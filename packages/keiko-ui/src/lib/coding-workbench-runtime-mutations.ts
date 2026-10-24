@@ -304,12 +304,14 @@ export function createFollowUpMutation(
   };
 }
 
-const REVERT_STATES: ReadonlySet<string> = new Set(["running", "paused"]);
+// A succeeded run is admitted while the server holds its runtime for undo (#3904 AC3).
+const REVERT_STATES: ReadonlySet<string> = new Set(["running", "paused", "succeeded"]);
 
 /**
  * Undo or restore of the run's newest turn (B3, S04): bound to the observed revision like a
- * follow-up, and only against a live run. The server refuses everything else; this keeps the
- * browser from sending a request it knows cannot be admitted.
+ * follow-up, and only against a live run or a succeeded run whose undo window is open. The server
+ * refuses everything else; this keeps the browser from sending a request it knows cannot be
+ * admitted.
  */
 export function createRevertMutation(
   action: CodingWorkbenchRuntimeRevertAction,

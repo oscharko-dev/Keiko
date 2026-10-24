@@ -132,6 +132,11 @@ export interface CodingRuntimeTaskDispatcher {
   readonly revertState?:
     ((runId: string) => Promise<CodingRuntimeRevertState | undefined>) | undefined;
   /**
+   * Commits an undo left staged in a held run when its post-completion undo window closes (#3904
+   * AC3); `none` when nothing is staged. Never rejects.
+   */
+  readonly commitRevert?: ((runId: string) => Promise<"committed" | "none" | "failed">) | undefined;
+  /**
    * The messages the operator sent into the running turn that the runtime has not handed to the
    * model yet, or `undefined` when the run offers none (S07). Never rejects; the run port records
    * one body-free line for each listing.

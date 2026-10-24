@@ -460,6 +460,10 @@ function selectedResumeMode(
  * when the run is waiting for the very action the trust notice is offering. A reasonless pause is
  * the operator's own, and keeps resuming exactly as it always has.
  */
+
+/** Run states whose undo counts the Workbench reads (B3, #3904 AC3). */
+const REVERT_READ_STATES: ReadonlySet<string> = new Set(["running", "paused", "succeeded"]);
+
 export function operatorResumeAvailable(
   resumeMode: CodingWorkbenchMode | null,
   pauseReason: CodingWorkbenchOperatorDecision | undefined,
@@ -823,7 +827,7 @@ function historyRuntimeState(
 function welcomeEligible(
   history: CodingTaskSession,
   state: CodingWorkbenchRuntimeState,
-  content: Readonly<Record<"activity" | "questions" | "review" | "research", boolean>>,
+  content: Readonly<Record<"activity" | "questions" | "review" | "research" | "revert", boolean>>,
 ): boolean {
   return (
     history.detail === null &&
@@ -1630,10 +1634,12 @@ function WorkbenchColumns({
     bindingPending: workspaceBindingPending,
     submittedRoot: runBoundRoot,
   });
-  // Undo / Restore of the newest turn (B3): counts only, and only for a run that is still open.
+  // Undo / Restore of the newest turn (B3): counts only, for a run that is still open or that
+  // succeeded and whose runtime the server still holds for undo (#3904 AC3); the server answers
+  // no counts once that window has closed.
   const revert = useCodingWorkbenchRevert({
     runId: state.run.value?.runId,
-    live: state.run.value?.state === "running" || state.run.value?.state === "paused",
+    live: REVERT_READ_STATES.has(state.run.value?.state ?? ""),
     revision: state.run.value?.revision,
     changeSignal: changesRefreshSignal(state.events, activity.feed),
   });
@@ -1776,6 +1782,8 @@ function WorkbenchColumns({
     questions: questions.questions.length > 0,
     review: editorBridge.pendingReview !== null,
     research: research.grant !== null,
+    // An undo the server still offers for a settled run is never hidden behind the welcome.
+    revert: revert.revert !== null,
   });
   return (
     <div className={styles.session}>

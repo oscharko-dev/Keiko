@@ -114,6 +114,7 @@ import {
   createProductionRuntimeOperationGuard,
   createProductionRuntimeManager,
   createProductionRuntimeTaskDispatcher,
+  revertMembers,
   type ProductionRuntimeRunRecord,
   type ProductionRuntimeTurnPort,
 } from "./productionCodingRuntimePorts.js";
@@ -127,6 +128,7 @@ import {
 import type { OpenCodeOptionalToolName } from "./opencodeLaunchProfile.js";
 import {
   productionRuntimeAuthorityFacts,
+  productionWorkspaceMatches,
   resolveProductionRuntimeContext,
   trustedManagedWorkspaceRoot,
   type ProductionWorkspaceAuthorityInput,
@@ -1075,6 +1077,9 @@ function createRunRecord(args: Omit<RunToolSurfaceInput, "signal">): ResolverRun
     operationGuard: createProductionRuntimeOperationGuard(request.runId, () =>
       runtimeAuthorityLive(input, context, minted, authority),
     ),
+    // #3904 AC3: an undo of a settled, held run is admitted while the workspace is still the one the
+    // run was bound to; its own authority ended with the run.
+    heldAdmission: () => productionWorkspaceMatches(input.workspaceAuthority, context),
     waitForPendingMutations: (signal) => surface.leases.waitForIdle(signal),
     ...(backend.questionPort ? { questionPort: backend.questionPort } : {}),
     ...(backend.permissionPort ? { permissionPort: backend.permissionPort } : {}),
@@ -1173,9 +1178,7 @@ export function bindExplicitSkillTurns(
       explicitSkills.clear();
       return turnPort.abortTurn(runId);
     },
-    ...(turnPort.revertTurn === undefined || turnPort.revertState === undefined
-      ? {}
-      : { revertTurn: turnPort.revertTurn, revertState: turnPort.revertState }),
+    ...revertMembers(turnPort),
     // Reading or withdrawing a pending message starts and settles no turn, so the explicit-skill
     // request of the turn in flight is neither replaced nor cleared by it.
     ...(turnPort.listInbox === undefined || turnPort.actOnInbox === undefined

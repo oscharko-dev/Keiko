@@ -79,6 +79,11 @@ interface RuntimeOperationCoordinatorDeps {
     current: CodingRuntimeSnapshot,
   ) => Promise<CodingRuntimeOrchestratorResult>;
   readonly settleTask: (runId: string, outcome: CodingRuntimeTaskOutcome) => void;
+  /**
+   * The settled run whose runtime is held for the post-completion undo window (#3904 AC3). Only
+   * undo and restore, and the counts behind them, are admitted for it.
+   */
+  readonly held?: (() => CodingRuntimeSnapshot | undefined) | undefined;
   readonly questionPort: CodingRuntimeQuestionPort;
   readonly manager: CodingRuntimeManager;
   readonly activityLog?: ServerLogSink | undefined;
@@ -316,6 +321,7 @@ const FOLLOW_UP_STATES: ReadonlySet<CodingRuntimeSnapshot["state"]> = new Set([
   "running",
   "paused",
 ]);
+const HELD_STATES: ReadonlySet<CodingRuntimeSnapshot["state"]> = new Set(["succeeded"]);
 
 const REVERT_KEYS = ["requestId", "expectedRevision", "action"] as const;
 const INBOX_KEYS = ["requestId", "expectedRevision", "action", "itemId"] as const;
@@ -513,7 +519,7 @@ export class CodingRuntimeOperationCoordinator {
     correlationId?: string,
   ): Promise<CodingRuntimeOrchestratorResult> {
     return this.deps.serial(async () => {
-      const operation = this.prepare(runId, input, REVERT_KEYS);
+      const operation = this.prepareRevert(runId, input);
       const action = admittedRevertAction(operation);
       if (!operation.ok || action === undefined || this.deps.taskDispatcher.revert === undefined) {
         if (operation.ok) operation.reservation.release();
@@ -533,7 +539,11 @@ export class CodingRuntimeOperationCoordinator {
     action: CodingWorkbenchRuntimeRevertAction,
     correlationId?: string,
   ): Promise<CodingRuntimeOrchestratorResult> {
-    const generation = action === "undo" ? this.reserveTaskGeneration(runId) : undefined;
+    // A held run (#3904 AC3) has no turn in flight whose outcome an undo would have to drop.
+    const generation =
+      action === "undo" && operation.current.state !== "succeeded"
+        ? this.reserveTaskGeneration(runId)
+        : undefined;
     const result = await this.dispatchRevert(runId, operation, action, correlationId);
     settleGenerationReservation(generation, result.ok);
     if (!result.ok) {
@@ -688,11 +698,23 @@ export class CodingRuntimeOperationCoordinator {
 
   /** The counts the Workbench shows beside the undo control; absent when no undo is available. */
   public revertState(runId: string): Promise<CodingRuntimeRevertState | undefined> {
-    const current = this.deps.current();
-    if (current?.runId !== runId || !FOLLOW_UP_STATES.has(current.state)) {
-      return Promise.resolve(undefined);
-    }
+    if (this.revertTarget(runId) === undefined) return Promise.resolve(undefined);
     return this.deps.taskDispatcher.revertState?.(runId) ?? Promise.resolve(undefined);
+  }
+
+  /** The live run, or the settled run held for undo, an undo or restore acts on. */
+  private revertTarget(runId: string): CodingRuntimeSnapshot | undefined {
+    const current = this.deps.current();
+    if (current?.runId === runId && FOLLOW_UP_STATES.has(current.state)) return current;
+    const held = this.deps.held?.();
+    return held?.runId === runId && HELD_STATES.has(held.state) ? held : undefined;
+  }
+
+  private prepareRevert(runId: string, input: unknown): PreparedRuntimeOperation {
+    const held = this.deps.held?.();
+    return held?.runId === runId && held.runId !== this.deps.current()?.runId
+      ? this.prepare(runId, input, REVERT_KEYS, "exact", { snapshot: held, states: HELD_STATES })
+      : this.prepare(runId, input, REVERT_KEYS);
   }
 
   public listQuestions(
@@ -1023,8 +1045,15 @@ export class CodingRuntimeOperationCoordinator {
     input: unknown,
     keys: readonly string[],
     revisionPolicy: RuntimeOperationRevisionPolicy = "exact",
+    target?: OperationTarget,
   ): PreparedRuntimeOperation {
-    const admitted = admitRuntimeOperation(input, keys, this.deps.current(), runId, revisionPolicy);
+    const admitted = admitRuntimeOperation(
+      input,
+      keys,
+      target ?? { snapshot: this.deps.current(), states: FOLLOW_UP_STATES },
+      runId,
+      revisionPolicy,
+    );
     if (admitted === undefined) return { ok: false };
     const reserveOutcome = this.replay.reserve(
       runId,
@@ -1052,10 +1081,16 @@ export class CodingRuntimeOperationCoordinator {
 // state fails closed. Split out of prepare() so that method stays under the complexity ceiling;
 // returns the narrowed snapshot and input together so a successful admission cannot be reported
 // with a stale/undefined current snapshot.
+/** The run an operation is admitted against and the states it is admissible in. */
+interface OperationTarget {
+  readonly snapshot: CodingRuntimeSnapshot | undefined;
+  readonly states: ReadonlySet<CodingRuntimeSnapshot["state"]>;
+}
+
 function admitRuntimeOperation(
   input: unknown,
   keys: readonly string[],
-  current: CodingRuntimeSnapshot | undefined,
+  target: OperationTarget,
   runId: string,
   revisionPolicy: RuntimeOperationRevisionPolicy,
 ):
@@ -1067,10 +1102,11 @@ function admitRuntimeOperation(
       };
     }
   | undefined {
+  const current = target.snapshot;
   if (
     !isExactRecord(input, keys) ||
     current?.runId !== runId ||
-    !(current.state === "running" || current.state === "paused")
+    !target.states.has(current.state)
   ) {
     return undefined;
   }
@@ -1326,7 +1362,9 @@ function validRequestId(value: unknown): value is string {
 function admittedRevertAction(
   operation: PreparedRuntimeOperation,
 ): CodingWorkbenchRuntimeRevertAction | undefined {
-  if (!operation.ok || !FOLLOW_UP_STATES.has(operation.current.state)) return undefined;
+  if (!operation.ok) return undefined;
+  const { state } = operation.current;
+  if (!FOLLOW_UP_STATES.has(state) && !HELD_STATES.has(state)) return undefined;
   const action = operation.value.action;
   return isCodingWorkbenchRuntimeRevertAction(action) ? action : undefined;
 }

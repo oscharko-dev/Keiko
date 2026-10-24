@@ -104,6 +104,7 @@ function coordinator(input: {
   readonly settleTask?: (runId: string, outcome: "cancelled" | "failed" | "succeeded") => void;
   readonly activityLog?: ServerLogSink;
   readonly current?: () => CodingRuntimeSnapshot | undefined;
+  readonly held?: () => CodingRuntimeSnapshot | undefined;
   // Overridable so a test can drive a PAUSED current snapshot through a controllable resume
   // outcome; every other fixture leaves this at its always-succeeding default, which a running
   // snapshot never even reaches (submitFollowUp only consults it while paused).
@@ -136,6 +137,7 @@ function coordinator(input: {
     }),
     taskDispatcher: input.taskDispatcher ?? dispatcher(),
     settleTask: input.settleTask ?? vi.fn(),
+    held: input.held,
     questionPort: input.port ?? questionPort(),
     manager: manager(
       input.stop ?? vi.fn(() => Promise.resolve({ ok: true as const, status: "stopped" as const })),
@@ -1846,6 +1848,139 @@ describe("CodingRuntimeOperationCoordinator turn revert", () => {
       expect(revertState).not.toHaveBeenCalled();
       await expect(coordinator({}).revertState("run-1")).resolves.toBeUndefined();
     });
+  });
+});
+
+// #3904 AC3: a succeeded run whose runtime is held for the undo window admits undo and restore,
+// under the same revision and one-use request id as a live run, and nothing else.
+describe("CodingRuntimeOperationCoordinator held run undo", () => {
+  type Revert = NonNullable<CodingRuntimeTaskDispatcher["revert"]>;
+  const state = { staged: false, fileCount: 2, additions: 3, deletions: 1 };
+
+  function heldSnapshot(overrides: Partial<CodingRuntimeSnapshot> = {}): CodingRuntimeSnapshot {
+    return { ...runningSnapshot(), state: "succeeded", revision: 9, terminalAt: AT, ...overrides };
+  }
+
+  function revertBody(expectedRevision = 9, requestId = "req-held-1"): Record<string, unknown> {
+    return { requestId, expectedRevision, action: "undo" };
+  }
+
+  it("reads the counts of the held run while no run is live", async () => {
+    const revertState = vi.fn(() => Promise.resolve(state));
+    const subject = coordinator({
+      taskDispatcher: dispatcher({ revertState }),
+      current: () => undefined,
+      held: () => heldSnapshot(),
+    });
+
+    await expect(subject.revertState("run-1")).resolves.toEqual(state);
+    await expect(subject.revertState("run-2")).resolves.toBeUndefined();
+    expect(revertState).toHaveBeenCalledTimes(1);
+  });
+
+  it("admits an undo of the held run at its revision and advances that revision", async () => {
+    const revert = vi.fn<Revert>(() =>
+      Promise.resolve({ ok: true, fileCount: 2, additions: 3, deletions: 1 }),
+    );
+    const advanceRevision = vi.fn(
+      (_current: CodingRuntimeSnapshot): CodingRuntimeOrchestratorResult => ({
+        ok: true,
+        snapshot: publicSnapshot(),
+      }),
+    );
+    const subject = coordinator({
+      taskDispatcher: dispatcher({ revert }),
+      current: () => undefined,
+      held: () => heldSnapshot(),
+      advanceRevision,
+    });
+
+    await expect(subject.submitRevert("run-1", revertBody(), "corr-held")).resolves.toMatchObject({
+      ok: true,
+    });
+
+    expect(revert).toHaveBeenCalledExactlyOnceWith({
+      runId: "run-1",
+      requestId: "req-held-1",
+      expectedRevision: 9,
+      action: "undo",
+      correlationId: "corr-held",
+    });
+    expect(advanceRevision.mock.calls[0]?.[0]).toMatchObject({
+      runId: "run-1",
+      state: "succeeded",
+      revision: 9,
+    });
+  });
+
+  it("refuses a stale revision and a reused request id, and reverts nothing for them", async () => {
+    const revert = vi.fn<Revert>(() =>
+      Promise.resolve({ ok: true, fileCount: 1, additions: 1, deletions: 0 }),
+    );
+    let held = heldSnapshot();
+    const subject = coordinator({
+      taskDispatcher: dispatcher({ revert }),
+      current: () => undefined,
+      held: () => held,
+      advanceRevision: (current): CodingRuntimeOrchestratorResult => {
+        held = { ...current, revision: current.revision + 1 };
+        return { ok: true, snapshot: publicSnapshot() };
+      },
+    });
+
+    await subject.submitRevert("run-1", revertBody(9, "req-1"));
+    await expect(subject.submitRevert("run-1", revertBody(9, "req-2"))).resolves.toEqual({
+      ok: false,
+      failureCode: "invalid-intent",
+    });
+    await expect(subject.submitRevert("run-1", revertBody(10, "req-1"))).resolves.toEqual({
+      ok: false,
+      failureCode: "invalid-intent",
+    });
+    expect(revert).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a held run that did not succeed, and another run's id", async () => {
+    const revert = vi.fn<Revert>();
+    const revertState = vi.fn(() => Promise.resolve(state));
+    for (const failed of ["failed", "cancelled"] as const) {
+      const subject = coordinator({
+        taskDispatcher: dispatcher({ revert, revertState }),
+        current: () => undefined,
+        held: () => heldSnapshot({ state: failed }),
+      });
+      await expect(subject.submitRevert("run-1", revertBody())).resolves.toEqual({
+        ok: false,
+        failureCode: "invalid-intent",
+      });
+      await expect(subject.revertState("run-1")).resolves.toBeUndefined();
+    }
+    const subject = coordinator({
+      taskDispatcher: dispatcher({ revert }),
+      current: () => undefined,
+      held: () => heldSnapshot(),
+    });
+    await expect(subject.submitRevert("run-2", revertBody())).resolves.toEqual({
+      ok: false,
+      failureCode: "invalid-intent",
+    });
+    expect(revert).not.toHaveBeenCalled();
+    expect(revertState).not.toHaveBeenCalled();
+  });
+
+  it("admits nothing but undo and restore for a held run", async () => {
+    const taskDispatcher = dispatcher();
+    const subject = coordinator({
+      taskDispatcher,
+      current: () => undefined,
+      held: () => heldSnapshot(),
+    });
+
+    await expect(subject.submitFollowUp("run-1", followUp("req-f", 9))).resolves.toMatchObject({
+      ok: false,
+    });
+    expect(taskDispatcher.dispatch).not.toHaveBeenCalled();
+    expect(taskDispatcher.replace).not.toHaveBeenCalled();
   });
 });
 

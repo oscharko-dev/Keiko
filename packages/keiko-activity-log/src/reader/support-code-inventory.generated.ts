@@ -1108,6 +1108,7 @@ export const SUPPORT_CODE_MODULES: readonly string[] = [
   "keiko-server/coding-runtime/codingRuntimeStartConfirmation",
   "keiko-server/coding-runtime/codingRuntimeStartConfirmationPlane",
   "keiko-server/coding-runtime/codingRuntimeTerminalCause",
+  "keiko-server/coding-runtime/codingRuntimeUndoWindow",
   "keiko-server/coding-runtime/codingRuntimeVerificationContinuation",
   "keiko-server/coding-runtime/codingRuntimeVerifiedCommitAuthorityStore",
   "keiko-server/coding-runtime/codingSafeActivityProjection",

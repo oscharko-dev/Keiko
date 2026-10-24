@@ -4509,6 +4509,137 @@ describe("coding runtime manager", () => {
     },
   );
 
+  // #3904 AC3 (owner decision 2026-10-24): a succeeded native run keeps its process for the
+  // post-completion undo window, with every run authority revoked, until a later stop reaps it.
+  describe("holding a succeeded runtime for the undo window", () => {
+    function heldHarness(options: { readonly native?: boolean } = {}): {
+      readonly manager: ReturnType<typeof createTestCodingRuntimeManager>;
+      readonly child: ReturnType<typeof fakeChild>;
+      readonly order: string[];
+      readonly fixture: ReturnType<typeof createManagedFixture>;
+    } {
+      const fixture = createManagedFixture();
+      const child = fakeChild();
+      const order: string[] = [];
+      const manager = createTestCodingRuntimeManager({
+        processEnv: {},
+        supervisor: testSupervisor(() => ({
+          ...child.handle,
+          kill: (signal): void => {
+            order.push(`signal:${signal}`);
+            child.kills.push(signal);
+            child.exit(0);
+          },
+        })),
+        revokeRuntime: (runId): true => {
+          order.push(`revoke:${runId}`);
+          return true;
+        },
+        abortInFlightActions: (runId): true => {
+          order.push(`abort:${runId}`);
+          return true;
+        },
+        ...(options.native === false
+          ? {}
+          : {
+              openCodeLifecycleAdapter: {
+                handshake: vi.fn(() => Promise.resolve({ ok: true as const })),
+                dispose: (runId, _signal, settlement): true => {
+                  order.push(`dispose:${runId}:${String(settlement?.terminalStatus)}`);
+                  return true;
+                },
+              },
+            }),
+        releaseRuntimeAfterReap: (runId): true => {
+          order.push(`release:${runId}`);
+          return true;
+        },
+      });
+      return { manager, child, order, fixture };
+    }
+
+    async function startHeld(
+      harness: ReturnType<typeof heldHarness>,
+    ): Promise<Awaited<ReturnType<NonNullable<CodingRuntimeManager["hold"]>>> | undefined> {
+      const { manager, fixture } = harness;
+      await manager.start(
+        launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      );
+      return manager.hold?.("run-1988");
+    }
+
+    it("revokes every run authority but keeps the process, and records the run as succeeded", async () => {
+      const harness = heldHarness();
+
+      await expect(startHeld(harness)).resolves.toEqual({ ok: true, status: "held" });
+
+      expect(harness.order).toEqual(["revoke:run-1988", "abort:run-1988"]);
+      expect(harness.child.kills).toEqual([]);
+      expect(harness.manager.result("run-1988")?.status).toBe("succeeded");
+    });
+
+    it("reaps, disposes as succeeded and releases only when the held runtime is stopped", async () => {
+      const harness = heldHarness();
+      await startHeld(harness);
+
+      await expect(harness.manager.stop("run-1988", "succeeded")).resolves.toEqual({
+        ok: true,
+        status: "stopped",
+      });
+
+      expect(harness.order).toEqual([
+        "revoke:run-1988",
+        "abort:run-1988",
+        "revoke:run-1988",
+        "abort:run-1988",
+        "signal:SIGTERM",
+        "dispose:run-1988:succeeded",
+        "release:run-1988",
+      ]);
+      expect(harness.manager.health().status).toBe("stopped");
+    });
+
+    it("admits no approval for a held run", async () => {
+      const harness = heldHarness();
+      await startHeld(harness);
+
+      expect(
+        harness.manager.issueApproval({
+          runId: "run-1988",
+          requestId: "approval-after-hold",
+          actionClass: "workspace-write",
+          targetDigest: "d".repeat(64),
+          scopeDigest: "e".repeat(64),
+        } as unknown as Parameters<typeof harness.manager.issueApproval>[0]),
+      ).toMatchObject({ ok: false });
+    });
+
+    it("stops a runtime without the native lifecycle instead of holding it", async () => {
+      const harness = heldHarness({ native: false });
+
+      await expect(startHeld(harness)).resolves.toEqual({ ok: true, status: "stopped" });
+      expect(harness.order).toContain("signal:SIGTERM");
+    });
+
+    it("refuses to hold another run's runtime", async () => {
+      const harness = heldHarness();
+      await harness.manager.start(
+        launchRequest(
+          harness.fixture.workspaceRoot,
+          harness.fixture.managedRoot,
+          harness.fixture.executablePath,
+        ),
+      );
+
+      await expect(harness.manager.hold?.("run-other")).resolves.toEqual({
+        ok: false,
+        failureCode: "runtime-run-mismatch",
+        retryable: false,
+      });
+      expect(harness.order).toEqual([]);
+    });
+  });
+
   it("reports a runtime that exited on its own as failed, even when a stop folds onto that teardown as succeeded", async () => {
     const fixture = createManagedFixture();
     const child = fakeChild();

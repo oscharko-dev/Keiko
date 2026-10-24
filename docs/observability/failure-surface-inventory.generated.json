@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "3ffc1c56147f4e3fcd6ebec07b5ff2ed24d9d976a863120917c7106319014aaf"
+    "catalogDigest": "a2cedb8bf938b42544a2f8c5ab30e67056dae7982280d254ccd3130ab4d21602"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -59,10 +59,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 577,
-    "proofCount": 590,
-    "resolvedProofCount": 590,
-    "failureClassCount": 360,
+    "operationCount": 578,
+    "proofCount": 591,
+    "resolvedProofCount": 591,
+    "failureClassCount": 361,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -387,6 +387,7 @@
         "coding-runtime.tool-availability.failed",
         "coding-runtime.tool-result",
         "coding-runtime.tool-result-rendered",
+        "coding-runtime.undo-window",
         "coding-runtime.verification",
         "coding-runtime.verification-summarized",
         "coding-runtime.workspace-discovery",
@@ -850,6 +851,7 @@
     "coding-runtime-tool-availability": ["tools-workflows.dependency-failure"],
     "coding-runtime-native-policy": ["tools-workflows.rejection"],
     "coding-runtime-tool-result": ["tools-workflows.dependency-failure"],
+    "coding-runtime-undo-window": ["tools-workflows.dependency-failure"],
     "coding-runtime-verification": ["tools-workflows.dependency-failure"],
     "coding-safe-activity-projection": ["tools-workflows.loss"],
     "coding-sidecar-gateway-readiness": ["tools-workflows.dependency-failure"],
@@ -1624,6 +1626,9 @@
     "coding-runtime.tool-result-rendered.emitted-line": [
       "packages/keiko-server/src/coding-runtime/governedToolModelContent.test.ts",
       "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts"
+    ],
+    "coding-runtime.undo-window.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/codingRuntimeUndoWindow.test.ts"
     ],
     "coding-runtime.verification.emitted-line": [
       "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.test.ts"

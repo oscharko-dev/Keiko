@@ -151,18 +151,22 @@ describe("createRevertMutation", () => {
     );
   });
 
-  it.each(["running", "paused"] as const)("is admitted against a %s run", (runState) => {
-    expect(() =>
-      createRevertMutation("undo", stateWithRun(snapshot({ state: runState }))),
-    ).not.toThrow();
-  });
+  // #3904 AC3 (owner decision 2026-10-24): a succeeded run is admitted too; the server holds its
+  // runtime for the post-completion undo window and refuses the request once that window closed.
+  it.each(["running", "paused", "succeeded"] as const)(
+    "is admitted against a %s run",
+    (runState) => {
+      expect(() =>
+        createRevertMutation("undo", stateWithRun(snapshot({ state: runState }))),
+      ).not.toThrow();
+    },
+  );
 
   it.each([
     "starting",
     "ready",
     "awaiting-approval",
     "stopping",
-    "succeeded",
     "failed",
     "cancelled",
     "recovery-required",

@@ -1262,6 +1262,68 @@ describe("production runtime singleton manager", () => {
     expect(manager.health()).toEqual({ status: "running" });
   });
 
+  // #3904 AC3: a succeeded run held for the undo window keeps the slot until it is stopped.
+  it("holds a succeeded run in its slot until a stop cleans it up", async () => {
+    const held = fakeManager({
+      hold: vi.fn(() => Promise.resolve({ ok: true as const, status: "held" as const })),
+      result: vi.fn(() => ({
+        status: "succeeded" as const,
+        exitCode: null,
+        output: { byteCount: 0, lineCount: 0, sha256: "0".repeat(64), truncated: false },
+        error: { byteCount: 0, lineCount: 0, sha256: "0".repeat(64), truncated: false },
+      })),
+    });
+    const first = managedRecord("run-1", held);
+    const second = managedRecord("run-2", fakeManager());
+    const runs = new Map([
+      ["run-1", first],
+      ["run-2", second],
+    ]);
+    const manager = createProductionRuntimeManager(runs, fakeAuthority());
+    await manager.start(launch("run-1"));
+
+    await expect(manager.hold?.("run-1")).resolves.toEqual({ ok: true, status: "held" });
+    expect(first.held).toBe(true);
+    expect(first.dispose).not.toHaveBeenCalled();
+    expect(manager.result("run-1")?.status).toBe("succeeded");
+    await expect(manager.start(launch("run-2"))).resolves.toMatchObject({
+      ok: false,
+      failureCode: "runtime-run-mismatch",
+    });
+
+    await expect(manager.stop("run-1", "succeeded")).resolves.toEqual({
+      ok: true,
+      status: "stopped",
+    });
+    expect(first.dispose).toHaveBeenCalledTimes(1);
+    expect(runs.has("run-1")).toBe(false);
+    await expect(manager.start(launch("run-2"))).resolves.toMatchObject({ ok: true });
+  });
+
+  it("cleans up a run whose runtime was stopped because it could not be held", async () => {
+    const inner = fakeManager({
+      hold: vi.fn(() => Promise.resolve({ ok: true as const, status: "stopped" as const })),
+    });
+    const stopped = managedRecord("run-1", inner);
+    const runs = new Map([["run-1", stopped]]);
+    const manager = createProductionRuntimeManager(runs, fakeAuthority());
+    await manager.start(launch("run-1"));
+
+    await expect(manager.hold?.("run-1")).resolves.toEqual({ ok: true, status: "stopped" });
+    expect(stopped.held).toBeUndefined();
+    expect(stopped.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops a runtime whose manager cannot hold it", async () => {
+    const stop = vi.fn(() => Promise.resolve({ ok: true as const, status: "stopped" as const }));
+    const runs = new Map([["run-1", managedRecord("run-1", fakeManager({ stop }))]]);
+    const manager = createProductionRuntimeManager(runs, fakeAuthority());
+    await manager.start(launch("run-1"));
+
+    await expect(manager.hold?.("run-1")).resolves.toEqual({ ok: true, status: "stopped" });
+    expect(stop).toHaveBeenCalledWith("run-1", "succeeded");
+  });
+
   it("rejects a start for an unknown run or while another run is active", async () => {
     const inner = fakeManager();
     const runs = new Map([["run-1", managedRecord("run-1", inner)]]);
@@ -2503,6 +2565,124 @@ describe("turn revert admission (B3, S04)", () => {
     const offered = createOpenCodeRuntimeTurnPort({ ...base, revertTurn, revertState });
     expect(offered.revertTurn).toBe(revertTurn);
     expect(offered.revertState).toBe(revertState);
+    expect(offered.commitStagedRevert).toBeUndefined();
+    // #3904 AC3: the commit the undo window needs travels with the other undo members only.
+    const commitStagedRevert: NonNullable<OpenCodeRunPort["commitStagedRevert"]> = () =>
+      Promise.resolve("none");
+    expect(
+      createOpenCodeRuntimeTurnPort({ ...base, revertTurn, revertState, commitStagedRevert })
+        .commitStagedRevert,
+    ).toBe(commitStagedRevert);
+    expect(
+      createOpenCodeRuntimeTurnPort({ ...base, commitStagedRevert }).commitStagedRevert,
+    ).toBeUndefined();
+  });
+});
+
+// #3904 AC3: the run's authority ended with the run; a held run is admitted to undo and restore
+// only, under the current workspace binding.
+describe("held run admission (#3904 AC3)", () => {
+  type RevertTurn = NonNullable<ProductionRuntimeRunRecord["turnPort"]["revertTurn"]>;
+  const APPLIED = { ok: true, fileCount: 1, additions: 1, deletions: 0 } as const;
+
+  function heldRecord(
+    runId: string,
+    port: Partial<ProductionRuntimeRunRecord["turnPort"]>,
+    workspace: (() => boolean) | undefined,
+  ): ProductionRuntimeRunRecord {
+    const controller = new AbortController();
+    // The hold revoked the run: its controller is aborted and its live authority gone.
+    controller.abort();
+    return {
+      controller,
+      operationGuard: createProductionRuntimeOperationGuard(runId, () => false),
+      held: true,
+      ...(workspace === undefined ? {} : { heldAdmission: workspace }),
+      turnPort: {
+        submitTurn: () => Promise.resolve(true),
+        abortTurn: () => Promise.resolve(true),
+        waitForTerminal: () => Promise.resolve("succeeded" as const),
+        ...port,
+      },
+    };
+  }
+
+  function request(requestId: string, expectedRevision: number) {
+    return { runId: "run-h", requestId, expectedRevision, action: "undo" as const };
+  }
+
+  it("admits an undo while the workspace is still the run's, and refuses it once it is not", async () => {
+    let workspace = true;
+    const revertTurn = vi.fn<RevertTurn>(() => Promise.resolve(APPLIED));
+    const dispatcher = createProductionRuntimeTaskDispatcher(
+      new Map([["run-h", heldRecord("run-h", { revertTurn }, () => workspace)]]),
+    );
+
+    await expect(dispatcher.revert?.(request("req-1", 7))).resolves.toEqual(APPLIED);
+    workspace = false;
+    await expect(dispatcher.revert?.(request("req-2", 8))).resolves.toEqual({
+      ok: false,
+      reason: "not-admitted",
+    });
+    expect(revertTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses an undo of a held run that carries no workspace check", async () => {
+    const revertTurn = vi.fn<RevertTurn>(() => Promise.resolve(APPLIED));
+    const dispatcher = createProductionRuntimeTaskDispatcher(
+      new Map([["run-h", heldRecord("run-h", { revertTurn }, undefined)]]),
+    );
+
+    await expect(dispatcher.revert?.(request("req-1", 7))).resolves.toEqual({
+      ok: false,
+      reason: "run-unavailable",
+    });
+    expect(revertTurn).not.toHaveBeenCalled();
+  });
+
+  it("refuses every other operation on a held run", async () => {
+    const actOnInbox = vi.fn(() => Promise.resolve({ ok: true as const, outcome: "withdrawn" }));
+    const dispatcher = createProductionRuntimeTaskDispatcher(
+      new Map([
+        [
+          "run-h",
+          heldRecord(
+            "run-h",
+            {
+              listInbox: () => Promise.resolve({ items: [] }),
+              actOnInbox,
+            } as unknown as Partial<ProductionRuntimeRunRecord["turnPort"]>,
+            () => true,
+          ),
+        ],
+      ]),
+    );
+
+    await expect(
+      dispatcher.inboxAction?.({
+        runId: "run-h",
+        requestId: "req-1",
+        expectedRevision: 7,
+        action: "withdraw",
+        itemId: "item-1",
+      } as unknown as Parameters<NonNullable<typeof dispatcher.inboxAction>>[0]),
+    ).resolves.toMatchObject({ ok: false, reason: "run-unavailable" });
+    expect(actOnInbox).not.toHaveBeenCalled();
+  });
+
+  it("commits a staged undo through the run's port, and none for a run without one", async () => {
+    const commitStagedRevert = vi.fn(() => Promise.resolve("committed" as const));
+    const dispatcher = createProductionRuntimeTaskDispatcher(
+      new Map([
+        ["run-h", heldRecord("run-h", { commitStagedRevert }, () => true)],
+        ["run-plain", heldRecord("run-plain", {}, () => true)],
+      ]),
+    );
+
+    await expect(dispatcher.commitRevert?.("run-h")).resolves.toBe("committed");
+    await expect(dispatcher.commitRevert?.("run-plain")).resolves.toBe("none");
+    await expect(dispatcher.commitRevert?.("run-missing")).resolves.toBe("none");
+    expect(commitStagedRevert).toHaveBeenCalledExactlyOnceWith("run-h");
   });
 });
 

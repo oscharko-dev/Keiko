@@ -20,7 +20,11 @@ import type {
   CodingRuntimeRevertState,
 } from "./codingRuntimeRevert.js";
 import type { OpenCodeRunPort } from "./opencodeRuntimeComposition.js";
-import type { CodingRuntimeManager, CodingRuntimeStartResult } from "./codingRuntimeManager.js";
+import type {
+  CodingRuntimeHoldResult,
+  CodingRuntimeManager,
+  CodingRuntimeStartResult,
+} from "./codingRuntimeManager.js";
 import type { CodingRuntimeMutationIdleOutcome } from "./codingRuntimeEditorMutationLeaseCoordinator.js";
 import {
   contentFreeErrorClass,
@@ -244,6 +248,9 @@ export interface ProductionRuntimeTurnPort {
     | undefined;
   readonly revertState?:
     ((runId: string) => Promise<CodingRuntimeRevertState | undefined>) | undefined;
+  /** Commits an undo left staged when the post-completion undo window closes (#3904 AC3). */
+  readonly commitStagedRevert?:
+    ((runId: string) => Promise<"committed" | "none" | "failed">) | undefined;
   /**
    * The messages the operator sent into the running turn that the runtime has not handed to the
    * model yet, and the withdrawal or promotion of one (S07, ADR-0137 D10). Absent for a port that
@@ -266,6 +273,14 @@ export interface ProductionRuntimeRunRecord {
   readonly turnPort: ProductionRuntimeTurnPort;
   readonly controller: AbortController;
   readonly operationGuard: ProductionRuntimeOperationGuard;
+  /**
+   * Set once the run settled and its runtime is held for the post-completion undo window (#3904
+   * AC3). Its authority is revoked by then, so only undo and restore are admitted, under
+   * `heldAdmission` instead of the live authority.
+   */
+  held?: boolean;
+  /** Whether the run's workspace binding still matches the current workspace (an undo admission). */
+  readonly heldAdmission?: (() => boolean) | undefined;
   readonly waitForPendingMutations?:
     ((signal: AbortSignal) => Promise<CodingRuntimeMutationIdleOutcome>) | undefined;
   readonly dispose?: (() => void | Promise<void>) | undefined;
@@ -275,6 +290,7 @@ export interface ProductionRuntimeOperationGuard {
   readonly reserve: (
     request: CodingRuntimeRunOperation,
     mode?: "mutation" | "read",
+    live?: () => boolean,
   ) => ProductionRuntimeOperationReservation | undefined;
 }
 
@@ -287,14 +303,18 @@ export interface ProductionRuntimeOperationReservation {
 
 export function createProductionRuntimeOperationGuard(
   runId: string,
-  live: () => boolean,
+  authorityLive: () => boolean,
 ): ProductionRuntimeOperationGuard {
   const usedRequestIds = new Set<string>();
   let lastRevision = -1;
   let pending:
     { readonly requestId: string; readonly expectedRevision: number; active: boolean } | undefined;
   return {
-    reserve: (request, mode = "mutation"): ProductionRuntimeOperationReservation | undefined => {
+    reserve: (
+      request,
+      mode = "mutation",
+      live = authorityLive,
+    ): ProductionRuntimeOperationReservation | undefined => {
       if (
         inadmissibleOperation(request, runId, lastRevision) ||
         usedRequestIds.has(request.requestId) ||
@@ -389,6 +409,7 @@ function buildProductionRuntimeManager(
     pause: (runId) => pauseProductionRuntime(context, runId),
     resume: (runId, requestedMode) => resumeProductionRuntime(context, runId, requestedMode),
     stop: (runId, resultStatus) => stopProductionRuntime(context, runId, resultStatus),
+    hold: (runId) => holdProductionRuntime(runs, context, runId),
     takeover: (runId) => settleProductionRuntime(context, runId, "takeover"),
     reconcile: (runId) => settleProductionRuntime(context, runId, "reconcile"),
     health: () => context.slot.manager()?.health() ?? { status: "stopped" },
@@ -469,6 +490,29 @@ async function settleProductionRuntime(
     captureTerminalResult(context, manager, runId);
     await context.slot.cleanup(runId);
   }
+  return result;
+}
+
+/**
+ * Holds a succeeded native run's runtime for the post-completion undo window (#3904 AC3). The slot
+ * stays claimed until `stop` reaps it, so no run can start over a held runtime; a runtime that could
+ * not be held was stopped instead and is cleaned up like any stopped one.
+ */
+async function holdProductionRuntime(
+  runs: Map<string, ProductionRuntimeRunRecord>,
+  context: ProductionRuntimeManagerContext,
+  runId: string,
+): Promise<CodingRuntimeHoldResult> {
+  const manager = context.slot.manager();
+  const record = runs.get(runId);
+  if (manager === undefined || record === undefined || !context.slot.matches(runId)) {
+    return stoppedRun();
+  }
+  const result = await (manager.hold?.(runId) ?? manager.stop(runId, "succeeded"));
+  if (!result.ok) return result;
+  captureTerminalResult(context, manager, runId);
+  if (result.status === "held") record.held = true;
+  else await context.slot.cleanup(runId);
   return result;
 }
 
@@ -595,12 +639,23 @@ export function createOpenCodeRuntimeTurnPort(runPort: OpenCodeRunPort): Product
       // not failed: the run's work did not break.
       return signal.aborted || outcome === "interrupted" ? "cancelled" : "failed";
     },
-    ...(runPort.revertTurn === undefined || runPort.revertState === undefined
-      ? {}
-      : { revertTurn: runPort.revertTurn, revertState: runPort.revertState }),
+    ...revertMembers(runPort),
     ...(runPort.listInbox === undefined || runPort.actOnInbox === undefined
       ? {}
       : { listInbox: runPort.listInbox, actOnInbox: runPort.actOnInbox }),
+  };
+}
+
+/** The undo members of a turn port: all of them, or none for a runtime without snapshots. */
+export function revertMembers(
+  port: Pick<ProductionRuntimeTurnPort, "revertTurn" | "revertState" | "commitStagedRevert">,
+): Pick<ProductionRuntimeTurnPort, "revertTurn" | "revertState" | "commitStagedRevert"> {
+  const { revertTurn, revertState, commitStagedRevert } = port;
+  if (revertTurn === undefined || revertState === undefined) return {};
+  return {
+    revertTurn,
+    revertState,
+    ...(commitStagedRevert === undefined ? {} : { commitStagedRevert }),
   };
 }
 
@@ -713,6 +768,8 @@ export function createProductionRuntimeTaskDispatcher(
     revert: (request) => revertRuntimeTask(runs, request, diagnostics),
     revertState: (runId) =>
       runs.get(runId)?.turnPort.revertState?.(runId) ?? Promise.resolve(undefined),
+    commitRevert: (runId) =>
+      runs.get(runId)?.turnPort.commitStagedRevert?.(runId) ?? Promise.resolve("none"),
     inbox: (runId, correlationId) =>
       runs.get(runId)?.turnPort.listInbox?.(runId, correlationId) ?? Promise.resolve(undefined),
     inboxAction: (request) => inboxRuntimeAction(runs, request, diagnostics),
@@ -1193,13 +1250,15 @@ async function performReservedOperation<Result extends { readonly ok: boolean }>
   diagnostics: ServerDiagnosticSink | undefined,
   start: (record: ProductionRuntimeRunRecord) => (() => Promise<Result>) | undefined,
   refuse: (reason: ReservedRefusal) => Result,
+  admitsHeld = false,
 ): Promise<Result> {
   const record = runs.get(request.runId);
   if (record === undefined) return refuse("run-unavailable");
   const perform = start(record);
   if (perform === undefined) return refuse("unsupported");
-  if (record.controller.signal.aborted) return refuse("run-unavailable");
-  const reservation = record.operationGuard.reserve(request);
+  const admission = operationAdmission(record, admitsHeld);
+  if (admission === "refused") return refuse("run-unavailable");
+  const reservation = record.operationGuard.reserve(request, "mutation", admission);
   if (reservation === undefined) return refuse("not-admitted");
   try {
     const result = await perform();
@@ -1217,6 +1276,19 @@ async function performReservedOperation<Result extends { readonly ok: boolean }>
     );
     return refuse("failed");
   }
+}
+
+/**
+ * The live check an operation is admitted under: the run's live authority (`undefined`, the guard's
+ * own), or, for a run held after it settled (#3904 AC3) and an operation a held run admits, the
+ * current workspace binding. A held run's revoked authority refuses everything else.
+ */
+function operationAdmission(
+  record: ProductionRuntimeRunRecord,
+  admitsHeld: boolean,
+): (() => boolean) | "refused" | undefined {
+  if (record.held !== true) return record.controller.signal.aborted ? "refused" : undefined;
+  return admitsHeld && record.heldAdmission !== undefined ? record.heldAdmission : "refused";
 }
 
 const REVERT_RESERVED_REFUSALS = {
@@ -1245,6 +1317,7 @@ function revertRuntimeTask(
       ok: false,
       reason: REVERT_RESERVED_REFUSALS[reason],
     }),
+    true,
   );
 }
 

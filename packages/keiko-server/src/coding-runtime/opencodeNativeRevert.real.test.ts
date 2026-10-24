@@ -12,6 +12,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Readable } from "node:stream";
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import {
   buildRuntimeGatewaySeatbeltCommand,
@@ -28,6 +29,7 @@ import {
   recordOpenCodeTurnImage,
   type OpenCodeRevertRun,
 } from "./opencodeRevert.js";
+import { auditDatabase } from "./opencodeSessionRetention.js";
 import { openCodeV2StepChanges } from "./opencodeV2History.js";
 import {
   OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
@@ -703,6 +705,53 @@ describe("pinned native OpenCode undo semantics", () => {
       });
     },
     180_000,
+  );
+
+  // #3904 AC3 (owner decision 2026-10-24): after the run settled, its runtime is held for the
+  // post-completion undo window. The human undoes and restores the settled turn through Keiko's port,
+  // and an undo left staged is committed when the window closes, so the session that is retained
+  // matches the workspace and passes the retention audit.
+  it.skipIf(skip)(
+    "commits an undo left staged when the undo window closes, and the session then passes the retention audit",
+    async () => {
+      await withRun(async (run) => {
+        const { port, state } = keikoRevertPort(run);
+        await settledTurn(run, state, editCall("original", "first"), "First edit.");
+        await settledTurn(run, state, editCall("first", "second"), "Second edit.");
+
+        // The window: undo, restore and undo again, all against the settled turn.
+        expect(await port.revertTurn("run", "undo")).toMatchObject({ ok: true, fileCount: 1 });
+        expect(workspaceFile(run)).toBe("revert fixture first\n");
+        expect(await port.revertTurn("run", "restore")).toMatchObject({ ok: true, fileCount: 1 });
+        expect(workspaceFile(run)).toBe("revert fixture second\n");
+        expect(await port.revertTurn("run", "undo")).toMatchObject({ ok: true, fileCount: 1 });
+
+        // The window closes with the undo staged: the runtime makes it final.
+        await expect(port.commitStagedRevert("run")).resolves.toBe("committed");
+        expect(state.revert).toBeUndefined();
+        expect(await sessionRevert(run)).toBeUndefined();
+        expect(workspaceFile(run)).toBe("revert fixture first\n");
+        // Only the undone turn's messages are gone; the first turn stays in the session.
+        expect(await userMessageIds(run)).toHaveLength(1);
+        await expect(port.commitStagedRevert("run")).resolves.toBe("none");
+
+        // The database the run would retain passes the audit a retained entry must pass.
+        const copy = join(run.fixture.root, "window-closed.db");
+        const live = new DatabaseSync(join(run.fixture.state, "state", "opencode.db"), {
+          readOnly: true,
+        });
+        live.prepare("VACUUM INTO ?").run(copy);
+        live.close();
+        expect(
+          auditDatabase(copy, {
+            sessionId: run.sessionId,
+            directory: run.fixture.workspace,
+            version: OPENCODE_PINNED_VERSION,
+          }),
+        ).toMatchObject({ ok: true });
+      });
+    },
+    240_000,
   );
 
   it.skipIf(skip)(

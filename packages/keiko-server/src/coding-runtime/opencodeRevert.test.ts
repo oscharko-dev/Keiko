@@ -90,6 +90,7 @@ function subject(
     readonly available?: boolean;
     readonly stage?: () => Promise<never>;
     readonly clear?: () => Promise<never>;
+    readonly commit?: () => Promise<never>;
     readonly diffFails?: boolean;
     /** `false`: the turn's settlement recorded no image of its files. */
     readonly image?: boolean;
@@ -117,6 +118,10 @@ function subject(
     clearRevert: vi.fn(() => {
       order.push("clear");
       return input.clear === undefined ? Promise.resolve() : input.clear();
+    }),
+    commitRevert: vi.fn(() => {
+      order.push("commit");
+      return input.commit === undefined ? Promise.resolve() : input.commit();
     }),
   };
   const run: OpenCodeRevertRun = {
@@ -736,6 +741,56 @@ describe("the staged-undo turn guard", () => {
 
 // The registered proofs run the persisted line through the real formatter, which needs the op in the
 // generated registry: they go green once `npm run generate:op-catalog` has been run for these ops.
+// #3904 AC3: the post-completion undo window commits an undo the human left staged when it closes.
+describe("commit of a staged undo when the undo window closes", () => {
+  it("commits the staged undo, forgets it and records what it made final", async () => {
+    const { run, port, client, log } = subject();
+    await port.revertTurn(RUN_ID, "undo");
+    log.events.length = 0;
+
+    await expect(port.commitStagedRevert(RUN_ID)).resolves.toBe("committed");
+
+    expect(client.commitRevert).toHaveBeenCalledWith(SESSION_ID);
+    expect(run.revert).toBeUndefined();
+    expect(log.events).toMatchObject([
+      { op: "coding-runtime.revert.applied", extra: { action: "commit", fileCount: 1 } },
+    ]);
+  });
+
+  it("answers none without asking the runtime when nothing is staged", async () => {
+    const { port, client } = subject();
+
+    await expect(port.commitStagedRevert(RUN_ID)).resolves.toBe("none");
+    expect(client.commitRevert).not.toHaveBeenCalled();
+  });
+
+  it("answers none for a run that is not ready", async () => {
+    const { port, client } = subject({ available: false });
+
+    await expect(port.commitStagedRevert(RUN_ID)).resolves.toBe("none");
+    expect(client.commitRevert).not.toHaveBeenCalled();
+  });
+
+  it("keeps the undo staged and says why on the log when the runtime fails to commit it", async () => {
+    const { run, port, log } = subject({
+      commit: () => Promise.reject(new Error(`commit failed ${SECRET}`)),
+    });
+    await port.revertTurn(RUN_ID, "undo");
+    log.events.length = 0;
+
+    await expect(port.commitStagedRevert(RUN_ID)).resolves.toBe("failed");
+
+    expect(run.revert).toBeDefined();
+    expect(log.events).toMatchObject([
+      {
+        op: "coding-runtime.revert.refused",
+        extra: { operation: "commit", reason: "revert-failed" },
+      },
+    ]);
+    expect(JSON.stringify(log.events)).not.toContain(SECRET);
+  });
+});
+
 describe("registered Activity Log proofs", () => {
   it("proves coding-runtime.revert.applied", async () => {
     const { port, log } = subject();

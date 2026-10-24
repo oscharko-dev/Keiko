@@ -325,10 +325,11 @@ function fixture(
     },
     transition: (id, change) => {
       const current = rowFor(rows, id);
+      // Like the production store: a settled transition keeps a settlement time it is given.
       const terminalAt = new Set(["succeeded", "failed", "cancelled", "taken-over"]).has(
         change.state,
       )
-        ? change.updatedAt
+        ? (change.terminalAt ?? change.updatedAt)
         : undefined;
       // `pauseReason` is WRITTEN, never merged — the production store does the same, so that
       // leaving `paused` drops the reason from the row itself. A fixture that let the spread of
@@ -8461,5 +8462,181 @@ describe("native session continuity requested by a start", () => {
     });
     expect(w.f.manager.start).not.toHaveBeenCalled();
     expect(w.continuity.take("run-2")).toBeUndefined();
+  });
+});
+
+// #3904 AC3 (owner decision 2026-10-24): a native run that succeeded with an undoable newest turn
+// keeps its runtime, authority revoked, for the post-completion undo window.
+describe("post-completion undo window", () => {
+  const COUNTS = { fileCount: 1, additions: 2, deletions: 1 } as const;
+
+  interface HeldRun {
+    readonly f: ReturnType<typeof fixture>;
+    readonly log: ReturnType<typeof captureActivityLog>;
+    readonly hold: ReturnType<typeof vi.fn>;
+    readonly revert: ReturnType<typeof vi.fn>;
+    readonly commitRevert: ReturnType<typeof vi.fn>;
+    readonly finish: (outcome: "succeeded" | "failed") => void;
+  }
+
+  function heldRun(changed = 1): HeldRun {
+    const log = captureActivityLog();
+    // Every reading of the clock is one second later, so a rewritten settlement time would show.
+    let tick = 0;
+    const clock = (): Date => new Date(Date.parse("2026-01-01T00:00:00.000Z") + 1_000 * tick++);
+    const f = fixture(undefined, clock, [], undefined, log.activityLog);
+    let finish: (outcome: "succeeded" | "failed") => void = () => undefined;
+    f.taskDispatcher.dispatch.mockResolvedValueOnce({
+      ok: true,
+      completion: new Promise<"succeeded" | "failed">((resolve) => {
+        finish = resolve;
+      }),
+    });
+    const hold = vi.fn(() => Promise.resolve({ ok: true as const, status: "held" as const }));
+    // A hold records the run's result as succeeded, like the stop it replaces.
+    const stoppedResult = f.manager.result.getMockImplementation();
+    f.manager.result.mockImplementation((runId) =>
+      hold.mock.calls.length > 0
+        ? {
+            status: "succeeded",
+            exitCode: null,
+            output: { byteCount: 0, lineCount: 0, sha256: "a".repeat(64), truncated: false },
+            error: { byteCount: 0, lineCount: 0, sha256: "b".repeat(64), truncated: false },
+          }
+        : stoppedResult?.(runId),
+    );
+    const revert = vi.fn(() => Promise.resolve({ ok: true as const, ...COUNTS }));
+    const commitRevert = vi.fn(() => Promise.resolve("committed" as const));
+    Object.assign(f.manager, { hold });
+    Object.assign(f.taskDispatcher, {
+      revert,
+      commitRevert,
+      revertState: vi.fn(() => Promise.resolve({ staged: false, ...COUNTS, fileCount: changed })),
+    });
+    return {
+      f,
+      log,
+      hold,
+      revert,
+      commitRevert,
+      finish: (outcome): void => {
+        finish(outcome);
+      },
+    };
+  }
+
+  async function settled(run: HeldRun, state: "succeeded" | "failed"): Promise<number> {
+    await vi.waitFor(() => {
+      expect(run.f.orchestrator.getSnapshot("run-1")?.state).toBe(state);
+    });
+    return run.f.orchestrator.getSnapshot("run-1")?.revision ?? -1;
+  }
+
+  function windowLines(run: HeldRun): readonly (Record<string, unknown> | undefined)[] {
+    return run.log.records
+      .filter((event) => event.op === "coding-runtime.undo-window")
+      .map((event) => event.extra);
+  }
+
+  it("holds a succeeded run's runtime instead of stopping it and opens the window", async () => {
+    const run = heldRun();
+    await run.f.orchestrator.start(start);
+    run.finish("succeeded");
+    await settled(run, "succeeded");
+
+    expect(run.hold).toHaveBeenCalledWith("run-1");
+    expect(run.f.manager.stop).not.toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(windowLines(run)).toMatchObject([{ runId: "run-1", event: "opened" }]);
+    });
+    await expect(run.f.orchestrator.revertState("run-1")).resolves.toMatchObject(COUNTS);
+  });
+
+  it("undoes the settled turn at its revision, advances that revision and keeps its settlement time", async () => {
+    const run = heldRun();
+    await run.f.orchestrator.start(start);
+    run.finish("succeeded");
+    const revision = await settled(run, "succeeded");
+    const terminalAt = run.f.rows.get("run-1")?.terminalAt;
+    expect(terminalAt).toBeDefined();
+
+    await expect(
+      run.f.orchestrator.submitRevert("run-1", {
+        requestId: "req-undo-1",
+        expectedRevision: revision,
+        action: "undo",
+      }),
+    ).resolves.toMatchObject({ ok: true });
+
+    expect(run.revert).toHaveBeenCalledOnce();
+    expect(run.f.rows.get("run-1")).toMatchObject({
+      state: "succeeded",
+      revision: revision + 1,
+      terminalAt,
+    });
+    // A second request at the revision the undo consumed reverts nothing.
+    await expect(
+      run.f.orchestrator.submitRevert("run-1", {
+        requestId: "req-undo-2",
+        expectedRevision: revision,
+        action: "undo",
+      }),
+    ).resolves.toEqual({ ok: false, failureCode: "invalid-intent" });
+    expect(run.revert).toHaveBeenCalledOnce();
+  });
+
+  it("closes the window before the next run starts: commits a staged undo, then stops the held runtime", async () => {
+    const run = heldRun();
+    await run.f.orchestrator.start(start);
+    run.finish("succeeded");
+    await settled(run, "succeeded");
+
+    await run.f.orchestrator.start(start);
+
+    expect(run.commitRevert).toHaveBeenCalledWith("run-1");
+    expect(run.f.manager.stop).toHaveBeenCalledWith("run-1", "succeeded");
+    const stopOrder = run.f.manager.stop.mock.invocationCallOrder[0] ?? 0;
+    const startOrder = run.f.manager.start.mock.invocationCallOrder[1] ?? 0;
+    expect(stopOrder).toBeLessThan(startOrder);
+    expect(windowLines(run).at(-1)).toMatchObject({
+      event: "closed",
+      reason: "next-run",
+      stagedRevert: "committed",
+      stopped: true,
+    });
+    await expect(run.f.orchestrator.revertState("run-1")).resolves.toBeUndefined();
+  });
+
+  it("stops the runtime as before when the settled turn changed nothing", async () => {
+    const run = heldRun(0);
+    await run.f.orchestrator.start(start);
+    run.finish("succeeded");
+    await settled(run, "succeeded");
+
+    expect(run.hold).not.toHaveBeenCalled();
+    expect(run.f.manager.stop).toHaveBeenCalledWith("run-1", "succeeded");
+    expect(windowLines(run)).toEqual([]);
+  });
+
+  it("stops the runtime as before when the run did not succeed", async () => {
+    const run = heldRun();
+    await run.f.orchestrator.start(start);
+    run.finish("failed");
+    await settled(run, "failed");
+
+    expect(run.hold).not.toHaveBeenCalled();
+    expect(run.f.manager.stop).toHaveBeenCalledWith("run-1", "failed");
+  });
+
+  it("closes the window at shutdown", async () => {
+    const run = heldRun();
+    await run.f.orchestrator.start(start);
+    run.finish("succeeded");
+    await settled(run, "succeeded");
+
+    await run.f.orchestrator.shutdown();
+
+    expect(run.f.manager.stop).toHaveBeenCalledWith("run-1", "succeeded");
+    expect(windowLines(run).at(-1)).toMatchObject({ event: "closed", reason: "shutdown" });
   });
 });

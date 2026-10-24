@@ -157,6 +157,8 @@ export interface CodingRuntimeOrchestratorDeps {
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly activityLog?: ServerLogSink | undefined;
   readonly now?: () => Date;
+  /** How long a succeeded run's runtime is held for undo (#3904 AC3); defaults to 30 minutes. */
+  readonly undoWindowMs?: number | undefined;
   readonly newRunId?: () => string;
 }
 

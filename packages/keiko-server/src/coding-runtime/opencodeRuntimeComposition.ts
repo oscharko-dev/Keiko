@@ -655,6 +655,7 @@ export interface OpenCodeRunPort {
    */
   readonly revertTurn?: OpenCodeRevertRunPort["revertTurn"] | undefined;
   readonly revertState?: OpenCodeRevertRunPort["revertState"] | undefined;
+  readonly commitStagedRevert?: OpenCodeRevertRunPort["commitStagedRevert"] | undefined;
   /**
    * How the armed turn ended (`OpenCodeTurnOutcome`): `true` succeeded, `false` failed or was
    * abandoned, `"interrupted"` the runtime ended it at a human's refusal of a question.

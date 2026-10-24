@@ -28,7 +28,8 @@ import type { OpenCodeV2FileDiff, OpenCodeV2HttpClient } from "./opencodeV2HttpC
  * Turn revert for a live native OpenCode run (B3, S04), built on the producer's snapshots
  * (`snapshots: true`): `session.diff` reports what the newest turn changed, `session.revert.stage`
  * restores those files and rewinds the session to the turn's first user message, and
- * `session.revert.clear` re-applies them. Keiko stages and clears; it never commits (see
+ * `session.revert.clear` re-applies them. Keiko stages and clears while the run is live, and
+ * commits only an undo left staged when the post-completion undo window closes (see
  * `codingRuntimeRevert.ts`). Everything here is workspace-contained, human-initiated (the route
  * admits it behind the app session and the live authority guard) and body-free: the log carries
  * counts and closed words, never a path, a patch or a message.
@@ -48,7 +49,7 @@ const OPENCODE_REVERT_REFUSALS = [
 ] as const satisfies readonly CodingRuntimeRevertRefusal[];
 
 type OpenCodeRevertRefusal = (typeof OPENCODE_REVERT_REFUSALS)[number];
-type OpenCodeRevertOperation = CodingWorkbenchRuntimeRevertAction | "state" | "submit";
+type OpenCodeRevertOperation = CodingWorkbenchRuntimeRevertAction | "state" | "submit" | "commit";
 
 const CODING_RUNTIME_REVERT_APPLIED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -63,7 +64,7 @@ const CODING_RUNTIME_REVERT_APPLIED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["undo", "restore"],
+      values: ["undo", "restore", "commit"],
     },
     fileCount: { type: "integer", dataClass: "count", required: true },
     additions: { type: "integer", dataClass: "count", required: true },
@@ -91,7 +92,7 @@ const CODING_RUNTIME_REVERT_REFUSED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["undo", "restore", "state", "submit"],
+      values: ["undo", "restore", "state", "submit", "commit"],
     },
     reason: {
       type: "string",
@@ -163,7 +164,7 @@ export interface OpenCodeRevertRun {
   readonly sessionId: string;
   readonly client: Pick<
     OpenCodeV2HttpClient,
-    "active" | "clearRevert" | "messages" | "sessionDiff" | "stageRevert"
+    "active" | "clearRevert" | "commitRevert" | "messages" | "sessionDiff" | "stageRevert"
   >;
   revert?: OpenCodeStagedRevert | undefined;
   /**
@@ -188,13 +189,45 @@ export interface OpenCodeRevertRunPort {
     correlationId?: string,
   ) => Promise<CodingRuntimeRevertResult>;
   readonly revertState: (runId: string) => Promise<CodingRuntimeRevertState | undefined>;
+  /**
+   * Makes an undo the human left staged final (`session.revert.commit`) when the post-completion
+   * undo window closes (#3904 AC3), so the session that is retained matches the workspace. The run
+   * is settled by then and its history captured, so the rewound messages leave no live projection
+   * behind. `none` when nothing is staged.
+   */
+  readonly commitStagedRevert: (runId: string) => Promise<"committed" | "none" | "failed">;
 }
 
 export function createOpenCodeRevertRunPort(ports: OpenCodeRevertPorts): OpenCodeRevertRunPort {
   return {
     revertTurn: (runId, action, correlationId) => revertTurn(ports, runId, action, correlationId),
     revertState: (runId) => revertState(ports, runId),
+    commitStagedRevert: (runId) => commitStagedRevert(ports, runId),
   };
+}
+
+async function commitStagedRevert(
+  ports: OpenCodeRevertPorts,
+  runId: string,
+): Promise<"committed" | "none" | "failed"> {
+  const run = ports.readyRun(runId);
+  const staged = run?.revert;
+  if (run === undefined || staged === undefined) return "none";
+  try {
+    await run.client.commitRevert(run.sessionId);
+    run.revert = undefined;
+    recordRevertApplied(
+      ports.activityLog,
+      runId,
+      "commit",
+      { ...countsOf(staged), interrupted: false },
+      undefined,
+    );
+    return "committed";
+  } catch (error) {
+    recordRevertRefusal(ports, runId, "commit", "revert-failed", undefined, error);
+    return "failed";
+  }
 }
 
 async function revertTurn(
@@ -532,7 +565,7 @@ function recordRevertRefusal(
 function recordRevertApplied(
   activityLog: ServerLogSink | undefined,
   runId: string,
-  action: CodingWorkbenchRuntimeRevertAction,
+  action: CodingWorkbenchRuntimeRevertAction | "commit",
   outcome: CodingRuntimeRevertCounts & { readonly interrupted: boolean },
   correlationId: string | undefined,
 ): void {

@@ -215,6 +215,14 @@ export type CodingRuntimeStopResult =
       readonly retryable: false;
     };
 
+/**
+ * A succeeded run held for the post-completion undo window (#3904 AC3): its authority is revoked
+ * but its process tree is kept until `stop` reaps it. A runtime that could not be held was stopped
+ * instead, and answers like `stop`.
+ */
+export type CodingRuntimeHoldResult =
+  { readonly ok: true; readonly status: "held" } | CodingRuntimeStopResult;
+
 export interface CodingRuntimeRunResult {
   readonly status: "cancelled" | "failed" | "signalled" | "succeeded";
   readonly exitCode: number | null;
@@ -497,6 +505,17 @@ type CodingRuntimeTerminalStatus = Extract<
   "cancelled" | "failed" | "succeeded"
 >;
 
+/** Only a ready native runtime that no teardown has reached can keep its process for undo. */
+function holdable(active: ActiveRuntime): boolean {
+  return (
+    active.openCodeLifecycleAdapter !== undefined &&
+    active.status === "ready" &&
+    !active.stopRequested &&
+    !active.tearingDown &&
+    active.stopPromise === undefined
+  );
+}
+
 function mostSevereTerminalStatus(
   current: CodingRuntimeTerminalStatus,
   requested: CodingRuntimeTerminalStatus,
@@ -533,6 +552,12 @@ export interface CodingRuntimeManager {
   pause(runId: string): CodingRuntimePauseResult;
   resume(runId: string, requestedMode?: CodingWorkbenchMode): CodingRuntimePauseResult;
   stop(runId: string, resultStatus?: CodingRuntimeTerminalStatus): Promise<CodingRuntimeStopResult>;
+  /**
+   * Ends a run that succeeded without terminating its native runtime (#3904 AC3): every run
+   * authority is revoked exactly as for a stop, and the process tree stays for the undo window until
+   * `stop` reaps it. A runtime that cannot be held is stopped instead.
+   */
+  hold?(runId: string): Promise<CodingRuntimeHoldResult>;
   takeover(runId: string): Promise<CodingRuntimeStopResult>;
   reconcile(runId: string): Promise<CodingRuntimeStopResult>;
   health(): CodingRuntimeHealthReport;
@@ -868,6 +893,22 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     const stopping = this.stopActive(active);
     active.stopPromise = stopping;
     return stopping;
+  }
+
+  public async hold(runId: string): Promise<CodingRuntimeHoldResult> {
+    const active = this.active;
+    if (active?.context.runId !== runId) {
+      return { ok: false, failureCode: "runtime-run-mismatch", retryable: false };
+    }
+    if (!holdable(active)) return this.stop(runId, "succeeded");
+    // Quiesces the runtime's own exit, monitor, output and approval handling exactly like a stop
+    // request does; the later `stop` still revokes again, reaps the tree and disposes the run.
+    active.stopRequested = true;
+    active.stopResultStatus = mostSevereTerminalStatus(active.stopResultStatus, "succeeded");
+    active.shutdownBarrierComplete = await this.runShutdownBarrier(active);
+    if (!active.shutdownBarrierComplete) return this.stop(runId, "succeeded");
+    this.captureResult(active, active.stopResultStatus, null);
+    return { ok: true, status: "held" };
   }
 
   private async stopActive(active: ActiveRuntime): Promise<CodingRuntimeStopResult> {

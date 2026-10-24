@@ -1821,9 +1821,10 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   undo stops the turn in flight (the runtime refuses to rewind a busy session), stages
   `session.revert.stage` at the first user message of the newest turn and leaves the run live; the
   coordinator reserves the next task generation first, so the interrupted turn's cancelled outcome
-  does not settle the run. Keiko never calls `session.revert.commit`: committing, and the next
-  prompt after a staged revert, delete the rewound messages, while the history reconciliation is
-  append-only per session, so a new turn is refused (`turn-blocked`) while an undo is staged. The
+  does not settle the run. While the run is live Keiko never calls `session.revert.commit`:
+  committing, and the next prompt after a staged revert, delete the rewound messages, while the
+  history reconciliation is append-only per session, so a new turn is refused (`turn-blocked`)
+  while an undo is staged. The
   runtime restores whole files, so Keiko proves each file unchanged by content before it lets the
   runtime write: the SHA-256 of its bytes, read through a descriptor that follows no link. Size and
   timestamps are no witness, since a same-size copy that puts the old modification time back would
@@ -1836,10 +1837,31 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   (`session.revert.clear`) needs every restored file to match the image the undo left. A human
   change made while a turn ran, to a file no edit of that turn wrote, is the one change Keiko cannot
   tell apart from the turn's own once the turn settled; the runtime's snapshot counts it as the
-  turn's. A settled run has no
-  undo: its private state, snapshots included, is removed with it. Evidence is
-  `coding-runtime.revert.applied`, `.refused` and `.dispatch-failed`: counts and closed words,
-  never a path, patch or message.
+  turn's. Evidence is `coding-runtime.revert.applied`, `.refused` and `.dispatch-failed`: counts
+  and closed words, never a path, patch or message.
+- **A succeeded native run keeps its undo for a bounded window (#3904 AC3, owner decision
+  2026-10-24).** A run used to settle when its turn ended and to remove its private state,
+  snapshots included, so a settled turn could not be undone, unlike standalone OpenCode. Now a
+  native run that succeeded with an undoable newest turn (`session.diff` names a file, or an undo
+  is staged) is held instead of stopped: `CodingRuntimeManager.hold` runs the same revocation
+  barrier as a stop (runtime capabilities, approvals, research grants, in-flight actions) and
+  records the run's result as succeeded, but keeps the process tree until a later `stop` reaps it.
+  The run settles normally (history captured, evidence settled, slot published as settled); the
+  production slot stays claimed, so no run can start over a held runtime. `CodingRuntimeUndoWindow`
+  closes the window when the next run starts or is retried, after 30 minutes, or at server
+  shutdown; a run that did not settle as succeeded is released at once. While the window is open
+  the coordinator admits undo and restore of the held run, and the counts behind them, under the
+  settled snapshot's revision and a one-use request id; the revision advances, the settlement time
+  does not. The dispatcher admits them under the current workspace binding
+  (`productionWorkspaceMatches`) in place of the ended run authority and refuses every other
+  operation on a held run. When the window closes, an undo left staged is committed with
+  `session.revert.commit` (the run is settled and its history captured by then, so no live
+  projection depends on the rewound messages), then the runtime is stopped and its session retained
+  like any settled run. Evidence is `coding-runtime.undo-window` (`opened`, `closed` with
+  `next-run`, `expired`, `shutdown` or `not-succeeded`, the staged-undo outcome and whether the stop
+  succeeded) beside the existing `coding-runtime.revert.*` lines (`commit` for the final commit).
+  The original executable proves the undo, restore and closing commit of a settled turn and that
+  the committed session passes the retention audit (`opencodeNativeRevert.real.test.ts`).
 - **Evidence.** `coding-runtime.native-policy.decided` records, per evaluated action, the mode, the
   closed action name, the effect (`allow`, `deny`, `ask`), the closed outcome (allowed, a hard
   denial reason, the human's approved/denied/expired/cancelled/unavailable, or

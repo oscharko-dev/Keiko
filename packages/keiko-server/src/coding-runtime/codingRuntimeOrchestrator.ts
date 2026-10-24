@@ -61,6 +61,7 @@ import {
 import type {
   CodingRuntimeApprovalIssueResult,
   CodingRuntimeFailureCode,
+  CodingRuntimeHoldResult,
   CodingRuntimeManager,
 } from "./codingRuntimeManager.js";
 import type {
@@ -142,6 +143,7 @@ import {
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { CodingRuntimeMentionables } from "./opencodeCommands.js";
+import { CodingRuntimeUndoWindow, type UndoWindowHoldOutcome } from "./codingRuntimeUndoWindow.js";
 export type { CodingRuntimeIssueIntake } from "./codingRuntimeIssueIntake.js";
 
 const CODING_RUNTIME_STATE_FIELD = {
@@ -1903,6 +1905,8 @@ export class CodingRuntimeOrchestrator {
   // rolled up with the run host's counts on the settlement line.
   private readonly effort = new CodingRuntimeRunEffortLedger();
   private readonly operations: CodingRuntimeOperationCoordinator;
+  // #3904 AC3: the succeeded run whose runtime is held so its newest turn can still be undone.
+  private readonly undoWindow: CodingRuntimeUndoWindow;
   private readonly projection: CodingRuntimeOrchestratorState;
   private readonly now: () => Date;
   private readonly newRunId: () => string;
@@ -1943,6 +1947,7 @@ export class CodingRuntimeOrchestrator {
       settleTask: (runId, outcome): void => {
         this.queueTaskSettlement(runId, outcome);
       },
+      held: (): CodingRuntimeSnapshot | undefined => this.heldSnapshot(),
       questionPort: deps.questionPort,
       manager: deps.manager,
       // [P1] review 3941746512: this seam was never wired, so every question/follow-up transport
@@ -1950,6 +1955,7 @@ export class CodingRuntimeOrchestrator {
       // production actually reads.
       activityLog: deps.activityLog,
     });
+    this.undoWindow = this.createUndoWindow(deps);
     // Production bootstrap marks stale active rows recovery-required before composition. Restore only
     // that content-free slot; no adapter turn or productive action is ever replayed.
     this.activeRunId = deps.snapshots.listRecentActive(1)[0]?.runId;
@@ -1966,13 +1972,41 @@ export class CodingRuntimeOrchestrator {
    * `startFresh`.
    */
   start(input: unknown, correlationId?: string): Promise<CodingRuntimeOrchestratorResult> {
-    return this.serial(() =>
-      this.startFreshAgainstPredecessor(
+    return this.serial(async () => {
+      // The next run ends the previous run's undo window: its runtime holds the slot until then.
+      await this.undoWindow.close("next-run");
+      return this.startFreshAgainstPredecessor(
         input,
         this.acknowledgedRecoveryPredecessorId(),
         correlationId,
-      ),
-    );
+      );
+    });
+  }
+
+  private createUndoWindow(deps: CodingRuntimeOrchestratorDeps): CodingRuntimeUndoWindow {
+    return new CodingRuntimeUndoWindow({
+      canHold: (): boolean =>
+        deps.manager.hold !== undefined && deps.taskDispatcher.commitRevert !== undefined,
+      revertState: async (runId): Promise<CodingRuntimeRevertState | undefined> =>
+        deps.taskDispatcher.revertState?.(runId),
+      hold: async (runId): Promise<CodingRuntimeHoldResult> =>
+        (await deps.manager.hold?.(runId)) ?? deps.manager.stop(runId, "succeeded"),
+      commitStagedRevert: async (runId): Promise<"committed" | "none" | "failed"> =>
+        (await deps.taskDispatcher.commitRevert?.(runId)) ?? "none",
+      stop: async (runId): Promise<boolean> => (await deps.manager.stop(runId, "succeeded")).ok,
+      expire: (close): void => {
+        void this.serial(close);
+      },
+      now: (): number => this.now().getTime(),
+      windowMs: deps.undoWindowMs,
+      activityLog: deps.activityLog,
+    });
+  }
+
+  /** The settled run whose runtime is held for undo, while its window is open (#3904 AC3). */
+  private heldSnapshot(): CodingRuntimeSnapshot | undefined {
+    const runId = this.undoWindow.heldRunId();
+    return runId === undefined ? undefined : this.deps.snapshots.get(runId);
   }
 
   private acknowledgedRecoveryPredecessorId(): string | undefined {
@@ -2009,6 +2043,7 @@ export class CodingRuntimeOrchestrator {
         return this.fail("invalid-intent");
       if (this.activeRunId !== undefined && this.activeRunId !== runId)
         return this.fail("active-run-conflict");
+      await this.undoWindow.close("next-run");
       return this.startFreshAgainstPredecessor(input, runId, correlationId);
     });
   }
@@ -3076,10 +3111,32 @@ export class CodingRuntimeOrchestrator {
     const truthfulOutcome = verificationFailure?.state ?? outcome;
     if (verificationFailure !== undefined)
       this.recordVerificationContinuation(runId, "not-evidenced");
-    const stopped = await this.stopForSettlement(runId, truthfulOutcome);
+    const ended = await this.endForSettlement(runId, truthfulOutcome);
     const live = this.current();
-    if (live?.runId !== runId) return;
-    this.settleStoppedTask(live, truthfulOutcome, stopped, cause, verificationFailure);
+    if (live?.runId === runId)
+      this.settleStoppedTask(live, truthfulOutcome, ended.stopped, cause, verificationFailure);
+    if (ended.held) await this.openOrReleaseUndoWindow(runId);
+  }
+
+  /**
+   * #3904 AC3 (owner decision 2026-10-24): a native run that succeeded with an undoable newest turn
+   * keeps its runtime, with its authority revoked, for the post-completion undo window; every other
+   * settlement stops the runtime as before.
+   */
+  private async endForSettlement(
+    runId: string,
+    outcome: CodingRuntimeTaskOutcome,
+  ): Promise<UndoWindowHoldOutcome> {
+    const held = outcome === "succeeded" ? await this.undoWindow.hold(runId) : undefined;
+    return held ?? { stopped: await this.stopForSettlement(runId, outcome), held: false };
+  }
+
+  private async openOrReleaseUndoWindow(runId: string): Promise<void> {
+    if (this.deps.snapshots.get(runId)?.state === "succeeded") {
+      this.undoWindow.open(runId);
+      return;
+    }
+    await this.undoWindow.release(runId, "not-succeeded");
   }
 
   private verificationMissing(runId: string, outcome: CodingRuntimeTaskOutcome): boolean {
@@ -3523,6 +3580,7 @@ export class CodingRuntimeOrchestrator {
    * confirmation (owner review, PR #3452).
    */
   async shutdown(correlationId?: string): Promise<CodingRuntimeOrchestratorResult> {
+    await this.undoWindow.close("shutdown");
     const current = this.current();
     if (current === undefined) {
       this.deps.safeActivityProjection?.purgeAll("shutdown", correlationId);
@@ -4203,6 +4261,8 @@ export class CodingRuntimeOrchestrator {
       state: current.state,
       revision: current.revision + 1,
       updatedAt: this.now().toISOString(),
+      // An undo of a held, settled run (#3904 AC3) advances its revision, never its settlement time.
+      ...(current.terminalAt === undefined ? {} : { terminalAt: current.terminalAt }),
     });
     return this.projection.publish(next, eventKind)
       ? { ok: true, snapshot: this.publicSnapshotWithDescription(next) }

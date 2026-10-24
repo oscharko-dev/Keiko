@@ -5,11 +5,12 @@ import type { CodingWorkbenchRuntimeFailureCode } from "@oscharko-dev/keiko-cont
  * does the work, the dispatcher that admits it, the coordinator that serializes it and the route
  * that answers it. Pure data, so no layer imports another to name a refusal.
  *
- * Why an undo only STAGES the runtime's revert and never commits it: committing deletes the
+ * Why an undo only STAGES the runtime's revert while the run is live: committing deletes the
  * rewound messages from the session, and Keiko's history reconciliation is append-only per session
  * (a message that reappears at an already-seen position with another digest fails the run). A
- * staged revert keeps the history intact, restores the files, and stays recoverable until the run
- * ends.
+ * staged revert keeps the history intact, restores the files, and stays recoverable. Only when the
+ * post-completion undo window closes (#3904 AC3), after the run settled and its history was
+ * captured, is a staged undo committed, so the retained session matches the workspace.
  */
 export const CODING_RUNTIME_REVERT_REFUSALS = [
   "already-staged",
