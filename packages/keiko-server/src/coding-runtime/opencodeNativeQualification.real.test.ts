@@ -1,6 +1,7 @@
 import { spawn, spawnSync, type ChildProcessByStdio } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
+  cpSync,
   existsSync,
   linkSync,
   mkdirSync,
@@ -8,12 +9,14 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Readable } from "node:stream";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { McpServerDefinition, VerificationKind } from "@oscharko-dev/keiko-contracts";
 import { isGatewayNativeToolAdvertisement } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
@@ -315,6 +318,13 @@ interface LaunchOptions {
   readonly plugins: Readonly<Record<string, string>>;
   /** The operator's MCP registry servers for this run, admitted as production admits them. */
   readonly mcpServers?: ((fixture: Fixture) => readonly McpServerDefinition[]) | undefined;
+  /**
+   * A toolchain directory on the launcher's `PATH`, opened as production opens the launcher's
+   * `PATH` (`nativeToolchainReadRoots`), so the agent runs the host's real executables (#3901 AC1).
+   */
+  readonly toolchainPath?: string | undefined;
+  /** Provisions the workspace beyond plain text files (a project's installed packages). */
+  readonly prepare?: ((fixture: Fixture) => void) | undefined;
 }
 
 const PRODUCTION_LAUNCH: LaunchOptions = {
@@ -326,6 +336,21 @@ const PRODUCTION_LAUNCH: LaunchOptions = {
   env: {},
   plugins: {},
 };
+
+function toolchainReadRoots(
+  options: LaunchOptions,
+  fixture: Fixture,
+): { readonly toolchainReadRoots?: readonly string[] } {
+  const paths = [
+    ...(options.mcpServers?.(fixture) ?? []).flatMap((server) =>
+      server.transport.kind === "local" ? [dirname(server.transport.command[0])] : [],
+    ),
+    ...(options.toolchainPath === undefined ? [] : [options.toolchainPath]),
+  ];
+  return paths.length === 0
+    ? {}
+    : { toolchainReadRoots: nativeToolchainReadRoots(paths.join(":"), homedir()) };
+}
 
 /** Renames the one model alias of a configuration document, leaving the rest untouched. */
 function withModelAlias(document: Record<string, unknown>, alias: string): Record<string, unknown> {
@@ -423,20 +448,9 @@ function launch(
       privateStateRoot: fixture.state,
       runtimeReadRoot: runtimeRoot,
       protectedWriteRoots: [openCodeConfigDirectory(fixture.state)],
-      // As production opens them: the admitted local MCP servers' install prefixes (#3903).
-      ...(options.mcpServers === undefined
-        ? {}
-        : {
-            toolchainReadRoots: nativeToolchainReadRoots(
-              options
-                .mcpServers(fixture)
-                .flatMap((server) =>
-                  server.transport.kind === "local" ? [dirname(server.transport.command[0])] : [],
-                )
-                .join(":"),
-              homedir(),
-            ),
-          }),
+      // As production opens them: the admitted local MCP servers' install prefixes (#3903) and the
+      // launcher's toolchain `PATH` (#3901 AC1).
+      ...toolchainReadRoots(options, fixture),
     },
   });
   const command = buildRuntimeGatewaySeatbeltCommand(policy, binary, profile.args, git.path);
@@ -452,7 +466,9 @@ function launch(
         OPENCODE_CONFIG_CONTENT: JSON.stringify(
           alias === undefined ? bound : withModelAlias(bound, alias),
         ),
-        PATH: `${dirname(git.path)}:/usr/bin:/bin`,
+        PATH: [dirname(git.path), options.toolchainPath, "/usr/bin", "/bin"]
+          .filter((entry) => entry !== undefined)
+          .join(":"),
         KEIKO_MODEL_GATEWAY_URL: gatewayUrl,
         KEIKO_MODEL_GATEWAY_CAPABILITY: GATEWAY_CAPABILITY,
         KEIKO_TOOL_FACADE_URL: `http://127.0.0.1:${String(ports.facade)}/native-policy`,
@@ -527,6 +543,7 @@ async function withRun(
     throw new Error("fixture-binary-missing");
   expect(process.platform).toBe("darwin");
   const fixture = createFixture(options.files);
+  options.prepare?.(fixture);
   const gateway = await startGateway();
   const mcp =
     options.mcpServers === undefined
@@ -1593,6 +1610,248 @@ describe("pinned native OpenCode project checks (T10, #3901)", () => {
       });
     },
     120_000,
+  );
+});
+
+// ─── T10/T11: the project's own toolchain (#3901 AC1) ──────────────────────────────────────────
+
+// The native shell runs the host's real executables when the launcher's `PATH` names them, opened
+// as production opens that `PATH`. In Full access a dependency install reaches the project's
+// registry (on loopback here) and a generation script runs with what it installed; below Full the
+// runtime's package manager stays offline, so the same install fails at once instead of reaching
+// out. The project's own Vitest fails, is repaired through a native edit and passes.
+describe("pinned native OpenCode with the project's own toolchain (#3901 AC1)", () => {
+  const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
+  const NODE_BIN = dirname(process.execPath);
+  const REPOSITORY_MODULES = fileURLToPath(new URL("../../../../node_modules", import.meta.url));
+  const DEPENDENCY = "keiko-fixture-dep";
+  const TARBALL = `/${DEPENDENCY}/-/${DEPENDENCY}-1.0.0.tgz`;
+
+  /** The one package the project's registry serves, packed as npm packs it. */
+  function packedDependency(): Buffer {
+    const root = mkdtempSync(join(tmpdir(), "keiko-native-registry-"));
+    try {
+      mkdirSync(join(root, "package"));
+      writeFileSync(
+        join(root, "package", "package.json"),
+        JSON.stringify({ name: DEPENDENCY, version: "1.0.0", type: "module", main: "index.js" }),
+      );
+      writeFileSync(
+        join(root, "package", "index.js"),
+        'export const greeting = "hello from the registry";\n',
+      );
+      const packed = spawnSync("/usr/bin/tar", ["-czf", "package.tgz", "package"], { cwd: root });
+      if (packed.status !== 0) throw new Error("fixture-pack-failed");
+      return readFileSync(join(root, "package.tgz"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  async function startRegistry(): Promise<Stub> {
+    const tarball = packedDependency();
+    return startStub((self, recorded, response) => {
+      if (recorded.url === `/${DEPENDENCY}`) {
+        const base = `http://127.0.0.1:${String(self.port)}`;
+        const version = {
+          name: DEPENDENCY,
+          version: "1.0.0",
+          type: "module",
+          main: "index.js",
+          dist: {
+            tarball: `${base}${TARBALL}`,
+            integrity: `sha512-${createHash("sha512").update(tarball).digest("base64")}`,
+            shasum: createHash("sha1").update(tarball).digest("hex"),
+          },
+        };
+        const packument = { name: DEPENDENCY, "dist-tags": { latest: "1.0.0" } };
+        response
+          .writeHead(200, { "Content-Type": "application/json" })
+          .end(JSON.stringify({ ...packument, versions: { "1.0.0": version } }));
+      } else if (recorded.url === TARBALL) {
+        response.writeHead(200, { "Content-Type": "application/octet-stream" }).end(tarball);
+      } else {
+        response.writeHead(404, { "Content-Type": "application/json" }).end("{}");
+      }
+    });
+  }
+
+  /** The packages the repository installed for Vitest, copied as a project's own install. */
+  function provisionVitest(fixture: Fixture): void {
+    const target = join(fixture.workspace, "node_modules");
+    for (const relative of vitestClosure())
+      cpSync(join(REPOSITORY_MODULES, relative), join(target, relative), {
+        recursive: true,
+        verbatimSymlinks: true,
+      });
+    mkdirSync(join(target, ".bin"), { recursive: true });
+    symlinkSync("../vitest/vitest.mjs", join(target, ".bin", "vitest"));
+  }
+
+  /** Vitest and every package it needs, as top-level paths under `node_modules`. */
+  function vitestClosure(): readonly string[] {
+    const seen = new Set<string>();
+    const visit = (directory: string): void => {
+      if (seen.has(directory)) return;
+      seen.add(directory);
+      const manifest = JSON.parse(readFileSync(join(directory, "package.json"), "utf8")) as {
+        readonly dependencies?: Readonly<Record<string, string>>;
+        readonly optionalDependencies?: Readonly<Record<string, string>>;
+      };
+      for (const name of Object.keys({
+        ...manifest.dependencies,
+        ...manifest.optionalDependencies,
+      })) {
+        const found = installedPackage(name, directory);
+        if (found !== undefined) visit(found);
+      }
+    };
+    visit(join(REPOSITORY_MODULES, "vitest"));
+    return [...seen]
+      .map((directory) => directory.slice(REPOSITORY_MODULES.length + 1))
+      .filter((relative) => !relative.includes("/node_modules/"));
+  }
+
+  function installedPackage(name: string, from: string): string | undefined {
+    for (let directory = from; directory.startsWith(REPOSITORY_MODULES);) {
+      const candidate = join(directory, "node_modules", name);
+      if (existsSync(join(candidate, "package.json"))) return candidate;
+      directory = dirname(directory);
+    }
+    const top = join(REPOSITORY_MODULES, name);
+    return existsSync(join(top, "package.json")) ? top : undefined;
+  }
+
+  /** A project with a generation script that imports the dependency it installs. */
+  function generatingProject(): Readonly<Record<string, string>> {
+    return {
+      "package.json": JSON.stringify({
+        name: "fixture",
+        version: "1.0.0",
+        private: true,
+        scripts: { generate: "node scripts/generate.mjs" },
+      }),
+      "scripts/generate.mjs": [
+        `import { greeting } from "${DEPENDENCY}";`,
+        'import { writeFileSync } from "node:fs";',
+        "writeFileSync(`src/generated.js`, `export const greeting = ${JSON.stringify(greeting)};\\n`);",
+        "",
+      ].join("\n"),
+      "src/index.js": "export {};\n",
+    };
+  }
+
+  /** The install line: a project's `.npmrc` is a denied sensitive file, so the registry is named. */
+  function installLine(registry: Stub): string {
+    const url = `http://127.0.0.1:${String(registry.port)}/`;
+    return `npm install --no-audit --no-fund --registry=${url} ${DEPENDENCY}@1.0.0`;
+  }
+
+  it.skipIf(skip)(
+    "installs a dependency in Full access and runs a generation script with it",
+    async () => {
+      const registry = await startRegistry();
+      try {
+        const files = generatingProject();
+        await withRun(
+          { mode: "autonomous-delivery", toolchainPath: NODE_BIN, files },
+          async (run) => {
+            const workspace = run.fixture.workspace;
+            await scriptedTurn(run, shell(installLine(registry)));
+            expect(
+              (
+                JSON.parse(readFileSync(join(workspace, "package.json"), "utf8")) as {
+                  readonly dependencies?: unknown;
+                }
+              ).dependencies,
+            ).toEqual({ [DEPENDENCY]: "^1.0.0" });
+            expect(existsSync(join(workspace, "node_modules", DEPENDENCY, "index.js"))).toBe(true);
+            expect(registry.requests.map((request) => request.url)).toEqual(
+              expect.arrayContaining([`/${DEPENDENCY}`, TARBALL]),
+            );
+            await scriptedTurn(run, shell("npm run generate"));
+            expect(readFileSync(join(workspace, "src", "generated.js"), "utf8")).toBe(
+              'export const greeting = "hello from the registry";\n',
+            );
+            // Full access runs both without a per-action approval.
+            expect(
+              run.facade.decisions
+                .filter((decision) => decision.permission === "shell")
+                .map((decision) => decision.effect),
+            ).toEqual(["allow", "allow"]);
+          },
+        );
+      } finally {
+        await closeStub(registry);
+      }
+    },
+    180_000,
+  );
+
+  it.skipIf(skip)(
+    "keeps the package manager offline below Full access, so an install fails without a request",
+    async () => {
+      const registry = await startRegistry();
+      try {
+        await withRun({ toolchainPath: NODE_BIN, files: generatingProject() }, async (run) => {
+          const result = await scriptedTurn(run, shell(installLine(registry)));
+          expect(result).toContain("ENOTCACHED");
+          expect(existsSync(join(run.fixture.workspace, "node_modules", DEPENDENCY))).toBe(false);
+          // Only npm's own update check may ask; the dependency was never fetched.
+          expect(registry.requests.map((request) => request.url)).not.toEqual(
+            expect.arrayContaining([`/${DEPENDENCY}`]),
+          );
+          expect(registry.requests.map((request) => request.url)).not.toContain(TARBALL);
+        });
+      } finally {
+        await closeStub(registry);
+      }
+    },
+    180_000,
+  );
+
+  it.skipIf(skip)(
+    "runs the project's own Vitest, repairs the failure through a native edit and passes on the rerun",
+    async () => {
+      const vitest = JSON.parse(
+        readFileSync(join(REPOSITORY_MODULES, "vitest", "package.json"), "utf8"),
+      ) as { readonly version: string };
+      const files = {
+        "package.json": JSON.stringify({
+          name: "fixture",
+          version: "1.0.0",
+          private: true,
+          type: "module",
+          scripts: { test: "vitest run" },
+          devDependencies: { vitest: vitest.version },
+        }),
+        "src/sum.js": "export const sum = (a, b) => a - b;\n",
+        "src/sum.test.js": [
+          'import { expect, it } from "vitest";',
+          'import { sum } from "./sum.js";',
+          'it("adds", () => {',
+          "  expect(sum(2, 3)).toBe(5);",
+          "});",
+          "",
+        ].join("\n"),
+      };
+      await withRun({ toolchainPath: NODE_BIN, prepare: provisionVitest, files }, async (run) => {
+        const red = await scriptedTurn(run, shell("npm test"));
+        expect(red).toMatch(/Tests\s+1 failed/u);
+        await scriptedTurn(run, {
+          name: "edit",
+          arguments: { path: "src/sum.js", oldString: "a - b", newString: "a + b" },
+        });
+        const green = await scriptedTurn(run, shell("npm test"));
+        expect(green).toMatch(/Tests\s+1 passed/u);
+        // Keiko reads both runs as the project's test check, the evidence its ledger weighs.
+        const checks = run.facade.decisions
+          .filter((decision) => decision.permission === "shell")
+          .map((decision) => openCodeNativeVerificationKind(decision.resources));
+        expect(checks).toEqual(["test", "test"]);
+      });
+    },
+    240_000,
   );
 });
 
