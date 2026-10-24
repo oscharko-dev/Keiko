@@ -128,6 +128,13 @@ interface HistoryActivity {
    * resets (#3873 review). Absent for a projection that is not fed by the event stream.
    */
   readonly takeMergedEventCount?: (() => number) | undefined;
+  /**
+   * The text a user message is presented by when it is a slash command's (`opencodeCommands.ts`):
+   * the runtime stores the command's expanded template as that message. `isNew` says the history had
+   * not shown the message before this read. Absent presents every user message by its own text.
+   */
+  readonly userMessageDisplay?:
+    ((messageId: string, isNew: boolean) => string | undefined) | undefined;
 }
 
 interface Candidate {
@@ -756,6 +763,7 @@ function messageCandidates(
   live: OpenCodeV2LiveText,
   toolProfile: OpenCodeToolProfile,
   children: BackgroundChildren,
+  userDisplay?: string,
 ): readonly Candidate[] {
   assertMessageShape(message);
   const id = messageId(message);
@@ -772,7 +780,7 @@ function messageCandidates(
         messageId: id,
         occurredAt,
       }),
-      textCandidate(id, 0, visibleUserText(message), occurredAt),
+      textCandidate(id, 0, userDisplay ?? visibleUserText(message), occurredAt),
     ];
   }
   if (message.type === "compaction") return [nativeCompactionCandidate(message, id)];
@@ -845,6 +853,7 @@ function allCandidates(
   live: OpenCodeV2LiveText,
   known: ReadonlyMap<string, KnownCandidate>,
   toolProfile: OpenCodeToolProfile,
+  activity?: HistoryActivity,
 ): readonly Candidate[] {
   const result: Candidate[] = [candidate(`${sessionId}:created`, "observation", sessionId)];
   const children: BackgroundChildren = { launched: new Set(), reported: new Set() };
@@ -852,8 +861,15 @@ function allCandidates(
   for (const message of messages) {
     if (message.type === "user") parentMessageId = messageId(message);
     observeBackgroundChildren(message, children);
+    const userDisplay =
+      message.type === "user"
+        ? activity?.userMessageDisplay?.(
+            messageId(message),
+            !known.has(`${messageId(message)}:message`),
+          )
+        : undefined;
     result.push(
-      ...messageCandidates(message, parentMessageId, live, toolProfile, children),
+      ...messageCandidates(message, parentMessageId, live, toolProfile, children, userDisplay),
       ...changedNativeRetryCandidates(message, parentMessageId, known),
     );
   }
@@ -1060,7 +1076,7 @@ export function createOpenCodeV2HistoryProjection(
         throw new Error("opencode-v2-checkpoint-invalid");
       }
       if (pending === undefined) {
-        const candidates = allCandidates(sessionId, messages, live, known, toolProfile);
+        const candidates = allCandidates(sessionId, messages, live, known, toolProfile, activity);
         pending = makePending(sessionId, position, known, candidates);
         capture(candidates);
         recordHistoryProjection(activity, pending, live);

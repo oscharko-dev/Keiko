@@ -734,6 +734,28 @@ describe("prompt inputs the server offers", () => {
     });
   });
 
+  // The slash command menu is a prompt input of its own (ADR-0137 D10): an older server never states
+  // it, which reads as not offered, and the Codex source never gets it.
+  it("records the slash command offer beside the other inputs and reads its absence as none", () => {
+    const withCommands = withPromptInputs(readyState(), {
+      delivery: true,
+      references: true,
+      commands: true,
+    });
+    expect(offeredCodingWorkbenchPromptInputs(withCommands).commands).toBe(true);
+    const without = withPromptInputs(readyState(), { delivery: true, references: true });
+    expect(offeredCodingWorkbenchPromptInputs(without).commands).not.toBe(true);
+    const narrowed = withPromptInputs(withCommands, {
+      delivery: true,
+      references: true,
+      commands: false,
+    });
+    expect(offeredCodingWorkbenchPromptInputs(narrowed).commands).toBe(false);
+    expect(withPromptInputs(withCommands).promptInputs.commands).not.toBe(true);
+    const codex = { ...withCommands, runtimePreference: "codex-subscription" as const };
+    expect(offeredCodingWorkbenchPromptInputs(codex).commands).not.toBe(true);
+  });
+
   it("offers neither input to a Codex subscription run, whatever the managed runtime reported", () => {
     const offered = withPromptInputs(readyState(), { delivery: true, references: true });
     const codex = { ...offered, runtimePreference: "codex-subscription" as const };

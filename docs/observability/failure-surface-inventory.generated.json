@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "5007f8151f80b4eadae7fe33069325c9cb9a46691e8115024db1716df013a2ab"
+    "catalogDigest": "221aefc06c7e390f1b9861c745103004c4bfef4256106fae7f96f06d78f0b7b9"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -59,9 +59,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 564,
-    "proofCount": 577,
-    "resolvedProofCount": 577,
+    "operationCount": 565,
+    "proofCount": 578,
+    "resolvedProofCount": 578,
     "failureClassCount": 356,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -314,6 +314,7 @@
         "coding-runtime.authority.mint-failed",
         "coding-runtime.authority.minted",
         "coding-runtime.authority.revalidation-refused",
+        "coding-runtime.commands.listed",
         "coding-runtime.compaction",
         "coding-runtime.context-usage.observed",
         "coding-runtime.description",
@@ -1383,6 +1384,9 @@
     ],
     "coding-runtime.authority.revalidation-refused.emitted-line": [
       "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.test.ts"
+    ],
+    "coding-runtime.commands.listed.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/opencodeCommands.test.ts"
     ],
     "coding-runtime.compaction.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeRuntime.real.test.ts",

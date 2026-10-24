@@ -1299,6 +1299,258 @@ describe("CodingRuntimeOperationCoordinator prompt inputs", () => {
   });
 });
 
+// C02 / S15 (ADR-0137 D10): a follow-up may run as a slash command, and the first turn of a start
+// carries the same references and command. Both travel the same admission as any task text.
+describe("CodingRuntimeOperationCoordinator slash commands and first-prompt inputs", () => {
+  const command = { name: "review" };
+  const asCommand = (extra: Record<string, unknown> = {}): Record<string, unknown> => ({
+    ...followUp(),
+    command,
+    ...extra,
+  });
+
+  it("starts the turn as a command, with the text after it as the task intent", async () => {
+    const taskDispatcher = dispatcher();
+    const advanceRevision = vi.fn(
+      (_current: CodingRuntimeSnapshot, _eventKind?: string): CodingRuntimeOrchestratorResult => ({
+        ok: true,
+        snapshot: publicSnapshot(),
+      }),
+    );
+    const subject = coordinator({ taskDispatcher, advanceRevision });
+
+    await expect(
+      subject.submitFollowUp(
+        "run-1",
+        asCommand({ taskIntent: "the main branch" }),
+        "corr-0123456789",
+      ),
+    ).resolves.toMatchObject({ ok: true });
+
+    expect(taskDispatcher.dispatch).toHaveBeenCalledExactlyOnceWith({
+      runId: "run-1",
+      requestId: "req-1",
+      expectedRevision: 3,
+      taskIntent: "the main branch",
+      correlationId: "corr-0123456789",
+      command,
+    });
+    expect(taskDispatcher.deliver).not.toHaveBeenCalled();
+    // A command starts a turn like any follow-up: the revision advances with the task submitted.
+    expect(advanceRevision.mock.calls[0]?.[1]).toBe("task-submitted");
+  });
+
+  it.each(["", "   ", "\n"])(
+    "admits a command with no arguments (%j) and refuses the same text without a command",
+    async (taskIntent) => {
+      const taskDispatcher = dispatcher();
+      const subject = coordinator({ taskDispatcher });
+
+      await expect(
+        subject.submitFollowUp("run-1", asCommand({ taskIntent })),
+      ).resolves.toMatchObject({ ok: true });
+      expect(taskDispatcher.dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({ command, taskIntent }),
+      );
+
+      await expect(
+        subject.submitFollowUp("run-1", { ...followUp("req-2", 4), taskIntent }),
+      ).resolves.toEqual({ ok: false, failureCode: "invalid-intent" });
+      expect(taskDispatcher.dispatch).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("runs a paused run's command as the replacement of its turn", async () => {
+    const taskDispatcher = dispatcher();
+    const subject = coordinator({
+      taskDispatcher,
+      current: () => ({ ...runningSnapshot(), state: "paused" }),
+    });
+
+    await expect(subject.submitFollowUp("run-1", asCommand())).resolves.toMatchObject({ ok: true });
+
+    expect(taskDispatcher.replace).toHaveBeenCalledWith(expect.objectContaining({ command }));
+    expect(taskDispatcher.dispatch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a malformed command", { command: { name: "a b" } }],
+    ["an unknown command key", { command: { name: "review", template: "x" } }],
+    ["a delivery that names a command", { delivery: "queue" }],
+  ])(
+    "refuses %s before the dispatcher is reached, freeing the request id",
+    async (_name, extra) => {
+      const taskDispatcher = dispatcher();
+      const subject = coordinator({ taskDispatcher });
+
+      await expect(subject.submitFollowUp("run-1", asCommand(extra))).resolves.toEqual({
+        ok: false,
+        failureCode: "invalid-intent",
+      });
+
+      expect(taskDispatcher.dispatch).not.toHaveBeenCalled();
+      expect(taskDispatcher.deliver).not.toHaveBeenCalled();
+      await expect(subject.submitFollowUp("run-1", asCommand())).resolves.toMatchObject({
+        ok: true,
+      });
+    },
+  );
+
+  it("answers a command the run's runtime does not list as the request's own fault", async () => {
+    const taskDispatcher = dispatcher({
+      dispatch: () => Promise.resolve({ ok: false, reason: "inputs-refused" }),
+    });
+
+    await expect(
+      coordinator({ taskDispatcher }).submitFollowUp("run-1", asCommand()),
+    ).resolves.toEqual({ ok: false, failureCode: "invalid-intent" });
+  });
+
+  it("consumes the request id like any follow-up: a replay is refused and not dispatched twice", async () => {
+    const taskDispatcher = dispatcher();
+    const subject = coordinator({ taskDispatcher });
+
+    await expect(subject.submitFollowUp("run-1", asCommand())).resolves.toMatchObject({ ok: true });
+    await expect(subject.submitFollowUp("run-1", asCommand())).resolves.toEqual({
+      ok: false,
+      failureCode: "invalid-intent",
+    });
+
+    expect(taskDispatcher.dispatch).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the first prompt of a start carrying its references and command to the dispatcher", async () => {
+    const taskDispatcher = dispatcher();
+    const references = [{ path: "src/app.ts" }];
+    const subject = coordinator({ taskDispatcher });
+
+    await expect(
+      subject.startInitialTurn({
+        runId: "run-1",
+        requestId: "initial-1",
+        expectedRevision: 1,
+        taskIntent: "Look at this",
+        references,
+        command,
+      }),
+    ).resolves.toBe("accepted");
+
+    expect(taskDispatcher.dispatch).toHaveBeenCalledExactlyOnceWith({
+      runId: "run-1",
+      requestId: "initial-1",
+      expectedRevision: 1,
+      taskIntent: "Look at this",
+      references,
+      command,
+    });
+  });
+
+  it("stops the run a start minted when the first prompt's inputs are refused, and says so", async () => {
+    const stop = vi.fn(() => Promise.resolve({ ok: true as const, status: "stopped" as const }));
+    const taskDispatcher = dispatcher({
+      dispatch: () => Promise.resolve({ ok: false, reason: "inputs-refused" }),
+    });
+    const subject = coordinator({ taskDispatcher, stop });
+
+    await expect(
+      subject.startInitialTurn({
+        runId: "run-1",
+        requestId: "initial-1",
+        expectedRevision: 1,
+        taskIntent: "Look at this",
+        references: [{ path: "src/app.ts" }],
+      }),
+    ).resolves.toBe("inputs-refused");
+
+    expect(stop).toHaveBeenCalledExactlyOnceWith("run-1");
+  });
+
+  it("keeps a refusal that is not the request's own fault a failed start, and an unstoppable run recoverable", async () => {
+    const refused = dispatcher({ dispatch: () => Promise.resolve({ ok: false }) });
+    await expect(
+      coordinator({ taskDispatcher: refused }).startInitialTurn({
+        runId: "run-1",
+        requestId: "initial-1",
+        expectedRevision: 1,
+        taskIntent: "Initial task",
+      }),
+    ).resolves.toBe("failed");
+
+    const stuck = dispatcher({
+      dispatch: () => Promise.resolve({ ok: false, reason: "inputs-refused" }),
+    });
+    await expect(
+      coordinator({
+        taskDispatcher: stuck,
+        stop: vi.fn(() =>
+          Promise.resolve({ ok: false as const, failureCode: "runtime-stopped" }),
+        ) as never,
+      }).startInitialTurn({
+        runId: "run-1",
+        requestId: "initial-1",
+        expectedRevision: 1,
+        taskIntent: "Initial task",
+        references: [{ path: "src/app.ts" }],
+      }),
+    ).resolves.toBe("recovery-required");
+  });
+
+  describe("listing a run's commands", () => {
+    it("asks the dispatcher for a live run and threads the correlation", async () => {
+      const commands = vi.fn(() => Promise.resolve([{ name: "init" }, { name: "review" }]));
+      const subject = coordinator({ taskDispatcher: dispatcher({ commands }) });
+
+      await expect(subject.listCommands("run-1", "corr-0123456789")).resolves.toEqual([
+        { name: "init" },
+        { name: "review" },
+      ]);
+      expect(commands).toHaveBeenCalledExactlyOnceWith("run-1", "corr-0123456789");
+    });
+
+    it("offers nothing for a run that is not the live one or is not running or paused", async () => {
+      const commands = vi.fn(() => Promise.resolve([{ name: "init" }]));
+      const taskDispatcher = dispatcher({ commands });
+
+      await expect(coordinator({ taskDispatcher }).listCommands("run-9")).resolves.toBeUndefined();
+      await expect(
+        coordinator({
+          taskDispatcher,
+          current: () => ({ ...runningSnapshot(), state: "succeeded" }),
+        }).listCommands("run-1"),
+      ).resolves.toBeUndefined();
+      await expect(
+        coordinator({ taskDispatcher, current: () => undefined }).listCommands("run-1"),
+      ).resolves.toBeUndefined();
+      expect(commands).not.toHaveBeenCalled();
+    });
+
+    it("offers nothing when the dispatcher takes no commands", async () => {
+      await expect(
+        coordinator({ taskDispatcher: dispatcher() }).listCommands("run-1"),
+      ).resolves.toBeUndefined();
+    });
+
+    it("reads without consuming a revision or a request id", async () => {
+      const advanceRevision = vi.fn((): CodingRuntimeOrchestratorResult => ({
+        ok: true,
+        snapshot: publicSnapshot(),
+      }));
+      const subject = coordinator({
+        taskDispatcher: dispatcher({ commands: () => Promise.resolve([{ name: "init" }]) }),
+        advanceRevision,
+      });
+
+      await subject.listCommands("run-1");
+      await subject.listCommands("run-1");
+
+      expect(advanceRevision).not.toHaveBeenCalled();
+      await expect(subject.submitFollowUp("run-1", followUp())).resolves.toMatchObject({
+        ok: true,
+      });
+    });
+  });
+});
+
 describe("CodingRuntimeOperationCoordinator turn revert", () => {
   type Outcome = "cancelled" | "failed" | "succeeded";
   type Revert = NonNullable<CodingRuntimeTaskDispatcher["revert"]>;

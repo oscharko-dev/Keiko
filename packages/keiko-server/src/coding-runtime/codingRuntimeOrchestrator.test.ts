@@ -66,6 +66,7 @@ import { runMigrations } from "../store/schema.js";
 import { createCodingRuntimeDescriptionJobStore } from "./codingRuntimeDescriptionJobStore.js";
 import {
   CodingRuntimeAgentUnsupportedError,
+  CodingRuntimeInputsUnsupportedError,
   CodingRuntimeLaunchRejectedError,
   CodingRuntimeLaunchResolutionError,
 } from "./launchFailure.js";
@@ -2847,6 +2848,203 @@ describe("CodingRuntimeOrchestrator", () => {
       expect(f.taskDispatcher.replace).toHaveBeenLastCalledWith(
         expect.objectContaining({ requestId: "follow-up-paused-plan", agent: "plan" }),
       );
+    });
+  });
+
+  // C02 / S15 (ADR-0137 D10): the first prompt of a start may carry `@` references and a slash command.
+  describe("the first prompt's references and slash command", () => {
+    const references = [{ path: "src/app.ts" }, { path: "docs/My Notes.md" }];
+
+    it("hands the references and the command to the first turn, and nothing when a start names none", async () => {
+      const f = fixture();
+      await f.orchestrator.start({ ...start, references });
+      expect(firstTaskDispatchRequest(f.taskDispatcher.dispatch.mock.calls)).toMatchObject({
+        references,
+        taskIntent: start.taskIntent,
+      });
+
+      const commanded = fixture();
+      await commanded.orchestrator.start({ ...start, command: { name: "review" } });
+      expect(firstTaskDispatchRequest(commanded.taskDispatcher.dispatch.mock.calls)).toMatchObject({
+        command: { name: "review" },
+        taskIntent: start.taskIntent,
+      });
+
+      const bare = fixture();
+      await bare.orchestrator.start(start);
+      const bareRequest = firstTaskDispatchRequest(bare.taskDispatcher.dispatch.mock.calls);
+      expect(bareRequest).not.toHaveProperty("references");
+      expect(bareRequest).not.toHaveProperty("command");
+    });
+
+    it("passes both to the launch resolver so a runtime without them is refused before launch", async () => {
+      const f = fixture();
+
+      await f.orchestrator.start({ ...start, references, command: { name: "init" } });
+
+      expect(f.launchResolver.resolve).toHaveBeenCalledWith(
+        expect.objectContaining({ references, command: { name: "init" } }),
+      );
+      const bare = fixture();
+      await bare.orchestrator.start(start);
+      expect(bare.launchResolver.resolve.mock.calls[0]?.[0]).not.toHaveProperty("references");
+      expect(bare.launchResolver.resolve.mock.calls[0]?.[0]).not.toHaveProperty("command");
+    });
+
+    it("answers a start whose runtime cannot take them with invalid-intent and a closed diagnostic", async () => {
+      const captured = captureDiagnostics();
+      const f = fixture(undefined, undefined, [], captured.diagnostics);
+      f.launchResolver.resolve.mockImplementationOnce(() => {
+        throw new CodingRuntimeInputsUnsupportedError();
+      });
+
+      expect(await f.orchestrator.start({ ...start, references })).toEqual({
+        ok: false,
+        failureCode: "invalid-intent",
+        runId: "run-1",
+      });
+      expect(f.taskDispatcher.dispatch).not.toHaveBeenCalled();
+      expect(captured.records).toContainEqual(
+        expect.objectContaining({
+          operation: "coding-runtime.start",
+          code: "stage=start:reason=launch-resolution:inputs-unsupported",
+        }),
+      );
+      expect(JSON.stringify(captured.records)).not.toContain("src/app.ts");
+    });
+
+    it("refuses the start with the request's own cause when the first prompt's inputs are refused", async () => {
+      const captured = captureDiagnostics();
+      const f = fixture(undefined, undefined, [], captured.diagnostics);
+      f.taskDispatcher.dispatch.mockResolvedValueOnce({ ok: false, reason: "inputs-refused" });
+
+      const result = await f.orchestrator.start({ ...start, references });
+
+      // The run that was minted for the prompt is stopped, never carried on without its files.
+      expect(successfulSnapshot(result)).toMatchObject({
+        state: "failed",
+        failureCode: "invalid-intent",
+      });
+      expect(f.manager.stop).toHaveBeenCalledOnce();
+      expect(captured.records).toContainEqual(
+        expect.objectContaining({
+          operation: "coding-runtime.start",
+          code: "stage=start:reason=initial-turn-inputs-refused",
+        }),
+      );
+      expect(JSON.stringify(captured.records)).not.toContain("src/app.ts");
+    });
+
+    it("keeps an ordinary refused first dispatch a runtime failure", async () => {
+      const f = fixture();
+      f.taskDispatcher.dispatch.mockResolvedValueOnce({ ok: false });
+
+      expect(successfulSnapshot(await f.orchestrator.start(start))).toMatchObject({
+        state: "failed",
+        failureCode: "runtime-failed",
+      });
+    });
+
+    it("builds no initial context for a command start, so nothing is recorded as included that the model never sees", async () => {
+      const getContextForRun = vi.fn<CodingRuntimeProjectMemoryPort["getContextForRun"]>(() =>
+        Promise.resolve({ text: "memory", includedMemoryIds: [] }),
+      );
+      const loadForRun = vi.fn<CodingRuntimeRepositoryInstructionsPort["loadForRun"]>(() =>
+        Promise.resolve("instructions"),
+      );
+      const f = fixture(
+        undefined,
+        undefined,
+        [],
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { getContextForRun },
+        undefined,
+        { loadForRun },
+      );
+
+      await f.orchestrator.start({ ...start, taskIntent: "", command: { name: "review" } });
+
+      expect(loadForRun).not.toHaveBeenCalled();
+      expect(getContextForRun).not.toHaveBeenCalled();
+      const request = firstTaskDispatchRequest(f.taskDispatcher.dispatch.mock.calls);
+      expect(request).not.toHaveProperty("initialContext");
+      expect(request).toMatchObject({ taskIntent: "", command: { name: "review" } });
+    });
+
+    it("still builds the initial context for a start whose first prompt only references files", async () => {
+      const loadForRun = vi.fn<CodingRuntimeRepositoryInstructionsPort["loadForRun"]>(() =>
+        Promise.resolve("instructions"),
+      );
+      const f = fixture(
+        undefined,
+        undefined,
+        [],
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { loadForRun },
+      );
+
+      await f.orchestrator.start({ ...start, references });
+
+      expect(loadForRun).toHaveBeenCalledOnce();
+      expect(firstTaskDispatchRequest(f.taskDispatcher.dispatch.mock.calls)).toMatchObject({
+        initialContext: expect.stringContaining("instructions") as unknown,
+        references,
+      });
+    });
+
+    it("lists the commands of the live run through its dispatcher and of no other", async () => {
+      const f = fixture();
+      const commands = vi.fn(() => Promise.resolve([{ name: "init" }, { name: "review" }]));
+      Object.assign(f.taskDispatcher, { commands });
+      await f.orchestrator.start(start);
+
+      await expect(f.orchestrator.listCommands("run-1", "corr-0123456789")).resolves.toEqual([
+        { name: "init" },
+        { name: "review" },
+      ]);
+      expect(commands).toHaveBeenCalledExactlyOnceWith("run-1", "corr-0123456789");
+      await expect(f.orchestrator.listCommands("run-9")).resolves.toBeUndefined();
+    });
+
+    it("hands a follow-up's command to the dispatch and omits the key when none was named", async () => {
+      const f = fixture();
+      await f.orchestrator.start(start);
+
+      const commanded = await f.orchestrator.submitFollowUp("run-1", {
+        requestId: "follow-up-command",
+        expectedRevision: 4,
+        taskIntent: "",
+        command: { name: "review" },
+      });
+
+      expect(successfulSnapshot(commanded).revision).toBe(5);
+      expect(f.taskDispatcher.dispatch).toHaveBeenLastCalledWith({
+        runId: "run-1",
+        requestId: "follow-up-command",
+        expectedRevision: 4,
+        taskIntent: "",
+        command: { name: "review" },
+      });
+      await f.orchestrator.submitFollowUp("run-1", {
+        requestId: "follow-up-plain",
+        expectedRevision: 5,
+        taskIntent: "now implement it",
+      });
+      expect(f.taskDispatcher.dispatch.mock.lastCall?.[0]).not.toHaveProperty("command");
     });
   });
 

@@ -86,7 +86,7 @@ const MODEL_CAPABILITY = "m".repeat(43);
 const TOOL_CAPABILITY = "t".repeat(43);
 const PROTOCOL_SCHEMA_SHA256 = "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec";
 const PROTOCOL_HANDSHAKE_DIGEST =
-  "96af8188171147a1ad06d8cdbb3b884e55fb953698d898307020e3f0a85fcf45";
+  "a4bc6046cff5a3d8a2a5cba8192c3371d99fc6b5f86d01fa66a7ef9ad102679e";
 const PROTOCOL_HANDSHAKE_ALGORITHM = "keiko-opencode-protocol-surface-v2" as const;
 // Structural sentinel required only by the manager's test seam; it is not a native release receipt.
 const FUNCTIONAL_TEST_QUALIFICATION_RECEIPT = `sha256:${"0".repeat(64)}`;

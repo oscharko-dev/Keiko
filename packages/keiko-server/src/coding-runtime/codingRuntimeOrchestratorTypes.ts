@@ -57,6 +57,13 @@ export interface CodingRuntimeLaunchResolver {
      * it throws `CodingRuntimeAgentUnsupportedError` before any run is minted.
      */
     readonly agent?: CodingWorkbenchAgent | undefined;
+    /**
+     * The first prompt's references and slash command (ADR-0137 D10). A resolver whose runtime
+     * cannot honour them throws `CodingRuntimeInputsUnsupportedError` before any run is minted;
+     * resolving the paths against the run's workspace waits until its first turn is dispatched.
+     */
+    readonly references?: CodingWorkbenchRuntimeStartRequest["references"];
+    readonly command?: CodingWorkbenchRuntimeStartRequest["command"];
     readonly workspaceId: string;
     readonly workspaceRoot: string;
     readonly serverPrincipal: string;

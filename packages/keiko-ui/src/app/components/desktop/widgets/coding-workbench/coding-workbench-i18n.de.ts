@@ -326,6 +326,21 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Die Dateisuche ist fehlgeschlagen. Tippe erneut, um es noch einmal zu versuchen.",
   "codingWorkbench.composer.references.picker.limit":
     "In einer Nachricht können höchstens {count} Dateien referenziert werden.",
+  "codingWorkbench.composer.commands.title": "Einen Slash-Befehl ausführen",
+  "codingWorkbench.composer.commands.results": "Passende Befehle",
+  "codingWorkbench.composer.commands.option": "Befehl /{name} ausführen",
+  "codingWorkbench.composer.commands.active": "/{name}, {position} von {total}",
+  "codingWorkbench.composer.commands.loading": "Befehle werden geladen...",
+  "codingWorkbench.composer.commands.found":
+    "Verfügbare Befehle: {count}. Wähle mit den Pfeiltasten und bestätige mit Enter.",
+  "codingWorkbench.composer.commands.empty": "Keine passenden Befehle.",
+  "codingWorkbench.composer.commands.none": "Diese Aufgabe bietet keine Slash-Befehle an.",
+  "codingWorkbench.composer.commands.error": "Die Befehle konnten nicht geladen werden.",
+  "codingWorkbench.composer.commands.retry": "Erneut versuchen",
+  "codingWorkbench.composer.commands.init.description":
+    "Geführte Einrichtung der AGENTS.md für dieses Repository",
+  "codingWorkbench.composer.commands.review.description":
+    "Änderungen prüfen [commit|branch|pr]; standardmäßig die nicht committeten Änderungen",
   "codingWorkbench.composer.model.label": "Coding-Modell",
   "codingWorkbench.composer.model.selected": "Coding-Modell: {model}",
   "codingWorkbench.composer.model.menu": "Coding-Modell auswählen",
@@ -370,6 +385,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.composer.blocked.busy": "Keiko verarbeitet gerade eine Runtime-Aktion.",
   "codingWorkbench.composer.blocked.emptyStart": "Beschreibe zuerst, was Keiko tun soll.",
   "codingWorkbench.composer.blocked.emptyFollowUp": "Schreibe zuerst eine Rückfrage.",
+  "codingWorkbench.composer.blocked.commandsLoading":
+    "Keiko lädt noch die Befehle dieser Aufgabe. Sende gleich noch einmal.",
   "codingWorkbench.composer.blocked.pauseDecision":
     "Dieser pausierte Lauf wartet auf eine erforderliche Entscheidung. Nutze die oben angezeigte Entscheidungsaktion.",
   "codingWorkbench.composer.blocked.notReady":
@@ -1119,6 +1136,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Keiko hat den Lauf beendet, weil die Änderungen des Modells mehrmals hintereinander abgelehnt wurden, etwa weil sie nicht mehr zur Datei passten. Starte die Aufgabe erneut, formuliere sie um oder teile sie auf, oder wähle ein anderes Modell; deine bisherigen Änderungen bleiben im Aufgaben-Arbeitsbereich.",
   "codingWorkbench.event.failure.runtime":
     "Nach den angezeigten Aktionen wurde der Coding-Lauf durch einen internen Fehler beendet. Starte die Aufgabe erneut; tritt der Fehler wieder auf, prüfe den Activity Log.",
+  "codingWorkbench.event.failure.invalid-intent":
+    "Keiko hat die Aufgabe abgelehnt, bevor sie lief, zum Beispiel weil eine mit @ referenzierte Datei fehlt, außerhalb des Arbeitsbereichs liegt oder geschützt ist, oder weil der Slash-Befehl nicht verfügbar ist. Prüfe die referenzierten Dateien und den Befehl und starte die Aufgabe dann erneut.",
   "codingWorkbench.event.failure.generic":
     "Dieser Schritt konnte nicht abgeschlossen werden. Prüfe den Activity Log und versuche es erneut.",
   "codingWorkbench.event.failure.prompt-allowance-exhausted":

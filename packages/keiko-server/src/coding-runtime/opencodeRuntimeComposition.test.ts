@@ -228,11 +228,23 @@ interface OpenCodeRuntimeComposition {
     ) => Promise<boolean>;
     /** What a prompt may carry besides its text, and the operations that honour it (ADR-0137 D10). */
     readonly promptInputs?:
-      { readonly delivery: boolean; readonly references: boolean } | undefined;
+      | { readonly delivery: boolean; readonly references: boolean; readonly commands?: boolean }
+      | undefined;
     readonly admitPromptInputs?:
       ((runId: string, request: PromptInputsRequest) => PromptInputsAdmission) | undefined;
     readonly deliverPrompt?:
       ((runId: string, text: string, inputs: AdmittedPromptInputs) => Promise<boolean>) | undefined;
+    /** The run's slash commands and the confirmation of a turn's command (C02, ADR-0137 D10). */
+    readonly listCommands?:
+      | ((
+          runId: string,
+          correlationId?: string,
+        ) => Promise<
+          readonly { readonly name: string; readonly description?: string }[] | undefined
+        >)
+      | undefined;
+    readonly admitCommand?:
+      ((runId: string, inputs: AdmittedPromptInputs) => Promise<PromptInputsAdmission>) | undefined;
     readonly selectableAgents?: readonly ("build" | "plan")[] | undefined;
     readonly abortTask: (runId: string) => Promise<boolean>;
     /** Undo and restore of the newest turn; offered by the native profile only (B3, S04). */
@@ -598,6 +610,21 @@ interface StartBridgeControl {
       readonly promptsBefore: number;
     }[];
     readonly agentResponse?: () => Response;
+    /** The slash command routes of a native run (C02): the listing and the session command. */
+    readonly commands?: {
+      /** Each `GET /api/command` and `POST /api/session/{id}/command`, in arrival order. */
+      readonly requests: {
+        readonly method: string;
+        readonly path: string;
+        readonly body?: string;
+      }[];
+      /** What `GET /api/command` answers. */
+      listing: unknown[];
+      /** What `GET /api/command` fails with, when it should not answer the listing. */
+      listingResponse?: (() => Response) | undefined;
+      /** What `POST .../command` answers; the runtime's 204 by default. */
+      commandResponse?: (() => Response) | undefined;
+    };
     /** The session diff and revert routes of a native run (B3, S04). */
     readonly revert?: {
       readonly requests: {
@@ -951,6 +978,19 @@ async function startBridgeFixture(
         return control.historyResponseFactory(init?.signal ?? undefined);
       return control?.historyResponse ?? Promise.resolve(v2Envelope([]));
     }
+    if (path === "/api/command" || path.endsWith("/command")) {
+      const commands = control?.runControl?.commands;
+      commands?.requests.push({
+        method: init?.method ?? "GET",
+        path,
+        ...(typeof init?.body === "string" ? { body: init.body } : {}),
+      });
+      return Promise.resolve(
+        path === "/api/command"
+          ? (commands?.listingResponse?.() ?? v2Envelope(commands?.listing ?? []))
+          : (commands?.commandResponse?.() ?? new Response(null, { status: 204 })),
+      );
+    }
     if (path.endsWith("/prompt")) {
       control?.sessionLocation?.stages?.push("prompt");
       if (typeof init?.body === "string" && init.body.includes("runtime readiness handshake")) {
@@ -1285,7 +1325,7 @@ describe("unmounted OpenCode runtime composition", () => {
   // eslint-disable-next-line complexity -- this audit fixture keeps lifecycle evidence co-located.
   it("prepares secret-safe state before spawn, proves the private runtime, and disposes only after reap", async () => {
     expect(OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256).toBe(
-      "62cc1e6c43fb06b21b370600390bc76dab1aed9d42fa1517f71d7b1b20cbc734",
+      "ba49adfd85f7fa2aee7ec8e513bd1d993a9df15ef79236e3c20f173af7fca6c2",
     );
     const root = tempDir("keiko-opencode-composition-");
     const workspaceRoot = join(root, "workspace");
@@ -6693,11 +6733,11 @@ describe("prompt inputs on the run port (ADR-0137 D10)", () => {
       .filter((event) => event.op === "coding-runtime.prompt-inputs.settled")
       .map((event) => event.extra);
 
-  it("offers delivery and references on the native service only", async () => {
+  it("offers delivery, references and slash commands on the native service only", async () => {
     for (const [profile, expected] of [
-      ["native", { delivery: true, references: true }],
-      ["direct", { delivery: false, references: false }],
-      ["code-mode", { delivery: false, references: false }],
+      ["native", { delivery: true, references: true, commands: true }],
+      ["direct", { delivery: false, references: false, commands: false }],
+      ["code-mode", { delivery: false, references: false, commands: false }],
     ] as const) {
       const { fixture, port } = await inputsFixture(profile);
       try {
@@ -6800,6 +6840,285 @@ describe("prompt inputs on the run port (ADR-0137 D10)", () => {
       await fixture.stop();
     }
   });
+
+  // ADR-0137 D10 (C02): the runtime's slash commands. The run port lists them, confirms a turn's command
+  // against the listing, and posts the turn as `session.command` instead of a prompt.
+  describe("slash commands on the run port (C02)", () => {
+    const facadeStub: CodingToolFacade = {
+      execute: () => Promise.resolve({ status: "observed", evidence: [] }),
+    };
+    const LISTING = [
+      { name: "init", description: "guided AGENTS.md setup" },
+      { name: "review", description: "review changes [commit|branch|pr], defaults to uncommitted" },
+    ];
+
+    async function commandsFixture(
+      profile: "native" | "direct" | "code-mode" = "native",
+      listing: unknown[] = LISTING,
+    ): Promise<{
+      readonly fixture: Awaited<ReturnType<typeof startBridgeFixture>>;
+      readonly port: OpenCodeRuntimeComposition["runPort"];
+      readonly workspace: string;
+      readonly promptBodies: string[];
+      readonly commands: NonNullable<NonNullable<StartBridgeControl["runControl"]>["commands"]>;
+      readonly activityLog: ReturnType<typeof createBufferedServerLogSink>;
+      readonly diagnostics: Parameters<ServerDiagnosticSink["record"]>[0][];
+    }> {
+      const workspace = realpathSync(tempDir("keiko-commands-workspace-"));
+      writeFileSync(join(workspace, "notes.md"), "NOTES-CANARY\n");
+      const promptBodies: string[] = [];
+      const diagnostics: Parameters<ServerDiagnosticSink["record"]>[0][] = [];
+      const activityLog = createBufferedServerLogSink();
+      const commands = { requests: [], listing };
+      const fixture = await startBridgeFixture(facadeStub, undefined, {
+        activityLog,
+        workspaceRoot: workspace,
+        readToolProfile: () => profile,
+        diagnostics: { record: (record): void => void diagnostics.push(record) },
+        runControl: { promptBodies, abortSessions: [], statusResponses: [{}], commands },
+      });
+      return {
+        fixture,
+        port: fixture.runtime.runPort,
+        workspace,
+        promptBodies,
+        commands,
+        activityLog,
+        diagnostics,
+      };
+    }
+
+    const lines = (log: ReturnType<typeof createBufferedServerLogSink>, op: string): unknown[] =>
+      log.events.filter((event) => event.op === op).map((event) => event.extra);
+
+    const admitted = (
+      port: OpenCodeRuntimeComposition["runPort"],
+      extra: Record<string, unknown> = {},
+    ): AdmittedPromptInputs => {
+      const inputs = port.admitPromptInputs?.(FIXTURE_RUN_ID, {
+        command: { name: "review", argumentBytes: 4 },
+        ...extra,
+      });
+      if (inputs?.ok !== true) throw new Error("expected the command inputs to be admitted");
+      return inputs.inputs;
+    };
+
+    it("lists the commands the runtime reports and records the counts alone", async () => {
+      const { fixture, port, commands, activityLog } = await commandsFixture();
+      try {
+        await expect(port.listCommands?.(FIXTURE_RUN_ID, "corr-0123456789")).resolves.toEqual(
+          LISTING,
+        );
+
+        expect(commands.requests).toEqual([{ method: "GET", path: "/api/command" }]);
+        expect(lines(activityLog, "coding-runtime.commands.listed")).toMatchObject([
+          { runId: FIXTURE_RUN_ID, outcome: "listed", commandCount: 2, skippedCount: 0 },
+        ]);
+        expect(JSON.stringify(activityLog.events)).not.toMatch(/AGENTS\.md|uncommitted/u);
+      } finally {
+        await fixture.stop();
+      }
+    });
+
+    it("confirms a turn's command against the listing before anything is reserved or sent", async () => {
+      const { fixture, port, commands, promptBodies, activityLog } = await commandsFixture();
+      try {
+        const inputs = admitted(port);
+        await expect(port.admitCommand?.(FIXTURE_RUN_ID, inputs)).resolves.toEqual({
+          ok: true,
+          inputs,
+        });
+        const unknown = admitted(port, { command: { name: "nope", argumentBytes: 0 } });
+        await expect(port.admitCommand?.(FIXTURE_RUN_ID, unknown)).resolves.toEqual({
+          ok: false,
+          reason: "command-unknown",
+        });
+
+        expect(commands.requests.map(({ path }) => path)).toEqual(["/api/command", "/api/command"]);
+        expect(promptBodies).toEqual([]);
+        expect(lines(activityLog, "coding-runtime.prompt-inputs.settled")).toMatchObject([
+          { outcome: "refused", reason: "command-unknown", command: "other" },
+        ]);
+        expect(JSON.stringify(activityLog.events)).not.toContain("nope");
+      } finally {
+        await fixture.stop();
+      }
+    });
+
+    it("posts the turn as the session command with the text after it and no prompt", async () => {
+      const { fixture, port, commands, promptBodies, activityLog } = await commandsFixture();
+      try {
+        const inputs = admitted(port);
+
+        await expect(
+          port.submitTask(FIXTURE_RUN_ID, "main", undefined, undefined, inputs),
+        ).resolves.toBe(true);
+
+        expect(commands.requests).toEqual([
+          {
+            method: "POST",
+            path: "/api/session/ses_tool/command",
+            body: JSON.stringify({ name: "review", text: "main" }),
+          },
+        ]);
+        expect(promptBodies, "a command turn is not also posted as a prompt").toEqual([]);
+        expect(lines(activityLog, "coding-runtime.prompt-inputs.settled")).toMatchObject([
+          {
+            outcome: "accepted",
+            command: "review",
+            commandArgumentBytes: 4,
+            delivery: "none",
+            referenceCount: 0,
+          },
+        ]);
+        expect(JSON.stringify(activityLog.events)).not.toContain("main");
+      } finally {
+        await fixture.stop();
+      }
+    });
+
+    it("sends a bare command with an empty text and the admitted attachments with the command", async () => {
+      const { fixture, port, commands, workspace } = await commandsFixture();
+      try {
+        const bare = admitted(port, { command: { name: "init", argumentBytes: 0 } });
+        await expect(port.submitTask(FIXTURE_RUN_ID, "", undefined, undefined, bare)).resolves.toBe(
+          true,
+        );
+        await settleRun(port);
+        const withFile = admitted(port, { references: [{ path: "notes.md" }] });
+        await expect(
+          port.submitTask(FIXTURE_RUN_ID, "the notes", undefined, undefined, withFile),
+        ).resolves.toBe(true);
+
+        expect(commands.requests.map(({ body }) => body)).toEqual([
+          JSON.stringify({ name: "init", text: "" }),
+          JSON.stringify({
+            name: "review",
+            text: "the notes",
+            files: [{ uri: `file://${join(workspace, "notes.md")}`, name: "notes.md" }],
+          }),
+        ]);
+      } finally {
+        await fixture.stop();
+      }
+    });
+
+    it("drops the initial context of a command turn instead of hiding it in the arguments", async () => {
+      const { fixture, port, commands, promptBodies } = await commandsFixture();
+      try {
+        await expect(
+          port.submitTask(
+            FIXTURE_RUN_ID,
+            "main",
+            "REPOSITORY-INSTRUCTIONS-CANARY",
+            undefined,
+            admitted(port),
+          ),
+        ).resolves.toBe(true);
+
+        expect(commands.requests[0]?.body).toBe(JSON.stringify({ name: "review", text: "main" }));
+        expect(JSON.stringify([commands.requests, promptBodies])).not.toContain("CANARY");
+      } finally {
+        await fixture.stop();
+      }
+    });
+
+    it("fails the turn and records the refusal when the runtime rejects the command", async () => {
+      const { fixture, port, commands, promptBodies, activityLog, diagnostics } =
+        await commandsFixture();
+      try {
+        commands.commandResponse = (): Response =>
+          new Response(JSON.stringify({ _tag: "CommandExecutionError" }), {
+            status: 500,
+            headers: { "content-type": "application/json" },
+          });
+
+        await expect(
+          port.submitTask(FIXTURE_RUN_ID, "main", undefined, undefined, admitted(port)),
+        ).resolves.toBe(false);
+
+        expect(promptBodies).toEqual([]);
+        expect(lines(activityLog, "coding-runtime.prompt-inputs.settled")).toMatchObject([
+          { outcome: "refused", reason: "command-refused", command: "review" },
+        ]);
+        expect(
+          activityLog.events.find((event) => event.extra?.reason === "command-refused"),
+        ).toMatchObject({
+          level: "warn",
+          errorKind: expect.any(String) as unknown,
+        });
+        expect(diagnostics).not.toHaveLength(0);
+        expect(JSON.stringify([diagnostics, activityLog.events])).not.toContain("main");
+        // The failed turn is not left armed: an ordinary turn is accepted afterwards.
+        commands.commandResponse = undefined;
+        await expect(port.submitTask(FIXTURE_RUN_ID, "an ordinary turn")).resolves.toBe(true);
+      } finally {
+        await fixture.stop();
+      }
+    });
+
+    it("reports an unreachable listing as a failed listing and refuses the command it could not confirm", async () => {
+      const { fixture, port, commands, activityLog } = await commandsFixture();
+      try {
+        commands.listingResponse = (): Response => new Response("", { status: 500 });
+
+        await expect(port.listCommands?.(FIXTURE_RUN_ID)).resolves.toBeUndefined();
+        await expect(port.admitCommand?.(FIXTURE_RUN_ID, admitted(port))).resolves.toEqual({
+          ok: false,
+          reason: "command-unavailable",
+        });
+
+        expect(lines(activityLog, "coding-runtime.commands.listed")).toMatchObject([
+          { outcome: "failed" },
+        ]);
+        expect(lines(activityLog, "coding-runtime.prompt-inputs.settled")).toMatchObject([
+          { outcome: "refused", reason: "command-unavailable" },
+        ]);
+      } finally {
+        await fixture.stop();
+      }
+    });
+
+    it.each(["direct", "code-mode"] as const)(
+      "offers no command on the governed %s profile and sends none",
+      async (profile) => {
+        const { fixture, port, commands, promptBodies, activityLog } =
+          await commandsFixture(profile);
+        try {
+          await expect(port.listCommands?.(FIXTURE_RUN_ID)).resolves.toBeUndefined();
+          expect(
+            port.admitPromptInputs?.(FIXTURE_RUN_ID, {
+              command: { name: "review", argumentBytes: 0 },
+            }),
+          ).toEqual({ ok: false, reason: "commands-unsupported" });
+
+          expect(commands.requests).toEqual([]);
+          expect(promptBodies).toEqual([]);
+          expect(lines(activityLog, "coding-runtime.commands.listed")).toMatchObject([
+            { outcome: "unsupported" },
+          ]);
+          expect(lines(activityLog, "coding-runtime.prompt-inputs.settled")).toMatchObject([
+            { outcome: "refused", reason: "commands-unsupported" },
+          ]);
+        } finally {
+          await fixture.stop();
+        }
+      },
+    );
+
+    it("offers nothing for a run that is not live", async () => {
+      const { fixture, port, commands } = await commandsFixture();
+      try {
+        await expect(port.listCommands?.("unknown-run")).resolves.toBeUndefined();
+        expect(commands.requests).toEqual([]);
+      } finally {
+        await fixture.stop();
+      }
+    });
+  });
+
+  const settleRun = (port: OpenCodeRuntimeComposition["runPort"]): Promise<boolean> =>
+    port.waitForTerminal(FIXTURE_RUN_ID, AbortSignal.abort());
 
   it.each(["direct", "code-mode"] as const)(
     "refuses a delivery and references on the governed %s profile, like a plan request",

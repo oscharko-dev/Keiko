@@ -102,6 +102,14 @@ import {
   type OpenCodePromptInputsRunPort,
 } from "./opencodePromptInputs.js";
 import {
+  commandDisplayText,
+  createOpenCodeCommandPresentation,
+  createOpenCodeCommandsRunPort,
+  recordCommandPostRefused,
+  type OpenCodeCommandPresentation,
+  type OpenCodeCommandsRunPort,
+} from "./opencodeCommands.js";
+import {
   beginOpenCodeTurnImages,
   createOpenCodeRevertRunPort,
   noteOpenCodeEditTargets,
@@ -492,6 +500,13 @@ export interface OpenCodeRunPort {
   readonly admitPromptInputs?: OpenCodePromptInputsRunPort["admitPromptInputs"] | undefined;
   readonly deliverPrompt?: OpenCodePromptInputsRunPort["deliverPrompt"] | undefined;
   /**
+   * The run's slash commands (`opencodeCommands.ts`): the listing the Workbench's `/` menu reads, and
+   * the confirmation, before a turn is reserved, that the runtime lists the command it names. A
+   * turn that runs as a command is submitted through `submitTask` with the command in its inputs.
+   */
+  readonly listCommands?: OpenCodeCommandsRunPort["listCommands"] | undefined;
+  readonly admitCommand?: OpenCodeCommandsRunPort["admitCommand"] | undefined;
+  /**
    * The primary agents this composition's tool profile can honour (`openCodeSelectableAgents`):
    * `plan` exists only on the native profile. A request for another agent is refused here.
    */
@@ -556,6 +571,8 @@ interface PreparedRun {
   agent?: CodingWorkbenchAgent | undefined;
   /** What the references of this run's accepted prompts added up to (`opencodePromptInputs.ts`). */
   promptFileBytes?: number | undefined;
+  /** How a slash command's turn is shown in the history (`opencodeCommands.ts`). */
+  readonly commandPresentation: OpenCodeCommandPresentation;
   /** The undo staged in the runtime, when there is one (`opencodeRevert.ts`). */
   revert?: OpenCodeStagedRevert | undefined;
   /** The newest settled turn's files as it left them (`recordOpenCodeTurnImage`). */
@@ -727,6 +744,7 @@ function createRunPort(
   return {
     submitTask: createSubmitTask(readyRun, diagnostics, activityLog, selectableAgents),
     selectableAgents,
+    ...createOpenCodeCommandsRunPort({ readyRun, capabilities: promptInputs, activityLog }),
     ...createOpenCodePromptInputsRunPort({
       readyRun,
       capabilities: promptInputs,
@@ -783,6 +801,41 @@ function createSubmitTask(
   };
 }
 
+/**
+ * Runs the turn as one of the runtime's slash commands (`POST /api/session/{sessionID}/command`).
+ * The runtime expands its own template around `text` and keeps no caller-supplied message id, and
+ * the command body has no field to hide a context in: a command turn is dispatched without an initial
+ * context (the orchestrator builds none for it). Its effects pass the run's native policy like any
+ * other turn's.
+ */
+async function postTurnCommand(
+  run: ReadyRun,
+  name: string,
+  text: string,
+  inputs: AdmittedPromptInputs,
+  diagnostics: ServerDiagnosticSink | undefined,
+  activityLog: ServerLogSink | undefined,
+): Promise<boolean> {
+  run.commandPresentation.arm(commandDisplayText(name, text));
+  try {
+    await run.client.command(
+      run.sessionId,
+      name,
+      text,
+      undefined,
+      inputs.files.length === 0 ? undefined : { files: inputs.files },
+    );
+    acceptPromptInputs(activityLog, run, inputs);
+    return run.ready;
+  } catch (error) {
+    run.commandPresentation.disarm();
+    recordOpenCodeTurnFailure(diagnostics, run, "submit", error);
+    recordCommandPostRefused(activityLog, run.runId, inputs, error);
+    run.runtimeAdapter.cancelTurn();
+    return false;
+  }
+}
+
 async function postTurnPrompt(
   run: ReadyRun,
   text: string,
@@ -791,6 +844,11 @@ async function postTurnPrompt(
   diagnostics: ServerDiagnosticSink | undefined,
   activityLog: ServerLogSink | undefined,
 ): Promise<boolean> {
+  // A turn that is not a command must never take a command's presentation.
+  run.commandPresentation.disarm();
+  if (inputs?.command !== undefined) {
+    return postTurnCommand(run, inputs.command.name, text, inputs, diagnostics, activityLog);
+  }
   try {
     await run.client.prompt(
       run.sessionId,
@@ -1338,6 +1396,7 @@ function preparedRun(
     mode,
     launchMode: mode,
     observedPermissionIds: new Set(),
+    commandPresentation: createOpenCodeCommandPresentation(),
     initialTurnBaselineStable: false,
     ready: false,
   };
@@ -1483,6 +1542,7 @@ function readinessV2Ports(
     runId: run.runId,
     activityLog: input.activityLog,
     captureMessages: input.safeActivity?.captureMessages,
+    userMessageDisplay: run.commandPresentation.displayFor,
     takeMergedEventCount: (): number => {
       const merged = mergedEvents;
       mergedEvents = 0;

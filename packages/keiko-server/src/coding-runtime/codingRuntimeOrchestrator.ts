@@ -34,6 +34,7 @@ import {
   parseCodingWorkbenchRuntimeStartRequest,
   parseCodingWorkbenchRuntimeStopRequest,
   parseCodingWorkbenchRuntimeTakeoverRequest,
+  type CodingWorkbenchCommand,
   type CodingWorkbenchTurnFailureCode,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import {
@@ -1142,6 +1143,7 @@ type RuntimeStartFailureReason =
   | "history-initialization"
   | CodingRuntimeFailureCode
   | "initial-turn-dispatch"
+  | "initial-turn-inputs-refused"
   | "initial-turn-recovery"
   | "launch-resolution"
   | "manager-exception"
@@ -1166,6 +1168,16 @@ function agentField(agent: CodingWorkbenchAgent | undefined): {
   readonly agent?: CodingWorkbenchAgent;
 } {
   return agent === undefined ? {} : { agent };
+}
+
+/** The first prompt's references and slash command as optional keys, so an absent one adds no key. */
+function promptInputFields(
+  request: Pick<CodingWorkbenchRuntimeStartRequest, "references" | "command">,
+): Pick<CodingWorkbenchRuntimeStartRequest, "references" | "command"> {
+  return {
+    ...(request.references === undefined ? {} : { references: request.references }),
+    ...(request.command === undefined ? {} : { command: request.command }),
+  };
 }
 
 function recordRuntimeStartFailure(
@@ -2069,6 +2081,14 @@ export class CodingRuntimeOrchestrator {
 
   revertState(runId: string): Promise<CodingRuntimeRevertState | undefined> {
     return this.operations.revertState(runId);
+  }
+
+  /** The slash commands the run's runtime lists right now; see `CodingRuntimeOperationCoordinator`. */
+  listCommands(
+    runId: string,
+    correlationId?: string,
+  ): Promise<readonly CodingWorkbenchCommand[] | undefined> {
+    return this.operations.listCommands(runId, correlationId);
   }
 
   listQuestions(
@@ -3793,6 +3813,7 @@ export class CodingRuntimeOrchestrator {
       taskIntent: request.taskIntent,
       ...(initialContext === undefined ? {} : { initialContext }),
       ...agentField(request.agent),
+      ...promptInputFields(request),
     });
     if (this.startupInterrupted(signal)) return this.interruptedStartResult(runId);
     // Every OTHER guarded mutation (follow-up dispatch, question answer/reject) advances the live
@@ -3810,9 +3831,24 @@ export class CodingRuntimeOrchestrator {
     // #3384). Advancing here restores the same one-bump-per-accepted-dispatch invariant every
     // other guarded mutation already provides.
     if (initialTurn === "accepted") return this.advanceRevision(runningInternal, "task-submitted");
+    return this.settleRefusedInitialTurn(initialTurn, runId);
+  }
+
+  // The first dispatch was not accepted and its run was stopped (or could not be): a runtime
+  // failure, the request's own refusal of the first prompt's inputs, or a run to recover.
+  private settleRefusedInitialTurn(
+    initialTurn: "failed" | "inputs-refused" | "recovery-required",
+    runId: string,
+  ): CodingRuntimeOrchestratorResult {
     if (initialTurn === "failed") {
       recordRuntimeStartFailure(this.deps.diagnostics, runId, "initial-turn-dispatch");
       return this.transitionActive("failed", "runtime-failed");
+    }
+    if (initialTurn === "inputs-refused") {
+      // The first prompt named a file or a command the run cannot take (ADR-0137 D10): the start is
+      // refused with the request's own cause, never carried on without it.
+      recordRuntimeStartFailure(this.deps.diagnostics, runId, "initial-turn-inputs-refused");
+      return this.transitionActive("failed", "invalid-intent");
     }
     recordRuntimeStartFailure(this.deps.diagnostics, runId, "initial-turn-recovery");
     return this.transitionActive("recovery-required", "recovery-required");
@@ -3824,6 +3860,9 @@ export class CodingRuntimeOrchestrator {
     runId: string,
     attachment?: CodingRuntimeIssueAttachment,
   ): Promise<string | undefined> {
+    // A slash command's runtime expands its own template and has no field to hide a context in, so
+    // a command start builds none: nothing is read or recorded as included that the model never sees.
+    if (request.command !== undefined) return undefined;
     const issueContext =
       attachment === undefined ? undefined : renderInitialTurnContext(attachment);
     const memoryContext = await this.projectMemoryInitialContext(request, active, runId);
@@ -3914,6 +3953,7 @@ export class CodingRuntimeOrchestrator {
         ...(request.reasoningEffort ? { reasoningEffort: request.reasoningEffort } : {}),
         projectMemoryEnabled: request.projectMemory?.enabled ?? true,
         ...agentField(request.agent),
+        ...promptInputFields(request),
         workspaceId: active.instance.workspaceId,
         workspaceRoot: active.binding.activeRoot,
         serverPrincipal: principal,

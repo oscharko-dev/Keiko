@@ -187,6 +187,7 @@ import { useRestoredRunTimeline } from "./codingWorkbenchRestoredRun";
 import { offeredSavedCodingModel, rememberCodingModel } from "./codingModelPreference";
 import { agentSelectionLocked, reportAgentSelection } from "./codingWorkbenchAgent";
 import { useCodingWorkbenchIssueIntake } from "./useCodingWorkbenchIssueIntake";
+import { useTaskComposerActions } from "./useCodingWorkbenchTaskActions";
 import { CodingWorkbenchIssueIntake } from "./CodingWorkbenchIssueIntake";
 import { CodingWorkbenchInfoPanel, type CodingWorkbenchInfoFact } from "./CodingWorkbenchInfoPanel";
 
@@ -648,6 +649,34 @@ function liveWorkspaceRootOf(workspace: WorkbenchWorkspaceApi): string | null {
 /** True while the live binding is unsettled and therefore proves nothing about where it points. */
 function workspaceBindingPendingOf(workspace: WorkbenchWorkspaceApi): boolean {
   return workspace.loading || workspace.switching;
+}
+
+/**
+ * The root a task with no run yet starts in, which its first prompt's `@` picker searches: the live
+ * task workspace when it belongs to the selected repository and its binding has settled, else the
+ * selected repository itself. A root that is not the selected repository's is never offered.
+ */
+export function newTaskReferenceRoot(
+  workspace: WorkbenchWorkspaceApi,
+  repositoryRoot: string | null,
+): string | null {
+  if (repositoryRoot === null) return null;
+  const belongs =
+    workspace.activeInstance?.repositoryRoot === repositoryRoot &&
+    !workspaceBindingPendingOf(workspace);
+  return (belongs ? liveWorkspaceRootOf(workspace) : null) ?? repositoryRoot;
+}
+
+/** The workspace root the composer's `@` picker searches: the live run's own, else the next run's. */
+function composerReferenceRoot(
+  state: CodingWorkbenchRuntimeState,
+  runWorkspace: CodingWorkbenchRunWorkspaceBinding,
+  workspace: WorkbenchWorkspaceApi,
+  repositoryRoot: string | null,
+): string | null {
+  return runIsActiveFrom(state)
+    ? (runWorkspace.bound?.root ?? null)
+    : newTaskReferenceRoot(workspace, repositoryRoot);
 }
 
 // Verification in a managed worktree uses its repository's package-script trust, and independently
@@ -1598,39 +1627,24 @@ function WorkbenchColumns({
   }, [repositoryRoot]);
   const onProposeReady = useMarkReadyPropose(journey.outcome, repositoryRoot);
   const promptDelivery = usePromptDeliveryNotice(state.mutation, runId);
-  const startTask = (draft = taskIntent): void => {
-    const submittedDraft = draft.trim();
-    void issueIntake.submit(submittedDraft, async (issue): Promise<void> => {
-      runWorkspace.captureSubmission();
-      await actions.start(submittedDraft, {
-        projectMemoryEnabled,
-        conversationId: history.conversationId,
-        issue,
-      });
-    });
-  };
+  const taskActions = useTaskComposerActions({
+    actions,
+    issueIntake,
+    runWorkspace,
+    promptDelivery,
+    taskIntent,
+    projectMemoryEnabled,
+    conversationId: history.conversationId,
+    resumeMode,
+  });
   const taskComposer = (
     <TaskStartSection
       taskIntent={taskIntent}
       onTaskIntentChange={onTaskIntentChange}
-      actions={{
-        onStart: startTask,
-        onPause: () => void actions.pause(),
-        onStop: () => void actions.stop(),
-        onResume: () => {
-          if (resumeMode !== null) void actions.resume(resumeMode);
-        },
-        onSend: (draft, references): void =>
-          void (references === undefined
-            ? actions.submitFollowUp(draft.trim())
-            : actions.submitFollowUp(draft.trim(), { references })),
-        onDeliver: (draft, delivery, references): void => {
-          promptDelivery.begin(delivery);
-          void actions.submitFollowUp(draft.trim(), { delivery, references });
-        },
-      }}
+      actions={taskActions.composer}
       promptInputs={offeredCodingWorkbenchPromptInputs(state)}
-      referenceRoot={runWorkspace.bound?.root ?? null}
+      referenceRoot={composerReferenceRoot(state, runWorkspace, activeWorkspace, repositoryRoot)}
+      runId={runId}
       deliveryNotice={promptDelivery.notice}
       canStart={canStartAtLocation(state, locationState)}
       runState={state.run.value?.state}
@@ -1834,7 +1848,7 @@ function WorkbenchColumns({
         <CodingWorkbenchIssueIntake
           state={issueIntake.state}
           onCancel={issueIntake.cancel}
-          onRetry={(): void => startTask()}
+          onRetry={taskActions.retryStart}
           repositoryPath={repositoryRoot ?? ""}
         />
         <CodexSubscriptionAuthCard state={state} actions={actions} />

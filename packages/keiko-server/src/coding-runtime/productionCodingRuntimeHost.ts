@@ -1,5 +1,7 @@
 import type { CodingWorkbenchAgent } from "@oscharko-dev/keiko-contracts";
 import type {
+  CodingWorkbenchCommand,
+  CodingWorkbenchCommandRequest,
   CodingWorkbenchPromptDelivery,
   CodingWorkbenchPromptReference,
   CodingWorkbenchRuntimeRevertAction,
@@ -52,6 +54,12 @@ export interface CodingRuntimeTaskDispatchRequest extends CodingRuntimeRunOperat
   readonly delivery?: CodingWorkbenchPromptDelivery | undefined;
   /** Workspace files the prompt references, relative to the run's workspace root (ADR-0137 D10). */
   readonly references?: readonly CodingWorkbenchPromptReference[] | undefined;
+  /**
+   * Runs the turn as one of the runtime's slash commands, `taskIntent` being the text after it.
+   * Only a dispatch or a replacement carries it; the dispatcher confirms the run's runtime lists
+   * the name before anything is reserved.
+   */
+  readonly command?: CodingWorkbenchCommandRequest | undefined;
 }
 
 /** One undo or restore of the run's newest turn, admitted like any other operator operation. */
@@ -78,6 +86,16 @@ export interface CodingRuntimeTaskDispatcher {
    */
   readonly deliver?:
     | ((request: CodingRuntimeTaskDispatchRequest) => Promise<CodingRuntimeTaskDeliveryResult>)
+    | undefined;
+  /**
+   * The slash commands the run's runtime lists right now, or `undefined` when the run offers none.
+   * Never rejects; the run port records one body-free line for each listing.
+   */
+  readonly commands?:
+    | ((
+        runId: string,
+        correlationId?: string,
+      ) => Promise<readonly CodingWorkbenchCommand[] | undefined>)
     | undefined;
   /**
    * Undoes the run's newest turn or restores an undo (B3, S04). Absent for a runtime without

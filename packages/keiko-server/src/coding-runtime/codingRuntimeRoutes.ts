@@ -19,7 +19,9 @@ import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-c
 import { parseCodingWorkbenchRuntimeReadinessRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import { resolveEffectiveCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
+  unpairedCodingWorkbenchRuntimeCommandsChannelPayload,
   unpairedCodingWorkbenchRuntimeRevertChannelPayload,
+  type CodingWorkbenchRuntimeCommandsChannelPayload,
   type CodingWorkbenchRuntimeRevertChannelPayload,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import { unpairedCodingWorkbenchRuntimeApprovalReviewChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-approval-review";
@@ -722,6 +724,34 @@ export async function handleCodingRuntimeRevertState(
   return { status: 200, body: payload };
 }
 
+/**
+ * The slash commands the run's runtime lists right now (C02, ADR-0137 D10): the names and one-line
+ * descriptions the Workbench's `/` menu shows. Both are the runtime's own untrusted display text,
+ * bounded by the contract; the templates behind them never leave the runtime. Absent `commands`
+ * means the run offers none (a mapped profile, a run that is not live, a listing the runtime could
+ * not give). Reading consumes no revision and no request id. An unpaired caller receives the one
+ * constant payload before any run resolution, so this read is never an existence oracle (ADR-0141 D6).
+ */
+export async function handleCodingRuntimeCommands(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
+    return { status: 200, body: unpairedCodingWorkbenchRuntimeCommandsChannelPayload() };
+  }
+  const runId = ctx.params.runId;
+  if (runId === undefined) return notFound(ctx.correlationId);
+  const required = requireRuntime(deps, ctx.correlationId);
+  if (isRouteResult(required)) return required;
+  if (!required.orchestrator.getSnapshot(runId)) return notFound(ctx.correlationId);
+  const commands = await required.orchestrator.listCommands(runId, ctx.correlationId);
+  const payload: CodingWorkbenchRuntimeCommandsChannelPayload = {
+    session: "active",
+    ...(commands === undefined ? {} : { commands }),
+  };
+  return { status: 200, body: payload };
+}
+
 // Required-question surface. Question text is browser-rendered untrusted content: it never enters
 // snapshots, diagnostics, evidence, or persistence. The answer/reject operations bind to the
 // server-owned revision through the same serialized coordinator as every other mutation.
@@ -1076,6 +1106,11 @@ export const CODING_RUNTIME_ROUTE_GROUP: readonly RouteDefinition[] = [
     method: "GET",
     pattern: "/api/coding-workbench/runtime/runs/:runId/revert",
     handler: handleCodingRuntimeRevertState,
+  },
+  {
+    method: "GET",
+    pattern: "/api/coding-workbench/runtime/runs/:runId/commands",
+    handler: handleCodingRuntimeCommands,
   },
   {
     method: "POST",

@@ -564,3 +564,179 @@ describe("prompt inputs on the follow-up mutation", () => {
     );
   });
 });
+
+// ADR-0137 D10: the first prompt carries the files it references with `@` exactly as a follow-up
+// does, and a start or a follow-up may run as one of the runtime's slash commands, its text then
+// being the command's arguments (and empty for a bare command).
+describe("references and a slash command on the start mutation", () => {
+  const ready = { canStart: true } as const;
+
+  it("sends the first prompt's references and the command beside its text", async () => {
+    const mutation = createStartMutation("the last commit", stateWithRun(null, ready), {
+      projectMemoryEnabled: true,
+      references: [{ path: "src/app.ts" }, { path: "docs/My Notes.md" }],
+      command: { name: "review" },
+    });
+    expect(mutation.mayInstallNewRun).toBe(true);
+    expect(mutation.expected).toBeUndefined();
+    await mutation.run();
+    expect(apiMocks.startCodingWorkbenchRuntime).toHaveBeenLastCalledWith({
+      requestId: mutation.requestId,
+      taskIntent: "the last commit",
+      requestedMode: "supervised-coding",
+      runtimePreference: "managed-gateway",
+      projectMemory: { enabled: true },
+      references: [{ path: "src/app.ts" }, { path: "docs/My Notes.md" }],
+      command: { name: "review" },
+    });
+  });
+
+  it("starts a bare command with an empty text", async () => {
+    const mutation = createStartMutation("", stateWithRun(null, ready), {
+      projectMemoryEnabled: true,
+      command: { name: "init" },
+    });
+    await mutation.run();
+    const body = apiMocks.startCodingWorkbenchRuntime.mock.lastCall?.[0] as Record<string, unknown>;
+    expect(body).toMatchObject({ taskIntent: "", command: { name: "init" } });
+    expect(body).not.toHaveProperty("references");
+  });
+
+  it("keeps the ordinary start body exactly as it was, whatever empty inputs ride along", async () => {
+    const plain = createStartMutation("fix it", stateWithRun(null, ready), {
+      projectMemoryEnabled: true,
+    });
+    await plain.run();
+    const empty = createStartMutation("fix it", stateWithRun(null, ready), {
+      projectMemoryEnabled: true,
+      references: [],
+      command: undefined,
+    });
+    await empty.run();
+    const [first, second] = apiMocks.startCodingWorkbenchRuntime.mock.calls.map(
+      (call) => call[0] as Record<string, unknown>,
+    );
+    expect(second).toEqual({ ...first, requestId: empty.requestId });
+    expect(second).not.toHaveProperty("references");
+    expect(second).not.toHaveProperty("command");
+  });
+
+  it("sends references beside an accepted issue, but never a command beside one", async () => {
+    const issue = {
+      issueRef: "https://github.com/owner/repo/issues/42",
+      expectedIssueBindingDigest: "a".repeat(64),
+    };
+    const withFiles = createStartMutation("implement it", stateWithRun(null, ready), {
+      projectMemoryEnabled: true,
+      issue,
+      references: [{ path: "src/app.ts" }],
+    });
+    await withFiles.run();
+    expect(apiMocks.startCodingWorkbenchRuntime).toHaveBeenLastCalledWith(
+      expect.objectContaining({ ...issue, references: [{ path: "src/app.ts" }] }),
+    );
+    apiMocks.startCodingWorkbenchRuntime.mockClear();
+    expect(() =>
+      createStartMutation("implement it", stateWithRun(null, ready), {
+        projectMemoryEnabled: true,
+        issue,
+        command: { name: "review" },
+      }),
+    ).toThrowError(expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }));
+    expect(apiMocks.startCodingWorkbenchRuntime).not.toHaveBeenCalled();
+  });
+
+  it("still refuses to start while the readiness gate is closed, command or not", () => {
+    expect(() =>
+      createStartMutation("", stateWithRun(null), {
+        projectMemoryEnabled: true,
+        command: { name: "init" },
+      }),
+    ).toThrowError(expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }));
+  });
+
+  it("gives each mutation its own request id and keeps it when the same mutation runs again", async () => {
+    const options = {
+      projectMemoryEnabled: true,
+      references: [{ path: "a.ts" }],
+      command: { name: "review" },
+    };
+    const first = createStartMutation("x", stateWithRun(null, ready), options);
+    const second = createStartMutation("x", stateWithRun(null, ready), options);
+    expect(first.requestId).not.toBe(second.requestId);
+    await first.run();
+    await first.run();
+    const calls = apiMocks.startCodingWorkbenchRuntime.mock.calls.map(
+      (call) => (call[0] as { requestId: string }).requestId,
+    );
+    expect(calls).toEqual([first.requestId, first.requestId]);
+  });
+});
+
+describe("a slash command on the follow-up mutation", () => {
+  const paused = stateWithRun(snapshot({ state: "paused" }));
+
+  it("sends the command with an empty text, bound to the current revision", async () => {
+    const mutation = createFollowUpMutation("", paused, { command: { name: "review" } });
+    expect(mutation.expected).toEqual({ runId: "run-1", revision: 4 });
+    expect(mutation.mayInstallNewRun).toBe(false);
+    await mutation.run();
+    expect(apiMocks.submitCodingWorkbenchRuntimeFollowUp).toHaveBeenLastCalledWith("run-1", {
+      requestId: mutation.requestId,
+      expectedRevision: 4,
+      taskIntent: "",
+      command: { name: "review" },
+    });
+  });
+
+  it("sends the command's arguments and the files they reference together with the agent", async () => {
+    const offered = stateWithRun(snapshot({ state: "paused" }), {
+      selectableAgents: ["build", "plan"],
+      agent: "plan",
+    });
+    const mutation = createFollowUpMutation("branch main", offered, {
+      command: { name: "review" },
+      references: [{ path: "src/app.ts" }],
+    });
+    await mutation.run();
+    expect(apiMocks.submitCodingWorkbenchRuntimeFollowUp).toHaveBeenLastCalledWith("run-1", {
+      requestId: mutation.requestId,
+      expectedRevision: 4,
+      taskIntent: "branch main",
+      agent: "plan",
+      references: [{ path: "src/app.ts" }],
+      command: { name: "review" },
+    });
+  });
+
+  it("keeps an empty text refused for everything that is not a command", () => {
+    expect(() => createFollowUpMutation("", paused)).toThrowError(
+      expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }),
+    );
+    expect(() =>
+      createFollowUpMutation("", paused, { references: [{ path: "a.ts" }] }),
+    ).toThrowError(expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }));
+  });
+
+  it("is admitted only against a paused run, and is never a delivery", () => {
+    for (const state of ["running", "idle", "awaiting-approval", "succeeded"] as const) {
+      expect(() =>
+        createFollowUpMutation("", stateWithRun(snapshot({ state })), {
+          command: { name: "init" },
+        }),
+      ).toThrowError(expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }));
+    }
+    expect(() =>
+      createFollowUpMutation("", stateWithRun(null), { command: { name: "init" } }),
+    ).toThrow();
+    for (const delivery of ["steer", "queue"] as const) {
+      expect(() =>
+        createFollowUpMutation("go", stateWithRun(snapshot({ state: "running" })), {
+          delivery,
+          command: { name: "init" },
+        }),
+      ).toThrowError(expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }));
+    }
+    expect(apiMocks.submitCodingWorkbenchRuntimeFollowUp).not.toHaveBeenCalled();
+  });
+});

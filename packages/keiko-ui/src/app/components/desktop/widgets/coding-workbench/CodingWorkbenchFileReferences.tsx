@@ -63,7 +63,7 @@ function PickerOptions({ picker, t }: PickerViewProps): ReactNode {
   }, [picker.highlighted, picker.options]);
   return (
     <ul
-      className={styles.pickerList}
+      className={styles.cmpPickerList}
       id={picker.listId}
       ref={listRef}
       aria-label={t("codingWorkbench.composer.references.picker.results")}
@@ -74,7 +74,7 @@ function PickerOptions({ picker, t }: PickerViewProps): ReactNode {
             type="button"
             id={picker.optionId(index)}
             tabIndex={-1}
-            className={styles.option}
+            className={styles.cmpOption}
             data-highlighted={index === picker.highlighted ? "true" : "false"}
             aria-label={t("codingWorkbench.composer.references.picker.option", {
               path: option.path,
@@ -83,13 +83,13 @@ function PickerOptions({ picker, t }: PickerViewProps): ReactNode {
             onMouseDown={(event): void => event.preventDefault()}
             onClick={(): void => picker.pick(option)}
           >
-            <span className={styles.optionIcon} aria-hidden="true">
+            <span className={styles.cmpOptionIcon} aria-hidden="true">
               <FileIcon name={option.name} />
             </span>
-            <span className={styles.optionText} aria-hidden="true">
-              <span className={styles.optionName}>{option.name}</span>
+            <span className={styles.cmpOptionText} aria-hidden="true">
+              <span className={styles.cmpOptionName}>{option.name}</span>
               {option.directory.length === 0 ? null : (
-                <span className={styles.optionDirectory}>{option.directory}</span>
+                <span className={styles.cmpOptionDirectory}>{option.directory}</span>
               )}
             </span>
           </button>
@@ -109,11 +109,11 @@ export function FileReferencePopover({ picker, t }: PickerViewProps): ReactNode 
   const showList = picker.status === "found" && !picker.atLimit && picker.options.length > 0;
   return (
     <fieldset
-      className={styles.picker}
+      className={styles.cmpPicker}
       aria-label={t("codingWorkbench.composer.references.picker.title")}
     >
       <output
-        className={styles.pickerStatus}
+        className={styles.cmpPickerStatus}
         data-state={picker.status === "error" ? "error" : "info"}
       >
         {pickerStatus(picker, t)}
@@ -130,16 +130,16 @@ export function FileReferencePopover({ picker, t }: PickerViewProps): ReactNode 
 export function FileReferenceChips({ picker, t }: PickerViewProps): ReactNode {
   if (picker.references.length === 0) return null;
   return (
-    <ul className={styles.chips} aria-label={t("codingWorkbench.composer.references.label")}>
+    <ul className={styles.cmpChips} aria-label={t("codingWorkbench.composer.references.label")}>
       {picker.references.map((reference) => (
-        <li key={reference.path} className={styles.chip}>
+        <li key={reference.path} className={styles.cmpChip}>
           <FileIcon name={reference.path} />
-          <span className={styles.chipPath} title={reference.path}>
+          <span className={styles.cmpChipPath} title={reference.path}>
             {reference.path}
           </span>
           <button
             type="button"
-            className={styles.chipRemove}
+            className={styles.cmpChipRemove}
             aria-label={t("codingWorkbench.composer.references.remove", { path: reference.path })}
             onClick={(): void => picker.remove(reference.path)}
           >

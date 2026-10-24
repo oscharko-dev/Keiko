@@ -555,6 +555,16 @@ of this view and can never be spent by looking. An unpaired read returns the sin
 `{ session: "unpaired" }` projection before run resolution, independent of run, catalog or skill
 existence, and `CodingWorkbenchRuntimeSnapshot` carries none of it.
 
+## Slash-command channel (ADR-0137 D10, C02)
+
+The slash commands a run's runtime lists are the runtime's own untrusted display text, so they ride
+the authenticated channel as well: `GET /runs/:runId/commands` answers the paired operator with the
+names and one-line descriptions the runtime reports right now, bounded and duplicate-free by the
+contract (templates never leave the runtime), and nothing for a run that is not live or whose profile
+offers no commands. The read consumes no revision and no request id. An unpaired read returns the
+single `{ session: "unpaired" }` projection before run resolution, independent of the run and of the
+listing, and the general snapshot carries none of it.
+
 ## Consequences
 
 - W1.5 can enforce this authority on the content-bearing routes and migrate the runtime-question

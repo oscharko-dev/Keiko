@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "5007f8151f80b4eadae7fe33069325c9cb9a46691e8115024db1716df013a2ab" as const;
+  "221aefc06c7e390f1b9861c745103004c4bfef4256106fae7f96f06d78f0b7b9" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -8936,21 +8936,86 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       lifecycleTransitions: ["state"],
       lifecycleOperations: {
         start: [],
-        state: ["coding-runtime.prompt-inputs.settled"],
+        state: ["coding-runtime.commands.listed", "coding-runtime.prompt-inputs.settled"],
         end: [],
         failure: [],
         loss: [],
       },
       causalEdges: [
         {
+          op: "coding-runtime.commands.listed",
+          mode: "correlation",
+        },
+        {
           op: "coding-runtime.prompt-inputs.settled",
           mode: "correlation",
         },
       ],
       lossSignals: [],
-      resourceSignals: ["coding-runtime.prompt-inputs.settled"],
+      resourceSignals: ["coding-runtime.commands.listed", "coding-runtime.prompt-inputs.settled"],
       replayReferences: [],
       operations: [
+        {
+          op: "coding-runtime.commands.listed",
+          owner: "keiko-server",
+          category: "process",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "causeChain",
+              type: "string-array",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
+              name: "commandCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "frames",
+              type: "string-array",
+              dataClass: "opaque-id",
+              required: false,
+            },
+            {
+              name: "outcome",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "runId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: true,
+            },
+            {
+              name: "skippedCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "error-kind",
+            "loss-state",
+            "opaque-id",
+          ],
+          frameCauseEvidence: {
+            frames: true,
+            causeChain: true,
+          },
+          proofIds: ["coding-runtime.commands.listed.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
         {
           op: "coding-runtime.prompt-inputs.settled",
           owner: "keiko-server",
@@ -8963,6 +9028,24 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "attachedBytes",
               type: "integer",
               dataClass: "count",
+              required: false,
+            },
+            {
+              name: "command",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "commandArgumentBytes",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "commandDigest",
+              type: "string",
+              dataClass: "digest",
               required: false,
             },
             {
@@ -9012,6 +9095,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             "closed-enum",
             "completeness-state",
             "count",
+            "digest",
             "loss-state",
             "opaque-id",
           ],
@@ -43375,6 +43459,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "coding-runtime.authority.mint-failed": "tools-workflows",
     "coding-runtime.authority.minted": "tools-workflows",
     "coding-runtime.authority.revalidation-refused": "tools-workflows",
+    "coding-runtime.commands.listed": "tools-workflows",
     "coding-runtime.compaction": "tools-workflows",
     "coding-runtime.context-usage.observed": "tools-workflows",
     "coding-runtime.description": "tools-workflows",

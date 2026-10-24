@@ -1,8 +1,10 @@
-/* The `@` file picker, the referenced-file chips and the delivery notice of the Coding Workbench
-   composer (ADR-0137 D10). Component-scoped on purpose: globals.css is behind a visual-proof gate. */
+/* The `@` file picker, the `/` command menu, the referenced-file chips and the delivery notice of the
+   Coding Workbench composer (ADR-0137 D10). Component-scoped on purpose: globals.css is behind a
+   visual-proof gate. */
 
-.picker {
+.cmpPicker {
   display: grid;
+  min-width: 0;
   gap: var(--space-2);
   min-inline-size: 0;
   margin: 0 0 var(--space-2);
@@ -13,7 +15,7 @@
   color: var(--text-primary);
 }
 
-.pickerStatus {
+.cmpPickerStatus {
   display: block;
   margin: 0;
   color: var(--text-tertiary);
@@ -22,11 +24,11 @@
   overflow-wrap: anywhere;
 }
 
-.pickerStatus[data-state="error"] {
+.cmpPickerStatus[data-state="error"] {
   color: var(--feedback-danger);
 }
 
-.pickerList {
+.cmpPickerList {
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -37,7 +39,7 @@
   list-style: none;
 }
 
-.option {
+.cmpOption {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
@@ -53,44 +55,80 @@
   cursor: pointer;
 }
 
-.option:hover,
-.option:focus-visible,
-.option[data-highlighted="true"] {
+.cmpOption:hover,
+.cmpOption:focus-visible,
+.cmpOption[data-highlighted="true"] {
   border-color: var(--accent-line);
   background: color-mix(in oklch, var(--accent) 10%, transparent);
 }
 
-.optionIcon {
+.cmpOptionIcon {
   display: grid;
   width: 18px;
   height: 18px;
   place-items: center;
 }
 
-.optionText {
+.cmpOptionText {
   display: grid;
   min-width: 0;
 }
 
-.optionName,
-.optionDirectory {
+.cmpOptionName,
+.cmpOptionDirectory {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.optionName {
+.cmpOptionName {
   font-size: 12px;
   font-weight: 700;
 }
 
-.optionDirectory {
+.cmpOptionDirectory {
   color: var(--text-tertiary);
   font-size: 10.5px;
 }
 
-.chips {
+/* A command option has no icon: its name and one line of description fill the row. */
+.cmpCommandOption {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.cmpOptionDescription {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cmpPickerAction {
+  justify-self: start;
+  min-height: 28px;
+  padding: 3px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: var(--text-caption);
+  cursor: pointer;
+}
+
+.cmpPickerAction:hover {
+  border-color: var(--accent-line);
+  background: color-mix(in oklch, var(--accent) 10%, transparent);
+}
+
+.cmpPickerAction:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.cmpChips {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
@@ -99,7 +137,7 @@
   list-style: none;
 }
 
-.chip {
+.cmpChip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -112,7 +150,7 @@
   color: var(--text-primary);
 }
 
-.chipPath {
+.cmpChipPath {
   min-width: 0;
   overflow: hidden;
   font-size: 12px;
@@ -120,7 +158,7 @@
   white-space: nowrap;
 }
 
-.chipRemove {
+.cmpChipRemove {
   display: grid;
   flex: none;
   width: 22px;
@@ -133,17 +171,17 @@
   cursor: pointer;
 }
 
-.chipRemove:hover {
+.cmpChipRemove:hover {
   background: var(--button-secondary-surface-hover);
   color: var(--button-secondary-text);
 }
 
-.chipRemove:focus-visible {
+.cmpChipRemove:focus-visible {
   outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 
-.notice {
+.cmpNotice {
   display: block;
   margin: var(--space-2) 0 0;
   color: var(--text-tertiary);
@@ -152,6 +190,6 @@
   overflow-wrap: anywhere;
 }
 
-.notice[data-state="failed"] {
+.cmpNotice[data-state="failed"] {
   color: var(--feedback-warning);
 }

@@ -678,3 +678,190 @@ describe("OpenCode V2 session diff and revert", () => {
     );
   });
 });
+
+// C02 (ADR-0137 D10): the runtime's slash commands. The listing is untrusted display text and the
+// session command carries no message id, so the client keeps both shapes closed.
+describe("OpenCode V2 slash commands", () => {
+  const AUTHORIZATION = `Basic ${Buffer.from("opencode:test-only", "utf8").toString("base64")}`;
+
+  function clientWith(respond: () => Response): {
+    readonly client: ReturnType<typeof createOpenCodeV2HttpClient>;
+    readonly fetch: ReturnType<typeof vi.fn<typeof globalThis.fetch>>;
+  } {
+    const fetch = vi.fn<typeof globalThis.fetch>(() => Promise.resolve(respond()));
+    return {
+      client: createOpenCodeV2HttpClient({
+        endpoint: "http://127.0.0.1:1984/",
+        password: "test-only",
+        fetch,
+      }),
+      fetch,
+    };
+  }
+
+  function json(body: unknown, status = 200): Response {
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  it("lists the commands with their closed fields and nothing the entries add", async () => {
+    const { client, fetch } = clientWith(() =>
+      json({
+        location: { directory: "/workspace" },
+        data: [
+          { name: "init", description: "guided AGENTS.md setup", template: "SECRET-TEMPLATE" },
+          { name: "review" },
+        ],
+      }),
+    );
+
+    await expect(client.commands()).resolves.toEqual([
+      { name: "init", description: "guided AGENTS.md setup" },
+      { name: "review" },
+    ]);
+
+    const [url, init] = fetch.mock.calls[0] ?? [];
+    expect(url).toEqual(new URL("http://127.0.0.1:1984/api/command"));
+    expect(init).toMatchObject({ method: "GET", redirect: "manual" });
+    expect(init?.headers).toMatchObject({ Authorization: AUTHORIZATION });
+    expect(init?.body).toBeUndefined();
+  });
+
+  it("drops an entry whose name is not a bounded command name and a description that is not text", async () => {
+    const { client } = clientWith(() =>
+      json({
+        data: [
+          { name: "ok", description: "fine" },
+          { name: "two words" },
+          { name: "../escape" },
+          { name: "" },
+          { name: 7 },
+          {},
+          { name: "tabbed", description: "bad\tdescription" },
+          { name: "long", description: "d".repeat(1_025) },
+          { name: "empty", description: "" },
+        ],
+      }),
+    );
+
+    await expect(client.commands()).resolves.toEqual([
+      { name: "ok", description: "fine" },
+      { name: "tabbed" },
+      { name: "long" },
+      { name: "empty" },
+    ]);
+  });
+
+  it.each([
+    ["a non-array payload", { data: {} }],
+    ["no data", { location: { directory: "/workspace" } }],
+    ["a non-object entry", { data: ["init"] }],
+    ["more entries than the client reads", { data: Array.from({ length: 257 }, () => ({})) }],
+  ])("rejects a listing with %s", async (_name, body) => {
+    const { client } = clientWith(() => json(body));
+
+    await expect(client.commands()).rejects.toThrow("opencode-v2-envelope-invalid");
+  });
+
+  it("surfaces the runtime's refusal of the listing instead of an empty list", async () => {
+    const { client } = clientWith(() => json({ _tag: "UnauthorizedError" }, 401));
+
+    await expect(client.commands()).rejects.toBeInstanceOf(OpenCodeV2HttpStatusError);
+  });
+
+  it("runs a command with the closed body and files, and reads the empty 204 answer", async () => {
+    const { client, fetch } = clientWith(() => new Response(null, { status: 204 }));
+    const file = { uri: "file:///workspace/NOTES.md", name: "NOTES.md" };
+
+    await expect(
+      client.command("ses_cmd_1", "review", "the main branch", undefined, { files: [file] }),
+    ).resolves.toBeUndefined();
+
+    const [url, init] = fetch.mock.calls[0] ?? [];
+    expect(url).toEqual(new URL("http://127.0.0.1:1984/api/session/ses_cmd_1/command"));
+    expect(init).toMatchObject({ method: "POST", redirect: "manual" });
+    expect(init?.body).toBe(
+      JSON.stringify({ name: "review", text: "the main branch", files: [file] }),
+    );
+    expect(init?.headers).toMatchObject({
+      "Content-Type": "application/json",
+      Authorization: AUTHORIZATION,
+    });
+  });
+
+  it("sends an empty argument text and no id, delivery or metadata", async () => {
+    const { client, fetch } = clientWith(() => new Response(null, { status: 204 }));
+
+    await client.command("ses_cmd_1", "init", "");
+
+    const [, init] = fetch.mock.calls[0] ?? [];
+    expect(init?.body).toBe(JSON.stringify({ name: "init", text: "" }));
+  });
+
+  it.each([
+    ["an unsafe session id", ["ses_a/../b", "review", ""], "opencode-v2-session-invalid"],
+    ["a name with a space", ["ses_cmd_1", "re view", ""], "opencode-v2-command-invalid"],
+    ["a name with a slash", ["ses_cmd_1", "/review", ""], "opencode-v2-command-invalid"],
+    ["an empty name", ["ses_cmd_1", "", ""], "opencode-v2-command-invalid"],
+    [
+      "an oversized text",
+      ["ses_cmd_1", "review", "x".repeat(65_537)],
+      "opencode-v2-prompt-oversized",
+    ],
+  ] as const)("refuses %s before any byte leaves the process", async (_name, args, message) => {
+    const { client, fetch } = clientWith(() => new Response(null, { status: 204 }));
+
+    const [sessionId, name, text] = args;
+
+    const failure: unknown = await client
+      .command(sessionId, name, text)
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(OpenCodeV2PromptRefusedError);
+    expect((failure as Error).message).toBe(message);
+    expect(classifyOpenCodeV2PromptFailure(failure)).toBe("not-submitted");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("refuses a malformed attachment and more attachments than a prompt takes", async () => {
+    const { client, fetch } = clientWith(() => new Response(null, { status: 204 }));
+    const file = (index: number): { uri: string; name: string } => ({
+      uri: `file:///workspace/f${String(index)}.md`,
+      name: `f${String(index)}.md`,
+    });
+
+    await expect(
+      client.command("ses_cmd_1", "review", "", undefined, {
+        files: [{ uri: "https://example.invalid/x", name: "x" }],
+      }),
+    ).rejects.toBeInstanceOf(OpenCodeV2PromptRefusedError);
+    await expect(
+      client.command("ses_cmd_1", "review", "", undefined, {
+        files: Array.from({ length: 17 }, (_, index) => file(index)),
+      }),
+    ).rejects.toBeInstanceOf(OpenCodeV2PromptRefusedError);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("surfaces an unknown command and a failed execution as the runtime's status", async () => {
+    const notFound = clientWith(() =>
+      json(
+        { _tag: "CommandNotFoundError", command: "nope", message: "Command not found: nope" },
+        404,
+      ),
+    );
+    const failed = clientWith(() => json({ _tag: "CommandExecutionError" }, 500));
+
+    const refusal: unknown = await notFound.client
+      .command("ses_cmd_1", "nope", "")
+      .catch((error: unknown) => error);
+    const execution: unknown = await failed.client
+      .command("ses_cmd_1", "review", "")
+      .catch((error: unknown) => error);
+
+    expect(refusal).toMatchObject({ name: "OpenCodeV2HttpStatusError", status: 404 });
+    expect(execution).toMatchObject({ name: "OpenCodeV2HttpStatusError", status: 500 });
+  });
+});

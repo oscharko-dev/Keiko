@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   linkSync,
   mkdirSync,
@@ -12,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { CODING_WORKBENCH_BUILT_IN_COMMAND_NAMES } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import { activityLogEventWillBeRejected } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
@@ -73,10 +75,19 @@ function refusal(path: string): PromptInputsRefusal | undefined {
 }
 
 describe("OpenCode prompt input capabilities", () => {
-  it("offers delivery and references only on the native service", () => {
-    expect(openCodePromptInputs("native")).toEqual({ delivery: true, references: true });
-    expect(openCodePromptInputs("direct")).toEqual({ delivery: false, references: false });
-    expect(openCodePromptInputs("code-mode")).toEqual({ delivery: false, references: false });
+  it("offers delivery, references and slash commands only on the native service", () => {
+    expect(openCodePromptInputs("native")).toEqual({
+      delivery: true,
+      references: true,
+      commands: true,
+    });
+    for (const profile of ["direct", "code-mode"] as const) {
+      expect(openCodePromptInputs(profile)).toEqual({
+        delivery: false,
+        references: false,
+        commands: false,
+      });
+    }
   });
 });
 
@@ -456,10 +467,15 @@ describe("the run port that admits and delivers prompt inputs", () => {
     h.sink.events.map((event) => (event as { extra?: unknown }).extra);
 
   it("reports the capabilities it was composed with", () => {
-    expect(harness().port.promptInputs).toEqual({ delivery: true, references: true });
+    expect(harness().port.promptInputs).toEqual({
+      delivery: true,
+      references: true,
+      commands: true,
+    });
     expect(harness({ capabilities: MAPPED }).port.promptInputs).toEqual({
       delivery: false,
       references: false,
+      commands: false,
     });
   });
 
@@ -518,6 +534,167 @@ describe("the run port that admits and delivers prompt inputs", () => {
     expect(h.sink.events, "admission alone records nothing: only a settled prompt does").toEqual(
       [],
     );
+  });
+
+  it("refuses a command on a profile that has none, recording the command only by its digest", () => {
+    const h = harness({ capabilities: MAPPED });
+
+    expect(
+      h.port.admitPromptInputs("run-1", {
+        command: { name: "my-custom", argumentBytes: 4 },
+        requestId: "req-1",
+      }),
+    ).toEqual({ ok: false, reason: "commands-unsupported" });
+
+    expect(lines(h)).toMatchObject([
+      {
+        outcome: "refused",
+        reason: "commands-unsupported",
+        command: "other",
+        commandDigest: createHash("sha256").update("my-custom", "utf8").digest("hex"),
+        commandArgumentBytes: 4,
+      },
+    ]);
+    expect(JSON.stringify(h.sink.events)).not.toContain("my-custom");
+  });
+
+  it("admits a command on the native profile with its references, and records nothing until it settles", () => {
+    const h = harness();
+
+    const admitted = h.port.admitPromptInputs("run-1", {
+      command: { name: "review", argumentBytes: 9 },
+      references: [{ path: "src/app.ts" }],
+      correlationId: "corr-0123456789",
+      requestId: "req-1",
+    });
+
+    expect(admitted).toEqual({
+      ok: true,
+      inputs: {
+        command: { name: "review", argumentBytes: 9 },
+        referenceCount: 1,
+        correlationId: "corr-0123456789",
+        requestId: "req-1",
+        files: [{ uri: `file://${join(workspace, "src", "app.ts")}`, name: "app.ts" }],
+        fileBytes: "export const app = 1;\n".length,
+      },
+    });
+    expect(h.sink.events).toEqual([]);
+  });
+
+  it("refuses the whole command prompt when one of its references is refused", () => {
+    const h = harness();
+
+    expect(
+      h.port.admitPromptInputs("run-1", {
+        command: { name: "review", argumentBytes: 0 },
+        references: [{ path: "src/app.ts" }, { path: "../outside/secret.txt" }],
+      }),
+    ).toEqual({ ok: false, reason: "reference-invalid" });
+    expect(lines(h)).toMatchObject([
+      { outcome: "refused", reason: "reference-invalid", command: "review" },
+    ]);
+  });
+
+  it("names a built-in command in the log and any other command by the digest of its name", () => {
+    const sink = createBufferedServerLogSink();
+
+    for (const name of ["init", "review", "git:commit", "Review"]) {
+      recordPromptInputs(
+        sink,
+        "run-1",
+        { referenceCount: 0, command: { name, argumentBytes: 5 } },
+        { outcome: "accepted", attachedBytes: 0 },
+      );
+    }
+
+    expect(sink.events.map((event) => (event as { extra?: unknown }).extra)).toMatchObject([
+      { command: "init", commandArgumentBytes: 5 },
+      { command: "review", commandArgumentBytes: 5 },
+      {
+        command: "other",
+        commandDigest: createHash("sha256").update("git:commit", "utf8").digest("hex"),
+        commandArgumentBytes: 5,
+      },
+      {
+        command: "other",
+        commandDigest: createHash("sha256").update("Review", "utf8").digest("hex"),
+      },
+    ]);
+    const builtIn = sink.events.slice(0, 2).map((event) => (event as { extra: object }).extra);
+    for (const extra of builtIn) expect(extra).not.toHaveProperty("commandDigest");
+    expect(JSON.stringify(sink.events)).not.toMatch(/git:commit/u);
+    for (const event of sink.events) expect(activityLogEventWillBeRejected(event)).toBe(false);
+  });
+
+  // The operation's `command` vocabulary is `init`, `review` and `other`: a built-in the contract
+  // names must reach the log by name, so the two move together.
+  it.each(CODING_WORKBENCH_BUILT_IN_COMMAND_NAMES)(
+    "names the contract's built-in command %s by name and not by digest",
+    (name) => {
+      const sink = createBufferedServerLogSink();
+
+      recordPromptInputs(
+        sink,
+        "run-1",
+        { referenceCount: 0, command: { name, argumentBytes: 0 } },
+        { outcome: "accepted", attachedBytes: 0 },
+      );
+
+      const extra = (sink.events[0] as { extra: Record<string, unknown> }).extra;
+      expect(extra.command).toBe(name);
+      expect(extra).not.toHaveProperty("commandDigest");
+    },
+  );
+
+  it("records a refused command turn with its closed reason and error kind", () => {
+    const sink = createBufferedServerLogSink();
+
+    recordPromptInputs(
+      sink,
+      "run-1",
+      { referenceCount: 0, command: { name: "review", argumentBytes: 0 } },
+      { outcome: "refused", reason: "command-refused", errorKind: "unavailable" },
+    );
+
+    expect(sink.events).toMatchObject([
+      {
+        level: "warn",
+        errorKind: "unavailable",
+        extra: { outcome: "refused", reason: "command-refused", command: "review" },
+      },
+    ]);
+    expect(activityLogEventWillBeRejected(sink.events[0] ?? {})).toBe(false);
+  });
+
+  // Needs the regenerated Activity Log registry (`npm run generate:op-catalog`), which carries the
+  // typed registration this operation declares.
+  it("is a registered, persistable line when it names a command", () => {
+    const sink = createBufferedServerLogSink();
+    recordPromptInputs(
+      sink,
+      "run-1",
+      { referenceCount: 1, command: { name: "review", argumentBytes: 12 }, requestId: "req-1" },
+      { outcome: "accepted", attachedBytes: 3 },
+    );
+    recordPromptInputs(
+      sink,
+      "run-1",
+      { referenceCount: 0, command: { name: "custom", argumentBytes: 0 } },
+      { outcome: "refused", reason: "command-unknown" },
+    );
+
+    const written = sink.events.map((event) =>
+      expectActivityLogProof(
+        "coding-runtime.prompt-inputs.settled.emitted-line",
+        formatActivityLogProofLine(event),
+      ),
+    );
+
+    expect(written).toMatchObject([
+      { outcome: "accepted", command: "review", commandArgumentBytes: 12, requestId: "req-1" },
+      { outcome: "refused", command: "other", reason: "command-unknown" },
+    ]);
   });
 
   it("refuses the prompt when a reference is hostile, naming only the closed reason", () => {

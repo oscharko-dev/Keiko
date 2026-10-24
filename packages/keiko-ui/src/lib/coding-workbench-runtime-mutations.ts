@@ -10,7 +10,10 @@ import type {
   CodingWorkbenchRuntimeStartRequest,
 } from "@oscharko-dev/keiko-contracts";
 import { isCodingWorkbenchModeWidening } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
-import type { CodingWorkbenchRuntimeRevertAction } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
+import type {
+  CodingWorkbenchCommandRequest,
+  CodingWorkbenchRuntimeRevertAction,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import {
   acknowledgeCodingWorkbenchRuntimeRecovery,
   codingWorkbenchRuntimeActionError,
@@ -62,6 +65,22 @@ function agentSelection(current: CodingWorkbenchRuntimeState): {
   return offeredCodingWorkbenchAgents(current).length > 1 ? { agent: current.agent } : {};
 }
 
+/**
+ * What the first prompt carries beside its text (ADR-0137 D10): the files it references with `@` and
+ * the slash command it starts with. Both are absent for the ordinary start, which keeps its request
+ * body exactly as it was.
+ */
+function startPromptInputs(options: CodingWorkbenchStartOptions): {
+  readonly references?: readonly CodingWorkbenchPromptReference[];
+  readonly command?: CodingWorkbenchCommandRequest;
+} {
+  const references = options.references ?? [];
+  return {
+    ...(references.length === 0 ? {} : { references }),
+    ...(options.command === undefined ? {} : { command: options.command }),
+  };
+}
+
 function startRequest(
   id: string,
   taskIntent: string,
@@ -77,6 +96,7 @@ function startRequest(
     projectMemory: { enabled: options.projectMemoryEnabled },
     ...managedGatewayModelSelection(current),
     ...agentSelection(current),
+    ...startPromptInputs(options),
   };
   if (options.issue === undefined) return request;
   return {
@@ -106,6 +126,9 @@ export function createStartMutation(
 ): CodingWorkbenchMutationCommand {
   if (!current.canStart)
     throw codingWorkbenchRuntimeActionError("The runtime is not ready to start.");
+  // A command turn carries none of an issue's context; the server refuses the pair, so never send it.
+  if (options.command !== undefined && options.issue !== undefined)
+    throw codingWorkbenchRuntimeActionError("A slash command cannot start a task from an issue.");
   const id = newCodingWorkbenchRuntimeRequestId();
   return {
     requestId: id,
@@ -192,12 +215,53 @@ function validatedResumeMode(
   return requestedMode;
 }
 
-/** What a follow-up carries beside its text; both fields are absent for the ordinary follow-up. */
+/** What a follow-up carries beside its text; all fields are absent for the ordinary follow-up. */
 export interface CodingWorkbenchFollowUpInputs {
   /** Makes the message join the turn that is running; it never starts one (ADR-0137 D10). */
   readonly delivery?: CodingWorkbenchPromptDelivery | undefined;
   /** Workspace files the human referenced with `@`, by path relative to the run's workspace. */
   readonly references?: readonly CodingWorkbenchPromptReference[] | undefined;
+  /**
+   * Runs the turn as one of the runtime's slash commands; the text is then the command's arguments
+   * and may be empty. A command starts a turn, so it is never a delivery.
+   */
+  readonly command?: CodingWorkbenchCommandRequest | undefined;
+}
+
+interface FollowUpTarget {
+  readonly runId: string;
+  readonly snapshot: CodingWorkbenchRuntimeSnapshot;
+}
+
+/** Whether the follow-up has anything to send: a text, or a command, which may take none. */
+function followUpHasText(taskIntent: string, inputs: CodingWorkbenchFollowUpInputs): boolean {
+  return taskIntent.length > 0 || inputs.command !== undefined;
+}
+
+/**
+ * The run a follow-up is admitted against, or the refusal. An ordinary follow-up is only ever
+ * admitted against a paused run; a delivered message (`steer` or `queue`) is the one thing a running
+ * run takes, and it takes it for the turn in flight. Only a command may carry an empty text, and a
+ * command starts a turn, so it is never a delivery.
+ */
+function followUpTarget(
+  snapshot: CodingWorkbenchRuntimeSnapshot | null,
+  taskIntent: string,
+  inputs: CodingWorkbenchFollowUpInputs,
+): FollowUpTarget {
+  const { delivery, command } = inputs;
+  if (command !== undefined && delivery !== undefined) {
+    throw codingWorkbenchRuntimeActionError("A slash command cannot be delivered into a turn.");
+  }
+  const admissible = delivery === undefined ? "paused" : "running";
+  if (snapshot?.state !== admissible || !followUpHasText(taskIntent, inputs) || !snapshot.runId) {
+    throw codingWorkbenchRuntimeActionError(
+      delivery === undefined
+        ? "A follow-up can only be sent while the run is paused."
+        : "A message can only be sent to a task while its turn is running.",
+    );
+  }
+  return { runId: snapshot.runId, snapshot };
 }
 
 export function createFollowUpMutation(
@@ -205,19 +269,9 @@ export function createFollowUpMutation(
   current: CodingWorkbenchRuntimeState,
   inputs: CodingWorkbenchFollowUpInputs = {},
 ): CodingWorkbenchMutationCommand {
-  const snapshot = current.run.value;
-  const runId = snapshot?.runId;
-  const { delivery } = inputs;
-  // An ordinary follow-up is only ever admitted against a paused run; a delivered message (`steer`
-  // or `queue`) is the one thing a running run takes, and it takes it for the turn in flight.
-  const admissible = delivery === undefined ? "paused" : "running";
-  if (!runId || snapshot?.state !== admissible || taskIntent.length === 0)
-    throw codingWorkbenchRuntimeActionError(
-      delivery === undefined
-        ? "A follow-up can only be sent while the run is paused."
-        : "A message can only be sent to a task while its turn is running.",
-    );
+  const { runId, snapshot } = followUpTarget(current.run.value, taskIntent, inputs);
   const id = newCodingWorkbenchRuntimeRequestId();
+  const { delivery, command } = inputs;
   const references = inputs.references ?? [];
   return {
     requestId: id,
@@ -231,6 +285,7 @@ export function createFollowUpMutation(
         // A delivered message joins the turn that runs under its agent and never switches it.
         ...(delivery === undefined ? agentSelection(current) : { delivery }),
         ...(references.length === 0 ? {} : { references }),
+        ...(command === undefined ? {} : { command }),
       }),
   };
 }

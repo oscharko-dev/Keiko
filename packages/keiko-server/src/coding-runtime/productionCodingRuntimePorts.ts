@@ -1,5 +1,8 @@
 import type { CodexRuntimeControl } from "./codexRuntimeComposition.js";
-import type { CodingWorkbenchRuntimeRevertAction } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
+import type {
+  CodingWorkbenchCommand,
+  CodingWorkbenchRuntimeRevertAction,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import type {
   AdmittedPromptInputs,
   PromptInputsAdmission,
@@ -185,6 +188,22 @@ export interface ProductionRuntimeTurnPort {
   /** Sends an admitted `steer` / `queue` message to the turn in flight; it starts no turn. */
   readonly deliverPrompt?:
     ((runId: string, text: string, inputs: AdmittedPromptInputs) => Promise<boolean>) | undefined;
+  /**
+   * The slash commands the run's runtime lists right now, for the Workbench's `/` menu; `undefined`
+   * when the run offers none. Absent for a port that has no commands (a mapped profile, Codex).
+   */
+  readonly listCommands?:
+    | ((
+        runId: string,
+        correlationId?: string,
+      ) => Promise<readonly CodingWorkbenchCommand[] | undefined>)
+    | undefined;
+  /**
+   * Confirms the runtime lists the command an admitted turn names, ahead of every reservation. A
+   * port without it takes no command: a turn that names one is refused like an unsupported agent.
+   */
+  readonly admitCommand?:
+    ((runId: string, inputs: AdmittedPromptInputs) => Promise<PromptInputsAdmission>) | undefined;
   /**
    * The primary agents, beside the default, an operator may select for this run's turns. Absent
    * means the default agent only: a request for any other is refused before the adapter is reached
@@ -533,6 +552,9 @@ export function createOpenCodeRuntimeTurnPort(runPort: OpenCodeRunPort): Product
     ...(runPort.admitPromptInputs === undefined || runPort.deliverPrompt === undefined
       ? {}
       : { admitPromptInputs: runPort.admitPromptInputs, deliverPrompt: runPort.deliverPrompt }),
+    ...(runPort.listCommands === undefined || runPort.admitCommand === undefined
+      ? {}
+      : { listCommands: runPort.listCommands, admitCommand: runPort.admitCommand }),
     abortTurn: (runId) => runPort.abortTask(runId),
     waitForTerminal: async (runId, signal): Promise<CodingRuntimeTaskOutcome> => {
       const outcome = await runPort.waitForTerminal(runId, signal);
@@ -649,6 +671,8 @@ export function createProductionRuntimeTaskDispatcher(
     replace: (request) => replaceRuntimeTask(runs, request, diagnostics),
     abort: (request) => abortRuntimeTask(runs, request),
     deliver: (request) => deliverRuntimePrompt(runs, request, diagnostics),
+    commands: (runId, correlationId) =>
+      runs.get(runId)?.turnPort.listCommands?.(runId, correlationId) ?? Promise.resolve(undefined),
     revert: (request) => revertRuntimeTask(runs, request, diagnostics),
     revertState: (runId) =>
       runs.get(runId)?.turnPort.revertState?.(runId) ?? Promise.resolve(undefined),
@@ -667,7 +691,7 @@ async function dispatchRuntimeTask(
     return rejectedDispatch(diagnostics, request.runId, "aborted", request.correlationId);
   if (!isAgentAdmitted(record.turnPort.selectableAgents, request.agent))
     return rejectedAgent(diagnostics, request.runId, request.correlationId);
-  const admitted = admitTurnInputs(record, request, "turn");
+  const admitted = await admitTurn(record, request);
   if (!admitted.ok) return rejectedInputs(diagnostics, request.runId, request.correlationId);
   const reservation = record.operationGuard.reserve(request);
   if (reservation === undefined)
@@ -690,20 +714,64 @@ function admitTurnInputs(
   request: CodingRuntimeTaskDispatchRequest,
   mode: "turn" | "delivery",
 ): TurnInputsAdmission {
-  const references = request.references ?? [];
   if ((request.delivery !== undefined) !== (mode === "delivery")) return { ok: false };
-  if (request.delivery === undefined && references.length === 0) return { ok: true };
+  // A delivery joins a turn that is running; a command starts one. The contract never lets a
+  // request be both, and the dispatcher does not trust it to.
+  if (request.delivery !== undefined && request.command !== undefined) return { ok: false };
+  if (!carriesPromptInputs(request)) return { ok: true };
   const admit = record.turnPort.admitPromptInputs;
   if (admit === undefined) return { ok: false };
-  const admission = admit(request.runId, {
+  const admission = admit(request.runId, promptInputsRequest(request));
+  return admission.ok ? { ok: true, inputs: admission.inputs } : { ok: false };
+}
+
+/** Whether a dispatch carries anything beside its text: a delivery, references or a command. */
+function carriesPromptInputs(request: CodingRuntimeTaskDispatchRequest): boolean {
+  return (
+    request.delivery !== undefined ||
+    request.command !== undefined ||
+    (request.references?.length ?? 0) > 0
+  );
+}
+
+/**
+ * What the run's port is asked to admit. The text of a command is counted, never forwarded: its size
+ * is all the port's log line may say of it.
+ */
+function promptInputsRequest(request: CodingRuntimeTaskDispatchRequest): PromptInputsRequest {
+  return {
     delivery: request.delivery,
     references: request.references,
+    ...(request.command === undefined
+      ? {}
+      : {
+          command: {
+            name: request.command.name,
+            argumentBytes: Buffer.byteLength(request.taskIntent, "utf8"),
+          },
+        }),
     correlationId: request.correlationId,
     // The operator request: a delivery binds its native message id to it, so a retry of the same
     // request resends the id the unconfirmed attempt carried.
     requestId: request.requestId,
-  });
-  return admission.ok ? { ok: true, inputs: admission.inputs } : { ok: false };
+  };
+}
+
+/**
+ * Admits a turn's inputs, then confirms with the runtime that it lists the command the turn names,
+ * all ahead of any reservation: a command the runtime does not list begins nothing. A port without
+ * the confirmation takes no command.
+ */
+async function admitTurn(
+  record: ProductionRuntimeRunRecord,
+  request: CodingRuntimeTaskDispatchRequest,
+): Promise<TurnInputsAdmission> {
+  const admitted = admitTurnInputs(record, request, "turn");
+  if (!admitted.ok || admitted.inputs?.command === undefined) return admitted;
+  const confirm = record.turnPort.admitCommand;
+  if (confirm === undefined) return { ok: false };
+  const confirmed = await confirm(request.runId, admitted.inputs);
+  return confirmed.ok ? { ok: true, inputs: confirmed.inputs } : { ok: false };
 }
 
 /**
@@ -768,16 +836,16 @@ interface ReplacementAdmission {
 // Ahead of the replacement lifecycle: a request the run cannot honour (an agent it does not offer,
 // inputs it cannot take) never begins one, so there is no `started` line to leave without its
 // terminal one, and the predecessor is not interrupted.
-function admitReplacement(
+async function admitReplacement(
   record: ProductionRuntimeRunRecord | undefined,
   request: CodingRuntimeTaskDispatchRequest,
   diagnostics: ServerDiagnosticSink | undefined,
-): ReplacementAdmission {
+): Promise<ReplacementAdmission> {
   if (record === undefined) return {};
   if (!isAgentAdmitted(record.turnPort.selectableAgents, request.agent)) {
     return { refusal: rejectedAgent(diagnostics, request.runId, request.correlationId) };
   }
-  const admitted = admitTurnInputs(record, request, "turn");
+  const admitted = await admitTurn(record, request);
   if (!admitted.ok) {
     return { refusal: rejectedInputs(diagnostics, request.runId, request.correlationId) };
   }
@@ -790,7 +858,7 @@ async function replaceRuntimeTask(
   diagnostics: ServerDiagnosticSink | undefined,
 ): Promise<CodingRuntimeTaskDispatchResult> {
   const record = runs.get(request.runId);
-  const admission = admitReplacement(record, request, diagnostics);
+  const admission = await admitReplacement(record, request, diagnostics);
   if (admission.refusal !== undefined) return admission.refusal;
   recordRuntimeReplacementActivity(request, "started");
   if (record === undefined) return rejectedReplacement(diagnostics, request, "no-record");

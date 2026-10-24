@@ -1803,6 +1803,206 @@
           }
         }
       }
+    },
+    "/api/command": {
+      "get": {
+        "parameters": [
+          {
+            "name": "location",
+            "in": "query",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "directory": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "required": false,
+            "style": "deepObject",
+            "explode": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "location": {
+                      "$ref": "#/components/schemas/Location.PublicRef"
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Command.Info"
+                      }
+                    }
+                  },
+                  "required": ["location", "data"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocationNotFoundErrorEncoded"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/session/{sessionID}/command": {
+      "post": {
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "$ref": "#/components/schemas/Session.ID"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "204": {},
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/CommandNotFoundErrorEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/LocationNotFoundErrorEncoded"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandExecutionErrorEncoded"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "text": {
+                    "type": "string"
+                  },
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/PromptInput.FileAttachment"
+                    }
+                  },
+                  "agents": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/Prompt.AgentAttachment"
+                    }
+                  },
+                  "skills": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/PromptInput.SkillAttachment"
+                    }
+                  },
+                  "delivery": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/Session.Inbox.Delivery"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": ["name", "text"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        }
+      }
     }
   },
   "components": {
@@ -2580,6 +2780,50 @@
       "V2EventEncoded": {
         "type": "string",
         "contentMediaType": "application/json"
+      },
+      "Command.Info": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": ["name"],
+        "additionalProperties": false
+      },
+      "CommandNotFoundErrorEncoded": {
+        "type": "object",
+        "properties": {
+          "_tag": {
+            "type": "string",
+            "enum": ["CommandNotFoundError"]
+          },
+          "command": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": ["_tag", "command", "message"],
+        "additionalProperties": false
+      },
+      "CommandExecutionErrorEncoded": {
+        "type": "object",
+        "properties": {
+          "_tag": {
+            "type": "string",
+            "enum": ["CommandExecutionError"]
+          },
+          "command": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": ["_tag", "command", "message"],
+        "additionalProperties": false
       },
       "Session.ForkBoundary": {
         "anyOf": [

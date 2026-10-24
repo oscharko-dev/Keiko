@@ -4,7 +4,6 @@ import {
   useCallback,
   useEffect,
   useId,
-  useLayoutEffect,
   useMemo,
   useState,
   type KeyboardEvent,
@@ -18,6 +17,7 @@ import {
 import { fetchFilesSearch } from "@/lib/api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { bffRequestErrorKind } from "@/lib/http";
+import { handleListboxKey, useCaretAfterInsert } from "./codingWorkbenchComposerListbox";
 import {
   canPickReference,
   fileMentionAtCursor,
@@ -30,10 +30,10 @@ import {
 } from "./codingWorkbenchPromptReferences";
 
 /** The picker offers a short list; the human narrows it by typing more of the name. */
-export const FILE_REFERENCE_SEARCH_LIMIT = 8;
+const FILE_REFERENCE_SEARCH_LIMIT = 8;
 const SEARCH_DEBOUNCE_MS = 150;
 
-export type FileReferenceSearchStatus = "idle" | "searching" | "found" | "empty" | "error";
+type FileReferenceSearchStatus = "idle" | "searching" | "found" | "empty" | "error";
 
 export interface FileReferencePickerInput {
   /** False hides the picker and drops every pick: the run offers no references, or has no root. */
@@ -83,6 +83,7 @@ interface SearchState {
 }
 
 const IDLE_SEARCH: SearchState = { status: "idle", options: [] };
+const NO_PATHS: readonly string[] = Object.freeze([]);
 
 /** The files a search found that the message does not reference yet. */
 function searchOptions(
@@ -141,10 +142,6 @@ function useFileSearch(
   return state;
 }
 
-function nextHighlight(current: number, count: number, step: 1 | -1): number {
-  return (current + step + count) % count;
-}
-
 interface MentionState {
   readonly mention: FileMention | null;
   readonly open: boolean;
@@ -155,23 +152,36 @@ interface MentionState {
   readonly close: () => void;
 }
 
-/** The `@` token under the caret: whether it is open, which option is active, and Escape. */
-function useMentionState(enabled: boolean): MentionState {
-  const [mention, setMention] = useState<FileMention | null>(null);
+/** Whether the draft still holds the mention exactly as it was tracked. */
+function mentionHolds(draft: string, mention: FileMention): boolean {
+  return draft.slice(mention.start, mention.end) === `@${mention.query}`;
+}
+
+/**
+ * The `@` token under the caret: whether it is open, which option is active, and Escape. A mention
+ * the draft no longer holds (it was cleared when a task started, or replaced) is no mention: it
+ * neither stays open over the next draft nor leaves its Escape behind for it.
+ */
+function useMentionState(enabled: boolean, draft: string): MentionState {
+  const [tracked, setTracked] = useState<FileMention | null>(null);
   const [dismissedAt, setDismissedAt] = useState<number | null>(null);
   const [highlighted, setHighlighted] = useState(0);
+  const mention = tracked !== null && mentionHolds(draft, tracked) ? tracked : null;
   const query = mention?.query;
   // Narrowing or moving to another mention starts again at the best match.
   useEffect(() => {
     setHighlighted(0);
   }, [query, mention?.start]);
   useEffect(() => {
-    if (!enabled) setMention(null);
+    if (!enabled) setTracked(null);
   }, [enabled]);
+  useEffect(() => {
+    if (mention === null) setDismissedAt(null);
+  }, [mention]);
   const track = useCallback(
     (value: string, cursor: number | null): void => {
       const next = enabled && cursor !== null ? fileMentionAtCursor(value, cursor) : null;
-      setMention(next);
+      setTracked(next);
       if (next === null) setDismissedAt(null);
     },
     [enabled],
@@ -180,7 +190,7 @@ function useMentionState(enabled: boolean): MentionState {
     setDismissedAt(mention?.start ?? null);
   }, [mention]);
   const close = useCallback((): void => {
-    setMention(null);
+    setTracked(null);
     setDismissedAt(null);
   }, []);
   const open = enabled && mention !== null && dismissedAt !== mention.start;
@@ -195,11 +205,21 @@ interface PickedPaths {
 }
 
 /**
- * The files picked so far, as a list that never outlives the draft: a pick whose `@path` token the
- * human deleted is dropped, so what a prompt sends is what its text shows.
+ * The files picked so far, as a list that never outlives the draft or the root it was searched in: a
+ * pick whose `@path` token the human deleted is dropped, so what a prompt sends is what its text
+ * shows, and so is every pick made under another root, whose relative paths mean something else
+ * here.
  */
-function usePickedPaths(enabled: boolean, draft: string): PickedPaths {
-  const [picked, setPicked] = useState<readonly string[]>([]);
+function usePickedPaths(enabled: boolean, draft: string, root: string | null): PickedPaths {
+  const [pickedIn, setPickedIn] = useState<{
+    readonly root: string | null;
+    readonly paths: readonly string[];
+  }>({ root, paths: [] });
+  const picked = pickedIn.root === root ? pickedIn.paths : NO_PATHS;
+  const setPicked = useCallback(
+    (paths: readonly string[]): void => setPickedIn({ root, paths }),
+    [root],
+  );
   const references = useMemo(() => referencesInDraft(draft, picked), [draft, picked]);
   const paths = useMemo(() => references.map((reference) => reference.path), [references]);
   useEffect(() => {
@@ -209,66 +229,8 @@ function usePickedPaths(enabled: boolean, draft: string): PickedPaths {
     } else if (picked.length !== paths.length) {
       setPicked(paths);
     }
-  }, [enabled, picked.length, paths]);
+  }, [enabled, picked.length, paths, setPicked]);
   return { picked, setPicked, references, paths };
-}
-
-/** Moves the caret behind an inserted mention once the new draft has been rendered. */
-function useCaretAfterInsert(
-  textareaRef: RefObject<HTMLTextAreaElement | null>,
-): (position: number) => void {
-  const [caret, setCaret] = useState<number | null>(null);
-  useLayoutEffect(() => {
-    const textarea = textareaRef.current;
-    if (caret === null || textarea === null) return;
-    textarea.focus();
-    textarea.setSelectionRange(caret, caret);
-    setCaret(null);
-  }, [caret, textareaRef]);
-  return setCaret;
-}
-
-interface KeyContext {
-  readonly open: boolean;
-  readonly options: readonly FileReferenceOption[];
-  readonly highlighted: number;
-  readonly setHighlighted: MentionState["setHighlighted"];
-  readonly dismiss: () => void;
-  readonly pick: (option: FileReferenceOption) => void;
-}
-
-const SELECT_KEYS: ReadonlySet<string> = new Set(["Enter", "Tab"]);
-
-function navigationStep(key: string): 1 | -1 | undefined {
-  if (key === "ArrowDown") return 1;
-  return key === "ArrowUp" ? -1 : undefined;
-}
-
-/** The arrow keys move the active option; Enter or Tab picks it. */
-function handleListKey(context: KeyContext, event: KeyboardEvent<HTMLTextAreaElement>): boolean {
-  const { options, highlighted, setHighlighted, pick } = context;
-  const step = navigationStep(event.key);
-  if (step !== undefined) {
-    event.preventDefault();
-    setHighlighted((current) => nextHighlight(current, options.length, step));
-    return true;
-  }
-  const chosen = options[Math.min(highlighted, options.length - 1)];
-  if (!SELECT_KEYS.has(event.key) || event.shiftKey || chosen === undefined) return false;
-  event.preventDefault();
-  pick(chosen);
-  return true;
-}
-
-/** The picker's share of a key press; true when it consumed the key. */
-function handlePickerKey(context: KeyContext, event: KeyboardEvent<HTMLTextAreaElement>): boolean {
-  if (!context.open || event.nativeEvent.isComposing) return false;
-  if (event.key === "Escape") {
-    event.preventDefault();
-    context.dismiss();
-    return true;
-  }
-  return context.options.length > 0 && handleListKey(context, event);
 }
 
 interface PickActions {
@@ -319,9 +281,9 @@ function usePickActions(
 export function useFileReferencePicker(input: FileReferencePickerInput): FileReferencePicker {
   const { enabled, root, draft } = input;
   const baseId = useId();
-  const mentionState = useMentionState(enabled);
+  const mentionState = useMentionState(enabled, draft);
   const { mention, open, highlighted, setHighlighted, track, dismiss } = mentionState;
-  const pickedPaths = usePickedPaths(enabled, draft);
+  const pickedPaths = usePickedPaths(enabled, draft, root);
   const { picked, references, paths } = pickedPaths;
   const search = useFileSearch(enabled ? root : null, mention?.query ?? null, paths);
   const listId = `${baseId}-file-references`;
@@ -329,7 +291,7 @@ export function useFileReferencePicker(input: FileReferencePickerInput): FileRef
   const { pick, remove } = usePickActions(input, mentionState, pickedPaths);
   const handleKey = useCallback(
     (event: KeyboardEvent<HTMLTextAreaElement>): boolean =>
-      handlePickerKey(
+      handleListboxKey(
         { open, options: search.options, highlighted, setHighlighted, dismiss, pick },
         event,
       ),

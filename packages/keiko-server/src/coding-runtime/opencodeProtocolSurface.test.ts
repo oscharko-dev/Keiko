@@ -132,6 +132,16 @@ describe("OpenCode v1.18.30 protocol-surface projection", () => {
   });
 });
 
+/** The value at a path of object keys, or `undefined` as soon as the path leaves the document. */
+function dig(value: unknown, ...keys: readonly string[]): unknown {
+  let current = value;
+  for (const key of keys) {
+    if (typeof current !== "object" || current === null) return undefined;
+    current = (current as Readonly<Record<string, unknown>>)[key];
+  }
+  return current;
+}
+
 describe("OpenCode 2.1.4 admitted V2 protocol surface", () => {
   const fixture: unknown = JSON.parse(
     readFileSync(
@@ -190,6 +200,39 @@ describe("OpenCode 2.1.4 admitted V2 protocol surface", () => {
       "/api/session/{sessionID}/revert/commit",
       "/api/session/{sessionID}/revert/stage",
     ]);
+  });
+
+  it("admits the command listing and the session command, each with its closed shape", () => {
+    const { projection } = projectOpenCodeV2ProtocolSurface(fixture);
+    const listing = dig(projection, "paths", "/api/command", "get");
+    const run = dig(projection, "paths", "/api/session/{sessionID}/command", "post");
+    const body = dig(run, "requestBody", "content", "application/json", "schema");
+
+    const parameters = dig(listing, "parameters") as readonly { readonly name: string }[];
+    expect(parameters.map(({ name }) => name)).toEqual(["location"]);
+    expect(JSON.stringify(listing)).toContain("#/components/schemas/Command.Info");
+    expect(dig(run, "requestBody", "required")).toBe(true);
+    expect(dig(body, "required")).toEqual(["name", "text"]);
+    expect(dig(body, "additionalProperties")).toBe(false);
+    // The producer stores no caller-supplied message id for a command, which is why a command turn
+    // cannot reuse the prompt's message-id binding (ADR-0137 D10).
+    expect(Object.keys(dig(body, "properties") as object)).toEqual([
+      "name",
+      "text",
+      "files",
+      "agents",
+      "skills",
+      "delivery",
+    ]);
+    expect(JSON.stringify(run)).toContain("#/components/schemas/CommandNotFoundErrorEncoded");
+  });
+
+  it("admits no command operation beyond the listing and the session command", () => {
+    const { projection } = projectOpenCodeV2ProtocolSurface(fixture);
+    const commandPaths = Object.keys((projection as { readonly paths: object }).paths).filter(
+      (path) => path.includes("command"),
+    );
+    expect([...commandPaths].sort()).toEqual(["/api/command", "/api/session/{sessionID}/command"]);
   });
 
   it("pins the current digest to the projection of the captured document", () => {

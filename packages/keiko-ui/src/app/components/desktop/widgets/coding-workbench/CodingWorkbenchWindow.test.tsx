@@ -45,10 +45,11 @@ import {
   createInitialCodingWorkbenchRuntimeState,
   type CodingWorkbenchRuntimeState,
 } from "@/lib/coding-workbench-live-state";
-import type { ProjectWithAvailability } from "@/lib/types";
+import type { FilesSearchResponse, ProjectWithAvailability } from "@/lib/types";
 import type { RepositoryBranchState } from "../../hooks/useRepositoryBranchState";
 import {
   CodingWorkbenchWindow,
+  newTaskReferenceRoot,
   sessionGrowthKey,
   type CodingWorkbenchGitTarget,
 } from "./CodingWorkbenchWindow";
@@ -130,6 +131,10 @@ const trustMutateMock = vi.hoisted(() => vi.fn());
 // suites that count or answer the read opt into a response.
 const gitStatusMock = vi.hoisted(() => vi.fn());
 const gitHistoryMock = vi.hoisted(() => vi.fn());
+// ADR-0137 D10: the composer's `@` picker searches files through the Files surface's own search, and
+// its `/` menu reads a paused run's commands through a hook of its own.
+const filesSearchMock = vi.hoisted(() => vi.fn());
+const commandsHookMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -139,6 +144,8 @@ vi.mock("@/lib/api", async (importOriginal) => {
       gitStatusMock(...args),
     fetchGitHistory: (...args: Parameters<typeof actual.fetchGitHistory>): unknown =>
       gitHistoryMock(...args),
+    fetchFilesSearch: (...args: Parameters<typeof actual.fetchFilesSearch>): unknown =>
+      filesSearchMock(...args),
     fetchCodingWorkbenchJourneyRefresh: journeyRefreshMock,
     fetchGitDeliveryMergeExecute: mergeExecuteMock,
     fetchGitDeliveryPrExecute: prUpdateExecuteMock,
@@ -208,6 +215,10 @@ vi.mock("@/lib/useCodingWorkbenchApprovalReview", () => ({
 
 vi.mock("@/lib/useCodingWorkbenchRevert", () => ({
   useCodingWorkbenchRevert: revertHookMock,
+}));
+
+vi.mock("@/lib/useCodingWorkbenchCommands", () => ({
+  useCodingWorkbenchCommands: commandsHookMock,
 }));
 
 vi.mock("../../hooks/useAutonomyModePolicy", () => ({
@@ -525,6 +536,25 @@ beforeEach(() => {
   activityHookMock.mockReturnValue(IDLE_ACTIVITY);
   approvalReviewHookMock.mockReturnValue({ status: "idle", review: null, retry: vi.fn() });
   revertHookMock.mockReset().mockReturnValue({ revert: null });
+  // The commands listing is read only for a paused run the `/` menu asked about.
+  commandsHookMock
+    .mockReset()
+    .mockImplementation(({ runId, wanted }: { runId?: string; wanted: boolean }) =>
+      runId !== undefined && wanted
+        ? {
+            status: "ready",
+            commands: [{ name: "review" }, { name: "team:deploy-check", description: "Deploy" }],
+            retry: vi.fn(),
+          }
+        : { status: "idle", commands: [], retry: vi.fn() },
+    );
+  filesSearchMock.mockReset().mockResolvedValue({
+    root: "/repo",
+    query: "",
+    results: [],
+    truncated: false,
+    scannedFileCount: 0,
+  });
   researchHookMock.mockReturnValue({ status: "idle", ask: null, grant: null, retry: vi.fn() });
   skillsHookMock.mockReturnValue({ status: "idle", skills: null, retry: vi.fn() });
   editorBridgeHookMock.mockReset();
@@ -5724,5 +5754,385 @@ describe("turn revert (B3, S04)", () => {
       window.localStorage.removeItem(I18N_STORAGE_KEY);
       resetLoadedMessageCatalogs();
     }
+  });
+});
+
+// Parity rows S15 and C02 (ADR-0137 D10): the first prompt of a new task references workspace files
+// with `@` and may open with one of the runtime's slash commands, and a paused run's follow-up may too.
+describe("CodingWorkbenchWindow first prompt: @ files and / commands (ADR-0137 D10)", () => {
+  const PROMPT_INPUTS = { delivery: true, references: true, commands: true } as const;
+  const taskBox = (): HTMLElement => screen.getByRole("textbox", { name: "Task instructions" });
+
+  function idle(overrides: Partial<CodingWorkbenchRuntimeState> = {}): CodingWorkbenchRuntimeState {
+    return liveState({ promptInputs: PROMPT_INPUTS, ...overrides });
+  }
+
+  function pausedRun(
+    overrides: Partial<CodingWorkbenchRuntimeState> = {},
+  ): CodingWorkbenchRuntimeState {
+    return idle({
+      run: {
+        status: "ready",
+        value: snapshot({ state: "paused", runId: "run-1", effectiveMode: "supervised-coding" }),
+        error: null,
+      },
+      ...overrides,
+    });
+  }
+
+  function hit(root: string, path = "src/app.ts"): FilesSearchResponse["results"][number] {
+    const name = path.slice(path.lastIndexOf("/") + 1);
+    return {
+      root,
+      path,
+      name,
+      directory: path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "",
+      extension: "ts",
+      sizeBytes: 10,
+      modifiedAt: 1,
+    };
+  }
+
+  function respondWithHit(root: string): void {
+    filesSearchMock.mockResolvedValue({
+      root,
+      query: "ap",
+      results: [hit(root)],
+      truncated: false,
+      scannedFileCount: 1,
+    } satisfies FilesSearchResponse);
+  }
+
+  async function mention(): Promise<ReturnType<typeof userEvent.setup>> {
+    const user = userEvent.setup();
+    await user.type(taskBox(), "look at @ap");
+    return user;
+  }
+
+  function optionOf(options: unknown): Record<string, unknown> {
+    return (options ?? {}) as Record<string, unknown>;
+  }
+
+  describe("the @ picker of a task that has no run yet", () => {
+    it("searches the selected repository and starts the run with the files the person picked", async () => {
+      respondWithHit("/repo");
+      const live = renderWorkbench(idle());
+      const user = await mention();
+
+      await user.click(await screen.findByRole("button", { name: "Reference src/app.ts" }));
+      expect(filesSearchMock).toHaveBeenLastCalledWith("/repo", "ap", 8, expect.anything());
+      await user.type(taskBox(), "please");
+      await user.click(screen.getByRole("button", { name: "Start coding run" }));
+
+      expect(live.start).toHaveBeenCalledExactlyOnceWith("look at @src/app.ts please", {
+        projectMemoryEnabled: true,
+        references: [{ path: "src/app.ts" }],
+      });
+    });
+
+    it("searches the live task workspace when it belongs to the selected repository", async () => {
+      respondWithHit("/worktrees/task-1");
+      renderWorkbench(
+        idle(),
+        actions(),
+        undefined,
+        activeWorkspaceWithBinding("/repos/keiko", "/worktrees/task-1"),
+      );
+      await mention();
+
+      expect(
+        await screen.findByRole("button", { name: "Reference src/app.ts" }),
+      ).toBeInTheDocument();
+      expect(filesSearchMock).toHaveBeenLastCalledWith(
+        "/worktrees/task-1",
+        "ap",
+        8,
+        expect.anything(),
+      );
+    });
+
+    it("never searches the workspace of a repository that is not the selected one", async () => {
+      respondWithHit("/repos/selected");
+      runtimeHookMock.mockReturnValue({ state: idle(), actions: actions() });
+      render(
+        <ActiveWorkspaceProvider
+          value={activeWorkspaceWithBinding("/repos/other", "/worktrees/other-task")}
+        >
+          <CodingWorkbenchWindow selectedRoot="/repos/selected" />
+        </ActiveWorkspaceProvider>,
+      );
+      await mention();
+
+      await screen.findByRole("button", { name: "Reference src/app.ts" });
+      for (const call of filesSearchMock.mock.calls) {
+        expect(call[0]).toBe("/repos/selected");
+      }
+    });
+
+    it("searches the repository, not the task workspace, while the binding is not settled", async () => {
+      respondWithHit("/repos/keiko");
+      renderWorkbench(idle(), actions(), undefined, {
+        ...activeWorkspaceWithBinding("/repos/keiko", "/worktrees/task-1"),
+        switching: true,
+      });
+      await mention();
+
+      await screen.findByRole("button", { name: "Reference src/app.ts" });
+      expect(filesSearchMock).toHaveBeenLastCalledWith("/repos/keiko", "ap", 8, expect.anything());
+    });
+
+    it("searches the next run's root once the previous run is over", async () => {
+      respondWithHit("/repo");
+      renderWorkbench(
+        idle({
+          run: {
+            status: "ready",
+            value: snapshot({ state: "succeeded", runId: "run-1" }),
+            error: null,
+          },
+        }),
+      );
+      await mention();
+
+      await screen.findByRole("button", { name: "Reference src/app.ts" });
+      expect(filesSearchMock).toHaveBeenLastCalledWith("/repo", "ap", 8, expect.anything());
+    });
+
+    it("keeps searching the run's own workspace while a run is live", async () => {
+      respondWithHit("/worktrees/task-1");
+      renderWorkbench(
+        idle({
+          run: {
+            status: "ready",
+            value: snapshot({ state: "running", runId: "run-1" }),
+            error: null,
+          },
+        }),
+        actions(),
+        undefined,
+        activeWorkspaceWithBinding("/repos/keiko", "/worktrees/task-1"),
+      );
+      await mention();
+
+      await screen.findByRole("button", { name: "Reference src/app.ts" });
+      expect(filesSearchMock).toHaveBeenLastCalledWith(
+        "/worktrees/task-1",
+        "ap",
+        8,
+        expect.anything(),
+      );
+    });
+
+    it("is not offered where the runtime reports no references, or for the Codex source", async () => {
+      const live = renderWorkbench(
+        idle({ promptInputs: { delivery: true, references: false, commands: true } }),
+      );
+      const user = await mention();
+      expect(screen.queryByRole("group", { name: "Reference a task file" })).toBeNull();
+      await user.click(screen.getByRole("button", { name: "Start coding run" }));
+      expect(optionOf(vi.mocked(live.start).mock.calls[0]?.[1])).not.toHaveProperty("references");
+      cleanup();
+
+      renderWorkbench(idle({ runtimePreference: "codex-subscription" }));
+      await mention();
+      expect(screen.queryByRole("group", { name: "Reference a task file" })).toBeNull();
+      expect(filesSearchMock).not.toHaveBeenCalled();
+    });
+
+    it("leaves the next task a clean composer once the draft is gone", async () => {
+      respondWithHit("/repo");
+      const live = actions();
+      runtimeHookMock.mockReturnValue({ state: idle(), actions: live });
+      const view = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+      const user = await mention();
+      await user.click(await screen.findByRole("button", { name: "Reference src/app.ts" }));
+      expect(screen.getByRole("list", { name: "Referenced files" })).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Start coding run" }));
+      expect(live.start).toHaveBeenCalledOnce();
+
+      // The start settles: the window clears the draft that start consumed.
+      runtimeHookMock.mockReturnValue({
+        state: idle({
+          mutation: { status: "pending", kind: "start", requestId: "req-1", error: null },
+        }),
+        actions: live,
+      });
+      view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+      runtimeHookMock.mockReturnValue({ state: idle(), actions: live });
+      view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+
+      await waitFor(() => expect(taskBox()).toHaveValue(""));
+      expect(screen.queryByRole("list", { name: "Referenced files" })).toBeNull();
+      await user.type(taskBox(), "a different task");
+      await user.click(screen.getByRole("button", { name: "Start coding run" }));
+      expect(live.start).toHaveBeenLastCalledWith("a different task", {
+        projectMemoryEnabled: true,
+      });
+    });
+  });
+
+  describe("the / menu and the first prompt of a new task", () => {
+    it("starts a command by name with the text after it as its arguments", async () => {
+      const live = renderWorkbench(idle());
+      const user = userEvent.setup();
+      // `#13` is the command's own argument: it is never read as an issue to resolve.
+      await user.type(taskBox(), "/review pr #13");
+      await user.click(screen.getByRole("button", { name: "Start coding run" }));
+
+      expect(live.start).toHaveBeenCalledExactlyOnceWith("pr #13", {
+        projectMemoryEnabled: true,
+        command: { name: "review" },
+      });
+      expect(optionOf(vi.mocked(live.start).mock.calls[0]?.[1]).issue).toBeUndefined();
+    });
+
+    it("starts a bare command with an empty text", async () => {
+      const live = renderWorkbench(idle());
+      const user = userEvent.setup();
+      await user.type(taskBox(), "/init");
+      await user.click(screen.getByRole("button", { name: "Start coding run" }));
+
+      expect(live.start).toHaveBeenCalledExactlyOnceWith("", {
+        projectMemoryEnabled: true,
+        command: { name: "init" },
+      });
+    });
+
+    it("sends a slash that names no offered command as the text it is", async () => {
+      const live = renderWorkbench(idle());
+      const user = userEvent.setup();
+      await user.type(taskBox(), "/foo bar");
+      await user.click(screen.getByRole("button", { name: "Start coding run" }));
+
+      expect(live.start).toHaveBeenCalledExactlyOnceWith("/foo bar", {
+        projectMemoryEnabled: true,
+      });
+      expect(optionOf(vi.mocked(live.start).mock.calls[0]?.[1])).not.toHaveProperty("command");
+    });
+
+    it("offers the built-in commands before there is a run to list them", async () => {
+      renderWorkbench(idle());
+      await userEvent.setup().type(taskBox(), "/");
+
+      const list = await screen.findByRole("list", { name: "Matching commands" });
+      expect(within(list).getAllByRole("button")).toHaveLength(2);
+      expect(commandsHookMock).not.toHaveBeenCalledWith(
+        expect.objectContaining({ runId: expect.any(String) as unknown }),
+      );
+    });
+
+    it("is not offered where the runtime reports no commands, or for the Codex source", async () => {
+      renderWorkbench(idle({ promptInputs: { delivery: true, references: true } }));
+      await userEvent.setup().type(taskBox(), "/");
+      expect(screen.queryByRole("group", { name: "Run a slash command" })).toBeNull();
+      cleanup();
+
+      renderWorkbench(idle({ runtimePreference: "codex-subscription" }));
+      await userEvent.setup().type(taskBox(), "/");
+      expect(screen.queryByRole("group", { name: "Run a slash command" })).toBeNull();
+    });
+  });
+
+  describe("a paused run's follow-up", () => {
+    it("offers what the run lists and sends the chosen command as a follow-up", async () => {
+      const live = renderWorkbench(pausedRun());
+      const user = userEvent.setup();
+      await user.type(taskBox(), "/");
+
+      const list = await screen.findByRole("list", { name: "Matching commands" });
+      expect(within(list).getByText("/team:deploy-check")).toBeInTheDocument();
+      expect(within(list).getByText("Deploy")).toBeInTheDocument();
+      expect(commandsHookMock).toHaveBeenCalledWith(
+        expect.objectContaining({ runId: "run-1", wanted: true }),
+      );
+
+      await user.type(taskBox(), "review pr");
+      await user.click(screen.getByRole("button", { name: "Send follow-up" }));
+
+      expect(live.submitFollowUp).toHaveBeenCalledExactlyOnceWith("pr", {
+        references: [],
+        command: { name: "review" },
+      });
+      expect(live.start).not.toHaveBeenCalled();
+    });
+
+    it("sends a bare command with an empty text", async () => {
+      const live = renderWorkbench(pausedRun());
+      const user = userEvent.setup();
+      await user.type(taskBox(), "/review");
+      await user.click(screen.getByRole("button", { name: "Send follow-up" }));
+
+      expect(live.submitFollowUp).toHaveBeenCalledExactlyOnceWith("", {
+        references: [],
+        command: { name: "review" },
+      });
+    });
+
+    it("sends an ordinary follow-up exactly as it always did", async () => {
+      const live = renderWorkbench(pausedRun());
+      const user = userEvent.setup();
+      await user.type(taskBox(), "please add a test");
+      await user.click(screen.getByRole("button", { name: "Send follow-up" }));
+
+      expect(live.submitFollowUp).toHaveBeenCalledExactlyOnceWith("please add a test");
+    });
+
+    it("offers no command menu to a turn that is running", async () => {
+      renderWorkbench(
+        idle({
+          run: {
+            status: "ready",
+            value: snapshot({ state: "running", runId: "run-1" }),
+            error: null,
+          },
+        }),
+      );
+      await userEvent.setup().type(taskBox(), "/");
+
+      expect(screen.queryByRole("group", { name: "Run a slash command" })).toBeNull();
+      expect(commandsHookMock).not.toHaveBeenCalledWith(
+        expect.objectContaining({ wanted: true, runId: "run-1" }),
+      );
+    });
+  });
+});
+
+describe("newTaskReferenceRoot", () => {
+  const REPOSITORY = "/repos/keiko";
+
+  it("is the live task workspace of the selected repository once its binding has settled", () => {
+    const workspace = activeWorkspaceWithBinding(REPOSITORY, "/worktrees/task-1");
+    expect(newTaskReferenceRoot(workspace, REPOSITORY)).toBe("/worktrees/task-1");
+  });
+
+  it("is the selected repository when the active workspace belongs to another one", () => {
+    const workspace = activeWorkspaceWithBinding("/repos/other", "/worktrees/other");
+    expect(newTaskReferenceRoot(workspace, REPOSITORY)).toBe(REPOSITORY);
+  });
+
+  it.each([
+    ["loading", { loading: true }],
+    ["switching", { switching: true }],
+    ["unreadable", { error: "binding read failed" }],
+  ] as const)("is the selected repository while the live binding is %s", (_name, unsettled) => {
+    const workspace = {
+      ...activeWorkspaceWithBinding(REPOSITORY, "/worktrees/task-1"),
+      ...unsettled,
+    };
+    expect(newTaskReferenceRoot(workspace, REPOSITORY)).toBe(REPOSITORY);
+  });
+
+  it("is the selected repository when no workspace is active", () => {
+    const workspace = {
+      ...activeWorkspaceWithBinding(REPOSITORY, "/worktrees/task-1"),
+      activeInstance: null,
+      activeBinding: null,
+    };
+    expect(newTaskReferenceRoot(workspace, REPOSITORY)).toBe(REPOSITORY);
+  });
+
+  it("is nothing without a selected repository, whatever workspace is active", () => {
+    const workspace = activeWorkspaceWithBinding(REPOSITORY, "/worktrees/task-1");
+    expect(newTaskReferenceRoot(workspace, null)).toBeNull();
   });
 });

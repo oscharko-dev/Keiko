@@ -606,6 +606,70 @@ describe("useCodingWorkbenchRuntime", () => {
       view.unmount();
     });
 
+    it("starts a task whose first prompt references files and opens with a command, through the mutation queue", async () => {
+      installBootstrap(snapshot({ state: "idle", runId: undefined, pendingPermission: undefined }));
+      vi.mocked(startCodingWorkbenchRuntime).mockResolvedValue(
+        snapshot({ state: "starting", runId: "run-2", pendingPermission: undefined }),
+      );
+      const activeWorkspace = workspace();
+      const view = renderHook(() =>
+        useCodingWorkbenchRuntime({
+          workspace: activeWorkspace,
+          initialRequestedMode: "governed-assist",
+        }),
+      );
+      act(() => view.result.current.actions.setSelectedModel("model-redacted"));
+      await waitFor(() => expect(view.result.current.state.canStart).toBe(true));
+
+      await act(async () => {
+        await view.result.current.actions.start("@src/app.ts", {
+          projectMemoryEnabled: true,
+          references: [{ path: "src/app.ts" }],
+          command: { name: "review" },
+        });
+      });
+
+      expect(startCodingWorkbenchRuntime).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          requestId: expect.any(String) as unknown,
+          taskIntent: "@src/app.ts",
+          references: [{ path: "src/app.ts" }],
+          command: { name: "review" },
+        }),
+      );
+      await waitFor(() => expect(view.result.current.state.run.value?.runId).toBe("run-2"));
+      expect(view.result.current.state.mutation.status).toBe("idle");
+      view.unmount();
+    });
+
+    it("sends a command with an empty text to a paused run, bound to its revision", async () => {
+      installBootstrap(snapshot({ state: "paused", pendingPermission: undefined }));
+      vi.mocked(submitCodingWorkbenchRuntimeFollowUp).mockResolvedValue(
+        snapshot({ state: "running", revision: 5, pendingPermission: undefined }),
+      );
+      const activeWorkspace = workspace();
+      const view = renderHook(() =>
+        useCodingWorkbenchRuntime({
+          workspace: activeWorkspace,
+          initialRequestedMode: "governed-assist",
+        }),
+      );
+      await waitFor(() => expect(view.result.current.state.run.value?.state).toBe("paused"));
+
+      await act(async () => {
+        await view.result.current.actions.submitFollowUp("", { command: { name: "init" } });
+      });
+
+      expect(submitCodingWorkbenchRuntimeFollowUp).toHaveBeenLastCalledWith("run-1", {
+        requestId: expect.any(String) as unknown,
+        expectedRevision: 4,
+        taskIntent: "",
+        command: { name: "init" },
+      });
+      await waitFor(() => expect(view.result.current.state.run.value?.revision).toBe(5));
+      view.unmount();
+    });
+
     it("surfaces a refused message as a mutation error and keeps the run as it was", async () => {
       installBootstrap(snapshot({ state: "running", pendingPermission: undefined }));
       vi.mocked(submitCodingWorkbenchRuntimeFollowUp).mockRejectedValue(

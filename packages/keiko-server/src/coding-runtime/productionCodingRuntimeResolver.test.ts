@@ -22,7 +22,10 @@ import {
   operatorDecisionRequester,
   runManifestAdmission,
 } from "./productionCodingRuntimeResolver.js";
-import { CodingRuntimeAgentUnsupportedError } from "./launchFailure.js";
+import {
+  CodingRuntimeAgentUnsupportedError,
+  CodingRuntimeInputsUnsupportedError,
+} from "./launchFailure.js";
 import { createExplicitSkillInvocationTracker } from "./explicitSkillInvocation.js";
 import { createServerApprovedSkillCatalog } from "./skillCatalog.js";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
@@ -954,6 +957,111 @@ describe("production coding runtime resolver", () => {
         undefined,
         inputs,
       );
+    });
+
+    // ADR-0137 D10 (C02, S15): the first prompt's references and slash command exist on the native
+    // service only; another profile refuses them before the one-use confirmation is spent.
+    describe("first-prompt references and slash command at launch", () => {
+      const references = [{ path: "src/app.ts" }];
+      const command = { name: "review" };
+
+      it.each([
+        ["references", { references }],
+        ["a command", { command }],
+        ["both", { references, command }],
+      ])("launches a native start that carries %s", (_label, inputs) => {
+        const { host, createRun, request } = agentHost("native");
+
+        host.launchResolver.resolve({ ...request, ...inputs });
+
+        expect(createRun).toHaveBeenCalledOnce();
+      });
+
+      it.each(["direct", "code-mode"] as const)(
+        "refuses references and a command on the governed %s profile before the confirmation is consumed",
+        (profile) => {
+          const { host, createRun, request } = agentHost(profile);
+
+          expect(() => host.launchResolver.resolve({ ...request, references })).toThrow(
+            CodingRuntimeInputsUnsupportedError,
+          );
+          expect(() => host.launchResolver.resolve({ ...request, command })).toThrow(
+            CodingRuntimeInputsUnsupportedError,
+          );
+          expect(createRun).not.toHaveBeenCalled();
+          // The one-use confirmation survived both refusals: the plain start proceeds.
+          host.launchResolver.resolve(request);
+          expect(createRun).toHaveBeenCalledOnce();
+        },
+      );
+
+      it("refuses references and a command for a Codex subscription run, which takes neither", () => {
+        const fixture = workspaceFixture();
+        const confirmations = confirmationFixture();
+        const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
+          backendRun(input.request.runId),
+        );
+        const host = createProductionCodingRuntimeHost(
+          resolverFor(fixture, createRun, confirmations.consumer, undefined, {
+            backend: { createRun, toolProfile: "native" },
+          }),
+        );
+        if (host === undefined) throw new Error("expected qualified host");
+        const request = {
+          ...launchRequest(fixture.workspace),
+          runtimePreference: "codex-subscription" as const,
+        };
+        confirmations.issue(
+          resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request),
+        );
+
+        expect(() => host.launchResolver.resolve({ ...request, references })).toThrow(
+          CodingRuntimeInputsUnsupportedError,
+        );
+        expect(() => host.launchResolver.resolve({ ...request, command })).toThrow(
+          CodingRuntimeInputsUnsupportedError,
+        );
+        expect(createRun).not.toHaveBeenCalled();
+      });
+    });
+
+    it("keeps the backend's command operations through the explicit-skill binding", async () => {
+      const listCommands = vi.fn(() => Promise.resolve([{ name: "review" }]));
+      const admitCommand = vi.fn((_runId: string, inputs: unknown) =>
+        Promise.resolve({ ok: true as const, inputs }),
+      );
+      const submitTurn = vi.fn(() => Promise.resolve(true));
+      const tracker = createExplicitSkillInvocationTracker(createServerApprovedSkillCatalog());
+      const observeTurn = vi.spyOn(tracker, "observeTurn");
+      const bound = bindExplicitSkillTurns(
+        {
+          submitTurn,
+          listCommands,
+          admitCommand: admitCommand as never,
+          abortTurn: () => Promise.resolve(true),
+          waitForTerminal: () => Promise.resolve("succeeded" as const),
+        },
+        tracker,
+      );
+
+      expect(bound.listCommands).toBe(listCommands);
+      expect(bound.admitCommand).toBe(admitCommand);
+      // Listing the commands of a run starts and settles nothing, so it never touches the tracker.
+      await bound.listCommands?.("run-1");
+      expect(observeTurn).not.toHaveBeenCalled();
+    });
+
+    it("offers no command operation through the binding when the backend has none", () => {
+      const bound = bindExplicitSkillTurns(
+        {
+          submitTurn: () => Promise.resolve(true),
+          abortTurn: () => Promise.resolve(true),
+          waitForTerminal: () => Promise.resolve("succeeded" as const),
+        },
+        createExplicitSkillInvocationTracker(createServerApprovedSkillCatalog()),
+      );
+      expect(bound.listCommands).toBeUndefined();
+      expect(bound.admitCommand).toBeUndefined();
     });
 
     it("offers no prompt-input operation through the binding when the backend has none", () => {

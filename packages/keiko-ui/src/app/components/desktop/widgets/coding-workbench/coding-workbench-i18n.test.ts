@@ -120,6 +120,49 @@ describe("Coding Workbench translations", () => {
     expect(note).not.toMatch(/\b(?:Ihnen|Ihre?)\b/u);
   });
 
+  // ADR-0137 D10: the `/` command menu, the sentence that holds a send until the run's commands are
+  // known, and the refusal of a start whose files or command were not accepted. Both catalogs
+  // carry every key, the German one translated rather than copied, in the informal du-form.
+  it.each([
+    "codingWorkbench.composer.commands.title",
+    "codingWorkbench.composer.commands.results",
+    "codingWorkbench.composer.commands.option",
+    "codingWorkbench.composer.commands.active",
+    "codingWorkbench.composer.commands.loading",
+    "codingWorkbench.composer.commands.found",
+    "codingWorkbench.composer.commands.empty",
+    "codingWorkbench.composer.commands.none",
+    "codingWorkbench.composer.commands.error",
+    "codingWorkbench.composer.commands.retry",
+    "codingWorkbench.composer.commands.init.description",
+    "codingWorkbench.composer.commands.review.description",
+    "codingWorkbench.composer.blocked.commandsLoading",
+    "codingWorkbench.event.failure.invalid-intent",
+  ] as const)("localizes %s in both catalogs", (key) => {
+    const en = translateCodingWorkbench("en", key, { name: "n", count: 1, position: 1, total: 1 });
+    const de = translateCodingWorkbench("de", key, { name: "n", count: 1, position: 1, total: 1 });
+    expect(en.length).toBeGreaterThan(0);
+    expect(de.length).toBeGreaterThan(0);
+    // Only the position announcement `/{name}, {position} of {total}` shares its words with German.
+    if (key !== "codingWorkbench.composer.commands.active") expect(de).not.toBe(en);
+    expect(de).not.toMatch(/\b(?:Sie|Ihre?[mnrs]?)\b/u);
+    expect(de).not.toMatch(/\{\w+\}/u);
+  });
+
+  it("keeps the placeholders the command menu fills in both languages", () => {
+    for (const locale of ["en", "de"] as const) {
+      expect(
+        translateCodingWorkbench(locale, "codingWorkbench.composer.commands.option"),
+      ).toContain("{name}");
+      expect(translateCodingWorkbench(locale, "codingWorkbench.composer.commands.found")).toContain(
+        "{count}",
+      );
+      expect(translateCodingWorkbench(locale, "codingWorkbench.composer.commands.active")).toMatch(
+        /\{name\}.*\{position\}.*\{total\}/u,
+      );
+    }
+  });
+
   it("interpolates runtime state and revision in both catalogs", () => {
     expect(
       translateCodingWorkbench("en", "codingWorkbench.announcement.runRevision", {

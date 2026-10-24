@@ -1,12 +1,7 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
-import { useState, type ReactNode } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
-import type {
-  CodingWorkbenchRuntimeStateName,
-  ModelCapability,
-} from "@oscharko-dev/keiko-contracts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FilesSearchResponse } from "@/lib/types";
 import { I18nProvider, I18N_STORAGE_KEY, loadLocaleMessages } from "@/lib/i18n";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
@@ -17,129 +12,21 @@ vi.mock("@/lib/api", async (importOriginal) => {
   return { ...actual, fetchFilesSearch: searchMock };
 });
 
-import { TaskStartSection, type TaskComposerActions } from "./CodingWorkbenchSections";
+import { TaskStartSection } from "./CodingWorkbenchSections";
+import {
+  AXE_OPTIONS,
+  ENABLED,
+  Harness,
+  ROOT,
+  actions,
+  props,
+  searchResult,
+  textbox,
+  type ComposerProps,
+} from "./_composerPromptTestSupport";
 
 // ADR-0137 D10: the composer takes a message while a turn runs (Send now / Queue) and lets the human
 // reference task files with `@`. Both are offered only where the server says the runtime can.
-
-const MODEL: ModelCapability = {
-  id: "gpt-5.4",
-  kind: "chat",
-  contextWindow: 128_000,
-  maxOutputTokens: 16_384,
-  toolCalling: true,
-  structuredOutput: true,
-  streaming: true,
-  supportsImageInput: false,
-  supportsDocumentInput: false,
-  workflowEligible: true,
-  costClass: "medium",
-  latencyClass: "standard",
-  throughputHint: "standard",
-  preferredUseCases: ["Coding"],
-  knownLimitations: [],
-  reasoningEfforts: [],
-};
-
-const AXE_OPTIONS = { rules: { region: { enabled: false } } } as const;
-const ROOT = "/work/space";
-const ENABLED = { delivery: true, references: true } as const;
-
-type ComposerProps = Parameters<typeof TaskStartSection>[0];
-
-type Fn<K extends keyof TaskComposerActions> = NonNullable<TaskComposerActions[K]>;
-
-interface ActionMocks extends TaskComposerActions {
-  readonly onStart: Mock<Fn<"onStart">>;
-  readonly onPause: Mock<Fn<"onPause">>;
-  readonly onResume: Mock<Fn<"onResume">>;
-  readonly onSend: Mock<Fn<"onSend">>;
-  readonly onDeliver: Mock<Fn<"onDeliver">>;
-  readonly onStop: Mock<Fn<"onStop">>;
-}
-
-function actions(): ActionMocks {
-  return {
-    onStart: vi.fn<Fn<"onStart">>(),
-    onPause: vi.fn<Fn<"onPause">>(),
-    onResume: vi.fn<Fn<"onResume">>(),
-    onSend: vi.fn<Fn<"onSend">>(),
-    onDeliver: vi.fn<Fn<"onDeliver">>(),
-    onStop: vi.fn<Fn<"onStop">>(),
-  };
-}
-
-function props(
-  runState: CodingWorkbenchRuntimeStateName,
-  taskActions: TaskComposerActions,
-  overrides: Partial<ComposerProps> = {},
-): ComposerProps {
-  return {
-    taskIntent: "",
-    onTaskIntentChange: vi.fn(),
-    actions: taskActions,
-    canStart: true,
-    canResume: true,
-    runState,
-    mutationPending: false,
-    startBusy: false,
-    startBlockedReason: null,
-    projectMemoryEnabled: true,
-    onProjectMemoryEnabledChange: vi.fn(),
-    autonomyMode: "supervised-coding",
-    autonomyLabel: "Supervised workspace",
-    requestedMode: "supervised-coding",
-    runtimePreference: "managed-gateway",
-    configurationLocked: runState !== "idle",
-    onRequestedModeChange: vi.fn(),
-    onRuntimePreferenceChange: vi.fn(),
-    models: [MODEL],
-    selectedModelId: MODEL.id,
-    reasoningEffort: null,
-    onSelectedModelChange: vi.fn(),
-    onReasoningEffortChange: vi.fn(),
-    offeredAgents: ["build"],
-    agent: "build",
-    agentLocked: false,
-    onAgentChange: vi.fn(),
-    ...overrides,
-  };
-}
-
-/** The composer with a real draft, as the window keeps it, so mentions and chips follow the text. */
-function Harness(inputProps: {
-  readonly runState: CodingWorkbenchRuntimeStateName;
-  readonly taskActions: TaskComposerActions;
-  readonly initialDraft?: string;
-  readonly overrides?: Partial<ComposerProps>;
-}): ReactNode {
-  const [draft, setDraft] = useState(inputProps.initialDraft ?? "");
-  return (
-    <TaskStartSection
-      {...props(inputProps.runState, inputProps.taskActions, {
-        promptInputs: ENABLED,
-        referenceRoot: ROOT,
-        ...inputProps.overrides,
-      })}
-      taskIntent={draft}
-      onTaskIntentChange={setDraft}
-    />
-  );
-}
-
-function searchResult(path: string, root = ROOT): FilesSearchResponse["results"][number] {
-  const name = path.slice(path.lastIndexOf("/") + 1);
-  const slash = path.lastIndexOf("/");
-  return {
-    root,
-    path,
-    name,
-    directory: slash < 0 ? "" : path.slice(0, slash),
-    extension: name.includes(".") ? name.slice(name.lastIndexOf(".") + 1) : null,
-    sizeBytes: 10,
-    modifiedAt: 1,
-  };
-}
 
 function respondWith(...paths: string[]): void {
   searchMock.mockResolvedValue({
@@ -150,9 +37,6 @@ function respondWith(...paths: string[]): void {
     scannedFileCount: paths.length,
   } satisfies FilesSearchResponse);
 }
-
-// The composer's one textbox, whatever the locale names it.
-const textbox = (): HTMLTextAreaElement => screen.getByRole("textbox") as HTMLTextAreaElement;
 
 beforeEach(() => {
   searchMock.mockReset();
@@ -619,7 +503,10 @@ describe("the @ file picker", () => {
     expect(sent).toHaveLength(16);
   });
 
-  it("is not offered when the runtime takes no references, without a workspace root, or between runs", async () => {
+  // A task that has no run yet is offered the picker too (its first prompt carries the files, see
+  // "the @ file picker for a new task"); what stays inert is a run in transition, whose composer
+  // offers neither a start nor a follow-up.
+  it("is not offered when the runtime takes no references, without a workspace root, or while a run starts or stops", async () => {
     const cases: Partial<ComposerProps>[] = [
       { promptInputs: { delivery: true, references: false } },
       { promptInputs: undefined },
@@ -636,7 +523,7 @@ describe("the @ file picker", () => {
       expect(screen.queryByRole("group", { name: "Reference a task file" })).toBeNull();
       view.unmount();
     }
-    for (const runState of ["idle", "starting", "awaiting-approval"] as const) {
+    for (const runState of ["starting", "ready", "awaiting-approval", "stopping"] as const) {
       const view = render(<Harness runState={runState} taskActions={actions()} />);
       const user = userEvent.setup();
       await user.click(textbox());
@@ -682,5 +569,185 @@ describe("the @ file picker", () => {
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "src/app.ts referenzieren" })).toBeInTheDocument();
     expect(screen.getByText(/Dateien gefunden|Datei gefunden/u)).toBeInTheDocument();
+  });
+});
+
+// Parity row S15 (ADR-0137 D10): a task that has no run yet references workspace files in its first
+// prompt, searched in the workspace the run will start from and sent with the start.
+describe("the @ file picker for a new task", () => {
+  async function typeMention(query = "app"): Promise<ReturnType<typeof userEvent.setup>> {
+    const user = userEvent.setup();
+    await user.click(textbox());
+    await user.type(textbox(), `look at @${query}`);
+    return user;
+  }
+
+  it.each(["idle", "succeeded", "failed", "cancelled"] as const)(
+    "is offered to a task whose composer would start a run (%s) and searches the root it starts from",
+    async (runState) => {
+      respondWith("src/app.ts", "src/app.test.ts");
+      render(<Harness runState={runState} taskActions={actions()} />);
+      await typeMention();
+
+      const list = await screen.findByRole("list", { name: "Matching task files" });
+      expect(within(list).getAllByRole("button")).toHaveLength(2);
+      expect(searchMock).toHaveBeenLastCalledWith(ROOT, "app", 8, {
+        signal: expect.any(AbortSignal) as unknown,
+      });
+      expect(textbox()).toHaveAttribute("aria-controls", list.id);
+    },
+  );
+
+  it("sends the picked files with the start and shows them as removable chips", async () => {
+    respondWith("src/app.ts");
+    const idle = actions();
+    render(<Harness runState="idle" taskActions={idle} />);
+    const user = await typeMention();
+    await screen.findByRole("list", { name: "Matching task files" });
+    await user.keyboard("{Enter}");
+    expect(textbox().value).toBe("look at @src/app.ts ");
+    expect(
+      within(screen.getByRole("list", { name: "Referenced files" })).getByText("src/app.ts"),
+    ).toBeInTheDocument();
+    // Enter picked; it did not start the task.
+    expect(idle.onStart).not.toHaveBeenCalled();
+
+    await user.type(textbox(), "please");
+    await user.click(screen.getByRole("button", { name: "Start coding run" }));
+
+    expect(idle.onStart).toHaveBeenCalledExactlyOnceWith("look at @src/app.ts please", {
+      references: [{ path: "src/app.ts" }],
+    });
+    expect(idle.onSend).not.toHaveBeenCalled();
+  });
+
+  it("starts with the historical single argument when nothing is referenced", async () => {
+    const user = userEvent.setup();
+    const idle = actions();
+    render(<Harness runState="idle" taskActions={idle} initialDraft="just text" />);
+    await user.click(screen.getByRole("button", { name: "Start coding run" }));
+    expect(idle.onStart).toHaveBeenCalledExactlyOnceWith("just text");
+  });
+
+  it("drops a reference when its @path token is deleted or its chip removed, before the start", async () => {
+    respondWith("src/app.ts");
+    const idle = actions();
+    render(<Harness runState="idle" taskActions={idle} />);
+    const user = await typeMention();
+    await screen.findByRole("list", { name: "Matching task files" });
+    await user.keyboard("{Enter}");
+    await user.click(screen.getByRole("button", { name: "Remove reference to src/app.ts" }));
+    expect(screen.queryByRole("list", { name: "Referenced files" })).toBeNull();
+    expect(textbox().value.includes("@src/app.ts")).toBe(false);
+
+    await user.type(textbox(), "tidy up");
+    await user.click(screen.getByRole("button", { name: "Start coding run" }));
+    expect(idle.onStart).toHaveBeenCalledExactlyOnceWith("look at tidy up");
+  });
+
+  it("is not offered when the runtime takes no references or the task has no root to search", async () => {
+    const cases: Partial<ComposerProps>[] = [
+      { promptInputs: { delivery: true, references: false } },
+      { promptInputs: undefined },
+      { referenceRoot: null },
+      { referenceRoot: undefined },
+    ];
+    for (const overrides of cases) {
+      const idle = actions();
+      const view = render(<Harness runState="idle" taskActions={idle} overrides={overrides} />);
+      const user = userEvent.setup();
+      await user.click(textbox());
+      await user.type(textbox(), "@app");
+      expect(screen.queryByRole("group", { name: "Reference a task file" })).toBeNull();
+      await user.click(screen.getByRole("button", { name: "Start coding run" }));
+      // The @ stays the person's own text: nothing is referenced.
+      expect(idle.onStart).toHaveBeenCalledExactlyOnceWith("@app");
+      view.unmount();
+    }
+    expect(searchMock).not.toHaveBeenCalled();
+  });
+
+  it("leaves nothing of a started task behind: no chip, no open list, no stale Escape for the next one", async () => {
+    respondWith("src/app.ts");
+    const idle = actions();
+    render(<Harness runState="idle" taskActions={idle} clearButton />);
+    const user = userEvent.setup();
+    await user.click(textbox());
+    await user.type(textbox(), "@app");
+    await screen.findByRole("list", { name: "Matching task files" });
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("group", { name: "Reference a task file" })).toBeNull();
+
+    // The window clears the draft without a keystroke once a start was accepted.
+    await user.click(screen.getByRole("button", { name: "Clear draft from outside" }));
+    expect(textbox().value).toBe("");
+    expect(screen.queryByRole("group", { name: "Reference a task file" })).toBeNull();
+
+    // The next task opens its own picker at the same position the dismissed one stood. Focus moves
+    // by keyboard: a pointer press would report a caret and end the old mention on its own.
+    act(() => textbox().focus());
+    await user.keyboard("@app");
+    expect(await screen.findByRole("list", { name: "Matching task files" })).toBeInTheDocument();
+    await user.keyboard("{Enter}");
+    expect(screen.getByRole("list", { name: "Referenced files" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Clear draft from outside" }));
+    expect(screen.queryByRole("list", { name: "Referenced files" })).toBeNull();
+    await user.type(textbox(), "a fresh task");
+    await user.click(screen.getByRole("button", { name: "Start coding run" }));
+    expect(idle.onStart).toHaveBeenCalledExactlyOnceWith("a fresh task");
+  });
+
+  it("closes a list the draft no longer holds when the draft is replaced from outside", async () => {
+    respondWith("src/app.ts");
+    render(<Harness runState="idle" taskActions={actions()} clearButton />);
+    const user = userEvent.setup();
+    await user.click(textbox());
+    await user.type(textbox(), "@app");
+    await screen.findByRole("list", { name: "Matching task files" });
+
+    await user.click(screen.getByRole("button", { name: "Clear draft from outside" }));
+
+    expect(screen.queryByRole("group", { name: "Reference a task file" })).toBeNull();
+    expect(textbox()).not.toHaveAttribute("aria-controls");
+  });
+
+  it("drops the picks made under a root when the task starts from another one", async () => {
+    respondWith("src/app.ts");
+    const idle = actions();
+    const view = render(<Harness runState="idle" taskActions={idle} />);
+    const user = await typeMention();
+    await screen.findByRole("list", { name: "Matching task files" });
+    await user.keyboard("{Enter}");
+    expect(screen.getByRole("list", { name: "Referenced files" })).toBeInTheDocument();
+
+    // The person selects another repository: `src/app.ts` there is another file.
+    view.rerender(
+      <Harness runState="idle" taskActions={idle} overrides={{ referenceRoot: "/work/other" }} />,
+    );
+
+    await waitFor(() =>
+      expect(screen.queryByRole("list", { name: "Referenced files" })).toBeNull(),
+    );
+    await user.type(textbox(), "now");
+    await user.click(screen.getByRole("button", { name: "Start coding run" }));
+    expect(idle.onStart).toHaveBeenCalledExactlyOnceWith("look at @src/app.ts now");
+
+    // Searching continues in the new root.
+    await user.type(textbox(), " @ap");
+    await waitFor(() =>
+      expect(searchMock).toHaveBeenLastCalledWith("/work/other", "ap", 8, expect.anything()),
+    );
+  });
+
+  it("has no accessibility violations with the picker open and a chip shown", async () => {
+    respondWith("src/app.ts", "src/app.test.ts");
+    render(<Harness runState="idle" taskActions={actions()} />);
+    const user = await typeMention();
+    await screen.findByRole("list", { name: "Matching task files" });
+    expect(await axe(document.body, AXE_OPTIONS)).toHaveNoViolations();
+    await user.keyboard("{Enter}");
+    expect(screen.getByRole("list", { name: "Referenced files" })).toBeInTheDocument();
+    expect(await axe(document.body, AXE_OPTIONS)).toHaveNoViolations();
   });
 });

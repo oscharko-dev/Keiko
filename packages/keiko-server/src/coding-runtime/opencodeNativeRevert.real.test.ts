@@ -506,7 +506,7 @@ describe("pinned native OpenCode undo semantics", () => {
   const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
 
   it.skipIf(skip)(
-    "serves exactly the admitted protocol surface, including the revert and diff operations",
+    "serves exactly the admitted protocol surface, including the revert, diff and command operations",
     async () => {
       await withRun(async (run) => {
         const { digest, projection } = projectOpenCodeV2ProtocolSurface(
@@ -520,6 +520,8 @@ describe("pinned native OpenCode undo semantics", () => {
             "/api/session/{sessionID}/revert",
             "/api/session/{sessionID}/revert/stage",
             "/api/session/{sessionID}/revert/commit",
+            "/api/command",
+            "/api/session/{sessionID}/command",
           ]),
         );
       });

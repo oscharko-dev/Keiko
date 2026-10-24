@@ -306,6 +306,21 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The file search failed. Type again to retry.",
   "codingWorkbench.composer.references.picker.limit":
     "At most {count} files can be referenced in one message.",
+  "codingWorkbench.composer.commands.title": "Run a slash command",
+  "codingWorkbench.composer.commands.results": "Matching commands",
+  "codingWorkbench.composer.commands.option": "Run command /{name}",
+  "codingWorkbench.composer.commands.active": "/{name}, {position} of {total}",
+  "codingWorkbench.composer.commands.loading": "Loading commands...",
+  "codingWorkbench.composer.commands.found":
+    "Commands available: {count}. Use the arrow keys to choose and Enter to select one.",
+  "codingWorkbench.composer.commands.empty": "No matching commands.",
+  "codingWorkbench.composer.commands.none": "This task offers no slash commands.",
+  "codingWorkbench.composer.commands.error": "The commands could not be loaded.",
+  "codingWorkbench.composer.commands.retry": "Try again",
+  "codingWorkbench.composer.commands.init.description":
+    "Guided AGENTS.md setup for this repository",
+  "codingWorkbench.composer.commands.review.description":
+    "Review changes [commit|branch|pr]; reviews the uncommitted changes by default",
   "codingWorkbench.composer.model.label": "Coding model",
   "codingWorkbench.composer.model.selected": "Coding model: {model}",
   "codingWorkbench.composer.model.menu": "Choose coding model",
@@ -350,6 +365,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.composer.blocked.busy": "Keiko is already processing a runtime action.",
   "codingWorkbench.composer.blocked.emptyStart": "Describe what Keiko should do first.",
   "codingWorkbench.composer.blocked.emptyFollowUp": "Write a follow-up first.",
+  "codingWorkbench.composer.blocked.commandsLoading":
+    "Keiko is still loading this task's commands. Send again in a moment.",
   "codingWorkbench.composer.blocked.pauseDecision":
     "This paused run is waiting for a required decision. Use the decision action shown above.",
   "codingWorkbench.composer.blocked.notReady":
@@ -1083,6 +1100,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Keiko stopped the run because the model's edits were refused several times in a row, for example because they no longer matched the file. Start the task again, rephrase or split it, or choose another model; your changes so far stay in the task workspace.",
   "codingWorkbench.event.failure.runtime":
     "The coding run ended with an internal error after the actions shown above. Start the task again; if it recurs, check the Activity Log.",
+  "codingWorkbench.event.failure.invalid-intent":
+    "Keiko refused the task before it ran, for example because a file you referenced with @ is missing, outside the workspace or protected, or because the slash command is not available. Check the referenced files and the command, then start the task again.",
   "codingWorkbench.event.failure.generic":
     "This step could not be completed. Check the Activity Log and try again.",
   "codingWorkbench.event.failure.prompt-allowance-exhausted":

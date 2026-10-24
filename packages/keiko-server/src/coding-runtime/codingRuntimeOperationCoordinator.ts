@@ -7,6 +7,7 @@ import {
   isCodingWorkbenchAgent,
   isCodingWorkbenchRuntimeRevertAction,
   parseCodingWorkbenchRuntimeFollowUpRequest,
+  type CodingWorkbenchCommand,
   type CodingWorkbenchRuntimeFollowUpRequest,
   type CodingWorkbenchRuntimeRevertAction,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
@@ -464,6 +465,7 @@ export class CodingRuntimeOperationCoordinator {
         ...(correlationId === undefined ? {} : { correlationId }),
         ...(isCodingWorkbenchAgent(agent) ? { agent } : {}),
         ...(admitted.references === undefined ? {} : { references: admitted.references }),
+        ...(admitted.command === undefined ? {} : { command: admitted.command }),
       });
       return { result, generation };
     } catch (error) {
@@ -543,6 +545,21 @@ export class CodingRuntimeOperationCoordinator {
       });
       return { ok: false, reason: "revert-failed" };
     }
+  }
+
+  /**
+   * The slash commands the run's runtime lists right now (the Workbench's `/` menu), or `undefined`
+   * when the run is not live or offers none. Reads only: it consumes no revision and no request id.
+   */
+  public listCommands(
+    runId: string,
+    correlationId?: string,
+  ): Promise<readonly CodingWorkbenchCommand[] | undefined> {
+    const current = this.deps.current();
+    if (current?.runId !== runId || !FOLLOW_UP_STATES.has(current.state)) {
+      return Promise.resolve(undefined);
+    }
+    return this.deps.taskDispatcher.commands?.(runId, correlationId) ?? Promise.resolve(undefined);
   }
 
   /** The counts the Workbench shows beside the undo control; absent when no undo is available. */
@@ -657,7 +674,7 @@ export class CodingRuntimeOperationCoordinator {
 
   public async startInitialTurn(
     input: CodingRuntimeTaskDispatchRequest,
-  ): Promise<"accepted" | "failed" | "recovery-required"> {
+  ): Promise<"accepted" | "failed" | "inputs-refused" | "recovery-required"> {
     const reserveOutcome = this.replay.reserve(
       input.runId,
       input.requestId,
@@ -682,9 +699,14 @@ export class CodingRuntimeOperationCoordinator {
       return "accepted";
     }
     reservation.release();
+    // A prompt whose own inputs the run refused (a reference that is not a contained text file, a
+    // command the runtime does not list) is the request's fault, not the runtime's: the run that
+    // was minted for it is stopped either way, and the start answers with the request's own cause.
+    const inputsRefused = dispatched.reason === "inputs-refused";
     try {
       const stopped = await this.deps.manager.stop(input.runId);
-      return stopped.ok ? "failed" : "recovery-required";
+      if (!stopped.ok) return "recovery-required";
+      return inputsRefused ? "inputs-refused" : "failed";
     } catch (error) {
       recordRuntimeOperationTransportFailure(this.deps.activityLog, {
         runId: input.runId,
@@ -1182,7 +1204,7 @@ function admittedRevertAction(
 /** The admissible part of a follow-up that the dispatchers read; the contract validated its shape. */
 type AdmittedFollowUp = Pick<
   CodingWorkbenchRuntimeFollowUpRequest,
-  "taskIntent" | "delivery" | "references"
+  "taskIntent" | "delivery" | "references" | "command"
 >;
 
 /**
@@ -1195,12 +1217,13 @@ function admittedFollowUp(
   body: CodingWorkbenchRuntimeFollowUpRequest,
 ): AdmittedFollowUp | undefined {
   if (!operation.ok || !FOLLOW_UP_STATES.has(operation.current.state)) return undefined;
-  if (!validTaskIntent(body.taskIntent)) return undefined;
+  if (!validTaskIntent(body.taskIntent, body.command !== undefined)) return undefined;
   if (body.delivery !== undefined && operation.current.state !== "running") return undefined;
   return {
     taskIntent: body.taskIntent,
     ...(body.delivery === undefined ? {} : { delivery: body.delivery }),
     ...(body.references === undefined ? {} : { references: body.references }),
+    ...(body.command === undefined ? {} : { command: body.command }),
   };
 }
 
@@ -1216,10 +1239,12 @@ function followUpDispatchRefusal(
     : "authority-resolution-failed";
 }
 
-function validTaskIntent(value: unknown): value is string {
+// The text of a follow-up. A slash command takes its arguments from it and may take none, so only a
+// request that names a command may carry a blank text.
+function validTaskIntent(value: unknown, commandNamed = false): value is string {
   return (
     typeof value === "string" &&
-    value.trim().length > 0 &&
+    (commandNamed || value.trim().length > 0) &&
     value.length <= CODING_WORKBENCH_TASK_INTENT_MAX_CHARS
   );
 }

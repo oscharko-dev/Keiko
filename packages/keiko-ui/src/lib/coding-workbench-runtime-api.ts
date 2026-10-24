@@ -26,10 +26,12 @@ import type {
 import { validateCodingWorkbenchRuntimeApprovalReviewChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-approval-review";
 import { validateCodingWorkbenchRuntimeQuestionsChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions";
 import {
+  validateCodingWorkbenchRuntimeCommandsChannelPayload,
   validateCodingWorkbenchRuntimeReadiness,
   validateCodingWorkbenchRuntimeRevertChannelPayload,
   validateCodingWorkbenchRuntimeSnapshot,
   validateCodingWorkbenchRuntimeSseEvent,
+  type CodingWorkbenchRuntimeCommandsChannelPayload,
   type CodingWorkbenchRuntimeRevertChannelPayload,
   type CodingWorkbenchRuntimeRevertRequest,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
@@ -153,6 +155,13 @@ function revertChannelValidator(
   value: unknown,
 ): CodingWorkbenchRuntimeRevertChannelPayload {
   return validated(path, value, validateCodingWorkbenchRuntimeRevertChannelPayload);
+}
+
+function commandsChannelValidator(
+  path: string,
+  value: unknown,
+): CodingWorkbenchRuntimeCommandsChannelPayload {
+  return validated(path, value, validateCodingWorkbenchRuntimeCommandsChannelPayload);
 }
 
 export interface CodingWorkbenchDescriptionDraftResult {
@@ -421,6 +430,23 @@ export function getCodingWorkbenchRuntimeRevertState(
     runPath(runId, "/revert"),
     { cache: "no-store", ...(signal ? { signal } : {}) },
     { validator: revertChannelValidator },
+  );
+}
+
+/**
+ * Lists the slash commands a live run's runtime offers over the authenticated app-session channel
+ * (ADR-0137 D10). The names and descriptions are runtime-authored display text, bounded by the
+ * contract validator. Absent `commands` means the run offers none or could not list them; an
+ * unpaired window receives the constant `{ session: "unpaired" }` projection instead of an error.
+ */
+export function fetchCodingWorkbenchRuntimeCommands(
+  runId: string,
+  init?: { readonly signal?: AbortSignal | undefined },
+): Promise<CodingWorkbenchRuntimeCommandsChannelPayload> {
+  return bffFetchJson(
+    runPath(runId, "/commands"),
+    { cache: "no-store", ...(init?.signal ? { signal: init.signal } : {}) },
+    { validator: commandsChannelValidator },
   );
 }
 

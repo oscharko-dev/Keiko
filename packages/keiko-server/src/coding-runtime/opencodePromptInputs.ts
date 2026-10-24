@@ -61,13 +61,25 @@ export function openCodePromptInputs(
   profile: OpenCodeToolProfile,
 ): CodingWorkbenchRuntimePromptInputs {
   const native = profile === "native";
-  return { delivery: native, references: native };
+  return { delivery: native, references: native, commands: native };
+}
+
+/**
+ * The slash command a turn runs as (`session.command`, ADR-0137 D10): its name and how many UTF-8
+ * bytes of arguments follow it. The template belongs to the runtime and never reaches Keiko, so the
+ * name and the count are all the Activity Log may say about it.
+ */
+export interface PromptCommandRequest {
+  readonly name: string;
+  readonly argumentBytes: number;
 }
 
 /** What a turn asks of the prompt beyond its text; `delivery` absent means an ordinary turn. */
 export interface PromptInputsRequest {
   readonly delivery?: CodingWorkbenchPromptDelivery | undefined;
   readonly references?: readonly CodingWorkbenchPromptReference[] | undefined;
+  /** Runs the turn as this command; a delivery never carries one. */
+  readonly command?: PromptCommandRequest | undefined;
   /** Request-scoped diagnostic join; never persisted or forwarded to the model. */
   readonly correlationId?: string | undefined;
   /**
@@ -87,6 +99,7 @@ export interface PromptFileAttachment {
 export interface PromptInputsSummary {
   readonly delivery?: CodingWorkbenchPromptDelivery | undefined;
   readonly referenceCount: number;
+  readonly command?: PromptCommandRequest | undefined;
   /** Request-scoped diagnostic join; never persisted or forwarded to the model. */
   readonly correlationId?: string | undefined;
   /**
@@ -105,6 +118,10 @@ export interface AdmittedPromptInputs extends PromptInputsSummary {
 
 /** Why admission refused; closed, body-free, and the whole of what the Activity Log records. */
 export type PromptInputsRefusal =
+  | "command-refused"
+  | "command-unavailable"
+  | "command-unknown"
+  | "commands-unsupported"
   | "delivery-unsupported"
   | "references-unsupported"
   | "run-unavailable"
@@ -299,11 +316,26 @@ const PROMPT_INPUTS_SETTLED_OPERATION = defineActivityLogOperation({
       required: false,
       values: ["bound", "reused", "unreconciled"],
     },
+    // The slash command the turn ran as: the closed name of a runtime built-in, or `other` for any
+    // other listed command, which is then told apart by the digest of its name alone.
+    command: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["init", "other", "review"],
+    },
+    commandDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    // The UTF-8 size of the text after the command, the only trace of what the operator typed.
+    commandArgumentBytes: { type: "integer", dataClass: "count", required: false },
     reason: {
       type: "string",
       dataClass: "closed-enum",
       required: false,
       values: [
+        "command-refused",
+        "command-unavailable",
+        "command-unknown",
+        "commands-unsupported",
         "delivery-refused",
         "delivery-unconfirmed",
         "delivery-unsupported",
@@ -377,12 +409,31 @@ export function recordPromptInputs(
         referenceCount: summary.referenceCount,
         ...(summary.requestId === undefined ? {} : { requestId: summary.requestId }),
         ...(settled.inputBinding === undefined ? {} : { inputBinding: settled.inputBinding }),
+        ...commandFields(summary.command),
         ...(settled.outcome === "accepted"
           ? { attachedBytes: settled.attachedBytes }
           : { reason: settled.reason }),
       },
     ),
   );
+}
+
+/** The log's words for a command turn: a built-in by name, any other by the digest of its name. */
+function commandFields(command: PromptCommandRequest | undefined): {
+  readonly command?: "init" | "other" | "review";
+  readonly commandDigest?: string;
+  readonly commandArgumentBytes?: number;
+} {
+  if (command === undefined) return {};
+  const argumentBytes = { commandArgumentBytes: command.argumentBytes };
+  if (command.name === "init" || command.name === "review") {
+    return { command: command.name, ...argumentBytes };
+  }
+  return {
+    command: "other",
+    commandDigest: createHash("sha256").update(command.name, "utf8").digest("hex"),
+    ...argumentBytes,
+  };
 }
 
 /** The part of a ready run the prompt inputs need; `ReadyRun` of the composition satisfies it. */
@@ -442,6 +493,7 @@ function requestSummary(request: PromptInputsRequest): PromptInputsSummary {
     delivery: request.delivery,
     referenceCount: request.references?.length ?? 0,
     correlationId: request.correlationId,
+    command: request.command,
   };
 }
 
@@ -452,6 +504,9 @@ function capabilityRefusal(
   if (request.delivery !== undefined && !capabilities.delivery) return "delivery-unsupported";
   if ((request.references?.length ?? 0) > 0 && !capabilities.references) {
     return "references-unsupported";
+  }
+  if (request.command !== undefined && capabilities.commands !== true) {
+    return "commands-unsupported";
   }
   return undefined;
 }

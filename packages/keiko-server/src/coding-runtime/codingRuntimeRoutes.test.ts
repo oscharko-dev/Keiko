@@ -49,6 +49,7 @@ import {
   handleCodingRuntimeResume,
   handleCodingRuntimeRetry,
   handleCodingRuntimeRevert,
+  handleCodingRuntimeCommands,
   handleCodingRuntimeRevertState,
   handleCodingRuntimeSkills,
   handleCodingRuntimeStatus,
@@ -188,6 +189,12 @@ function runtime(
       Promise.resolve(
         runId === "run-1" ? { staged: true, fileCount: 2, additions: 12, deletions: 4 } : undefined,
       ),
+    listCommands: (runId: string) =>
+      Promise.resolve(
+        runId === "run-1"
+          ? [{ name: "init", description: "guided AGENTS.md setup" }, { name: "review" }]
+          : undefined,
+      ),
     answerQuestion: (_runId: string, body: unknown, correlationId?: string) => {
       calls.push(body);
       correlationIds.push(correlationId);
@@ -304,6 +311,7 @@ describe("coding runtime routes", () => {
         "POST /api/coding-workbench/runtime/runs/:runId/follow-up",
         "POST /api/coding-workbench/runtime/runs/:runId/revert",
         "GET /api/coding-workbench/runtime/runs/:runId/revert",
+        "GET /api/coding-workbench/runtime/runs/:runId/commands",
         "POST /api/coding-workbench/runtime/runs/:runId/research/revoke",
         "POST /api/coding-workbench/runtime/runs/:runId/questions",
         "POST /api/coding-workbench/runtime/runs/:runId/questions/answer",
@@ -957,6 +965,97 @@ describe("coding runtime routes", () => {
     });
   });
 
+  // C02 (ADR-0137 D10): the slash commands the run's runtime lists, for the composer's `/` menu.
+  describe("slash commands", () => {
+    const runPath = "/api/coding-workbench/runtime/runs/run-1/commands";
+
+    it("shows the paired operator the names and descriptions the runtime lists", async () => {
+      const session = pairedAppSession();
+
+      await expect(
+        handleCodingRuntimeCommands(
+          context("", { runId: "run-1" }, runPath, session.cookie),
+          runtime({ codingAppSessionChannel: session.channel }),
+        ),
+      ).resolves.toEqual({
+        status: 200,
+        body: {
+          session: "active",
+          commands: [{ name: "init", description: "guided AGENTS.md setup" }, { name: "review" }],
+        },
+      });
+    });
+
+    it("threads the request correlation to the listing and reads no body", async () => {
+      const session = pairedAppSession();
+      const seen: (string | undefined)[] = [];
+      const deps = runtime({ codingAppSessionChannel: session.channel });
+      (deps.codingRuntimeOrchestrator as unknown as { listCommands: unknown }).listCommands = (
+        _runId: string,
+        correlationId?: string,
+      ) => {
+        seen.push(correlationId);
+        return Promise.resolve([]);
+      };
+
+      await handleCodingRuntimeCommands(
+        context("", { runId: "run-1" }, runPath, session.cookie, "commands-correlation-id-1"),
+        deps,
+      );
+
+      expect(seen).toEqual(["commands-correlation-id-1"]);
+    });
+
+    it("reports no commands for a run whose runtime offers none", async () => {
+      const session = pairedAppSession();
+      const deps = runtime({ codingAppSessionChannel: session.channel });
+      (deps.codingRuntimeOrchestrator as unknown as { listCommands: unknown }).listCommands = () =>
+        Promise.resolve(undefined);
+
+      await expect(
+        handleCodingRuntimeCommands(context("", { runId: "run-1" }, runPath, session.cookie), deps),
+      ).resolves.toEqual({ status: 200, body: { session: "active" } });
+    });
+
+    it("answers an unpaired read with the constant projection whatever the run, asking the runtime nothing", async () => {
+      const { channel } = pairedAppSession();
+      const spy = spyingRuntime(channel);
+      const cases: readonly [Record<string, string>, UiHandlerDeps][] = [
+        [{ runId: "run-1" }, spy.deps],
+        [{ runId: "run-9" }, spy.deps],
+        [{}, spy.deps],
+        [{ runId: "run-1" }, runtime({ codingRuntimeOrchestrator: undefined })],
+      ];
+      for (const [params, deps] of cases) {
+        await expect(handleCodingRuntimeCommands(context("", params), deps)).resolves.toEqual({
+          status: 200,
+          body: { session: "unpaired" },
+        });
+      }
+      expect(spy.invoked).toEqual([]);
+    });
+
+    it("conceals an unknown run from a paired read and reports an unconfigured runtime", async () => {
+      const session = pairedAppSession();
+
+      await expect(
+        handleCodingRuntimeCommands(
+          context("", { runId: "run-9" }, runPath, session.cookie),
+          runtime({ codingAppSessionChannel: session.channel }),
+        ),
+      ).resolves.toMatchObject({ status: 404 });
+      await expect(
+        handleCodingRuntimeCommands(
+          context("", { runId: "run-1" }, runPath, session.cookie),
+          runtime({
+            codingAppSessionChannel: session.channel,
+            codingRuntimeOrchestrator: undefined,
+          }),
+        ),
+      ).resolves.toMatchObject({ status: 503 });
+    });
+  });
+
   it("#2802: the paired approval-review route shows the operator the files the change would write", () => {
     const session = pairedAppSession();
 
@@ -1193,8 +1292,8 @@ describe("coding runtime routes", () => {
         runtimeEvidenceClass: "functional-not-platform-qualified",
         // No tool profile is threaded either: the agents default to the baseline, never to plan.
         selectableAgents: ["build"],
-        // ...and the prompt inputs default to none: no delivery, no references.
-        promptInputs: { delivery: false, references: false },
+        // ...and the prompt inputs default to none: no delivery, no references, no commands.
+        promptInputs: { delivery: false, references: false, commands: false },
       },
     });
     const serialized = JSON.stringify(result.body);
@@ -1247,24 +1346,28 @@ describe("coding runtime routes", () => {
     });
 
     // Only the native service can steer, queue and read a referenced file under its own policy.
+    // The same holds for the runtime's slash commands.
     expect(promptInputs({ codingRuntimeHostQualified: true, ...registry("native") })).toEqual({
       delivery: true,
       references: true,
+      commands: true,
     });
     for (const profile of ["direct", "code-mode"]) {
       expect(promptInputs({ codingRuntimeHostQualified: true, ...registry(profile) })).toEqual({
         delivery: false,
         references: false,
+        commands: false,
       });
     }
     // No composed registry fails closed to nothing, and so does one that states no profile.
     expect(promptInputs({ codingRuntimeHostQualified: true })).toEqual({
       delivery: false,
       references: false,
+      commands: false,
     });
     expect(
       promptInputs({ codingRuntimeHostQualified: true, openCodeGatewayReadinessRegistry: {} }),
-    ).toEqual({ delivery: false, references: false });
+    ).toEqual({ delivery: false, references: false, commands: false });
   });
 
   it("serves a readiness payload the shared contract validator accepts", () => {
@@ -1816,6 +1919,10 @@ function spyingRuntime(channel: UiHandlerDeps["codingAppSessionChannel"]): Spyin
     submitRevert: settle("submitRevert"),
     revertState: () => {
       invoked.push("revertState");
+      return Promise.resolve(undefined);
+    },
+    listCommands: () => {
+      invoked.push("listCommands");
       return Promise.resolve(undefined);
     },
     answerQuestion: settle("answerQuestion"),

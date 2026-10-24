@@ -1181,8 +1181,69 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   message) and the closed error kind, so a lost acknowledgement and the retry that resolved it join
   on the request id. Never a path, name, text or message id. The composer offers Send now (Enter) and Queue (Ctrl or Cmd+Enter) while a
   turn runs and the `@` picker (the Files search over the run's workspace, no second index) while
-  a run runs or is paused. A start carries no references yet: the workspace they name does not
-  exist before the run is minted.
+  a run runs or is paused and, for a new task, over the workspace the run will start from.
+  **The first prompt takes the same references (S15).** A start may carry `references` (the same
+  closed `{ path }` entries and bounds as a follow-up's: at most 16, no absolute path, URI or link,
+  sensitive paths refused). The task workspace does not exist before the run is minted, so nothing is
+  resolved at the request: the launch refuses, before the one-use confirmation is consumed or any run
+  exists, a runtime that cannot take them (the mapped profiles and a Codex run, `invalid-intent`),
+  and the paths are resolved against the run's own canonical workspace root when its first turn is
+  dispatched, through the same `admitPromptInputs` as a follow-up's. A reference that is refused
+  refuses the start with the existing closed reason: the run that was minted for it is stopped and
+  settles `failed` with `invalid-intent`, and the turn is never sent without the files the operator
+  named (the diagnostic stage is `initial-turn-inputs-refused`; the `coding-runtime.prompt-inputs.settled`
+  line carries the closed refusal reason). The composer enables the `@` picker for a new task when
+  the readiness read says `references`, searching the active task workspace when it belongs to the
+  selected repository and otherwise the selected repository's root; a path the run's workspace does
+  not hold is refused at the dispatch like any other.
+- **A turn may run as one of the runtime's slash commands (C02).** The pinned 2.1.4 producer lists its
+  commands (`GET /api/command`, `command.list`: `init`, guided AGENTS.md setup, and `review`, review
+  of the changes, defaulting to the uncommitted ones) and runs one as a turn (`POST
+  /api/session/{sessionID}/command`, `session.command`, body `{ name, text, files?, agents?, skills?,
+  delivery? }`, 204; `CommandNotFoundError` is a 404, `CommandExecutionError` a 500). Both operations
+  are admitted in the protocol surface (21 operations; the structural digest pins and the captured
+  fixture moved with them, and the original executable's live document projects to the new digest).
+  A command is a server-authored prompt template: it is untrusted intent like any task text, grants
+  nothing, and every effect it causes passes the native policy of the run's mode. The producer
+  registers its built-ins a moment after the instance boots, so the listing is empty until then; the
+  admission treats an absent name as unknown. A start or a follow-up may carry `command: { name }`
+  (a bounded name, `isCodingWorkbenchCommandName`) and the text after the command in `taskIntent`,
+  which may then be empty and only then; a command cannot be a `delivery` and a start cannot combine
+  one with an issue reference. The native profile alone offers commands (`promptInputs.commands` of the
+  readiness read; absent reads false), and a start or follow-up that names one elsewhere is refused
+  like a `plan` request. The dispatcher admits a command like any prompt input and then asks the run's
+  runtime (`GET /api/command`, fresh) whether it lists the name, all ahead of any reservation, so an
+  unknown name begins nothing and leaves the request id and revision usable; an unreadable listing
+  proves nothing about the name and refuses it as well (`command-unavailable`). The dispatch is then the
+  ordinary one (the same orchestrator, operation coordinator, run port, revision, single-use request
+  id, replacement of a paused turn, turn lifecycle and history projection), with `session.command`
+  posted in place of `prompt`. The body has no message id, so the delivery's native-message-id ledger
+  does not apply: a command turn is a turn like a prompt turn, whose acknowledgement is the
+  runtime's settlement, and a failed post fails the turn it started (`command-refused`), never
+  resending it. Sent to a running turn the producer takes the command into that execution at its next
+  step like a steered message, which is why Keiko dispatches a command only as the start of a turn.
+  The command body has no field to hide a context in, so a command turn carries no initial context
+  (repository instructions, memory, history, issue): the orchestrator builds none for a command
+  start, and the model reads what it needs with its own governed tools. The producer stores the
+  expanded template as the turn's user message and marks no command on it, so the run's command
+  presentation is armed with `/<name> <text>` just before the post and the history projection
+  presents the first user message it had not shown before by that text, in the timeline and in
+  Coding History, never the template. `GET /runs/:runId/commands` (authenticated; an unpaired
+  caller receives the constant `{ session: "unpaired" }` before any run resolution, ADR-0141) gives
+  the Workbench's `/` menu the names and one-line descriptions the runtime lists, bounded and
+  contract-valid (at most 64, duplicate-free, descriptions the contract refuses dropped from their
+  entry); absent `commands` means the run offers none. A new task, which has no runtime to list
+  yet, shows the pinned built-ins (`CODING_WORKBENCH_BUILT_IN_COMMAND_NAMES`); the original-runtime
+  proof fails if the producer lists anything else. Evidence is body-free: the
+  `coding-runtime.prompt-inputs.settled` line names a built-in command (`init`, `review`) and any other
+  only by the SHA-256 of its name (`command`, `commandDigest`) with the UTF-8 size of the text after
+  it (`commandArgumentBytes`) and the closed refusal reasons `commands-unsupported`,
+  `command-unknown`, `command-unavailable` and `command-refused`; each listing is one
+  `coding-runtime.commands.listed` line (outcome and counts, with the closed error kind, frames and
+  causes of a failed one). `opencodeNativePromptInputs.real.test.ts` proves, on the original
+  executable, that `command.list` returns exactly the two built-ins, that `review` runs a turn whose
+  model request carries the producer's template and ends idle, that the built-in templates
+  substitute no shell command, and that a start's referenced file reaches its first model request.
 - **Every evaluated action asks the server-owned policy.** The generated `keiko.native-policy`
   plugin registers OpenCode's supported `permission.evaluate` hook and asks the tool facade
   (`native-policy` action) for the final effect of each evaluated action. `opencodeNativePolicy.ts`

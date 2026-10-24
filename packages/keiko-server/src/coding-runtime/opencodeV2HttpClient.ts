@@ -1,6 +1,7 @@
 import {
   CODING_WORKBENCH_PROMPT_REFERENCES_MAX,
   isCodingWorkbenchAgent,
+  isCodingWorkbenchCommandName,
   isCodingWorkbenchPromptDelivery,
   type CodingWorkbenchAgent,
   type CodingWorkbenchPromptDelivery,
@@ -67,6 +68,23 @@ export interface OpenCodeV2PromptInputs {
    */
   readonly id?: string | undefined;
 }
+
+/**
+ * One slash command the runtime lists (`Command.Info` of the pinned 2.1.4 schema): its name and the
+ * one-line description it gives, both untrusted display text. The command's template stays with the
+ * runtime; Keiko never reads it.
+ */
+export interface OpenCodeV2Command {
+  readonly name: string;
+  readonly description?: string | undefined;
+}
+
+/**
+ * The most commands one listing may hold before the client refuses it. The built-in set is two; the
+ * bound only keeps a hostile or broken listing from growing the server's memory.
+ */
+const MAX_COMMANDS = 256;
+const COMMAND_DESCRIPTION_MAX_CHARS = 1_024;
 
 /**
  * The prompt was refused before any byte left: a bound or a shape the client itself checks. Nothing
@@ -151,6 +169,26 @@ export interface OpenCodeV2HttpClient {
     signal?: AbortSignal,
     display?: OpenCodeV2PromptDisplay,
     inputs?: OpenCodeV2PromptInputs,
+  ): Promise<void>;
+  /**
+   * The slash commands the runtime offers right now (`GET /api/command`, operation `command.list`).
+   * An entry whose name is not a bounded command name is dropped and never reaches a caller; a
+   * description that is not bounded text is dropped from its entry.
+   */
+  commands(signal?: AbortSignal): Promise<readonly OpenCodeV2Command[]>;
+  /**
+   * Runs the session's next turn as a slash command (`POST /api/session/{sessionID}/command`,
+   * operation `session.command`): the runtime expands the command's template with `text` as its
+   * arguments and runs the turn. The body has no message id, so unlike a prompt the post cannot be
+   * resent safely after a lost acknowledgement; a failure is final for the turn that sent it.
+   * `files` are the same attachments a prompt carries.
+   */
+  command(
+    sessionId: string,
+    name: string,
+    text: string,
+    signal?: AbortSignal,
+    inputs?: Pick<OpenCodeV2PromptInputs, "files">,
   ): Promise<void>;
   interrupt(sessionId: string, signal?: AbortSignal): Promise<void>;
   /**
@@ -304,6 +342,33 @@ function safeSessionId(value: string): string {
   return value;
 }
 
+function safeCommandName(value: string): string {
+  if (!isCodingWorkbenchCommandName(value)) throw new Error("opencode-v2-command-invalid");
+  return value;
+}
+
+function commandDescription(value: unknown): string | undefined {
+  return typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= COMMAND_DESCRIPTION_MAX_CHARS &&
+    !hasControlCharacter(value)
+    ? value
+    : undefined;
+}
+
+/** Keeps the closed fields of every well-named entry; the rest of an entry is never copied. */
+function commandEntries(
+  entries: readonly Readonly<Record<string, unknown>>[],
+): readonly OpenCodeV2Command[] {
+  if (entries.length > MAX_COMMANDS) throw new Error("opencode-v2-envelope-invalid");
+  return entries.flatMap((entry): readonly OpenCodeV2Command[] => {
+    const name = entry.name;
+    if (!isCodingWorkbenchCommandName(name)) return [];
+    const description = commandDescription(entry.description);
+    return [description === undefined ? { name } : { name, description }];
+  });
+}
+
 function safeAgent(value: string): CodingWorkbenchAgent {
   if (!isCodingWorkbenchAgent(value)) throw new Error("opencode-v2-agent-invalid");
   return value;
@@ -398,6 +463,32 @@ function promptInputFields(inputs: OpenCodeV2PromptInputs | undefined): Record<s
 
 function messageIdField(id: string | undefined): Record<string, unknown> {
   return id === undefined ? {} : { id: safeMessageId(id) };
+}
+
+/**
+ * Every check that can refuse a command before a byte is sent, in one place, like `preparedPrompt`:
+ * a failure here is `not-submitted` by construction.
+ */
+function preparedCommand(
+  sessionId: string,
+  name: string,
+  text: string,
+  inputs: Pick<OpenCodeV2PromptInputs, "files"> | undefined,
+): { readonly path: string; readonly body: Record<string, unknown> } {
+  try {
+    if (Buffer.byteLength(text, "utf8") > MAX_TEXT_BYTES)
+      throw new Error("opencode-v2-prompt-oversized");
+    const { files } = promptInputFields(inputs);
+    return {
+      path: `/api/session/${safeSessionId(sessionId)}/command`,
+      body: { name: safeCommandName(name), text, ...(files === undefined ? {} : { files }) },
+    };
+  } catch (error) {
+    throw new OpenCodeV2PromptRefusedError(
+      error instanceof Error ? error.message : "opencode-v2-command-invalid",
+      { cause: error },
+    );
+  }
 }
 
 interface PreparedPrompt {
@@ -621,6 +712,12 @@ export function createOpenCodeV2HttpClient(
       const prepared = preparedPrompt(sessionId, value, display, inputs);
       const receipt = objectEnvelope(await request("POST", prepared.path, prepared.body, signal));
       reconcileReceipt(receipt, prepared);
+    },
+    commands: async (signal) =>
+      commandEntries(arrayEnvelope(await request("GET", "/api/command", undefined, signal))),
+    command: async (sessionId, name, text, signal, inputs): Promise<void> => {
+      const prepared = preparedCommand(sessionId, name, text, inputs);
+      await request("POST", prepared.path, prepared.body, signal);
     },
     interrupt: async (sessionId, signal): Promise<void> => {
       await request("POST", `/api/session/${safeSessionId(sessionId)}/interrupt`, {}, signal);

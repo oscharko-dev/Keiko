@@ -2295,3 +2295,116 @@ describe("OpenCode 2.1.4 background subagent reports (#3897, PR #4064)", () => {
     expect(line?.extra).not.toHaveProperty("heldIdleCount");
   });
 });
+
+// C02 (ADR-0137 D10): the runtime stores a slash command's expanded template as the turn's user
+// message and marks no command on it. The presentation hook shows what the operator typed instead.
+describe("OpenCode V2 slash command presentation", () => {
+  const TEMPLATE = "You are a code reviewer. TEMPLATE-CANARY-BODY\n\nInput: main\n";
+  const history = (userText = TEMPLATE): readonly Record<string, unknown>[] => [
+    { id: "msg_old", type: "user", time: { created: 1 }, text: "an earlier task" },
+    { id: "msg_cmd", type: "user", time: { created: 2 }, text: userText },
+  ];
+
+  function project(
+    userMessageDisplay: ((messageId: string, isNew: boolean) => string | undefined) | undefined,
+    messages = history(),
+  ): {
+    readonly signals: readonly CodingSafeActivitySignal[];
+    readonly captured: readonly unknown[];
+  } {
+    const captured: unknown[] = [];
+    const projection = createOpenCodeV2HistoryProjection({
+      runId: "run-command",
+      activityLog: undefined,
+      toolProfile: "native",
+      captureMessages: (conversation): boolean => {
+        captured.push(conversation);
+        return true;
+      },
+      userMessageDisplay,
+    });
+    const events = projection.project("ses_command", messages, undefined);
+    const signals = events.flatMap((event) => {
+      const signal = projection.takeSignal(event);
+      return signal === undefined ? [] : [signal];
+    });
+    return { signals, captured };
+  }
+
+  it("presents a command's message by what the operator typed in the timeline and in Coding History", () => {
+    const seen: [string, boolean][] = [];
+    const { signals, captured } = project((id, isNew) => {
+      seen.push([id, isNew]);
+      return id === "msg_cmd" ? "/review main" : undefined;
+    });
+
+    expect(seen).toEqual([
+      ["msg_old", true],
+      ["msg_cmd", true],
+    ]);
+    expect(JSON.stringify(signals)).toContain("/review main");
+    expect(JSON.stringify(signals)).toContain("an earlier task");
+    expect(JSON.stringify(signals)).not.toContain("TEMPLATE-CANARY-BODY");
+    expect(captured.at(-1)).toEqual([
+      { messageId: "msg_old", role: "user", content: "an earlier task" },
+      { messageId: "msg_cmd", role: "user", content: "/review main" },
+    ]);
+    expect(JSON.stringify(captured)).not.toContain("TEMPLATE-CANARY-BODY");
+  });
+
+  it("presents every user message by its own text when no command is presented", () => {
+    for (const hook of [undefined, (): undefined => undefined]) {
+      const { signals, captured } = project(hook);
+      expect(JSON.stringify(signals)).toContain("TEMPLATE-CANARY-BODY");
+      expect(captured.at(-1)).toEqual([
+        { messageId: "msg_old", role: "user", content: "an earlier task" },
+        { messageId: "msg_cmd", role: "user", content: TEMPLATE },
+      ]);
+    }
+  });
+
+  it("says whether the history had shown a message before, so a later read is not new", () => {
+    const seen: [string, boolean][] = [];
+    const projection = createOpenCodeV2HistoryProjection({
+      runId: "run-command",
+      activityLog: undefined,
+      toolProfile: "native",
+      userMessageDisplay: (id, isNew) => {
+        seen.push([id, isNew]);
+        return undefined;
+      },
+    });
+    const messages = history();
+    const first = projection.project("ses_command", messages, undefined);
+    const checkpoint = first.at(-1)?.sequence;
+    seen.length = 0;
+
+    projection.project("ses_command", messages, checkpoint);
+
+    expect(seen).toEqual([
+      ["msg_old", false],
+      ["msg_cmd", false],
+    ]);
+  });
+
+  it("asks nothing about a message that is not a user message", () => {
+    const seen: string[] = [];
+    project(
+      (id) => {
+        seen.push(id);
+        return undefined;
+      },
+      [
+        { id: "msg_user", type: "user", time: { created: 1 }, text: "task" },
+        {
+          id: "msg_assistant",
+          type: "assistant",
+          time: { created: 2 },
+          content: [{ type: "text", text: "answer" }],
+        },
+      ],
+    );
+
+    expect(seen).toEqual(["msg_user"]);
+  });
+});

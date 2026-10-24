@@ -3,12 +3,16 @@ import type {
   CodingWorkbenchAgent,
   CodingWorkbenchCodexAuthMethod,
   CodingWorkbenchMode,
+  CodingWorkbenchPromptReference,
   CodingWorkbenchRuntimeApprovalDecision,
   CodingWorkbenchRuntimePreference,
   CodingWorkbenchRuntimeResearchGrant,
   ModelReasoningEffort,
 } from "@oscharko-dev/keiko-contracts";
-import type { CodingWorkbenchRuntimeRevertAction } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
+import type {
+  CodingWorkbenchCommandRequest,
+  CodingWorkbenchRuntimeRevertAction,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import type {
   CodingWorkbenchRuntimeState,
   CodingWorkbenchRuntimeStateAction,
@@ -25,6 +29,13 @@ export interface CodingWorkbenchStartOptions {
   readonly conversationId?: string | undefined;
   readonly issue?: CodingWorkbenchIssueStartIntent | undefined;
   readonly projectMemoryEnabled: boolean;
+  /**
+   * Workspace files the first prompt references with `@`, by path relative to the workspace the run
+   * starts in (ADR-0137 D10). The server resolves them when the first turn is dispatched.
+   */
+  readonly references?: readonly CodingWorkbenchPromptReference[] | undefined;
+  /** Starts the first turn with a slash command; the text is then the command's arguments. */
+  readonly command?: CodingWorkbenchCommandRequest | undefined;
 }
 
 export interface CodingWorkbenchRuntimeActions {

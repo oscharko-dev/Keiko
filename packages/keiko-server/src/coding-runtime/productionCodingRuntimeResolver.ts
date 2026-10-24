@@ -1,8 +1,10 @@
 import {
   CodingRuntimeAgentUnsupportedError,
+  CodingRuntimeInputsUnsupportedError,
   CodingRuntimeLaunchRejectedError,
 } from "./launchFailure.js";
 import { isAgentAdmitted, openCodeSelectableAgents } from "./opencodeAgents.js";
+import { openCodePromptInputs } from "./opencodePromptInputs.js";
 import { openCodeVisibleToolNames, type OpenCodeToolProfile } from "./opencodeToolSchemas.js";
 import {
   createProductionDraftDeliveryService,
@@ -660,6 +662,7 @@ function launchResolver(
       // Before the one-use confirmation is consumed or authority minted: a refused agent leaves
       // nothing to undo, and the operator's confirmation stays valid for the corrected request.
       refuseUnsupportedAgent(request.agent, context.runtimeSource, shared.toolProfile);
+      refuseUnsupportedPromptInputs(request, context.runtimeSource, shared.toolProfile);
       const intent = startIntent(request, context);
       const nowIso = runtimeNow(input).toISOString();
       const approvalDigest = consumeStartConfirmation(input, request, context, nowIso);
@@ -705,6 +708,28 @@ function refuseUnsupportedAgent(
   if (agent === undefined) return;
   const selectable = runtimeSource === "keiko-sidecar" ? openCodeSelectableAgents(toolProfile) : [];
   if (!isAgentAdmitted(selectable, agent)) throw new CodingRuntimeAgentUnsupportedError(agent);
+}
+
+/**
+ * The first prompt's `@` references and slash command exist on the native service only (ADR-0137
+ * D10). Another profile, or a Codex subscription run, has neither; starting without them would
+ * answer another request than the one written, so the start is refused before the confirmation is
+ * consumed or any run is minted. Where the files are resolved, and whether the command is listed,
+ * waits for the first turn's dispatch.
+ */
+function refuseUnsupportedPromptInputs(
+  request: Pick<ProductionRuntimeBackendInput["request"], "references" | "command">,
+  runtimeSource: CodingRuntimeTrustedContext["runtimeSource"],
+  toolProfile: OpenCodeToolProfile,
+): void {
+  if (request.references === undefined && request.command === undefined) return;
+  const offered = runtimeSource === "keiko-sidecar" ? openCodePromptInputs(toolProfile) : undefined;
+  if (request.references !== undefined && offered?.references !== true) {
+    throw new CodingRuntimeInputsUnsupportedError();
+  }
+  if (request.command !== undefined && offered?.commands !== true) {
+    throw new CodingRuntimeInputsUnsupportedError();
+  }
 }
 
 function consumeStartConfirmation(
@@ -1137,6 +1162,11 @@ export function bindExplicitSkillTurns(
           admitPromptInputs: turnPort.admitPromptInputs,
           deliverPrompt: turnPort.deliverPrompt,
         }),
+    // Listing a run's commands and confirming one starts and settles nothing, so the explicit-skill
+    // request of the turn that follows is neither replaced nor cleared by it.
+    ...(turnPort.listCommands === undefined || turnPort.admitCommand === undefined
+      ? {}
+      : { listCommands: turnPort.listCommands, admitCommand: turnPort.admitCommand }),
     abortTurn: async (runId): Promise<boolean> => {
       explicitSkills.clear();
       return turnPort.abortTurn(runId);

@@ -83,6 +83,19 @@ export class CodingRuntimeAgentUnsupportedError extends Error {
 }
 
 /**
+ * A start whose first prompt carries inputs the selected runtime cannot take (ADR-0137 D10): files
+ * referenced with `@`, or a slash command, exist on the native service only. The mapped profiles
+ * and the Codex adapter have neither, and starting the run without them would answer another
+ * request than the one the operator wrote. Carries no name, path or text.
+ */
+export class CodingRuntimeInputsUnsupportedError extends Error {
+  public constructor() {
+    super("inputs-unsupported");
+    this.name = "CodingRuntimeInputsUnsupportedError";
+  }
+}
+
+/**
  * The closed diagnostic reason of a launch rejection: the structured code, suffixed with its closed
  * sub-reason when the rejection carries one, or the model-selection reason. Never free text.
  */
@@ -92,6 +105,7 @@ export function launchRejectionDiagnosticReason(error: unknown): string | undefi
   }
   if (error instanceof CodingRuntimeLaunchResolutionError) return error.reason;
   if (error instanceof CodingRuntimeAgentUnsupportedError) return "agent-unsupported";
+  if (error instanceof CodingRuntimeInputsUnsupportedError) return "inputs-unsupported";
   return undefined;
 }
 
@@ -139,6 +153,7 @@ export function launchModelRefusalReason(
 export function classifyLaunchRejection(error: unknown): CodingWorkbenchRuntimeFailureCode {
   // A request the runtime cannot honour is an invalid intent, not a missing authority.
   if (error instanceof CodingRuntimeAgentUnsupportedError) return "invalid-intent";
+  if (error instanceof CodingRuntimeInputsUnsupportedError) return "invalid-intent";
   if (!(error instanceof CodingRuntimeLaunchRejectedError)) return "authority-resolution-failed";
   return LAUNCH_FAILURE_CODES.get(error.failureCode) ?? "authority-resolution-failed";
 }

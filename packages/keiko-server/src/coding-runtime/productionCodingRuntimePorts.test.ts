@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CodexRuntimeControl } from "./codexRuntimeComposition.js";
 import type { OpenCodeRunPort } from "./opencodeRuntimeComposition.js";
-import type { PromptInputsRequest } from "./opencodePromptInputs.js";
+import type { AdmittedPromptInputs, PromptInputsRequest } from "./opencodePromptInputs.js";
 import type { CodingRuntimeManager } from "./codingRuntimeManager.js";
 import type { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
@@ -558,6 +558,263 @@ describe("production coding runtime turn ports", () => {
       const port = createOpenCodeRuntimeTurnPort({ ...base, admitPromptInputs, deliverPrompt });
       expect(port.admitPromptInputs).toBe(admitPromptInputs);
       expect(port.deliverPrompt).toBe(deliverPrompt);
+    });
+  });
+
+  // C02 (ADR-0137 D10): a turn may run as one of the runtime's slash commands. The dispatcher admits
+  // the inputs, confirms with the run's runtime that it lists the command, and only then reserves.
+  describe("slash commands (C02)", () => {
+    const COMMAND = { name: "review", argumentBytes: 9 };
+    const ADMITTED = { files: [], fileBytes: 0, referenceCount: 0, command: COMMAND };
+
+    function commandPort(
+      overrides: Partial<ProductionRuntimeRunRecord["turnPort"]> = {},
+    ): ProductionRuntimeRunRecord["turnPort"] {
+      return {
+        submitTurn: vi.fn(() => Promise.resolve(true)),
+        abortTurn: vi.fn(() => Promise.resolve(true)),
+        waitForTerminal: () => Promise.resolve("succeeded" as const),
+        admitPromptInputs: vi.fn((_runId: string, request: PromptInputsRequest) => ({
+          ok: true as const,
+          inputs: { ...ADMITTED, command: request.command ?? COMMAND },
+        })),
+        deliverPrompt: vi.fn(() => Promise.resolve(true)),
+        listCommands: vi.fn(() => Promise.resolve([{ name: "review" }])),
+        admitCommand: vi.fn((_runId: string, inputs: AdmittedPromptInputs) =>
+          Promise.resolve({ ok: true as const, inputs }),
+        ),
+        ...overrides,
+      };
+    }
+
+    function dispatching(turnPort: ProductionRuntimeRunRecord["turnPort"]) {
+      const run: ProductionRuntimeRunRecord = {
+        turnPort,
+        controller: new AbortController(),
+        operationGuard: createProductionRuntimeOperationGuard("run-1", () => true),
+      };
+      return createProductionRuntimeTaskDispatcher(new Map([["run-1", run]]));
+    }
+
+    const asCommand = (requestId = "cmd-1", expectedRevision = 4, taskIntent = "main branch") => ({
+      ...operation("run-1", requestId, expectedRevision, taskIntent),
+      command: { name: "review" },
+      correlationId: "corr-0123456789",
+    });
+
+    it("admits the command's inputs, confirms the runtime lists it and starts the turn with them", async () => {
+      const turnPort = commandPort();
+      const dispatcher = dispatching(turnPort);
+
+      await expect(dispatcher.dispatch(asCommand())).resolves.toMatchObject({ ok: true });
+
+      // The count of the argument bytes is all the port learns of the text for its log line.
+      expect(turnPort.admitPromptInputs).toHaveBeenCalledExactlyOnceWith("run-1", {
+        delivery: undefined,
+        references: undefined,
+        command: { name: "review", argumentBytes: "main branch".length },
+        correlationId: "corr-0123456789",
+        requestId: "cmd-1",
+      });
+      expect(turnPort.admitCommand).toHaveBeenCalledExactlyOnceWith("run-1", {
+        ...ADMITTED,
+        command: { name: "review", argumentBytes: "main branch".length },
+      });
+      expect(turnPort.submitTurn).toHaveBeenCalledExactlyOnceWith(
+        "run-1",
+        "main branch",
+        undefined,
+        undefined,
+        { ...ADMITTED, command: { name: "review", argumentBytes: "main branch".length } },
+      );
+    });
+
+    it("counts the argument bytes of multibyte text, and of an empty text", async () => {
+      const sizes: (number | undefined)[] = [];
+      const turnPort = commandPort({
+        admitPromptInputs: (_runId, request) => {
+          sizes.push(request.command?.argumentBytes);
+          return {
+            ok: true as const,
+            inputs: { ...ADMITTED, command: request.command ?? COMMAND },
+          };
+        },
+      });
+      const dispatcher = dispatching(turnPort);
+
+      await dispatcher.dispatch(asCommand("cmd-1", 4, "prüfen"));
+      await dispatcher.dispatch(asCommand("cmd-2", 5, ""));
+
+      expect(sizes).toEqual([Buffer.byteLength("prüfen", "utf8"), 0]);
+    });
+
+    it("refuses a command the runtime does not list before reserving, so the request can be retried", async () => {
+      const state = { listed: false };
+      const turnPort = commandPort({
+        admitCommand: (_runId, inputs) =>
+          Promise.resolve(
+            state.listed
+              ? { ok: true as const, inputs }
+              : { ok: false as const, reason: "command-unknown" as const },
+          ),
+      });
+      const dispatcher = dispatching(turnPort);
+
+      await expect(dispatcher.dispatch(asCommand("cmd-1", 4))).resolves.toEqual({
+        ok: false,
+        reason: "inputs-refused",
+      });
+      expect(turnPort.submitTurn).not.toHaveBeenCalled();
+
+      // Nothing was reserved or committed: the same request id at the same revision is admitted
+      // once the runtime lists the command.
+      state.listed = true;
+      await expect(dispatcher.dispatch(asCommand("cmd-1", 4))).resolves.toMatchObject({ ok: true });
+      expect(turnPort.submitTurn).toHaveBeenCalledOnce();
+    });
+
+    it("leaves the revision free for another request after a refusal", async () => {
+      const turnPort = commandPort({
+        admitCommand: () =>
+          Promise.resolve({ ok: false as const, reason: "command-unknown" as const }),
+      });
+      const dispatcher = dispatching(turnPort);
+
+      await dispatcher.dispatch(asCommand("cmd-1", 4));
+
+      await expect(
+        dispatcher.dispatch(operation("run-1", "plain-1", 4, "plain text")),
+      ).resolves.toMatchObject({ ok: true });
+    });
+
+    it("refuses a command on a port that cannot confirm one, and never submits it", async () => {
+      const turnPort = commandPort({ admitCommand: undefined, listCommands: undefined });
+      const dispatcher = dispatching(turnPort);
+
+      await expect(dispatcher.dispatch(asCommand())).resolves.toEqual({
+        ok: false,
+        reason: "inputs-refused",
+      });
+      await expect(dispatcher.replace?.(asCommand("cmd-2", 4))).resolves.toEqual({
+        ok: false,
+        reason: "inputs-refused",
+      });
+      expect(turnPort.submitTurn).not.toHaveBeenCalled();
+      expect(turnPort.abortTurn).not.toHaveBeenCalled();
+    });
+
+    it("refuses a command on a port that takes no prompt inputs at all (a mapped profile or Codex)", async () => {
+      const turnPort = commandPort({
+        admitPromptInputs: undefined,
+        deliverPrompt: undefined,
+        admitCommand: undefined,
+        listCommands: undefined,
+      });
+      const dispatcher = dispatching(turnPort);
+
+      await expect(dispatcher.dispatch(asCommand())).resolves.toEqual({
+        ok: false,
+        reason: "inputs-refused",
+      });
+      expect(turnPort.submitTurn).not.toHaveBeenCalled();
+    });
+
+    it("never delivers a command into a running turn: a delivery that names one is refused", async () => {
+      const turnPort = commandPort();
+      const deliver = dispatching(turnPort).deliver;
+      if (deliver === undefined) throw new Error("deliver dispatcher is unavailable");
+
+      await expect(deliver({ ...asCommand(), delivery: "queue" as const })).resolves.toEqual({
+        ok: false,
+        reason: "inputs-refused",
+      });
+      expect(turnPort.deliverPrompt).not.toHaveBeenCalled();
+      expect(turnPort.admitPromptInputs).not.toHaveBeenCalled();
+    });
+
+    it("admits and confirms a replacement's command before it interrupts the paused predecessor", async () => {
+      const order: string[] = [];
+      const turnPort = commandPort({
+        admitPromptInputs: vi.fn((_runId: string, request: PromptInputsRequest) => {
+          order.push("admit");
+          return {
+            ok: true as const,
+            inputs: { ...ADMITTED, command: request.command ?? COMMAND },
+          };
+        }),
+        admitCommand: vi.fn((_runId: string, inputs: AdmittedPromptInputs) => {
+          order.push("confirm");
+          return Promise.resolve({ ok: true as const, inputs });
+        }),
+        abortTurn: vi.fn(() => {
+          order.push("abort");
+          return Promise.resolve(true);
+        }),
+        submitTurn: vi.fn(() => {
+          order.push("submit");
+          return Promise.resolve(true);
+        }),
+      });
+      const dispatcher = dispatching(turnPort);
+
+      await expect(dispatcher.replace?.(asCommand("replace-1", 4))).resolves.toMatchObject({
+        ok: true,
+      });
+
+      expect(order).toEqual(["admit", "confirm", "abort", "submit"]);
+    });
+
+    it("refuses a replacement whose command is unknown without interrupting the predecessor", async () => {
+      const turnPort = commandPort({
+        admitCommand: () =>
+          Promise.resolve({ ok: false as const, reason: "command-unknown" as const }),
+      });
+      const dispatcher = dispatching(turnPort);
+
+      await expect(dispatcher.replace?.(asCommand("replace-1", 4))).resolves.toEqual({
+        ok: false,
+        reason: "inputs-refused",
+      });
+      expect(turnPort.abortTurn).not.toHaveBeenCalled();
+    });
+
+    it("lists a live run's commands through its port, and offers none for any other run", async () => {
+      const turnPort = commandPort();
+      const dispatcher = dispatching(turnPort);
+
+      await expect(dispatcher.commands?.("run-1", "corr-0123456789")).resolves.toEqual([
+        { name: "review" },
+      ]);
+      expect(turnPort.listCommands).toHaveBeenCalledExactlyOnceWith("run-1", "corr-0123456789");
+      await expect(dispatcher.commands?.("run-9")).resolves.toBeUndefined();
+      await expect(
+        dispatching(commandPort({ listCommands: undefined })).commands?.("run-1"),
+      ).resolves.toBeUndefined();
+    });
+
+    it("forwards a profile's command port from the OpenCode run port, and none from one without it", () => {
+      const listCommands = vi.fn(() => Promise.resolve(undefined));
+      const admitCommand = vi.fn((_runId: string, inputs: AdmittedPromptInputs) =>
+        Promise.resolve({ ok: true as const, inputs }),
+      );
+      const base: OpenCodeRunPort = {
+        submitTask: () => Promise.resolve(true),
+        abortTask: () => Promise.resolve(true),
+        waitForTerminal: () => Promise.resolve(true),
+        listQuestions: () => Promise.resolve([]),
+        answerQuestion: () => Promise.resolve(false),
+        rejectQuestion: () => Promise.resolve(false),
+        replyPermission: () => Promise.resolve(false),
+      };
+      expect(createOpenCodeRuntimeTurnPort(base).listCommands).toBeUndefined();
+      expect(createOpenCodeRuntimeTurnPort(base).admitCommand).toBeUndefined();
+      expect(
+        createOpenCodeRuntimeTurnPort({ ...base, listCommands }).admitCommand,
+        "a listing without the confirmation is not a command port",
+      ).toBeUndefined();
+      const port = createOpenCodeRuntimeTurnPort({ ...base, listCommands, admitCommand });
+      expect(port.listCommands).toBe(listCommands);
+      expect(port.admitCommand).toBe(admitCommand);
     });
   });
 

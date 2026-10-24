@@ -6,11 +6,21 @@ import { dirname, join } from "node:path";
 import type { Readable } from "node:stream";
 import { describe, expect, it } from "vitest";
 import {
+  CODING_WORKBENCH_BUILT_IN_COMMAND_NAMES,
+  validateCodingWorkbenchRuntimeCommandsChannelPayload,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
+import {
   buildRuntimeGatewaySeatbeltCommand,
   createRuntimeGatewayConfinement,
   resolveDarwinGitExecutable,
 } from "@oscharko-dev/keiko-sandbox";
 import { buildOpenCodeLaunchProfile, openCodeConfigDirectory } from "./opencodeLaunchProfile.js";
+import {
+  commandDisplayText,
+  createOpenCodeCommandPresentation,
+  createOpenCodeCommandsRunPort,
+  projectCommands,
+} from "./opencodeCommands.js";
 import {
   createOpenCodePromptInputsRunPort,
   openCodePromptInputs,
@@ -26,16 +36,19 @@ import { createBufferedServerLogSink } from "../../../../tests/support/buffered-
 import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import { createOpenCodeV2HistoryProjection } from "./opencodeV2History.js";
 import {
+  OpenCodeV2HttpStatusError,
   createOpenCodeV2HttpClient,
   parseOpenCodeV2ChildEndpoint,
+  type OpenCodeV2Command,
   type OpenCodeV2HttpClient,
 } from "./opencodeV2HttpClient.js";
 import type { CodingHistoryMessage } from "./codingRuntimeHistory.js";
 
 /**
- * Original-runtime proof of the two prompt inputs a native run takes beyond its text (#3897,
- * ADR-0137 D10, parity rows S07 and S15): a message sent while a turn runs (`delivery: "steer"` or
- * `"queue"`) and a workspace file the human referenced (`files`). The pinned executable runs under
+ * Original-runtime proof of the prompt inputs a native run takes beyond its text (#3897, ADR-0137
+ * D10, parity rows S07, S15 and C02): a message sent while a turn runs (`delivery: "steer"` or
+ * `"queue"`), a workspace file the human referenced (`files`) on a follow-up and on the first prompt,
+ * and a turn run as one of the runtime's slash commands (`session.command`). The pinned executable runs under
  * the real native Seatbelt wrapper with the profile `buildOpenCodeLaunchProfile` produces, behind
  * a scripted Model Gateway stub that records every model request; the prompts are sent through
  * Keiko's own V2 client, and the attachments are the ones Keiko's own resolver produces.
@@ -922,6 +935,509 @@ describe("pinned native OpenCode prompt inputs", () => {
             files: [{ uri: `file://${missing}`, name: "missing.md" }],
           }),
         ).rejects.toThrow("opencode-v2-response-invalid");
+      });
+    },
+    120_000,
+  );
+});
+
+// C02 (ADR-0137 D10): the runtime's slash commands. `command.list` names them, `session.command` runs
+// one as a turn: the runtime expands its own template around the text and runs the execution the
+// way it runs a prompt. The body has no message id and no metadata, which is why a command turn
+// carries no hidden context and is shown by Keiko's own presentation of what the operator typed.
+describe("pinned native OpenCode slash commands", () => {
+  const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
+
+  /** The runtime registers its built-ins asynchronously after the instance boots. */
+  async function listed(run: Run): Promise<readonly OpenCodeV2Command[]> {
+    await expect
+      .poll(async () => (await run.client.commands()).length, { timeout: 30_000 })
+      .toBeGreaterThan(0);
+    return await run.client.commands();
+  }
+
+  it.skipIf(skip)(
+    "lists exactly the built-in commands the contract names, with the producer's descriptions",
+    async () => {
+      await withRun([], async (run) => {
+        const commands = await listed(run);
+
+        expect(commands.map(({ name }) => name).sort()).toEqual([
+          ...CODING_WORKBENCH_BUILT_IN_COMMAND_NAMES,
+        ]);
+        expect(commands).toEqual([
+          { name: "init", description: "guided AGENTS.md setup" },
+          {
+            name: "review",
+            description: "review changes [commit|branch|pr], defaults to uncommitted",
+          },
+        ]);
+        // The raw route carries the location beside the list and the client reads only the list.
+        const raw = await run.raw("GET", "/api/command");
+        expect(raw.status).toBe(200);
+        expect(Object.keys(raw.body as object).sort()).toEqual(["data", "location"]);
+        // What Keiko hands the browser is a listing its own contract accepts.
+        const projection = projectCommands(commands);
+        expect(projection.skippedCount).toBe(0);
+        expect(
+          validateCodingWorkbenchRuntimeCommandsChannelPayload({
+            session: "active",
+            commands: projection.commands,
+          }).ok,
+        ).toBe(true);
+      });
+    },
+    120_000,
+  );
+
+  // The producer's review template reaches the model request and the execution ends idle, exactly
+  // like a prompt turn: Keiko's one settlement covers it.
+  it.skipIf(skip)(
+    "runs review as a turn: the model receives the producer's review template and the execution ends idle",
+    async () => {
+      await withRun(["text"], async (run) => {
+        await listed(run);
+
+        await run.client.command(run.sessionId, "review", "the main branch");
+        await settled(run);
+
+        expect(run.gateway.requests).toHaveLength(1);
+        const modelSaw = lastUserContent(run.gateway.requests[0]);
+        expect(modelSaw).toContain("You are a code reviewer");
+        expect(modelSaw).toContain("Review all uncommitted changes");
+        // The text after the command is the template's input.
+        expect(modelSaw).toContain("Input: the main branch");
+        expect(count(run.events, "session.execution.started")).toBe(1);
+        expect(count(run.events, "session.execution.succeeded")).toBe(1);
+
+        const messages = await run.client.messages(run.sessionId);
+        expect(messages.map((message) => message.type)).toEqual(["user", "assistant", "idle"]);
+        expect(messages.at(-1)).toMatchObject({ type: "idle", outcome: "succeeded" });
+        // The runtime stores the expanded template as the user message and marks no command on it.
+        const user = messages.find((message) => message.type === "user");
+        expect(String(user?.text)).toContain("You are a code reviewer");
+        expect(Object.keys(user ?? {}).sort()).toEqual(["id", "text", "time", "type"]);
+      });
+    },
+    120_000,
+  );
+
+  it.skipIf(skip)(
+    "runs init with no arguments and neither built-in template substitutes a shell command",
+    async () => {
+      await withRun(["text", "text"], async (run) => {
+        await listed(run);
+
+        await run.client.command(run.sessionId, "init", "");
+        await settled(run);
+        const initSaw = lastUserContent(run.gateway.requests[0]);
+        expect(initSaw).toContain("Create or update");
+        expect(initSaw).toContain("AGENTS.md");
+
+        await run.client.command(run.sessionId, "review", "");
+        await expect
+          .poll(() => count(run.events, "session.execution.succeeded"), { timeout: 30_000 })
+          .toBe(2);
+        // A template that substituted a shell command would run it in the runtime, outside the
+        // native policy hook. The pinned built-ins do not; the list above is what pins that.
+        const templates = (await run.client.messages(run.sessionId))
+          .filter((message) => message.type === "user")
+          .map((message) => String(message.text));
+        expect(templates).toHaveLength(2);
+        for (const template of templates) expect(template).not.toMatch(/![`]/u);
+      });
+    },
+    120_000,
+  );
+
+  it.skipIf(skip)(
+    "answers an unknown command with 404 and starts nothing",
+    async () => {
+      await withRun(["text"], async (run) => {
+        await listed(run);
+
+        const failure: unknown = await run.client
+          .command(run.sessionId, "no-such-command", "")
+          .catch((error: unknown) => error);
+
+        expect(failure).toBeInstanceOf(OpenCodeV2HttpStatusError);
+        expect((failure as OpenCodeV2HttpStatusError).status).toBe(404);
+        const raw = await run.raw("POST", `/api/session/${run.sessionId}/command`, {
+          name: "no-such-command",
+          text: "",
+        });
+        expect(raw).toMatchObject({ status: 404, body: { _tag: "CommandNotFoundError" } });
+        expect(run.gateway.requests).toHaveLength(0);
+        expect(count(run.events, "session.execution.started")).toBe(0);
+      });
+    },
+    120_000,
+  );
+
+  // Why Keiko dispatches a command only as the start of a turn: sent while a turn runs, the runtime
+  // takes it into the running execution at the next step, like a steered message, where it would
+  // steer a turn Keiko's accounting believes it is not waiting on.
+  it.skipIf(skip)(
+    "takes a command sent to a running turn into that execution instead of starting another",
+    async () => {
+      await withRun(["tool-held", "text"], async (run) => {
+        await listed(run);
+        await run.client.prompt(run.sessionId, "First prompt");
+        await expect.poll(() => run.gateway.requests.length, { timeout: 30_000 }).toBe(1);
+
+        await run.client.command(run.sessionId, "review", "");
+        run.gateway.release();
+        await settled(run);
+
+        expect(count(run.events, "session.execution.started")).toBe(1);
+        expect(run.gateway.requests).toHaveLength(2);
+        expect(conversation(run.gateway.requests[1]).map((message) => message.role)).toEqual([
+          "user",
+          "assistant",
+          "tool",
+          "user",
+        ]);
+        expect(lastUserContent(run.gateway.requests[1])).toContain("You are a code reviewer");
+      });
+    },
+    120_000,
+  );
+
+  it.skipIf(skip)(
+    "attaches a referenced file to a command turn like it does to a prompt",
+    async () => {
+      await withRun(["text"], async (run) => {
+        await listed(run);
+        const resolved = resolvePromptReferences({
+          workspaceRoot: run.fixture.workspace,
+          references: [{ path: NOTES_FILE }],
+          remainingRunBytes: 1_000_000,
+        });
+        if (!resolved.ok) throw new Error("expected the reference to resolve");
+
+        await run.client.command(run.sessionId, "review", `@${NOTES_FILE}`, undefined, {
+          files: resolved.files,
+        });
+        await settled(run);
+
+        const modelSaw = lastUserContent(run.gateway.requests[0]);
+        expect(modelSaw).toContain("You are a code reviewer");
+        expect(modelSaw).toContain(`Attached file: ${NOTES_FILE}`);
+        expect(modelSaw).toContain(NOTES_CANARY);
+      });
+    },
+    120_000,
+  );
+
+  // The runtime marks no command on the stored message, so Keiko presents the turn by what the
+  // operator typed: the armed presentation binds the first new user message after the post.
+  it.skipIf(skip)(
+    "presents a command turn by what was typed in the timeline and in Coding History, never the template",
+    async () => {
+      await withRun(["text"], async (run) => {
+        await listed(run);
+        const presentation = createOpenCodeCommandPresentation();
+        const captured: CodingHistoryMessage[] = [];
+        const projection = createOpenCodeV2HistoryProjection({
+          runId: RUN_ID,
+          activityLog: undefined,
+          toolProfile: "native",
+          userMessageDisplay: presentation.displayFor,
+          captureMessages: (messages): boolean => {
+            captured.splice(0, captured.length, ...messages);
+            return true;
+          },
+        });
+        const project = async (): Promise<string> => {
+          const events = projection.project(
+            run.sessionId,
+            await run.client.messages(run.sessionId),
+            undefined,
+          );
+          return JSON.stringify(
+            events.flatMap((event) => {
+              const signal = projection.takeSignal(event);
+              return signal === undefined ? [] : [signal];
+            }),
+          );
+        };
+
+        presentation.arm(commandDisplayText("review", "the main branch"));
+        await run.client.command(run.sessionId, "review", "the main branch");
+        await settled(run);
+        const shown = await project();
+
+        expect(shown).toContain("/review the main branch");
+        expect(shown).not.toContain("You are a code reviewer");
+        expect(captured.find((message) => message.role === "user")?.content).toBe(
+          "/review the main branch",
+        );
+        expect(JSON.stringify(captured)).not.toContain("You are a code reviewer");
+        // The same projection read again keeps the presentation.
+        expect(await project()).toContain("/review the main branch");
+      });
+    },
+    120_000,
+  );
+});
+
+/**
+ * Keiko's own admission over the real session: the production task dispatcher with the run's real
+ * prompt-input and command ports, and a turn port whose submission is the call the composition makes
+ * for a turn's admitted inputs (a prompt with the attachments, or the session command). The dispatcher
+ * gives the stale-revision, single-use request id and refusal semantics of a Workbench request; the
+ * composition's own mapping from inputs to the HTTP call is pinned in `opencodeRuntimeComposition.test.ts`.
+ */
+interface TurnPath {
+  readonly sink: ReturnType<typeof createBufferedServerLogSink>;
+  readonly dispatch: (operation: {
+    readonly requestId: string;
+    readonly expectedRevision: number;
+    readonly taskIntent: string;
+    readonly command?: { readonly name: string };
+    readonly references?: readonly { readonly path: string }[];
+  }) => Promise<{ readonly ok: boolean; readonly reason?: string | undefined }>;
+}
+
+function turnPath(run: Run): TurnPath {
+  const sink = createBufferedServerLogSink();
+  const promptRun: PromptInputsRun = {
+    runId: RUN_ID,
+    workspaceRoot: run.fixture.workspace,
+    sessionId: run.sessionId,
+    client: run.client,
+    runtimeAdapter: { turnInFlight: (): boolean => false },
+    ready: true,
+  };
+  const capabilities = openCodePromptInputs("native");
+  const inputs = createOpenCodePromptInputsRunPort({
+    readyRun: (): PromptInputsRun => promptRun,
+    capabilities,
+    activityLog: sink,
+    recordPostFailure: (): void => undefined,
+  });
+  const commands = createOpenCodeCommandsRunPort({
+    readyRun: () => ({ runId: RUN_ID, client: run.client }),
+    capabilities,
+    activityLog: sink,
+  });
+  const dispatcher = createProductionRuntimeTaskDispatcher(
+    new Map([
+      [
+        RUN_ID,
+        {
+          turnPort: {
+            submitTurn: async (_runId, text, _context, _agent, admitted): Promise<boolean> => {
+              const files = admitted?.files ?? [];
+              const withFiles = files.length === 0 ? undefined : { files };
+              if (admitted?.command !== undefined) {
+                await run.client.command(
+                  run.sessionId,
+                  admitted.command.name,
+                  text,
+                  undefined,
+                  withFiles,
+                );
+              } else {
+                await run.client.prompt(run.sessionId, text, undefined, undefined, withFiles);
+              }
+              return true;
+            },
+            abortTurn: (): Promise<boolean> => Promise.resolve(true),
+            waitForTerminal: (): Promise<"succeeded"> => Promise.resolve("succeeded" as const),
+            admitPromptInputs: inputs.admitPromptInputs,
+            deliverPrompt: inputs.deliverPrompt,
+            listCommands: commands.listCommands,
+            admitCommand: commands.admitCommand,
+          },
+          controller: new AbortController(),
+          operationGuard: createProductionRuntimeOperationGuard(RUN_ID, (): boolean => true),
+        },
+      ],
+    ]),
+    { record: (): void => undefined },
+  );
+  return {
+    sink,
+    dispatch: (operation) => dispatcher.dispatch({ runId: RUN_ID, ...operation }),
+  };
+}
+
+const lineOf = (event: unknown): Record<string, unknown> =>
+  (event as { extra: Record<string, unknown> }).extra;
+
+describe("pinned native OpenCode commands and first-prompt references through Keiko's admission", () => {
+  const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
+
+  it.skipIf(skip)(
+    "starts a turn as review through the production dispatcher and records the command body-free",
+    async () => {
+      await withRun(["text"], async (run) => {
+        await expect
+          .poll(async () => (await run.client.commands()).length, { timeout: 30_000 })
+          .toBeGreaterThan(0);
+        const path = turnPath(run);
+
+        await expect(
+          path.dispatch({
+            requestId: "req-1",
+            expectedRevision: 1,
+            taskIntent: "the main branch",
+            command: { name: "review" },
+          }),
+        ).resolves.toMatchObject({ ok: true });
+        await settled(run);
+
+        expect(lastUserContent(run.gateway.requests[0])).toContain("Input: the main branch");
+        expect(lastUserContent(run.gateway.requests[0])).toContain("You are a code reviewer");
+        expect(path.sink.events).toHaveLength(0);
+        // A replay of the settled request is refused and sends nothing.
+        await expect(
+          path.dispatch({
+            requestId: "req-1",
+            expectedRevision: 1,
+            taskIntent: "the main branch",
+            command: { name: "review" },
+          }),
+        ).resolves.toEqual({ ok: false });
+        expect(run.gateway.requests).toHaveLength(1);
+      });
+    },
+    120_000,
+  );
+
+  it.skipIf(skip)(
+    "refuses a command the runtime does not list before anything is reserved, and the request id stays usable",
+    async () => {
+      await withRun(["text"], async (run) => {
+        await expect
+          .poll(async () => (await run.client.commands()).length, { timeout: 30_000 })
+          .toBeGreaterThan(0);
+        const path = turnPath(run);
+
+        await expect(
+          path.dispatch({
+            requestId: "req-1",
+            expectedRevision: 1,
+            taskIntent: "",
+            command: { name: "no-such-command" },
+          }),
+        ).resolves.toEqual({ ok: false, reason: "inputs-refused" });
+        expect(run.gateway.requests).toHaveLength(0);
+        expect(count(run.events, "session.inbox.enqueued")).toBe(0);
+        expect(path.sink.events.map(lineOf)).toMatchObject([
+          {
+            outcome: "refused",
+            reason: "command-unknown",
+            command: "other",
+            commandArgumentBytes: 0,
+          },
+        ]);
+
+        // Nothing was reserved: the same request id and revision run a listed command.
+        await expect(
+          path.dispatch({
+            requestId: "req-1",
+            expectedRevision: 1,
+            taskIntent: "",
+            command: { name: "init" },
+          }),
+        ).resolves.toMatchObject({ ok: true });
+        await settled(run);
+        expect(lastUserContent(run.gateway.requests[0])).toContain("AGENTS.md");
+      });
+    },
+    120_000,
+  );
+
+  // S15: the first prompt resolves its references against the run's own workspace when the turn is
+  // dispatched, through the same admission as a follow-up's, and the producer attaches the file.
+  it.skipIf(skip)(
+    "attaches a file referenced by the first prompt to the first model request",
+    async () => {
+      await withRun(["text"], async (run) => {
+        const path = turnPath(run);
+
+        await expect(
+          path.dispatch({
+            requestId: "start-1",
+            expectedRevision: 1,
+            taskIntent: `Summarize @${NOTES_FILE}`,
+            references: [{ path: NOTES_FILE }],
+          }),
+        ).resolves.toMatchObject({ ok: true });
+        await settled(run);
+
+        expect(run.gateway.requests).toHaveLength(1);
+        const modelSaw = lastUserContent(run.gateway.requests[0]);
+        expect(modelSaw).toContain(`Summarize @${NOTES_FILE}`);
+        expect(modelSaw).toContain(`Attached file: ${NOTES_FILE}`);
+        expect(modelSaw).toContain(NOTES_CANARY);
+        // The typed text stays the visible first message; the bytes ride in `files` alone.
+        const user = (await run.client.messages(run.sessionId)).find(
+          (message) => message.type === "user",
+        );
+        expect(user?.text).toBe(`Summarize @${NOTES_FILE}`);
+        expect(path.sink.events.map(lineOf)).toEqual([]);
+      });
+    },
+    120_000,
+  );
+
+  it.skipIf(skip)(
+    "refuses the first prompt for a hostile reference and sends nothing, rather than starting without it",
+    async () => {
+      await withRun(["text"], async (run) => {
+        writeFileSync(join(run.fixture.workspace, ".env"), "TOKEN=SENSITIVE-CANARY\n");
+        const path = turnPath(run);
+
+        for (const [requestId, reference, reason] of [
+          ["start-1", ".env", "reference-sensitive"],
+          ["start-2", "missing.md", "reference-unreadable"],
+          ["start-3", "../outside.md", "reference-invalid"],
+        ] as const) {
+          await expect(
+            path.dispatch({
+              requestId,
+              expectedRevision: 1,
+              taskIntent: `Look at @${reference}`,
+              references: [{ path: NOTES_FILE }, { path: reference }],
+            }),
+          ).resolves.toEqual({ ok: false, reason: "inputs-refused" });
+          expect(path.sink.events.map(lineOf).at(-1)).toMatchObject({ outcome: "refused", reason });
+        }
+
+        expect(run.gateway.requests).toHaveLength(0);
+        expect(count(run.events, "session.inbox.enqueued")).toBe(0);
+        expect(JSON.stringify(path.sink.events)).not.toMatch(/SENSITIVE|\.env|missing\.md/u);
+      });
+    },
+    120_000,
+  );
+
+  it.skipIf(skip)(
+    "starts a turn that is both a command and carries a file, attaching the file to the command's message",
+    async () => {
+      await withRun(["text"], async (run) => {
+        await expect
+          .poll(async () => (await run.client.commands()).length, { timeout: 30_000 })
+          .toBeGreaterThan(0);
+        const path = turnPath(run);
+
+        await expect(
+          path.dispatch({
+            requestId: "start-1",
+            expectedRevision: 1,
+            taskIntent: `@${NOTES_FILE}`,
+            command: { name: "review" },
+            references: [{ path: NOTES_FILE }],
+          }),
+        ).resolves.toMatchObject({ ok: true });
+        await settled(run);
+
+        const modelSaw = lastUserContent(run.gateway.requests[0]);
+        expect(modelSaw).toContain("You are a code reviewer");
+        expect(modelSaw).toContain(NOTES_CANARY);
       });
     },
     120_000,

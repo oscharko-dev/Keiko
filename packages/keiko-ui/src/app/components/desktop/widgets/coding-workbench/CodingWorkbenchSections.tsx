@@ -20,16 +20,25 @@ import type {
   ModelReasoningEffort,
 } from "@oscharko-dev/keiko-contracts";
 import { isCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import type { CodingWorkbenchCommandRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import { CODING_WORKBENCH_TASK_INTENT_MAX_CHARS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { reportTaskSubmission } from "./codingWorkbenchTaskSubmission";
 import { CodingWorkbenchAgentToggle } from "./CodingWorkbenchAgentToggle";
 import { FileReferenceChips, FileReferencePopover } from "./CodingWorkbenchFileReferences";
 import promptStyles from "./CodingWorkbenchPromptInputs.module.css";
+import { SlashCommandPopover } from "./CodingWorkbenchSlashMenu";
 import type { PromptDeliveryNotice } from "./usePromptDeliveryNotice";
+import { activeRunState } from "./codingWorkbenchLabels";
+import type { SlashSubmission } from "./codingWorkbenchSlashCommands";
 import {
   useFileReferencePicker,
   type FileReferencePicker,
 } from "./useCodingWorkbenchFileReferences";
+import {
+  useSlashCommandMenu,
+  type DraftCommand,
+  type SlashMenu,
+} from "./useCodingWorkbenchSlashMenu";
 import {
   useCodingWorkbenchTranslate,
   type CodingWorkbenchTranslate,
@@ -83,12 +92,28 @@ export function WorkbenchWelcome(): ReactNode {
   );
 }
 
+/** What the first prompt of a new task carries beside its text. */
+export interface TaskStartInputs {
+  /** The `@` files the text references, within the run's workspace. */
+  readonly references: readonly CodingWorkbenchPromptReference[];
+  /** The slash command the task starts with; the text is then its arguments. */
+  readonly command?: CodingWorkbenchCommandRequest;
+}
+
 export interface TaskComposerActions {
-  readonly onStart: (draft: string) => void;
+  /** Starts a task; `inputs` only when the draft references `@` files or opens with a command. */
+  readonly onStart: (draft: string, inputs?: TaskStartInputs) => void;
   readonly onPause: () => void;
   readonly onResume: () => void;
-  /** A follow-up to a paused run; `references` only when the draft carries `@` files. */
-  readonly onSend: (draft: string, references?: readonly CodingWorkbenchPromptReference[]) => void;
+  /**
+   * A follow-up to a paused run; `references` only when the draft carries `@` files, `command`
+   * only when it opens with an offered slash command (then `draft` is the command's arguments).
+   */
+  readonly onSend: (
+    draft: string,
+    references?: readonly CodingWorkbenchPromptReference[],
+    command?: CodingWorkbenchCommandRequest,
+  ) => void;
   /**
    * A message for the turn that is running: sent into it (`steer`) or behind it (`queue`)
    * (ADR-0137 D10). Absent where the window offers no delivery.
@@ -172,11 +197,16 @@ interface TaskStartSectionProps {
   readonly onAgentChange: (agent: CodingWorkbenchAgent) => void;
   /**
    * What the server says the run's runtime can do with a prompt's inputs (ADR-0137 D10). Absent
-   * offers neither Send now / Queue while a turn runs nor the `@` file picker.
+   * offers neither Send now / Queue while a turn runs, nor the `@` file picker, nor the `/` menu.
    */
   readonly promptInputs?: CodingWorkbenchRuntimePromptInputs | undefined;
-  /** The run's workspace root the `@` picker searches; no root, no picker. */
+  /**
+   * The workspace root the `@` picker searches: the run's own while it is live, the root a new task
+   * will start from before there is a run. No root, no picker.
+   */
   readonly referenceRoot?: string | null | undefined;
+  /** The run a paused composer follows up; its runtime lists the slash commands it offers. */
+  readonly runId?: string | undefined;
   /** What the last message sent to the running turn came to; announced beside the composer. */
   readonly deliveryNotice?: PromptDeliveryNotice | undefined;
 }
@@ -191,8 +221,10 @@ interface TaskComposerController {
   readonly submitFeedbackId: string;
   /** `mode` is set by Send now and Queue; a plain submit lets the run state decide. */
   readonly submit: (mode?: CodingWorkbenchPromptDelivery) => void;
-  /** The `@` file picker; inert unless the run offers references and has a workspace root. */
+  /** The `@` file picker; inert unless the runtime offers references and there is a root. */
   readonly picker: FileReferencePicker;
+  /** The `/` command menu; inert unless the runtime offers commands and no turn is running. */
+  readonly menu: SlashMenu;
   /** Whether Send now and Queue are offered: a turn is running and the runtime takes messages. */
   readonly deliveryEnabled: boolean;
   /** True while a message cannot be sent now: an action is pending or the draft is empty. */
@@ -201,10 +233,13 @@ interface TaskComposerController {
   readonly onTextChange: (value: string, cursor: number | null) => void;
 }
 
+const ORDINARY_DRAFT: DraftCommand = { submission: null, pending: false };
+
 function submitBlockedReason(
   input: TaskStartSectionProps,
   t: CodingWorkbenchTranslate,
   mode?: CodingWorkbenchPromptDelivery,
+  draftCommand: DraftCommand = ORDINARY_DRAFT,
 ): string | null {
   if (input.mutationPending) return t("codingWorkbench.composer.blocked.busy");
   if (input.runState === "running") {
@@ -213,7 +248,21 @@ function submitBlockedReason(
       ? t("codingWorkbench.composer.blocked.emptyMessage")
       : null;
   }
-  return emptySubmitReason(input, t) ?? unavailableSubmitReason(input, t);
+  return (
+    emptySubmitReason(input, t) ??
+    unavailableSubmitReason(input, t) ??
+    commandsPendingReason(draftCommand, t)
+  );
+}
+
+// A draft that opens like a command waits while the run's listing says whether it is one: sending it
+// now would send "/review" to the model as text. (A bare command is not an empty draft: the draft
+// holds the `/name`, and only the text sent after it may be empty.)
+function commandsPendingReason(
+  draftCommand: DraftCommand,
+  t: CodingWorkbenchTranslate,
+): string | null {
+  return draftCommand.pending ? t("codingWorkbench.composer.blocked.commandsLoading") : null;
 }
 
 function emptySubmitReason(
@@ -249,10 +298,22 @@ function sendFollowUp(
   input: TaskStartSectionProps,
   draft: string,
   references: readonly CodingWorkbenchPromptReference[],
+  command: CodingWorkbenchCommandRequest | undefined,
 ): void {
-  // The historical call stays exactly as it was when the draft references no file.
-  if (references.length === 0) input.actions.onSend(draft);
+  // The historical call stays exactly as it was when the draft references no file and names no command.
+  if (command !== undefined) input.actions.onSend(draft, references, command);
+  else if (references.length === 0) input.actions.onSend(draft);
   else input.actions.onSend(draft, references);
+}
+
+function sendStart(
+  input: TaskStartSectionProps,
+  draft: string,
+  references: readonly CodingWorkbenchPromptReference[],
+  command: CodingWorkbenchCommandRequest | undefined,
+): void {
+  if (command === undefined && references.length === 0) input.actions.onStart(draft);
+  else input.actions.onStart(draft, { references, ...(command === undefined ? {} : { command }) });
 }
 
 // A running turn takes a message when the runtime offers it and there is one; Enter on an empty
@@ -277,6 +338,7 @@ function submitTask(
   displayedDraft: string,
   mode: CodingWorkbenchPromptDelivery | undefined,
   references: readonly CodingWorkbenchPromptReference[],
+  slash: SlashSubmission | null,
 ): void {
   if (input.runState === "running") {
     submitRunning(input, displayedDraft, mode, references);
@@ -284,8 +346,16 @@ function submitTask(
   }
   const kind = input.runState === "paused" ? "follow-up" : "start";
   reportTaskSubmission(displayedDraft, input.taskIntent, kind);
-  if (kind === "follow-up") sendFollowUp(input, displayedDraft, references);
-  else input.actions.onStart(displayedDraft);
+  // A recognized command sends its name and the text after it instead of the raw draft.
+  const text = slash?.text ?? displayedDraft;
+  if (kind === "follow-up") sendFollowUp(input, text, references, slash?.command);
+  else sendStart(input, text, references, slash?.command);
+}
+
+/** The two pop-up lists the textarea drives: `@` files and `/` commands. */
+interface ComposerLists {
+  readonly picker: FileReferencePicker;
+  readonly menu: SlashMenu;
 }
 
 interface ComposerSubmit {
@@ -298,23 +368,28 @@ function useComposerSubmit(
   input: TaskStartSectionProps,
   t: CodingWorkbenchTranslate,
   textareaRef: RefObject<HTMLTextAreaElement | null>,
-  picker: FileReferencePicker,
+  lists: ComposerLists,
 ): ComposerSubmit {
   const { onTaskIntentChange, taskIntent } = input;
+  const { picker, menu } = lists;
   const [blockedSubmitAttempted, setBlockedSubmitAttempted] = useState(false);
-  const blockedReason = submitBlockedReason(input, t);
+  const blockedReason = submitBlockedReason(input, t, undefined, menu.inspect(taskIntent));
   // Send now and Queue are blocked by an empty draft, which a plain submit while running is not.
   const feedbackReason =
     blockedReason ?? (canDeliver(input) ? submitBlockedReason(input, t, "steer") : null);
   const submit = (mode?: CodingWorkbenchPromptDelivery): void => {
     const displayedDraft = textareaRef.current?.value ?? taskIntent;
     if (displayedDraft !== taskIntent) onTaskIntentChange(displayedDraft);
-    if (submitBlockedReason({ ...input, taskIntent: displayedDraft }, t, mode) !== null) {
+    const draftCommand = menu.inspect(displayedDraft);
+    if (
+      submitBlockedReason({ ...input, taskIntent: displayedDraft }, t, mode, draftCommand) !== null
+    ) {
       setBlockedSubmitAttempted(true);
       return;
     }
     setBlockedSubmitAttempted(false);
-    submitTask(input, displayedDraft, mode, picker.referencesFor(displayedDraft));
+    const references = picker.referencesFor(displayedDraft);
+    submitTask(input, displayedDraft, mode, references, draftCommand.submission);
   };
   const feedbackShown = feedbackReason !== null;
   useEffect(() => {
@@ -336,6 +411,12 @@ function isQueueChord(event: KeyboardEvent<HTMLTextAreaElement>): boolean {
   );
 }
 
+// The `@` picker is offered where a prompt can carry files: to a turn that takes a message, to a
+// paused run's follow-up, and to a task that has no run yet (its first prompt).
+function referencesOffered(runState: CodingWorkbenchRuntimeStateName | undefined): boolean {
+  return runState === "running" || runState === "paused" || !activeRunState(runState);
+}
+
 function useComposerPicker(
   input: TaskStartSectionProps,
   textareaRef: RefObject<HTMLTextAreaElement | null>,
@@ -344,7 +425,7 @@ function useComposerPicker(
     enabled:
       input.promptInputs?.references === true &&
       typeof input.referenceRoot === "string" &&
-      (input.runState === "running" || input.runState === "paused"),
+      referencesOffered(input.runState),
     root: input.referenceRoot ?? null,
     draft: input.taskIntent,
     onDraftChange: input.onTaskIntentChange,
@@ -352,15 +433,37 @@ function useComposerPicker(
   });
 }
 
-// The picker gets a key first (an open list owns the arrows, Enter, Tab and Escape); then
-// Ctrl/Cmd+Enter queues while a turn runs; then Enter submits as it always has.
+// The `/` menu is offered where a prompt starts a turn: a new task, offered the built-in commands,
+// and a paused run's follow-up, offered what its runtime lists. Never while a turn runs: a running
+// composer sends Send now and Queue messages, which are never commands.
+function useComposerMenu(
+  input: TaskStartSectionProps,
+  t: CodingWorkbenchTranslate,
+  textareaRef: RefObject<HTMLTextAreaElement | null>,
+): SlashMenu {
+  const paused = input.runState === "paused";
+  const startable = !activeRunState(input.runState);
+  return useSlashCommandMenu({
+    enabled:
+      input.promptInputs?.commands === true && (paused ? input.runId !== undefined : startable),
+    runId: paused ? input.runId : undefined,
+    draft: input.taskIntent,
+    onDraftChange: input.onTaskIntentChange,
+    textareaRef,
+    t,
+  });
+}
+
+// An open list gets a key first (it owns the arrows, Enter, Tab and Escape; the `@` picker and the
+// `/` menu are never open together); then Ctrl/Cmd+Enter queues while a turn runs; then Enter
+// submits as it always has.
 function useComposerKeys(
-  picker: FileReferencePicker,
+  lists: ComposerLists,
   deliveryEnabled: boolean,
   submit: (mode?: CodingWorkbenchPromptDelivery) => void,
 ): (event: KeyboardEvent<HTMLTextAreaElement>) => void {
   return (event): void => {
-    if (picker.handleKey(event)) return;
+    if (lists.picker.handleKey(event) || lists.menu.handleKey(event)) return;
     if (deliveryEnabled && isQueueChord(event)) {
       event.preventDefault();
       submit("queue");
@@ -391,14 +494,13 @@ function useTaskComposerController(
     onInsert: insertTranscript,
   });
   const picker = useComposerPicker(input, textareaRef);
-  const { submit, submitBlocked, submitFeedback } = useComposerSubmit(
-    input,
-    t,
-    textareaRef,
+  const menu = useComposerMenu(input, t, textareaRef);
+  const { submit, submitBlocked, submitFeedback } = useComposerSubmit(input, t, textareaRef, {
     picker,
-  );
+    menu,
+  });
   const deliveryEnabled = canDeliver(input);
-  const onKeyDown = useComposerKeys(picker, deliveryEnabled, submit);
+  const onKeyDown = useComposerKeys({ picker, menu }, deliveryEnabled, submit);
   useComposerAutoGrow(textareaRef, taskIntent);
   return {
     textareaRef,
@@ -410,10 +512,14 @@ function useTaskComposerController(
     submitFeedbackId,
     submit,
     picker,
+    menu,
     deliveryEnabled,
     deliveryBlocked: input.mutationPending || taskIntent.trim().length === 0,
     onKeyDown,
-    onTextChange: picker.track,
+    onTextChange: (value, cursor): void => {
+      picker.track(value, cursor);
+      menu.track(cursor);
+    },
   };
 }
 
@@ -482,7 +588,7 @@ function TaskComposerBox({ input, controller, t }: ComposerViewProps): ReactNode
         textareaRef={controller.textareaRef}
         maxLength={CODING_WORKBENCH_TASK_INTENT_MAX_CHARS}
         disabled={input.mutationPending}
-        ariaControls={controller.picker.controls}
+        ariaControls={controller.picker.controls ?? controller.menu.controls}
         onChange={(event): void => {
           input.onTaskIntentChange(event.target.value);
           controller.onTextChange(event.target.value, event.target.selectionStart);
@@ -511,6 +617,7 @@ interface ComposerViewProps extends ControlProps {
 function FileReferences({ controller, t }: Pick<ComposerViewProps, "controller" | "t">): ReactNode {
   return (
     <>
+      <SlashCommandPopover menu={controller.menu} t={t} />
       <FileReferencePopover picker={controller.picker} t={t} />
       <FileReferenceChips picker={controller.picker} t={t} />
     </>
@@ -525,7 +632,7 @@ function DeliveryNotice({ input, t }: ControlProps): ReactNode {
   if (notice === undefined || notice === null) return null;
   if (notice !== "failed" && input.runState !== "running") return null;
   return (
-    <output className={promptStyles.notice} data-state={notice === "failed" ? "failed" : "info"}>
+    <output className={promptStyles.cmpNotice} data-state={notice === "failed" ? "failed" : "info"}>
       {t(`codingWorkbench.composer.delivery.${notice}`)}
     </output>
   );
