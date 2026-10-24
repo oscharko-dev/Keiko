@@ -8,6 +8,8 @@ import { CODING_WORKBENCH_RICH_CONTENT } from "./CodingWorkbenchRichContent";
 import { Icons } from "../../Icons";
 import styles from "./CodingHistory.module.css";
 
+const BranchIcon = Icons.branch;
+
 interface SessionBarProps {
   readonly session: CodingTaskSession;
   readonly active: boolean;
@@ -126,7 +128,7 @@ export function CodingTaskTranscript({
                 onFork(message.id);
               }}
             >
-              <Icons.branch />
+              <BranchIcon />
               {t("codingWorkbench.history.forkFrom")}
             </button>
           ) : null}

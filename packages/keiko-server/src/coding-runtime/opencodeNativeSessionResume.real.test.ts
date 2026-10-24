@@ -529,7 +529,7 @@ describe("native session continuity on the pinned OpenCode runtime", () => {
 
             await turn(client, sessionId, "THIRD-QUESTION");
 
-            expect(gateway.requests.length).toBe(before + 1);
+            expect(gateway.requests).toHaveLength(before + 1);
             const request = gateway.requests.at(-1);
             const conversation = modelMessages(request)
               .filter((message) => message.role !== "system")

@@ -72,7 +72,7 @@ const ENTRY_NAME = /^[a-f0-9]{64}$/u;
 const INTERRUPTED_ENTRY = /^\.(?:staging|replaced)-[a-f0-9]{16}$/u;
 const SESSION_ID = /^ses_[A-Za-z0-9_-]{1,251}$/u;
 const SHA256 = /^[a-f0-9]{64}$/u;
-const RUNTIME_VERSION = /^[0-9]+\.[0-9]+\.[0-9]+$/u;
+const RUNTIME_VERSION = /^\d+\.\d+\.\d+$/u;
 const TASK_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u;
 const HASH_CHUNK_BYTES = MIB;
 
@@ -507,9 +507,15 @@ const MANIFEST_KEYS = [
   "workspaceKey",
 ];
 
+// Code-unit order, the order `MANIFEST_KEYS` is written in.
+function compareKeys(a: string, b: string): number {
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
+}
+
 function parseManifest(value: unknown): RetainedSessionManifest | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
-  const keys = Object.keys(value).sort();
+  const keys = Object.keys(value).sort(compareKeys);
   if (keys.length !== MANIFEST_KEYS.length || keys.some((key, i) => key !== MANIFEST_KEYS[i])) {
     return undefined;
   }

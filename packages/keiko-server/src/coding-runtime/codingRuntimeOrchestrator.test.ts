@@ -8347,9 +8347,9 @@ describe("native session continuity requested by a start", () => {
       await w.f.orchestrator.start({ ...start, conversationId: "task-prior" });
 
       expect(w.spies.initialContext).not.toHaveBeenCalled();
-      expect(firstTaskDispatchRequest(w.f.taskDispatcher.dispatch.mock.calls).initialContext).toBe(
-        undefined,
-      );
+      expect(
+        firstTaskDispatchRequest(w.f.taskDispatcher.dispatch.mock.calls).initialContext,
+      ).toBeUndefined();
     },
   );
 

@@ -155,17 +155,19 @@ function recordFallBack(
   error?: unknown,
 ): void {
   context.service.settle(location.runId, { kind: "fresh", reason });
-  const outcome = BENIGN_REASONS.has(reason)
-    ? "fresh"
-    : reason === "copy-failed"
-      ? "failed"
-      : "refused";
+  const outcome = freshOutcome(reason);
   recordSessionContinuity(context.activityLog, {
     ...lineOf(context, location, intent),
     outcome,
     reason,
     ...(error === undefined ? {} : { error }),
   });
+}
+
+/** A benign reason falls back fresh; a failed copy failed; anything else was refused. */
+function freshOutcome(reason: ContinuityReason): "failed" | "fresh" | "refused" {
+  if (BENIGN_REASONS.has(reason)) return "fresh";
+  return reason === "copy-failed" ? "failed" : "refused";
 }
 
 /** The part of the runtime client the session binding uses. */

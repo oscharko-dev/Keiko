@@ -469,7 +469,7 @@ function forkedSession(value: Readonly<Record<string, unknown>>): OpenCodeV2Fork
   const id = value.id;
   const source = fork?.sessionID;
   if (typeof id !== "string" || typeof source !== "string" || typeof directory !== "string") {
-    throw new Error("opencode-v2-envelope-invalid");
+    throw new TypeError("opencode-v2-envelope-invalid");
   }
   if (!SESSION_ID.test(id) || !SESSION_ID.test(source)) {
     throw new Error("opencode-v2-envelope-invalid");
