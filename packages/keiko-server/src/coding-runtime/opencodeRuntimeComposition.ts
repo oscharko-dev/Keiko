@@ -1485,7 +1485,10 @@ async function materializePrepare(
         );
   if (serviceHost !== undefined && program === undefined)
     throw new Error("host-preparation-invalid");
-  persistPreparedRun(runs, request, runRoot, password, configDigest, program, continuation, mcp);
+  persistPreparedRun(runs, request, runRoot, password, configDigest, program, {
+    continuation,
+    mcp,
+  });
   recordNativeFormatterBound(input.activityLog, request, profile.formatter);
   return { ...result, ...(program === undefined ? {} : { serviceHost: program }) };
 }
@@ -1620,9 +1623,12 @@ function persistPreparedRun(
   password: string,
   configDigest: string,
   program: PreparedOpenCodeServiceHostLaunch | undefined,
-  continuation?: RunContinuation,
-  mcp?: OpenCodeNativeMcpGrants,
+  extras: {
+    readonly continuation?: RunContinuation | undefined;
+    readonly mcp?: OpenCodeNativeMcpGrants | undefined;
+  } = {},
 ): void {
+  const { continuation, mcp } = extras;
   const run = preparedRun(
     request.runId,
     runRoot,

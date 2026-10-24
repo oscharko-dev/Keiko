@@ -7,6 +7,7 @@ import type {
   CodingWorkbenchApprovalRisk,
   CodingWorkbenchPermissionRequestKind,
   CodingWorkbenchPolicyResourceScope,
+  McpToolRisk,
   VerificationKind,
 } from "@oscharko-dev/keiko-contracts";
 import {
@@ -18,7 +19,6 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import type { McpToolRisk } from "@oscharko-dev/keiko-contracts";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 

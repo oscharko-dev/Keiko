@@ -434,7 +434,7 @@ interface PermissionRule {
   effect?: string;
 }
 
-const RULE_FIELD_LINE = /^(action|resource|effect):[ \t]+(.+?)[ \t]*$/u;
+const RULE_FIELD_LINE = /^(action|resource|effect):[ \t]+(\S(?:.*\S)?)[ \t]*$/u;
 
 /** The rules of a block list, or undefined when any line or item is outside the closed shape. */
 function permissionRules(

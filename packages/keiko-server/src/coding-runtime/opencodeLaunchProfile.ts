@@ -355,6 +355,11 @@ export function createFixedOpenCodeConfig(
   };
 }
 
+/** The MCP binding of a native run that admits no server: still written, so no layer adds one. */
+const NO_MCP_SERVERS: { readonly servers: Readonly<Record<string, unknown>> } = Object.freeze({
+  servers: Object.freeze({}),
+});
+
 /** Original V2 execution with exactly the server-selected governed tool profile. */
 export function createFixedOpenCodeV2Config(
   contextGeometry: OpenCodeContextGeometry,
@@ -362,7 +367,7 @@ export function createFixedOpenCodeV2Config(
   profile: OpenCodeToolProfile = "direct",
   stateRoot?: string,
   formatter: OpenCodeNativeFormatterDisposition = "disabled-unknown-mode",
-  mcp: { readonly servers: Readonly<Record<string, unknown>> } = { servers: {} },
+  mcp: { readonly servers: Readonly<Record<string, unknown>> } = NO_MCP_SERVERS,
 ): Readonly<Record<string, unknown>> {
   openCodeVisibleToolNames(profile);
   if (profile === "native")
