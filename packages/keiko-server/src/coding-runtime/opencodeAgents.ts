@@ -4,7 +4,7 @@ import {
   type CodingWorkbenchAgent,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 
-import type { OpenCodeToolProfile } from "@oscharko-dev/keiko-contracts/runtime/opencode-service-host";
+import type { OpenCodeToolProfile } from "./opencodeToolSchemas.js";
 
 /**
  * The primary agents an operator may select for a run on the given OpenCode tool profile (#3897).

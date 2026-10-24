@@ -36,7 +36,6 @@
   ],
   "sideEffects": false,
   "scripts": {
-    "test:opencode-service-host": "node --test --test-concurrency=1 native/opencode-service-host/compatibility.test.mjs native/opencode-service-host/entry.test.mjs native/opencode-service-host/guard-seams.test.mjs native/opencode-service-host/host.test.mjs",
     "build:packages": "npm run check:typescript-toolchain && node scripts/build-packages.mjs",
     "build": "npm run build:packages && node node_modules/@typescript/native/bin/tsc -p tsconfig.build.json",
     "keiko:start": "node dist/cli/index.js start",
@@ -51,7 +50,6 @@
     "test:coverage:packages:merge": "vitest run --config vitest.coverage.packages.config.ts --coverage --mergeReports=.vitest-reports",
     "test:coverage:ui": "vitest run --config packages/keiko-ui/vitest.coverage.config.ts --coverage",
     "test:coverage:scripts": "npm run build && vitest run --config vitest.coverage.scripts.config.ts --coverage",
-    "test:coverage:opencode-service-host": "node --test --experimental-test-coverage --test-coverage-include=\"native/opencode-service-host/*.mjs\" --test-coverage-exclude=\"**/*.test.mjs\" --test-reporter=spec --test-reporter-destination=stderr --test-reporter=lcov --test-reporter-destination=stdout native/opencode-service-host/*.test.mjs >> coverage/scripts/lcov.info",
     "test:coverage:quality": "npm run test:coverage:packages && npm run test:coverage:ui && npm run test:coverage:scripts && npm run check:coverage:quality",
     "test:managed-lsp-closeout": "npm run build:packages && vitest run packages/keiko-contracts/src/managed-lsp-activation.test.ts packages/keiko-contracts/src/managed-lsp-capabilities.test.ts packages/keiko-contracts/src/managed-lsp-evidence.test.ts packages/keiko-contracts/src/managed-lsp-route.test.ts packages/keiko-contracts/src/managed-lsp-runtime.test.ts packages/keiko-server/src/editor/languageRoutes.test.ts packages/keiko-server/src/editor/lsp packages/keiko-tools/src/editor-agent-tool-host.test.ts tests/editor-agent-managed-lsp.integration.test.ts tests/e2e/managed-language-closeout-2282.static.test.ts tests/qa/managed-language-closeout-evidence.test.ts && npm test --workspace @oscharko-dev/keiko-ui -- src/lib/api.test.ts src/app/components/desktop/widgets/panels/ManagedLanguageSettings.test.tsx",
     "check:managed-lsp-performance": "npm run build:packages && node scripts/measure-managed-lsp-closeout.mjs",

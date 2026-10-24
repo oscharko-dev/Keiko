@@ -1,4 +1,4 @@
-import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import {
   DEFAULT_SANDBOX_POLICY,
   GOVERNED_TOOL_SETTLEMENT_GRACE_MS,
@@ -419,12 +419,6 @@ interface VerifiedPortableInput {
 /** Terminal states for a tool action's safe-activity settlement (#2386). */
 type OpenCodeToolSettlementState = "succeeded" | "failed" | "denied" | "cancelled";
 
-import {
-  prepareOpenCodeServiceHostLaunch,
-  type OpenCodeServiceHostDiskReceipt,
-  type PreparedOpenCodeServiceHostLaunch,
-} from "./opencodeServiceHostArtifact.js";
-
 export interface OpenCodeRuntimeCompositionInput {
   /** Captured server-only observation profile. Absent retains the direct native history contract. */
   readonly toolProfile?: OpenCodeToolProfile | undefined;
@@ -597,11 +591,6 @@ export interface OpenCodeToolBridgeResponse {
 }
 
 export interface OpenCodeRuntimeComposition {
-  /** Inactive trusted preparation only; host readiness remains separately unqualified. */
-  readonly prepareServiceHost: (
-    request: OpenCodeLifecyclePrepareRequest,
-    receipt: Extract<OpenCodeServiceHostDiskReceipt, { readonly ok: true }>,
-  ) => Promise<OpenCodeLifecyclePrepareResult>;
   readonly manager: CodingRuntimeManager;
   readonly toolBridge: OpenCodeToolBridge;
   readonly runPort: OpenCodeRunPort;
@@ -680,8 +669,6 @@ export interface OpenCodeRunPort {
 }
 
 interface PreparedRun {
-  serviceHostPrepared?: true;
-  nativeInitialization?: NativeInitializationAttachment;
   readonly runId: string;
   readonly runRoot: string;
   readonly workspaceRoot: string;
@@ -774,7 +761,6 @@ export function createOpenCodeRuntimeComposition(
     input.activityLog,
   );
   return {
-    prepareServiceHost: (request, receipt) => prepare(input, bridge, runs, request, receipt),
     manager,
     toolBridge: bridge.publicPort,
     runPort: createRunPort(
@@ -1556,10 +1542,9 @@ async function materializePrepare(
   runs: Map<string, PreparedRun>,
   request: OpenCodeLifecyclePrepareRequest,
   runRoot: string,
-  serviceHost?: Extract<OpenCodeServiceHostDiskReceipt, { readonly ok: true }>,
 ): Promise<OpenCodeLifecyclePrepareResult> {
   createPrivateState(runRoot);
-  const continuation = serviceHost === undefined ? seedRun(input, request, runRoot) : undefined;
+  const continuation = seedRun(input, request, runRoot);
   await bridge.start();
   const { profile, mcp } = runLaunchProfile(input, request, runRoot);
   const config = profile.config;
@@ -1569,26 +1554,10 @@ async function materializePrepare(
   if (password === undefined) throw new Error("password-missing");
   const configDigest = createHash("sha256").update(config, "utf8").digest("hex");
   const result = preparedLaunch(input, bridge, profile.env);
-  const program =
-    serviceHost === undefined
-      ? undefined
-      : prepareCompositionServiceHost(
-          serviceHost,
-          request,
-          runRoot,
-          configDigest,
-          result.env,
-          input.toolProfile ?? "direct",
-        );
-  if (serviceHost !== undefined && program === undefined)
-    throw new Error("host-preparation-invalid");
-  persistPreparedRun(runs, request, runRoot, password, configDigest, program, {
-    continuation,
-    mcp,
-  });
+  persistPreparedRun(runs, request, runRoot, password, configDigest, { continuation, mcp });
   recordNativeFormatterBound(input.activityLog, request, profile.formatter);
   recordProviderPolicyBound(input.activityLog, request, profile, input.toolProfile ?? "direct");
-  return { ...result, ...(program === undefined ? {} : { serviceHost: program }) };
+  return result;
 }
 
 /** The run's launch profile, with the MCP servers the operator's registry admits for it. */
@@ -1749,7 +1718,6 @@ function persistPreparedRun(
   runRoot: string,
   password: string,
   configDigest: string,
-  program: PreparedOpenCodeServiceHostLaunch | undefined,
   extras: {
     readonly continuation?: RunContinuation | undefined;
     readonly mcp?: OpenCodeNativeMcpGrants | undefined;
@@ -1765,37 +1733,9 @@ function persistPreparedRun(
     request.verification,
     request.env.KEIKO_CODING_MODE,
   );
-  if (program !== undefined) run.serviceHostPrepared = true;
   if (continuation !== undefined) run.continuation = continuation;
   if (mcp !== undefined) run.mcp = mcp;
   runs.set(request.runId, run);
-}
-
-function prepareCompositionServiceHost(
-  receipt: Extract<OpenCodeServiceHostDiskReceipt, { readonly ok: true }>,
-  request: OpenCodeLifecyclePrepareRequest,
-  stateRoot: string,
-  configDigest: string,
-  env: Readonly<Record<string, string>>,
-  toolProfile: OpenCodeToolProfile,
-): PreparedOpenCodeServiceHostLaunch | undefined {
-  return prepareOpenCodeServiceHostLaunch(
-    receipt,
-    {
-      workspace: request.env.KEIKO_CODING_WORKSPACE_ROOT,
-      stateRoot,
-      password: env.OPENCODE_SERVER_PASSWORD,
-      providerURL: `${request.env.KEIKO_MODEL_GATEWAY_URL ?? ""}/chat/completions`,
-      providerCapability: env.KEIKO_MODEL_GATEWAY_CAPABILITY,
-      facadeURL: env.KEIKO_TOOL_FACADE_URL,
-      facadeCapability: env.KEIKO_TOOL_FACADE_CAPABILITY,
-      mode: request.env.KEIKO_CODING_MODE,
-      runId: request.runId,
-      configDigest,
-      toolProfile,
-    },
-    env,
-  );
 }
 
 async function prepare(
@@ -1803,10 +1743,7 @@ async function prepare(
   bridge: ToolBridgeController,
   runs: Map<string, PreparedRun>,
   request: OpenCodeLifecyclePrepareRequest,
-  serviceHost?: Extract<OpenCodeServiceHostDiskReceipt, { readonly ok: true }>,
 ): Promise<OpenCodeLifecyclePrepareResult> {
-  if (serviceHost !== undefined && runs.has(request.runId))
-    return { ok: false, reason: "host-preparation-unqualified" };
   if (!verifiedProtocol(request.verification, input.portable.verification)) {
     return { ok: false, reason: "target-attestation-failed" };
   }
@@ -1815,7 +1752,7 @@ async function prepare(
   }
   const runRoot = join(input.stateBaseRoot, request.runId);
   try {
-    return await materializePrepare(input, bridge, runs, request, runRoot, serviceHost);
+    return await materializePrepare(input, bridge, runs, request, runRoot);
   } catch {
     await disposeFailedPrepare(
       bridge,
@@ -1921,7 +1858,6 @@ async function handshake(
 ): Promise<{ readonly ok: true } | { readonly ok: false; readonly reason: string }> {
   const run = runs.get(request.runId);
   if (run === undefined) return { ok: false, reason: "preparation-missing" };
-  if (run.serviceHostPrepared === true) return { ok: false, reason: "host-readiness-unqualified" };
   run.onPermission = request.onPermission;
   try {
     const endpoint = parseOpenCodeV2ChildEndpoint(
@@ -3210,9 +3146,6 @@ function handleDirectToolRequest(
   const read = nativeReadTransportValue(input.body);
   if (read !== undefined)
     return handleNativeReadTransport(read, input.signal, deps, runs, nativeRead);
-  const native = nativeInitializationValue(input.body);
-  if (native !== undefined)
-    return handleNativeInitialization(native, input.signal, deps, gate, runs);
   const permission = parseV2PermissionRequest(input.body);
   if (permission !== undefined) {
     return handleV2PermissionRequest(permission, input.signal, deps, approvals, runs);
@@ -4383,18 +4316,18 @@ async function handleNativeReadTransport(
   producer: CodingToolNativeReadInvocations | undefined,
 ): Promise<OpenCodeToolBridgeResponse> {
   const packet = copyNativeReadTransportPacket(value);
-  if (packet === undefined) return nativeInitializationRefusal("invalid-request", 400);
+  if (packet === undefined) return nativeTransportRefusal("invalid-request", 400);
   const run = runs.get(packet.runId);
   try {
     if (producer?.fileIO === undefined || !nativeReadRunCurrent(deps, run))
-      return nativeInitializationRefusal("dispatch-refused");
-    if (signal?.aborted === true) return nativeInitializationRefusal("cancelled");
+      return nativeTransportRefusal("dispatch-refused");
+    if (signal?.aborted === true) return nativeTransportRefusal("cancelled");
     return await dispatchNativeReadTransport(packet, run, producer, signal, deps);
   } catch (error) {
     if (producer !== undefined && packet.phase !== "begin")
       void producer.close(packet.identity, "cancelled");
     emitFacadeFailureDiagnostic(deps.diagnostics, nativeReadPacketActionId(packet), error);
-    return nativeInitializationRefusal("dispatch-refused", 502);
+    return nativeTransportRefusal("dispatch-refused", 502);
   }
 }
 
@@ -4430,8 +4363,7 @@ async function beginNativeReadTransport(
   signal: AbortSignal | undefined,
   deps: ToolBridgeExecutionDeps,
 ): Promise<OpenCodeToolBridgeResponse> {
-  if (packet.context.sessionID !== run.sessionId)
-    return nativeInitializationRefusal("dispatch-refused");
+  if (packet.context.sessionID !== run.sessionId) return nativeTransportRefusal("dispatch-refused");
   const body = JSON.stringify({
     action: "read",
     relativePath: packet.relativePath,
@@ -4446,11 +4378,11 @@ async function beginNativeReadTransport(
     ...(packet.offset === undefined ? {} : { offset: packet.offset }),
     ...(packet.limit === undefined ? {} : { limit: packet.limit }),
   });
-  if (!result.ok) return nativeInitializationRefusal(result.reason);
+  if (!result.ok) return nativeTransportRefusal(result.reason);
   let delivered = false;
   try {
     if (!nativeReadBeginCurrent(packet, run, producer, result.identity, signal, deps))
-      return nativeInitializationRefusal("dispatch-refused");
+      return nativeTransportRefusal("dispatch-refused");
     delivered = true;
     return {
       status: 200,
@@ -4490,7 +4422,7 @@ async function closeNativeReadTransport(
     const ok = await producer.close(packet.identity, packet.outcome);
     return nativeReadRunCurrent(deps, run) && signal?.aborted !== true
       ? { status: 200, body: JSON.stringify({ ok }), nativeResult: true }
-      : nativeInitializationRefusal("dispatch-refused");
+      : nativeTransportRefusal("dispatch-refused");
   } finally {
     detach();
   }
@@ -4519,7 +4451,7 @@ async function nativeReadTransportIO(
   deps: ToolBridgeExecutionDeps,
 ): Promise<OpenCodeToolBridgeResponse> {
   const io = producer.fileIO;
-  if (io === undefined) return nativeInitializationRefusal("dispatch-refused");
+  if (io === undefined) return nativeTransportRefusal("dispatch-refused");
   const detach = bindNativeReadDisconnect(signal, producer, packet.identity);
   const work = io[packet.phase](packet.identity, packet.input);
   void work.then((late) => {
@@ -4530,12 +4462,12 @@ async function nativeReadTransportIO(
     if (signal?.aborted === true || !nativeReadIOCurrent(deps, run, result)) {
       wipeNativeIOBytes(result);
       void producer.close(packet.identity, "cancelled");
-      return nativeInitializationRefusal("dispatch-refused");
+      return nativeTransportRefusal("dispatch-refused");
     }
     return nativeFileIOResponse(result);
   } catch (error) {
     if (signal?.aborted !== true) throw error;
-    return nativeInitializationRefusal("cancelled");
+    return nativeTransportRefusal("cancelled");
   } finally {
     detach();
   }
@@ -4557,66 +4489,6 @@ function nativeReadIOCurrent(
 
 function wipeNativeIOBytes(result: NativeFileIOResult): void {
   if (result.ok && "bytes" in result) result.bytes.fill(0);
-}
-
-type NativeInitializationPacket = Readonly<{
-  action: "native-initialization";
-  runId: string;
-}> &
-  (
-    | { readonly phase: "begin" }
-    | { readonly phase: "end"; readonly scopeId: string }
-    | {
-        readonly phase: "readBytes";
-        readonly scopeId: string;
-        readonly relativePath: string;
-        readonly range?: { readonly offset: number; readonly length: number };
-      }
-    | { readonly phase: "stat" | "list"; readonly scopeId: string; readonly relativePath: string }
-  );
-interface NativeInitializationAttachment {
-  readonly id: string;
-  readonly admission: AdmittedToolRequest;
-  readonly result: Promise<CodingAcceptedInitializationResult<void>>;
-  readonly end: () => void;
-  io?: CodingAcceptedInitializationReadPort;
-  open: boolean;
-}
-
-function nativeInitializationValue(body: string): unknown {
-  if (!validJson(body)) return undefined;
-  const value: unknown = JSON.parse(body);
-  return v2Record(value)?.action === "native-initialization" ? value : undefined;
-}
-
-/** Owned data only; transport never supplies authority, workspace root, purpose, or executable. */
-export function copyNativeInitializationPacket(
-  value: unknown,
-): NativeInitializationPacket | undefined {
-  const record = initializationData(value);
-  if (record?.action !== "native-initialization" || typeof record.runId !== "string")
-    return undefined;
-  if (!/^[A-Za-z0-9_-]{1,256}$/u.test(record.runId)) return undefined;
-  return copyInitializationPhase(record, record.runId);
-}
-
-function copyInitializationPhase(
-  record: Readonly<Record<string, unknown>>,
-  runId: string,
-): NativeInitializationPacket | undefined {
-  const action = "native-initialization";
-  if (record.phase === "begin")
-    return initialFields(record, ["action", "phase", "runId"])
-      ? Object.freeze({ action, phase: record.phase, runId })
-      : undefined;
-  if (typeof record.scopeId !== "string" || !/^[a-f0-9-]{36}$/u.test(record.scopeId))
-    return undefined;
-  const common = { action, runId, scopeId: record.scopeId } as const;
-  if (record.phase === "end")
-    return initialFields(record, ["action", "phase", "runId", "scopeId"])
-      ? Object.freeze({ ...common, phase: record.phase })
-      : undefined;
-  return copyInitializationIO(record, common);
 }
 
 function initializationData(value: unknown): Readonly<Record<string, unknown>> | undefined {
@@ -4642,32 +4514,6 @@ function initialFields(
   );
 }
 
-function copyInitializationIO(
-  record: Readonly<Record<string, unknown>>,
-  common: {
-    readonly action: "native-initialization";
-    readonly runId: string;
-    readonly scopeId: string;
-  },
-): NativeInitializationPacket | undefined {
-  if (typeof record.relativePath !== "string") return undefined;
-  const keys = ["action", "phase", "runId", "scopeId", "relativePath"];
-  const path = record.relativePath;
-  if (record.phase === "stat" || record.phase === "list")
-    return initialFields(record, keys)
-      ? Object.freeze({ ...common, phase: record.phase, relativePath: path })
-      : undefined;
-  if (record.phase !== "readBytes") return undefined;
-  const range = copyInitializationRange(record, keys);
-  if (range === false) return undefined;
-  return Object.freeze({
-    ...common,
-    phase: record.phase,
-    relativePath: path,
-    ...(range === undefined ? {} : { range }),
-  });
-}
-
 function copyInitializationRange(
   record: Readonly<Record<string, unknown>>,
   keys: readonly string[],
@@ -4684,158 +4530,19 @@ function copyInitializationRange(
   return Object.freeze({ offset: range.offset, length: range.length });
 }
 
-async function handleNativeInitialization(
-  value: unknown,
-  signal: AbortSignal | undefined,
-  deps: ToolBridgeExecutionDeps,
-  gate: ToolBridgeAdmissionGate,
-  runs: ReadonlyMap<string, PreparedRun>,
-): Promise<OpenCodeToolBridgeResponse> {
-  const packet = copyNativeInitializationPacket(value);
-  if (packet === undefined) return nativeInitializationRefusal("invalid-request", 400);
-  const run = runs.get(packet.runId);
-  try {
-    if (run?.serviceHostPrepared !== true || run.ready || !initializationRootCurrent(deps, run))
-      return nativeInitializationRefusal("initialization-refused");
-    if (packet.phase === "begin") return await beginNativeInitialization(run, signal, deps, gate);
-    return await continueNativeInitialization(packet, run, signal, deps);
-  } catch (error) {
-    run?.nativeInitialization?.admission.controller.abort("initialization-failed");
-    emitFacadeFailureDiagnostic(deps.diagnostics, undefined, error);
-    return nativeInitializationRefusal("initialization-failed", 502);
-  }
-}
-
 function initializationRootCurrent(deps: ToolBridgeExecutionDeps, run: PreparedRun): boolean {
   const root = deps.resolveWorkspaceRootAccess?.();
   return root?.canonicalRoot === run.workspaceRoot;
 }
 
-function nativeInitializationRefusal(reason: string, status = 409): OpenCodeToolBridgeResponse {
+function nativeTransportRefusal(reason: string, status = 409): OpenCodeToolBridgeResponse {
   return { status, body: JSON.stringify({ ok: false, reason }), nativeResult: true };
-}
-
-async function beginNativeInitialization(
-  run: PreparedRun,
-  signal: AbortSignal | undefined,
-  deps: ToolBridgeExecutionDeps,
-  gate: ToolBridgeAdmissionGate,
-): Promise<OpenCodeToolBridgeResponse> {
-  const facet = deps.facade.acceptedInitialization;
-  if (facet === undefined || run.nativeInitialization !== undefined)
-    return nativeInitializationRefusal("initialization-closed");
-  if (signal?.aborted === true) return nativeInitializationRefusal("cancelled");
-  const admission = gate.admit(gate.limits.requestDeadlineMs);
-  if (admission === undefined) return nativeInitializationRefusal("busy", 429);
-  const { state, ready } = createInitializationAttachment(
-    deps,
-    facet,
-    admission,
-    signal,
-    run.runId,
-  );
-  run.nativeInitialization = state;
-  const result = state.result;
-  const entered = await Promise.race([ready.then(() => true), result.then(() => false)]);
-  if (!entered) return initializationOutcome(await result);
-  if (!state.open || !initializationRootCurrent(deps, run)) {
-    admission.controller.abort("initialization-refused");
-    return nativeInitializationRefusal("initialization-refused");
-  }
-  recordNativeInitializationLifecycle(deps, run.runId, "begin", "accepted");
-  return { status: 200, body: JSON.stringify({ ok: true, scopeId: state.id }), nativeResult: true };
-}
-
-function initializationOutcome(
-  result: CodingAcceptedInitializationResult<void>,
-): OpenCodeToolBridgeResponse {
-  return result.ok
-    ? { status: 200, body: '{"ok":true}', nativeResult: true }
-    : nativeInitializationRefusal(result.reason);
-}
-
-async function continueNativeInitialization(
-  packet: Exclude<NativeInitializationPacket, { readonly phase: "begin" }>,
-  run: PreparedRun,
-  signal: AbortSignal | undefined,
-  deps: ToolBridgeExecutionDeps,
-): Promise<OpenCodeToolBridgeResponse> {
-  const state = run.nativeInitialization;
-  if (state?.id !== packet.scopeId || !state.open || state.io === undefined)
-    return nativeInitializationRefusal("initialization-closed");
-  const detach = bindExternalAbort(signal, state.admission);
-  try {
-    if (packet.phase === "end") {
-      state.open = false;
-      state.end();
-      const result = await state.result;
-      return initializationRootCurrent(deps, run)
-        ? initializationOutcome(result)
-        : nativeInitializationRefusal("initialization-refused");
-    }
-    return await initialIOUnderCurrentScope(packet, run, state, state.io, deps);
-  } finally {
-    detach();
-  }
-}
-
-async function initialIOUnderCurrentScope(
-  packet: Exclude<NativeInitializationPacket, { readonly phase: "begin" | "end" }>,
-  run: PreparedRun,
-  state: NativeInitializationAttachment,
-  io: CodingAcceptedInitializationReadPort,
-  deps: ToolBridgeExecutionDeps,
-): Promise<OpenCodeToolBridgeResponse> {
-  const work = executeInitialIO(packet, io);
-  void work.then(
-    (late) => {
-      if (state.admission.controller.signal.aborted && late.ok && "bytes" in late)
-        late.bytes.fill(0);
-    },
-    (error: unknown) => {
-      if (state.admission.controller.signal.aborted)
-        emitFacadeFailureDiagnostic(deps.diagnostics, undefined, error);
-    },
-  );
-  let result: InitialIOResult;
-  try {
-    result = await raceAbort(work, state.admission.controller.signal);
-  } catch (error) {
-    if (!state.admission.controller.signal.aborted) throw error;
-    return nativeInitializationRefusal(
-      abortReason(state.admission.controller.signal) === DEADLINE_ABORT ? "timeout" : "cancelled",
-    );
-  }
-  if (
-    !state.open ||
-    state.admission.controller.signal.aborted ||
-    !initializationRootCurrent(deps, run)
-  ) {
-    if (result.ok && "bytes" in result) result.bytes.fill(0);
-    state.admission.controller.abort("initialization-refused");
-    return nativeInitializationRefusal("initialization-refused");
-  }
-  return nativeFileIOResponse(result);
 }
 
 type NativeFileIOResult =
   | Awaited<ReturnType<CodingToolNativeReadFileIO["readBytes"]>>
   | Awaited<ReturnType<CodingToolNativeReadFileIO["stat"]>>
   | Awaited<ReturnType<CodingToolNativeReadFileIO["list"]>>;
-type InitialIOResult =
-  | Awaited<ReturnType<CodingAcceptedInitializationReadPort["readBytes"]>>
-  | Awaited<ReturnType<CodingAcceptedInitializationReadPort["stat"]>>
-  | Awaited<ReturnType<CodingAcceptedInitializationReadPort["list"]>>;
-function executeInitialIO(
-  packet: Exclude<NativeInitializationPacket, { readonly phase: "begin" | "end" }>,
-  io: CodingAcceptedInitializationReadPort,
-): Promise<InitialIOResult> {
-  const request = {
-    relativePath: packet.relativePath,
-    ...(packet.phase === "readBytes" && packet.range !== undefined ? { range: packet.range } : {}),
-  };
-  return io[packet.phase](request);
-}
 
 function nativeFileIOResponse(result: NativeFileIOResult): OpenCodeToolBridgeResponse {
   if (!result.ok) {
@@ -4848,7 +4555,7 @@ function nativeFileIOResponse(result: NativeFileIOResult): OpenCodeToolBridgeRes
           info: result.info,
         }),
       };
-    return nativeInitializationRefusal(result.reason);
+    return nativeTransportRefusal(result.reason);
   }
   const bytes = nativeFileIOResultBytes(result);
   try {
@@ -4868,128 +4575,4 @@ function nativeFileIOResultBytes(
   if ("bytes" in result) return result.bytes;
   if ("entries" in result) return encodeSecureWorkspaceNativeDirectory(result.entries);
   return new Uint8Array();
-}
-
-function createInitializationAttachment(
-  deps: ToolBridgeExecutionDeps,
-  facet: CodingAcceptedInitializationFacet,
-  admission: AdmittedToolRequest,
-  signal: AbortSignal | undefined,
-  runId: string,
-): { readonly state: NativeInitializationAttachment; readonly ready: Promise<void> } {
-  const acquired = initializationDeferred<undefined>();
-  const done = initializationDeferred<undefined>();
-  const completed = initializationDeferred<CodingAcceptedInitializationResult<void>>();
-  const state: NativeInitializationAttachment = {
-    id: randomUUID(),
-    admission,
-    result: completed.promise,
-    end: () => {
-      done.resolve(undefined);
-    },
-    open: true,
-  };
-  const close = (): void => {
-    state.open = false;
-    state.end();
-  };
-  admission.controller.signal.addEventListener("abort", close, { once: true });
-  const detach = bindExternalAbort(signal, admission);
-  void executeBridgeInitialization(
-    deps,
-    facet.run.bind(facet),
-    (io) => {
-      state.io = io;
-      acquired.resolve(undefined);
-      return done.promise;
-    },
-    admission,
-  ).then((result) => {
-    close();
-    detach();
-    admission.controller.signal.removeEventListener("abort", close);
-    completed.resolve(recordInitializationCompletion(deps, runId, result));
-  });
-  return { state, ready: acquired.promise };
-}
-
-function recordInitializationCompletion(
-  deps: ToolBridgeExecutionDeps,
-  runId: string,
-  result: CodingAcceptedInitializationResult<void>,
-): CodingAcceptedInitializationResult<void> {
-  try {
-    recordNativeInitializationLifecycle(
-      deps,
-      runId,
-      "end",
-      result.ok ? "completed" : result.reason,
-    );
-    return result;
-  } catch (error) {
-    emitFacadeFailureDiagnostic(deps.diagnostics, undefined, error);
-    return { ok: false, reason: "initialization-failed" };
-  }
-}
-
-const NATIVE_INITIALIZATION_LIFECYCLE_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
-  op: "coding-runtime.initialization-transport",
-  category: "process",
-  owner: "keiko-server",
-  emitter: "coding-runtime.opencodeRuntimeComposition.recordNativeInitializationLifecycle",
-  fields: {
-    stage: { type: "string", dataClass: "closed-enum", required: true, values: ["begin", "end"] },
-    outcome: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: [
-        "accepted",
-        "completed",
-        "initialization-closed",
-        "initialization-refused",
-        "initialization-failed",
-        "cancelled",
-        "timeout",
-        "busy",
-      ],
-    },
-  },
-  causal: "correlation",
-  lifecycle: "state",
-  analyzerProjection: "timeline",
-  failureClasses: ["coding-runtime-initialization-transport"],
-  proofIds: ["coding-runtime.initialization-transport.emitted-line"],
-  releaseImpact: "patch",
-});
-
-function recordNativeInitializationLifecycle(
-  deps: ToolBridgeExecutionDeps,
-  runId: string,
-  stage: "begin" | "end",
-  outcome:
-    | "accepted"
-    | "completed"
-    | Exclude<CodingAcceptedInitializationResult<void>, { readonly ok: true }>["reason"],
-): void {
-  deps.activityLog.write(
-    activityLogEvent(
-      NATIVE_INITIALIZATION_LIFECYCLE_OPERATION,
-      { correlationId: runId },
-      { stage, outcome },
-    ),
-  );
-}
-
-function initializationDeferred<T>(): {
-  readonly promise: Promise<T>;
-  readonly resolve: (value: T) => void;
-} {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
 }

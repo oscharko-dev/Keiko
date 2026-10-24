@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "6b9fda15bde77005cbfa36387e8703b3536b06d1172b509d5aa6033116050c39"
+    "catalogDigest": "949b0fe1a11bf969ab9d7e5590ca47c6e92ed388918aa37a39c89503fce10446"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -59,10 +59,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 577,
-    "proofCount": 590,
-    "resolvedProofCount": 590,
-    "failureClassCount": 361,
+    "operationCount": 576,
+    "proofCount": 589,
+    "resolvedProofCount": 589,
+    "failureClassCount": 360,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -337,7 +337,6 @@
         "coding-runtime.inbox.dispatch-failed",
         "coding-runtime.initial-turn.dispatch-failed",
         "coding-runtime.initial-turn.stop-failed",
-        "coding-runtime.initialization-transport",
         "coding-runtime.mentions.listed",
         "coding-runtime.native-formatter.bound",
         "coding-runtime.native-narrowing.refused",
@@ -819,7 +818,6 @@
     "coding-runtime-dev-lane": ["tools-workflows.rejection"],
     "coding-runtime-event-drop": ["tools-workflows.loss"],
     "coding-runtime-follow-up-dispatch": ["tools-workflows.dependency-failure"],
-    "coding-runtime-initialization-transport": ["tools-workflows.dependency-failure"],
     "coding-runtime-initial-turn-dispatch": ["tools-workflows.dependency-failure"],
     "coding-runtime-initial-turn-stop": ["tools-workflows.crash"],
     "coding-runtime-issue-binding": ["tools-workflows.rejection"],
@@ -1469,9 +1467,6 @@
     ],
     "coding-runtime.initial-turn.stop-failed.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.test.ts"
-    ],
-    "coding-runtime.initialization-transport.emitted-line": [
-      "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts"
     ],
     "coding-runtime.mentions.listed.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeCommands.test.ts"

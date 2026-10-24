@@ -1,5 +1,5 @@
 import { CODING_WORKBENCH_AGENTS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
-import { OPENCODE_TOOL_PROFILES } from "@oscharko-dev/keiko-contracts/runtime/opencode-service-host";
+import { OPENCODE_TOOL_PROFILES } from "@oscharko-dev/keiko-tool-catalog";
 import { describe, expect, it } from "vitest";
 
 import { isAgentAdmitted, openCodeSelectableAgents } from "./opencodeAgents.js";

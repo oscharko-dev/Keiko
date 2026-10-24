@@ -438,7 +438,6 @@ run tools; later changes to caller-owned input objects do not change the canonic
 The same selected projection supplies prepared binding, expiry evidence and dispatch digests.
 Unknown profiles fail closed and incoming tool fields cannot select a profile. The existing direct
 profile and Chat repository search remain unchanged. The same captured selection reaches native configuration and generated plugin materialization.
-Enabling an original service host remains a separate prerequisite.
 
 Native composition now captures that same profile for history and safe-activity observation.
 Only the explicit Code Mode profile recognizes the original `execute` parent. Each inner action
@@ -517,34 +516,9 @@ The one-shot scope closes when its callback settles or accepted authority is rev
 IO retains the same physical-work reservation until actual settlement, including when transport
 timeout or cancellation has already answered. Accessor, inherited and extra request fields are
 refused before IO. Technical failures retain the original unavailable instruction state.
-The inactive original service can now enter that callback through the existing authenticated
-`/api/coding-sidecar/tool` route. Closed `native-initialization` begin/byte/stat/list/end packets
-require the actual prepared host while it is STARTING and the same current accepted root. No
-incoming field selects authority, executable, workspace or purpose. Its callback retains the same
-physical gate until real IO settles, including after response cancellation and a refused disposal.
-Native bytes use the existing KSS3 codec over bounded binary HTTP with backpressure, completion and
-buffer wiping; public JSON/text limits retain their contracts. The existing Activity Log records
-body-free initialization-transport begin/end outcomes. A controlled original initial graph matches
-forty ordered instructions through this actual route; synthetic host-byte fixtures do not qualify
-a production host. This prerequisite covers accepted-workspace initial acquisition only. It does
-not authorize global or above-root reads, watcher refresh, a model selector or production host
-activation.
-
-The private original host now wraps the actual builtin `ConfigInstructionPlugin` generation after
-its original service capture, using one per-host Effect reference and the existing initialization
-route. The original FSUtil closures capture the decorated dependency before acquisition; project
-instruction discovery remains enabled while arbitrary project configuration and global instruction
-discovery remain disabled. The scope permanently closes after the first callback, including for
-inherited child fibers. The host copies decoded native bytes before wiping the canonical KSS3 frame.
-The package builder copies the complete canonical codec and workspace deny-policy modules as fixed
-sibling assets; it does not reimplement their formulas or accept an incoming module locator.
-Before the first callback, only the accepted workspace's lexically and canonically contained
-`realPath` metadata and the fixed private-state metadata are available. Fixed approved configuration
-uses its already checked bytes; unexpected JSONC configuration is refused. Actual original host
-acquisition matches one root instruction and preserves technical-unavailable output. Forty ancestor
-instructions are separately qualified with a controlled Location/Project, not genuine VCS discovery.
-Original Git discovery, the ready lifecycle and full native file/tool advertisement remain separate
-requirements; this private prerequisite does not activate the production service.
+The original service host that could enter that callback over closed `native-initialization`
+packets on the authenticated tool route was removed with the host (#3897, see "Service host
+removed" below); the route no longer recognizes those packets.
 
 The separately inactive original Read-parent transport also uses the existing authenticated tool
 route. Closed begin/byte/stat/list/close packets require the existing admitted run's actual ready
@@ -554,7 +528,7 @@ cancelled close validates that identity before aborting only its existing admiss
 Completed close does not cancel unrelated work. Returned settlement joins actual physical work and
 the same idempotent slot release, so response disconnection cannot free a still-running reader.
 Private controls use genuine authority/Manager admission with hermetic endpoint and supervisor
-readiness; they do not qualify the fixed service host as ready or activate its native advertisement.
+readiness; they do not activate a native advertisement.
 The existing rejection operation records the closed `native-read-refused` reason without bodies.
 
 A separately pinned `KSR3/KSS3` facet supplies bytes, ranges, descriptor metadata and immediate
@@ -583,63 +557,17 @@ after waiting and immediately before physical IO. Cancellation removes waiters, 
 slot remains held until the actual process settles. Public text reads retain their existing busy
 result. Overflow is an explicit technical refusal, never partial instruction success.
 
-An original Node service host has its own supplemental immutable artifact identity: final npm
-payload and archive, fixed Node executable and bootstrap, dependency lock, license inventory,
-SBOM and build-provenance evidence. Existing CLI archive approval neither approves nor selects
-that host. The shared closed metadata contract distinguishes npm byte integrity from unavailable
-upstream source-build attestation. Its inactive launch-shape producer admits only the fixed
-bootstrap argument and rejects ambient Node loader or native-library injection. Ordinary CLI
-approval checks retain their pre-build path; supplemental host checks require the compiled
-canonical contract. These shape checks do not replace disk, platform, current-authority,
-network or process-lifetime qualification and do not activate native tools.
-
-The existing npm runtime builder also exposes a private, unapproved service-host candidate path.
-It retains the approved CLI members and copies fixed original host assets, locked installed
-dependencies and the artifact-owned Node distribution through the existing archive and tree owners.
-Final npm extraction precedes payload attestation; npm-excluded metadata is reported explicitly.
-The original npm SBOM root stays in its metadata exactly once, while the Node executable is added
-with its measured digest. Installed alias identities retain their actual manifests and license
-files. License-policy refusal remains in the private receipt and prevents production qualification;
-the candidate has no publish configuration and does not change public runtime pins or selectors.
-
-The inactive supplemental disk inspection matches declared canonical metadata to the server-owned
-target supplement, then obtains the complete tree and six fixed Node/bootstrap/lock/SBOM/license/
-provenance digests from one fresh stable pass through the existing attestation owner. Its immutable
-receipt binds the inspected root and the platform captured before IO, and reports only
-supplementary byte qualification. Mutation of an input platform during attestation cannot change
-the later prepared-program target. It neither
-measures the archive/count/source claims nor proves executable suitability, current authority or
-point-of-launch freshness. Missing or unsafe files, cancellation and deadlines retain the owning
-attestation errors and registered body-free log. The inactive fixed executable entry now serves the original public `createRoutes` graph through
-the original Node HTTP/WebSocket server, preserving before-acquisition replacements. It accepts
-one bounded immutable binding packet, publishes readiness after acquisition and closes its native
-scope on stdin EOF. Its executable refuses a process cwd outside the packet's canonical workspace
-before acquiring the original graph. Its database and freshness check use the existing launch
-producer's `<stateRoot>/state/opencode.db` path. Original default session creation and its echo
-retain that workspace Location. These entry controls do not establish current native filesystem
-authority. The BFF separately checks the original created and echoed
-session Location against the captured accepted workspace, and rechecks cancellation after each
-await before proceeding to model readiness. Existing authenticated Fetch factory behavior remains
-available. The existing Manager can privately prepare the distinct owned Node/bootstrap program,
-freshly reattest it and write its single bounded packet through the owned stdin lifetime lease before
-handshake. Unsupported or failed writes follow existing cleanup and recovery; a copied program or
-receipt cannot replace the artifact owner's binding. Host readiness remains unqualified before the
-ordinary CLI adapter can open, so this transport path does not activate the service. This prerequisite
-still needs actual platform/process-lifetime controls, current native IO authority and fresh
-final-payload qualification before production selection or launch. EOF closure alone does not prove
-settlement of delegated effects.
-
-The closed canonical startup packet now carries the same captured `direct` or `code-mode` profile
-as the immutable run configuration. The shared contracts package owns that enum and the eleven
-packet fields. A fixed generated data asset supplies those fields, profiles and the 16 KiB ceiling
-to the native host and executable entry. Static imports select the existing fixed direct or Code
-Mode factory; input cannot name a module, executable or source locator. Missing or arbitrary profiles refuse rather than silently choosing direct; valid mutable input
-is captured before asynchronous work. A copied artifact receipt remains invalid. The existing factory algorithms
-and default model projections remain unchanged. Actual original Tool/Plugin/Location acquisition
-and provider request serialization qualify both selected mapped profiles, including the original
-Code Mode inventory. That inventory includes two additional native items beyond the seventeen
-managed handlers; these controls do not qualify those items or native workspace tools. They do
-not activate the service or replace final packaged-byte/platform qualification.
+**Service host removed (#3897, owner decision of 2026-10-24).** An inactive original Node service
+host built for OpenCode 2.0.10 (its supplemental artifact identity, the private npm candidate path,
+the supplemental disk inspection, the prepared Manager program with its bounded startup packet, and
+the `native-initialization` transport) was never selected in production: every native run starts
+the original pinned OpenCode binary directly through the ordinary prepare and handshake path. The
+host, its contract (`keiko-contracts/runtime/opencode-service-host`), its artifact owner, its private
+lock and its CI and supply-chain coupling were removed. `OPENCODE_TOOL_PROFILES` and
+`OpenCodeToolProfile` moved to `keiko-tool-catalog`, which already owns the profile concept.
+Portable approvals no longer accept a `serviceHost` facet, and the license preflight validates the
+root lock alone. The generated plugin sources of ordinary runs are byte-identical before and after
+the removal.
 
 Portable CLI discovery derives executable, license and SBOM digests from one fresh, bounded
 content pass over stable file descriptors. Those evidence digests and the payload digest belong

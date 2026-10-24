@@ -10,7 +10,7 @@ import {
   type CodingWorkbenchPromptReference,
   type CodingWorkbenchRuntimePromptInputs,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
-import type { OpenCodeToolProfile } from "@oscharko-dev/keiko-contracts/runtime/opencode-service-host";
+import type { OpenCodeToolProfile } from "./opencodeToolSchemas.js";
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
 import {
   activityLogErrorKindOr,

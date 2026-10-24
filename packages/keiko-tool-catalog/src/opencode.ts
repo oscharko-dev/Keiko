@@ -8,10 +8,6 @@ import { WORKSPACE_PORTABLE_PATH_MAX_BYTES } from "@oscharko-dev/keiko-contracts
 // The server's incoming contract matcher and the provider bridge consume this one declaration.
 // Managed source schemas still belong to opencodeToolSchemas.ts; the catalog dialect losslessly
 // projects their canonical descriptors and does not control the native engine or its tool loop.
-import {
-  OPENCODE_TOOL_PROFILES,
-  type OpenCodeToolProfile,
-} from "@oscharko-dev/keiko-contracts/runtime/opencode-service-host";
 import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import {
@@ -39,6 +35,14 @@ const OPENCODE_DISCOVER_MAX_RESULTS = 100;
 const OPENCODE_READ_MAX_START_LINE = 1_000_000;
 const OPENCODE_READ_MAX_WINDOW_LINES = 5_000;
 
+/**
+ * Server-selected fixed tool contract only; this value is never a model or module selector.
+ * `native` is the standalone-equivalent profile (#3897): the pinned OpenCode service runs its own
+ * tools, agents and commands, and Keiko binds the autonomy mode through the supported permission
+ * and tool hooks instead of substituting mapped tools.
+ */
+export const OPENCODE_TOOL_PROFILES = Object.freeze(["native", "direct", "code-mode"] as const);
+export type OpenCodeToolProfile = (typeof OPENCODE_TOOL_PROFILES)[number];
 const OPEN_CODE_TOOL_PROFILES: ReadonlySet<unknown> = new Set(OPENCODE_TOOL_PROFILES);
 const OPENCODE_PROFILE = { id: "opencode", version: 1 } as const;
 const OPENCODE_DIALECT = { id: "managed-runtime-json-schema", version: 1 } as const;

@@ -11,7 +11,7 @@ import {
   CREDENTIAL_PATH_DENY_PATTERNS,
   ENV_EXAMPLE_BASENAME,
   TOOL_STATE_PATH_DENY_PATTERNS,
-} from "./sensitivePathPatterns.js";
+} from "@oscharko-dev/keiko-contracts/sensitive-path-patterns";
 import { memoizeByStringKey, PATH_MEMO_MAX_ENTRIES } from "./boundedMemo.js";
 
 // The pattern names live in keiko-contracts (the leaf both this predicate and the native sandbox

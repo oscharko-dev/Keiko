@@ -1,10 +1,5 @@
 import { WORKSPACE_PATH_DISCOVERY_MODES } from "@oscharko-dev/keiko-contracts/runtime/workspace";
 import { WORKSPACE_PORTABLE_PATH_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
-import {
-  OPENCODE_TOOL_PROFILES,
-  type OpenCodeToolProfile,
-} from "@oscharko-dev/keiko-contracts/runtime/opencode-service-host";
-export type { OpenCodeToolProfile } from "@oscharko-dev/keiko-contracts/runtime/opencode-service-host";
 import { createHash, randomUUID } from "node:crypto";
 
 import {
@@ -12,7 +7,10 @@ import {
   createKeikoToolCatalog,
   opencodeRegistrationSet,
   OPENCODE_NATIVE_EXTENSION_DEFINITIONS,
+  OPENCODE_TOOL_PROFILES,
+  type OpenCodeToolProfile,
 } from "@oscharko-dev/keiko-tool-catalog";
+export type { OpenCodeToolProfile } from "@oscharko-dev/keiko-tool-catalog";
 import type {
   GatewayNativeToolAdvertisement,
   GatewayToolCatalogAdvertisement,

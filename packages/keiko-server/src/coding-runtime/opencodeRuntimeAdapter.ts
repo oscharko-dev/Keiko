@@ -1375,23 +1375,15 @@ export function createGeneratedOpenCodeV2Plugins(
       ? {
           keiko_native_policy: createGeneratedOpenCodeNativePolicyPlugin(),
           keiko_native_context: createGeneratedOpenCodeNativeContextPlugin("native"),
-          [OPENCODE_NATIVE_DELIVERY_PLUGIN_FILE]: sharedV2ToolPluginSource(false, "native"),
+          [OPENCODE_NATIVE_DELIVERY_PLUGIN_FILE]: sharedV2ToolPluginSource("native"),
         }
       : {
-          keiko_governed_tools: sharedV2ToolPluginSource(false, profile),
+          keiko_governed_tools: sharedV2ToolPluginSource(profile),
           keiko_native_context: createGeneratedOpenCodeNativeContextPlugin(),
         };
   const sources = Object.freeze(plugins);
   cachedV2PluginSources.set(profile, sources);
   return sources;
-}
-
-/** Fixed-source external host entry; it never selects or activates a runtime. */
-export function createGeneratedOpenCodeV2HostFactory(
-  profile: OpenCodeToolProfile = "direct",
-): string {
-  openCodeVisibleToolNames(profile);
-  return sharedV2ToolPluginSource(true, profile);
 }
 
 type OpenCodeToolSourceDefinition = (typeof OPENCODE_TOOL_SOURCE_DEFINITIONS)[number];
@@ -1407,25 +1399,14 @@ function v2ToolDefinitions(profile: OpenCodeToolProfile): readonly OpenCodeToolS
     : OPENCODE_TOOL_SOURCE_DEFINITIONS;
 }
 
-function sharedV2ToolPluginSource(host = false, profile: OpenCodeToolProfile = "direct"): string {
+function sharedV2ToolPluginSource(profile: OpenCodeToolProfile): string {
   const native = profile === "native";
   const definitions = v2ToolDefinitions(profile);
   return [
-    ...(host
-      ? [
-          "export default (runtime) => {",
-          "  const { process, crypto, fetch, bindOwner, onParentClosed } = runtime;",
-          "  const plugin = {",
-        ]
-      : ["export default {"]),
+    "export default {",
     `  id: ${JSON.stringify(native ? OPENCODE_NATIVE_DELIVERY_PLUGIN_ID : "keiko.governed-tools")},`,
     "  async setup(ctx) {",
-    ...v2InvocationIdentitySource(host),
-    ...(host
-      ? [
-          "    bindOwner(Object.freeze({ close: closeParent, assertOpen: assertInvocationOpen, capture: captureInvocationIdentity }));",
-        ]
-      : []),
+    ...v2InvocationIdentitySource(),
     // Only the Code Mode profile nests tool calls inside an `execute` program. A native run's
     // delivery tools are top-level calls (the policy plugin governs `execute` itself), so there
     // is no parent invocation to track.
@@ -1439,7 +1420,6 @@ function sharedV2ToolPluginSource(host = false, profile: OpenCodeToolProfile = "
     "    return () => { disposed = true; parents.clear(); closedParents.clear(); };",
     "  },",
     "};",
-    ...(host ? ["  return plugin;", "};"] : []),
   ].join("\n");
 }
 
@@ -1458,7 +1438,7 @@ function v2ExecuteHooksSource(): readonly string[] {
   ];
 }
 
-function v2InvocationIdentitySource(host: boolean): readonly string[] {
+function v2InvocationIdentitySource(): readonly string[] {
   return [
     `    const MAX_IDENTITIES = ${String(MAX_RECENT_IDENTITIES)};`,
     "    const parents = new Map();",
@@ -1471,7 +1451,6 @@ function v2InvocationIdentitySource(host: boolean): readonly string[] {
     "      parents.delete(key);",
     "      closedParents.add(key);",
     "      if (closedParents.size > MAX_IDENTITIES) closedParents.delete(closedParents.values().next().value);",
-    ...(host ? ["      onParentClosed?.(context);"] : []),
     "      return true;",
     "    }",
     "    function assertInvocationOpen(context, requireParent = false) {",

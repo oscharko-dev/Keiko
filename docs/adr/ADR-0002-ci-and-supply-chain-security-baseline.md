@@ -35,6 +35,11 @@ so no obligation reaches our source or our artifacts.
 
 ### Exact-artifact original OpenCode host license disposition (#3895, 2026-10-09)
 
+> **Superseded 2026-10-24 (#3897).** The original OpenCode service host and its private npm lock
+> were removed, so the three component dispositions below no longer apply and no exception admits
+> their licenses. The same-job preflight now reads the canonical root lock alone; the exact-artifact
+> decisions it still carries (`khroma`, `robust-predicates`, #3906) keep the guard described here.
+
 The OpenCode integration in #3895 includes an engineering-reviewed correction for three original npm
 component identities and their preserved notice obligations. Dependency Review's global
 thirteen-license allowlist, the local twelve-license SPDX allowlist, vulnerability thresholds, action
