@@ -643,6 +643,16 @@ const AUTHORITY_FACT_KEYS = [
   "issueBindingDigest",
 ];
 
+// Authority facts and adapter requests carry the same required runtime/model selection.
+function validateRequiredRuntimeSources(value: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
+  if (!isOneOf(value.runtimeSource, CODING_WORKBENCH_RUNTIME_SOURCES))
+    valid = [appendValidationIssues(errors, "runtimeSource is invalid"), valid].every(Boolean);
+  if (!isOneOf(value.modelSource, CODING_WORKBENCH_MODEL_SOURCES))
+    valid = [appendValidationIssues(errors, "modelSource is invalid"), valid].every(Boolean);
+  return valid;
+}
+
 function admitCodingWorkbenchRuntimeAuthorityFacts(
   value: unknown,
   errors: string[],
@@ -681,10 +691,7 @@ function admitCodingWorkbenchRuntimeAuthorityFacts(
         valid,
       ].every(Boolean);
   }
-  if (!isOneOf(value.runtimeSource, CODING_WORKBENCH_RUNTIME_SOURCES))
-    valid = [appendValidationIssues(errors, "runtimeSource is invalid"), valid].every(Boolean);
-  if (!isOneOf(value.modelSource, CODING_WORKBENCH_MODEL_SOURCES))
-    valid = [appendValidationIssues(errors, "modelSource is invalid"), valid].every(Boolean);
+  valid = [validateRequiredRuntimeSources(value, errors), valid].every(Boolean);
   return valid;
 }
 
@@ -742,10 +749,7 @@ function admitCodingWorkbenchRuntimeAdapterStartRequest(
   for (const key of ["delegationId", "idempotencyKey"] as const)
     if (!isNonEmpty(value[key]))
       valid = [appendValidationIssues(errors, `${key} is required`), valid].every(Boolean);
-  if (!isOneOf(value.runtimeSource, CODING_WORKBENCH_RUNTIME_SOURCES))
-    valid = [appendValidationIssues(errors, "runtimeSource is invalid"), valid].every(Boolean);
-  if (!isOneOf(value.modelSource, CODING_WORKBENCH_MODEL_SOURCES))
-    valid = [appendValidationIssues(errors, "modelSource is invalid"), valid].every(Boolean);
+  valid = [validateRequiredRuntimeSources(value, errors), valid].every(Boolean);
   return valid;
 }
 

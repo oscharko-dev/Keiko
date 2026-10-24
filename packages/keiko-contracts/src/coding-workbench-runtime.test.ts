@@ -1080,3 +1080,122 @@ it("preserves full authority-validator digest observation order (#3918)", async 
     digest-throws:threw:expected>binding>digest"
   `);
 });
+
+function requiredSourcePairInput(kind: "facts" | "adapter"): Record<string, unknown> {
+  const facts = c1bAuthorityFacts();
+  if (kind === "facts") return facts;
+  return {
+    authorityRef: { runId: "run-1", envelopeDigest: DIGEST },
+    delegationId: "d-1",
+    idempotencyKey: "i-1",
+    binding: facts.binding,
+    runtimeSource: "keiko-sidecar",
+    modelSource: "keiko-model-gateway",
+  };
+}
+
+function observeRequiredSources(
+  input: Record<string, unknown>,
+  trace: string[],
+  healthy: boolean,
+  missing: boolean,
+): void {
+  const binding = input.binding;
+  Object.defineProperty(input, "binding", {
+    enumerable: true,
+    get: (): unknown => {
+      trace.push("binding");
+      return binding;
+    },
+  });
+  Object.defineProperty(input, "runtimeSource", {
+    enumerable: true,
+    get: (): unknown => {
+      trace.push("runtimeSource");
+      if (missing) return undefined;
+      return healthy ? "keiko-sidecar" : "invalid";
+    },
+  });
+  Object.defineProperty(input, "modelSource", {
+    enumerable: true,
+    get: (): unknown => {
+      trace.push("modelSource");
+      if (missing) return undefined;
+      return healthy ? "keiko-model-gateway" : "invalid";
+    },
+  });
+}
+
+describe("required runtime and model source admission", () => {
+  it.each([
+    ["source", "facts"],
+    ["public", "facts"],
+    ["source", "adapter"],
+    ["public", "adapter"],
+  ] as const)("preserves eager reads and diagnostic order through %s %s", async (surface, kind) => {
+    const module =
+      surface === "source"
+        ? await import("./coding-workbench-runtime.js")
+        : await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime");
+    const validate =
+      kind === "facts"
+        ? module.validateCodingWorkbenchRuntimeAuthorityFacts
+        : module.validateCodingWorkbenchRuntimeAdapterStartRequest;
+    for (const variant of ["healthy", "invalid-both", "missing-both", "prior-invalid"] as const) {
+      const input = requiredSourcePairInput(kind);
+      const trace: string[] = [];
+      if (variant === "prior-invalid") input.binding = null;
+      observeRequiredSources(input, trace, variant === "healthy", variant === "missing-both");
+      const result = validate(input);
+      expect(trace).toEqual(["binding", "runtimeSource", "modelSource"]);
+      if (variant === "healthy") {
+        expect(result.ok).toBe(true);
+        if (result.ok) expect(result.value).toBe(input);
+      } else {
+        expect(result).toEqual({
+          ok: false,
+          errors: [
+            ...(variant === "prior-invalid" ? ["binding must be an object"] : []),
+            "runtimeSource is invalid",
+            "modelSource is invalid",
+          ],
+        });
+      }
+    }
+  });
+
+  it.each([
+    ["source", "facts"],
+    ["public", "facts"],
+    ["source", "adapter"],
+    ["public", "adapter"],
+  ] as const)("preserves source getter exceptions through %s %s", async (surface, kind) => {
+    const module =
+      surface === "source"
+        ? await import("./coding-workbench-runtime.js")
+        : await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime");
+    const validate =
+      kind === "facts"
+        ? module.validateCodingWorkbenchRuntimeAuthorityFacts
+        : module.validateCodingWorkbenchRuntimeAdapterStartRequest;
+    for (const throwingField of ["runtimeSource", "modelSource"] as const) {
+      const input = requiredSourcePairInput(kind);
+      const trace: string[] = [];
+      const failure = new TypeError("fixture source read refused");
+      for (const field of ["runtimeSource", "modelSource"] as const) {
+        Object.defineProperty(input, field, {
+          enumerable: true,
+          get: (): string => {
+            trace.push(field);
+            if (field === throwingField) throw failure;
+            return "invalid";
+          },
+        });
+      }
+      expect(() => validate(input)).toThrow(failure);
+      expect(trace).toEqual(
+        throwingField === "runtimeSource" ? ["runtimeSource"] : ["runtimeSource", "modelSource"],
+      );
+    }
+  });
+});
