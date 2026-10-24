@@ -1,3 +1,10 @@
+import {
+  rawDataToString,
+  rawDataByteLength,
+  closeVoiceSockets,
+  createVoiceUpgradeHandler,
+  type VoiceUpgradeHandler,
+} from "./voice-transport.js";
 // BFF live dictation control plane (Keiko Voice P3). This is intentionally narrower than the
 // dialogue control plane in voice-realtime.ts: it exists only to negotiate a transcription-only
 // WebRTC session for browser microphone capture. It accepts no chat context, persona, tools,
@@ -5,7 +12,6 @@
 // persisted transcripts.
 
 import type { IncomingMessage } from "node:http";
-import type { Duplex } from "node:stream";
 import { WebSocketServer, type RawData, type WebSocket as WsSocket } from "ws";
 import {
   findConfiguredCapability,
@@ -33,10 +39,8 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { isAllowedHost } from "./host-check.js";
-import { resolveCorrelationId } from "./correlation.js";
 import { currentGatewayConfig, currentGatewayEgressConfig, type UiHandlerDeps } from "./deps.js";
-import { isVoiceDisabledByPolicy, isVoiceRealtimeCapable } from "./read-handlers.js";
+import { isVoiceDisabledByPolicy } from "./read-handlers.js";
 import {
   emitServerDiagnostic,
   serverDiagnosticFromError,
@@ -218,31 +222,6 @@ function isLiveTranscribeUpgrade(req: IncomingMessage): boolean {
     return false;
   }
   return url.pathname === VOICE_LIVE_TRANSCRIBE_PATH;
-}
-
-function rawDataToString(data: RawData, isBinary: boolean): string | undefined {
-  if (isBinary) {
-    return undefined;
-  }
-  if (typeof data === "string") {
-    return data;
-  }
-  if (Buffer.isBuffer(data)) {
-    return data.toString("utf8");
-  }
-  if (Array.isArray(data)) {
-    return Buffer.concat(data).toString("utf8");
-  }
-  return Buffer.from(data).toString("utf8");
-}
-
-function rawDataByteLength(data: RawData): number {
-  if (typeof data === "string") return Buffer.byteLength(data, "utf8");
-  if (Buffer.isBuffer(data)) return data.byteLength;
-  if (Array.isArray(data)) {
-    return data.reduce((total, chunk) => total + chunk.byteLength, 0);
-  }
-  return Buffer.from(data).byteLength;
 }
 
 interface LiveDictationProvider {
@@ -564,27 +543,17 @@ class VoiceLiveDictationPlaneImpl implements VoiceControlPlane {
   private readonly activeSessionSockets = new Set<WsSocket>();
   private heartbeat: ReturnType<typeof setInterval> | undefined;
 
-  constructor(private readonly planeDeps: VoiceLiveDictationPlaneDeps) {}
+  public readonly handleUpgrade: VoiceUpgradeHandler;
 
-  handleUpgrade(req: IncomingMessage, sock: Duplex, head: Buffer): boolean {
-    if (!isLiveTranscribeUpgrade(req)) {
-      return false;
-    }
-    const deps = this.planeDeps.handlerDeps();
-    if (
-      typeof req.headers.origin !== "string" ||
-      !isAllowedHost(req, this.planeDeps.port) ||
-      !isVoiceRealtimeCapable(deps)
-    ) {
-      return false;
-    }
-    // Resolved ONCE per upgrade (RB-6 / ADR-0173 D5), not re-minted per diagnostic — every
-    // negotiation failure this connection later reports carries the same id.
-    const correlationId = resolveCorrelationId(req);
-    this.wss.handleUpgrade(req, sock, head, (ws) => {
-      this.onConnection(ws, deps, correlationId);
-    });
-    return true;
+  constructor(private readonly planeDeps: VoiceLiveDictationPlaneDeps) {
+    this.handleUpgrade = createVoiceUpgradeHandler(
+      planeDeps,
+      this.wss,
+      isLiveTranscribeUpgrade,
+      (ws, deps, correlationId) => {
+        this.onConnection(ws, deps, correlationId);
+      },
+    );
   }
 
   closeAll(): void {
@@ -592,10 +561,7 @@ class VoiceLiveDictationPlaneImpl implements VoiceControlPlane {
       clearInterval(this.heartbeat);
       this.heartbeat = undefined;
     }
-    for (const client of this.wss.clients) {
-      client.close(1001, "server shutting down");
-    }
-    this.wss.close();
+    closeVoiceSockets(this.wss);
   }
 
   private startHeartbeat(): void {

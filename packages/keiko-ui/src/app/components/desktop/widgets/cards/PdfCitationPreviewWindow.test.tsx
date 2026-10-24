@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readStylesheet } from "../../../../../../read-stylesheet.mjs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -822,13 +822,12 @@ describe("PdfCitationPreviewWindow", () => {
 
   // GEN-UI-FOCUS-001 + GEN-UI-VISUAL-001 — the .tm-action chrome and its focus ring must be
   // re-declared under THIS module's scope (the TerminalWidget copy cannot match the PDF window's
-  // CSS-module hash). jsdom cannot compute the ring, so guard the source rule at the string level.
-  it("re-declares the tm-action chrome and focus ring under the pdf module scope", () => {
+  // CSS-module hash). Resolve its composed ancestor and guard both chrome and the local ring.
+  it("composes the tm-action chrome and retains the focus ring under the pdf module scope", () => {
     // Resolve the sibling CSS module relative to THIS test file, not process.cwd(): the coverage
     // gate (test:coverage:ui) runs from the repo root, so a cwd-relative path would ENOENT there.
-    const css = readFileSync(
+    const css = readStylesheet(
       resolve(dirname(fileURLToPath(import.meta.url)), "PdfCitationPreviewWindow.module.css"),
-      "utf8",
     );
     expect(css).toMatch(/:global\(\.tm-action\)\s*\{/);
     expect(css).toMatch(/:global\(\.tm-action\):focus-visible\s*\{[^}]*--focus-ring[^}]*\}/);

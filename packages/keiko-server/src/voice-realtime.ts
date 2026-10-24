@@ -1,3 +1,10 @@
+import {
+  rawDataToString,
+  rawDataByteLength,
+  closeVoiceSockets,
+  createVoiceUpgradeHandler,
+  type VoiceUpgradeHandler,
+} from "./voice-transport.js";
 // BFF realtime voice control plane (Issue #497, Epic #491, ADR-0100 D3/D6, ADR-0101). Re-opens the
 // BFF WebSocket upgrade — deliberately hard-rejected for every other path (server.ts) — for the single
 // loopback control path `/api/voice/control`, and ONLY when the resolved voice capability is the
@@ -54,10 +61,8 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { isAllowedHost } from "./host-check.js";
-import { resolveCorrelationId } from "./correlation.js";
 import { currentGatewayConfig, currentGatewayEgressConfig, type UiHandlerDeps } from "./deps.js";
-import { isVoiceDisabledByPolicy, isVoiceRealtimeCapable } from "./read-handlers.js";
+import { isVoiceDisabledByPolicy } from "./read-handlers.js";
 import {
   emitServerDiagnostic,
   serverDiagnosticFromError,
@@ -724,31 +729,6 @@ function isVoiceControlUpgrade(req: IncomingMessage): boolean {
   return url.pathname === VOICE_CONTROL_PATH;
 }
 
-function rawDataToString(data: RawData, isBinary: boolean): string | undefined {
-  if (isBinary) {
-    return undefined;
-  }
-  if (typeof data === "string") {
-    return data;
-  }
-  if (Buffer.isBuffer(data)) {
-    return data.toString("utf8");
-  }
-  if (Array.isArray(data)) {
-    return Buffer.concat(data).toString("utf8");
-  }
-  return Buffer.from(data).toString("utf8");
-}
-
-function rawDataByteLength(data: RawData): number {
-  if (typeof data === "string") return Buffer.byteLength(data, "utf8");
-  if (Buffer.isBuffer(data)) return data.byteLength;
-  if (Array.isArray(data)) {
-    return data.reduce((total, chunk) => total + chunk.byteLength, 0);
-  }
-  return Buffer.from(data).byteLength;
-}
-
 export interface VoiceControlPlaneDeps {
   // The bound loopback port; the upgrade reuses the HTTP path's Host/Origin check on it.
   readonly port: number;
@@ -847,7 +827,18 @@ class VoiceControlPlaneImpl implements VoiceControlPlane {
   // A socket that misses a ping/pong cycle is terminated by the next sweep.
   private heartbeat: ReturnType<typeof setInterval> | undefined;
 
-  constructor(private readonly planeDeps: VoiceControlPlaneDeps) {}
+  public readonly handleUpgrade: VoiceUpgradeHandler;
+
+  constructor(planeDeps: VoiceControlPlaneDeps) {
+    this.handleUpgrade = createVoiceUpgradeHandler(
+      planeDeps,
+      this.wss,
+      isVoiceControlUpgrade,
+      (ws, deps, correlationId) => {
+        this.onConnection(ws, deps, correlationId);
+      },
+    );
+  }
 
   private startHeartbeat(): void {
     if (this.heartbeat !== undefined) {
@@ -862,41 +853,12 @@ class VoiceControlPlaneImpl implements VoiceControlPlane {
     this.heartbeat = timer;
   }
 
-  handleUpgrade(req: IncomingMessage, sock: Duplex, head: Buffer): boolean {
-    if (!isVoiceControlUpgrade(req)) {
-      return false;
-    }
-    const deps = this.planeDeps.handlerDeps();
-    // Three load-bearing gates: (1) a present, loopback Origin — a browser always sends Origin on a WS
-    // handshake, so requiring it (in addition to `isAllowedHost` rejecting a non-loopback or opaque
-    // `null` Origin) keeps the control plane reachable only from the loopback browser origin and never
-    // from a non-browser local process; (2) loopback Host; (3) the full-realtime capability gate (a
-    // no-voice / STT-only / policy-disabled deployment keeps the WebSocket hard-rejected, AC1/AC3).
-    if (
-      typeof req.headers.origin !== "string" ||
-      !isAllowedHost(req, this.planeDeps.port) ||
-      !isVoiceRealtimeCapable(deps)
-    ) {
-      return false;
-    }
-    // Resolved ONCE per upgrade (RB-6 / ADR-0173 D5): the id is scoped to this physical WebSocket
-    // connection, not the resumable logical session, so a later reconnect gets its own fresh id.
-    const correlationId = resolveCorrelationId(req);
-    this.wss.handleUpgrade(req, sock, head, (ws) => {
-      this.onConnection(ws, deps, correlationId);
-    });
-    return true;
-  }
-
   closeAll(): void {
     if (this.heartbeat !== undefined) {
       clearInterval(this.heartbeat);
       this.heartbeat = undefined;
     }
-    for (const client of this.wss.clients) {
-      client.close(1001, "server shutting down");
-    }
-    this.wss.close();
+    closeVoiceSockets(this.wss);
     this.sessions.clear();
   }
 

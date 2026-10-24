@@ -854,6 +854,10 @@
     "./runtime/opencode-service-host": {
       "types": "./dist/opencode-service-host.d.ts",
       "import": "./dist/opencode-service-host.js"
+    },
+    "./runtime/activity-log-diagnostic-fields": {
+      "types": "./dist/activity-log-diagnostic-fields.d.ts",
+      "import": "./dist/activity-log-diagnostic-fields.js"
     }
   },
   "scripts": {

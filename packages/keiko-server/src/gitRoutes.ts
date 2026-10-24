@@ -1290,6 +1290,23 @@ export async function handleGitStatus(
   );
 }
 
+function prepareDiffContext<Scope>(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  rawOptions: GitRouteOptions | undefined,
+  scopeParser: (value: string | null) => Scope,
+): {
+  readonly options: ReturnType<typeof optionsWithDefaults>;
+  readonly scope: Scope;
+  readonly path: string | undefined;
+  readonly repository: ReturnType<typeof resolveRepository>;
+} {
+  const options = optionsWithDefaults(rawOptions ?? deps.gitRouteOptions, ctx.correlationId);
+  const scope = scopeParser(ctx.url.searchParams.get("scope"));
+  const path = validatePath(ctx.url.searchParams.get("path"));
+  return { options, scope, path, repository: resolveRepository(ctx, deps, options) };
+}
+
 // eslint-disable-next-line max-lines-per-function
 export async function handleGitDiff(
   ctx: RouteContext,
@@ -1301,10 +1318,13 @@ export async function handleGitDiff(
     deps,
     // eslint-disable-next-line max-lines-per-function
     async () => {
-      const options = optionsWithDefaults(rawOptions ?? deps.gitRouteOptions, ctx.correlationId);
-      const scope = parseScope(ctx.url.searchParams.get("scope"));
-      const path = validatePath(ctx.url.searchParams.get("path"));
-      const repo = await resolveRepository(ctx, deps, options);
+      const { options, scope, path, repository } = prepareDiffContext(
+        ctx,
+        deps,
+        rawOptions,
+        parseScope,
+      );
+      const repo = await repository;
       if ("available" in repo) {
         const body: GitRepositoryDiffResponse = {
           schemaVersion: GIT_REPOSITORY_SCHEMA_VERSION,
@@ -1531,10 +1551,13 @@ export async function handleGitStructuredDiff(
     ctx,
     deps,
     async () => {
-      const options = optionsWithDefaults(rawOptions ?? deps.gitRouteOptions, ctx.correlationId);
-      const scope = parseStructuredScope(ctx.url.searchParams.get("scope"));
-      const path = validatePath(ctx.url.searchParams.get("path"));
-      const repo = await resolveRepository(ctx, deps, options);
+      const { options, scope, path, repository } = prepareDiffContext(
+        ctx,
+        deps,
+        rawOptions,
+        parseStructuredScope,
+      );
+      const repo = await repository;
       if ("available" in repo) {
         return { status: 200, body: redacted(deps, unavailableStructuredDiff(scope)) };
       }

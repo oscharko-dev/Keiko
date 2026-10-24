@@ -3,7 +3,7 @@
   "producer": "docs/design-system/evidence/sonarcloud-2026-10-24/context-loop-preservation.mjs",
   "producerSha256": "f23b97663cbddcd51cbb47fe23dbc4cee50878b5c31550b9bb66a9d1ecd9dc91",
   "sources": {
-    "scripts/check-context-quality.mjs": "9ecc05e29db7cb5d4c1f3ab4bd03a77e34a7be3b41dd11c9f51a580bf3a74b37",
+    "scripts/check-context-quality.mjs": "f50746575e7b8816b436cb2f2e6c8b1a9961538d01b408101bf507684ae01406",
     "scripts/lib/context-quality-corpus.mjs": "79a910021282ab8b3c4381fe20643a9471ee5032f8d23e0c8700dad88f577442"
   },
   "comparison": {
@@ -86,7 +86,7 @@
     },
     "productSnapshot": {
       "fileCount": 5717,
-      "sha256": "a56080b7ec9bcbd8c089fdfe035a14ed3f6ea0ea7bd0f264cb0c47c912e996bf"
+      "sha256": "2711b84c41fa6f30a9cf7c00b532d94d8fe2357a5c5fb798143f65fb1b080ec7"
     }
   },
   "targetedEslintRule": {

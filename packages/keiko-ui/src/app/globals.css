@@ -1,3 +1,11 @@
+@import "../../dist/styles/product-tokens.css";
+@import "../../../../design-system/keiko-ai.css";
+@import "../../../../design-system/keiko-data.css";
+@import "../../../../design-system/keiko-dataviz.css";
+@import "../../../../design-system/keiko-inputs.css";
+@import "../../../../design-system/keiko-nav.css";
+/* Shared token values are bound to the existing design-system CSS; overrides remain explicit. */
+
 /* ============================================================
    KEIKO DESKTOP — design tokens & base
    Brand: #4EBA87 (orca green) · #333333 · #ffffff
@@ -14,574 +22,6 @@
   font-display: swap;
   font-weight: 100 800;
   src: url("/fonts/jetbrains-mono-latin-wght-normal.woff2") format("woff2");
-}
-
-:root {
-  /* Tell the user agent the app paints on a dark surface by default. Without
-     this hint the browser fills the empty document with its own white "blank"
-     state between document swap and CSS variable resolution during F5 reloads,
-     producing a visible white flash before the shader/background paints (#302). */
-  color-scheme: dark;
-
-  /* surfaces — warm-neutral near-black, derived in oklch from #333 */
-  --bg: oklch(0.17 0.004 160); /* app background */
-  --surface: oklch(0.205 0.004 160); /* sidebar / panels */
-  --card: oklch(0.235 0.004 160); /* raised cards */
-  --card-2: oklch(0.265 0.004 160); /* hover / nested */
-  --inset: oklch(0.155 0.004 160); /* wells, inputs */
-
-  /* borders */
-  --line: oklch(0.3 0.004 160);
-  --line-soft: oklch(0.26 0.004 160);
-  --line-strong: oklch(0.38 0.005 160);
-  /* canvas dot-grid pitch tone + focus-ring width (#1292) — the two Tier-1
-     primitives the design-system reference carries that product CSS lacked.
-     Stepped in the high-contrast + forced-colors blocks below. */
-  --grid-dot: oklch(0.34 0.005 160);
-  --focus-w: 2px;
-
-  /* text */
-  --fg: oklch(0.97 0.003 160);
-  --fg-muted: oklch(0.74 0.004 160);
-  /* WCAG 1.4.3 — 0.58 measured 3.88:1 on --card / 4.17:1 on --surface (FAIL for
-     11-12px text: settings tabs, zoom %, tb-status, QI counts). 0.66 measures
-     5.36:1 on --card, 4.92:1 on --card-2, 5.76:1 on --surface; stays below
-     --fg-muted (0.74) so the hierarchy remains monotonic. */
-  --fg-dim: oklch(0.66 0.004 160);
-  /* WCAG 1.4.3 — 0.46 measured 2.34:1 on --card / 2.75:1 on --inset (FAIL for
-     11-12.5px text: scope labels, section labels, empty states, win subtitles).
-     0.64 measures 4.96:1 on --card, 4.55:1 on --card-2, 5.82:1 on --inset;
-     stays below --fg-dim (0.66) so the hierarchy remains monotonic (uiux-fix F020). */
-  --fg-faint: oklch(0.64 0.004 160);
-
-  /* dark text token for use on light/accent backgrounds (Issue #184) */
-  --ink-inverse: oklch(0.18 0.005 160);
-  --ink-muted: oklch(0.58 0.004 160);
-
-  /* brand */
-  --accent: #4eba87;
-  --accent-bright: oklch(0.78 0.13 160);
-  --accent-dim: color-mix(in oklch, #4eba87 18%, transparent);
-  --accent-line: color-mix(in oklch, #4eba87 40%, transparent);
-  --accent-glow: color-mix(in oklch, #4eba87 26%, transparent);
-  /* text-tone alias — equals --accent in dark theme; overridden to ≥4.5:1 on white in light */
-  --accent-text: var(--accent);
-  --accent-solid: var(--accent);
-  --accent-solid-ink: var(--ink-inverse);
-  --accent-on-tint: var(--accent-text);
-  /* status */
-  --ok: #4eba87;
-  --warn: oklch(0.78 0.13 75);
-  --info: oklch(0.74 0.1 240);
-  --danger: oklch(0.68 0.16 25);
-
-  --radius: 14px;
-  --radius-sm: 9px;
-  --radius-lg: 18px;
-
-  /* Mode-aware shadow ink (#1295 Category C1). Dark = pure black (the historical
-     hardcoded shadow ink), so rgb(var(--shadow-ink-rgb) / α) is byte-identical to the
-     prior rgba(0, 0, 0, α) in dark/+HC/forced-colors. The light block re-points it to
-     the DS warm shadow ink (20 30 25) so component drop-shadows adapt in Light. */
-  --shadow-ink-rgb: 0 0 0;
-
-  --shadow-card: 0 1px 0 0 oklch(1 0 0 / 0.03) inset, 0 8px 24px -12px rgba(0, 0, 0, 0.6);
-  --shadow-pop: 0 16px 50px -16px rgba(0, 0, 0, 0.7), 0 0 0 1px var(--line);
-
-  --font-ui:
-    -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-
-  /* ============================================================
-   DESIGN-SYSTEM TOKEN TIERS 2–4 (#1292) — scales · semantic · component
-   ------------------------------------------------------------
-   SOURCE OF TRUTH: this file (globals.css) is the single emitted stylesheet
-   the product ships (imported once at app/layout.tsx). The standalone
-   design-system/keiko-*.css files are the human-readable REFERENCE mirror,
-   not a build input — nothing imports them. This block consolidates the
-   middle + top of the four-tier token architecture into the product so the
-   reference and the runtime stop diverging (epic #1290, blueprint #1291,
-   docs/design-system/token-component-reuse-map.md §1).
-
-   Strategy = EXTEND, never fork: every alias below resolves to a Tier-1
-   primitive already defined in the :root above, so the rendered product is
-   byte-identical until components are migrated to consume these names (the
-   migrations are scoped to #1293–#1298). Because the primitives already
-   redefine themselves for the light theme, prefers-contrast / in-app
-   high-contrast, and forced-colors, these aliases inherit all modes
-   automatically — there is no per-mode duplication to keep in sync. The
-   globals.css.test.ts suite pins this set
-   against design-system/keiko-semantic-tokens.css as a drift gate; adding a
-   second :root token source (a parallel namespace) is forbidden by the epic
-   reuse gate. ============================================================ */
-  /* ── SCALE · SPACING — 2-based rhythm, mode-independent ── */
-  --space-0: 0;
-  --space-1: 2px;
-  --space-2: 4px;
-  --space-3: 6px;
-  --space-4: 8px;
-  --space-5: 12px;
-  --space-6: 14px;
-  --space-7: 18px;
-  --space-8: 24px;
-  --space-9: 32px;
-  --space-10: 48px;
-  --space-12: 64px;
-  --space-16: 96px;
-
-  /* ── SCALE · RADIUS (alias — primitives own the values) ── */
-  --radius-pill: 999px;
-  --radius-control: var(--radius-sm);
-  --radius-surface: var(--radius);
-  --radius-floating: var(--radius-lg);
-
-  /* ── SCALE · TYPE WEIGHT ── */
-  --weight-regular: 400;
-  --weight-medium: 500;
-  --weight-semibold: 600;
-  --weight-strong: 650;
-
-  /* ── SCALE · LINE-HEIGHT ── */
-  --leading-tight: 1.1;
-  --leading-snug: 1.3;
-  --leading-normal: 1.5;
-  --leading-relaxed: 1.65;
-
-  /* ── SCALE · TYPE SIZE — role-named ramp, 11px floor ── */
-  --text-caption: 11px;
-  --text-label: 12px;
-  --text-body-sm: 13px;
-  --text-body: 14px;
-  --text-body-lg: 15px;
-  --text-heading: 17px;
-  --text-title: 22px;
-  --text-title-lg: 28px;
-  --text-display-sm: 36px;
-  --text-display: 50px;
-
-  /* ── SCALE · OPACITY ── */
-  --opacity-disabled: 0.42;
-  --opacity-muted: 0.64;
-  --opacity-hover-veil: 0.06;
-  --opacity-scrim: 0.55;
-  --opacity-scrim-strong: 0.72;
-
-  /* ── SCALE · BLUR ── */
-  --blur-sm: 4px;
-  --blur-md: 12px;
-  --blur-lg: 28px;
-
-  /* ── SCALE · MOTION (reduced-motion handled globally below) ── */
-  --dur-instant: 80ms;
-  --dur-fast: 120ms;
-  --dur-base: 180ms;
-  --dur-slow: 260ms;
-  --dur-flow: 1100ms;
-  --ease-standard: cubic-bezier(0.2, 0, 0.2, 1);
-  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-  --ease-in: cubic-bezier(0.4, 0, 1, 1);
-  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
-
-  /* ── SCALE · Z-INDEX — named layers, closes the raw-z-index gap ── */
-  --z-base: 0;
-  --z-canvas-window: 10;
-  --z-canvas-window-active: 20;
-  --z-rail: 40;
-  --z-nav: 50;
-  --z-sticky: 80;
-  --z-dropdown: 100;
-  --z-overlay: 200;
-  --z-modal: 300;
-  --z-popover: 400;
-  --z-toast: 500;
-  --z-tooltip: 600;
-  --shell-rail-width: 50px;
-  --shell-right-rail-reserve: var(--shell-rail-width);
-
-  /* ── SCALE · BREAKPOINTS — canonical media-query reference values ── */
-  --bp-xs: 480px;
-  --bp-sm: 640px;
-  --bp-md: 768px;
-  --bp-lg: 900px;
-  --bp-xl: 1200px;
-  --bp-2xl: 1536px;
-
-  /* ── SCALE · DENSITY — comfortable default, compact overridden below ── */
-  --control-height: 34px;
-  --control-height-sm: 28px;
-  --control-height-lg: 40px;
-  --control-pad-x: 14px;
-  --row-pad-y: 9px;
-  --row-pad-x: 12px;
-
-  /* ── SEMANTIC — the layer product code should consume. All resolve to
-        mode-aware primitives, so correct in dark · light · +HC · forced-colors ── */
-  --background-primary: var(--bg);
-  --background-secondary: var(--surface);
-
-  --surface-primary: var(--card);
-  --surface-secondary: var(--card-2);
-  --surface-elevated: var(--card-2);
-  --surface-inset: var(--inset);
-  --surface-overlay: var(--surface);
-  --surface-accent-subtle: var(--accent-dim);
-  --surface-accent-glow: var(--accent-glow);
-
-  --text-primary: var(--fg);
-  --text-secondary: var(--fg-muted);
-  --text-tertiary: var(--fg-dim);
-  --text-faint: var(--fg-faint);
-  --text-disabled: var(--fg-faint);
-  --text-inverse: var(--ink-inverse);
-  --text-accent: var(--accent-text);
-  --text-on-accent: var(--ink-inverse);
-
-  --border-subtle: var(--line-soft);
-  --border-default: var(--line);
-  --border-strong: var(--line-strong);
-  --border-accent: var(--accent-line);
-
-  --action-primary: var(--accent);
-  --action-primary-text: var(--accent-text);
-  --action-secondary-surface: var(--card);
-  --action-secondary-border: var(--line);
-  --action-tertiary-text: var(--fg-muted);
-
-  --feedback-success: var(--ok);
-  --feedback-warning: var(--warn);
-  --feedback-danger: var(--danger);
-  --feedback-info: var(--info);
-  --feedback-success-surface: color-mix(in oklch, var(--ok) 12%, transparent);
-  --feedback-warning-surface: color-mix(in oklch, var(--warn) 12%, transparent);
-  --feedback-danger-surface: color-mix(in oklch, var(--danger) 12%, transparent);
-  --feedback-info-surface: color-mix(in oklch, var(--info) 12%, transparent);
-
-  --focus-ring: var(--accent-text);
-  --focus-width: var(--focus-w);
-  --selection-surface: var(--accent-glow);
-
-  --overlay-scrim: oklch(0 0 0 / var(--opacity-scrim));
-  --overlay-scrim-strong: oklch(0 0 0 / var(--opacity-scrim-strong));
-
-  --skeleton-base: var(--inset);
-  --skeleton-highlight: var(--card-2);
-
-  /* ── COMPONENT — one resolved name per component decision ── */
-  --button-primary-surface: var(--accent);
-  --button-primary-surface-hover: var(--accent-bright);
-  --button-primary-text: var(--ink-inverse);
-  --button-primary-disabled-surface: var(--card-2);
-  --button-primary-disabled-text: var(--fg-faint);
-  --button-secondary-surface: var(--card);
-  --button-secondary-surface-hover: var(--card-2);
-  --button-secondary-border: var(--line);
-  --button-secondary-text: var(--fg);
-  --button-ghost-surface-hover: var(--inset);
-  --button-danger-surface: var(--danger);
-  --button-danger-text: var(--ink-inverse);
-
-  --input-surface: var(--inset);
-  --input-border: var(--line);
-  --input-border-hover: var(--line-strong);
-  --input-border-focus: var(--accent-line);
-  --input-border-error: var(--danger);
-  --input-text: var(--fg);
-  --input-placeholder: var(--fg-muted);
-  --input-ring-focus: var(--accent-glow);
-
-  --card-surface: var(--card);
-  --card-border: var(--line);
-  --card-shadow: var(--shadow-card);
-  --card-shadow-raised: var(--shadow-pop);
-
-  /* WCAG 2.2 AA (RB-14) — the window zoom cluster (.win-zoom) rests at opacity:0.72,
-     which composites this badge's text toward the window surface. --text-tertiary then
-     measured only 3.45:1 in a real browser (jsdom axe cannot see it). A primary+secondary
-     mix clears 4.5:1 at that resting opacity in dark (6.15:1) and light (4.97:1) while
-     staying dimmer than the window title; it resolves per-theme through the referenced
-     tokens (dark/light/HC), and brightens to --text-primary on hover. */
-  --win-zoom-pct: color-mix(in oklch, var(--text-primary), var(--text-secondary));
-
-  --modal-surface: var(--card);
-  --modal-border: var(--line);
-  --modal-backdrop: var(--overlay-scrim);
-  --modal-shadow: var(--shadow-pop);
-
-  --popover-surface: var(--surface);
-  --popover-border: var(--line);
-  --popover-shadow: var(--shadow-pop);
-  --tooltip-surface: var(--card-2);
-  --tooltip-text: var(--fg);
-  --menu-item-surface-hover: var(--card);
-
-  --toast-surface: var(--card);
-  --toast-border: var(--line);
-  --toast-shadow: var(--shadow-pop);
-
-  --ai-response-surface: var(--surface);
-  --ai-response-border: var(--line-soft);
-  --ai-thinking-indicator: var(--accent-text);
-  --ai-streaming-cursor: var(--accent);
-  --ai-source-border: var(--accent-line);
-  --ai-source-surface: var(--accent-dim);
-  --ai-tool-surface: var(--inset);
-  --ai-tool-border: var(--line);
-  --ai-confidence-high: var(--ok);
-  --ai-confidence-medium: var(--warn);
-  --ai-confidence-low: var(--danger);
-  --ai-permission-surface: var(--feedback-warning-surface);
-  --ai-permission-border: color-mix(in oklch, var(--warn) 40%, transparent);
-
-  --table-header-text: var(--fg-faint);
-  --table-header-surface: var(--card-2);
-  --table-row-border: var(--line-soft);
-  --table-row-surface-hover: var(--card);
-  --table-row-surface-selected: var(--accent-dim);
-  --table-foot-surface: var(--card-2);
-  --table-sort-indicator: var(--accent-text);
-  --table-num-text: var(--fg);
-
-  --nav-surface: var(--surface);
-  --nav-item-text: var(--fg-muted);
-  --nav-item-text-active: var(--fg);
-  --nav-item-surface-active: var(--card);
-  --nav-item-indicator: var(--accent-text);
-
-  --checkbox-surface: var(--inset);
-  --checkbox-border: var(--line);
-  --checkbox-surface-selected: var(--accent-solid);
-  --checkbox-mark: var(--accent-solid-ink);
-  --radio-surface: var(--inset);
-  --radio-border: var(--line);
-  --radio-border-selected: var(--accent);
-  --radio-dot: var(--accent-solid);
-
-  --slider-track: var(--inset);
-  --slider-fill: var(--accent-solid);
-  --slider-thumb: var(--accent-bright);
-  --slider-thumb-ring: var(--accent-line);
-  --slider-thumb-border: var(--bg);
-
-  --stepper-surface: var(--card);
-  --stepper-border: var(--line);
-  --stepper-button-text: var(--fg-muted);
-  --stepper-button-surface-hover: var(--card-2);
-  --stepper-input-surface: var(--inset);
-
-  --combobox-surface: var(--card);
-  --combobox-border: var(--line);
-  --combobox-list-surface: var(--surface);
-  --combobox-list-border: var(--line);
-  --combobox-option-surface-hover: var(--card);
-  --combobox-option-selected-mark: var(--accent-text);
-
-  --tag-surface: var(--accent-dim);
-  --tag-border: var(--accent-line);
-  --tag-text: var(--accent-on-tint);
-
-  --file-dropzone-surface: var(--inset);
-  --file-dropzone-border: var(--line);
-  --file-dropzone-border-active: var(--accent-line);
-  --file-progress: var(--accent);
-  --file-item-surface: var(--card);
-
-  --date-surface: var(--inset);
-  --date-border: var(--line);
-  --date-segment-surface-active: var(--accent-dim);
-  --date-segment-text-active: var(--accent-text);
-
-  --breadcrumb-text: var(--fg-muted);
-  --breadcrumb-text-current: var(--fg);
-  --breadcrumb-surface-hover: var(--card-2);
-  --pagination-text: var(--fg-muted);
-  --pagination-surface-hover: var(--card-2);
-  --pagination-surface-current: var(--accent-dim);
-  --pagination-text-current: var(--accent-on-tint);
-  --pagination-border-current: var(--accent-line);
-  --tab-underline-indicator: var(--accent-text);
-  --context-item-text: var(--fg-muted);
-  --context-item-surface-hover: var(--card);
-  --context-item-text-danger: var(--danger);
-  --step-dot-surface: var(--card);
-  --step-dot-border: var(--line);
-  --step-dot-surface-done: var(--accent-solid);
-  --step-dot-text-done: var(--accent-solid-ink);
-  --step-dot-border-active: var(--accent);
-  --step-line: var(--line);
-  --step-line-done: var(--accent);
-
-  --viz-gridline: var(--line-soft);
-  --viz-axis-text: var(--fg-faint);
-  --viz-tooltip-surface: var(--card-2);
-  --viz-tooltip-value: var(--fg);
-
-  /* Issue #1297 — Design System 0.4.0 data-visualisation palette (design-system/keiko-dataviz.css).
-     Categorical hues at a matched chroma so no single series shouts (order = legend order), a
-     single-hue green sequential ramp for magnitude, plus grid/axis tokens. Dark values live here;
-     the light-theme block overrides --viz-2..6 and --viz-seq-1..5 for light backgrounds. */
-  --viz-1: var(--accent);
-  --viz-2: oklch(0.7 0.12 240);
-  --viz-3: oklch(0.78 0.13 75);
-  --viz-4: oklch(0.68 0.15 330);
-  --viz-5: oklch(0.7 0.13 25);
-  --viz-6: oklch(0.72 0.07 200);
-  --viz-seq-1: oklch(0.3 0.05 160);
-  --viz-seq-2: oklch(0.42 0.08 160);
-  --viz-seq-3: oklch(0.54 0.1 160);
-  --viz-seq-4: oklch(0.66 0.12 160);
-  --viz-seq-5: oklch(0.78 0.13 160);
-  --viz-grid: var(--border-subtle);
-  --viz-axis: var(--text-faint);
-
-  /* Single-source HC palettes — the OS media query and explicit in-app attribute
-   below both promote these same primitives, matching the design-system mirror. */
-  --hc-d-bg: oklch(0.11 0.004 160);
-  --hc-d-surface: oklch(0.145 0.004 160);
-  --hc-d-card: oklch(0.185 0.004 160);
-  --hc-d-card-2: oklch(0.225 0.004 160);
-  --hc-d-inset: oklch(0.09 0.004 160);
-  --hc-d-line: oklch(0.62 0.006 160);
-  --hc-d-line-soft: oklch(0.5 0.005 160);
-  --hc-d-line-strong: oklch(0.74 0.006 160);
-  --hc-d-grid-dot: oklch(0.52 0.006 160);
-  --hc-d-fg: oklch(1 0 0);
-  --hc-d-fg-muted: oklch(0.88 0.004 160);
-  --hc-d-fg-dim: oklch(0.84 0.004 160);
-  --hc-d-fg-faint: oklch(0.82 0.004 160);
-  --hc-d-accent-bright: oklch(0.88 0.15 160);
-  --hc-d-accent-text: oklch(0.86 0.16 160);
-  --hc-d-accent-dim: color-mix(in oklch, var(--accent) 28%, transparent);
-  --hc-d-accent-line: color-mix(in oklch, var(--accent) 72%, transparent);
-  --hc-d-accent-glow: color-mix(in oklch, var(--accent) 42%, transparent);
-  --hc-d-warn: oklch(0.88 0.14 80);
-  --hc-d-danger: oklch(0.78 0.17 25);
-  --hc-d-ok: oklch(0.82 0.15 146);
-  --hc-d-info: oklch(0.84 0.12 240);
-  --hc-d-shadow-card: 0 0 0 1px var(--hc-d-line), 0 8px 24px -12px rgba(0, 0, 0, 0.7);
-  --hc-d-shadow-pop: 0 0 0 1px var(--hc-d-line-strong), 0 18px 50px -18px rgba(0, 0, 0, 0.85);
-
-  --hc-l-bg: oklch(1 0 0);
-  --hc-l-surface: oklch(0.99 0.002 160);
-  --hc-l-card: oklch(1 0 0);
-  --hc-l-card-2: oklch(0.965 0.004 160);
-  --hc-l-inset: oklch(0.95 0.004 160);
-  --hc-l-line: oklch(0.45 0.008 160);
-  --hc-l-line-soft: oklch(0.6 0.006 160);
-  --hc-l-line-strong: oklch(0.35 0.01 160);
-  --hc-l-grid-dot: oklch(0.6 0.01 160);
-  --hc-l-fg: oklch(0.13 0.01 160);
-  --hc-l-fg-muted: oklch(0.3 0.012 160);
-  --hc-l-fg-dim: oklch(0.34 0.012 160);
-  --hc-l-fg-faint: oklch(0.36 0.012 160);
-  --hc-l-accent-text: oklch(0.42 0.14 160);
-  --hc-l-accent-bright: oklch(0.42 0.14 160);
-  --hc-l-accent-dim: color-mix(in oklch, var(--accent) 22%, transparent);
-  --hc-l-accent-line: color-mix(in oklch, var(--hc-l-accent-text) 78%, transparent);
-  --hc-l-accent-glow: color-mix(in oklch, var(--hc-l-accent-text) 32%, transparent);
-  --hc-l-danger: oklch(0.42 0.19 25);
-  --hc-l-warn: oklch(0.38 0.14 75);
-  --hc-l-info: oklch(0.4 0.16 240);
-  --hc-l-ok: oklch(0.4 0.14 146);
-  --hc-l-shadow-card: 0 0 0 1px var(--hc-l-line-strong);
-  --hc-l-shadow-pop: 0 18px 50px -18px rgba(20, 30, 25, 0.32), 0 0 0 1px var(--hc-l-line-strong);
-
-  /* ============================================================
-   Editor theme tokens (#1212) — consumed by the Keiko Editor Monaco runtime (#1193).
-   Lifted from design/keiko-editor-tokens.css; EXTENDS the base palette (does not fork it):
-   editor chrome reuses --bg/--fg/--danger/--warn/--info, and only the syntax palette plus the
-   editor-specific chrome/diff/ghost-text are net-new. Surfaced here so the --ed-* / --ed-syn-*
-   custom properties resolve at runtime when the editor mounts (host integration, #1194); the
-   Monaco theme reads them via getComputedStyle and embeds no colour literals. Dark is the default;
-   the light and high-contrast variants follow the source. High contrast is exposed both through
-   prefers-contrast and [data-hc="more"], matching the design-system source.
-   ============================================================ */
-  /* editor surface (reuses the inset tone as the code well) */
-  --ed-bg: oklch(0.16 0.004 160);
-  --ed-bg-gutter: oklch(0.16 0.004 160);
-  --ed-fg: #c5cdd9;
-  /* syntax palette — TS/JS first, semantic types reused by all languages */
-  --ed-syn-comment: #7d8ba5;
-  --ed-syn-string: #c3e88d;
-  --ed-syn-number: #f78c6c;
-  --ed-syn-constant: #f78c6c;
-  --ed-syn-keyword: #c792ea;
-  --ed-syn-type: #ffcb6b;
-  --ed-syn-function: #82aaff;
-  --ed-syn-property: #80cbc4;
-  --ed-syn-variable: #c5cdd9;
-  --ed-syn-operator: #89ddff;
-  --ed-syn-punct: #89ddff;
-  --ed-syn-regexp: #e9a3a3;
-  /* editor chrome */
-  --ed-gutter-fg: color-mix(in oklch, var(--fg) 38%, transparent);
-  --ed-gutter-fg-active: var(--fg-muted);
-  --ed-line-active: color-mix(in oklch, var(--fg) 5%, transparent);
-  --ed-cursor: var(--fg);
-  --ed-selection: color-mix(in oklch, var(--accent) 26%, transparent);
-  --ed-selection-blur: color-mix(in oklch, var(--fg) 13%, transparent);
-  --ed-find-match: color-mix(in oklch, var(--warn) 34%, transparent);
-  --ed-find-match-active: color-mix(in oklch, var(--warn) 60%, transparent);
-  --ed-bracket-match: var(--accent-line);
-  --ed-indent-guide: var(--line-soft);
-  --ed-indent-guide-active: var(--line-strong);
-  --ed-whitespace: color-mix(in oklch, var(--fg) 22%, transparent);
-  /* focus ring / keyboard-visible chrome — two-tone ring (#1212 final, #1232) */
-  --ed-focus: var(--accent-text);
-  --ed-focus-inner: var(--ed-bg);
-  /* diff (patch-review surface) */
-  --ed-diff-ins-line: color-mix(in oklch, oklch(0.72 0.16 150) 15%, transparent);
-  --ed-diff-ins-text: color-mix(in oklch, oklch(0.72 0.16 150) 30%, transparent);
-  --ed-diff-rem-line: color-mix(in oklch, var(--danger) 15%, transparent);
-  --ed-diff-rem-text: color-mix(in oklch, var(--danger) 30%, transparent);
-  --ed-diff-ins-gutter: oklch(0.72 0.13 150);
-  --ed-diff-rem-gutter: var(--danger);
-  /* changed / word-diff middle state — info hue, distinct from ins/rem (#1232) */
-  --ed-diff-chg-line: color-mix(in oklch, var(--info) 13%, transparent);
-  --ed-diff-chg-text: color-mix(in oklch, var(--info) 26%, transparent);
-  --ed-diff-chg-gutter: var(--info);
-  /* diagnostics (map straight onto the status palette) */
-  --ed-error: var(--danger);
-  --ed-warn: var(--warn);
-  --ed-info: var(--info);
-  --ed-hint: var(--fg-faint);
-  --ed-error-bg: color-mix(in oklch, var(--danger) 12%, transparent);
-  --ed-warn-bg: color-mix(in oklch, var(--warn) 12%, transparent);
-  /* inline ghost text / AI suggestion + suggest widget */
-  --ed-ghost: var(--fg-dim);
-  --ed-suggest-bg: var(--card);
-  --ed-suggest-sel: var(--accent-dim);
-  --ed-suggest-match: var(--accent-text);
-  /* agent-in-editor surfaces (editor-agent.html) */
-  --ed-agent-line: color-mix(in oklch, var(--accent) 12%, transparent);
-  --ed-agent-gutter: var(--accent-text);
-  --ed-agent-ghost: var(--ed-ghost);
-  --ed-agent-accept: var(--ed-diff-ins-gutter);
-  --ed-agent-reject: var(--danger);
-  --ed-agent-chip-bg: var(--accent-dim);
-  --ed-agent-chip-line: var(--accent-line);
-  /* editor card: tabs, status bar, minimap */
-  --ed-tab-bg: var(--surface);
-  --ed-tab-active-bg: var(--ed-bg);
-  --ed-tab-active-fg: var(--fg);
-  --ed-tab-inactive-fg: var(--fg-faint);
-  --ed-tab-accent: var(--accent);
-  --ed-statusbar-bg: var(--surface);
-  --ed-statusbar-fg: var(--fg-muted);
-  --ed-statusbar-accent: var(--accent-text);
-  --ed-minimap-bg: var(--ed-bg);
-  --ed-minimap-slider: color-mix(in oklch, var(--fg) 10%, transparent);
-  --ed-scrollbar-track: transparent;
-  --ed-scrollbar-thumb: color-mix(in oklch, var(--ed-fg) 30%, transparent);
-  --ed-scrollbar-thumb-hover: color-mix(in oklch, var(--ed-fg) 44%, transparent);
-}
-
-[data-density="compact"] {
-  --control-height: 30px;
-  --control-height-sm: 24px;
-  --control-height-lg: 34px;
-  --control-pad-x: 11px;
-  --row-pad-y: 6px;
-  --row-pad-x: 10px;
 }
 
 * {
@@ -1096,106 +536,6 @@ input.number-control-input {
 /* ============================================================
    LIGHT THEME — warm-neutral, same orca-green accent
    ============================================================ */
-[data-theme="light"] {
-  color-scheme: light;
-  --bg: oklch(0.955 0.004 160);
-  --surface: oklch(0.978 0.003 160);
-  --card: oklch(1 0 0);
-  --card-2: oklch(0.96 0.004 160);
-  --inset: oklch(0.945 0.005 160);
-
-  --line: oklch(0.88 0.006 160);
-  --line-soft: oklch(0.915 0.005 160);
-  --line-strong: oklch(0.8 0.008 160);
-  --grid-dot: oklch(0.78 0.012 160);
-
-  --fg: oklch(0.26 0.012 160);
-  --fg-muted: oklch(0.42 0.011 160);
-  /* WCAG 1.4.3 — 0.54 measured 4.28:1 on --inset chips (.kbd, .modesw-opt; FAIL).
-     0.48 measures 5.55:1 on --inset, 6.50:1 on white; stays darker than --fg-faint. */
-  --fg-dim: oklch(0.48 0.01 160);
-  /* WCAG 1.4.3 — 0.66 measured 3.09:1 on white --card / 2.64:1 on --inset (FAIL
-     for 10-12.5px text). 0.52 measures 5.48:1 on white, 4.67:1 on --inset; stays
-     lighter than --fg-dim (0.48) so the hierarchy remains monotonic (uiux-fix F020). */
-  --fg-faint: oklch(0.52 0.01 160);
-
-  /* WCAG 1.4.3 text-tone overrides — all ≥4.5:1 on white (--card: oklch(1 0 0)).
-     --accent #4eba87 = 2.41:1 FAIL; oklch(0.48 0.13 160) ≈ 5.9:1 PASS on white and
-     ≥4.8:1 on the 18% --accent-dim tint (0.5 measured only 4.48:1 there — accent
-     text frequently sits on accent-dim chips: .rail-avatar, .set-onprem, .chat-ctx).
-     --danger oklch(0.68 0.16 25) = 3.11:1 FAIL; oklch(0.50 0.18 25) ≈ 5.46:1 PASS.
-     --warn oklch(0.78 0.13 75) = 2.04:1 FAIL; oklch(0.43 0.14 75) ≈ 5.82:1 PASS.
-     --info oklch(0.74 0.1 240) = 1.96:1 FAIL; oklch(0.45 0.15 240) ≈ 5.08:1 PASS on the 20%
-     info tint (info-blue severity/badge text — .qi-sev-medium, .qi-badge-running, .arun-gate,
-     lkd diag info). Measured from rendered pixels over the badge's own info-tint background. */
-  --accent-text: oklch(0.48 0.13 160);
-  --accent-solid: oklch(0.52 0.15 160);
-  --accent-solid-ink: oklch(1 0 0);
-  --accent-on-tint: oklch(0.43 0.13 160);
-  --danger: oklch(0.5 0.18 25);
-  /* Light danger surfaces require light ink; the dark inverse ink used by the dark theme
-     fails WCAG contrast on this deliberately darker semantic danger surface. */
-  --button-danger-text: var(--accent-solid-ink);
-  --warn: oklch(0.43 0.14 75);
-  --info: oklch(0.45 0.15 240);
-  /* --ok #4eba87 = 2.12:1 FAIL on light --bg; matches --accent-text light (uiux-fix F005) */
-  --ok: oklch(0.5 0.13 160);
-
-  --shadow-card: 0 1px 0 0 oklch(1 0 0 / 0.7) inset, 0 6px 18px -12px rgba(20, 30, 25, 0.22);
-  --shadow-pop: 0 18px 50px -18px rgba(20, 30, 25, 0.26), 0 0 0 1px var(--line);
-
-  /* #1295 C1 — DS warm shadow ink for Light (same 20 30 25 the light --shadow-card/-pop
-     already use), so component drop-shadows routed through rgb(var(--shadow-ink-rgb) / α)
-     adapt instead of staying pure black. */
-  --shadow-ink-rgb: 20 30 25;
-
-  /* #1295 C3 — Light dialog scrim. Centralises the shared light backdrop value the
-     per-component overrides used (.dlg-overlay/.wf-dialog-overlay/.mc-dialog-backdrop),
-     so the base scrim rules routed to var(--overlay-scrim) adapt in Light. */
-  --overlay-scrim: oklch(0.3 0.01 160 / 0.34);
-
-  /* Issue #1297 — DS 0.4.0 dataviz light-mode palette overrides (design-system/keiko-dataviz.css):
-     same categorical hues re-tuned to a higher chroma / lower lightness so they stay distinct on
-     the light --bg, and the sequential ramp inverts dark→light to remain a magnitude scale. */
-  --viz-2: oklch(0.5 0.14 240);
-  --viz-3: oklch(0.55 0.13 75);
-  --viz-4: oklch(0.52 0.16 330);
-  --viz-5: oklch(0.52 0.17 25);
-  --viz-6: oklch(0.5 0.08 200);
-  --viz-seq-1: oklch(0.9 0.04 160);
-  --viz-seq-2: oklch(0.8 0.08 160);
-  --viz-seq-3: oklch(0.68 0.11 160);
-  --viz-seq-4: oklch(0.56 0.12 160);
-  --viz-seq-5: oklch(0.46 0.13 160);
-  --ed-bg: oklch(0.985 0.003 160);
-  --ed-bg-gutter: oklch(0.985 0.003 160);
-  --ed-fg: #2b3440;
-  --ed-syn-comment: #5a6675;
-  --ed-syn-string: #2c7430;
-  --ed-syn-number: #a8480a;
-  --ed-syn-constant: #a8480a;
-  --ed-syn-keyword: #8b2bb8;
-  --ed-syn-type: #856000;
-  --ed-syn-function: #235fc0;
-  --ed-syn-property: #0e6b66;
-  --ed-syn-variable: #2b3440;
-  --ed-syn-operator: #0f7491;
-  --ed-syn-punct: #0f7491;
-  --ed-syn-regexp: #a33b3b;
-  --ed-diff-ins-line: color-mix(in oklch, oklch(0.6 0.15 150) 14%, transparent);
-  --ed-diff-ins-text: color-mix(in oklch, oklch(0.6 0.15 150) 26%, transparent);
-  --ed-diff-rem-line: color-mix(in oklch, var(--danger) 12%, transparent);
-  --ed-diff-rem-text: color-mix(in oklch, var(--danger) 24%, transparent);
-  --ed-diff-ins-gutter: oklch(0.5 0.13 150);
-  --ed-diff-rem-gutter: var(--danger);
-  --ed-whitespace: color-mix(in oklch, var(--fg) 28%, transparent);
-  --ed-minimap-slider: color-mix(in oklch, var(--fg) 12%, transparent);
-  --ed-scrollbar-track: transparent;
-  --ed-scrollbar-thumb: color-mix(in oklch, var(--ed-fg) 28%, transparent);
-  --ed-scrollbar-thumb-hover: color-mix(in oklch, var(--ed-fg) 42%, transparent);
-  /* darkened so ghost text clears the 4.5:1 floor on the near-white well (#1232) */
-  --ed-ghost: oklch(0.55 0.02 160);
-}
 
 /* prefers-contrast: more — first-class High Contrast. Mirrors the full
    design-system primitive palette so surfaces, text hierarchy, focus, shadows,
@@ -1203,71 +543,6 @@ input.number-control-input {
    path. */
 /* prettier-ignore */
 @media (prefers-contrast: more) {
-  :root {
-    color-scheme: dark;
-    /* Raw HC smoke values: --bg: oklch(0.11 0.004 160); --fg: oklch(1 0 0); --accent-text: oklch(0.86 0.16 160); --shadow-card: 0 0 0 1px var(--line); --grid-dot: oklch(0.52 0.006 160). */
-    --bg: var(--hc-d-bg); --surface: var(--hc-d-surface); --card: var(--hc-d-card); --card-2: var(--hc-d-card-2); --inset: var(--hc-d-inset);
-    --line: var(--hc-d-line); --line-soft: var(--hc-d-line-soft); --line-strong: var(--hc-d-line-strong); --grid-dot: var(--hc-d-grid-dot);
-    --focus-w: 3px;
-    --fg: var(--hc-d-fg); --fg-muted: var(--hc-d-fg-muted); --fg-dim: var(--hc-d-fg-dim); --fg-faint: var(--hc-d-fg-faint);
-    --accent-bright: var(--hc-d-accent-bright); --accent-text: var(--hc-d-accent-text);
-    --accent-dim: var(--hc-d-accent-dim); --accent-line: var(--hc-d-accent-line); --accent-glow: var(--hc-d-accent-glow);
-    --warn: var(--hc-d-warn); --danger: var(--hc-d-danger); --ok: var(--hc-d-ok); --info: var(--hc-d-info);
-    --shadow-card: var(--hc-d-shadow-card); --shadow-pop: var(--hc-d-shadow-pop);
-    --ed-bg: oklch(0.07 0.004 160);
-    --ed-bg-gutter: oklch(0.07 0.004 160);
-    --ed-fg: #ffffff;
-    --ed-syn-comment: #9bb0c9;
-    --ed-syn-string: #b6f08a;
-    --ed-syn-number: #ffb38a;
-    --ed-syn-constant: #ffb38a;
-    --ed-syn-keyword: #d8b6ff;
-    --ed-syn-type: #ffd479;
-    --ed-syn-function: #9fc1ff;
-    --ed-syn-property: #8fe0d8;
-    --ed-syn-variable: #e8edf3;
-    --ed-syn-operator: #a6e9ff;
-    --ed-syn-punct: #a6e9ff;
-    --ed-syn-regexp: #f3b0b0;
-    --ed-line-active: color-mix(in oklch, var(--fg) 10%, transparent);
-    --ed-indent-guide: var(--line);
-    --ed-whitespace: color-mix(in oklch, var(--fg) 34%, transparent);
-    --ed-ghost: oklch(0.74 0.004 160);
-    --ed-scrollbar-track: transparent;
-    --ed-scrollbar-thumb: color-mix(in oklch, var(--ed-fg) 52%, transparent);
-    --ed-scrollbar-thumb-hover: color-mix(in oklch, var(--ed-fg) 68%, transparent);
-  }
-  [data-theme="light"] {
-    color-scheme: light;
-    /* Raw light HC smoke values: --fg-faint: oklch(0.36 0.012 160); --grid-dot: oklch(0.6 0.01 160). */
-    --bg: var(--hc-l-bg); --surface: var(--hc-l-surface); --card: var(--hc-l-card); --card-2: var(--hc-l-card-2); --inset: var(--hc-l-inset);
-    --line: var(--hc-l-line); --line-soft: var(--hc-l-line-soft); --line-strong: var(--hc-l-line-strong); --grid-dot: var(--hc-l-grid-dot);
-    --focus-w: 3px;
-    --fg: var(--hc-l-fg); --fg-muted: var(--hc-l-fg-muted); --fg-dim: var(--hc-l-fg-dim); --fg-faint: var(--hc-l-fg-faint);
-    --accent-text: var(--hc-l-accent-text); --accent-bright: var(--hc-l-accent-bright);
-    --accent-dim: var(--hc-l-accent-dim); --accent-line: var(--hc-l-accent-line); --accent-glow: var(--hc-l-accent-glow);
-    --danger: var(--hc-l-danger); --warn: var(--hc-l-warn); --info: var(--hc-l-info); --ok: var(--hc-l-ok);
-    --shadow-card: var(--hc-l-shadow-card); --shadow-pop: var(--hc-l-shadow-pop);
-    --ed-bg: oklch(1 0 0);
-    --ed-bg-gutter: oklch(1 0 0);
-    --ed-fg: #000000;
-    --ed-syn-comment: #46525f;
-    --ed-syn-string: #1a5d1d;
-    --ed-syn-number: #8a3600;
-    --ed-syn-constant: #8a3600;
-    --ed-syn-keyword: #6f1b96;
-    --ed-syn-type: #5f4200;
-    --ed-syn-function: #143f8f;
-    --ed-syn-property: #0a5c57;
-    --ed-syn-variable: #000000;
-    --ed-syn-operator: #0a5e75;
-    --ed-syn-punct: #0a5e75;
-    --ed-syn-regexp: #8a2020;
-    --ed-ghost: oklch(0.42 0.01 160);
-    --ed-scrollbar-track: transparent;
-    --ed-scrollbar-thumb: color-mix(in oklch, var(--ed-fg) 48%, transparent);
-    --ed-scrollbar-thumb-hover: color-mix(in oklch, var(--ed-fg) 62%, transparent);
-  }
   :root .rb-edge-badge-btn,
   :root .rb-edge-badge-static {
     background: var(--button-secondary-surface);
@@ -1284,72 +559,7 @@ input.number-control-input {
    document (useTheme is light|dark only), so this remains inert at runtime
    until a later issue wires the selector. */
 /* prettier-ignore */
-[data-hc="more"] {
-  color-scheme: dark;
-  /* Raw dark HC values: --bg: oklch(0.11 0.004 160); --line: oklch(0.62 0.006 160); --fg-faint: oklch(0.82 0.004 160); --warn: oklch(0.88 0.14 80); --grid-dot: oklch(0.52 0.006 160). */
-  --bg: var(--hc-d-bg); --surface: var(--hc-d-surface); --card: var(--hc-d-card); --card-2: var(--hc-d-card-2); --inset: var(--hc-d-inset);
-  --line: var(--hc-d-line); --line-soft: var(--hc-d-line-soft); --line-strong: var(--hc-d-line-strong); --grid-dot: var(--hc-d-grid-dot);
-  --focus-w: 3px;
-  --fg: var(--hc-d-fg); --fg-muted: var(--hc-d-fg-muted); --fg-dim: var(--hc-d-fg-dim); --fg-faint: var(--hc-d-fg-faint);
-  --accent-bright: var(--hc-d-accent-bright); --accent-text: var(--hc-d-accent-text);
-  --accent-dim: var(--hc-d-accent-dim); --accent-line: var(--hc-d-accent-line); --accent-glow: var(--hc-d-accent-glow);
-  --warn: var(--hc-d-warn); --danger: var(--hc-d-danger); --ok: var(--hc-d-ok); --info: var(--hc-d-info);
-  --shadow-card: var(--hc-d-shadow-card); --shadow-pop: var(--hc-d-shadow-pop);
-  --ed-bg: oklch(0.07 0.004 160);
-  --ed-bg-gutter: oklch(0.07 0.004 160);
-  --ed-fg: #ffffff;
-  --ed-syn-comment: #9bb0c9;
-  --ed-syn-string: #b6f08a;
-  --ed-syn-number: #ffb38a;
-  --ed-syn-constant: #ffb38a;
-  --ed-syn-keyword: #d8b6ff;
-  --ed-syn-type: #ffd479;
-  --ed-syn-function: #9fc1ff;
-  --ed-syn-property: #8fe0d8;
-  --ed-syn-variable: #e8edf3;
-  --ed-syn-operator: #a6e9ff;
-  --ed-syn-punct: #a6e9ff;
-  --ed-syn-regexp: #f3b0b0;
-  --ed-line-active: color-mix(in oklch, var(--fg) 10%, transparent);
-  --ed-indent-guide: var(--line);
-  --ed-whitespace: color-mix(in oklch, var(--fg) 34%, transparent);
-  --ed-ghost: oklch(0.74 0.004 160);
-  --ed-scrollbar-track: transparent;
-  --ed-scrollbar-thumb: color-mix(in oklch, var(--ed-fg) 52%, transparent);
-  --ed-scrollbar-thumb-hover: color-mix(in oklch, var(--ed-fg) 68%, transparent);
-}
 /* prettier-ignore */
-[data-hc="more"][data-theme="light"] {
-  color-scheme: light;
-  /* Raw light HC values: --bg: oklch(1 0 0); --line: oklch(0.45 0.008 160); --fg-faint: oklch(0.36 0.012 160); --warn: oklch(0.38 0.14 75); --grid-dot: oklch(0.6 0.01 160). */
-  --bg: var(--hc-l-bg); --surface: var(--hc-l-surface); --card: var(--hc-l-card); --card-2: var(--hc-l-card-2); --inset: var(--hc-l-inset);
-  --line: var(--hc-l-line); --line-soft: var(--hc-l-line-soft); --line-strong: var(--hc-l-line-strong); --grid-dot: var(--hc-l-grid-dot);
-  --focus-w: 3px;
-  --fg: var(--hc-l-fg); --fg-muted: var(--hc-l-fg-muted); --fg-dim: var(--hc-l-fg-dim); --fg-faint: var(--hc-l-fg-faint);
-  --accent-text: var(--hc-l-accent-text); --accent-bright: var(--hc-l-accent-bright);
-  --accent-dim: var(--hc-l-accent-dim); --accent-line: var(--hc-l-accent-line); --accent-glow: var(--hc-l-accent-glow);
-  --danger: var(--hc-l-danger); --warn: var(--hc-l-warn); --info: var(--hc-l-info); --ok: var(--hc-l-ok);
-  --shadow-card: var(--hc-l-shadow-card); --shadow-pop: var(--hc-l-shadow-pop);
-  --ed-bg: oklch(1 0 0);
-  --ed-bg-gutter: oklch(1 0 0);
-  --ed-fg: #000000;
-  --ed-syn-comment: #46525f;
-  --ed-syn-string: #1a5d1d;
-  --ed-syn-number: #8a3600;
-  --ed-syn-constant: #8a3600;
-  --ed-syn-keyword: #6f1b96;
-  --ed-syn-type: #5f4200;
-  --ed-syn-function: #143f8f;
-  --ed-syn-property: #0a5c57;
-  --ed-syn-variable: #000000;
-  --ed-syn-operator: #0a5e75;
-  --ed-syn-punct: #0a5e75;
-  --ed-syn-regexp: #8a2020;
-  --ed-ghost: oklch(0.42 0.01 160);
-  --ed-scrollbar-track: transparent;
-  --ed-scrollbar-thumb: color-mix(in oklch, var(--ed-fg) 48%, transparent);
-  --ed-scrollbar-thumb-hover: color-mix(in oklch, var(--ed-fg) 62%, transparent);
-}
 
 /* Windows / forced-colors High Contrast (#1292) — when the OS forces its own
    palette, defer to system colours so the focus ring and the card/window/dialog
@@ -2494,11 +1704,6 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 }
 
 @media (max-width: 700px), (max-height: 430px) {
-  :root {
-    --shell-rail-width: 44px;
-    --shell-right-rail-reserve: var(--shell-rail-width);
-  }
-
   .stage {
     gap: 0;
     padding: 6px;
@@ -2596,10 +1801,6 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 }
 
 @media (max-width: 420px) {
-  :root {
-    --shell-right-rail-reserve: 0px;
-  }
-
   .rail-right {
     display: none;
   }
@@ -2882,17 +2083,22 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   background: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-glow);
 }
-.auto-row {
+.auto-row,
+.pol-row {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 9px 10px;
   border-radius: 9px;
 }
-.auto-row:hover {
+.auto-row {
+  padding: 9px 10px;
+}
+.auto-row:hover,
+.pol-row:hover {
   background: var(--card-2);
 }
-.auto-text {
+.auto-text,
+.pol-text {
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -7130,21 +6336,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   line-height: 1.45;
 }
 .pol-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
   padding: 8px 9px;
-  border-radius: 9px;
-}
-.pol-row:hover {
-  background: var(--card-2);
-}
-.pol-text {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
 }
 .pol-action {
   font-size: 12.5px;
@@ -7839,35 +7031,45 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
     transform: none;
   }
 }
-.palette-head {
+.palette-head,
+.dlg-head {
   display: flex;
   align-items: center;
+  flex: none;
+}
+.palette-head {
   gap: 11px;
   padding: 14px 12px 14px 14px;
   border-bottom: 1px solid var(--line-soft);
-  flex: none;
 }
-.palette-badge {
-  width: 34px;
-  height: 34px;
+.palette-badge,
+.dlg-ico {
   flex: none;
-  border-radius: 10px;
   display: grid;
   place-items: center;
   color: var(--accent);
   background: var(--accent-dim);
   border: 1px solid var(--accent-line);
 }
-.palette-htext {
+.palette-badge {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+}
+.palette-htext,
+.dlg-htext {
   display: flex;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
 }
-.palette-title {
-  font-size: 15px;
+.palette-title,
+.dlg-title {
   font-weight: 650;
   letter-spacing: -0.01em;
+}
+.palette-title {
+  font-size: 15px;
   white-space: nowrap;
 }
 .palette-sub {
@@ -8024,34 +7226,17 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   }
 }
 .dlg-head {
-  display: flex;
-  align-items: center;
   gap: 12px;
   padding: 16px 12px 16px 16px;
   border-bottom: 1px solid var(--border-subtle);
-  flex: none;
 }
 .dlg-ico {
   width: 40px;
   height: 40px;
-  flex: none;
   border-radius: 11px;
-  display: grid;
-  place-items: center;
-  color: var(--accent);
-  background: var(--accent-dim);
-  border: 1px solid var(--accent-line);
-}
-.dlg-htext {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
 }
 .dlg-title {
   font-size: 15.5px;
-  font-weight: 650;
-  letter-spacing: -0.01em;
 }
 .dlg-sub {
   font-size: 12px;
@@ -11644,81 +10829,13 @@ html[data-keiko-gateway-setup-open="true"] {
    ============================================================ */
 
 /* ── response surface ────────────────────────────────────────── */
-.ai-msg {
-  display: flex;
-  gap: 13px;
-  max-width: 720px;
-}
-.ai-avatar {
-  width: 30px;
-  height: 30px;
-  flex: none;
-  border-radius: 9px;
-  display: grid;
-  place-items: center;
-  background: var(--surface-accent-subtle);
-  color: var(--accent-on-tint);
-  border: 1px solid var(--border-accent);
-}
-.ai-body {
-  flex: 1;
-  min-width: 0;
-}
-.ai-response {
-  background: var(--ai-response-surface);
-  border: 1px solid var(--ai-response-border);
-  border-radius: var(--radius-surface);
-  padding: 14px 16px;
-  font-size: var(--text-body);
-  line-height: 1.6;
-  color: var(--text-primary);
-}
-.ai-response p {
-  margin: 0 0 10px;
-}
-.ai-response p:last-child {
-  margin-bottom: 0;
-}
-.ai-response code {
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-  color: var(--text-accent);
-  background: var(--surface-inset);
-  padding: 1px 5px;
-  border-radius: 4px;
-}
 
 /* ── thinking indicator ──────────────────────────────────────── */
-.ai-thinking {
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
-  font-size: var(--text-body-sm);
-  color: var(--ai-thinking-indicator);
-}
-.ai-thinking .dots {
-  display: inline-flex;
-  gap: 4px;
-}
 .ai-thinking .dots i {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
   /* WCAG 2.3.3 — animation OFF by default (static 0.7-opacity fallback for reduced-motion /
      unsupported), enabled only inside prefers-reduced-motion: no-preference below. */
   opacity: 0.7;
   animation: none;
-}
-@keyframes ai-blink {
-  0%,
-  60%,
-  100% {
-    opacity: 0.3;
-  }
-  30% {
-    opacity: 1;
-  }
 }
 @media (prefers-reduced-motion: no-preference) {
   .ai-thinking .dots i {
@@ -11734,20 +10851,8 @@ html[data-keiko-gateway-setup-open="true"] {
 
 /* ── streaming cursor ────────────────────────────────────────── */
 .ai-stream-cursor {
-  display: inline-block;
-  width: 8px;
-  height: 1.05em;
-  vertical-align: text-bottom;
-  margin-left: 2px;
-  border-radius: 1px;
-  background: var(--ai-streaming-cursor);
   /* WCAG 2.3.3 — solid (non-blinking) caret by default; blink only under no-preference. */
   animation: none;
-}
-@keyframes ai-caret {
-  50% {
-    opacity: 0;
-  }
 }
 @media (prefers-reduced-motion: no-preference) {
   .ai-stream-cursor {
@@ -11756,210 +10861,21 @@ html[data-keiko-gateway-setup-open="true"] {
 }
 
 /* ── tool-call card ──────────────────────────────────────────── */
-.ai-tool {
-  border: 1px solid var(--ai-tool-border);
-  border-radius: var(--radius-control);
-  background: var(--ai-tool-surface);
-  overflow: hidden;
-}
-.ai-tool-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 9px 12px;
-  font-size: var(--text-body-sm);
-}
-.ai-tool-head .ic {
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
-  display: grid;
-  place-items: center;
-  background: var(--surface-secondary);
-  color: var(--text-secondary);
-  flex: none;
-}
-.ai-tool-head .nm {
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-  color: var(--text-primary);
-}
-.ai-tool-head .nm b {
-  color: var(--text-accent);
-  font-weight: var(--weight-semibold);
-}
-.ai-tool-head .st {
-  margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font: var(--weight-semibold) 10.5px var(--font-mono);
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-  color: var(--text-faint);
-}
-.ai-tool-head .st.run {
-  color: var(--text-accent);
-}
 .ai-tool-head .st.run::before {
-  content: "";
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  border: 1.5px solid currentColor;
-  border-top-color: transparent;
   /* WCAG 2.3.3 — frozen ring by default; spin only under no-preference. */
   animation: none;
-}
-.ai-tool-head .st.done::before {
-  content: "";
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--feedback-success);
-}
-@keyframes ai-spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 @media (prefers-reduced-motion: no-preference) {
   .ai-tool-head .st.run::before {
     animation: ai-spin 0.7s linear infinite;
   }
 }
-.ai-tool-body {
-  border-top: 1px solid var(--ai-tool-border);
-  padding: 11px 12px;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--text-secondary);
-  background: var(--background-primary);
-}
-.ai-tool-body .k {
-  color: var(--text-faint);
-}
 
 /* ── source citation ─────────────────────────────────────────── */
-.ai-cite {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
-  border-radius: 5px;
-  font: var(--weight-semibold) 10.5px var(--font-mono);
-  color: var(--accent-on-tint);
-  background: var(--ai-source-surface);
-  border: 1px solid var(--ai-source-border);
-  vertical-align: super;
-  cursor: pointer;
-}
-.ai-cite:hover {
-  background: var(--surface-accent-glow);
-}
-.ai-sources {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 12px;
-}
-.ai-source {
-  display: flex;
-  align-items: center;
-  gap: 11px;
-  padding: 9px 12px;
-  border-radius: var(--radius-control);
-  border: 1px solid var(--border-subtle);
-  background: var(--surface-primary);
-}
-.ai-source .n {
-  width: 18px;
-  height: 18px;
-  flex: none;
-  border-radius: 5px;
-  display: grid;
-  place-items: center;
-  font: var(--weight-semibold) 10.5px var(--font-mono);
-  color: var(--accent-on-tint);
-  background: var(--ai-source-surface);
-  border: 1px solid var(--ai-source-border);
-}
-.ai-source .tl {
-  font-size: var(--text-body-sm);
-  color: var(--text-primary);
-}
-.ai-source .ur {
-  font-size: var(--text-caption);
-  color: var(--text-faint);
-  font-family: var(--font-mono);
-  margin-left: auto;
-}
 
 /* ── confidence ──────────────────────────────────────────────── */
-.ai-conf {
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
-}
-.ai-conf .track {
-  display: inline-flex;
-  gap: 3px;
-}
-.ai-conf .track i {
-  width: 16px;
-  height: 5px;
-  border-radius: 999px;
-  background: var(--surface-inset);
-}
-.ai-conf .lbl {
-  font: var(--weight-semibold) 11px var(--font-mono);
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-}
-.ai-conf[data-level="high"] .track i:nth-child(-n + 3) {
-  background: var(--ai-confidence-high);
-}
-.ai-conf[data-level="high"] .lbl {
-  color: var(--ai-confidence-high);
-}
-.ai-conf[data-level="medium"] .track i:nth-child(-n + 2) {
-  background: var(--ai-confidence-medium);
-}
-.ai-conf[data-level="medium"] .lbl {
-  color: var(--ai-confidence-medium);
-}
-.ai-conf[data-level="low"] .track i:nth-child(-n + 1) {
-  background: var(--ai-confidence-low);
-}
-.ai-conf[data-level="low"] .lbl {
-  color: var(--ai-confidence-low);
-}
 
 /* ── stop / regenerate controls ──────────────────────────────── */
-.ai-controls {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-.ai-stop {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  height: 30px;
-  padding: 0 12px;
-  border-radius: var(--radius-control);
-  border: 1px solid color-mix(in oklch, var(--feedback-danger) 42%, transparent);
-  background: transparent;
-  color: var(--feedback-danger);
-  font: var(--weight-medium) 12.5px var(--font-ui);
-  cursor: pointer;
-}
-.ai-stop:hover {
-  background: color-mix(in oklch, var(--feedback-danger) 12%, transparent);
-}
 /* WCAG 2.4.7 — keyboard focus ring for the stop/regenerate controls and the permission /
    sensitive-action button pairs (consistent with the product's other interactive controls). */
 .ai-stop:focus-visible,
@@ -11968,116 +10884,10 @@ html[data-keiko-gateway-setup-open="true"] {
   outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
-.ai-stop .sq {
-  width: 9px;
-  height: 9px;
-  border-radius: 2px;
-  background: currentColor;
-}
 
 /* ── permission request ──────────────────────────────────────── */
-.ai-permit {
-  border: 1px solid var(--ai-permission-border);
-  background: var(--ai-permission-surface);
-  border-radius: var(--radius-surface);
-  padding: 15px 16px;
-  max-width: 560px;
-}
-.ai-permit-h {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.ai-permit-h .ic {
-  width: 30px;
-  height: 30px;
-  flex: none;
-  border-radius: 8px;
-  display: grid;
-  place-items: center;
-  background: color-mix(in oklch, var(--feedback-warning) 16%, transparent);
-  color: var(--feedback-warning);
-}
-.ai-permit-h .tt {
-  font-size: var(--text-body);
-  font-weight: var(--weight-semibold);
-  color: var(--text-primary);
-}
-.ai-permit-h .ts {
-  font-size: var(--text-label);
-  color: var(--text-secondary);
-  margin-top: 1px;
-}
-.ai-permit-scope {
-  margin: 13px 0;
-  padding: 11px 13px;
-  border-radius: var(--radius-control);
-  background: var(--surface-primary);
-  border: 1px solid var(--border-subtle);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--text-secondary);
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.ai-permit-scope .row {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-}
-.ai-permit-scope .row .gr {
-  color: var(--feedback-success);
-}
-.ai-permit-act {
-  display: flex;
-  gap: 9px;
-}
 
 /* ── sensitive-action confirm ────────────────────────────────── */
-.ai-danger {
-  border: 1px solid color-mix(in oklch, var(--feedback-danger) 45%, transparent);
-  background: color-mix(in oklch, var(--feedback-danger) 7%, var(--surface-primary));
-  border-radius: var(--radius-surface);
-  padding: 15px 16px;
-  max-width: 560px;
-}
-.ai-danger-h {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 10px;
-}
-.ai-danger-h .ic {
-  width: 30px;
-  height: 30px;
-  flex: none;
-  border-radius: 8px;
-  display: grid;
-  place-items: center;
-  background: color-mix(in oklch, var(--feedback-danger) 15%, transparent);
-  color: var(--feedback-danger);
-}
-.ai-danger-h .tt {
-  font-size: var(--text-body);
-  font-weight: var(--weight-semibold);
-  color: var(--text-primary);
-}
-.ai-danger p {
-  font-size: var(--text-body-sm);
-  line-height: 1.55;
-  color: var(--text-secondary);
-  margin: 0 0 13px;
-}
-.ai-danger p code {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--feedback-danger);
-}
-.ai-danger-act {
-  display: flex;
-  gap: 9px;
-}
 
 /* ============================================================
    Issue #1297 — Table / Data Grid + Data Visualisation (Design System 0.4.0).
@@ -12101,499 +10911,54 @@ html[data-keiko-gateway-setup-open="true"] {
    ============================================================ */
 
 /* ── table & data grid (design-system/keiko-data.css) ─────── */
-.c-tablewrap {
-  border: 1px solid var(--card-border);
-  border-radius: var(--radius-surface);
-  background: var(--card-surface);
-  overflow: hidden;
-}
-.c-tablescroll {
-  overflow: auto;
-  max-height: 420px;
-}
-
-.c-table {
-  width: 100%;
-  border-collapse: separate;
-  border-spacing: 0;
-  font-size: var(--text-body-sm);
-}
 
 /* head */
-.c-table thead th {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  text-align: left;
-  font: var(--weight-semibold) var(--text-caption) / 1 var(--font-mono);
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--table-header-text);
-  background: var(--table-header-surface);
-  padding: 11px var(--row-pad-x);
-  border-bottom: 1px solid var(--border-default);
-  white-space: nowrap;
-}
-.c-table thead th.num {
-  text-align: right;
-}
-.c-table th.sortable {
-  cursor: pointer;
-  user-select: none;
-}
-.c-table th.sortable:hover {
-  color: var(--text-secondary);
-}
 .c-table th.sortable:focus-visible {
   outline: var(--focus-width, 2px) solid var(--focus-ring);
-  outline-offset: -2px;
-}
-.c-table th .so {
-  display: inline-flex;
-  vertical-align: middle;
-  margin-left: 6px;
-  color: var(--text-faint);
-  transition:
-    color 0.12s,
-    transform 0.12s;
-}
-.c-table th[aria-sort="ascending"] .so {
-  color: var(--table-sort-indicator);
-  transform: rotate(180deg);
-}
-.c-table th[aria-sort="descending"] .so {
-  color: var(--table-sort-indicator);
-}
-.c-table th[aria-sort="none"] .so {
-  opacity: 0.5;
 }
 
 /* body */
-.c-table tbody td {
-  padding: var(--row-pad-y) var(--row-pad-x);
-  border-bottom: 1px solid var(--table-row-border);
-  color: var(--text-secondary);
-  vertical-align: middle;
-  white-space: nowrap;
-}
-.c-table tbody tr:last-child td {
-  border-bottom: 0;
-}
-.c-table tbody td.num {
-  text-align: right;
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-  color: var(--table-num-text);
-  font-variant-numeric: tabular-nums;
-}
-.c-table td .pri {
-  color: var(--text-primary);
-  font-weight: var(--weight-medium);
-}
-.c-table tbody tr {
-  transition: background 0.1s;
-}
 .c-table tbody tr[tabindex]:focus-visible {
   outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: -2px;
 }
-.c-table tbody tr:hover {
-  background: var(--table-row-surface-hover);
-}
-.c-table tbody tr[aria-selected="true"] {
-  background: var(--table-row-surface-selected);
-}
-.c-table tbody tr[aria-selected="true"] td {
-  color: var(--text-primary);
-}
-.c-table.zebra tbody tr:nth-child(even) {
-  background: color-mix(in oklch, var(--surface-secondary) 45%, transparent);
-}
-.c-table.zebra tbody tr:hover {
-  background: var(--table-row-surface-hover);
-}
 
 /* selection cell + checkbox sizing handled by the .c-check input primitive */
-.c-table .selcell {
-  width: 36px;
-  padding-right: 0;
-}
-.c-table .c-cell-user {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.c-table .c-cell-user .av {
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  background: var(--surface-accent-subtle);
-  color: var(--text-accent);
-  border: 1px solid var(--border-accent);
-  display: grid;
-  place-items: center;
-  font: 700 10.5px var(--font-ui);
-  flex: none;
-}
 
 /* loading skeleton rows */
 .c-table.is-loading tbody td,
 .c-table.is-loading tbody tr[aria-selected="true"] td {
   color: transparent;
 }
-.c-table.is-loading tbody td * {
-  visibility: hidden;
-}
-.c-table.is-loading tbody td::after {
-  content: "";
-  display: block;
-  height: 9px;
-  border-radius: 5px;
-  background: linear-gradient(
-    90deg,
-    var(--skeleton-base),
-    var(--skeleton-highlight),
-    var(--skeleton-base)
-  );
-  background-size: 200% 100%;
-  animation: c-shimmer 1.3s linear infinite;
-  width: 70%;
-}
-.c-table.is-loading tbody td.num::after {
-  margin-left: auto;
-  width: 44px;
-}
-@keyframes c-shimmer {
-  to {
-    background-position: -200% 0;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .c-table.is-loading tbody td::after {
-    animation: none;
-  }
-}
 
 /* empty state */
-.c-table-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-  padding: 54px 20px;
-  text-align: center;
-}
-.c-table-empty .ic {
-  width: 44px;
-  height: 44px;
-  border-radius: var(--radius-control);
-  display: grid;
-  place-items: center;
-  background: var(--surface-inset);
-  border: 1px solid var(--border-subtle);
-  color: var(--text-faint);
-}
-.c-table-empty .tt {
-  font-size: var(--text-body);
-  font-weight: var(--weight-semibold);
-  color: var(--text-primary);
-}
-.c-table-empty .ts {
-  font-size: var(--text-body-sm);
-  color: var(--text-secondary);
-  max-width: 38ch;
-  line-height: 1.5;
-}
 
 /* footer */
-.c-table-foot {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 10px var(--row-pad-x);
-  border-top: 1px solid var(--border-default);
-  background: var(--table-foot-surface);
-  font-size: var(--text-label);
-  color: var(--text-secondary);
-}
-.c-table-foot .grow {
-  flex: 1;
-}
-.c-table-foot .rc {
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  color: var(--text-faint);
-}
 
 /* ── responsive: collapse to stacked cards on narrow viewports ──────────
    Each <td> carries data-label; below the small breakpoint the table becomes
    a list of labelled rows. Add class .responsive to opt in. */
-@media (max-width: 640px) {
-  .c-table.responsive thead {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-    white-space: nowrap;
-  }
-  .c-table.responsive,
-  .c-table.responsive tbody,
-  .c-table.responsive tr,
-  .c-table.responsive td {
-    display: block;
-    width: 100%;
-  }
-  .c-table.responsive tr {
-    border-bottom: 1px solid var(--border-default);
-    padding: 6px 4px;
-  }
-  .c-table.responsive tbody td {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    border: 0;
-    padding: 7px var(--row-pad-x);
-    white-space: normal;
-    text-align: right;
-  }
-  .c-table.responsive tbody td.num {
-    text-align: right;
-  }
-  .c-table.responsive tbody td::before {
-    content: attr(data-label);
-    font: var(--weight-semibold) var(--text-caption) var(--font-mono);
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: var(--table-header-text);
-    text-align: left;
-  }
-  .c-table.responsive tbody td.selcell {
-    justify-content: flex-start;
-  }
-  .c-table.responsive tbody td.selcell::before {
-    content: none;
-  }
-}
 
 /* ── data visualisation (design-system/keiko-dataviz.css) ───
    CSS/flex charts so they inherit every theme; an accessible categorical +
    sequential palette, axis / legend / tooltip rules, and an uncertainty
    encoding that never relies on colour alone. */
-.viz {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-.viz-plot {
-  position: relative;
-  display: flex;
-  align-items: flex-end;
-  gap: 14px;
-  height: 200px;
-  padding-left: 34px;
-}
-.viz-yaxis {
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 22px;
-  width: 30px;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-}
-.viz-yaxis span {
-  font: 10px var(--font-mono);
-  color: var(--viz-axis);
-  text-align: right;
-  transform: translateY(-50%);
-}
-.viz-gridlines {
-  position: absolute;
-  left: 34px;
-  right: 0;
-  top: 0;
-  bottom: 22px;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  pointer-events: none;
-}
-.viz-gridlines i {
-  height: 1px;
-  background: var(--viz-grid);
-}
 
 /* bar chart */
-.viz-bars {
-  flex: 1;
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-around;
-  gap: 12px;
-  height: 100%;
-  padding-bottom: 22px;
-}
-.viz-bar-col {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0;
-  height: 100%;
-  justify-content: flex-end;
-  position: relative;
-}
-.viz-bar {
-  width: 100%;
-  max-width: 46px;
-  border-radius: 5px 5px 0 0;
-  background: var(--viz-1);
-  transition: filter 0.12s;
-  position: relative;
-}
-.viz-bar:hover {
-  filter: brightness(1.12);
-}
-.viz-bar-col .xl {
-  position: absolute;
-  bottom: -20px;
-  font: 10.5px var(--font-mono);
-  color: var(--viz-axis);
-  white-space: nowrap;
-}
 
 /* stacked / grouped helpers */
-.viz-bar.s2 {
-  background: var(--viz-2);
-}
-.viz-bar.s3 {
-  background: var(--viz-3);
-}
 
 /* line / area (SVG-driven, colours from tokens) */
-.viz-line-wrap {
-  position: relative;
-  height: 200px;
-  padding-left: 34px;
-}
-.viz-line-wrap svg {
-  position: absolute;
-  inset: 0 0 22px 34px;
-  width: calc(100% - 34px);
-  height: calc(100% - 22px);
-  overflow: visible;
-}
 
 /* legend */
-.viz-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 16px;
-}
-.viz-legend .it {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: var(--text-body-sm);
-  color: var(--text-secondary);
-}
-.viz-legend .sw {
-  width: 12px;
-  height: 12px;
-  border-radius: 4px;
-  flex: none;
-}
 
 /* tooltip */
-.viz-tip {
-  display: inline-block;
-  background: var(--tooltip-surface);
-  color: var(--tooltip-text);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-control);
-  box-shadow: var(--popover-shadow);
-  padding: 8px 11px;
-  font-size: var(--text-label);
-}
-.viz-tip .vk {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.viz-tip .vk .sw {
-  width: 9px;
-  height: 9px;
-  border-radius: 3px;
-}
-.viz-tip .vv {
-  font-family: var(--font-mono);
-  color: var(--text-primary);
-  font-weight: var(--weight-semibold);
-  margin-left: auto;
-  padding-left: 14px;
-}
-.viz-tip .vl {
-  font-size: var(--text-caption);
-  color: var(--text-faint);
-  margin-bottom: 4px;
-}
 
 /* uncertainty — hatched fill, never colour alone */
-.viz-bar.uncertain {
-  background-image: repeating-linear-gradient(
-    135deg,
-    transparent 0 4px,
-    color-mix(in oklch, var(--background-primary) 45%, transparent) 4px 7px
-  );
-}
-.viz-uncert-note {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: var(--text-label);
-  color: var(--text-secondary);
-}
-.viz-uncert-note .pat {
-  width: 22px;
-  height: 14px;
-  border-radius: 3px;
-  background: var(--viz-1);
-  background-image: repeating-linear-gradient(
-    135deg,
-    transparent 0 4px,
-    color-mix(in oklch, var(--background-primary) 45%, transparent) 4px 7px
-  );
-}
 
 /* sequential swatch strip */
-.viz-seq {
-  display: flex;
-  border-radius: var(--radius-control);
-  overflow: hidden;
-  border: 1px solid var(--border-subtle);
-}
-.viz-seq i {
-  flex: 1;
-  height: 40px;
-}
 
 /* donut (conic) */
-.viz-donut {
-  width: 132px;
-  height: 132px;
-  border-radius: 50%;
-  position: relative;
-}
-.viz-donut::after {
-  content: "";
-  position: absolute;
-  inset: 26px;
-  border-radius: 50%;
-  background: var(--card-surface);
-}
 
 /* Issue #1297 — palette-completeness helpers. The reference applies the extended
    categorical hues (--viz-4..6) and the sequential ramp (--viz-seq-*) per series
@@ -13371,785 +11736,73 @@ html[data-keiko-gateway-setup-open="true"] {
    ============================================================ */
 
 /* ── checkbox (design-system/keiko-inputs.css) ───────────── */
-.c-check {
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
-  cursor: pointer;
-  font-size: var(--text-body-sm);
-  color: var(--text-primary);
-  user-select: none;
-}
-.c-check input {
-  position: absolute;
-  opacity: 0;
-  width: 0;
-  height: 0;
-}
-.c-check .bx {
-  width: 18px;
-  height: 18px;
-  flex: none;
-  border-radius: 5px;
-  border: 1px solid var(--checkbox-border);
-  background: var(--checkbox-surface);
-  display: grid;
-  place-items: center;
-  color: var(--checkbox-mark);
-  transition:
-    background 0.12s,
-    border-color 0.12s;
-}
-.c-check .bx svg {
-  width: 12px;
-  height: 12px;
-  opacity: 0;
-  transform: scale(0.6);
-  transition:
-    opacity 0.12s,
-    transform 0.12s;
-}
-.c-check input:checked + .bx {
-  background: var(--checkbox-surface-selected);
-  border-color: transparent;
-}
-.c-check input:checked + .bx svg {
-  opacity: 1;
-  transform: none;
-}
-.c-check input:indeterminate + .bx {
-  background: var(--checkbox-surface-selected);
-  border-color: transparent;
-}
-.c-check input:indeterminate + .bx::after {
-  content: "";
-  width: 9px;
-  height: 2px;
-  border-radius: 2px;
-  background: var(--checkbox-mark);
-}
-.c-check input:indeterminate + .bx svg {
-  opacity: 0;
-}
-.c-check input:focus-visible + .bx {
-  outline: 2px solid transparent;
-  box-shadow:
-    0 0 0 2px var(--background-primary),
-    0 0 0 4px var(--focus-ring);
-}
-.c-check input:disabled + .bx {
-  opacity: var(--opacity-disabled);
-}
-.c-check.is-disabled {
-  color: var(--text-disabled);
-  cursor: not-allowed;
-}
 
 /* ── radio (design-system/keiko-inputs.css) ──────────────── */
-.c-radio {
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
-  cursor: pointer;
-  font-size: var(--text-body-sm);
-  color: var(--text-primary);
-  user-select: none;
-}
-.c-radio input {
-  position: absolute;
-  opacity: 0;
-  width: 0;
-  height: 0;
-}
-.c-radio .rb {
-  width: 18px;
-  height: 18px;
-  flex: none;
-  border-radius: 50%;
-  border: 1px solid var(--radio-border);
-  background: var(--radio-surface);
-  display: grid;
-  place-items: center;
-  transition: border-color 0.12s;
-}
-.c-radio .rb::after {
-  content: "";
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--radio-dot);
-  transform: scale(0);
-  transition: transform 0.12s;
-}
-.c-radio input:checked + .rb {
-  border-color: var(--radio-border-selected);
-}
-.c-radio input:checked + .rb::after {
-  transform: none;
-}
 .c-radio input:focus-visible + .rb {
   outline: var(--focus-width, 2px) solid var(--focus-ring);
-  outline-offset: 2px;
-  box-shadow:
-    0 0 0 2px var(--background-primary),
-    0 0 0 4px var(--focus-ring);
 }
 
 /* ── slider (design-system/keiko-inputs.css) ─────────────── */
-.c-slider {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
-.c-slider input[type="range"] {
-  -webkit-appearance: none;
-  appearance: none;
-  flex: 1;
-  height: 4px;
-  border-radius: 999px;
-  background: var(--slider-track);
-  outline: none;
-}
-.c-slider input[type="range"]::-webkit-slider-runnable-track {
-  height: 4px;
-  border-radius: 999px;
-}
-.c-slider input[type="range"]::-moz-range-track {
-  height: 4px;
-  border-radius: 999px;
-  background: var(--slider-track);
-}
-.c-slider input[type="range"]::-moz-range-progress {
-  height: 4px;
-  border-radius: 999px;
-  background: var(--slider-fill);
-}
 .c-slider input[type="range"]::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  margin-top: -7px;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: var(--slider-thumb);
-  border: 3px solid var(--slider-thumb-border);
-  box-shadow: 0 0 0 1px var(--slider-thumb-ring);
-  cursor: pointer;
   transition: transform 0.1s;
-}
-.c-slider input[type="range"]::-moz-range-thumb {
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: var(--slider-thumb);
-  border: 3px solid var(--slider-thumb-border);
-  box-shadow: 0 0 0 1px var(--slider-thumb-ring);
-  cursor: pointer;
-}
-.c-slider input[type="range"]:active::-webkit-slider-thumb {
-  transform: scale(1.12);
 }
 .c-slider input[type="range"]:focus-visible {
   outline: var(--focus-width, 2px) solid var(--focus-ring);
-  outline-offset: 4px;
-  box-shadow:
-    0 0 0 2px var(--background-primary),
-    0 0 0 4px var(--focus-ring);
-}
-.c-slider .val {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--text-primary);
-  min-width: 40px;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
 }
 
 /* ── stepper / number (design-system/keiko-inputs.css) ───── */
-.c-stepper {
-  display: inline-flex;
-  align-items: center;
-  border: 1px solid var(--stepper-border);
-  border-radius: var(--radius-control);
-  background: var(--stepper-surface);
-  overflow: hidden;
-}
-.c-stepper button {
-  width: 32px;
-  height: var(--control-height);
-  border: 0;
-  background: transparent;
-  color: var(--stepper-button-text);
-  cursor: pointer;
-  display: grid;
-  place-items: center;
-  transition:
-    background 0.12s,
-    color 0.12s;
-}
-.c-stepper button:hover {
-  background: var(--stepper-button-surface-hover);
-  color: var(--text-primary);
-}
 .c-stepper button:focus-visible {
   outline: var(--focus-width, 2px) solid var(--focus-ring);
-  outline-offset: -2px;
-}
-.c-stepper input {
-  width: 52px;
-  height: var(--control-height);
-  border: 0;
-  border-left: 1px solid var(--border-subtle);
-  border-right: 1px solid var(--border-subtle);
-  background: var(--stepper-input-surface);
-  color: var(--input-text);
-  text-align: center;
-  font: 13px var(--font-mono);
-  outline: none;
-}
-.c-stepper:focus-within {
-  border-color: var(--input-border-focus);
-  box-shadow: 0 0 0 3px var(--input-ring-focus);
 }
 
 /* ── combobox (design-system/keiko-inputs.css) ───────────── */
-.c-combo {
-  position: relative;
-  width: 280px;
-}
-.c-combo-input {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: var(--control-height);
-  padding: 0 10px 0 12px;
-  border-radius: var(--radius-control);
-  border: 1px solid var(--combobox-border);
-  background: var(--combobox-surface);
-}
 .c-combo-input:focus-within {
   outline: var(--focus-width, 2px) solid var(--focus-ring);
-  outline-offset: 1px;
-  border-color: var(--input-border-focus);
-  box-shadow: 0 0 0 3px var(--input-ring-focus);
-}
-.c-combo-input input {
-  flex: 1;
-  min-width: 0;
-  border: 0;
-  background: none;
-  outline: none;
-  color: var(--input-text);
-  font: 13px var(--font-ui);
-}
-.c-combo-input .chev {
-  color: var(--text-faint);
-  flex: none;
-}
-.c-combo-list {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  right: 0;
-  z-index: var(--z-dropdown);
-  background: var(--combobox-list-surface);
-  border: 1px solid var(--combobox-list-border);
-  border-radius: var(--radius-surface);
-  box-shadow: var(--popover-shadow);
-  padding: 6px;
-  max-height: 240px;
-  overflow: auto;
-}
-.c-combo-opt {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
-  border-radius: var(--radius-control);
-  font-size: var(--text-body-sm);
-  color: var(--text-secondary);
-  cursor: pointer;
-}
-.c-combo-opt:hover,
-.c-combo-opt[aria-selected="true"],
-.c-combo-opt.active {
-  background: var(--combobox-option-surface-hover);
-  color: var(--text-primary);
-}
-.c-combo-opt .ck {
-  margin-left: auto;
-  color: var(--combobox-option-selected-mark);
-  opacity: 0;
-}
-.c-combo-opt[aria-selected="true"] .ck {
-  opacity: 1;
-}
-.c-combo-empty {
-  padding: 14px 10px;
-  font-size: var(--text-body-sm);
-  color: var(--text-faint);
-  text-align: center;
 }
 
 /* ── tag input (design-system/keiko-inputs.css) ──────────── */
-.c-tagfield {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 9px;
-  border-radius: var(--radius-control);
-  border: 1px solid var(--input-border);
-  background: var(--input-surface);
-}
-.c-tagfield:focus-within {
-  border-color: var(--input-border-focus);
-  box-shadow: 0 0 0 3px var(--input-ring-focus);
-}
-.c-tagfield input {
-  flex: 1;
-  min-width: 80px;
-  border: 0;
-  background: none;
-  outline: none;
-  color: var(--input-text);
-  font: 13px var(--font-ui);
-  padding: 3px 2px;
-}
-.c-tag {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 4px 3px 9px;
-  border-radius: var(--radius-control);
-  font-size: 12px;
-  color: var(--tag-text);
-  background: var(--tag-surface);
-  border: 1px solid var(--tag-border);
-}
-.c-tag button {
-  width: 24px;
-  height: 24px;
-  margin: -4px -2px -4px 0;
-  border: 0;
-  background: transparent;
-  color: var(--tag-text);
-  cursor: pointer;
-  display: grid;
-  place-items: center;
-  border-radius: 6px;
-  line-height: 1;
-  opacity: 0.7;
-}
-.c-tag button:hover {
-  opacity: 1;
-  background: color-mix(in oklch, var(--accent) 18%, transparent);
-}
 .c-tag button:focus-visible {
   outline: var(--focus-width, 2px) solid var(--focus-ring);
-  outline-offset: 1px;
-  opacity: 1;
 }
 
 /* ── file upload / dropzone (design-system/keiko-inputs.css) ── */
-.c-drop {
-  width: 100%;
-  appearance: none;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-  padding: 30px 24px;
-  border-radius: var(--radius-surface);
-  border: 1.5px dashed var(--file-dropzone-border);
-  background: var(--file-dropzone-surface);
-  color: var(--text-primary);
-  font: inherit;
-  text-align: center;
-  cursor: pointer;
-  transition:
-    border-color 0.14s,
-    background 0.14s;
-}
-.c-drop:hover,
-.c-drop.is-over {
-  border-color: var(--file-dropzone-border-active);
-  background: color-mix(in oklch, var(--accent) 6%, var(--file-dropzone-surface));
-}
 .c-drop:focus-visible {
   outline: var(--focus-width, 2px) solid var(--focus-ring);
-  outline-offset: 2px;
-}
-.c-drop .ic {
-  width: 40px;
-  height: 40px;
-  border-radius: var(--radius-control);
-  display: grid;
-  place-items: center;
-  background: var(--surface-accent-subtle);
-  color: var(--text-accent);
-  border: 1px solid var(--border-accent);
-}
-.c-drop .tt {
-  font-size: var(--text-body-sm);
-  color: var(--text-primary);
-  font-weight: var(--weight-medium);
-}
-.c-drop .tt b {
-  color: var(--text-accent);
-}
-.c-drop .ts {
-  font-size: var(--text-label);
-  color: var(--text-faint);
-  font-family: var(--font-mono);
-}
-.c-fileitem {
-  display: flex;
-  align-items: center;
-  gap: 11px;
-  padding: 10px 12px;
-  border-radius: var(--radius-control);
-  border: 1px solid var(--border-subtle);
-  background: var(--file-item-surface);
-}
-.c-fileitem .fi {
-  width: 32px;
-  height: 32px;
-  border-radius: 7px;
-  display: grid;
-  place-items: center;
-  background: var(--surface-inset);
-  color: var(--text-secondary);
-  flex: none;
-}
-.c-fileitem .nm {
-  font-size: var(--text-body-sm);
-  color: var(--text-primary);
-}
-.c-fileitem .mt {
-  font-size: var(--text-caption);
-  color: var(--text-faint);
-  font-family: var(--font-mono);
-}
-.c-fileitem .bar {
-  height: 4px;
-  border-radius: 999px;
-  background: var(--surface-inset);
-  overflow: hidden;
-  margin-top: 6px;
-}
-.c-fileitem .bar i {
-  display: block;
-  height: 100%;
-  border-radius: 999px;
-  background: var(--file-progress);
 }
 
 /* ── date field, segmented (design-system/keiko-inputs.css) ── */
-.c-datefield {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  padding: 0 4px 0 12px;
-  height: var(--control-height);
-  border-radius: var(--radius-control);
-  border: 1px solid var(--date-border);
-  background: var(--date-surface);
-  font: 13px var(--font-mono);
-  color: var(--input-text);
-}
-.c-datefield:focus-within {
-  border-color: var(--input-border-focus);
-  box-shadow: 0 0 0 3px var(--input-ring-focus);
-}
-.c-datefield .seg {
-  padding: 2px 3px;
-  border-radius: 4px;
-  outline: none;
-}
-.c-datefield .seg:focus {
-  background: var(--date-segment-surface-active);
-  color: var(--date-segment-text-active);
-}
-.c-datefield .sep {
-  color: var(--text-faint);
-}
-.c-datefield .cal {
-  margin-left: auto;
-  width: 28px;
-  height: 28px;
-  border: 0;
-  background: transparent;
-  color: var(--text-secondary);
-  display: grid;
-  place-items: center;
-  border-radius: 6px;
-  cursor: pointer;
-}
-.c-datefield .cal:hover {
-  background: var(--surface-secondary);
-  color: var(--text-primary);
-}
 .c-datefield .cal:focus-visible {
   outline: var(--focus-width, 2px) solid var(--focus-ring);
-  outline-offset: 1px;
 }
 
 /* form layout helpers (design-system/keiko-inputs.css) */
-.c-form-row {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.c-form-grid {
-  display: grid;
-  gap: 18px;
-}
 
 /* ── breadcrumbs (design-system/keiko-nav.css) ───────────── */
-.c-crumbs {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 2px;
-  font-size: var(--text-body-sm);
-}
-.c-crumbs a,
-.c-crumbs span {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
-  border-radius: 7px;
-  color: var(--breadcrumb-text);
-  text-decoration: none;
-}
-.c-crumbs a:hover {
-  background: var(--breadcrumb-surface-hover);
-  color: var(--breadcrumb-text-current);
-}
 .c-crumbs a:focus-visible {
   outline: var(--focus-width, 2px) solid var(--focus-ring);
-  outline-offset: 1px;
-}
-.c-crumbs .sep {
-  color: var(--text-faint);
-  padding: 0;
-}
-.c-crumbs [aria-current="page"] {
-  color: var(--breadcrumb-text-current);
-  font-weight: var(--weight-medium);
 }
 
 /* ── back (design-system/keiko-nav.css) ──────────────────── */
-.c-back {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  height: 30px;
-  padding: 0 12px 0 8px;
-  border-radius: var(--radius-control);
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--text-secondary);
-  font: var(--weight-medium) 13px var(--font-ui);
-  cursor: pointer;
-}
-.c-back:hover {
-  background: var(--surface-secondary);
-  color: var(--text-primary);
-}
 .c-back:focus-visible {
   outline: var(--focus-width, 2px) solid var(--focus-ring);
-  outline-offset: 2px;
 }
 
 /* ── underline tabs, formalised (design-system/keiko-nav.css) ── */
-.c-utabs {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  border-bottom: 1px solid var(--border-default);
-}
-.c-utab {
-  position: relative;
-  padding: 10px 14px;
-  border: 0;
-  background: transparent;
-  color: var(--nav-item-text);
-  font: var(--weight-medium) var(--text-body-sm) var(--font-ui);
-  cursor: pointer;
-}
-.c-utab:hover {
-  color: var(--nav-item-text-active);
-}
-.c-utab[aria-selected="true"] {
-  color: var(--text-primary);
-}
 .c-utab:focus-visible {
   outline: var(--focus-width, 2px) solid var(--focus-ring);
-  outline-offset: -2px;
-  border-radius: 6px;
-}
-.c-utab[aria-selected="true"]::after {
-  content: "";
-  position: absolute;
-  left: 10px;
-  right: 10px;
-  bottom: -1px;
-  height: 2px;
-  border-radius: 2px 2px 0 0;
-  background: var(--tab-underline-indicator);
-}
-.c-utab .ct {
-  margin-left: 7px;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--text-faint);
 }
 
 /* ── pagination (design-system/keiko-nav.css) ────────────── */
-.c-pager {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-.c-pager button {
-  min-width: 32px;
-  height: 32px;
-  padding: 0 9px;
-  border-radius: var(--radius-control);
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--pagination-text);
-  font: var(--weight-medium) 13px var(--font-ui);
-  cursor: pointer;
-  display: inline-grid;
-  place-items: center;
-}
-.c-pager button:hover:not(:disabled) {
-  background: var(--pagination-surface-hover);
-  color: var(--text-primary);
-}
 .c-pager button:focus-visible {
   outline: var(--focus-width, 2px) solid var(--focus-ring);
-  outline-offset: 1px;
-}
-.c-pager button[aria-current="page"] {
-  background: var(--pagination-surface-current);
-  color: var(--pagination-text-current);
-  border-color: var(--pagination-border-current);
-}
-.c-pager button:disabled {
-  color: var(--text-disabled);
-  opacity: var(--opacity-disabled);
-  cursor: not-allowed;
-}
-.c-pager .gap {
-  color: var(--text-faint);
-  padding: 0 2px;
 }
 
 /* ── context menu (design-system/keiko-nav.css) ──────────── */
-.c-ctx {
-  width: 230px;
-  background: var(--popover-surface);
-  border: 1px solid var(--popover-border);
-  border-radius: var(--radius-surface);
-  box-shadow: var(--popover-shadow);
-  padding: 6px;
-}
-.c-ctx-item {
-  display: flex;
-  align-items: center;
-  gap: 11px;
-  width: 100%;
-  padding: 8px 9px;
-  border-radius: var(--radius-control);
-  text-align: left;
-  font: var(--text-body-sm) var(--font-ui);
-  color: var(--context-item-text);
-  border: 0;
-  background: transparent;
-  cursor: pointer;
-}
-.c-ctx-item:hover,
-.c-ctx-item.active {
-  background: var(--context-item-surface-hover);
-  color: var(--text-primary);
-}
 .c-ctx-item:focus-visible {
   outline: var(--focus-width, 2px) solid var(--focus-ring);
-  outline-offset: -2px;
-}
-.c-ctx-item .k {
-  margin-left: auto;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--text-faint);
-}
-.c-ctx-item.danger {
-  color: var(--context-item-text-danger);
-}
-.c-ctx-item.danger:hover,
-.c-ctx-item.danger.active {
-  background: color-mix(in oklch, var(--feedback-danger) 12%, transparent);
-}
-.c-ctx-sep {
-  height: 1px;
-  background: var(--border-subtle);
-  margin: 4px 2px;
 }
 
 /* ── steps / wizard progress (design-system/keiko-nav.css) ── */
-.c-steps {
-  display: flex;
-  align-items: center;
-  gap: 0;
-}
-.c-step {
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
-}
-.c-step .dot {
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  font: var(--weight-semibold) 11px var(--font-mono);
-  border: 1px solid var(--step-dot-border);
-  color: var(--text-faint);
-  background: var(--step-dot-surface);
-  flex: none;
-}
-.c-step .lb {
-  font-size: var(--text-body-sm);
-  color: var(--text-secondary);
-}
-.c-step.done .dot {
-  background: var(--step-dot-surface-done);
-  border-color: transparent;
-  color: var(--step-dot-text-done);
-}
-.c-step.active .dot {
-  border-color: var(--step-dot-border-active);
-  color: var(--text-accent);
-}
-.c-step.active .lb {
-  color: var(--text-primary);
-  font-weight: var(--weight-medium);
-}
-.c-step-line {
-  width: 40px;
-  height: 1px;
-  background: var(--step-line);
-  margin: 0 12px;
-}
-.c-step.done + .c-step-line {
-  background: var(--step-line-done);
-}
 
 /* Responsive: the input/nav primitives are intrinsically fluid (flex-wrap,
    min-width, flex:1). The one governed breakpoint collapses multi-column form
@@ -16606,7 +14259,8 @@ html[data-keiko-gateway-setup-open="true"] {
 }
 
 /* Status badges — AA-compliant colours on var(--card) backgrounds */
-.qi-badge {
+.qi-badge,
+.cmp-budget-badge {
   display: inline-flex;
   align-items: center;
   padding: 1px 7px;
@@ -16614,23 +14268,28 @@ html[data-keiko-gateway-setup-open="true"] {
   font-size: 11px;
   font-weight: 500;
   letter-spacing: 0.02em;
+}
+.qi-badge {
   width: fit-content;
 }
 
 /* succeeded: --accent #4eba87 bg; --ink-inverse on top ≈6.94:1 */
-.qi-badge-succeeded {
+.qi-badge-succeeded,
+.cmp-budget-badge-low {
   background: var(--accent-dim);
   color: var(--accent);
 }
 
 /* running: info blue */
-.qi-badge-running {
+.qi-badge-running,
+.cmp-budget-badge-moderate {
   background: color-mix(in oklch, var(--feedback-info) 18%, transparent);
   color: var(--feedback-info);
 }
 
 /* failed: danger — var(--fg) near-white on 18% danger/--card surface ≈ 7.5:1 (WCAG 1.4.3 AA). */
-.qi-badge-failed {
+.qi-badge-failed,
+.cmp-budget-badge-exceeded {
   background: color-mix(in oklch, var(--feedback-danger) 18%, transparent);
   color: var(--text-primary);
 }
@@ -20521,32 +18180,13 @@ button.figma-view-preview {
 /* ==== uiux-fix F010: scope-pill focus and pressure badge styling (C169/C326) ==== */
 /* Scope pressure badges follow the .qi-badge status pattern. */
 .cmp-budget-badge {
-  display: inline-flex;
-  align-items: center;
   min-height: 20px;
-  padding: 1px 7px;
-  border-radius: 99px;
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.02em;
-}
-.cmp-budget-badge-low {
-  background: var(--accent-dim);
-  color: var(--accent);
-}
-.cmp-budget-badge-moderate {
-  background: color-mix(in oklch, var(--feedback-info) 18%, transparent);
-  color: var(--feedback-info);
 }
 .cmp-budget-badge-high {
   background: color-mix(in oklch, var(--feedback-warning) 18%, transparent);
   color: var(--feedback-warning);
 }
 /* exceeded: --fg on the 18% danger tint ≈7.5:1 (same rationale as .qi-badge-failed). */
-.cmp-budget-badge-exceeded {
-  background: color-mix(in oklch, var(--feedback-danger) 18%, transparent);
-  color: var(--text-primary);
-}
 /* Light theme: raw --accent #4eba87 on the 18% accent tint ≈1.97:1 FAIL — ink-inverse
    ≈15:1 (same precedent as [data-theme="light"] .qi-badge-succeeded). --info/--warn/--danger
    are already AA-darkened in the light token block, so moderate/high/exceeded need no override. */

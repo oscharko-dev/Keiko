@@ -1,11 +1,12 @@
 {
   "schemaVersion": 1,
   "baselineRevision": "c8fb7e2d78720a8ba51d3d3ae7dd0e82f2df7add",
-  "harnessSha256": "c82838b4f9fdc323772ad68e01ab8e7891a9e89146118491c57721c72c6c8411",
+  "harnessSha256": "3e993196c93f90664e2a5b06ac5b7997d098245fdca80175f33af9b16164cb20",
+  "fixtureDataSha256": "6f433e0ee330487625c687f5e6647e3ab26cc3053e3a602134d671d3a0cdd232",
   "sourceSha256": {
-    "packages/keiko-ui/src/app/globals.css": "002e4ba59dca284ab15c7afc02d3ad04fb90e011e1ed118ff82c180dce0441e2",
+    "packages/keiko-ui/src/app/globals.css": "b4db5a8c3b03e43a4a518a26bf2ada6aef94e0b33f31a5e86a8a444b58e1aa90",
     "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow.module.css": "b8ad6569dc15a98be6e363d536d14a17b3258ac39bec16962be6b6ff4f896182",
-    "packages/keiko-ui/src/app/components/desktop/widgets/cards/TerminalWidget.module.css": "3e9f7bb352e12233836ef0a9fceee695637b4a7f926ea4e2d479a72ea7a00425",
+    "packages/keiko-ui/src/app/components/desktop/widgets/cards/TerminalWidget.module.css": "0054a83ecbf05640a113a46b0108a8a22478b5499142e4d471520dde593836fa",
     "packages/keiko-ui/src/app/components/desktop/widgets/panels/DebuggingSettings.module.css": "9f7a0cea453f53b8a04574ac18994c1ddd8643536546f1a4b73feab562bb068e"
   },
   "nodeVersion": "v24.18.0",
@@ -52,7 +53,7 @@
     "table-selected-loading-text",
     "table-selected-loading-number"
   ],
-  "postCssSha256": "002e4ba59dca284ab15c7afc02d3ad04fb90e011e1ed118ff82c180dce0441e2",
+  "postCssSha256": "6c8f21880aea2f6ab15c371bd7541e5fd3494f2bdfe37408153d9e4691663562",
   "fixtureCount": 40,
   "computedValueComparisons": 50304,
   "differences": []

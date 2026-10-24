@@ -1,4 +1,24 @@
+.cmp-action-scope :global(.tm-action) {
+  padding: 6px 14px;
+  min-height: 28px;
+  min-width: 56px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--button-secondary-border);
+  background: var(--button-secondary-surface);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-weight: 550;
+  cursor: pointer;
+}
+
+.cmp-action-scope :global(.tm-action):hover:not(:disabled) {
+  background: var(--button-secondary-surface-hover);
+  color: var(--button-secondary-text);
+  border-color: var(--border-strong);
+}
+
 .lazyWidgetScope {
+  composes: cmp-action-scope;
   --lazy-widget-scope: 1;
 }
 
@@ -76,25 +96,6 @@
   align-items: center;
   gap: 8px;
   margin-top: 2px;
-}
-
-.lazyWidgetScope :global(.tm-action) {
-  padding: 6px 14px;
-  min-height: 28px;
-  min-width: 56px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--button-secondary-border);
-  background: var(--button-secondary-surface);
-  color: var(--text-secondary);
-  font-size: 12.5px;
-  font-weight: 550;
-  cursor: pointer;
-}
-
-.lazyWidgetScope :global(.tm-action):hover:not(:disabled) {
-  background: var(--button-secondary-surface-hover);
-  color: var(--button-secondary-text);
-  border-color: var(--border-strong);
 }
 
 .lazyWidgetScope :global(.tm-action):disabled {

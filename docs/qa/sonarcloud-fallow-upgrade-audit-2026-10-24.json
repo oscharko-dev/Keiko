@@ -8,14 +8,14 @@
   "minimumLines": 10,
   "ignoreImports": true,
   "baselineWholeProjectGroups": 2107,
-  "currentChangedFileGroups": 94,
+  "currentChangedFileGroups": 0,
   "classificationCounts": {
     "unchanged-source-new-maximal-fingerprint": 8,
     "baseline-fingerprint": 80,
     "new-css-clone-after-cascade-cleanup": 1,
     "new-fixture-data-shape": 5
   },
-  "state": "Owner selected a separate, low-risk follow-up scope on 2026-10-24. Planning only: no production clone refactor, profile waiver, baseline exemption, threshold or workflow change has been applied. The current required clone gate remains red.",
+  "state": "Owner authorized only the remaining blockers for PR #4069 integration. The security-required Fallow 3.34.0 upgrade is retained; source reuse and data/code separation remove the changed-file duplicate groups with the original semantic/100-token/10-line/zero-issue command. Final verification and exact-head review/CI settlement remain required; general issue cleanup is paused.",
   "limitations": [
     "Fingerprint presence proves that a normalized group already existed, not that every current instance was present.",
     "Whole-line-span presence establishes retained source for the additional unchanged groups; it is not an equivalence proof for surrounding behavior.",
@@ -3657,7 +3657,7 @@
   "separateScopePlan": {
     "ownerDirection": "Getrennten Lösungsumfang vorbereiten (empfohlen)",
     "confirmedDate": "2026-10-24",
-    "implementationAuthorized": false,
+    "implementationAuthorized": true,
     "importantLimit": "The 94 overlapping clone groups are not 94 independent refactors. Many normalize distinct declarative schemas or literal lookup data; inspect semantics before introducing an abstraction.",
     "classificationCounts": {
       "http-body": 8,
@@ -3759,6 +3759,25 @@
       "Run the unchanged Fallow 3.34.0 semantic/100-token/10-line/zero-issue gate after each batch; retain the first failure and its evidence.",
       "No saved baseline growth, blanket suppression, lowered threshold or direct dev push.",
       "Current Sonar PR remains blocked until the existing required gates genuinely pass; a plan is not permission to publish a red change."
-    ]
+    ],
+    "implementationAuthorization": {
+      "date": "2026-10-24",
+      "scope": "Owner requested implementation of all six batches after a governed merge of PR #4069, plus the generated registry representation prerequisite; merge is blocked until exact-head checks pass.",
+      "constraints": [
+        "Preserve product functionality, authority boundaries, serial retry/stream/resource ordering and logging.",
+        "Do not relax rules, thresholds, baselines, exclusions or required checks."
+      ]
+    }
+  },
+  "initialChangedFileGroups": 94,
+  "mergeBlockerVerification": {
+    "baseRevision": "c8fb7e2d78720a8ba51d3d3ae7dd0e82f2df7add",
+    "duplicateGroups": 0,
+    "command": "fallow dupes --mode semantic --min-tokens 100 --min-lines 10 --ignore-imports --format json --fail-on-issues --changed-since c8fb7e2d78720a8ba51d3d3ae7dd0e82f2df7add",
+    "gateConfigurationChanged": false,
+    "wholeOriginalSerialLoopsRetained": 173,
+    "originalAwaitFindings": 177,
+    "pairedStyleEvidence": "docs/design-system/evidence/sonarcloud-2026-10-24/design-style-preservation-proof.json",
+    "limitations": "Historical group records below describe the original 94-group audit, rather than current analyzer output. Final checks and review settlement are pending."
   }
 }

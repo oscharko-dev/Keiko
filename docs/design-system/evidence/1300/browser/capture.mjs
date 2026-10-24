@@ -1,3 +1,10 @@
+import { designEvidenceSourceHashes } from "../../../../../scripts/lib/design-evidence-sources.mjs";
+import { readStylesheet } from "../../../../../packages/keiko-ui/read-stylesheet.mjs";
+import {
+  createUiStaticFixtureServer,
+  listenUiStaticFixtureServer,
+  loadThemedUiFixture,
+} from "../../../../../scripts/lib/ui-browser-evidence.mjs";
 // Issue #1300 — running-app cross-theme / cross-viewport screenshot bundle.
 //
 // Serves the Next.js STATIC EXPORT (packages/keiko-ui/out, ADR-0011 D1 — self-contained, no backend)
@@ -12,10 +19,9 @@
 import { chromium } from "playwright";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { createServer } from "node:http";
-import { readFile, readdir, stat, mkdir, realpath } from "node:fs/promises";
+import { readFile, readdir, mkdir } from "node:fs/promises";
 import { readFileSync, writeFileSync } from "node:fs";
-import { join, extname, resolve, dirname, normalize, sep, relative } from "node:path";
+import { join, resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { codingAppSessionAcknowledgement } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
@@ -34,7 +40,7 @@ const CAPTURE_SHA256 = createHash("sha256")
   .update(readFileSync(CAPTURE_PATH, "utf8").replace(/\r\n?/g, "\n"))
   .digest("hex");
 const POST_CSS_SHA256 = createHash("sha256")
-  .update(readFileSync(CSS_PATH, "utf8").replace(/\r\n?/g, "\n"))
+  .update(readStylesheet(CSS_PATH).replace(/\r\n?/g, "\n"))
   .digest("hex");
 
 function buildStaticExport() {
@@ -84,72 +90,8 @@ async function renderedCssBundleSha256() {
 buildStaticExport();
 const RENDERED_CSS_BUNDLE_SHA256 = await renderedCssBundleSha256();
 await mkdir(OUT_DIR, { recursive: true });
-const ROOT_REAL = await realpath(ROOT);
-const OUT_REL = relative(REPO, OUT_DIR);
-
-const MIME = {
-  ".html": "text/html",
-  ".js": "text/javascript",
-  ".css": "text/css",
-  ".json": "application/json",
-  ".svg": "image/svg+xml",
-  ".png": "image/png",
-  ".ico": "image/x-icon",
-  ".webmanifest": "application/manifest+json",
-  ".woff2": "font/woff2",
-  ".woff": "font/woff",
-  ".txt": "text/plain",
-  ".map": "application/json",
-};
-const server = createServer(async (req, res) => {
-  try {
-    const requested = decodeURIComponent((req.url ?? "/").split("?")[0]);
-    // Confine every request to ROOT: prefixing "/" then normalize() collapses any ".." segment so
-    // the resolved path can never escape the served directory; the startsWith guard is a
-    // belt-and-braces check (CodeQL path-injection hardening).
-    const safe = normalize("/" + (requested === "/" ? "index.html" : requested));
-    let fp = join(ROOT_REAL, safe);
-    if (fp !== ROOT_REAL && !fp.startsWith(ROOT_REAL + sep)) {
-      res.writeHead(403, { "content-type": "text/plain" });
-      return res.end("forbidden");
-    }
-    try {
-      if ((await stat(fp)).isDirectory()) fp = join(fp, "index.html");
-    } catch {}
-    let buf;
-    try {
-      const realFile = await realpath(fp);
-      if (realFile !== ROOT_REAL && !realFile.startsWith(ROOT_REAL + sep)) {
-        res.writeHead(403, { "content-type": "text/plain" });
-        return res.end("forbidden");
-      }
-      buf = await readFile(fp);
-    } catch {
-      try {
-        fp += ".html";
-        const realFile = await realpath(fp);
-        if (realFile !== ROOT_REAL && !realFile.startsWith(ROOT_REAL + sep)) {
-          res.writeHead(403, { "content-type": "text/plain" });
-          return res.end("forbidden");
-        }
-        buf = await readFile(fp);
-      } catch {
-        res.writeHead(404, { "content-type": "text/plain" });
-        return res.end("not found");
-      }
-    }
-    res.writeHead(200, {
-      "content-type": MIME[extname(fp)] || "application/octet-stream",
-      "cache-control": "no-store",
-    });
-    res.end(buf);
-  } catch {
-    // Never reflect the error/stack to the client (CodeQL: stack-trace exposure). Fixed plain text.
-    res.writeHead(500, { "content-type": "text/plain" });
-    res.end("internal error");
-  }
-});
-await new Promise((r) => server.listen(4612, "127.0.0.1", r));
+const server = await createUiStaticFixtureServer(ROOT);
+await listenUiStaticFixtureServer(server, 4612);
 const BASE = "http://127.0.0.1:4612";
 
 const MODES = [
@@ -1079,17 +1021,7 @@ for (const vp of VIEWPORTS) {
         },
         { theme: mode.theme, windows: scenario.windows },
       );
-      await page.goto(BASE + "/", { waitUntil: "networkidle", timeout: 30000 });
-      await page.evaluate(
-        ({ theme, hc }) => {
-          const r = document.documentElement;
-          r.dataset.theme = theme;
-          delete r.dataset.hc;
-          if (hc) r.dataset.hc = hc;
-        },
-        { theme: mode.theme, hc: mode.hc },
-      );
-      await page.waitForTimeout(900);
+      await loadThemedUiFixture(page, BASE + "/", mode);
       const name = `${vp.id}__${scenario.id}__${mode.id}.png`;
       await page.screenshot({ path: join(OUT_DIR, name), fullPage: false });
       const info = await page.evaluate((requiredSelectors) => {
@@ -1147,6 +1079,7 @@ writeFileSync(
       issue: 1300,
       epic: 1290,
       captureSha256: CAPTURE_SHA256,
+      sourceFiles: designEvidenceSourceHashes(REPO),
       postCssSha256: POST_CSS_SHA256,
       renderedCssBundleSha256: RENDERED_CSS_BUNDLE_SHA256,
       appPath: "packages/keiko-ui/out",
@@ -1165,7 +1098,7 @@ writeFileSync(
     2,
   ),
 );
-console.log(`\nWrote ${shotCount} screenshots + manifest.json to ${OUT_REL}`);
+console.log(`\nWrote ${shotCount} screenshots + manifest.json to ${relative(REPO, HERE)}`);
 const anyErr = manifest.some(
   (m) =>
     m.pageErrors.length ||

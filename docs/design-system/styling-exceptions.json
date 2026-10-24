@@ -158,7 +158,7 @@
         ".connector-picker-selected",
         ".connector-picker-status"
       ],
-      "unprefixedLocalClasses": ["connector-picker", "lazyWidgetScope"]
+      "unprefixedLocalClasses": ["lazyWidgetScope"]
     },
     {
       "source": "packages/keiko-ui/src/app/components/desktop/widgets/cards/DocumentationBrowserWidget.module.css",
@@ -306,7 +306,7 @@
     {
       "source": "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorRuntimeWidget.module.css",
       "globalSelectors": [],
-      "unprefixedLocalClasses": ["ed-tablist", "tabHitClosable", "tabRow", "themeTokens"]
+      "unprefixedLocalClasses": ["tabHitClosable", "tabRow", "themeTokens"]
     },
     {
       "source": "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorWidget.module.css",
@@ -391,13 +391,10 @@
         ".pdfv-zoom",
         ".tm-action",
         ".tm-action",
-        ".tm-action",
-        ".tm-action",
-        ".tm-action",
         ".tm-action[aria-disabled=\"true\"]",
         ".tm-action[aria-disabled=\"true\"]"
       ],
-      "unprefixedLocalClasses": ["lazyWidgetScope", "tm-action"]
+      "unprefixedLocalClasses": ["lazyWidgetScope"]
     },
     {
       "source": "packages/keiko-ui/src/app/components/desktop/widgets/cards/TerminalWidget.module.css",
@@ -773,7 +770,7 @@
     {
       "source": "packages/keiko-ui/src/app/components/desktop/widgets/panels/NotificationsPanel.module.css",
       "globalSelectors": [".nt-empty"],
-      "unprefixedLocalClasses": ["lazyWidgetScope", "tl-empty"]
+      "unprefixedLocalClasses": ["lazyWidgetScope"]
     },
     {
       "source": "packages/keiko-ui/src/app/components/desktop/widgets/panels/PluginsPanel.module.css",
@@ -908,7 +905,7 @@
         ".lkd-manual-refresh-note",
         ".lkd-manual-refresh-title"
       ],
-      "unprefixedLocalClasses": ["lkd-manual-refresh", "panelScope"]
+      "unprefixedLocalClasses": ["panelScope"]
     },
     {
       "source": "packages/keiko-ui/src/app/local-knowledge/set-counts.module.css",

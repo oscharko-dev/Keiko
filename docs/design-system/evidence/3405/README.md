@@ -133,3 +133,8 @@ The SonarCloud CSS maintenance on 2026-10-24 regenerated the original nine-case 
 on macOS arm64 with Node 24.22.0. All nine cases passed in 56.8 seconds, including the real-BFF
 outage case; the unchanged freshness gate passed. These updater fixtures qualify presentation and
 BFF recovery only. They do not replace the separate Editor smoke or native update qualification.
+
+Source provenance version 2 stores each owned input as an explicit `{ path, sha256 }` record.
+The checker rejects duplicates, extra row fields, unsupported versions and any changed source path
+or digest. Harness hashes retain their existing exact map. This identifies public checksums as
+checksums while preserving the complete input binding and all visual/accessibility thresholds.

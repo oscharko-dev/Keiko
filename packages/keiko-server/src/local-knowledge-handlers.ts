@@ -1,3 +1,6 @@
+import { readBoundedRequestBody, RequestBodyTooLargeError } from "./bounded-request-body.js";
+export { stripTrailingSlashes } from "./embedding-provider-identity.js";
+import { normalizedEndpointFingerprint } from "./embedding-provider-identity.js";
 import { createHash, randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
 import { basename, join } from "node:path";
@@ -206,36 +209,23 @@ function notFound(message: string): RouteResult {
   return { status: 404, body: errorBody("NOT_FOUND", message) };
 }
 
-async function readBody(req: IncomingMessage): Promise<string> {
-  return new Promise<string>((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let total = 0;
-    let capped = false;
-    req.on("data", (chunk: Buffer) => {
-      total += chunk.length;
-      if (total > MAX_BODY_BYTES) {
-        if (!capped) {
-          capped = true;
-          chunks.length = 0;
-          reject(new BodyTooLargeError());
-          req.resume();
-        }
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on("end", () => {
-      if (!capped) resolve(Buffer.concat(chunks).toString("utf8"));
-    });
-    req.on("error", reject);
-  });
+async function readBody(req: IncomingMessage, correlationId?: string): Promise<string> {
+  try {
+    return await readBoundedRequestBody(req, MAX_BODY_BYTES, undefined, correlationId);
+  } catch (error) {
+    if (error instanceof RequestBodyTooLargeError) throw new BodyTooLargeError();
+    throw error;
+  }
 }
 
-async function readJsonObject(req: IncomingMessage): Promise<Record<string, unknown>> {
+async function readJsonObject(
+  req: IncomingMessage,
+  correlationId?: string,
+): Promise<Record<string, unknown>> {
   if (req.method === undefined || req.method === "GET" || req.method === "HEAD") {
     return {};
   }
-  const raw = await readBody(req);
+  const raw = await readBody(req, correlationId);
   if (raw.length === 0) return {};
   let parsed: unknown;
   try {
@@ -1575,18 +1565,6 @@ function parseCreateCapsuleInput(body: Record<string, unknown>): {
 // the string doesn't end in "/", which is quadratic in input length (SonarCloud S8786).
 // Exported for the co-located regression test only — not part of the package's public surface
 // (index.ts re-exports handlers by name and does not list this helper).
-export function stripTrailingSlashes(value: string): string {
-  let end = value.length;
-  while (end > 0 && value.codePointAt(end - 1) === 0x2f /* "/" */) {
-    end -= 1;
-  }
-  return value.slice(0, end);
-}
-
-function normalizedEndpointFingerprint(baseUrl: string): string {
-  const normalized = stripTrailingSlashes(baseUrl.trim());
-  return createHash("sha256").update(normalized).digest("hex").slice(0, 16);
-}
 
 function embeddingProviderIdentity(provider: ModelProviderConfig): string {
   return `openai-compatible:${normalizedEndpointFingerprint(provider.baseUrl)}`;
@@ -2628,7 +2606,7 @@ export async function handleCreateLocalKnowledgeCapsuleSet(
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
   return runHandler(async () => {
-    const input = parseCreateCapsuleSetInput(await readJsonObject(ctx.req));
+    const input = parseCreateCapsuleSetInput(await readJsonObject(ctx.req, ctx.correlationId));
     const env = openStoreForDeps(deps);
     try {
       const set = composeCapsules(env.store, {
@@ -2779,7 +2757,7 @@ export async function handleUpdateLocalKnowledgeCapsule(
 ): Promise<RouteResult> {
   return runHandler(async () => {
     const capsuleId = parseCapsuleId(ctx);
-    const patch = parseUpdateCapsuleInput(await readJsonObject(ctx.req));
+    const patch = parseUpdateCapsuleInput(await readJsonObject(ctx.req, ctx.correlationId));
     const env = openStoreForDeps(deps);
     try {
       const capsule = updateCapsuleDetails(env.store, capsuleId, patch);
@@ -2798,7 +2776,7 @@ export async function handleCreateLocalKnowledgeCapsule(
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
   return runHandler(async () => {
-    const input = parseCreateCapsuleInput(await readJsonObject(ctx.req));
+    const input = parseCreateCapsuleInput(await readJsonObject(ctx.req, ctx.correlationId));
     const env = openStoreForDeps(deps);
     try {
       const provider = configuredEmbeddingProviders(currentGatewayConfig(deps))[0];
@@ -2873,15 +2851,27 @@ export async function handleGetLocalKnowledgeCapsule(
 // exists only in the 202 response body, and the operator's request joins to no later line at all.
 const INDEXING_LOG_DIGEST_LENGTH = 16;
 
-const INDEXING_START_REFUSED_OPERATION = defineActivityLogOperation({
+const INDEXING_CAPSULE_ID_DIGEST_FIELD = {
+  type: "string",
+  dataClass: "digest",
+  required: true,
+  maxLength: 16,
+} as const;
+
+const INDEXING_OPERATION_BASE = {
   contractKind: "activity-log-operation",
   schemaVersion: 1,
-  op: "indexing.start.refused",
   category: "indexing",
   owner: "keiko-server",
+  releaseImpact: "patch",
+} as const;
+
+const INDEXING_START_REFUSED_OPERATION = defineActivityLogOperation({
+  ...INDEXING_OPERATION_BASE,
+  op: "indexing.start.refused",
   emitter: "local-knowledge-handlers.refuseIndexingStart",
   fields: {
-    capsuleIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
+    capsuleIdDigest: INDEXING_CAPSULE_ID_DIGEST_FIELD,
     reason: {
       type: "string",
       dataClass: "closed-enum",
@@ -2894,26 +2884,20 @@ const INDEXING_START_REFUSED_OPERATION = defineActivityLogOperation({
         "run-already-starting",
       ],
     },
-    completeness: { type: "string", dataClass: "completeness-state", required: true },
-    loss: { type: "string", dataClass: "loss-state", required: true },
   },
   causal: "correlation",
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["indexing-route"],
   proofIds: ["indexing.start.refused.line"],
-  releaseImpact: "patch",
 });
 
 const INDEXING_DETACHED_RUN_FAILED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...INDEXING_OPERATION_BASE,
   op: "indexing.detached-run.failed",
-  category: "indexing",
-  owner: "keiko-server",
   emitter: "local-knowledge-handlers.reportDetachedIndexingFailure",
   fields: {
-    capsuleIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
+    capsuleIdDigest: INDEXING_CAPSULE_ID_DIGEST_FIELD,
     stage: {
       type: "string",
       dataClass: "closed-enum",
@@ -2935,125 +2919,92 @@ const INDEXING_DETACHED_RUN_FAILED_OPERATION = defineActivityLogOperation({
       maxLength: 128,
       maxItems: 5,
     },
-    completeness: { type: "string", dataClass: "completeness-state", required: true },
-    loss: { type: "string", dataClass: "loss-state", required: true },
   },
   causal: "correlation",
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["indexing-detached-run"],
   proofIds: ["indexing.detached-run.failed.line"],
-  releaseImpact: "patch",
 });
 
 const INDEXING_DETACHED_RUN_LAUNCHED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...INDEXING_OPERATION_BASE,
   op: "indexing.detached-run.launched",
-  category: "indexing",
-  owner: "keiko-server",
   emitter: "local-knowledge-handlers.launchDetachedCapsuleIndexing",
   fields: {
-    capsuleIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
+    capsuleIdDigest: INDEXING_CAPSULE_ID_DIGEST_FIELD,
     jobIdMinted: { type: "boolean", dataClass: "closed-enum", required: true },
-    completeness: { type: "string", dataClass: "completeness-state", required: true },
-    loss: { type: "string", dataClass: "loss-state", required: true },
   },
   causal: "parent-correlation",
   lifecycle: "start",
   analyzerProjection: "process-lifecycle",
   failureClasses: ["indexing-detached-run"],
   proofIds: ["indexing.detached-run.launched.line"],
-  releaseImpact: "patch",
 });
 
 const INDEXING_START_ACCEPTED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...INDEXING_OPERATION_BASE,
   op: "indexing.start.accepted",
-  category: "indexing",
-  owner: "keiko-server",
   emitter: "local-knowledge-handlers.acceptDetachedIndexingStart",
   fields: {
-    capsuleIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
+    capsuleIdDigest: INDEXING_CAPSULE_ID_DIGEST_FIELD,
     jobIdMinted: { type: "boolean", dataClass: "closed-enum", required: true },
     sourceCount: { type: "integer", dataClass: "count", required: true },
-    completeness: { type: "string", dataClass: "completeness-state", required: true },
-    loss: { type: "string", dataClass: "loss-state", required: true },
   },
   causal: "correlation",
   lifecycle: "start",
   analyzerProjection: "process-lifecycle",
   failureClasses: ["indexing-route"],
   proofIds: ["indexing.start.accepted.line"],
-  releaseImpact: "patch",
 });
 
 const INDEXING_CANCEL_REQUESTED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...INDEXING_OPERATION_BASE,
   op: "indexing.cancel.requested",
-  category: "indexing",
-  owner: "keiko-server",
   emitter: "local-knowledge-handlers.handleCancelLocalKnowledgeCapsuleIndexing",
   fields: {
-    capsuleIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
-    completeness: { type: "string", dataClass: "completeness-state", required: true },
-    loss: { type: "string", dataClass: "loss-state", required: true },
+    capsuleIdDigest: INDEXING_CAPSULE_ID_DIGEST_FIELD,
   },
   causal: "correlation",
   lifecycle: "start",
   analyzerProjection: "timeline",
   failureClasses: ["indexing-cancellation"],
   proofIds: ["indexing.cancel.requested.line"],
-  releaseImpact: "patch",
 });
 
 const INDEXING_CANCEL_REFUSED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...INDEXING_OPERATION_BASE,
   op: "indexing.cancel.refused",
-  category: "indexing",
-  owner: "keiko-server",
   emitter: "local-knowledge-handlers.handleCancelLocalKnowledgeCapsuleIndexing.refused",
   fields: {
-    capsuleIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
+    capsuleIdDigest: INDEXING_CAPSULE_ID_DIGEST_FIELD,
     reason: {
       type: "string",
       dataClass: "closed-enum",
       required: true,
       values: ["capsule-not-found", "no-running-job"],
     },
-    completeness: { type: "string", dataClass: "completeness-state", required: true },
-    loss: { type: "string", dataClass: "loss-state", required: true },
   },
   causal: "correlation",
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["indexing-cancellation"],
   proofIds: ["indexing.cancel.refused.line"],
-  releaseImpact: "patch",
 });
 
 const INDEXING_CANCEL_ACCEPTED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...INDEXING_OPERATION_BASE,
   op: "indexing.cancel.accepted",
-  category: "indexing",
-  owner: "keiko-server",
   emitter: "local-knowledge-handlers.handleCancelLocalKnowledgeCapsuleIndexing.accepted",
   fields: {
-    capsuleIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
+    capsuleIdDigest: INDEXING_CAPSULE_ID_DIGEST_FIELD,
     cancellationRequested: { type: "boolean", dataClass: "closed-enum", required: true },
-    completeness: { type: "string", dataClass: "completeness-state", required: true },
-    loss: { type: "string", dataClass: "loss-state", required: true },
   },
   causal: "correlation",
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["indexing-cancellation"],
   proofIds: ["indexing.cancel.accepted.line"],
-  releaseImpact: "patch",
 });
 
 // The raw capsule id is a customer-chosen handle, so it is never written; the digest is one-way,
@@ -3312,7 +3263,7 @@ export async function handleStartLocalKnowledgeCapsuleIndexing(
 ): Promise<RouteResult> {
   return runHandler(async () => {
     const capsuleId = parseCapsuleId(ctx);
-    await readJsonObject(ctx.req);
+    await readJsonObject(ctx.req, ctx.correlationId);
     const log = indexingRouteLog(capsuleId);
     const env = openStoreForDeps(deps);
     try {
@@ -3401,7 +3352,7 @@ async function cancelLocalKnowledgeCapsuleIndexing(
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
   const capsuleId = parseCapsuleId(ctx);
-  await readJsonObject(ctx.req);
+  await readJsonObject(ctx.req, ctx.correlationId);
   const log = indexingRouteLog(capsuleId);
   log.logger.info(
     activityLogEvent(
@@ -3594,13 +3545,25 @@ function scopeIdentity(scope: KnowledgeSourceScope): string {
   ]);
 }
 
+async function refreshedCapsuleResponse(
+  deps: UiHandlerDeps,
+  env: ReturnType<typeof openStoreForDeps>,
+  capsule: KnowledgeCapsule,
+  status: 200 | 201,
+): Promise<RouteResult> {
+  const updated = getCapsule(env.store, capsule.id) ?? capsule;
+  return { status, body: await buildCapsuleResponseBody(deps, env.store, env.dbPath, updated) };
+}
+
 export async function handleConnectLocalKnowledgeCapsule(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
   return runHandler(async () => {
     const capsuleId = parseCapsuleId(ctx);
-    const { scope, displayName } = parseConnectSourceInput(await readJsonObject(ctx.req));
+    const { scope, displayName } = parseConnectSourceInput(
+      await readJsonObject(ctx.req, ctx.correlationId),
+    );
     const guarded = guardConnectorSourcePath(scope);
     const env = openStoreForDeps(deps);
     try {
@@ -3632,11 +3595,7 @@ export async function handleConnectLocalKnowledgeCapsule(
         },
         createSqliteAuditSink(env.store),
       );
-      const updated = getCapsule(env.store, capsule.id) ?? capsule;
-      return {
-        status: 201,
-        body: await buildCapsuleResponseBody(deps, env.store, env.dbPath, updated),
-      };
+      return await refreshedCapsuleResponse(deps, env, capsule, 201);
     } finally {
       env.close();
     }
@@ -3649,7 +3608,7 @@ export async function handleDisconnectLocalKnowledgeCapsule(
 ): Promise<RouteResult> {
   return runHandler(async () => {
     const capsuleId = parseCapsuleId(ctx);
-    await readJsonObject(ctx.req);
+    await readJsonObject(ctx.req, ctx.correlationId);
     const env = openStoreForDeps(deps);
     try {
       const capsule = getCapsule(env.store, capsuleId);
@@ -3671,7 +3630,7 @@ export async function handleRebindLocalKnowledgeCapsuleSource(
   return runHandler(async () => {
     const capsuleId = parseCapsuleId(ctx);
     const sourceId = parseSourceId(ctx);
-    const rootPath = parseRebindSourceInput(await readJsonObject(ctx.req));
+    const rootPath = parseRebindSourceInput(await readJsonObject(ctx.req, ctx.correlationId));
     const guardedScopeInput = (source: KnowledgeSource): KnowledgeSourceScope =>
       guardConnectorSourcePath(rebindScopeRoot(source.scope, rootPath));
     const env = openStoreForDeps(deps);
@@ -3700,11 +3659,7 @@ export async function handleRebindLocalKnowledgeCapsuleSource(
       if (scopeIdentity(source.scope) !== targetIdentity) {
         persistSourceRootRebind(env.store, capsule, source, guarded);
       }
-      const updated = getCapsule(env.store, capsule.id) ?? capsule;
-      return {
-        status: 200,
-        body: await buildCapsuleResponseBody(deps, env.store, env.dbPath, updated),
-      };
+      return await refreshedCapsuleResponse(deps, env, capsule, 200);
     } finally {
       env.close();
     }
@@ -3717,7 +3672,7 @@ export async function handleDeleteLocalKnowledgeCapsule(
 ): Promise<RouteResult> {
   return runHandler(async () => {
     const capsuleId = parseCapsuleId(ctx);
-    await readJsonObject(ctx.req);
+    await readJsonObject(ctx.req, ctx.correlationId);
     const env = openStoreForDeps(deps);
     try {
       const result = deleteCapsule(env.store, capsuleId, createSqliteAuditSink(env.store));
@@ -3734,7 +3689,7 @@ export async function handleReindexLocalKnowledgeCapsule(
 ): Promise<RouteResult> {
   return runHandler(async () => {
     const capsuleId = parseCapsuleId(ctx);
-    const body = await readJsonObject(ctx.req);
+    const body = await readJsonObject(ctx.req, ctx.correlationId);
     const reindexRequest = validateCapsuleReindexRequest({ ...body, capsuleId });
     if (!reindexRequest.ok) {
       throw new InvalidRequest(reindexRequest.errors.join(" "));

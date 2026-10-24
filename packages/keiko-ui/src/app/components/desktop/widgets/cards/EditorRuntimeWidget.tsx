@@ -1406,6 +1406,31 @@ function largeFileSettings(
   };
 }
 
+interface EditorDocumentOperationContext {
+  readonly hasTarget: boolean;
+  readonly root: string | undefined;
+  readonly file: string | undefined;
+  readonly currentDocumentUri: string | null;
+  readonly document: EditorDiagnosticsQuery["request"]["document"];
+  readonly capabilities: LanguageServiceCapabilities | null;
+}
+
+function editorDocumentOperationTarget(
+  context: EditorDocumentOperationContext,
+  operation: "diagnostics" | "formatting",
+): { readonly root: string; readonly path: string } | undefined {
+  const provider = providerForLanguage(context.capabilities, context.document.language);
+  if (
+    !context.hasTarget ||
+    context.root === undefined ||
+    context.file === undefined ||
+    context.document.uri !== context.currentDocumentUri ||
+    !providerOperationEnabled(provider, operation)
+  )
+    return undefined;
+  return { root: context.root, path: context.file };
+}
+
 type EditorLanguageProvider = ReturnType<typeof providerForLanguage>;
 type EditorProviderOperation = Parameters<typeof providerOperationEnabled>[1];
 
@@ -3231,18 +3256,22 @@ function EditorRuntimeWidget({
   // degrades to nothing (no markers / no hover / no outline / no edits) — it never breaks editing.
   const provideDiagnostics = useCallback<EditorDiagnosticsResolver>(
     async (query: EditorDiagnosticsQuery, signal: AbortSignal) => {
-      const provider = providerForLanguage(languageCapabilities, query.request.document.language);
-      if (
-        !hasTarget ||
-        root === undefined ||
-        file === undefined ||
-        query.request.document.uri !== currentDocumentUri ||
-        !providerOperationEnabled(provider, "diagnostics")
-      ) {
+      const target = editorDocumentOperationTarget(
+        {
+          hasTarget,
+          root,
+          file,
+          currentDocumentUri,
+          document: query.request.document,
+          capabilities: languageCapabilities,
+        },
+        "diagnostics",
+      );
+      if (target === undefined) {
         return { request: query.request.request, diagnostics: [] };
       }
       const wire = await requestEditorDiagnostics(
-        { root, path: file, languageId: query.request.document.language, text: query.documentText },
+        { ...target, languageId: query.request.document.language, text: query.documentText },
         signal,
       );
       return mapWireToEditorDiagnosticsResponse(query.request.request, wire);
@@ -3323,20 +3352,23 @@ function EditorRuntimeWidget({
 
   const provideFormatting = useCallback<EditorFormattingResolver>(
     async (query: EditorFormattingQuery, signal: AbortSignal) => {
-      const provider = providerForLanguage(languageCapabilities, query.request.document.language);
-      if (
-        !hasTarget ||
-        root === undefined ||
-        file === undefined ||
-        query.request.document.uri !== currentDocumentUri ||
-        !providerOperationEnabled(provider, "formatting")
-      ) {
+      const target = editorDocumentOperationTarget(
+        {
+          hasTarget,
+          root,
+          file,
+          currentDocumentUri,
+          document: query.request.document,
+          capabilities: languageCapabilities,
+        },
+        "formatting",
+      );
+      if (target === undefined) {
         return { request: query.request.request, edits: [] };
       }
       const wire = await requestEditorFormatting(
         {
-          root,
-          path: file,
+          ...target,
           languageId: query.request.document.language,
           text: query.documentText,
           options: {
@@ -3359,12 +3391,16 @@ function EditorRuntimeWidget({
     ],
   );
 
-  const provideDefinition = useCallback<EditorDefinitionResolver>(
-    async (query: EditorDefinitionQuery, signal: AbortSignal) => {
+  const resolveDefinition = useCallback(
+    async (
+      query: EditorDefinitionQuery,
+      signal: AbortSignal,
+      requestDefinition: typeof requestEditorDefinition,
+    ): Promise<ReturnType<typeof mapWireToEditorDefinitionResponse>> => {
       if (!hasTarget || root === undefined || file === undefined) {
         return { request: query.request.request, locations: [] };
       }
-      const wire = await requestEditorDefinition(
+      const wire = await requestDefinition(
         {
           root,
           path: file,
@@ -3385,62 +3421,21 @@ function EditorRuntimeWidget({
       return response;
     },
     [file, hasTarget, openEditorFile, root],
+  );
+
+  const provideDefinition = useCallback<EditorDefinitionResolver>(
+    (query, signal) => resolveDefinition(query, signal, requestEditorDefinition),
+    [resolveDefinition],
   );
 
   const provideTypeDefinition = useCallback<EditorDefinitionResolver>(
-    async (query: EditorDefinitionQuery, signal: AbortSignal) => {
-      if (!hasTarget || root === undefined || file === undefined) {
-        return { request: query.request.request, locations: [] };
-      }
-      const wire = await requestEditorTypeDefinition(
-        {
-          root,
-          path: file,
-          languageId: query.request.document.language,
-          text: query.documentText,
-          position: {
-            line: query.request.position.line,
-            character: query.request.position.column,
-          },
-        },
-        signal,
-      );
-      const response = mapWireToEditorDefinitionResponse(query.request.request, wire);
-      const crossFile = response.locations.find((location) => location.path !== file);
-      if (crossFile !== undefined) {
-        openCrossFileLocation({ root, file, location: crossFile, openEditorFile });
-      }
-      return response;
-    },
-    [file, hasTarget, openEditorFile, root],
+    (query, signal) => resolveDefinition(query, signal, requestEditorTypeDefinition),
+    [resolveDefinition],
   );
 
   const provideImplementation = useCallback<EditorDefinitionResolver>(
-    async (query: EditorDefinitionQuery, signal: AbortSignal) => {
-      if (!hasTarget || root === undefined || file === undefined) {
-        return { request: query.request.request, locations: [] };
-      }
-      const wire = await requestEditorImplementation(
-        {
-          root,
-          path: file,
-          languageId: query.request.document.language,
-          text: query.documentText,
-          position: {
-            line: query.request.position.line,
-            character: query.request.position.column,
-          },
-        },
-        signal,
-      );
-      const response = mapWireToEditorDefinitionResponse(query.request.request, wire);
-      const crossFile = response.locations.find((location) => location.path !== file);
-      if (crossFile !== undefined) {
-        openCrossFileLocation({ root, file, location: crossFile, openEditorFile });
-      }
-      return response;
-    },
-    [file, hasTarget, openEditorFile, root],
+    (query, signal) => resolveDefinition(query, signal, requestEditorImplementation),
+    [resolveDefinition],
   );
 
   const provideCallHierarchy = useCallback<EditorCallHierarchyResolver>(
