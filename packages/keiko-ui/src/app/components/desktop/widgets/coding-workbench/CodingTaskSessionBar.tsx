@@ -25,6 +25,14 @@ function TaskSessionActions({ session, active, onHistory }: SessionBarProps): Re
       disabled: false,
     },
     {
+      label: t("codingWorkbench.history.fork"),
+      icon: Icons.branch,
+      run: (): void => {
+        session.beginFork();
+      },
+      disabled: locked || session.detail === null || session.fork !== null,
+    },
+    {
       label: t("codingWorkbench.history.finish"),
       icon: Icons.check,
       run: (): void => void session.finish(),
@@ -82,9 +90,12 @@ export function CodingTaskSessionBar(props: SessionBarProps): ReactNode {
 export function CodingTaskTranscript({
   session,
   shownRun,
+  onFork,
 }: {
   readonly session: CodingTaskSession;
   readonly shownRun: ShownRun | undefined;
+  /** Forks the task just before a user message; absent while a run is active. */
+  readonly onFork?: ((messageId: string) => void) | undefined;
 }): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const messages =
@@ -107,6 +118,18 @@ export function CodingTaskTranscript({
             diagnosticMessageId={message.id}
             richContent={message.role === "user" ? undefined : CODING_WORKBENCH_RICH_CONTENT}
           />
+          {message.role === "user" && onFork !== undefined ? (
+            <button
+              type="button"
+              className={styles.cmpMessageFork}
+              onClick={(): void => {
+                onFork(message.id);
+              }}
+            >
+              <Icons.branch />
+              {t("codingWorkbench.history.forkFrom")}
+            </button>
+          ) : null}
         </article>
       ))}
     </section>

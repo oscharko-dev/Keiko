@@ -22,6 +22,13 @@ import { newClientCorrelationId } from "@/lib/bff-correlation";
 import type { ClientDiagnosticCodingHistoryScope } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import type { WorkbenchExecutionLocation } from "./CodingWorkbenchRepositorySelector";
 
+/** The task the person chose to fork, and where: just before a user message, or as it ended. */
+export interface CodingTaskForkSource {
+  readonly taskId: string;
+  readonly title: string;
+  readonly beforeMessageId?: string | undefined;
+}
+
 export interface CodingTaskSession {
   readonly detail: CodingHistoryDetail | null;
   readonly conversationId: string | undefined;
@@ -30,6 +37,14 @@ export interface CodingTaskSession {
   readonly error: boolean;
   readonly newTask: () => Promise<void>;
   readonly finish: () => Promise<void>;
+  /**
+   * The fork the person asked for (S03): the next start begins a new task from it instead of
+   * continuing the loaded one. It ends with that start, a new task, another selection or a run.
+   */
+  readonly fork: CodingTaskForkSource | null;
+  /** Forks the loaded task as it ended, or just before one of its user messages. */
+  readonly beginFork: (beforeMessageId?: string) => void;
+  readonly cancelFork: () => void;
 }
 
 interface SessionInput {
@@ -86,6 +101,7 @@ export function useCodingTaskSession(options: SessionInput): CodingTaskSession {
     }
   };
   const scoped = detail !== null && taskScopeMatches(detail, input, false) ? detail : null;
+  const fork = useTaskFork(input, scoped);
   return {
     detail: scoped,
     conversationId: scoped?.task.id,
@@ -94,7 +110,55 @@ export function useCodingTaskSession(options: SessionInput): CodingTaskSession {
     newTask,
     finish,
     visibleRun: sessionRunVisible(input, scoped, ignoredRun.current),
+    ...fork,
   };
+}
+
+interface PendingFork {
+  readonly source: CodingTaskForkSource;
+  /** The run on display when the person asked: a different one ends the request. */
+  readonly runId: string | undefined;
+}
+
+/**
+ * A fork is a standing request of the person, made against the task and the run on display. It ends
+ * when either changes, when a run is active, and when the person cancels it; it is never inferred.
+ */
+function useTaskFork(
+  input: SessionInput,
+  detail: CodingHistoryDetail | null,
+): Pick<CodingTaskSession, "fork" | "beginFork" | "cancelFork"> {
+  const [pending, setPending] = useState<PendingFork | null>(null);
+  const runId = input.snapshot?.runId;
+  const taskId = detail?.task.id;
+  useEffect(() => {
+    if (pending === null) return;
+    if (input.active || taskId !== pending.source.taskId || runId !== pending.runId) {
+      setPending(null);
+    }
+  }, [pending, input.active, taskId, runId]);
+  const beginFork = useCallback(
+    (beforeMessageId?: string): void => {
+      if (input.active || detail === null) return;
+      const userMessage = detail.messages.some(
+        (message) => message.id === beforeMessageId && message.role === "user",
+      );
+      if (beforeMessageId !== undefined && !userMessage) return;
+      setPending({
+        runId,
+        source: {
+          taskId: detail.task.id,
+          title: detail.task.title,
+          ...(beforeMessageId === undefined ? {} : { beforeMessageId }),
+        },
+      });
+    },
+    [detail, input.active, runId],
+  );
+  const cancelFork = useCallback((): void => {
+    setPending(null);
+  }, []);
+  return { fork: pending?.source ?? null, beginFork, cancelFork };
 }
 
 function sessionRunVisible(

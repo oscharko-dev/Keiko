@@ -27,6 +27,13 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.history.exporting": "Preparing export…",
   "codingWorkbench.history.exportError": "The task could not be exported. Try again.",
   "codingWorkbench.history.finish": "Complete task",
+  "codingWorkbench.history.fork": "Fork task",
+  "codingWorkbench.history.forkFrom": "Fork from here",
+  "codingWorkbench.history.forkNotice":
+    "Your next message starts a new task forked from “{title}”. The new task keeps this conversation up to the fork point and does not change “{title}”.",
+  "codingWorkbench.history.forkNoticeBefore":
+    "Your next message starts a new task forked from “{title}”, just before the message you picked. The new task keeps the conversation up to that point and does not change “{title}”.",
+  "codingWorkbench.history.forkCancel": "Cancel fork",
   "codingWorkbench.history.location": "Task workspace location",
   "codingWorkbench.history.transcript": "Previous conversation",
   "codingWorkbench.history.truncated": "Only the most recent saved messages are shown.",

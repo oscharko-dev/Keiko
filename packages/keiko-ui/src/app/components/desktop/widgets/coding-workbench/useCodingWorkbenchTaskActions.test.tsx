@@ -121,6 +121,33 @@ describe("starting a task", () => {
     expect(vi.mocked(actions.start).mock.calls[0]?.[1]).not.toHaveProperty("references");
   });
 
+  it("starts a fork instead of continuing the conversation, and never sends both", async () => {
+    const { result, actions } = setup({
+      fork: { taskId: "conv-1", title: "Inspect the parser", beforeMessageId: "m-3" },
+    });
+
+    act(() => result.current.composer.onStart("try another approach"));
+
+    await waitFor(() => expect(actions.start).toHaveBeenCalledOnce());
+    expect(actions.start).toHaveBeenCalledWith("try another approach", {
+      projectMemoryEnabled: true,
+      fork: { taskId: "conv-1", beforeMessageId: "m-3" },
+      issue: undefined,
+    });
+    expect(vi.mocked(actions.start).mock.calls[0]?.[1]).not.toHaveProperty("conversationId");
+  });
+
+  it("forks the task as it ended when no message was chosen", async () => {
+    const { result, actions } = setup({ fork: { taskId: "conv-1", title: "Inspect the parser" } });
+
+    act(() => result.current.composer.onStart("go"));
+
+    await waitFor(() => expect(actions.start).toHaveBeenCalledOnce());
+    const options = vi.mocked(actions.start).mock.calls[0]?.[1];
+    expect(options?.fork).toEqual({ taskId: "conv-1" });
+    expect(options).not.toHaveProperty("conversationId");
+  });
+
   it("still resolves an issue named in an ordinary prompt, with the files beside it", async () => {
     const { result, actions } = setup();
 

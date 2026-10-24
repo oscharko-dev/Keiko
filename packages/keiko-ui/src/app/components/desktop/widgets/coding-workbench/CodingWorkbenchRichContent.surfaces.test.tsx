@@ -167,6 +167,9 @@ describe("Coding Workbench transcript rich content", () => {
       error: false,
       newTask: vi.fn(() => Promise.resolve(undefined)),
       finish: vi.fn(() => Promise.resolve(undefined)),
+      fork: null,
+      beginFork: vi.fn(),
+      cancelFork: vi.fn(),
     };
   }
 

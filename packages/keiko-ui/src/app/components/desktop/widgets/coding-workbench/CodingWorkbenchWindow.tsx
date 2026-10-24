@@ -16,6 +16,7 @@ import {
 import { useCodingTaskSession, type CodingTaskSession } from "./useCodingTaskSession";
 import { usePromptDeliveryNotice } from "./usePromptDeliveryNotice";
 import { CodingTaskSessionBar, CodingTaskTranscript } from "./CodingTaskSessionBar";
+import { CodingTaskForkNotice } from "./CodingTaskForkNotice";
 import {
   CodingWorkbenchDeliveryReview,
   approvalHelpKey,
@@ -1655,6 +1656,7 @@ function WorkbenchColumns({
     taskIntent,
     projectMemoryEnabled,
     conversationId: history.conversationId,
+    fork: history.fork,
     resumeMode,
   });
   const taskComposer = (
@@ -1789,7 +1791,11 @@ function WorkbenchColumns({
             // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- scrollable log region must be keyboard-focusable (axe scrollable-region-focusable)
             tabIndex={0}
           >
-            <CodingTaskTranscript session={history} shownRun={timeline.shownRun} />
+            <CodingTaskTranscript
+              session={history}
+              shownRun={timeline.shownRun}
+              onFork={runIsActive ? undefined : history.beginFork}
+            />
             <PermissionPrompt
               // A new request is a new decision: remount so the previous request's focused Approve
               // (and its review state) can never be reused to decide it.
@@ -1866,6 +1872,7 @@ function WorkbenchColumns({
       <div className={styles.composerDock}>
         {repositorySelector}
         <LocationBindingNotices locationState={locationState} />
+        <CodingTaskForkNotice fork={history.fork} onCancel={history.cancelFork} />
         <CodingWorkbenchIssueIntake
           state={issueIntake.state}
           onCancel={issueIntake.cancel}

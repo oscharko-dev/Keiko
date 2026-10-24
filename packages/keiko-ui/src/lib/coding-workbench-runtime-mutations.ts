@@ -12,6 +12,7 @@ import type {
 import { isCodingWorkbenchModeWidening } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import type {
   CodingWorkbenchCommandRequest,
+  CodingWorkbenchRuntimeForkRequest,
   CodingWorkbenchRuntimeRevertAction,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import {
@@ -66,18 +67,20 @@ function agentSelection(current: CodingWorkbenchRuntimeState): {
 }
 
 /**
- * What the first prompt carries beside its text (ADR-0137 D10): the files it references with `@` and
- * the slash command it starts with. Both are absent for the ordinary start, which keeps its request
- * body exactly as it was.
+ * What the first prompt carries beside its text (ADR-0137 D10): the files it references with `@`, the
+ * slash command it starts with, and the task it forks (S03). All are absent for the ordinary start,
+ * which keeps its request body exactly as it was.
  */
 function startPromptInputs(options: CodingWorkbenchStartOptions): {
   readonly references?: readonly CodingWorkbenchPromptReference[];
   readonly command?: CodingWorkbenchCommandRequest;
+  readonly fork?: CodingWorkbenchRuntimeForkRequest;
 } {
   const references = options.references ?? [];
   return {
     ...(references.length === 0 ? {} : { references }),
     ...(options.command === undefined ? {} : { command: options.command }),
+    ...(options.fork === undefined ? {} : { fork: options.fork }),
   };
 }
 
@@ -129,6 +132,9 @@ export function createStartMutation(
   // A command turn carries none of an issue's context; the server refuses the pair, so never send it.
   if (options.command !== undefined && options.issue !== undefined)
     throw codingWorkbenchRuntimeActionError("A slash command cannot start a task from an issue.");
+  // A fork begins a new task, so it never also continues one; the server refuses the pair.
+  if (options.fork !== undefined && options.conversationId !== undefined)
+    throw codingWorkbenchRuntimeActionError("A fork cannot continue a task.");
   const id = newCodingWorkbenchRuntimeRequestId();
   return {
     requestId: id,

@@ -30,6 +30,13 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.history.exportError":
     "Die Aufgabe konnte nicht exportiert werden. Bitte erneut versuchen.",
   "codingWorkbench.history.finish": "Aufgabe abschließen",
+  "codingWorkbench.history.fork": "Aufgabe verzweigen",
+  "codingWorkbench.history.forkFrom": "Ab hier verzweigen",
+  "codingWorkbench.history.forkNotice":
+    "Deine nächste Nachricht startet eine neue Aufgabe, die von „{title}“ abzweigt. Die neue Aufgabe behält diesen Verlauf bis zum Verzweigungspunkt und verändert „{title}“ nicht.",
+  "codingWorkbench.history.forkNoticeBefore":
+    "Deine nächste Nachricht startet eine neue Aufgabe, die von „{title}“ abzweigt, direkt vor der gewählten Nachricht. Die neue Aufgabe behält den Verlauf bis dahin und verändert „{title}“ nicht.",
+  "codingWorkbench.history.forkCancel": "Verzweigung abbrechen",
   "codingWorkbench.history.location": "Speicherort des Aufgaben-Arbeitsbereichs",
   "codingWorkbench.history.transcript": "Bisheriger Verlauf",
   "codingWorkbench.history.truncated":

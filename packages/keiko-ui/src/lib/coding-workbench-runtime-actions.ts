@@ -11,6 +11,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type {
   CodingWorkbenchCommandRequest,
+  CodingWorkbenchRuntimeForkRequest,
   CodingWorkbenchRuntimeRevertAction,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import type {
@@ -36,6 +37,11 @@ export interface CodingWorkbenchStartOptions {
   readonly references?: readonly CodingWorkbenchPromptReference[] | undefined;
   /** Starts the first turn with a slash command; the text is then the command's arguments. */
   readonly command?: CodingWorkbenchCommandRequest | undefined;
+  /**
+   * Starts a NEW task forked from another task (S03): from the task as it ended, or just before one
+   * of its user messages. Never together with `conversationId`.
+   */
+  readonly fork?: CodingWorkbenchRuntimeForkRequest | undefined;
 }
 
 export interface CodingWorkbenchRuntimeActions {

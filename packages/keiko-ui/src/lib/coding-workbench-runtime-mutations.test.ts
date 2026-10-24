@@ -170,6 +170,40 @@ describe("createStartMutation", () => {
     });
   });
 
+  // S03 (#3904): a fork starts a NEW task from another task, optionally just before one of its
+  // user messages; the request names the task and the message and nothing about the saved session.
+  it("sends the task to fork and the message to fork before, without a conversation id", async () => {
+    const mutation = createStartMutation(
+      "try another approach",
+      stateWithRun(null, { canStart: true }),
+      {
+        projectMemoryEnabled: true,
+        fork: { taskId: "task-source", beforeMessageId: "message-3" },
+      },
+    );
+
+    await mutation.run();
+
+    expect(apiMocks.startCodingWorkbenchRuntime).toHaveBeenCalledWith({
+      requestId: mutation.requestId,
+      taskIntent: "try another approach",
+      requestedMode: "supervised-coding",
+      runtimePreference: "managed-gateway",
+      projectMemory: { enabled: true },
+      fork: { taskId: "task-source", beforeMessageId: "message-3" },
+    });
+  });
+
+  it("refuses to send a fork that also continues a task", () => {
+    expect(() =>
+      createStartMutation("task", stateWithRun(null, { canStart: true }), {
+        projectMemoryEnabled: true,
+        conversationId: "task-source",
+        fork: { taskId: "task-source" },
+      }),
+    ).toThrowError("A fork cannot continue a task.");
+  });
+
   it("does not leak stale gateway model settings into a Codex subscription start", async () => {
     const state = stateWithRun(null, {
       canStart: true,

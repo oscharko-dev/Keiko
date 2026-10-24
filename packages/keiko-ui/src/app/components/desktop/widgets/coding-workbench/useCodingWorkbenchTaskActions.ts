@@ -7,6 +7,7 @@ import type { CodingWorkbenchFollowUpInputs } from "@/lib/coding-workbench-runti
 import type { CodingWorkbenchStartOptions } from "@/lib/coding-workbench-runtime-actions";
 import type { CodingWorkbenchRuntimeActions } from "@/lib/useCodingWorkbenchRuntime";
 import type { TaskComposerActions, TaskStartInputs } from "./CodingWorkbenchSections";
+import type { CodingTaskForkSource } from "./useCodingTaskSession";
 import type { useCodingWorkbenchIssueIntake } from "./useCodingWorkbenchIssueIntake";
 import type { CodingWorkbenchRunWorkspaceBinding } from "./useCodingWorkbenchRunWorkspace";
 import type { PromptDeliveryNoticeController } from "./usePromptDeliveryNotice";
@@ -20,6 +21,11 @@ export interface TaskActionsInput {
   readonly taskIntent: string;
   readonly projectMemoryEnabled: boolean;
   readonly conversationId: string | undefined;
+  /**
+   * The fork the person asked for (S03): the start begins a new task from it and continues no
+   * conversation.
+   */
+  readonly fork?: CodingTaskForkSource | null | undefined;
   /** The mode a paused run resumes in; none while the operator cannot resume. */
   readonly resumeMode: CodingWorkbenchMode | null;
 }
@@ -46,6 +52,20 @@ function startPromptInputs(
   };
 }
 
+/** The task a start continues, or the one it forks: never both. */
+function startedFrom(
+  input: TaskActionsInput,
+): Pick<CodingWorkbenchStartOptions, "conversationId" | "fork"> {
+  const { fork } = input;
+  if (fork === null || fork === undefined) return { conversationId: input.conversationId };
+  return {
+    fork: {
+      taskId: fork.taskId,
+      ...(fork.beforeMessageId === undefined ? {} : { beforeMessageId: fork.beforeMessageId }),
+    },
+  };
+}
+
 // Resolves an issue reference in the prompt, then starts the run on the workspace the person is
 // looking at. A command turn carries none of an issue's context, so its arguments are never read for
 // an issue reference: an empty prompt resets the intake and starts the command as it is.
@@ -61,7 +81,7 @@ function beginStart(
     runWorkspace.captureSubmission();
     await actions.start(submitted, {
       projectMemoryEnabled: input.projectMemoryEnabled,
-      conversationId: input.conversationId,
+      ...startedFrom(input),
       issue,
       ...startPromptInputs(inputs),
     });
