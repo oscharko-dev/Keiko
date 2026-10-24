@@ -725,6 +725,11 @@ policy decides `allowed`, every effect still runs through the governed delivery 
 delivery-truth rule decides whether the run delivered. Merge and Authority Envelope widening
 require their own human approval in every mode (ADR-0087).
 
+A run's runtime database is private per-run state and is removed with the run's state root. The one
+runtime state that outlives a run is the retained session entry of D10 (S02, S03, #3904): it is
+server-owned under the state directory, outside every workspace and run root, one entry per task
+and bounded, and it is never authority, because a later run mints, bounds and approves its own.
+
 ### D5 — Process-tree ownership and platform qualification are fail-closed invariants
 
 The BFF process supervisor owns the complete spawned runtime process tree from the first spawn until
@@ -1330,8 +1335,8 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   of the changes, defaulting to the uncommitted ones) and runs one as a turn (`POST
   /api/session/{sessionID}/command`, `session.command`, body `{ name, text, files?, agents?, skills?,
   delivery? }`, 204; `CommandNotFoundError` is a 404, `CommandExecutionError` a 500). Both operations
-  are admitted in the protocol surface (21 operations; the structural digest pins and the captured
-  fixture moved with them, and the original executable's live document projects to the new digest).
+  are admitted in the protocol surface (21 operations then, 23 with the session fork and removal of
+  S02 and S03 below; the structural digest pins and the captured fixture moved with them, and the original executable's live document projects to the new digest).
   A command is a server-authored prompt template: it is untrusted intent like any task text, grants
   nothing, and every effect it causes passes the native policy of the run's mode. The producer
   registers its built-ins a moment after the instance boots, so the listing is empty until then; the
@@ -1740,6 +1745,74 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   The orchestrator's edit outcome (verification requirement and refusal escalation) is not fed: it
   belongs to Keiko's governed verifier, which a native run calls only to record the commit proof of
   a delivery.
+
+- **A settled task's runtime session is retained, and the next run may resume or fork it (S02, S03,
+  #3904).** Before this, every run started an empty runtime session and a follow-up replayed up to
+  24,000 characters of Coding History as hidden context. The pinned 2.0.10 and 2.1.4 producers admit
+  `session.fork` (`POST /api/session/{sessionID}/fork`, body `{ before? }` naming a message) and
+  `session.remove` (`DELETE /api/session/{sessionID}`); both are in the digest-pinned protocol
+  surface (23 operations). The design keeps authority out of the persisted state:
+  - **Retention.** When a native run ends `succeeded` through an orderly stop (the manager passes the
+    lifecycle settlement only for `stop()`, and the composition retains after the runtime process was
+    reaped; a kill, timeout, crash, cancelled or failed run retains nothing) the run's `opencode.db`
+    is copied with SQLite `VACUUM INTO` (a consistent, compacted copy) to
+    `<stateDir>/coding-runtime/retained-sessions/<sha256(task)>/`, outside every workspace and run
+    root. One entry per task; a new entry replaces the previous one and a run that retains nothing
+    removes it. The manifest binds the database's sha256 and size, the task, a digest of the workspace
+    identity, the session id, the runtime version and the input window the history was built under.
+    The copy must hold exactly one top-level session and no row in any grant, credential or pending
+    table, no suspended or archived session, no staged revert and an empty permission ruleset;
+    an unknown schema is refused rather than guessed. Bounds: 128 MiB an entry, 512 MiB and 32
+    entries in all, 14 days, 3,000 messages; the store prunes on startup and on every retain, and an
+    entry whose task Coding History no longer holds is removed. `KEIKO_CODING_SESSION_RETENTION=off`
+    retains, resumes and forks nothing; any other unknown value fails closed to off.
+  - **Resume.** The orchestrator declares the intent before it launches; the composition's prepare
+    step checks the entry out into the new run's own state root (exclusive copy, then the digest and
+    the audit again, workspace, runtime version and window checked against the new run), so the
+    retained entry is never written by a run. After the handshake the composition binds the run to
+    the one session the database holds, resets its agent to Build (the launch profile's default,
+    which a fresh run also starts under; a read-only Plan run must not silently turn the next task
+    into one), and the orchestrator skips the history replay for a resumed run. The gateway readiness challenge of a
+    continued run runs in a scratch session that is removed afterwards, so the probe's prompt is not
+    in the resumed history. The history projection and capture filter the messages the database held
+    at the start by id (the baseline), so a persisted message is neither re-emitted into the timeline
+    nor recorded in Coding History twice. The run's authority, model route, workspace binding and
+    approvals are minted fresh by the orchestrator exactly as for a new run. Keiko answers a runtime
+    permission request with `once` or `reject` and never `always`, and both clients refuse any other
+    reply before it is sent (`opencodePermissionReplies.test.ts`), so no grant can have entered the
+    database that the audit would not also have refused.
+  - **Fork.** A start request may carry `fork: { taskId, beforeMessageId? }` and no conversation id.
+    The orchestrator refuses it with `invalid-intent` before any run exists when the source is not a
+    task of the active workspace or the named message is not one of its user turns. Coding History
+    creates a new task whose first run is the synthetic `inherit-<runId>`, copying the inherited
+    messages with their original timestamps and recording the provenance (`coding-runtime.history`
+    `forked`). The composition checks the source's entry out for the new run, forks it with
+    `session.fork` before the user turn the boundary names (located by the turn's ordinal among the
+    source's user turns, with the runtime's own count required to agree, never by a client-supplied
+    runtime id), makes the fork the run's session and removes the copied source session with
+    `session.remove`. The fork runs in the same workspace under fresh authority, and the source's
+    retained entry and Coding History are left untouched.
+  - **Fallback.** Every refusal starts a fresh runtime with the Coding History context, today's
+    behaviour, and says why with a closed reason on the Activity Log: `disabled`,
+    `not-native-profile`, `not-succeeded`, `no-session`, `no-task`, `no-retained-state`, `expired`,
+    `integrity-failed`, `version-changed`, `workspace-changed`, `window-shrunk`, `schema-unknown`,
+    `grant-present`, `credential-present`, `pending-input`, `revert-staged`, `session-mismatch`,
+    `database-missing`, `database-oversized`, `copy-failed`, `agent-reset-failed`,
+    `history-oversized`, `scratch-session-failed`, `fork-boundary-unresolved` and `fork-failed`.
+    A refusal that proves the entry unusable removes it, except `window-shrunk`, which a larger
+    window can still take.
+  - **Evidence.** `coding-runtime.session-continuity` records, per retain, resume, fork and prune, the
+    action, the outcome (`retained`, `resumed`, `forked`, `pruned`, `fresh`, `skipped`, `refused`,
+    `failed`), the closed reason, byte and message counts and digests of the task and its fork source;
+    never a path, a message or a session id. A refused or failed line keeps its diagnostic frames
+    and cause chain under the run's correlation id.
+  - **The Workbench.** Fork task (on the loaded task) and Fork from here (on each user message of the
+    previous conversation) are the person's own requests: a notice announces the pending fork and
+    can cancel it, it ends with the run or task it was made against, it is not offered while a run is
+    active, and the next start carries the fork instead of the conversation id.
+  - **Not done.** A stopped, cancelled or failed run may hold a half-finished tool call and takes the
+    history replay; the mapped (non-native) profile retains nothing; `session.update` (rename) stays
+    refused; a fork inside the run the timeline shows is offered only as a whole-task fork.
 
 What this amendment does not change: the three modes and the Authority Envelope (ADR-0124,
 ADR-0129, ADR-0138), the hard denials (ADR-0129 D3), Git delivery as a Keiko product operation

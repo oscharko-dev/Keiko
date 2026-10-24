@@ -12,6 +12,8 @@ import { OPENCODE_HISTORY_RESPONSE_MAX_BYTES } from "./opencodeProtocol.js";
 
 const SESSION_ID = /^ses_[A-Za-z0-9_-]{1,251}$/u;
 const REQUEST_ID = /^[A-Za-z0-9_-]{1,256}$/u;
+// The only answers Keiko gives a permission request; `always` is never one of them.
+const PERMISSION_DECISIONS: ReadonlySet<string> = new Set(["once", "reject"]);
 const MESSAGE_ID = /^msg_[A-Za-z0-9_-]{1,251}$/u;
 const MAX_JSON_BYTES = OPENCODE_HISTORY_RESPONSE_MAX_BYTES;
 /**
@@ -926,6 +928,11 @@ export function createOpenCodeV2HttpClient(
       );
     },
     replyPermission: async (sessionId, requestId, decision, message, signal): Promise<void> => {
+      // An `always` is remembered for the rest of the session, which a retained and resumed session
+      // would carry across runs (S02): Keiko answers one request at a time, whatever the type says.
+      if (!PERMISSION_DECISIONS.has(decision)) {
+        throw new Error("opencode-v2-permission-decision-invalid");
+      }
       await request(
         "POST",
         `/api/session/${safeSessionId(sessionId)}/permission/${safeRequestId(requestId)}/reply`,
