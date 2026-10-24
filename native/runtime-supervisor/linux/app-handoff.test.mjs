@@ -58,10 +58,13 @@ const launcherFor = (root) =>
 const helperFor = (root) => join(resources(root), "runtime/native/keiko-runtime-supervisor");
 const stateDir = join(directory, "state");
 const managedRoot = join(directory, bundleName);
-const rootFixture = fileURLToPath(new URL("./test-support.app-handoff-root.mjs", import.meta.url));
+const rootFixture = fileURLToPath(
+  new URL("./test-support.app-handoff-bootstrap.mjs", import.meta.url),
+);
 const INITIAL_START_TIMEOUT_MS = 15_000;
 let initialOwner;
 let ownerExited;
+let ownerExitedAt;
 let port;
 let currentActivation;
 const knownLaunchIds = new Set();
@@ -134,7 +137,18 @@ async function receipt(launchId) {
 async function awaitPhase(launchId, phase, timeoutMs) {
   const deadline = performance.now() + timeoutMs;
   while ((await receipt(launchId))[4] !== phase && performance.now() < deadline) await delay(20);
-  assert.equal((await receipt(launchId))[4], phase);
+  const observed = (await receipt(launchId))[4];
+  if (observed !== phase)
+    console.error(
+      JSON.stringify({
+        classification: "native-fixture-phase-failure",
+        expected: phase,
+        observed,
+        bootstrap: await readFixtureObservation("bootstrap", launchId),
+        startup: await readFixtureObservation("startup", launchId),
+      }),
+    );
+  assert.equal(observed, phase);
 }
 
 function updateOutcome(plan, previous, index, newLaunchId) {
@@ -229,6 +243,9 @@ async function awaitState(version, launchId, timeoutMs = 15_000) {
           .filter((name) => /^fixture-failure-[a-f0-9]{32}\.json$/u.test(name))
           .map(async (name) => JSON.parse(await readFile(join(stateDir, name), "utf8"))),
       ),
+      bootstrapObservations: await Promise.all(
+        [...knownLaunchIds].map((id) => readFixtureObservation("bootstrap", id)),
+      ),
       receipts:
         currentActivation === undefined
           ? []
@@ -244,20 +261,43 @@ async function awaitState(version, launchId, timeoutMs = 15_000) {
   throw new Error("native fixture did not reach the selected owned version");
 }
 
-async function startupObservation(launchId) {
-  const trace = async (kind) => {
-    try {
-      return JSON.parse(await readFile(join(stateDir, `fixture-${kind}-${launchId}.json`), "utf8"));
-    } catch {
-      return undefined;
-    }
-  };
+async function startupControlObservation(reader) {
+  if (!reader.ended || reader.size < 12) return { bufferedBytes: reader.size, ended: reader.ended };
+  try {
+    const frame = await appResponse(reader);
+    return {
+      kind: frame.kind,
+      payloadBytes: frame.payload.length,
+      ...(frame.kind === 2 && frame.payload.length === 8
+        ? {
+            rootExitCode: frame.payload.readUInt32LE(0),
+            remainingProcesses: frame.payload.readUInt32LE(4),
+          }
+        : {}),
+    };
+  } catch {
+    return { unavailable: true };
+  }
+}
+
+async function readFixtureObservation(kind, launchId) {
+  try {
+    return JSON.parse(await readFile(join(stateDir, `fixture-${kind}-${launchId}.json`), "utf8"));
+  } catch {
+    return undefined;
+  }
+}
+
+async function startupObservation(launchId, reader) {
   return {
     classification: "native-fixture-startup-failure",
     ownerExitCode: initialOwner.exitCode,
     ownerSignal: initialOwner.signalCode,
-    startup: await trace("startup"),
-    failure: await trace("failure"),
+    ownerExitedAt,
+    startup: await readFixtureObservation("startup", launchId),
+    failure: await readFixtureObservation("failure", launchId),
+    bootstrap: await readFixtureObservation("bootstrap", launchId),
+    control: await startupControlObservation(reader),
   };
 }
 
@@ -269,9 +309,12 @@ async function initialStart(launcher, helper, hash) {
     env: {},
     stdio: ["ignore", "pipe", "inherit", "pipe", "pipe"],
   });
-  ownerExited = new Promise((resolve) =>
-    initialOwner.once("exit", (code, signal) => resolve({ code, signal })),
-  );
+  ownerExited = new Promise((resolve) => {
+    initialOwner.once("exit", (code, signal) => {
+      ownerExitedAt = Date.now();
+      resolve({ code, signal });
+    });
+  });
   const reader = streamReader(initialOwner.stdio[4]);
   initialOwner.stdio[3].write(
     appLaunchPacket(
@@ -333,7 +376,11 @@ async function initialStart(launcher, helper, hash) {
   }
   if (!ready)
     console.error(
-      JSON.stringify({ ...(await startupObservation(launchId)), requestedAt, lastObservation }),
+      JSON.stringify({
+        ...(await startupObservation(launchId, reader)),
+        requestedAt,
+        lastObservation,
+      }),
     );
   assert(ready);
   initialOwner.stdio[3].write(commitPacket(launchId));
