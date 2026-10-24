@@ -1230,6 +1230,8 @@ export const SUPPORT_CODE_MODULES: readonly string[] = [
   "keiko-server/coding-runtime/supervisedCodingApprovalStore",
   "keiko-server/coding-runtime/supervisedCodingPolicy",
   "keiko-server/coding-runtime/windowsPortableAuthenticode",
+  "keiko-server/coding-sidecar-data-url",
+  "keiko-server/coding-sidecar-document-parts",
   "keiko-server/coding-sidecar-gateway",
   "keiko-server/coding-sidecar-image-parts",
   "keiko-server/coding-sidecar-tool-facade",

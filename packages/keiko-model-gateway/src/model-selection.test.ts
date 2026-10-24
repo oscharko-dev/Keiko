@@ -704,6 +704,33 @@ describe("resolveCodingSafeSidecarGatewayProfile", () => {
     });
   });
 
+  // #3906 AC1: PDF documents reach the model only when its verified capability declares document
+  // input; the native provider binding and the sidecar gateway both read this one projection.
+  describe("document input", () => {
+    function documentProfile(
+      supportsDocumentInput: boolean,
+    ): ReturnType<typeof resolveCodingSafeSidecarGatewayProfile> {
+      return resolveCodingSafeSidecarGatewayProfile(
+        config(
+          ["document-coder"],
+          [codingSidecarCapability("document-coder", { supportsDocumentInput })],
+        ),
+      );
+    }
+
+    it("publishes declared document input in the run metadata", () => {
+      const result = documentProfile(true);
+      if (result.status !== "available") throw new Error("expected an available profile");
+      expect(result.runMetadata.supportsDocumentInput).toBe(true);
+    });
+
+    it("leaves the run metadata without document input for a model that declares none", () => {
+      const result = documentProfile(false);
+      if (result.status !== "available") throw new Error("expected an available profile");
+      expect(result.runMetadata).not.toHaveProperty("supportsDocumentInput");
+    });
+  });
+
   it("preserves the independent input ceiling in the coding sidecar projection", () => {
     const result = resolveCodingSafeSidecarGatewayProfile(
       config(

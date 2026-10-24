@@ -117,6 +117,15 @@ import {
   parseImageUrlContentPart,
   type CodingSidecarImageRejection,
 } from "./coding-sidecar-image-parts.js";
+import {
+  CODING_SIDECAR_DOCUMENT_REJECTION_MESSAGES,
+  CODING_SIDECAR_DOCUMENT_REJECTIONS,
+  CODING_SIDECAR_MAX_DOCUMENT_PARTS,
+  countDocumentContentParts,
+  isFileContentPartCandidate,
+  parseFileContentPart,
+  type CodingSidecarDocumentRejection,
+} from "./coding-sidecar-document-parts.js";
 
 const ENABLE_TOKENS = new Set(["1", "true", "on", "yes", "enabled"]);
 const CODING_SIDECAR_DISABLED_ENV = "KEIKO_CODING_SIDECAR_DISABLED";
@@ -284,6 +293,9 @@ const TOOL_ADOPTION_GAP_MESSAGE_THRESHOLD = 9;
 const GOVERNED_TOOL_NAME_PREFIX = "keiko_";
 const MODEL_REASONING_EFFORT_SET: ReadonlySet<string> = new Set(MODEL_REASONING_EFFORTS);
 
+/** A media part count on the request line: present only when the request carries such parts. */
+const MEDIA_PART_COUNT_FIELD = { type: "integer", dataClass: "count", required: false } as const;
+
 const CODING_SIDECAR_GATEWAY_REQUEST_VALIDATED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -311,7 +323,10 @@ const CODING_SIDECAR_GATEWAY_REQUEST_VALIDATED_OPERATION = defineActivityLogOper
     // #3897 S14: how many validated image parts the request carries; present only when it carries
     // any. The count is part of what `estimatedPromptTokens` is charged for (the gateway's image
     // allowance per image); the images themselves are never recorded.
-    imageCount: { type: "integer", dataClass: "count", required: false },
+    imageCount: MEDIA_PART_COUNT_FIELD,
+    // #3906: how many validated PDF document parts the request carries; present only when it
+    // carries any. Like an image, each takes the gateway's media allowance; never recorded itself.
+    documentCount: MEDIA_PART_COUNT_FIELD,
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -449,6 +464,7 @@ type CodingSidecarGatewayRejectionReason =
   | "message-shape-invalid"
   | "content-part-unsupported"
   | CodingSidecarImageRejection
+  | CodingSidecarDocumentRejection
   | "tools-not-openai-compatible"
   | "invalid-sampling"
   | "input-messages-exceeded"
@@ -493,6 +509,11 @@ const CODING_SIDECAR_GATEWAY_REJECTED_OPERATION = defineActivityLogOperation({
         "image-part-too-large",
         "image-count-exceeded",
         "image-input-unsupported",
+        "document-part-invalid",
+        "document-mime-unsupported",
+        "document-part-too-large",
+        "document-count-exceeded",
+        "document-input-unsupported",
         "tools-not-openai-compatible",
         "invalid-sampling",
         "input-messages-exceeded",
@@ -923,6 +944,16 @@ const IMAGE_REJECTION_REASON_ROWS: readonly {
   reason,
 }));
 
+// One row per document refusal (#3906), with the same single owner of the messages.
+const DOCUMENT_REJECTION_REASON_ROWS: readonly {
+  readonly test: (message: string) => boolean;
+  readonly reason: CodingSidecarDocumentRejection;
+}[] = CODING_SIDECAR_DOCUMENT_REJECTIONS.map((reason) => ({
+  test: (message: string): boolean =>
+    message === CODING_SIDECAR_DOCUMENT_REJECTION_MESSAGES[reason],
+  reason,
+}));
+
 // One row per message literal `badRequest`/`validationErrorForChatRequest` actually builds — a
 // message change and this table must move together. A future unmatched shape receives the explicit
 // `unclassified-rejection` reason instead of borrowing one of these known meanings.
@@ -964,6 +995,7 @@ const BAD_REQUEST_MESSAGE_REASONS: readonly {
     reason: "content-part-unsupported",
   },
   ...IMAGE_REJECTION_REASON_ROWS,
+  ...DOCUMENT_REJECTION_REASON_ROWS,
   {
     test: (message) =>
       message.startsWith("Request body temperature") || message.startsWith("Request body top_p"),
@@ -1233,6 +1265,7 @@ type ParsedMessagePiece<T> =
   | { readonly kind: "ok"; readonly value: T }
   | { readonly kind: "content-part-unsupported" }
   | { readonly kind: "image-rejected"; readonly reason: CodingSidecarImageRejection }
+  | { readonly kind: "document-rejected"; readonly reason: CodingSidecarDocumentRejection }
   | { readonly kind: "invalid" };
 
 /**
@@ -1263,6 +1296,12 @@ function parseContentPart(part: unknown): ParsedMessagePiece<ChatMessageContentP
     if (image.kind === "unsupported") return { kind: "content-part-unsupported" };
     return { kind: "image-rejected", reason: image.reason };
   }
+  if (isFileContentPartCandidate(part)) {
+    const document = parseFileContentPart(part);
+    if (document.kind === "ok") return { kind: "ok", value: document.part };
+    if (document.kind === "unsupported") return { kind: "content-part-unsupported" };
+    return { kind: "document-rejected", reason: document.reason };
+  }
   return isRecord(part) && typeof part.type === "string"
     ? { kind: "content-part-unsupported" }
     : { kind: "invalid" };
@@ -1289,9 +1328,7 @@ function parseMessageContent(value: unknown): ParsedMessagePiece<ParsedMessageCo
   const text = parts.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n\n");
   return {
     kind: "ok",
-    value: parts.some((part) => part.type === "image_url")
-      ? { text, contentParts: parts }
-      : { text },
+    value: parts.some((part) => part.type !== "text") ? { text, contentParts: parts } : { text },
   };
 }
 
@@ -1319,7 +1356,9 @@ function parseRoleContent(
   }
   const content = parseMessageContent(entry.content);
   if (content.kind === "ok" && content.value.contentParts !== undefined && role !== "user") {
-    return { kind: "image-rejected", reason: "image-part-invalid" };
+    return content.value.contentParts.some((part) => part.type === "file")
+      ? { kind: "document-rejected", reason: "document-part-invalid" }
+      : { kind: "image-rejected", reason: "image-part-invalid" };
   }
   return content;
 }
@@ -1489,6 +1528,9 @@ function parseMessages(value: unknown): ParsedMessages | RouteResult | undefined
   if (countImageContentParts(messages) > CODING_SIDECAR_MAX_IMAGE_PARTS) {
     return badRequest(CODING_SIDECAR_IMAGE_REJECTION_MESSAGES["image-count-exceeded"]);
   }
+  if (countDocumentContentParts(messages) > CODING_SIDECAR_MAX_DOCUMENT_PARTS) {
+    return badRequest(CODING_SIDECAR_DOCUMENT_REJECTION_MESSAGES["document-count-exceeded"]);
+  }
   return messages.length === 0 ? undefined : { messages, droppedReasoningMessageCount };
 }
 
@@ -1501,6 +1543,9 @@ function messageParseRefusal(
   }
   if (parsed.kind === "image-rejected") {
     return badRequest(CODING_SIDECAR_IMAGE_REJECTION_MESSAGES[parsed.reason]);
+  }
+  if (parsed.kind === "document-rejected") {
+    return badRequest(CODING_SIDECAR_DOCUMENT_REJECTION_MESSAGES[parsed.reason]);
   }
   return badRequest(
     `Request body messages must be well-formed chat messages (entries: ${String(entryCount)}).`,
@@ -2080,6 +2125,19 @@ function imageInputRefusal(
   return badRequest(CODING_SIDECAR_IMAGE_REJECTION_MESSAGES["image-input-unsupported"]);
 }
 
+// PDF input follows the image rule (#3906): native profile only, and only for a model whose
+// `document_input` capability the configuration or readiness probe established. Anything else is
+// refused openly instead of silently dropping the document the model was meant to read.
+function documentInputRefusal(
+  parsed: CodingSidecarGatewayChatCompletionRequest,
+  runMetadata: CodingWorkbenchSidecarGatewayRunMetadata,
+  toolProfile: OpenCodeToolProfile,
+): RouteResult | undefined {
+  if (countDocumentContentParts(parsed.messages) === 0) return undefined;
+  if (runMetadata.supportsDocumentInput === true && toolProfile === "native") return undefined;
+  return badRequest(CODING_SIDECAR_DOCUMENT_REJECTION_MESSAGES["document-input-unsupported"]);
+}
+
 function validationErrorForChatRequest(
   parsed: CodingSidecarGatewayChatCompletionRequest | RouteResult,
   modelAlias: string,
@@ -2095,8 +2153,10 @@ function validationErrorForChatRequest(
   if (invalidSamplingMessage !== undefined) {
     return badRequest(invalidSamplingMessage);
   }
-  const imageRefusal = imageInputRefusal(parsed, runMetadata, toolProfile);
-  if (imageRefusal !== undefined) return imageRefusal;
+  const mediaRefusal =
+    imageInputRefusal(parsed, runMetadata, toolProfile) ??
+    documentInputRefusal(parsed, runMetadata, toolProfile);
+  if (mediaRefusal !== undefined) return mediaRefusal;
   const invalidBudget = budgetValidationError(parsed, runMetadata, estimatedPromptTokens);
   if (invalidBudget !== undefined) return invalidBudget;
   if (!isMatchingModelAlias(parsed.model, modelAlias, runtimeAuthenticated)) {
@@ -5069,9 +5129,14 @@ function logValidatedRequestBounds(
 
 function imageCountEvidence(request: CodingSidecarGatewayChatCompletionRequest): {
   readonly imageCount?: number;
+  readonly documentCount?: number;
 } {
   const imageCount = countImageContentParts(request.messages);
-  return imageCount === 0 ? {} : { imageCount };
+  const documentCount = countDocumentContentParts(request.messages);
+  return {
+    ...(imageCount === 0 ? {} : { imageCount }),
+    ...(documentCount === 0 ? {} : { documentCount }),
+  };
 }
 
 function executeBudgetedGatewayChat(

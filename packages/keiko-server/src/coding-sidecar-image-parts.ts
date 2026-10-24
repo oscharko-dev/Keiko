@@ -5,6 +5,8 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/bff-wire";
 import type { ChatMessageImageUrlContentPart } from "@oscharko-dev/keiko-contracts";
 
+import { parseInlineDataUrl } from "./coding-sidecar-data-url.js";
+
 /**
  * Image input for a native OpenCode coding run (#3897 S14). The native `read` of a workspace image
  * reaches the model as an OpenAI-compatible `image_url` content part carrying a base64 data URL;
@@ -50,11 +52,6 @@ export type CodingSidecarImagePartResult =
   | { readonly kind: "unsupported" }
   | { readonly kind: "rejected"; readonly reason: CodingSidecarImageRejection };
 
-const DATA_URL_SCHEME = "data:";
-const BASE64_MARKER = "base64";
-const BASE64_PAYLOAD = /^[A-Za-z0-9+/]+={0,2}$/u;
-// A canonical base64 string of the largest admitted image: four characters per three bytes.
-const MAX_BASE64_CHARACTERS = 4 * Math.ceil(MAX_ATTACHMENT_BYTES / 3);
 // `detail` is a provider-side resolution hint the AI SDK may attach; it carries no content, and the
 // gateway projection forwards the URL only.
 const IMAGE_DETAIL_HINTS: ReadonlySet<string> = new Set(["auto", "low", "high"]);
@@ -86,35 +83,6 @@ function imageUrlOf(part: unknown): string | undefined {
   return typeof url === "string" ? url : undefined;
 }
 
-interface DataUrlParts {
-  readonly mediaType: string;
-  readonly payload: string;
-}
-
-function splitBase64DataUrl(url: string): DataUrlParts | undefined {
-  const comma = url.indexOf(",");
-  if (comma < 0) return undefined;
-  const [mediaType, encoding, ...extra] = url.slice(DATA_URL_SCHEME.length, comma).split(";");
-  if (mediaType === undefined || encoding !== BASE64_MARKER || extra.length > 0) return undefined;
-  return { mediaType, payload: url.slice(comma + 1) };
-}
-
-function paddingLength(payload: string): number {
-  if (payload.endsWith("==")) return 2;
-  return payload.endsWith("=") ? 1 : 0;
-}
-
-function decodedBase64Bytes(payload: string): number {
-  return (payload.length / 4) * 3 - paddingLength(payload);
-}
-
-/** The refusal for a payload that is not canonical, non-empty base64 within the size limit. */
-function payloadRejection(payload: string): CodingSidecarImageRejection | undefined {
-  if (payload.length > MAX_BASE64_CHARACTERS) return "image-part-too-large";
-  if (payload.length % 4 !== 0 || !BASE64_PAYLOAD.test(payload)) return "image-part-invalid";
-  return decodedBase64Bytes(payload) > MAX_ATTACHMENT_BYTES ? "image-part-too-large" : undefined;
-}
-
 function rejected(reason: CodingSidecarImageRejection): CodingSidecarImagePartResult {
   return { kind: "rejected", reason };
 }
@@ -130,16 +98,16 @@ function rejected(reason: CodingSidecarImageRejection): CodingSidecarImagePartRe
  */
 export function parseImageUrlContentPart(part: unknown): CodingSidecarImagePartResult {
   const url = imageUrlOf(part);
-  if (url?.startsWith(DATA_URL_SCHEME) !== true) return { kind: "unsupported" };
-  const split = splitBase64DataUrl(url);
-  if (split === undefined) return rejected("image-part-invalid");
-  const mediaType = normalizeAttachmentMime(split.mediaType);
+  if (url === undefined) return { kind: "unsupported" };
+  const inline = parseInlineDataUrl(url, MAX_ATTACHMENT_BYTES);
+  if (inline.kind === "not-inline") return { kind: "unsupported" };
+  if (inline.kind === "too-large") return rejected("image-part-too-large");
+  if (inline.kind === "invalid") return rejected("image-part-invalid");
+  const mediaType = normalizeAttachmentMime(inline.value.mediaType);
   if (mediaType === undefined || classifyAttachmentMime(mediaType) !== "image") {
     return rejected("image-mime-unsupported");
   }
-  const { payload } = split;
-  const refusal = payloadRejection(payload);
-  if (refusal !== undefined) return rejected(refusal);
+  const { payload } = inline.value;
   return {
     kind: "ok",
     part: { type: "image_url", image_url: { url: `data:${mediaType};base64,${payload}` } },

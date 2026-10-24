@@ -96,6 +96,10 @@ import {
   CODING_SIDECAR_IMAGE_REJECTION_MESSAGES,
   CODING_SIDECAR_MAX_IMAGE_PARTS,
 } from "./coding-sidecar-image-parts.js";
+import {
+  CODING_SIDECAR_DOCUMENT_REJECTION_MESSAGES,
+  CODING_SIDECAR_MAX_DOCUMENT_PARTS,
+} from "./coding-sidecar-document-parts.js";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import { OPENCODE_RUNTIME_READINESS_PROMPT } from "./coding-runtime/opencodeLaunchProfile.js";
 import { CodingRuntimeEventHub } from "./coding-runtime/codingRuntimeEventHub.js";
@@ -9663,7 +9667,7 @@ describe("coding-sidecar gateway native image input", () => {
   }
 
   // The shape the pinned OpenCode 2.1.4 sends after a native `read` of an image: the tool result
-  // text, then the image alone in a user message (captured by opencodeNativeImageInput.real.test).
+  // text, then the image alone in a user message (captured by opencodeNativeMediaInput.real.test).
   function readImageMessages(url: string): readonly Record<string, unknown>[] {
     return [
       { role: "user", content: "Look at pixel.png" },
@@ -9686,6 +9690,7 @@ describe("coding-sidecar gateway native image input", () => {
   function nativeDeps(
     options: {
       readonly imageInput?: boolean;
+      readonly documentInput?: boolean;
       readonly toolProfile?: "direct" | "code-mode" | "native";
       readonly contextWindow?: number;
       readonly chatFactory?: UiHandlerDeps["codingSidecarGatewayChatFactory"];
@@ -9697,6 +9702,7 @@ describe("coding-sidecar gateway native image input", () => {
           provider(),
           capability({
             supportsImageInput: options.imageInput ?? true,
+            supportsDocumentInput: options.documentInput ?? false,
             ...(options.contextWindow === undefined
               ? {}
               : { contextWindow: options.contextWindow }),
@@ -9976,6 +9982,109 @@ describe("coding-sidecar gateway native image input", () => {
         .filter((event) => event.op === "coding-sidecar.gateway.rejected")
         .map((event) => event.extra?.reason),
     ).toEqual(["content-part-unsupported", "content-part-unsupported", "content-part-unsupported"]);
+  });
+
+  // #3906: the shape OpenCode's OpenAI-chat serializer sends for a read PDF.
+  const PDF_BYTES = Buffer.from("%PDF-1.4\n1 0 obj << >> endobj\n%%EOF\n", "latin1");
+  const pdfDataUrl = `data:application/pdf;base64,${PDF_BYTES.toString("base64")}`;
+  const readDocumentMessages = (fileData: string): readonly Record<string, unknown>[] => [
+    { role: "user", content: "Summarize spec.pdf" },
+    {
+      role: "user",
+      content: [{ type: "file", file: { filename: "spec.pdf", file_data: fileData } }],
+    },
+  ];
+
+  it("forwards a read PDF to a document-capable model as one file part (#3906)", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("info");
+    const provider = stubProvider();
+
+    const result = await send(
+      readDocumentMessages(pdfDataUrl),
+      nativeDeps({ documentInput: true }),
+    );
+
+    assertRouteResult(result);
+    expect(result.status).toBe(200);
+    const sent = provider.bodies[0]?.messages as readonly { content: unknown }[];
+    expect(sent[1]?.content).toEqual([
+      { type: "file", file: { filename: "spec.pdf", file_data: pdfDataUrl } },
+    ]);
+    const admission = sink.events.find((event) => event.op === "gateway.prompt.admission");
+    expect(admission?.extra).toMatchObject({
+      imageCount: 0,
+      documentCount: 1,
+      imageAccounting: "fallback-estimated",
+    });
+    expect(Number(admission?.extra?.imageReserveTokens)).toBeGreaterThan(0);
+    const validated = sink.events.find(
+      (event) => event.op === "coding-sidecar.gateway.request-validated",
+    );
+    expect(validated?.extra).toMatchObject({ documentCount: 1 });
+    expect(JSON.stringify(sink.events)).not.toContain(PDF_BYTES.toString("base64").slice(4));
+  });
+
+  it("refuses PDF input openly for a model or profile that does not declare it (#3906)", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("warn");
+    const provider = stubProvider();
+    for (const deps of [
+      nativeDeps({ documentInput: false }),
+      nativeDeps({ documentInput: true, toolProfile: "direct" }),
+    ]) {
+      const result = await send(readDocumentMessages(pdfDataUrl), deps);
+      assertRouteResult(result);
+      expect(result.status).toBe(400);
+    }
+    expect(provider.bodies).toHaveLength(0);
+    expect(
+      sink.events
+        .filter((event) => event.op === "coding-sidecar.gateway.rejected")
+        .map((event) => event.extra?.reason),
+    ).toEqual(["document-input-unsupported", "document-input-unsupported"]);
+  });
+
+  it("refuses a non-PDF or remote file part and more documents than one request may carry", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("warn");
+    stubProvider();
+    const deps = nativeDeps({ documentInput: true, contextWindow: 4_000_000 });
+    const documents = (count: number): Record<string, unknown> => ({
+      role: "user",
+      content: Array.from({ length: count }, () => ({
+        type: "file",
+        file: { filename: "spec.pdf", file_data: pdfDataUrl },
+      })),
+    });
+    const admitted = await send([documents(CODING_SIDECAR_MAX_DOCUMENT_PARTS)], deps);
+    assertRouteResult(admitted);
+    expect(admitted.status).toBe(200);
+    for (const messages of [
+      [documents(CODING_SIDECAR_MAX_DOCUMENT_PARTS + 1)],
+      readDocumentMessages(`data:text/html;base64,${PDF_BYTES.toString("base64")}`),
+      readDocumentMessages("https://example.invalid/spec.pdf"),
+    ]) {
+      const refused = await send(messages, deps);
+      assertRouteResult(refused);
+      expect(refused.status).toBe(400);
+    }
+    expect(
+      sink.events
+        .filter((event) => event.op === "coding-sidecar.gateway.rejected")
+        .map((event) => event.extra?.reason),
+    ).toEqual(["document-count-exceeded", "document-mime-unsupported", "content-part-unsupported"]);
+  });
+
+  it("classifies each document refusal message under its own closed reason", () => {
+    for (const [reason, message] of Object.entries(CODING_SIDECAR_DOCUMENT_REJECTION_MESSAGES)) {
+      expect(
+        _classifyBadRequestReasonForTests({
+          status: 400,
+          body: { error: { code: "BAD_REQUEST", message } },
+        }),
+      ).toBe(reason);
+    }
   });
 
   it("classifies each image refusal message under its own closed reason", () => {

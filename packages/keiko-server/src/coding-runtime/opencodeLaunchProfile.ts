@@ -57,6 +57,12 @@ export interface OpenCodeContextGeometry {
    * false keeps the text-only declaration, and the runtime tells the model it cannot see images.
    */
   readonly imageInput?: boolean | undefined;
+  /**
+   * The admitted model takes PDF documents (`CodingWorkbenchSidecarGatewayRunMetadata.
+   * supportsDocumentInput`, #3906). The native profile then declares `pdf` input, so the runtime
+   * hands a read PDF to the model as a document; otherwise the runtime refuses to read one for it.
+   */
+  readonly documentInput?: boolean | undefined;
 }
 
 export interface OpenCodeLaunchProfileInput {
@@ -251,6 +257,7 @@ export function resolveOpenCodeContextGeometry(
     maxInputTokens,
     maxOutputTokens,
     ...(metadata.supportsImageInput === true ? { imageInput: true } : {}),
+    ...(metadata.supportsDocumentInput === true ? { documentInput: true } : {}),
   };
 }
 
@@ -418,7 +425,7 @@ export function createFixedOpenCodeV2Config(
     snapshots: false,
     model: `${OPENCODE_RUNTIME_PROVIDER_ID}/${OPENCODE_RUNTIME_MODEL_ALIAS}`,
     default_agent: "build",
-    providers: fixedOpenCodeV2Provider(contextGeometry, false),
+    providers: fixedOpenCodeV2Provider(contextGeometry, { image: false, pdf: false }),
     policies: OPENCODE_GATEWAY_PROVIDER_POLICIES,
     compaction: { auto: true, keep: { tokens: recent }, buffer: reserved },
     tool_output: { max_bytes: CODING_TOOL_MAX_BODY_BYTES },
@@ -471,7 +478,10 @@ function createNativeOpenCodeV2Config(
     formatter: openCodeNativeFormatterSetting(formatter),
     model: `${OPENCODE_RUNTIME_PROVIDER_ID}/${OPENCODE_RUNTIME_MODEL_ALIAS}`,
     default_agent: "build",
-    providers: fixedOpenCodeV2Provider(contextGeometry, contextGeometry.imageInput === true),
+    providers: fixedOpenCodeV2Provider(contextGeometry, {
+      image: contextGeometry.imageInput === true,
+      pdf: contextGeometry.documentInput === true,
+    }),
     policies: OPENCODE_GATEWAY_PROVIDER_POLICIES,
     compaction: { auto: true, keep: { tokens: recent }, buffer: reserved },
     tool_output: { max_bytes: CODING_TOOL_MAX_BODY_BYTES },
@@ -528,13 +538,13 @@ function nativeServerOwnedBinding(
 }
 
 /**
- * `imageInput` is the one capability that varies per admitted model: the native `read` of an image
- * becomes a model-visible image only when the provider model declares it, exactly as in standalone
- * OpenCode (https://opencode.ai/v2/docs/tools/). The direct and Code Mode profiles never pass it.
+ * The input modalities are what varies per admitted model: the native `read` of an image or a PDF
+ * becomes model-visible media only when the provider model declares it, exactly as in standalone
+ * OpenCode (https://opencode.ai/v2/docs/tools/). The direct and Code Mode profiles never pass them.
  */
 function fixedOpenCodeV2Provider(
   geometry: OpenCodeContextGeometry,
-  imageInput: boolean,
+  media: { readonly image: boolean; readonly pdf: boolean },
 ): Readonly<Record<string, unknown>> {
   return {
     [OPENCODE_RUNTIME_PROVIDER_ID]: {
@@ -545,7 +555,7 @@ function fixedOpenCodeV2Provider(
           name: "Keiko Governed Coding",
           capabilities: {
             tools: true,
-            input: imageInput ? ["text", "image"] : ["text"],
+            input: ["text", ...(media.image ? ["image"] : []), ...(media.pdf ? ["pdf"] : [])],
             output: ["text"],
           },
           limit: {

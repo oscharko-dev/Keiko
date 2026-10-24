@@ -491,6 +491,53 @@ describe("OpenCode launch profile", () => {
     });
   });
 
+  // #3906: a PDF the native `read` admits reaches the model as a document only when the provider
+  // model declares `pdf` input, which follows the admitted model's document capability.
+  describe("PDF document input declaration", () => {
+    function inputFor(
+      toolProfile: "direct" | "code-mode" | "native",
+      media: { readonly imageInput?: boolean; readonly documentInput?: boolean },
+    ): unknown {
+      const profile = buildOpenCodeLaunchProfile({
+        executable: "/managed/opencode",
+        stateRoot: "/private/run",
+        toolProfile,
+        contextGeometry: { ...CONTEXT_GEOMETRY, ...media },
+        randomBytes: () => Buffer.alloc(32, 7),
+      });
+      if (!profile.ok) throw new Error("expected launch profile");
+      const config = JSON.parse(profile.config) as { providers: Record<string, unknown> };
+      const provider = record(config.providers["keiko-runtime"]);
+      return record(record(record(provider.models).coding).capabilities).input;
+    }
+
+    it("declares pdf input on the native model only when the admitted model takes documents", () => {
+      expect(inputFor("native", { documentInput: true })).toEqual(["text", "pdf"]);
+      expect(inputFor("native", { imageInput: true, documentInput: true })).toEqual([
+        "text",
+        "image",
+        "pdf",
+      ]);
+      expect(inputFor("native", { documentInput: false })).toEqual(["text"]);
+      for (const toolProfile of ["direct", "code-mode"] as const) {
+        expect(inputFor(toolProfile, { documentInput: true })).toEqual(["text"]);
+      }
+    });
+
+    it("carries the admitted model's document capability into the context geometry", () => {
+      const metadata = {
+        maxPromptTokens: 128_000,
+        maxOutputTokens: 8_000,
+        maxInputMessages: 512,
+        maxRequestBytes: 1_048_576,
+      };
+      expect(
+        resolveOpenCodeContextGeometry({ ...metadata, supportsDocumentInput: true }),
+      ).toMatchObject({ documentInput: true });
+      expect(resolveOpenCodeContextGeometry(metadata)).not.toHaveProperty("documentInput");
+    });
+  });
+
   it("preserves the V1 compatibility prompt's digest-bound edit and instruction guidance", () => {
     const config = createFixedOpenCodeConfig(CONTEXT_GEOMETRY);
     const prompt = record(record(config.agent).build).prompt;

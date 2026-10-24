@@ -12593,6 +12593,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "image-part-too-large",
           "image-count-exceeded",
           "image-input-unsupported",
+          "document-part-invalid",
+          "document-mime-unsupported",
+          "document-part-too-large",
+          "document-count-exceeded",
+          "document-input-unsupported",
           "tools-not-openai-compatible",
           "invalid-sampling",
           "input-messages-exceeded",
@@ -12755,6 +12760,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
       imageCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      documentCount: {
         type: "integer",
         dataClass: "count",
         required: false,
@@ -17890,6 +17900,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: true,
+      },
+      documentCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
       },
       imageAccounting: {
         type: "string",

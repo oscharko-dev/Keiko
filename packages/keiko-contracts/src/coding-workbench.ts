@@ -564,6 +564,12 @@ export interface CodingWorkbenchSidecarGatewayRunMetadata {
    * content-part admission so they cannot disagree (#3897 S14). Absent means text only.
    */
   readonly supportsImageInput?: boolean | undefined;
+  /**
+   * The admitted model's PDF document input (`ModelCapability.supportsDocumentInput`, the
+   * capability the `document_input` readiness probe verifies), carried the same way to the native
+   * provider binding and to the gateway's document-part admission (#3906). Absent means no PDFs.
+   */
+  readonly supportsDocumentInput?: boolean | undefined;
 }
 
 export interface CodingWorkbenchSidecarGatewayProjection {

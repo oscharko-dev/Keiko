@@ -2087,6 +2087,7 @@ export type {
   CompletionModelSelection,
   ChatMessage,
   ChatMessageContentPart,
+  ChatMessageFileContentPart,
   ChatMessageImageUrlContentPart,
   ChatMessageTextContentPart,
   ToolDefinition,

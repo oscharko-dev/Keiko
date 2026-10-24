@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "bc0897d6abc8e5a08d7bc4dfc26e07ebbb4fde64b66adefe3332be710352fccd" as const;
+  "d4172c76cf037d6181c683317b05490f6b7e268b6284dc0e87d407545eb8f5b1" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -12960,6 +12960,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "documentCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "droppedReasoningMessageCount",
               type: "integer",
               dataClass: "count",
@@ -21439,6 +21445,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "string",
               dataClass: "closed-enum",
               required: true,
+            },
+            {
+              name: "documentCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
             },
             {
               name: "fallbackPromptTokens",

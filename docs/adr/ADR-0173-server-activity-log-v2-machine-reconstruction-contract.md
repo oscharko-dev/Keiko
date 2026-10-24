@@ -1298,9 +1298,10 @@ bounded conversation lane, not the whole model input; unused source capacity rem
 identified. Checkpoint validity uses that same lane profile. These fields are counts only and
 retain the existing timeline, causal correlation and sufficiency contract.
 
-Gateway admission additionally records `imageCount`, the selected `imageAccounting` rule,
-`imageReserveTokens`, `localPromptTokens`, `fallbackPromptTokens`, and, when present,
-`reportedPromptTokens` plus schema-adjusted `providerPromptTokens`. A positive reported count
+Gateway admission additionally records `imageCount`, optional `documentCount`, the selected
+`imageAccounting` rule, `imageReserveTokens`, `localPromptTokens`, `fallbackPromptTokens`, and,
+when present, `reportedPromptTokens` plus schema-adjusted `providerPromptTokens`. PDF document
+parts take the same per-part media reserve as images. A positive reported count
 replaces the image reserve even when the local text/tool/schema floor determines the final total;
 a zero count retains the reserve. The recorded candidates make those decisions distinguishable.
 

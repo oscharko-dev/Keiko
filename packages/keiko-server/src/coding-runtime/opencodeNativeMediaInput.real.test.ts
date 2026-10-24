@@ -22,6 +22,7 @@ import {
   createOpenCodeGatewayReadinessRegistry,
   handleCodingSidecarGatewayChatCompletions,
 } from "../coding-sidecar-gateway.js";
+import { parseFileContentPart } from "../coding-sidecar-document-parts.js";
 import { parseImageUrlContentPart } from "../coding-sidecar-image-parts.js";
 import { buildRedactor, type UiHandlerDeps } from "../deps.js";
 import { STREAMING, type RouteResult } from "../routes.js";
@@ -37,22 +38,24 @@ import {
 } from "./opencodeV2HttpClient.js";
 
 /**
- * Original-runtime proof for native image input (#3897 S14, review P2). The pinned executable runs
- * under the real native Seatbelt wrapper with the profile `buildOpenCodeLaunchProfile` produces; a
- * scripted model asks for a native `read` of a small synthetic PNG, and the stub gateway records
- * the provider request that follows. With image input declared that request carries exactly one
- * `image_url` part holding the file's bytes; declared text-only (the default) it carries none and
- * the file's bytes appear nowhere in the request. A second pair runs the same original runtime
- * against the PRODUCTIVE sidecar route (`handleCodingSidecarGatewayChatCompletions`, scripted only
- * at the model-gateway port), so the request the route hands the gateway is observed too. Run with
- * KEIKO_OPENCODE_REAL_BINARY and KEIKO_OPENCODE_REAL_RESOURCE_ROOT set; otherwise it is skipped.
+ * Original-runtime proof for native media input: images (#3897 S14, review P2) and PDF documents
+ * (#3906 AC1). The pinned executable runs under the real native Seatbelt wrapper with the profile
+ * `buildOpenCodeLaunchProfile` produces; a scripted model asks for a native `read` of a small
+ * synthetic PNG or PDF, and the stub gateway records the provider request that follows. With the
+ * medium declared that request carries exactly one `image_url` or `file` part holding the file's
+ * bytes; declared text-only (the default) it carries none and the file's bytes appear nowhere in
+ * the request. A second set runs the same original runtime against the PRODUCTIVE sidecar route
+ * (`handleCodingSidecarGatewayChatCompletions`, scripted only at the model-gateway port), so the
+ * request the route hands the gateway is observed too. Run with KEIKO_OPENCODE_REAL_BINARY and
+ * KEIKO_OPENCODE_REAL_RESOURCE_ROOT set; otherwise it is skipped.
  */
 const BINARY = process.env.KEIKO_OPENCODE_REAL_BINARY;
 const RESOURCE_ROOT = process.env.KEIKO_OPENCODE_REAL_RESOURCE_ROOT;
 const GATEWAY_CAPABILITY = "m".repeat(43);
-const RUN_ID = "run-native-image";
+const RUN_ID = "run-native-media";
 const FACADE_CAPABILITY = "fixture-facade-capability";
 const IMAGE_FILE = "pixel.png";
+const PDF_FILE = "brief.pdf";
 const MAX_FIXTURE_BODY_BYTES = 4 * 1_024 * 1_024;
 
 interface Recorded {
@@ -72,7 +75,19 @@ interface ModelEndpoint {
   readonly close: () => Promise<void>;
   /** Tool-call turns still to script; each answers one request whose last message is the user's. */
   toolTurns: number;
+  /** The workspace file each scripted turn asks the native `read` tool for. */
+  readPath: string;
 }
+
+/** The media the admitted model declares beyond text. */
+interface Media {
+  readonly image: boolean;
+  readonly pdf: boolean;
+}
+
+const TEXT_ONLY: Media = { image: false, pdf: false };
+const IMAGE_INPUT: Media = { image: true, pdf: false };
+const PDF_INPUT: Media = { image: false, pdf: true };
 
 interface GatewayStub extends Stub, ModelEndpoint {}
 
@@ -81,6 +96,7 @@ interface Fixture {
   readonly workspace: string;
   readonly state: string;
   readonly png: Buffer;
+  readonly pdf: Buffer;
 }
 
 function object(value: unknown): Record<string, unknown> | undefined {
@@ -116,6 +132,22 @@ function syntheticPng(): Buffer {
     pngChunk("IDAT", deflateSync(raw)),
     pngChunk("IEND", Buffer.alloc(0)),
   ]);
+}
+
+/** A minimal one-page PDF; the sidecar route checks only its `%PDF-` signature and size. */
+function syntheticPdf(): Buffer {
+  return Buffer.from(
+    [
+      "%PDF-1.4",
+      "1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj",
+      "2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj",
+      "3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 72 72]>>endobj",
+      "trailer<</Root 1 0 R>>",
+      "%%EOF",
+      "",
+    ].join("\n"),
+    "latin1",
+  );
 }
 
 function frame(value: unknown): string {
@@ -211,7 +243,7 @@ async function startGateway(): Promise<GatewayStub> {
         index: 0,
         id: `call_image_${String(self.requests.length)}`,
         type: "function",
-        function: { name: "read", arguments: JSON.stringify({ path: IMAGE_FILE }) },
+        function: { name: "read", arguments: JSON.stringify({ path: gateway.readPath }) },
       };
       streamedTurn(response, { tool_calls: [call] }, "tool_calls");
       return;
@@ -220,6 +252,7 @@ async function startGateway(): Promise<GatewayStub> {
   });
   return Object.assign(stub, {
     toolTurns: 0,
+    readPath: IMAGE_FILE,
     url: `http://127.0.0.1:${String(stub.port)}/v1`,
     close: (): Promise<void> => closeStub(stub),
   });
@@ -239,6 +272,8 @@ function createFixture(): Fixture {
   mkdirSync(state, { recursive: true, mode: 0o700 });
   const png = syntheticPng();
   writeFileSync(join(workspace, IMAGE_FILE), png);
+  const pdf = syntheticPdf();
+  writeFileSync(join(workspace, PDF_FILE), pdf);
   const git = resolveDarwinGitExecutable();
   const initialized = spawnSync(git.path, ["init", "-q", workspace], {
     env: {
@@ -249,7 +284,7 @@ function createFixture(): Fixture {
     },
   });
   if (initialized.status !== 0) throw new Error("fixture-git-initialization-failed");
-  return { root, workspace, state, png };
+  return { root, workspace, state, png, pdf };
 }
 
 interface Launched {
@@ -277,7 +312,7 @@ function launch(
   binary: string,
   runtimeRoot: string,
   endpoints: { readonly gatewayUrl: string; readonly facade: Stub },
-  imageInput: boolean,
+  media: Media,
 ): Launched {
   const profile = buildOpenCodeLaunchProfile({
     executable: binary,
@@ -287,7 +322,8 @@ function launch(
       contextWindowTokens: 32_768,
       maxInputTokens: 24_000,
       maxOutputTokens: 4_096,
-      ...(imageInput ? { imageInput: true } : {}),
+      ...(media.image ? { imageInput: true } : {}),
+      ...(media.pdf ? { documentInput: true } : {}),
     },
   });
   if (!profile.ok) throw new Error("fixture-profile-invalid");
@@ -379,7 +415,7 @@ interface ProductiveGateway extends ModelEndpoint {
   readonly statuses: number[];
 }
 
-function gatewayConfig(imageInput: boolean): GatewayConfig {
+function gatewayConfig(media: Media): GatewayConfig {
   const provider = {
     modelId: "image-fixture-model",
     baseUrl: "https://provider.invalid/v1",
@@ -409,8 +445,8 @@ function gatewayConfig(imageInput: boolean): GatewayConfig {
         },
         structuredOutput: true,
         streaming: true,
-        supportsImageInput: imageInput,
-        supportsDocumentInput: false,
+        supportsImageInput: media.image,
+        supportsDocumentInput: media.pdf,
         workflowEligible: true,
         costClass: "low",
         latencyClass: "standard",
@@ -440,16 +476,16 @@ function modelResponse(partial: Partial<NormalizedResponse>): NormalizedResponse
   };
 }
 
-/** The scripted model: one native read of the image, then a plain final answer. */
+/** The scripted model: one native read of the scripted file, then a plain final answer. */
 function scriptedModelTurn(
-  script: { toolTurns: number },
+  script: { toolTurns: number; readPath: string },
   request: GatewayRequest,
 ): NormalizedResponse {
   if (script.toolTurns > 0 && request.messages.at(-1)?.role === "user") {
     script.toolTurns -= 1;
     return modelResponse({
       finishReason: "tool_calls",
-      toolCalls: [{ id: "call_image_route", name: "read", arguments: { path: IMAGE_FILE } }],
+      toolCalls: [{ id: "call_media_route", name: "read", arguments: { path: script.readPath } }],
     });
   }
   return modelResponse({ content: "Fixture turn completed." });
@@ -488,11 +524,11 @@ async function serveRoute(
  * registry, runtime capability authenticator) with only the model-gateway port scripted: the
  * recorded `GatewayRequest` is what the route would hand the Model Gateway.
  */
-async function startProductiveGateway(imageInput: boolean): Promise<ProductiveGateway> {
-  const config = gatewayConfig(imageInput);
+async function startProductiveGateway(media: Media): Promise<ProductiveGateway> {
+  const config = gatewayConfig(media);
   const requests: GatewayRequest[] = [];
   const statuses: number[] = [];
-  const state = { toolTurns: 0 };
+  const state = { toolTurns: 0, readPath: IMAGE_FILE };
   const script = (request: GatewayRequest): NormalizedResponse => {
     requests.push(request);
     return scriptedModelTurn(state, request);
@@ -558,6 +594,12 @@ async function startProductiveGateway(imageInput: boolean): Promise<ProductiveGa
     set toolTurns(value: number) {
       state.toolTurns = value;
     },
+    get readPath(): string {
+      return state.readPath;
+    },
+    set readPath(value: string) {
+      state.readPath = value;
+    },
     url: `http://127.0.0.1:${String(address.port)}/api/coding-sidecar/gateway`,
     close: async (): Promise<void> => {
       server.closeAllConnections();
@@ -580,21 +622,21 @@ interface Run<M extends ModelEndpoint> {
 }
 
 async function withRun<M extends ModelEndpoint>(
-  imageInput: boolean,
-  startModel: (imageInput: boolean) => Promise<M>,
+  media: Media,
+  startModel: (media: Media) => Promise<M>,
   body: (run: Run<M>) => Promise<void>,
 ): Promise<void> {
   if (BINARY === undefined || RESOURCE_ROOT === undefined)
     throw new Error("fixture-binary-missing");
   expect(process.platform).toBe("darwin");
   const fixture = createFixture();
-  const [model, facade] = [await startModel(imageInput), await startFacade()];
+  const [model, facade] = [await startModel(media), await startFacade()];
   const launched = launch(
     fixture,
     realpathSync(BINARY),
     realpathSync(RESOURCE_ROOT),
     { gatewayUrl: model.url, facade },
-    imageInput,
+    media,
   );
   try {
     const client = createOpenCodeV2HttpClient({
@@ -632,9 +674,10 @@ function toolResultText(recorded: Recorded): string {
   return typeof result?.content === "string" ? result.content : "";
 }
 
-/** Every `image_url` content part of a request, with the role of the message that carries it. */
-function imageParts(
+/** Every content part of one type in a request, with the role of the message that carries it. */
+function mediaParts(
   recorded: Recorded | undefined,
+  type: "image_url" | "file",
 ): readonly { readonly role: unknown; readonly part: Record<string, unknown> }[] {
   const messages = object(recorded?.body)?.messages;
   if (!Array.isArray(messages)) return [];
@@ -644,42 +687,51 @@ function imageParts(
     if (!Array.isArray(content)) return [];
     return content.flatMap((part: unknown) => {
       const record = object(part);
-      return record?.type === "image_url" ? [{ role: entry?.role, part: record }] : [];
+      return record?.type === type ? [{ role: entry?.role, part: record }] : [];
     });
   });
 }
 
-async function readScriptedImage(run: Run<GatewayStub>): Promise<Recorded> {
+async function readScripted(run: Run<GatewayStub>, path: string): Promise<Recorded> {
   run.model.toolTurns = 1;
-  await run.client.prompt(run.sessionId, "Look at the image in the workspace.");
+  run.model.readPath = path;
+  await run.client.prompt(run.sessionId, `Look at ${path} in the workspace.`);
   await expect.poll(() => followUpRequest(run.model), { timeout: 60_000 }).not.toBeUndefined();
   const followUp = followUpRequest(run.model);
   if (followUp === undefined) throw new Error("fixture-follow-up-missing");
   return followUp;
 }
 
-/** The request the route handed the gateway after the scripted read's result came back. */
-function routeFollowUp(gateway: ProductiveGateway): GatewayRequest | undefined {
-  return gateway.requests.find((request) =>
-    request.messages.some((message) => message.role === "tool"),
-  );
+/** The first request since `from` the route handed the gateway with a read's result in it. */
+function routeFollowUp(gateway: ProductiveGateway, from: number): GatewayRequest | undefined {
+  return gateway.requests
+    .slice(from)
+    .find((request) => request.messages.some((message) => message.role === "tool"));
 }
 
-function gatewayImageParts(
+/** The image URL or document data of every media part the route handed the gateway. */
+function gatewayMediaParts(
   request: GatewayRequest,
-): readonly { readonly role: string; readonly url: string }[] {
+): readonly { readonly role: string; readonly data: string }[] {
   return request.messages.flatMap((message) =>
-    (message.contentParts ?? []).flatMap((part) =>
-      part.type === "image_url" ? [{ role: message.role, url: part.image_url.url }] : [],
-    ),
+    (message.contentParts ?? []).flatMap((part) => {
+      if (part.type === "image_url") return [{ role: message.role, data: part.image_url.url }];
+      if (part.type === "file") return [{ role: message.role, data: part.file.file_data }];
+      return [];
+    }),
   );
 }
 
-async function readThroughRoute(run: Run<ProductiveGateway>): Promise<GatewayRequest> {
+async function readThroughRoute(
+  run: Run<ProductiveGateway>,
+  path: string,
+): Promise<GatewayRequest> {
   run.model.toolTurns = 1;
-  await run.client.prompt(run.sessionId, "Look at the image in the workspace.");
-  await expect.poll(() => routeFollowUp(run.model), { timeout: 60_000 }).not.toBeUndefined();
-  const followUp = routeFollowUp(run.model);
+  run.model.readPath = path;
+  const from = run.model.requests.length;
+  await run.client.prompt(run.sessionId, `Look at ${path} in the workspace.`);
+  await expect.poll(() => routeFollowUp(run.model, from), { timeout: 60_000 }).not.toBeUndefined();
+  const followUp = routeFollowUp(run.model, from);
   if (followUp === undefined) throw new Error("fixture-route-follow-up-missing");
   return followUp;
 }
@@ -689,23 +741,27 @@ function modelCapabilities(config: Record<string, unknown> | undefined): unknown
   return object(object(provider?.models)?.coding)?.capabilities;
 }
 
-describe("pinned native OpenCode image input", () => {
+function dataUrl(mime: string, bytes: Buffer): string {
+  return `data:${mime};base64,${bytes.toString("base64")}`;
+}
+
+describe("pinned native OpenCode media input", () => {
   const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
 
   it.skipIf(skip)(
     "hands a read workspace image to a model that declares image input, once and byte for byte",
     async () => {
-      await withRun(true, startGateway, async (run) => {
+      await withRun(IMAGE_INPUT, startGateway, async (run) => {
         expect(modelCapabilities(run.config)).toEqual({
           tools: true,
           input: ["text", "image"],
           output: ["text"],
         });
-        const followUp = await readScriptedImage(run);
-        const images = imageParts(followUp);
+        const followUp = await readScripted(run, IMAGE_FILE);
+        const images = mediaParts(followUp, "image_url");
         expect(images).toHaveLength(1);
         const url = object(images[0]?.part.image_url)?.url;
-        expect(url).toBe(`data:image/png;base64,${run.fixture.png.toString("base64")}`);
+        expect(url).toBe(dataUrl("image/png", run.fixture.png));
         // The production validator admits exactly what the original runtime emitted.
         const admitted = parseImageUrlContentPart(images[0]?.part);
         expect(admitted).toEqual({ kind: "ok", part: images[0]?.part });
@@ -717,14 +773,14 @@ describe("pinned native OpenCode image input", () => {
   it.skipIf(skip)(
     "control: a model that declares text only receives no image and none of the file's bytes",
     async () => {
-      await withRun(false, startGateway, async (run) => {
+      await withRun(TEXT_ONLY, startGateway, async (run) => {
         expect(modelCapabilities(run.config)).toEqual({
           tools: true,
           input: ["text"],
           output: ["text"],
         });
-        const followUp = await readScriptedImage(run);
-        expect(imageParts(followUp)).toHaveLength(0);
+        const followUp = await readScripted(run, IMAGE_FILE);
+        expect(mediaParts(followUp, "image_url")).toHaveLength(0);
         // The original runtime itself tells the model it cannot see the image, as standalone.
         expect(toolResultText(followUp)).toContain("does not support image input");
         expect(JSON.stringify(followUp.body)).not.toContain(run.fixture.png.toString("base64"));
@@ -733,13 +789,53 @@ describe("pinned native OpenCode image input", () => {
     },
     120_000,
   );
+
+  it.skipIf(skip)(
+    "hands a read workspace PDF to a model that declares PDF input, once and byte for byte",
+    async () => {
+      await withRun(PDF_INPUT, startGateway, async (run) => {
+        expect(modelCapabilities(run.config)).toEqual({
+          tools: true,
+          input: ["text", "pdf"],
+          output: ["text"],
+        });
+        const followUp = await readScripted(run, PDF_FILE);
+        const documents = mediaParts(followUp, "file");
+        expect(documents).toHaveLength(1);
+        expect(documents[0]?.role).toBe("user");
+        const file = object(documents[0]?.part.file);
+        expect(file?.file_data).toBe(dataUrl("application/pdf", run.fixture.pdf));
+        // The production validator admits what the original runtime emitted, bytes unchanged.
+        const admitted = parseFileContentPart(documents[0]?.part);
+        if (admitted.kind !== "ok") throw new Error("expected the PDF part to be admitted");
+        expect(admitted.part.file.file_data).toBe(file?.file_data);
+        expect(mediaParts(followUp, "image_url")).toHaveLength(0);
+      });
+    },
+    120_000,
+  );
+
+  it.skipIf(skip)(
+    "control: a model that declares text only receives no PDF and none of the document's bytes",
+    async () => {
+      await withRun(TEXT_ONLY, startGateway, async (run) => {
+        const followUp = await readScripted(run, PDF_FILE);
+        expect(mediaParts(followUp, "file")).toHaveLength(0);
+        // The original runtime itself tells the model it cannot read the PDF, as standalone.
+        expect(toolResultText(followUp)).toContain("does not support pdf input");
+        expect(JSON.stringify(followUp.body)).not.toContain(run.fixture.pdf.toString("base64"));
+      });
+    },
+    120_000,
+  );
+
   it.skipIf(skip)(
     "the productive sidecar route admits the original runtime's image request and hands the gateway one image part",
     async () => {
-      await withRun(true, startProductiveGateway, async (run) => {
-        const followUp = await readThroughRoute(run);
-        expect(gatewayImageParts(followUp)).toEqual([
-          { role: "user", url: `data:image/png;base64,${run.fixture.png.toString("base64")}` },
+      await withRun(IMAGE_INPUT, startProductiveGateway, async (run) => {
+        const followUp = await readThroughRoute(run, IMAGE_FILE);
+        expect(gatewayMediaParts(followUp)).toEqual([
+          { role: "user", data: dataUrl("image/png", run.fixture.png) },
         ]);
         // The route answered every request the original runtime made with success.
         expect(run.model.statuses.length).toBeGreaterThanOrEqual(2);
@@ -750,11 +846,26 @@ describe("pinned native OpenCode image input", () => {
   );
 
   it.skipIf(skip)(
-    "control: the productive sidecar route hands the gateway no image when the runtime declares text only",
+    "the productive sidecar route admits the original runtime's PDF request and hands the gateway one file part",
     async () => {
-      await withRun(false, startProductiveGateway, async (run) => {
-        const followUp = await readThroughRoute(run);
-        expect(gatewayImageParts(followUp)).toEqual([]);
+      await withRun(PDF_INPUT, startProductiveGateway, async (run) => {
+        const followUp = await readThroughRoute(run, PDF_FILE);
+        expect(gatewayMediaParts(followUp)).toEqual([
+          { role: "user", data: dataUrl("application/pdf", run.fixture.pdf) },
+        ]);
+        expect(run.model.statuses.length).toBeGreaterThanOrEqual(2);
+        expect(run.model.statuses.every((status) => status === 200)).toBe(true);
+      });
+    },
+    120_000,
+  );
+
+  it.skipIf(skip)(
+    "control: the productive sidecar route hands the gateway no media when the runtime declares text only",
+    async () => {
+      await withRun(TEXT_ONLY, startProductiveGateway, async (run) => {
+        expect(gatewayMediaParts(await readThroughRoute(run, IMAGE_FILE))).toEqual([]);
+        expect(gatewayMediaParts(await readThroughRoute(run, PDF_FILE))).toEqual([]);
         expect(run.model.statuses.every((status) => status === 200)).toBe(true);
       });
     },

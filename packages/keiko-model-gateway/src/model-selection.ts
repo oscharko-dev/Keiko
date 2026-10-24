@@ -321,6 +321,8 @@ function codingSidecarProjection(
       maxRequestBytes: CODING_SIDECAR_MAX_REQUEST_BYTES,
       // Present only for a model whose configuration declares image input; absence is text only.
       ...(capability.supportsImageInput ? { supportsImageInput: true } : {}),
+      // Present only for a model whose PDF document input is declared or probed; absence is none.
+      ...(capability.supportsDocumentInput ? { supportsDocumentInput: true } : {}),
     },
     verification,
   };

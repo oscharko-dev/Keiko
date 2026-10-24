@@ -717,7 +717,20 @@ export interface ChatMessageImageUrlContentPart {
   };
 }
 
-export type ChatMessageContentPart = ChatMessageTextContentPart | ChatMessageImageUrlContentPart;
+/**
+ * A PDF document, inline: the OpenAI-compatible `file` part with a `data:application/pdf;base64,`
+ * URL, the shape the `document_input` readiness probe verifies (`supportsDocumentInput`).
+ */
+export interface ChatMessageFileContentPart {
+  readonly type: "file";
+  readonly file: {
+    readonly filename: string;
+    readonly file_data: string;
+  };
+}
+
+export type ChatMessageContentPart =
+  ChatMessageTextContentPart | ChatMessageImageUrlContentPart | ChatMessageFileContentPart;
 
 export interface ChatMessage {
   readonly role: "system" | "user" | "assistant" | "tool";

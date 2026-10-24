@@ -1494,9 +1494,26 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   `coding-sidecar.gateway.request-validated`, `imageInputDeclared` on the native
   `coding-runtime.readiness.phase` line); no image bytes, path or URL enter a log. Authority is
   unchanged: the read stays the policy-governed, kernel-contained native `read`. The original
-  executable shows it (`opencodeNativeImageInput.real.test.ts`): a scripted `read` of a PNG puts
+  executable shows it (`opencodeNativeMediaInput.real.test.ts`): a scripted `read` of a PNG puts
   one image part, byte for byte, in the next provider request and in the request the production
   route hands the gateway; a text-only declaration puts none.
+- **A native `read` of a PDF reaches a model that declares document input (#3906 AC1).** The same
+  path carries PDF documents. The provider model declares `pdf` input only when the admitted
+  model's verified configuration declares `supportsDocumentInput` (the gateway readiness probe
+  `document_input` sends exactly this part shape), carried as run metadata, and only on the native
+  profile. `coding-sidecar-document-parts.ts` admits the producer's `file` part
+  (`{ type: "file", file: { filename, file_data } }`, the shared `ChatMessageFileContentPart`)
+  only as an inline `application/pdf` data URL that decodes to a `%PDF-` signature, at most
+  `MAX_ATTACHMENT_BYTES`, at most 8 parts per request, on a user message; a filename that is not a
+  plain name becomes `document.pdf`. Every other case is one of five closed
+  `coding-sidecar.gateway.rejected` reasons (`document-part-invalid`, `document-mime-unsupported`,
+  `document-part-too-large`, `document-count-exceeded`, `document-input-unsupported`). The Model
+  Gateway forwards the part unchanged to OpenAI-compatible providers and charges it the same media
+  allowance as an image (`documentCount` on `gateway.prompt.admission`, `documentCount` on
+  `coding-sidecar.gateway.request-validated`); no document bytes, filename or URL enter a log. A
+  model without document input never receives the part: the original runtime answers the `read`
+  with its own unsupported-input result and the run continues text only. The original executable
+  shows both (`opencodeNativeMediaInput.real.test.ts`).
 - **A native run delivers through Keiko's delivery tools, never the shell (#3897, T12).**
   Standalone OpenCode commits and pushes through its shell. Keiko owns delivery (signed commits,
   bounded refs, ADR-0135; merge is never model-visible, ADR-0087; ADR-0138 D3), so the shell policy
