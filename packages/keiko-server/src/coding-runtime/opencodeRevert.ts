@@ -22,7 +22,11 @@ import type {
   CodingRuntimeRevertResult,
   CodingRuntimeRevertState,
 } from "./codingRuntimeRevert.js";
-import type { OpenCodeV2FileDiff, OpenCodeV2HttpClient } from "./opencodeV2HttpClient.js";
+import {
+  OPENCODE_TURN_ORIGIN_METADATA,
+  type OpenCodeV2FileDiff,
+  type OpenCodeV2HttpClient,
+} from "./opencodeV2HttpClient.js";
 
 /**
  * Turn revert for a live native OpenCode run (B3, S04), built on the producer's snapshots
@@ -260,9 +264,9 @@ async function undoLastTurn(
 ): Promise<RevertOutcome> {
   if (run.revert !== undefined) return { ok: false, reason: "already-staged" };
   // Every check precedes the interrupt: a request that cannot succeed never ends a working turn.
-  const changed = await changedFiles(run);
-  if (changed.length === 0) return { ok: false, reason: "nothing-to-undo" };
   const boundary = newestTurnBoundary(await run.client.messages(run.sessionId));
+  const changed = await changedFiles(run, boundary);
+  if (changed.length === 0) return { ok: false, reason: "nothing-to-undo" };
   if (boundary === undefined) return { ok: false, reason: "turn-boundary-missing" };
   const busy = Object.hasOwn(await run.client.active(), run.sessionId);
   // The runtime restores whole files, so a turn is undone only while every file it changed is
@@ -272,7 +276,7 @@ async function undoLastTurn(
     // The runtime refuses to rewind a busy session, so a turn in flight is stopped first; what it
     // changed by the time it stopped is then proven once more.
     if (!(await ports.abortTask(run.runId))) return { ok: false, reason: "interrupt-failed" };
-    if (!(await turnUnchanged(run, await changedFiles(run), true)))
+    if (!(await turnUnchanged(run, await changedFiles(run, boundary), true)))
       return { ok: false, reason: "workspace-changed" };
   }
   const staged = await run.client.stageRevert(run.sessionId, boundary);
@@ -308,7 +312,7 @@ async function revertState(
   if (run === undefined) return undefined;
   if (run.revert !== undefined) return { staged: true, ...countsOf(run.revert) };
   try {
-    return { staged: false, ...diffCounts(await run.client.sessionDiff(run.sessionId)) };
+    return { staged: false, ...diffCounts(await turnDiff(run)) };
   } catch (error) {
     recordRevertRefusal(ports, runId, "state", "revert-failed", undefined, error);
     return undefined;
@@ -319,24 +323,44 @@ async function revertState(
  * The first user message of the newest turn. A turn runs from the first prompt after the session
  * was last idle until its idle marker, so a prompt steered into a busy turn belongs to the same
  * turn and the boundary is the earliest user message after the previous idle marker; the markers
- * that end the newest turn itself (a restore appends one more) are skipped.
+ * that end the newest turn itself (a restore appends one more) are skipped. A turn Keiko started to
+ * continue the human's request (its automatic verification continuation) is part of that request,
+ * so the boundary reaches back across it to the human's own turn (#3904 AC3).
  */
 export function newestTurnBoundary(
   messages: readonly Readonly<Record<string, unknown>>[],
 ): string | undefined {
-  let boundary: string | undefined;
+  let boundary: { readonly id: string; readonly continuation: boolean } | undefined;
   let inTurn = false;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (message === undefined) continue;
     if (message.type === "idle") {
-      if (inTurn) break;
+      if (inTurn && boundary?.continuation !== true) break;
+      inTurn = false;
       continue;
     }
     inTurn = true;
-    if (message.type === "user" && typeof message.id === "string") boundary = message.id;
+    if (message.type === "user" && typeof message.id === "string")
+      boundary = { id: message.id, continuation: continuesRequest(message) };
   }
-  return boundary;
+  return boundary?.id;
+}
+
+function continuesRequest(message: Readonly<Record<string, unknown>>): boolean {
+  const metadata = message.metadata;
+  return (
+    typeof metadata === "object" &&
+    metadata !== null &&
+    (metadata as Readonly<Record<string, unknown>>)[OPENCODE_TURN_ORIGIN_METADATA] ===
+      "verification-continuation"
+  );
+}
+
+/** What the newest turn changed, from its human request on: Keiko's continuations included. */
+async function turnDiff(run: OpenCodeRevertRun): Promise<readonly OpenCodeV2FileDiff[]> {
+  const boundary = newestTurnBoundary(await run.client.messages(run.sessionId));
+  return run.client.sessionDiff(run.sessionId, undefined, boundary);
 }
 
 function diffCounts(files: readonly OpenCodeV2FileDiff[]): CodingRuntimeRevertCounts {
@@ -427,8 +451,13 @@ async function witnessHolds(
   });
 }
 
-async function changedFiles(run: OpenCodeRevertRun): Promise<readonly string[]> {
-  return (await run.client.sessionDiff(run.sessionId)).map((diff) => diff.file);
+async function changedFiles(
+  run: OpenCodeRevertRun,
+  boundary: string | undefined,
+): Promise<readonly string[]> {
+  return (await run.client.sessionDiff(run.sessionId, undefined, boundary)).map(
+    (diff) => diff.file,
+  );
 }
 
 /**
@@ -534,7 +563,7 @@ export function recordOpenCodeTurnImage(
 }
 
 async function turnImage(run: OpenCodeRevertRun): Promise<OpenCodeRevertWitness> {
-  const files = (await run.client.sessionDiff(run.sessionId)).map((diff) => diff.file);
+  const files = (await turnDiff(run)).map((diff) => diff.file);
   return captureWitness(run.workspaceRoot, files);
 }
 

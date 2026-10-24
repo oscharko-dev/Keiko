@@ -8170,8 +8170,11 @@ describe("verification truth at task settlement", () => {
       expect.objectContaining({
         runId: "run-1",
         taskIntent: VERIFICATION_CONTINUATION_INTENT,
+        // It continues the human's request, so an undo reaches back to it (r4368344091).
+        origin: "verification-continuation",
       }),
     );
+    expect(f.taskDispatcher.dispatch.mock.calls[0]?.[0]).not.toHaveProperty("origin");
     const continued = requireLoggedEvent(
       log.records.find(
         (line) =>

@@ -1833,7 +1833,12 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   the live authority as an operator admission, which a paused run passes; the click is the approval
   in every mode, and only the runtime's own snapshots write files, inside the task workspace. An
   undo stops the turn in flight (the runtime refuses to rewind a busy session), stages
-  `session.revert.stage` at the first user message of the newest turn and leaves the run live; the
+  `session.revert.stage` at the first user message of the newest turn and leaves the run live. A
+  turn Keiko itself starts to continue the human's request (the automatic verification
+  continuation) carries `keikoTurnOriginV1` on its prompt metadata and belongs to that request: the
+  newest turn, its `session.diff` (`from` its first user message) and its witnesses reach back
+  across it to the human's own turn, so a verification-only continuation cannot hide the human's
+  edit from the undo (r4368344091). The
   coordinator reserves the next task generation first, so the interrupted turn's cancelled outcome
   does not settle the run. While the run is live Keiko never calls `session.revert.commit`:
   committing, and the next prompt after a staged revert, delete the rewound messages, while the

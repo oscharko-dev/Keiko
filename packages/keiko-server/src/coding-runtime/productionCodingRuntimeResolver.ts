@@ -1150,12 +1150,10 @@ export function bindExplicitSkillTurns(
   explicitSkills: ExplicitSkillInvocationTracker,
 ): ProductionRuntimeTurnPort {
   return {
-    submitTurn: async (runId, text, initialContext, agent, inputs): Promise<boolean> => {
-      explicitSkills.observeTurn(text);
-      const accepted =
-        inputs === undefined
-          ? await turnPort.submitTurn(runId, text, initialContext, agent)
-          : await turnPort.submitTurn(runId, text, initialContext, agent, inputs);
+    // Handed on with exactly the arguments it came with, so a plain turn stays a plain call.
+    submitTurn: async (...turn): Promise<boolean> => {
+      explicitSkills.observeTurn(turn[1]);
+      const accepted = await turnPort.submitTurn(...turn);
       if (!accepted) explicitSkills.clear();
       return accepted;
     },

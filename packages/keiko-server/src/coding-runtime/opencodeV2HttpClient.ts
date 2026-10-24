@@ -97,7 +97,16 @@ export interface OpenCodeV2PromptInputs {
   readonly id?: string | undefined;
   /** The subagents and skills the prompt mentions (S15, #3906), already checked by the caller. */
   readonly mentions?: OpenCodeV2PromptMentions | undefined;
+  /**
+   * Set when Keiko itself starts the turn to continue the human's accepted request (its automatic
+   * verification continuation). It is stored on the message as `OPENCODE_TURN_ORIGIN_METADATA`, so
+   * an undo of the newest turn reaches back to that request (#3904 AC3).
+   */
+  readonly origin?: "verification-continuation" | undefined;
 }
+
+/** The prompt metadata key that marks a turn Keiko started to continue the human's request. */
+export const OPENCODE_TURN_ORIGIN_METADATA = "keikoTurnOriginV1";
 
 /**
  * One slash command the runtime lists (`Command.Info` of the pinned 2.1.4 schema): its name and the
@@ -340,9 +349,14 @@ export interface OpenCodeV2HttpClient {
   switchAgent(sessionId: string, agent: CodingWorkbenchAgent, signal?: AbortSignal): Promise<void>;
   /**
    * The files the session's newest turn changed (`GET /api/session/{sessionID}/diff`, operation
-   * `session.diff`), without their patch text. A step still running compares against the working copy.
+   * `session.diff`), without their patch text, or, with `from`, every file changed since that user
+   * message. A step still running compares against the working copy.
    */
-  sessionDiff(sessionId: string, signal?: AbortSignal): Promise<readonly OpenCodeV2FileDiff[]>;
+  sessionDiff(
+    sessionId: string,
+    signal?: AbortSignal,
+    from?: string,
+  ): Promise<readonly OpenCodeV2FileDiff[]>;
   /**
    * Rewinds the session to just before a user message and restores the files its turn changed
    * (`POST /api/session/{sessionID}/revert/stage`, operation `session.revert.stage`). The revert is
@@ -723,6 +737,20 @@ function checkedDelivery(
   return delivery;
 }
 
+/** The message metadata Keiko reads back: the context presentation and the turn's origin. */
+function promptMetadata(
+  display: OpenCodeV2PromptDisplay | undefined,
+  origin: OpenCodeV2PromptInputs["origin"],
+): Record<string, unknown> {
+  if (display === undefined && origin === undefined) return {};
+  return {
+    metadata: {
+      ...(display === undefined ? {} : { keikoContextPresentationV1: display }),
+      ...(origin === undefined ? {} : { [OPENCODE_TURN_ORIGIN_METADATA]: origin }),
+    },
+  };
+}
+
 function promptInputFields(inputs: OpenCodeV2PromptInputs | undefined): Record<string, unknown> {
   const files = checkedFiles(inputs);
   const delivery = checkedDelivery(inputs);
@@ -822,7 +850,7 @@ function preparedPrompt(
       body: {
         text: value,
         ...inputFields,
-        ...(display === undefined ? {} : { metadata: { keikoContextPresentationV1: display } }),
+        ...promptMetadata(display, inputs?.origin),
       },
     };
   } catch (error) {
@@ -1152,11 +1180,12 @@ export function createOpenCodeV2HttpClient(
         signal,
       );
     },
-    sessionDiff: async (sessionId, signal): Promise<readonly OpenCodeV2FileDiff[]> => {
+    sessionDiff: async (sessionId, signal, from): Promise<readonly OpenCodeV2FileDiff[]> => {
       // `context=0` asks for hunks without surrounding lines: the patch text is discarded anyway.
+      const since = from === undefined ? "" : `&from=${safeMessageId(from)}`;
       const response = await request(
         "GET",
-        `/api/session/${safeSessionId(sessionId)}/diff?context=0`,
+        `/api/session/${safeSessionId(sessionId)}/diff?context=0${since}`,
         undefined,
         signal,
       );

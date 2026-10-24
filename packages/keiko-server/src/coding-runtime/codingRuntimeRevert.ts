@@ -28,6 +28,13 @@ export const CODING_RUNTIME_REVERT_REFUSALS = [
 
 export type CodingRuntimeRevertRefusal = (typeof CODING_RUNTIME_REVERT_REFUSALS)[number];
 
+/**
+ * Who started a turn the operator did not: Keiko's automatic verification continuation. Such a turn
+ * continues the human's accepted request, so an undo of the newest turn reaches back across it to
+ * that request (#3904 AC3).
+ */
+export type CodingRuntimeTurnOrigin = "verification-continuation";
+
 export interface CodingRuntimeRevertCounts {
   readonly fileCount: number;
   readonly additions: number;

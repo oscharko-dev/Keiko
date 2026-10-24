@@ -48,6 +48,7 @@ import {
   type OpenCodeLifecyclePrepareRequest,
   type OpenCodeLifecyclePrepareResult,
 } from "./codingRuntimeManager.js";
+import type { CodingRuntimeTurnOrigin } from "./codingRuntimeRevert.js";
 import type { CodingToolApprovalBridge } from "./codingToolApprovalBridge.js";
 import {
   CODING_TOOL_MAX_BODY_BYTES,
@@ -94,6 +95,7 @@ import {
   createOpenCodeV2HttpClient,
   parseOpenCodeV2ChildEndpoint,
   type OpenCodeV2HttpClient,
+  type OpenCodeV2PromptInputs,
 } from "./opencodeV2HttpClient.js";
 import { createOpenCodeNativeMessageIdMinter } from "./opencodeNativeMessageId.js";
 import {
@@ -616,6 +618,7 @@ export interface OpenCodeRunPort {
     initialContext?: string,
     agent?: CodingWorkbenchAgent,
     inputs?: AdmittedPromptInputs,
+    origin?: CodingRuntimeTurnOrigin,
   ) => Promise<boolean>;
   /**
    * What a prompt may carry besides its text on this composition's tool profile, and the two
@@ -961,7 +964,7 @@ function createSubmitTask(
   activityLog: ServerLogSink | undefined,
   selectableAgents: readonly CodingWorkbenchAgent[],
 ): OpenCodeRunPort["submitTask"] {
-  return async (runId, text, initialContext, agent, inputs): Promise<boolean> => {
+  return async (runId, text, initialContext, agent, inputs, origin): Promise<boolean> => {
     const run = readyRun(runId);
     // A delivery joins the turn in flight (`deliverPrompt`); it never starts or arms one.
     if (run === undefined || inputs?.delivery !== undefined) return false;
@@ -978,9 +981,10 @@ function createSubmitTask(
     }
     if (!(await synchronizeTurnBaseline(run))) return false;
     if (!run.runtimeAdapter.armTurn()) return false;
-    // A new turn: what an undo must find unchanged is recorded afresh from here on.
-    beginOpenCodeTurnImages(run);
-    return postTurnPrompt(run, text, initialContext, inputs, diagnostics, activityLog);
+    // A new turn: what an undo must find unchanged is recorded afresh from here on. Keiko's own
+    // continuation of the human's request keeps that request's images: its undo reaches back to it.
+    if (origin === undefined) beginOpenCodeTurnImages(run);
+    return postTurnPrompt(run, text, initialContext, inputs, diagnostics, activityLog, origin);
   };
 }
 
@@ -1053,6 +1057,22 @@ function releaseUnsentTurnInputs(
 // What separates a turn's hidden context from the operator's own text in the sent prompt.
 const PROMPT_CONTEXT_SEPARATOR = "\n\n";
 
+/** The sent turn's own id, origin and inputs; a hidden context moves the mentions by its length. */
+function turnPromptInputs(
+  id: string,
+  inputs: AdmittedPromptInputs | undefined,
+  initialContext: string | undefined,
+  origin: CodingRuntimeTurnOrigin | undefined,
+): OpenCodeV2PromptInputs {
+  const offset =
+    initialContext === undefined ? 0 : initialContext.length + PROMPT_CONTEXT_SEPARATOR.length;
+  return {
+    id,
+    ...(origin === undefined ? {} : { origin }),
+    ...runtimePromptInputs(inputs, offset),
+  };
+}
+
 async function postTurnPrompt(
   run: ReadyRun,
   text: string,
@@ -1060,6 +1080,7 @@ async function postTurnPrompt(
   inputs: AdmittedPromptInputs | undefined,
   diagnostics: ServerDiagnosticSink | undefined,
   activityLog: ServerLogSink | undefined,
+  origin?: CodingRuntimeTurnOrigin,
 ): Promise<boolean> {
   // A turn that is not a command must never take a command's presentation.
   run.commandPresentation.disarm();
@@ -1083,16 +1104,7 @@ async function postTurnPrompt(
             displayText: text,
             hiddenContextSha256: createHash("sha256").update(initialContext).digest("hex"),
           },
-      // A hidden context leads the sent text, so the mentions move by its length and the separator.
-      {
-        id,
-        ...runtimePromptInputs(
-          inputs,
-          initialContext === undefined
-            ? 0
-            : initialContext.length + PROMPT_CONTEXT_SEPARATOR.length,
-        ),
-      },
+      turnPromptInputs(id, inputs, initialContext, origin),
     );
   };
   try {

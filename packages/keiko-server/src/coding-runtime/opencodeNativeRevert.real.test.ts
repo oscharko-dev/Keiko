@@ -667,6 +667,48 @@ describe("pinned native OpenCode undo semantics", () => {
     180_000,
   );
 
+  // r4368344091: Keiko's automatic verification continuation runs as a native turn of its own after
+  // the human's edit turn and changes nothing, so the producer's newest-turn diff is empty. The undo
+  // must still reach the human's edit: the continuation is marked as continuing that request.
+  it.skipIf(skip)(
+    "Keiko undoes and restores the human's edit across its own verification continuation",
+    async () => {
+      await withRun(async (run) => {
+        const { port, state } = keikoRevertPort(run);
+        await settledTurn(run, state, editCall("original", "human"), "Edit the notes file.");
+        await agentWrote(state);
+        const before = run.gateway.requests.length;
+        run.gateway.call = { name: "read", arguments: { path: FIXTURE_FILE } };
+        run.gateway.toolTurns = 1;
+        await run.service.client.prompt(run.sessionId, "Verify.", undefined, undefined, {
+          origin: "verification-continuation",
+        });
+        await expect
+          .poll(() => run.gateway.requests.length, { timeout: 60_000 })
+          .toBeGreaterThanOrEqual(before + 2);
+        await expect.poll(() => sessionIsIdle(run), { timeout: 30_000 }).toBe(true);
+        recordOpenCodeTurnImage(state, undefined);
+        await state.turnImage;
+        // The producer's own newest turn is the continuation, which changed nothing.
+        expect(await run.service.client.sessionDiff(run.sessionId)).toEqual([]);
+        const [human, continuation] = await userMessageIds(run);
+        expect(continuation).toBeDefined();
+        expect(await port.revertState("run")).toEqual({
+          staged: false,
+          fileCount: 1,
+          additions: 1,
+          deletions: 1,
+        });
+        expect(await port.revertTurn("run", "undo")).toMatchObject({ ok: true, fileCount: 1 });
+        expect(workspaceFile(run)).toBe(ORIGINAL_CONTENT);
+        expect(await sessionRevert(run)).toMatchObject({ messageID: human });
+        expect(await port.revertTurn("run", "restore")).toMatchObject({ ok: true, fileCount: 1 });
+        expect(workspaceFile(run)).toBe("revert fixture human\n");
+      });
+    },
+    120_000,
+  );
+
   it.skipIf(skip)(
     "Keiko undoes only the newest turn and restores it, counting files without reading content",
     async () => {

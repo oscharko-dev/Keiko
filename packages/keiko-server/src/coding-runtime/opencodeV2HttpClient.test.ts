@@ -218,6 +218,30 @@ describe("OpenCode V2 prompt inputs", () => {
     );
   });
 
+  // r4368344091: Keiko's verification continuation is marked on its message, beside a presentation.
+  it("marks a turn Keiko started to continue the request in the message metadata", async () => {
+    const { client, fetch } = promptClient();
+    await client.prompt("ses_prompt_1", "verify", undefined, undefined, {
+      origin: "verification-continuation",
+    });
+    expect(sentBody(fetch)).toEqual({
+      text: "verify",
+      metadata: { keikoTurnOriginV1: "verification-continuation" },
+    });
+    const display = { displayText: "shown", hiddenContextSha256: "a".repeat(64) };
+    await client.prompt("ses_prompt_1", "hidden\n\nshown", undefined, display, {
+      origin: "verification-continuation",
+    });
+    const second = fetch.mock.calls[1]?.[1]?.body;
+    expect(typeof second === "string" ? JSON.parse(second) : undefined).toEqual({
+      text: "hidden\n\nshown",
+      metadata: {
+        keikoContextPresentationV1: display,
+        keikoTurnOriginV1: "verification-continuation",
+      },
+    });
+  });
+
   it.each(["steer", "queue"] as const)(
     "sends delivery %s to the session prompt route beside the text",
     async (delivery) => {
@@ -577,6 +601,18 @@ describe("OpenCode V2 session diff and revert", () => {
     expect(init).toMatchObject({ method: "GET", redirect: "manual" });
     expect(init?.headers).toMatchObject({ Authorization: AUTHORIZATION });
     expect(init?.body).toBeUndefined();
+  });
+
+  it("reads every file changed since a user message, and refuses a malformed one", async () => {
+    const { client, fetch } = clientWith(() => json({ data: [] }));
+
+    await client.sessionDiff("ses_diff_1", undefined, "msg_human_1");
+
+    expect(fetch.mock.calls[0]?.[0]).toEqual(
+      new URL("http://127.0.0.1:1984/api/session/ses_diff_1/diff?context=0&from=msg_human_1"),
+    );
+    await expect(client.sessionDiff("ses_diff_1", undefined, "msg_a&to=x")).rejects.toThrow();
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
   it.each([

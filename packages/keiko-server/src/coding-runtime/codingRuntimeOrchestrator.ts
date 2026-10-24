@@ -3159,6 +3159,7 @@ export class CodingRuntimeOrchestrator {
         requestId: `verification-continuation-${String(attempt)}`,
         expectedRevision: live.revision,
         taskIntent: VERIFICATION_CONTINUATION_INTENT,
+        origin: "verification-continuation",
       });
     } catch (error) {
       recordVerificationContinuation(

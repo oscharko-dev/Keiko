@@ -18,6 +18,7 @@ import type {
   CodingRuntimeRevertRefusal,
   CodingRuntimeRevertResult,
   CodingRuntimeRevertState,
+  CodingRuntimeTurnOrigin,
 } from "./codingRuntimeRevert.js";
 import type { OpenCodeRunPort } from "./opencodeRuntimeComposition.js";
 import type {
@@ -192,6 +193,7 @@ export interface ProductionRuntimeTurnPort {
     initialContext?: string,
     agent?: CodingWorkbenchAgent,
     inputs?: AdmittedPromptInputs,
+    origin?: CodingRuntimeTurnOrigin,
   ) => Promise<boolean>;
   /**
    * Admits the inputs a prompt carries beside its text (ADR-0137 D10): a message that joins the
@@ -639,10 +641,7 @@ function stoppedRun(): ReturnType<CodingRuntimeManager["stop"]> {
 
 export function createOpenCodeRuntimeTurnPort(runPort: OpenCodeRunPort): ProductionRuntimeTurnPort {
   return {
-    submitTurn: (runId, text, initialContext, agent, inputs) =>
-      inputs === undefined
-        ? runPort.submitTask(runId, text, initialContext, agent)
-        : runPort.submitTask(runId, text, initialContext, agent, inputs),
+    submitTurn: (...turn) => runPort.submitTask(...turn),
     selectableAgents: runPort.selectableAgents,
     ...(runPort.admitPromptInputs === undefined || runPort.deliverPrompt === undefined
       ? {}
@@ -1083,13 +1082,15 @@ async function submitReservedRuntimeTask(
 }
 
 // A plain turn is handed to the port with the arguments it always had; the admitted inputs ride as
-// one more argument only when there are some.
+// one more argument only when there are some, and the origin of a turn Keiko started after them.
 function submitTurn(
   record: ProductionRuntimeRunRecord,
   request: CodingRuntimeTaskDispatchRequest,
   inputs: AdmittedPromptInputs | undefined,
 ): Promise<boolean> {
-  const { runId, taskIntent, initialContext, agent } = request;
+  const { runId, taskIntent, initialContext, agent, origin } = request;
+  if (origin !== undefined)
+    return record.turnPort.submitTurn(runId, taskIntent, initialContext, agent, inputs, origin);
   return inputs === undefined
     ? record.turnPort.submitTurn(runId, taskIntent, initialContext, agent)
     : record.turnPort.submitTurn(runId, taskIntent, initialContext, agent, inputs);

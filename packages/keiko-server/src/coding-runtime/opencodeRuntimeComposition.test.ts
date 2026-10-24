@@ -227,6 +227,7 @@ interface OpenCodeRuntimeComposition {
       initialContext?: string,
       agent?: "build" | "plan",
       inputs?: AdmittedPromptInputs,
+      origin?: "verification-continuation",
     ) => Promise<boolean>;
     /** What a prompt may carry besides its text, and the operations that honour it (ADR-0137 D10). */
     readonly promptInputs?:
@@ -7242,6 +7243,37 @@ describe("primary agent selection on the run port (#3897)", () => {
         },
       ]);
       expect(JSON.stringify(lines)).not.toMatch(/outline it|refine it|now build/u);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  // r4368344091: Keiko's verification continuation is marked on its message, so an undo reaches
+  // back to the human's request; an operator's turn carries no origin.
+  it("marks Keiko's verification continuation on its prompt and an operator's turn not", async () => {
+    const { control, promptBodies } = agentControl({ readToolProfile: () => "native" });
+    const fixture = await startBridgeFixture(agentFacade, undefined, control);
+    try {
+      const port = fixture.runtime.runPort;
+      await expect(port.submitTask(FIXTURE_RUN_ID, "human task")).resolves.toBe(true);
+      await settleTurn(port);
+      await expect(
+        port.submitTask(
+          FIXTURE_RUN_ID,
+          "Verify.",
+          undefined,
+          undefined,
+          undefined,
+          "verification-continuation",
+        ),
+      ).resolves.toBe(true);
+      expect(parsedBodies(promptBodies)).toEqual([
+        turnPrompt({ text: "human task" }),
+        turnPrompt({
+          text: "Verify.",
+          metadata: { keikoTurnOriginV1: "verification-continuation" },
+        }),
+      ]);
     } finally {
       await fixture.stop();
     }

@@ -12,7 +12,11 @@ import type {
 import type { CodingRuntimeHost } from "./codingRuntimeControlPlane.js";
 import type { CodingRuntimeMentionables } from "./opencodeCommands.js";
 import type { CodingRuntimeInboxItems, CodingRuntimeInboxResult } from "./codingRuntimeInbox.js";
-import type { CodingRuntimeRevertResult, CodingRuntimeRevertState } from "./codingRuntimeRevert.js";
+import type {
+  CodingRuntimeRevertResult,
+  CodingRuntimeRevertState,
+  CodingRuntimeTurnOrigin,
+} from "./codingRuntimeRevert.js";
 
 export type CodingRuntimeTaskOutcome = "cancelled" | "failed" | "succeeded";
 
@@ -69,6 +73,12 @@ export interface CodingRuntimeTaskDispatchRequest extends CodingRuntimeRunOperat
    * run's runtime lists every one before anything is reserved.
    */
   readonly mentions?: CodingWorkbenchPromptMentions | undefined;
+  /**
+   * Set only by the orchestrator's automatic verification continuation: Keiko starts the turn to
+   * continue the human's accepted request, so an undo of the newest turn reaches back to that
+   * request instead of stopping at the continuation (#3904 AC3). Absent is an operator's turn.
+   */
+  readonly origin?: CodingRuntimeTurnOrigin | undefined;
 }
 
 /** One undo or restore of the run's newest turn, admitted like any other operator operation. */

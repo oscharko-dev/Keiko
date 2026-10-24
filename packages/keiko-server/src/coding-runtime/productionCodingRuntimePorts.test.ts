@@ -197,6 +197,26 @@ describe("production coding runtime turn ports", () => {
       expect(submitTurn).not.toHaveBeenCalled();
     });
 
+    // r4368344091: the origin of Keiko's verification continuation reaches the run's port, which
+    // marks the turn so an undo reaches back to the human's request; an operator's turn has none.
+    it("hands the verification continuation's origin to the turn and the run port", async () => {
+      const submitTask = vi.fn<OpenCodeRunPort["submitTask"]>(() => Promise.resolve(true));
+      const turnPort = createOpenCodeRuntimeTurnPort(openCodeRunPort(submitTask));
+      const dispatcher = createProductionRuntimeTaskDispatcher(
+        new Map([["run-origin", record("run-origin", turnPort)]]),
+      );
+
+      await expect(
+        dispatcher.dispatch({
+          ...operation("run-origin", "verification-continuation-1", 1, "Verify."),
+          origin: "verification-continuation",
+        }),
+      ).resolves.toMatchObject({ ok: true });
+      expect(submitTask.mock.calls).toEqual([
+        ["run-origin", "Verify.", undefined, undefined, undefined, "verification-continuation"],
+      ]);
+    });
+
     it("hands a replacement's agent to the turn once the predecessor settled", async () => {
       const submitTurn = vi.fn<ProductionRuntimeRunRecord["turnPort"]["submitTurn"]>(() =>
         Promise.resolve(true),

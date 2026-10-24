@@ -199,6 +199,43 @@ describe("newestTurnBoundary", () => {
     expect(newestTurnBoundary(switched)).toBe("msg_user");
   });
 
+  // r4368344091: Keiko's automatic verification continuation is a turn of its own in the runtime,
+  // but it continues the human's request, so the undo boundary reaches back to that request.
+  const CONTINUED = [
+    ...TURN,
+    {
+      id: "msg_continue",
+      type: "user",
+      metadata: { keikoTurnOriginV1: "verification-continuation" },
+    },
+    { id: "msg_continue_reply", type: "assistant" },
+    { id: "msg_continue_idle", type: "idle" },
+  ];
+
+  it("reaches back across Keiko's verification continuations to the human's request", () => {
+    expect(newestTurnBoundary(CONTINUED)).toBe("msg_turn_user");
+    const twice = [
+      ...CONTINUED,
+      {
+        id: "msg_again",
+        type: "user",
+        metadata: { keikoTurnOriginV1: "verification-continuation" },
+      },
+      { id: "msg_again_idle", type: "idle" },
+    ];
+    expect(newestTurnBoundary(twice)).toBe("msg_turn_user");
+  });
+
+  it("stops at the human's newest request and treats any other metadata as human", () => {
+    expect(
+      newestTurnBoundary([
+        ...CONTINUED,
+        { id: "msg_human", type: "user", metadata: { keikoTurnOriginV1: "other" } },
+        { id: "msg_human_idle", type: "idle" },
+      ]),
+    ).toBe("msg_human");
+  });
+
   it.each([
     ["no messages", []],
     ["only idle markers", [{ id: "msg_idle", type: "idle" }]],
@@ -660,6 +697,42 @@ describe("revert state", () => {
       additions: 6,
       deletions: 1,
     });
+  });
+
+  it("counts from the human's request on, across Keiko's verification continuation", async () => {
+    const { port, client } = subject({
+      messages: [
+        ...TURN,
+        {
+          id: "msg_continue",
+          type: "user",
+          metadata: { keikoTurnOriginV1: "verification-continuation" },
+        },
+        { id: "msg_continue_idle", type: "idle" },
+      ],
+    });
+
+    await expect(port.revertState(RUN_ID)).resolves.toMatchObject({ staged: false, fileCount: 1 });
+    expect(client.sessionDiff).toHaveBeenCalledWith(SESSION_ID, undefined, "msg_turn_user");
+  });
+
+  it("stages the undo at the human's request across Keiko's continuation", async () => {
+    const { port, run, client } = subject({
+      messages: [
+        ...TURN,
+        {
+          id: "msg_continue",
+          type: "user",
+          metadata: { keikoTurnOriginV1: "verification-continuation" },
+        },
+        { id: "msg_continue_idle", type: "idle" },
+      ],
+    });
+    await agentWrote(run, ["a.txt"]);
+
+    await expect(port.revertTurn(RUN_ID, "undo")).resolves.toMatchObject({ ok: true });
+    expect(client.stageRevert).toHaveBeenCalledWith(SESSION_ID, "msg_turn_user");
+    expect(client.sessionDiff).toHaveBeenCalledWith(SESSION_ID, undefined, "msg_turn_user");
   });
 
   it("reports the staged counts without asking the runtime again", async () => {
