@@ -187,6 +187,12 @@ tags and is narrower than the full producer's two separately bounded outputs; no
 Callers release retained graphs with `close`; released resolvers cannot be reused.
 Unsupported or unresolved semantic situations remain incomplete or fail closed. Runtime semantic qualification and further migration/scope activation remain subsequent #3918 checkpoints.
 
+Declaration-position lookup visits only parsed raw spans that can contain the requested UTF-16
+offset. It charges every inspected node, including a pruned sibling, through the unchanged
+cumulative node ruler. Selection still uses token start, exclusive end and the last minimum raw-span
+candidate in TypeScript preorder; leading trivia retains the SourceFile fallback. This avoids
+walking unrelated descendant subtrees without caching ASTs or changing any budget.
+
 Incoming member references use actual checker-owned properties and canonical declaration provenance,
 including dot access, literal/template element access and bounded immutable const key/callee aliases.
 Inert TypeScript syntax preserves call classification. Keys derive from actual literal/const

@@ -5,13 +5,24 @@ import { execFileSync } from "node:child_process";
 import { createRequire, SourceMap } from "node:module";
 import { isDeepStrictEqual } from "node:util";
 import ts from "typescript";
-import { subjectPath, visitCompilerNodes } from "./code-quality-compiler.mjs";
+import { subjectPath } from "./code-quality-compiler.mjs";
+import { chargeSymbolVisits } from "./code-quality-policy.mjs";
+
+function visitPositionNodes(compiler, node, offset, visit) {
+  chargeSymbolVisits(compiler.state);
+  // Raw spans include trivia and contain every parsed child span.
+  if (node.pos > offset || node.end <= offset) return;
+  visit(node);
+  ts.forEachChild(node, (child) => {
+    visitPositionNodes(compiler, child, offset, visit);
+  });
+}
 
 export function compilerNodeAt(compiler, source, offset) {
   if (!Number.isSafeInteger(offset) || offset < 0 || offset >= source.text.length)
     throw new TypeError("invalid-symbol-position");
   let selected = source;
-  visitCompilerNodes(compiler.state, source, (node) => {
+  visitPositionNodes(compiler, source, offset, (node) => {
     if (
       node.getStart(source) <= offset &&
       node.end > offset &&

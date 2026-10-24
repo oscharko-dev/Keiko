@@ -24,7 +24,7 @@ import ts from "typescript";
 import { createCompilerContext, visitCompilerNodes } from "../lib/code-quality-compiler.mjs";
 import * as productionModuleFacts from "../lib/code-quality-production.mjs";
 import { SYMBOL_LIMITS } from "../lib/code-quality-policy.mjs";
-import { declarationMapPosition } from "../lib/code-quality-provenance.mjs";
+import { compilerNodeAt, declarationMapPosition } from "../lib/code-quality-provenance.mjs";
 import { createSymbolResolver } from "../lib/code-quality-symbols.mjs";
 import {
   createConsumerSeamFixture,
@@ -91,6 +91,77 @@ async function fixture(options = {}) {
   return own;
 }
 const reference = { consumerPath: "src/consumer.ts", specifier: "alpha", exportName: "parse" };
+
+function positionLookupCompiler(nodes = SYMBOL_LIMITS.nodes) {
+  return { state: { nodes: 0, limits: { ...SYMBOL_LIMITS, nodes } } };
+}
+
+describe("charged declaration position lookup (#3918)", () => {
+  it("locates a declaration without traversing unrelated source subtrees", () => {
+    const unrelated = Array.from({ length: 512 }, (_, index) => `void ${index};`).join("\n");
+    const text = `function unrelated() {\n${unrelated}\n}\nfunction needle() { return 1; }`;
+    const source = ts.createSourceFile("lookup.ts", text, ts.ScriptTarget.Latest, true);
+    const target = source.statements[1].name;
+    const compiler = positionLookupCompiler(64);
+    expect(compilerNodeAt(compiler, source, target.getStart(source))).toBe(target);
+    expect(compiler.state.nodes).toBeGreaterThan(0);
+  });
+
+  it("preserves leading-trivia fallback and the last equal-span preorder selection", () => {
+    const source = ts.createSourceFile(
+      "lookup.ts",
+      "/* before */\nneedle",
+      ts.ScriptTarget.Latest,
+      true,
+    );
+    const compiler = positionLookupCompiler();
+    expect(compilerNodeAt(compiler, source, 0)).toBe(source);
+    expect(compilerNodeAt(compiler, source, source.text.indexOf("needle"))).toBe(
+      source.statements[0].expression,
+    );
+  });
+
+  it.each([-1, Number.NaN, Number.POSITIVE_INFINITY, 0.5, 6])(
+    "rejects invalid position %s before charging a traversal",
+    (offset) => {
+      const source = ts.createSourceFile("lookup.ts", "needle", ts.ScriptTarget.Latest, true);
+      const compiler = positionLookupCompiler();
+      expect(() => compilerNodeAt(compiler, source, offset)).toThrow("invalid-symbol-position");
+      expect(compiler.state.nodes).toBe(0);
+    },
+  );
+
+  it("charges siblings on both sides of the selected position before pruning", () => {
+    const source = ts.createSourceFile(
+      "lookup.ts",
+      "before;\nneedle;\nafter;",
+      ts.ScriptTarget.Latest,
+      true,
+    );
+    const selected = source.statements[1].expression;
+    const inspected = [
+      source,
+      source.statements[0],
+      source.statements[1],
+      selected,
+      source.statements[2],
+      source.endOfFileToken,
+    ];
+    const compiler = positionLookupCompiler(inspected.length);
+    const offset = selected.getStart(source);
+    expect(compilerNodeAt(compiler, source, offset)).toBe(selected);
+    expect(compiler.state.nodes).toBe(inspected.length);
+    const insufficient = positionLookupCompiler(inspected.length - 1);
+    expect(() => compilerNodeAt(insufficient, source, offset)).toThrow("symbol-node-budget");
+  });
+
+  it("charges inspected nodes and refuses an insufficient lookup budget", () => {
+    const source = ts.createSourceFile("lookup.ts", "needle", ts.ScriptTarget.Latest, true);
+    const compiler = positionLookupCompiler(1);
+    expect(() => compilerNodeAt(compiler, source, 0)).toThrow("symbol-node-budget");
+    expect(compiler.state.nodes).toBe(2);
+  });
+});
 
 describe("configured canonical symbol resolver interface (#3918)", () => {
   it.each([
