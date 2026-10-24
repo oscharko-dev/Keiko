@@ -132,7 +132,8 @@ For a machine without that original environment, or to refresh an existing porta
 npm run perf:evidence:regen:tool-catalog:portable -- --baseline origin/dev
 ```
 
-Commit the implementation first and fetch the intended baseline before running this command.
+Start from an installed checkout with `npm run build:packages` completed so the producer's workspace
+imports exist. Commit the implementation first and fetch the intended baseline before this command.
 It requires a clean checkout, a baseline that is an ancestor of HEAD, Node 24.18.0, npm 11.16.0,
 and a dedicated Linux, macOS or Windows x64/arm64 host with at least 14 logical cores. It archives
 the baseline into a separate directory, installs both lockfiles with `npm ci --ignore-scripts`,
