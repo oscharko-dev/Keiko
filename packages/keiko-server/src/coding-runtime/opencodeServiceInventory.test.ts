@@ -180,9 +180,12 @@ describe("OpenCode 2.1.4 service dispositions fail closed", () => {
         expect(paths.get(name), name).toContain("/experimental/");
       }
     }
-    const used = [...OPENCODE_SERVICE_DISPOSITIONS, ...OPENCODE_CLI_DISPOSITIONS].flatMap(
-      (entry) => (entry.disposition.kind === "refused" ? [entry.disposition.reason] : []),
-    );
+    // The vocabulary is shared with the configuration settings, which alone use `producer-inert`.
+    const used = [
+      ...OPENCODE_SERVICE_DISPOSITIONS,
+      ...OPENCODE_CLI_DISPOSITIONS,
+      ...OPENCODE_CONFIGURATION_DISPOSITIONS,
+    ].flatMap((entry) => (entry.disposition.kind === "refused" ? [entry.disposition.reason] : []));
     expect(OPENCODE_SERVICE_REFUSAL_REASONS.filter((reason) => !used.includes(reason))).toEqual([]);
   });
 

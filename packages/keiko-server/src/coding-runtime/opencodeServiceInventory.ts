@@ -331,6 +331,7 @@ export const OPENCODE_SERVICE_REFUSAL_REASONS = [
   "experimental-unadmitted",
   "host-surface",
   "not-yet-implemented",
+  "producer-inert",
 ] as const;
 
 export type OpenCodeServiceRefusalReason = (typeof OPENCODE_SERVICE_REFUSAL_REASONS)[number];
@@ -910,7 +911,7 @@ export const OPENCODE_CONFIGURATION_DISPOSITIONS = flatten<OpenCodeConfiguration
     ],
   ),
   refused(
-    "not-yet-implemented",
+    "producer-inert",
     3900,
     ["T20"],
     [

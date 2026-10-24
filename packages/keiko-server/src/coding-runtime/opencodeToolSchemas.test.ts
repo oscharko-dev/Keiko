@@ -1046,6 +1046,23 @@ describe("createOpenCodeNativeToolAdvertisement (#3897)", () => {
     expect(isGatewayNativeToolAdvertisement(advertisement)).toBe(true);
   });
 
+  // #3908 AC4: the committed capture of the pinned 2.1.4 producer's model-visible tools, which the
+  // real-binary qualification compares against the live advertisement on every pinned run.
+  it("admits the pinned 2.1.4 producer's captured tools, each native one a classified tool", () => {
+    const captured = JSON.parse(
+      readFileSync(
+        new URL("./opencodeToolSchemas.opencode-2.1.4-advertised.fixture.json", import.meta.url),
+        "utf8",
+      ),
+    ) as readonly RealAdvertisedTool[];
+    const tools = captured.map(({ name, parameters }) => ({ name, description: "", parameters }));
+    const advertisement = createOpenCodeNativeToolAdvertisement(tools, NOW, LIFETIME_MS);
+    expect(isGatewayNativeToolAdvertisement(advertisement)).toBe(true);
+    const classified = new Set(OPENCODE_NATIVE_TOOL_DEFINITIONS.map((tool) => tool.id));
+    const native = captured.map(({ name }) => name).filter((name) => !name.startsWith("keiko_"));
+    expect(native.filter((name) => !classified.has(name))).toEqual([]);
+  });
+
   it("forwards only name, description and parameters of each tool, as independent wrappers", () => {
     const input: NativeAdvertisedTool = nativeTool("read", { properties: { path: {} } });
     const carrying = { ...input, handler: "/usr/bin/anything", authority: "root" };

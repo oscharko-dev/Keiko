@@ -16,6 +16,7 @@ import { dirname, join } from "node:path";
 import type { Readable } from "node:stream";
 import { describe, expect, it } from "vitest";
 import type { McpServerDefinition, VerificationKind } from "@oscharko-dev/keiko-contracts";
+import { isGatewayNativeToolAdvertisement } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 import {
   buildRuntimeGatewaySeatbeltCommand,
   createRuntimeGatewayConfinement,
@@ -44,6 +45,7 @@ import {
 } from "./opencodeNativeMcp.js";
 import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import { createOpenCodeV2HistoryProjection } from "./opencodeV2History.js";
+import { createOpenCodeNativeToolAdvertisement } from "./opencodeToolSchemas.js";
 import {
   createNativeTreeStatusPort,
   interruptNativeTree,
@@ -1221,6 +1223,39 @@ describe("pinned native OpenCode plan tool (T19)", () => {
     120_000,
   );
 
+  // #3908 AC4: the model-visible tool schemas of the pinned producer are a committed fixture, so a
+  // producer change to any tool's parameters is a reviewed diff before admission, and the gateway
+  // admits exactly that advertisement. `KEIKO_WRITE_OPENCODE_TOOL_SCHEMAS=1` rewrites the fixture.
+  it.skipIf(skip)(
+    "advertises exactly the committed 2.1.4 tool schemas, and the gateway admits them",
+    async () => {
+      await withRun({}, async (run) => {
+        await scriptedTurn(run, PLAN_CALL);
+        const tools = (object(run.gateway.requests[0]?.body)?.tools as unknown[]).map((tool) => {
+          const definition = object(object(tool)?.function) ?? {};
+          return {
+            name: String(definition.name),
+            description: String(definition.description),
+            parameters: object(definition.parameters) ?? {},
+          };
+        });
+        const advertised = tools
+          .map(({ name, parameters }) => ({ name, parameters }))
+          .sort((left, right) => left.name.localeCompare(right.name));
+        const fixture = new URL(
+          "./opencodeToolSchemas.opencode-2.1.4-advertised.fixture.json",
+          import.meta.url,
+        );
+        if (process.env.KEIKO_WRITE_OPENCODE_TOOL_SCHEMAS === "1")
+          writeFileSync(fixture, `${JSON.stringify(advertised, null, 2)}\n`);
+        expect(advertised).toEqual(JSON.parse(readFileSync(fixture, "utf8")));
+        const offer = createOpenCodeNativeToolAdvertisement(tools, Date.now(), 60_000);
+        expect(isGatewayNativeToolAdvertisement(offer)).toBe(true);
+      });
+    },
+    120_000,
+  );
+
   // The inventory Keiko classifies is derived from the producer, so it must name what the producer
   // registers: the plan tool was recorded as `todo` while the executable registers `todowrite`,
   // which the policy then refused as an unclassified action.
@@ -1556,6 +1591,53 @@ describe("pinned native OpenCode project checks (T10, #3901)", () => {
         });
         expect(needs).toEqual([true, true, true, true, true, false]);
       });
+    },
+    120_000,
+  );
+});
+
+// ─── T20: code intelligence (#3900 AC4) ────────────────────────────────────────────────────────
+
+// The pinned producer carries the `lsp` configuration schema but no language-server client and no
+// `lsp` tool, so a configured server is a legacy setting, not a capability Keiko withholds: in Full
+// access, the widest mode, a configured server never starts around native writes, edits and reads.
+describe("pinned native OpenCode code intelligence (T20, #3900 AC4)", () => {
+  const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
+  const MARKER = "lsp-started.marker";
+  const START = `echo started >> ${MARKER}`;
+
+  it.skipIf(skip)(
+    "starts no configured language server and registers no lsp tool, while the command itself runs",
+    async () => {
+      await withRun(
+        {
+          mode: "autonomous-delivery",
+          plugins: REGISTRY_PROBE,
+          overlay: {
+            lsp: { probe: { command: ["/bin/sh", "-c", START], extensions: [".ts"] } },
+          },
+        },
+        async (run) => {
+          const marker = join(run.fixture.workspace, MARKER);
+          const results = [
+            await scriptedTurn(run, {
+              name: "write",
+              arguments: { path: "src/probe.ts", content: "export const probe: number = 1;\n" },
+            }),
+            await scriptedTurn(run, {
+              name: "edit",
+              arguments: { path: "src/probe.ts", oldString: "= 1", newString: "= 2" },
+            }),
+            await scriptedTurn(run, read("src/probe.ts")),
+          ];
+          for (const result of results) expect(result).not.toMatch(/diagnostic|lsp/iu);
+          expect(registeredToolIds(run)).not.toContain("lsp");
+          expect(existsSync(marker)).toBe(false);
+          // Positive control: the same command runs under this mode's confinement when asked to.
+          await scriptedTurn(run, shell(`/bin/sh -c '${START}'`));
+          expect(readFileSync(marker, "utf8")).toBe("started\n");
+        },
+      );
     },
     120_000,
   );
