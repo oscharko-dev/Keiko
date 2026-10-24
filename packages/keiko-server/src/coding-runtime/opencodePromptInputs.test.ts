@@ -42,6 +42,7 @@ import {
   resolvePromptReferences,
   runtimePromptInputs,
   type AdmittedPromptInputs,
+  type PromptInputsAdmission,
   type PromptInputsRefusal,
   type PromptInputsRun,
 } from "./opencodePromptInputs.js";
@@ -911,7 +912,7 @@ describe("the run port that admits and delivers prompt inputs", () => {
       expect(JSON.stringify(h.sink.events)).not.toContain("PRIVATE-TRANSPORT-DETAIL");
     });
 
-    it("keeps the id through repeated losses and charges the files once, at the acknowledged attempt", async () => {
+    it("keeps the id through repeated losses and charges the files once, when the id is first sent", async () => {
       const h = harness();
       const attach = h.port.admitPromptInputs("run-1", {
         delivery: "steer",
@@ -922,10 +923,12 @@ describe("the run port that admits and delivers prompt inputs", () => {
       h.promptFailures.push(LOST, new DOMException("timed out", "TimeoutError"));
       const send = (): Promise<boolean> => h.port.deliverPrompt("run-1", "t", attach.inputs);
       await expect(send()).resolves.toBe(false);
+      // The producer may already hold the files: they count before any acknowledgement (#4064 review).
+      expect(h.run.promptFileBytes).toBe("# readme\n".length);
       await expect(send()).resolves.toBe(false);
-      expect(h.run.promptFileBytes).toBeUndefined();
       await expect(send()).resolves.toBe(true);
       expect(sentIds(h)).toEqual(["msg_minted_1", "msg_minted_1", "msg_minted_1"]);
+      // The retries resent the same id and charged nothing again.
       expect(h.run.promptFileBytes).toBe("# readme\n".length);
     });
 
@@ -1049,17 +1052,126 @@ describe("the run port that admits and delivers prompt inputs", () => {
       expect(sentIds(h)).toEqual(["msg_minted_1", "msg_other_run"]);
     });
 
-    it("forgets the oldest unresolved ids first once the ledger is full", async () => {
+    // PR #4064 review: a delivery whose acknowledgement was lost may already reside in the
+    // producer, so its files count against the run's budget from the moment it is sent.
+    describe("the run's attachment budget across uncertain deliveries", () => {
+      const FULL = ["full-a.txt", "full-b.txt", "full-c.txt"];
+      const PROMPT_BYTES = FULL.length * OPENCODE_PROMPT_FILE_MAX_BYTES;
+
+      beforeEach(() => {
+        for (const name of FULL) {
+          writeFileSync(join(workspace, name), "x".repeat(OPENCODE_PROMPT_FILE_MAX_BYTES));
+        }
+      });
+
+      const admitFull = (h: Harness, requestId: string): PromptInputsAdmission =>
+        h.port.admitPromptInputs("run-1", {
+          delivery: "queue",
+          requestId,
+          references: FULL.map((path) => ({ path })),
+        });
+
+      async function queueSix(h: Harness): Promise<boolean[]> {
+        const admitted: boolean[] = [];
+        for (let index = 1; index <= 6; index += 1) {
+          const admission = admitFull(h, `req-${String(index)}`);
+          admitted.push(admission.ok);
+          if (admission.ok) await h.port.deliverPrompt("run-1", "queued", admission.inputs);
+        }
+        return admitted;
+      }
+
+      it("refuses the sixth prompt of three full files when every acknowledgement arrives", async () => {
+        const h = harness();
+        await expect(queueSix(h)).resolves.toEqual([true, true, true, true, true, false]);
+        expect(h.run.promptFileBytes).toBe(5 * PROMPT_BYTES);
+        expect(lines(h)[5]).toMatchObject({ outcome: "refused", reason: "references-run-budget" });
+      });
+
+      it("refuses the sixth too when every acknowledgement was lost", async () => {
+        const h = harness();
+        for (let index = 0; index < 6; index += 1) h.promptFailures.push(LOST);
+        await expect(queueSix(h)).resolves.toEqual([true, true, true, true, true, false]);
+        expect(h.prompts).toHaveLength(5);
+        expect(h.run.promptFileBytes).toBe(5 * PROMPT_BYTES);
+        expect(lines(h)).toMatchObject([
+          ...Array.from({ length: 5 }, () => ({
+            outcome: "refused",
+            reason: "delivery-unconfirmed",
+            reservedBytes: PROMPT_BYTES,
+          })),
+          { outcome: "refused", reason: "references-run-budget" },
+        ]);
+      });
+
+      it("returns the reservation of a fresh message the producer refused, and charges its retry once", async () => {
+        const h = harness();
+        const admission = admitFull(h, "req-1");
+        if (!admission.ok) throw new Error("expected admission");
+        h.promptFailures.push(new OpenCodeV2HttpStatusError(409));
+        await expect(h.port.deliverPrompt("run-1", "t", admission.inputs)).resolves.toBe(false);
+        expect(h.run.promptFileBytes).toBe(0);
+        expect(lines(h)[0]).toMatchObject({ reason: "delivery-refused", reservedBytes: 0 });
+        await expect(h.port.deliverPrompt("run-1", "t", admission.inputs)).resolves.toBe(true);
+        expect(h.run.promptFileBytes).toBe(PROMPT_BYTES);
+      });
+
+      it("keeps the reservation when a refusal answers a resent id the producer may hold", async () => {
+        const h = harness();
+        const admission = admitFull(h, "req-1");
+        if (!admission.ok) throw new Error("expected admission");
+        h.promptFailures.push(LOST, new OpenCodeV2HttpStatusError(409));
+        await h.port.deliverPrompt("run-1", "t", admission.inputs);
+        await expect(h.port.deliverPrompt("run-1", "t", admission.inputs)).resolves.toBe(false);
+        expect(h.run.promptFileBytes).toBe(PROMPT_BYTES);
+        expect(lines(h)[1]).toMatchObject({
+          reason: "delivery-refused",
+          inputBinding: "reused",
+          reservedBytes: PROMPT_BYTES,
+        });
+      });
+
+      it("refuses, unsent, a delivery whose files another admitted delivery already took", async () => {
+        const h = harness();
+        h.run.promptFileBytes = OPENCODE_PROMPT_RUN_FILES_MAX_BYTES - PROMPT_BYTES;
+        const first = admitFull(h, "req-1");
+        const second = admitFull(h, "req-2");
+        if (!first.ok || !second.ok) throw new Error("expected both admissions");
+        await expect(h.port.deliverPrompt("run-1", "one", first.inputs)).resolves.toBe(true);
+        await expect(h.port.deliverPrompt("run-1", "two", second.inputs)).resolves.toBe(false);
+        expect(h.prompts).toHaveLength(1);
+        expect(h.run.promptFileBytes).toBe(OPENCODE_PROMPT_RUN_FILES_MAX_BYTES);
+        expect(lines(h)[1]).toMatchObject({
+          outcome: "refused",
+          reason: "references-run-budget",
+          requestId: "req-2",
+        });
+      });
+    });
+
+    // PR #4064 review: forgetting an unresolved id let a retry mint a second id, and the producer,
+    // which may hold the first message, stored a second copy.
+    it("keeps every unresolved id and refuses a new request while the ledger is full of them", async () => {
       const h = harness();
-      for (let index = 0; index <= OPENCODE_NATIVE_INPUT_LEDGER_MAX; index += 1) {
+      for (let index = 0; index < OPENCODE_NATIVE_INPUT_LEDGER_MAX; index += 1) {
         h.promptFailures.push(LOST);
         await admitDelivery(h, `req-${String(index)}`)();
       }
       const before = h.prompts.length;
-      await admitDelivery(h, "req-1")();
-      expect(sentIds(h)[before], "a retained id is still resent").toBe("msg_minted_2");
-      await admitDelivery(h, "req-0")();
-      expect(sentIds(h)[before + 1], "the oldest one was forgotten").not.toBe("msg_minted_1");
+      await expect(admitDelivery(h, "req-new")()).resolves.toBe(false);
+      expect(h.prompts, "nothing was sent for the new request").toHaveLength(before);
+      expect(lines(h).at(-1)).toMatchObject({
+        outcome: "refused",
+        reason: "delivery-unresolved-limit",
+        requestId: "req-new",
+      });
+      await expect(admitDelivery(h, "req-0")()).resolves.toBe(true);
+      expect(sentIds(h)[before], "the oldest unresolved id is still resent").toBe("msg_minted_1");
+      // Its acknowledgement resolved it, so its room now serves the new request.
+      await expect(admitDelivery(h, "req-new")()).resolves.toBe(true);
+      expect(sentIds(h)[before + 1]).toBe(
+        `msg_minted_${String(OPENCODE_NATIVE_INPUT_LEDGER_MAX + 1)}`,
+      );
     });
 
     it("forgets an acknowledged id before any unresolved one", async () => {

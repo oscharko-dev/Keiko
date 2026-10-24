@@ -24,6 +24,7 @@ import {
   projectCommands,
 } from "./opencodeCommands.js";
 import {
+  OPENCODE_NATIVE_INPUT_LEDGER_MAX,
   createOpenCodePromptInputsRunPort,
   openCodePromptInputs,
   resolvePromptReferences,
@@ -39,6 +40,7 @@ import { createBufferedServerLogSink } from "../../../../tests/support/buffered-
 import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import { createOpenCodeV2HistoryProjection } from "./opencodeV2History.js";
 import {
+  OPENCODE_PROMPT_FILE_MAX_BYTES,
   OpenCodeV2HttpStatusError,
   createOpenCodeV2HttpClient,
   parseOpenCodeV2ChildEndpoint,
@@ -444,15 +446,16 @@ async function settled(run: Run): Promise<void> {
 const RUN_ID = "run-prompt-inputs";
 
 /**
- * A transport that loses the acknowledgement of the first `delivery` post AFTER the producer has
- * answered it in full: the request went out, the producer stored the input, and the answer never
- * reaches the caller. This is the failure the operator's retry has to resolve without a second input.
+ * A transport that loses the acknowledgement of the first `limit` `delivery` posts AFTER the
+ * producer has answered them in full: the request went out, the producer stored the input, and the
+ * answer never reaches the caller. This is the failure the operator's retry has to resolve without a
+ * second input.
  */
-function acknowledgementLosingFetch(state: { lost: number }): typeof globalThis.fetch {
+function acknowledgementLosingFetch(state: { lost: number }, limit = 1): typeof globalThis.fetch {
   return async (input, init): Promise<Response> => {
     const response = await fetch(input, init);
     const sent = typeof init?.body === "string" ? init.body : "";
-    if (response.url.endsWith("/prompt") && sent.includes('"delivery"') && state.lost === 0) {
+    if (response.url.endsWith("/prompt") && sent.includes('"delivery"') && state.lost < limit) {
       state.lost += 1;
       await response.arrayBuffer();
       throw new TypeError("fetch failed");
@@ -704,6 +707,99 @@ describe("pinned native OpenCode prompt inputs", () => {
           { outcome: "refused", reason: "delivery-unconfirmed", inputBinding: "bound" },
           { outcome: "accepted", inputBinding: "reused", requestId: "req-1" },
         ]);
+      });
+    },
+    120_000,
+  );
+
+  it.skipIf(skip)(
+    "counts the files of queued inputs whose acknowledgement was lost against the run's budget",
+    async () => {
+      await withRun(["tool-held", "text", "text"], async (run) => {
+        await run.client.prompt(run.sessionId, "First prompt");
+        await expect.poll(() => run.gateway.requests.length, { timeout: 30_000 }).toBe(1);
+        const files = ["full-a.txt", "full-b.txt", "full-c.txt"];
+        for (const name of files) {
+          const full = "x".repeat(OPENCODE_PROMPT_FILE_MAX_BYTES);
+          writeFileSync(join(run.fixture.workspace, name), full);
+        }
+        const lost = { lost: 0 };
+        const lossy = createOpenCodeV2HttpClient({
+          endpoint: run.endpoint,
+          password: run.password,
+          fetch: acknowledgementLosingFetch(lost, Number.POSITIVE_INFINITY),
+        });
+        const path = deliveryPath(run, lossy);
+        const admitted: boolean[] = [];
+        for (let index = 1; index <= 6; index += 1) {
+          const admission = path.port.admitPromptInputs(RUN_ID, {
+            delivery: "queue",
+            requestId: `req-${String(index)}`,
+            references: files.map((name) => ({ path: name })),
+          });
+          admitted.push(admission.ok);
+          if (!admission.ok) continue;
+          await expect(
+            path.port.deliverPrompt(RUN_ID, `Queued ${String(index)}`, admission.inputs),
+          ).resolves.toBe(false);
+        }
+        // PR #4064 review: the producer stored every input whose answer was lost, so the files of
+        // all five count and the sixth prompt no longer fits the run's budget.
+        expect(admitted).toEqual([true, true, true, true, true, false]);
+        expect(lost.lost).toBe(5);
+        const wire = await run.raw("GET", `/api/session/${run.sessionId}/inbox`);
+        const items = (object(wire.body)?.data ?? []) as unknown[];
+        expect(items.map((item) => object(item)?.delivery)).toEqual(Array(5).fill("queue"));
+        const lines = path.sink.events.map((event) => (event as { extra?: unknown }).extra);
+        const reservedBytes = files.length * OPENCODE_PROMPT_FILE_MAX_BYTES;
+        expect(lines).toMatchObject([
+          ...Array.from({ length: 5 }, () => ({ reason: "delivery-unconfirmed", reservedBytes })),
+          { outcome: "refused", reason: "references-run-budget" },
+        ]);
+      });
+    },
+    120_000,
+  );
+
+  it.skipIf(skip)(
+    "keeps every unresolved native id when the ledger is full of them and stores no second copy",
+    async () => {
+      await withRun(["tool-held", "text", "text"], async (run) => {
+        await run.client.prompt(run.sessionId, "First prompt");
+        await expect.poll(() => run.gateway.requests.length, { timeout: 30_000 }).toBe(1);
+        const lost = { lost: 0 };
+        const lossy = createOpenCodeV2HttpClient({
+          endpoint: run.endpoint,
+          password: run.password,
+          fetch: acknowledgementLosingFetch(lost, Number.POSITIVE_INFINITY),
+        });
+        const path = deliveryPath(run, lossy);
+        const deliver = async (requestId: string): Promise<boolean> => {
+          const admission = path.port.admitPromptInputs(RUN_ID, { delivery: "queue", requestId });
+          if (!admission.ok) throw new Error("expected admission");
+          return path.port.deliverPrompt(RUN_ID, `Queued ${requestId}`, admission.inputs);
+        };
+        for (let index = 0; index < OPENCODE_NATIVE_INPUT_LEDGER_MAX; index += 1) {
+          await expect(deliver(`req-${String(index)}`)).resolves.toBe(false);
+        }
+        // PR #4064 review: every one of them may be stored, so none is forgotten for a new request.
+        await expect(deliver("req-new")).resolves.toBe(false);
+        expect(lost.lost, "the new request was never posted").toBe(
+          OPENCODE_NATIVE_INPUT_LEDGER_MAX,
+        );
+        // The oldest request's retry resends its own id; the producer keeps one input for it.
+        await expect(deliver("req-0")).resolves.toBe(false);
+        expect(lost.lost).toBe(OPENCODE_NATIVE_INPUT_LEDGER_MAX + 1);
+        const wire = await run.raw("GET", `/api/session/${run.sessionId}/inbox`);
+        const items = (object(wire.body)?.data ?? []) as unknown[];
+        expect(items).toHaveLength(OPENCODE_NATIVE_INPUT_LEDGER_MAX);
+        const lines = path.sink.events.map((event) => (event as { extra?: unknown }).extra);
+        expect(lines.at(-2)).toMatchObject({
+          outcome: "refused",
+          reason: "delivery-unresolved-limit",
+          requestId: "req-new",
+        });
+        expect(lines.at(-1)).toMatchObject({ inputBinding: "reused", requestId: "req-0" });
       });
     },
     120_000,

@@ -8670,6 +8670,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      reservedBytes: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       requestId: {
         type: "string",
         dataClass: "opaque-id",
@@ -8723,6 +8728,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "mentions-unsupported",
           "delivery-refused",
           "delivery-unconfirmed",
+          "delivery-unresolved-limit",
           "delivery-unsupported",
           "reference-invalid",
           "reference-not-file",

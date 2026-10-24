@@ -151,6 +151,7 @@ export type PromptInputsRefusal =
   | "reference-unreadable"
   | "delivery-refused"
   | "delivery-unconfirmed"
+  | "delivery-unresolved-limit"
   | "request-conflict";
 
 export type PromptInputsAdmission =
@@ -322,6 +323,9 @@ const PROMPT_INPUTS_SETTLED_OPERATION = defineActivityLogOperation({
     },
     referenceCount: { type: "integer", dataClass: "count", required: true },
     attachedBytes: { type: "integer", dataClass: "count", required: false },
+    // What a refused delivery still holds against the run's attachment budget: kept while the producer
+    // may hold the message, zero once it provably never arrived.
+    reservedBytes: { type: "integer", dataClass: "count", required: false },
     // The operator request a delivery belongs to: the join key between an attempt whose
     // acknowledgement was lost and the retry that resolved it, each under its own correlation id.
     requestId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
@@ -361,6 +365,7 @@ const PROMPT_INPUTS_SETTLED_OPERATION = defineActivityLogOperation({
         "mentions-unsupported",
         "delivery-refused",
         "delivery-unconfirmed",
+        "delivery-unresolved-limit",
         "delivery-unsupported",
         "reference-invalid",
         "reference-not-file",
@@ -401,6 +406,8 @@ export type PromptInputsOutcome =
       readonly inputBinding?: PromptInputBinding | undefined;
       /** Set on a delivery that failed after admission, so the line carries the closed error kind. */
       readonly errorKind?: ActivityLogErrorKind | undefined;
+      /** Set on a delivery that failed after it was sent: what its files still hold of the budget. */
+      readonly reservedBytes?: number | undefined;
     };
 
 /**
@@ -434,12 +441,21 @@ export function recordPromptInputs(
         ...(settled.inputBinding === undefined ? {} : { inputBinding: settled.inputBinding }),
         ...commandFields(summary.command),
         ...mentionCounts(summary.mentions),
-        ...(settled.outcome === "accepted"
-          ? { attachedBytes: settled.attachedBytes }
-          : { reason: settled.reason }),
+        ...settledFields(settled),
       },
     ),
   );
+}
+
+function settledFields(settled: PromptInputsOutcome): {
+  readonly attachedBytes?: number;
+  readonly reason?: PromptInputsRefusal;
+  readonly reservedBytes?: number;
+} {
+  if (settled.outcome === "accepted") return { attachedBytes: settled.attachedBytes };
+  return settled.reservedBytes === undefined
+    ? { reason: settled.reason }
+    : { reason: settled.reason, reservedBytes: settled.reservedBytes };
 }
 
 function mentionCounts(mentions: CodingWorkbenchPromptMentions | undefined): {
@@ -626,23 +642,52 @@ function admitForRun(
   const resolved = resolvePromptReferences({
     workspaceRoot: run.workspaceRoot,
     references,
-    remainingRunBytes: OPENCODE_PROMPT_RUN_FILES_MAX_BYTES - (run.promptFileBytes ?? 0),
+    remainingRunBytes: remainingRunBytes(run),
   });
   if (!resolved.ok) return resolved;
   return { ok: true, inputs: admittedInputs(request, resolved.files, resolved.bytes) };
 }
 
+function remainingRunBytes(run: Pick<PromptInputsRun, "promptFileBytes">): number {
+  return OPENCODE_PROMPT_RUN_FILES_MAX_BYTES - (run.promptFileBytes ?? 0);
+}
+
 /**
- * The prompt was accepted by the runtime: its files now count against the run's budget and one
- * body-free line says what was attached. Called by the one place that sent the prompt.
+ * Charges a prompt's files to the run's budget before the prompt is sent. Once the request has left,
+ * the producer may hold the files whether or not its acknowledgement arrives, so the charge cannot
+ * wait for the acknowledgement (#4064 review). `false` charges nothing: a prompt admitted meanwhile
+ * left too little of the budget, and this one is refused at the same bound its admission checked.
+ */
+export function reservePromptInputs(
+  run: Pick<PromptInputsRun, "promptFileBytes">,
+  inputs: Pick<AdmittedPromptInputs, "fileBytes">,
+): boolean {
+  if (inputs.fileBytes === 0) return true;
+  if (inputs.fileBytes > remainingRunBytes(run)) return false;
+  run.promptFileBytes = (run.promptFileBytes ?? 0) + inputs.fileBytes;
+  return true;
+}
+
+/** Returns the reservation of a prompt that provably never reached the producer. */
+export function releasePromptInputs(
+  run: Pick<PromptInputsRun, "promptFileBytes">,
+  inputs: Pick<AdmittedPromptInputs, "fileBytes">,
+): void {
+  if (inputs.fileBytes === 0) return;
+  run.promptFileBytes = Math.max(0, (run.promptFileBytes ?? 0) - inputs.fileBytes);
+}
+
+/**
+ * The prompt was accepted by the runtime: one body-free line says what was attached. Its files were
+ * charged to the run when it was sent (`reservePromptInputs`) and stay charged. Called by the one
+ * place that sent the prompt.
  */
 export function acceptPromptInputs(
   activityLog: ServerLogSink | undefined,
-  run: Pick<PromptInputsRun, "runId" | "promptFileBytes">,
+  run: Pick<PromptInputsRun, "runId">,
   inputs: AdmittedPromptInputs,
   inputBinding?: PromptInputBinding,
 ): void {
-  run.promptFileBytes = (run.promptFileBytes ?? 0) + inputs.fileBytes;
   recordPromptInputs(activityLog, run.runId, inputs, {
     outcome: "accepted",
     attachedBytes: inputs.fileBytes,
@@ -651,15 +696,18 @@ export function acceptPromptInputs(
 }
 
 /**
- * The most native message ids one run retains. Past it an acknowledged id is forgotten first, then
- * the oldest unresolved one: a retry of a request whose id was forgotten that way is a new input.
+ * The most native message ids one run retains. Past it an acknowledged id is forgotten; an unresolved
+ * one never is, because the producer may hold its message and a retry under a fresh id would store a
+ * second copy (PR #4064 review). When every retained id is unresolved, a new request is refused with
+ * `delivery-unresolved-limit` until one of them is resolved.
  */
 export const OPENCODE_NATIVE_INPUT_LEDGER_MAX = 32;
 
 /**
  * One operator request's native message: the id its message was sent under and the digest of what
  * that id stands for. The id is minted once, when the request is first delivered, and kept until the
- * request is known to have been refused by the producer or is forgotten for lack of room, so every
+ * request is known to have been refused by the producer or, once acknowledged, is forgotten for lack
+ * of room, so every
  * retry of the request resends the same id.
  */
 interface NativeInputEntry {
@@ -705,7 +753,9 @@ export function nativeInputPreview(text: string): string {
 type NativeInputLedger = Map<string, NativeInputEntry>;
 
 type NativeInputBinding =
-  { readonly kind: PromptInputBinding; readonly messageId: string } | { readonly kind: "conflict" };
+  | { readonly kind: PromptInputBinding; readonly messageId: string }
+  | { readonly kind: "conflict" }
+  | { readonly kind: "ledger-full" };
 
 /**
  * What an id stands for: the delivery, the text and the files. Only the digest is kept, so a request
@@ -724,12 +774,13 @@ function messageFingerprint(text: string, inputs: AdmittedPromptInputs): string 
     .digest("hex");
 }
 
-/** Makes room for one more entry: a resolved entry goes before any unresolved one. */
-function makeRoom(ledger: NativeInputLedger): void {
-  if (ledger.size < OPENCODE_NATIVE_INPUT_LEDGER_MAX) return;
+/** Makes room for one more entry by forgetting an acknowledged one; `false` when none is. */
+function makeRoom(ledger: NativeInputLedger): boolean {
+  if (ledger.size < OPENCODE_NATIVE_INPUT_LEDGER_MAX) return true;
   const resolved = [...ledger].find(([, entry]) => entry.acknowledged);
-  const oldest = resolved ?? ledger.entries().next().value;
-  if (oldest !== undefined) ledger.delete(oldest[0]);
+  if (resolved === undefined) return false;
+  ledger.delete(resolved[0]);
+  return true;
 }
 
 /**
@@ -754,7 +805,7 @@ function bindNativeInput(
       ? { kind: "reused", messageId: held.messageId }
       : { kind: "conflict" };
   }
-  makeRoom(ledger);
+  if (!makeRoom(ledger)) return { kind: "ledger-full" };
   const messageId = mint();
   ledger.set(requestId, {
     messageId,
@@ -788,9 +839,11 @@ function acknowledgeNativeInput(context: DeliveryContext, attempt: DeliveryAttem
 /**
  * The producer did not take the message. What the retry may do depends on what the failure proves
  * about the producer's side: a refusal of a message that went out under a fresh id proves nothing was
- * stored, so the id is forgotten and the retry starts clean; anything else (the connection was lost
- * after the request was sent, the acknowledgement could not be read, or this attempt reused an id an
- * earlier attempt may have stored) leaves the id bound to the request so the retry resends it.
+ * stored, so the id is forgotten, its files' reservation is returned and the retry starts clean;
+ * anything else (the connection was lost after the request was sent, the acknowledgement could not
+ * be read, or this attempt reused an id an earlier attempt may have stored) leaves the id bound to the
+ * request so the retry resends it, and its files charged so the budget counts what the producer may
+ * hold. A retry of the same id charges nothing again.
  */
 function recordDeliveryFailure(
   context: DeliveryContext,
@@ -808,16 +861,44 @@ function recordDeliveryFailure(
     acceptPromptInputs(deps.activityLog, run, inputs, "unreconciled");
     return run.ready;
   }
-  if (failure === "not-submitted" && binding.kind === "bound" && inputs.requestId !== undefined) {
-    context.ledgerOf(run).delete(inputs.requestId);
+  const provenUnsent = failure === "not-submitted" && binding.kind === "bound";
+  if (provenUnsent) {
+    if (inputs.requestId !== undefined) context.ledgerOf(run).delete(inputs.requestId);
+    releasePromptInputs(run, inputs);
   }
   recordPromptInputs(deps.activityLog, run.runId, inputs, {
     outcome: "refused",
     reason: failure === "not-submitted" ? "delivery-refused" : "delivery-unconfirmed",
     inputBinding: binding.kind,
     errorKind: activityLogErrorKindOr(errorKindOf(error), "internal"),
+    reservedBytes: provenUnsent ? 0 : inputs.fileBytes,
   });
   return false;
+}
+
+/** Why a delivery that could not be bound to a native id is refused, unsent. */
+const BINDING_REFUSALS = {
+  conflict: "request-conflict",
+  "ledger-full": "delivery-unresolved-limit",
+  "over-budget": "references-run-budget",
+} as const satisfies Readonly<Record<string, PromptInputsRefusal>>;
+
+/**
+ * Binds the delivery to its native id and, for an id minted now, charges its files before anything
+ * is sent; a reused id's files were charged by the attempt that minted it.
+ */
+function bindDelivery(
+  context: DeliveryContext,
+  mint: () => string,
+  run: PromptInputsRun,
+  text: string,
+  inputs: AdmittedPromptInputs,
+): NativeInputBinding | { readonly kind: "over-budget" } {
+  const ledger = context.ledgerOf(run);
+  const binding = bindNativeInput(ledger, mint, text, inputs);
+  if (binding.kind !== "bound" || reservePromptInputs(run, inputs)) return binding;
+  if (inputs.requestId !== undefined) ledger.delete(inputs.requestId);
+  return { kind: "over-budget" };
 }
 
 async function sendDelivery(context: DeliveryContext, attempt: DeliveryAttempt): Promise<boolean> {
@@ -909,11 +990,11 @@ export function createOpenCodePromptInputsRunPort(
         });
         return false;
       }
-      const binding = bindNativeInput(ledgerOf(run), mint, text, inputs);
-      if (binding.kind === "conflict") {
+      const binding = bindDelivery(context, mint, run, text, inputs);
+      if (!("messageId" in binding)) {
         recordPromptInputs(deps.activityLog, runId, inputs, {
           outcome: "refused",
-          reason: "request-conflict",
+          reason: BINDING_REFUSALS[binding.kind],
         });
         return false;
       }

@@ -114,6 +114,9 @@ import { isAgentAdmitted, openCodeSelectableAgents } from "./opencodeAgents.js";
 import {
   acceptPromptInputs,
   createOpenCodePromptInputsRunPort,
+  recordPromptInputs,
+  releasePromptInputs,
+  reservePromptInputs,
   runtimePromptInputs,
   openCodePromptInputs,
   type AdmittedPromptInputs,
@@ -992,18 +995,55 @@ async function postTurnCommand(
   diagnostics: ServerDiagnosticSink | undefined,
   activityLog: ServerLogSink | undefined,
 ): Promise<boolean> {
+  if (!reserveTurnInputs(run, inputs, activityLog)) return false;
   run.commandPresentation.arm(commandDisplayText(name, text));
   try {
     await run.client.command(run.sessionId, name, text, undefined, runtimePromptInputs(inputs));
     acceptPromptInputs(activityLog, run, inputs);
     return run.ready;
   } catch (error) {
+    releaseUnsentTurnInputs(run, inputs, 1, error);
     run.commandPresentation.disarm();
     recordOpenCodeTurnFailure(diagnostics, run, "submit", error);
     recordCommandPostRefused(activityLog, run.runId, inputs, error);
     run.runtimeAdapter.cancelTurn();
     return false;
   }
+}
+
+/**
+ * Charges the turn's files to the run before its prompt is sent: once the request has left, the
+ * producer may hold them whether or not the acknowledgement arrives (#4064 review). A prompt admitted
+ * meanwhile can have left too little of the budget; this turn is then refused, with one body-free
+ * line, and cancelled like any other turn whose prompt was not sent.
+ */
+function reserveTurnInputs(
+  run: ReadyRun,
+  inputs: AdmittedPromptInputs | undefined,
+  activityLog: ServerLogSink | undefined,
+): boolean {
+  if (inputs === undefined || reservePromptInputs(run, inputs)) return true;
+  recordPromptInputs(activityLog, run.runId, inputs, {
+    outcome: "refused",
+    reason: "references-run-budget",
+  });
+  run.runtimeAdapter.cancelTurn();
+  return false;
+}
+
+/**
+ * Returns the reservation only when the failure proves the producer holds nothing: its first and
+ * only attempt was refused before it was taken. A refusal of a resent attempt may follow one that
+ * was stored, so the files stay charged.
+ */
+function releaseUnsentTurnInputs(
+  run: ReadyRun,
+  inputs: AdmittedPromptInputs | undefined,
+  attempts: number,
+  error: unknown,
+): void {
+  if (inputs === undefined || attempts !== 1) return;
+  if (classifyOpenCodeV2PromptFailure(error) === "not-submitted") releasePromptInputs(run, inputs);
 }
 
 // What separates a turn's hidden context from the operator's own text in the sent prompt.
@@ -1022,11 +1062,14 @@ async function postTurnPrompt(
   if (inputs?.command !== undefined) {
     return postTurnCommand(run, inputs.command.name, text, inputs, diagnostics, activityLog);
   }
+  if (!reserveTurnInputs(run, inputs, activityLog)) return false;
   // One id for the turn's input: a resend after a lost acknowledgement is the same input, never a
   // second one, so a lost reply does not end a turn the runtime already started (#3897 review).
   const id = mintTurnMessageId();
-  const post = (): Promise<void> =>
-    run.client.prompt(
+  let attempts = 0;
+  const post = (): Promise<void> => {
+    attempts += 1;
+    return run.client.prompt(
       run.sessionId,
       initialContext === undefined ? text : `${initialContext}${PROMPT_CONTEXT_SEPARATOR}${text}`,
       undefined,
@@ -1047,12 +1090,14 @@ async function postTurnPrompt(
         ),
       },
     );
+  };
   try {
     await postOnceMore(post, diagnostics, run);
     if (initialContext !== undefined) recordContextPresentation(activityLog, run.runId);
     if (inputs !== undefined) acceptPromptInputs(activityLog, run, inputs);
     return run.ready;
   } catch (error) {
+    releaseUnsentTurnInputs(run, inputs, attempts, error);
     recordOpenCodeTurnFailure(diagnostics, run, "submit", error);
     run.runtimeAdapter.cancelTurn();
     return false;

@@ -147,7 +147,10 @@ import type {
 } from "./opencodePromptInputs.js";
 import { OPENCODE_NATIVE_REQUIRED_PLUGINS } from "./opencodeNativePluginReadiness.js";
 import { CODING_TOOL_MAX_BODY_BYTES } from "./codingToolIpc.js";
-import { openCodeV2PromptFileData } from "./opencodeV2HttpClient.js";
+import {
+  OPENCODE_PROMPT_FILE_MAX_BYTES,
+  openCodeV2PromptFileData,
+} from "./opencodeV2HttpClient.js";
 
 const generatedToolSources = vi.hoisted(() => ({ passes: 0, utf8Bytes: 0 }));
 
@@ -8089,6 +8092,91 @@ describe("prompt inputs on the run port (ADR-0137 D10)", () => {
     } finally {
       await fixture.stop();
     }
+  });
+
+  // PR #4064 review: a turn prompt whose acknowledgement was lost may already hold its files in the
+  // producer's history, so they count against the run before any acknowledgement arrives.
+  describe("the run's attachment budget across uncertain turn prompts", () => {
+    const FULL = ["full-a.txt", "full-b.txt", "full-c.txt"];
+
+    async function budgetFixture(answers: readonly ("deliver" | "lose" | "refuse")[]): Promise<{
+      readonly fixture: Awaited<ReturnType<typeof startBridgeFixture>>;
+      readonly port: OpenCodeRuntimeComposition["runPort"];
+      readonly activityLog: ReturnType<typeof createBufferedServerLogSink>;
+    }> {
+      const workspace = realpathSync(tempDir("keiko-prompt-budget-workspace-"));
+      for (const name of FULL) {
+        writeFileSync(join(workspace, name), "x".repeat(OPENCODE_PROMPT_FILE_MAX_BYTES));
+      }
+      let posts = 0;
+      const activityLog = createBufferedServerLogSink();
+      const fixture = await startBridgeFixture(facadeStub, undefined, {
+        activityLog,
+        workspaceRoot: workspace,
+        readToolProfile: () => "native",
+        runControl: {
+          promptBodies: [],
+          abortSessions: [],
+          statusResponses: [{}],
+          promptAcknowledgement: () => answers[posts++] ?? "deliver",
+        },
+      });
+      return { fixture, port: fixture.runtime.runPort, activityLog };
+    }
+
+    async function admittedTurns(
+      port: OpenCodeRuntimeComposition["runPort"],
+      turns: number,
+    ): Promise<boolean[]> {
+      const admitted: boolean[] = [];
+      for (let index = 0; index < turns; index += 1) {
+        const admission = port.admitPromptInputs?.(FIXTURE_RUN_ID, {
+          references: FULL.map((path) => ({ path })),
+        });
+        admitted.push(admission?.ok === true);
+        if (admission?.ok === true) {
+          await port.submitTask(
+            FIXTURE_RUN_ID,
+            "read them",
+            undefined,
+            undefined,
+            admission.inputs,
+          );
+        }
+      }
+      return admitted;
+    }
+
+    it("counts the files of turns whose prompt and resend both lost their acknowledgement", async () => {
+      const lost = Array.from({ length: 12 }, () => "lose" as const);
+      const { fixture, port, activityLog } = await budgetFixture(lost);
+      try {
+        await expect(admittedTurns(port, 6)).resolves.toEqual([
+          true,
+          true,
+          true,
+          true,
+          true,
+          false,
+        ]);
+        expect(inputLines(activityLog).at(-1)).toMatchObject({
+          outcome: "refused",
+          reason: "references-run-budget",
+        });
+      } finally {
+        await fixture.stop();
+      }
+    });
+
+    it("returns the files of turns the runtime refused before taking them", async () => {
+      const refused = Array.from({ length: 6 }, () => "refuse" as const);
+      const { fixture, port } = await budgetFixture(refused);
+      try {
+        await expect(admittedTurns(port, 6)).resolves.toEqual([true, true, true, true, true, true]);
+      } finally {
+        await fixture.stop();
+      }
+    });
   });
 
   it("never starts a turn for a delivery: submitTask refuses it and arms nothing", async () => {

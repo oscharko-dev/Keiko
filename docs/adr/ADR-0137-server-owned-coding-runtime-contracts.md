@@ -1343,8 +1343,9 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   Keiko mints the id once per request, in the producer's own ascending layout
   (`opencodeNativeMessageId.ts`: `msg_`, twelve hex digits of `milliseconds * 0x1000 + counter`,
   fourteen base-62 characters, strictly ascending within the process), and the run port retains it
-  beside a digest of the message and a one-line preview of it (at most 32 per run; an acknowledged entry is
-  forgotten before any unresolved one), so a retry of the same request resends it. The client reconciles the producer's receipt against the
+  beside a digest of the message and a one-line preview of it (at most 32 per run; only an acknowledged entry is
+  forgotten for room, never an unresolved one, whose message the producer may hold: while all 32 are
+  unresolved a new request is refused unsent with `delivery-unresolved-limit`, PR #4064 review), so a retry of the same request resends it. The client reconciles the producer's receipt against the
   id it sent. A failed post is classified by what it proves about the producer: refused before any
   byte left, or answered with a declared 4xx status, the producer holds nothing and the id is
   forgotten, unless the failing attempt itself reused an id an earlier attempt may have stored;
@@ -1373,7 +1374,14 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   judged again), no hard link, no sensitive path (`isDenied`, the list the kernel boundary shares),
   at most 64 KiB per file, 192 KiB per prompt and 1 MiB per run (the runtime embeds the bytes in
   the session history that Keiko reads back whole). The first violation refuses the whole prompt
-  before anything is sent. The attachment is the runtime's `files` entry: the bytes that descriptor
+  before anything is sent. A prompt's files count against the run when it is sent, not when its
+  acknowledgement arrives: once the request has left, the producer may hold them (PR #4064 review:
+  six queued prompts whose answers were lost otherwise passed the 1 MiB bound). The charge is
+  returned only when the failure proves the producer holds nothing (its first and only attempt,
+  under a fresh id, was refused before it was taken); a retry of the same native id charges nothing
+  again, and a prompt that no longer fits because another admitted prompt was sent first is refused
+  unsent with `references-run-budget`. Turn prompts, slash commands and deliveries share this
+  rule (`reservePromptInputs` / `releasePromptInputs`). The attachment is the runtime's `files` entry: the bytes that descriptor
   read admitted, inline as a `data:text/plain;base64,` URI, and the file name. A `file://` URI is
   never sent (the client refuses it before a byte leaves), because the runtime would reopen the
   path after Keiko's check and a hard link swapped in between would reach the model instead (#3897
@@ -1385,8 +1393,9 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   `bound` minted for this request, `reused` resent from an earlier unconfirmed attempt,
   `unreconciled` accepted under another id); a delivery that failed after admission is `refused`
   with `delivery-refused` (the producer holds nothing) or `delivery-unconfirmed` (it may hold the
-  message) and the closed error kind, so a lost acknowledgement and the retry that resolved it join
-  on the request id. Never a path, name, text or message id. The composer offers Send now (Enter) and Queue (Ctrl or Cmd+Enter) while a
+  message), the closed error kind and `reservedBytes` (what its files still hold of the run's
+  budget: zero once they provably never arrived), so a lost acknowledgement and the retry that
+  resolved it join on the request id. Never a path, name, text or message id. The composer offers Send now (Enter) and Queue (Ctrl or Cmd+Enter) while a
   turn runs and the `@` picker (the Files search over the run's workspace, no second index) while
   a run runs or is paused and, for a new task, over the workspace the run will start from.
   **The first prompt takes the same references (S15).** A start may carry `references` (the same

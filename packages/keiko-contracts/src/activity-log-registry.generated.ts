@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "6770ef9977ac64ec289f4d1a29afd4c9229d915bf0e1a9ca4d44f1053e926224" as const;
+  "ae63901efa54272d0cc6fc2cd97d89e617cf092559712911fe0b52c204fbc46a" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -9577,6 +9577,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "requestId",
               type: "string",
               dataClass: "opaque-id",
+              required: false,
+            },
+            {
+              name: "reservedBytes",
+              type: "integer",
+              dataClass: "count",
               required: false,
             },
             {
