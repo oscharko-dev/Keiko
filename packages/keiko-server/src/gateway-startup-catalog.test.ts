@@ -32,6 +32,12 @@ import {
   executeLocalSupportQuery,
   DEFAULT_SUPPORT_QUERY_LIMITS,
 } from "@oscharko-dev/keiko-activity-log/reader";
+import {
+  codingWorkbenchModelEligibility,
+  isCodingWorkbenchModel,
+  isConversationEligibleModel,
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
+import type { ModelCapability } from "@oscharko-dev/keiko-contracts";
 import { activityLogOperationSchema } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { RouteContext } from "./routes.js";
 
@@ -1780,4 +1786,395 @@ it.each([
   }
   expect(encoded).not.toContain("throwaway-key");
   expect(encoded).not.toContain("provider.example.invalid");
+});
+
+// #3905: the gateway can re-point an alias to another deployment without moving its name, endpoint
+// or protocol. The tool-calling proof of the previous deployment must not survive on the new one.
+const DEPLOYMENT_BEFORE = "a".repeat(64);
+const DEPLOYMENT_AFTER = "b".repeat(64);
+
+function provenOnDeploymentConfig(
+  identity: string | undefined,
+): ReturnType<typeof parseGatewayConfig> {
+  const config = startupConfig();
+  const provider = {
+    ...requiredStartupProvider(config),
+    ...(identity === undefined ? {} : { deploymentIdentitySha256: identity }),
+  };
+  return parseGatewayConfig({
+    ...rawConfigFromCurrent({ ...config, providers: [provider] }, undefined),
+    capabilities: config.capabilities?.map((model) => ({
+      ...model,
+      toolCalling: true,
+      toolCallingVerification: {
+        status: "verified",
+        probe: "gateway-tool-calling-v1",
+        checkedAt: new Date().toISOString(),
+        configurationFingerprint: toolCallingConfigurationFingerprint(provider),
+      },
+    })),
+  });
+}
+
+function rediscoveredOn(identity: string): () => Promise<{
+  readonly modelIds: string[];
+  readonly chatModelIds: string[];
+  readonly embeddingModelIds: string[];
+  readonly modelMetadata: Record<
+    string,
+    { contextWindow: number; deploymentIdentitySha256: string }
+  >;
+}> {
+  return () =>
+    Promise.resolve({
+      ...discoveredCatalog(),
+      modelMetadata: {
+        "chat-model": { contextWindow: 64_000, deploymentIdentitySha256: identity },
+      },
+    });
+}
+
+function stubToolProbe(gate?: Promise<boolean>): { readonly toolCalls: () => number } {
+  let toolCalls = 0;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (_input: unknown, init: RequestInit) => {
+      const tools = typeof init.body === "string" && init.body.includes("report_readiness");
+      if (tools) {
+        toolCalls++;
+        await gate;
+      }
+      return Response.json({
+        choices: [
+          {
+            message: {
+              content: "OK",
+              ...(tools
+                ? {
+                    tool_calls: [
+                      { function: { name: "report_readiness", arguments: '{"status":"ok"}' } },
+                    ],
+                  }
+                : {}),
+            },
+            finish_reason: "stop",
+          },
+        ],
+      });
+    }),
+  );
+  return { toolCalls: (): number => toolCalls };
+}
+
+function onlyProvider(
+  deps: UiHandlerDeps,
+): ReturnType<typeof parseGatewayConfig>["providers"][number] {
+  const provider = deps.gatewayConfig?.current()?.providers[0];
+  if (provider === undefined) throw new TypeError("Expected the configured provider.");
+  return provider;
+}
+
+function onlyModel(deps: UiHandlerDeps): ModelCapability {
+  const model = startupModels(deps)[0];
+  if (model === undefined) throw new TypeError("Expected the configured model.");
+  return model;
+}
+
+it("withdraws a tool proof when the same alias is re-pointed to another deployment and renews it", async () => {
+  const gate = deferredValue<boolean>();
+  const probe = stubToolProbe(gate.promise);
+  const events: ServerLogEvent[] = [];
+  const deps = startupDeps(rediscoveredOn(DEPLOYMENT_AFTER), events);
+  deps.gatewayConfig?.set(provenOnDeploymentConfig(DEPLOYMENT_BEFORE), true);
+  expect(onlyModel(deps).toolCalling).toBe(true);
+  try {
+    await vi.waitFor(() => {
+      expect(probe.toolCalls()).toBe(1);
+    });
+    // The proof belonged to the previous deployment: until the new one proves itself it is withdrawn.
+    expect(onlyProvider(deps).deploymentIdentitySha256).toBe(DEPLOYMENT_AFTER);
+    expect(onlyModel(deps).toolCalling).toBe(false);
+    expect(isLiteLlmCodingReadinessPending(deps)).toBe(true);
+  } finally {
+    gate.resolve(true);
+  }
+  await vi.waitFor(() => {
+    expect(onlyModel(deps).toolCalling).toBe(true);
+  });
+  expect(onlyModel(deps).toolCallingVerification?.configurationFingerprint).toBe(
+    toolCallingConfigurationFingerprint(onlyProvider(deps)),
+  );
+  expect(catalogCompletions(events)[0]?.extra).toMatchObject({
+    outcome: "applied",
+    deploymentChangedModelCount: 1,
+  });
+});
+
+it("keeps the tool proof and sends no probe while the discovered deployment is unchanged", async () => {
+  const probe = stubToolProbe();
+  const events: ServerLogEvent[] = [];
+  const deps = startupDeps(rediscoveredOn(DEPLOYMENT_BEFORE), events);
+  deps.gatewayConfig?.set(provenOnDeploymentConfig(DEPLOYMENT_BEFORE), true);
+  await vi.waitFor(() => {
+    expect(catalogCompletions(events).length).toBeGreaterThan(0);
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(onlyModel(deps).toolCalling).toBe(true);
+  expect(probe.toolCalls()).toBe(0);
+  expect(catalogCompletions(events)[0]?.extra).toMatchObject({
+    outcome: "unchanged",
+    deploymentChangedModelCount: 0,
+  });
+});
+
+it("keeps the tool proof when a refresh states no deployment, instead of clearing the identity", async () => {
+  const probe = stubToolProbe();
+  const events: ServerLogEvent[] = [];
+  const deps = startupDeps(() => Promise.resolve(discoveredCatalog()), events);
+  deps.gatewayConfig?.set(provenOnDeploymentConfig(DEPLOYMENT_BEFORE), true);
+  await vi.waitFor(() => {
+    expect(catalogCompletions(events).length).toBeGreaterThan(0);
+  });
+  expect(onlyProvider(deps).deploymentIdentitySha256).toBe(DEPLOYMENT_BEFORE);
+  expect(onlyModel(deps).toolCalling).toBe(true);
+  expect(probe.toolCalls()).toBe(0);
+});
+
+// #3905 AC1: the completion states what the reconciliation actually did. An addition and a removal
+// are not only "updated" models; an analyzer has to tell a catalog that grew from one that shrank.
+it("records added and removed model counts from the actual reconciliation", async () => {
+  stubReadyChat();
+  const events: ServerLogEvent[] = [];
+  const deps = startupDeps(
+    () =>
+      Promise.resolve({
+        modelIds: ["replacement-chat", "second-new-chat"],
+        chatModelIds: ["replacement-chat", "second-new-chat"],
+        embeddingModelIds: [],
+      }),
+    events,
+  );
+  deps.gatewayConfig?.set(managedStartupConfig("discovered"), true);
+  await vi.waitFor(() => {
+    expect(catalogCompletions(events).length).toBeGreaterThan(0);
+  });
+  const completion = catalogCompletions(events)[0];
+  if (completion === undefined) throw new TypeError("Expected catalog completion.");
+  const record = expectActivityLogProof(
+    "gateway.catalog.automatic.completed.line",
+    formatActivityLogProofLine(completion),
+  );
+  expect(record).toMatchObject({
+    outcome: "applied",
+    configuredModelCount: 1,
+    addedModelCount: 2,
+    removedModelCount: 1,
+    updatedModelCount: 3,
+    deploymentChangedModelCount: 0,
+  });
+  expect(startupProviderIds(deps)).toEqual(["replacement-chat", "second-new-chat"]);
+});
+
+it("counts neither an addition nor a removal when only a declared limit changed", async () => {
+  stubReadyChat();
+  const events: ServerLogEvent[] = [];
+  const deps = startupDeps(
+    () =>
+      Promise.resolve({
+        ...discoveredCatalog(),
+        modelMetadata: { "chat-model": { contextWindow: 32_000 } },
+      }),
+    events,
+  );
+  deps.gatewayConfig?.set(startupConfig(), true);
+  await vi.waitFor(() => {
+    expect(catalogCompletions(events).length).toBeGreaterThan(0);
+  });
+  expect(catalogCompletions(events)[0]?.extra).toMatchObject({
+    outcome: "applied",
+    updatedModelCount: 1,
+    addedModelCount: 0,
+    removedModelCount: 0,
+    deploymentChangedModelCount: 0,
+  });
+});
+
+it("reports zero counts on every non-reconciling disposition", async () => {
+  const event = await actualCatalogCompletion("failed");
+  expect(event.extra).toMatchObject({
+    outcome: "failed",
+    updatedModelCount: 0,
+    addedModelCount: 0,
+    removedModelCount: 0,
+    deploymentChangedModelCount: 0,
+  });
+});
+
+// #3905 AC2: a catalog declaration is the gateway's claim. Neither `supports_function_calling` nor
+// any other metadata grants `toolCalling` before the live forced-tool-call probe proved it.
+it("never lets a catalog declaration grant tool calling before the live probe proved it", async () => {
+  const gate = deferredValue<boolean>();
+  const probe = stubToolProbe(gate.promise);
+  const deps = startupDeps(() =>
+    Promise.resolve({
+      ...discoveredCatalog(),
+      modelMetadata: { "chat-model": { contextWindow: 64_000, toolCalling: true } },
+    }),
+  );
+  deps.gatewayConfig?.set(startupConfig(), true);
+  try {
+    await vi.waitFor(() => {
+      expect(probe.toolCalls()).toBe(1);
+    });
+    // The declaration is in, the probe is still in flight: nothing has been proved yet.
+    expect(startupModels(deps)[0]?.toolCalling).toBe(false);
+    expect(startupModels(deps)[0]?.toolCallingVerification).toBeUndefined();
+    expect(codingWorkbenchModelEligibility(onlyModel(deps))).toBe("ineligible");
+  } finally {
+    gate.resolve(true);
+  }
+  // Positive control: the same declaration takes effect once the probe verified the deployment.
+  await vi.waitFor(() => {
+    expect(startupModels(deps)[0]?.toolCalling).toBe(true);
+  });
+  expect(startupModels(deps)[0]?.toolCallingVerification?.status).toBe("verified");
+});
+
+it("keeps a declared tool-calling model unproven when the live probe is refused", async () => {
+  let toolRequests = 0;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((_input: unknown, init: RequestInit) => {
+      const tools = typeof init.body === "string" && init.body.includes("report_readiness");
+      if (tools) toolRequests++;
+      return Promise.resolve(
+        tools
+          ? new Response("", { status: 400 })
+          : Response.json({ choices: [{ message: { content: "OK" }, finish_reason: "stop" }] }),
+      );
+    }),
+  );
+  const events: ServerLogEvent[] = [];
+  const deps = startupDeps(
+    () =>
+      Promise.resolve({
+        ...discoveredCatalog(),
+        modelMetadata: { "chat-model": { contextWindow: 64_000, toolCalling: true } },
+      }),
+    events,
+  );
+  deps.gatewayConfig?.set(startupConfig(), true);
+  await vi.waitFor(() => {
+    expect(catalogCompletions(events).length).toBeGreaterThan(0);
+    expect(toolRequests).toBeGreaterThanOrEqual(1);
+  });
+  await vi.waitFor(() => {
+    expect(isLiteLlmCodingReadinessPending(deps)).toBe(false);
+  });
+  expect(startupModels(deps)[0]?.toolCalling).toBe(false);
+  expect(startupModels(deps)[0]?.toolCallingVerification?.status).not.toBe("verified");
+});
+
+// #3905 AC4: embedding identity stays separate from coding models. A refresh that discovers an
+// embedding alias configures it as an embedding model, which no chat or Coding picker offers and
+// no tool-calling probe ever addresses.
+it("keeps a newly discovered embedding model out of the Chat and Coding pickers", async () => {
+  const probedModels: string[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((_input: unknown, init: RequestInit) => {
+      const body = typeof init.body === "string" ? init.body : "";
+      const model = /"model":"([^"]+)"/u.exec(body)?.[1];
+      if (model !== undefined) probedModels.push(model);
+      return Promise.resolve(
+        Response.json({
+          choices: [
+            {
+              message: {
+                content: "OK",
+                ...(body.includes("report_readiness")
+                  ? {
+                      tool_calls: [
+                        { function: { name: "report_readiness", arguments: '{"status":"ok"}' } },
+                      ],
+                    }
+                  : {}),
+              },
+              finish_reason: "stop",
+            },
+          ],
+        }),
+      );
+    }),
+  );
+  const events: ServerLogEvent[] = [];
+  const deps = startupDeps(
+    () =>
+      Promise.resolve({
+        modelIds: ["chat-model", "text-embedding-house"],
+        chatModelIds: ["chat-model"],
+        embeddingModelIds: ["text-embedding-house"],
+      }),
+    events,
+  );
+  deps.gatewayConfig?.set(managedStartupConfig("discovered"), true);
+  await vi.waitFor(() => {
+    expect(startupProviderIds(deps)).toContain("text-embedding-house");
+  });
+  await vi.waitFor(() => {
+    expect(startupModels(deps).find((model) => model.id === "chat-model")?.toolCalling).toBe(true);
+  });
+  const models = handleModels({ url: new URL("http://127.0.0.1/api/models") } as RouteContext, deps)
+    .body as { readonly models: readonly ModelCapability[] };
+  const embedding = models.models.find((model) => model.id === "text-embedding-house");
+  expect(embedding).toMatchObject({ kind: "embedding", toolCalling: false });
+  expect(models.models.filter(isConversationEligibleModel).map((model) => model.id)).toEqual([
+    "chat-model",
+  ]);
+  expect(models.models.filter(isCodingWorkbenchModel).map((model) => model.id)).toEqual([
+    "chat-model",
+  ]);
+  expect(probedModels).not.toContain("text-embedding-house");
+  const profile = await handleCodingSidecarGatewayProfile(
+    { correlationId: "corr-embedding-separation" } as RouteContext,
+    deps,
+  );
+  expect(profile.body).toMatchObject({ status: "available", modelAlias: "chat-model" });
+});
+
+// The readiness queue keys its six-hour cooldown by the deployment identity. A proof the gateway
+// just withdrew must not wait out the cooldown of the probe that proved the previous deployment.
+it("re-probes a re-pointed alias even inside the cooldown of the earlier deployment's probe", async () => {
+  const probe = stubToolProbe();
+  const discovery = vi
+    .fn<() => ReturnType<ReturnType<typeof rediscoveredOn>>>()
+    .mockImplementationOnce(rediscoveredOn(DEPLOYMENT_BEFORE))
+    .mockImplementation(rediscoveredOn(DEPLOYMENT_AFTER));
+  const deps = startupDeps(discovery);
+  const unproven = provenOnDeploymentConfig(DEPLOYMENT_BEFORE);
+  deps.gatewayConfig?.set(
+    {
+      ...unproven,
+      capabilities: unproven.capabilities?.map(({ toolCallingVerification: _proof, ...model }) => ({
+        ...model,
+        toolCalling: false,
+      })),
+    },
+    true,
+  );
+  await vi.waitFor(() => {
+    expect(onlyModel(deps).toolCalling).toBe(true);
+  });
+  expect(probe.toolCalls()).toBe(1);
+  deps.refreshGatewayCatalog?.("corr-repoint-inside-cooldown");
+  await vi.waitFor(() => {
+    expect(probe.toolCalls()).toBe(2);
+  });
+  await vi.waitFor(() => {
+    expect(onlyModel(deps).toolCalling).toBe(true);
+  });
+  expect(onlyProvider(deps).deploymentIdentitySha256).toBe(DEPLOYMENT_AFTER);
+  expect(onlyModel(deps).toolCallingVerification?.configurationFingerprint).toBe(
+    toolCallingConfigurationFingerprint(onlyProvider(deps)),
+  );
 });

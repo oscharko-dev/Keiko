@@ -5782,6 +5782,71 @@ describe("handleGatewaySetup", () => {
     expect(reverse).toEqual(forward);
   });
 
+  // #3905: the tool-calling proof is bound to the deployment the gateway reports behind an alias.
+  describe("deployment identity behind an alias", () => {
+    const deployment = (
+      model: string,
+      extra: { readonly id?: string; readonly apiBase?: string } = {},
+    ): Record<string, unknown> => ({
+      model_name: "shared-chat",
+      litellm_params: {
+        model,
+        ...(extra.apiBase === undefined ? {} : { api_base: extra.apiBase }),
+      },
+      model_info: { mode: "chat", ...(extra.id === undefined ? {} : { id: extra.id }) },
+    });
+    const identityOf = (data: readonly Record<string, unknown>[]): string | undefined =>
+      parseModelDiscovery({ data }).modelMetadata?.["shared-chat"]?.deploymentIdentitySha256;
+
+    it("derives one digest of the reported deployment and never echoes the raw values", () => {
+      const parsed = parseModelDiscovery({
+        data: [
+          deployment("ollama/private-model-name", {
+            id: "private-deployment-id",
+            apiBase: "http://private-backend.invalid:11434",
+          }),
+        ],
+      });
+      expect(parsed.modelMetadata?.["shared-chat"]?.deploymentIdentitySha256).toMatch(
+        /^[a-f0-9]{64}$/u,
+      );
+      const encoded = JSON.stringify(parsed);
+      for (const raw of ["private-model-name", "private-deployment-id", "private-backend"])
+        expect(encoded).not.toContain(raw);
+    });
+
+    it("changes when the gateway re-points the same alias to another deployment", () => {
+      const before = identityOf([deployment("ollama/gemma-3", { id: "dep-1" })]);
+      expect(identityOf([deployment("ollama/gemma-3", { id: "dep-1" })])).toBe(before);
+      expect(identityOf([deployment("ollama/qwen-3", { id: "dep-1" })])).not.toBe(before);
+      expect(identityOf([deployment("ollama/gemma-3", { id: "dep-2" })])).not.toBe(before);
+      expect(
+        identityOf([
+          deployment("ollama/gemma-3", { id: "dep-1", apiBase: "http://other.invalid" }),
+        ]),
+      ).not.toBe(before);
+    });
+
+    it("is independent of the order the gateway lists the replicas of one alias", () => {
+      const first = deployment("ollama/gemma-3", { id: "dep-1" });
+      const second = deployment("ollama/gemma-3", { id: "dep-2" });
+      const third = deployment("ollama/gemma-3", { id: "dep-3" });
+      const forward = identityOf([first, second, third]);
+      expect(forward).toMatch(/^[a-f0-9]{64}$/u);
+      expect(identityOf([third, second, first])).toBe(forward);
+      expect(identityOf([second, third, first])).toBe(forward);
+      expect(identityOf([first, second])).not.toBe(forward);
+    });
+
+    it("states no identity when the gateway reports no deployment", () => {
+      const parsed = parseModelDiscovery({
+        data: [{ model_name: "shared-chat", model_info: { mode: "chat" } }, { id: "listed-only" }],
+      });
+      expect(parsed.modelMetadata?.["shared-chat"]).not.toHaveProperty("deploymentIdentitySha256");
+      expect(parsed.modelMetadata?.["listed-only"]).not.toHaveProperty("deploymentIdentitySha256");
+    });
+  });
+
   it("uses conservative context geometry if one alias deployment omits its limit", () => {
     const result = parseModelDiscovery({
       data: [
@@ -8484,6 +8549,61 @@ describe("handleGatewaySetup", () => {
     );
     deps.store.close();
   });
+
+  // #3905 AC2: a management declaration (`supports_function_calling: true`) is the gateway's claim,
+  // not evidence that this deployment accepted Keiko's forced tool call. Only the live probe grants
+  // `toolCalling`; the positive control proves the same declaration does reach the capability once
+  // the probe verified it.
+  it.each([
+    { observation: "none", expected: false, verification: undefined },
+    { observation: "unverified", expected: false, verification: "unverified" },
+    { observation: "unsupported", expected: false, verification: "unsupported" },
+    { observation: "verified", expected: true, verification: "verified" },
+  ] as const)(
+    "grants tool calling from the live probe, never from a declaration ($observation)",
+    async ({ observation, expected, verification }) => {
+      const uiDir = await tempDir("keiko-gw-ui-declared-tools-");
+      const discovered = parseModelDiscovery({
+        data: [
+          {
+            model_name: "declared-tools",
+            model_info: { mode: "chat", supports_function_calling: true, max_input_tokens: 64_000 },
+          },
+        ],
+      });
+      expect(discovered.modelMetadata?.["declared-tools"]?.toolCalling).toBe(true);
+      const deps = buildUiHandlerDeps({
+        configPath: undefined,
+        evidenceDir: await tempDir("keiko-gw-ev-declared-tools-"),
+        env: { ...VAULT_ENV },
+        uiDbPath: join(uiDir, "keiko-ui.db"),
+        gatewayModelDiscovery: () => Promise.resolve(discovered),
+        gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+        gatewaySetupTester: (_config, modelIds) =>
+          Promise.resolve({
+            testedModelIds: modelIds,
+            responseFormatModelIds: [],
+            toolCallingObservations:
+              observation === "none"
+                ? []
+                : modelIds.map((modelId) => ({
+                    modelId,
+                    status: observation,
+                    checkedAt: new Date().toISOString(),
+                  })),
+          }),
+      });
+      const result = await handleGatewaySetup(
+        ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+        deps,
+      );
+      expect(result.status).toBe(200);
+      const capability = requiredCapability(requiredGatewayConfig(deps), "declared-tools");
+      expect(capability.toolCalling).toBe(expected);
+      expect(capability.toolCallingVerification?.status).toBe(verification);
+      deps.store.close();
+    },
+  );
 
   it("lets the operator explicitly mark one discovered chat model as coding-safe", async () => {
     const uiDir = await tempDir("keiko-gw-ui-coding-safe-");

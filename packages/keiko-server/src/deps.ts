@@ -674,6 +674,12 @@ export interface GatewayDiscoveredModelMetadata {
   readonly contextWindowUndeclared?: boolean | undefined;
   readonly maxOutputTokens?: number | undefined;
   readonly toolCalling?: boolean | undefined;
+  /**
+   * Digest of the deployment(s) the gateway reported behind this alias (#3905). Absent when the
+   * discovery source states none (the serving list, a group summary), which never clears an
+   * identity recorded earlier. A change withdraws the alias's tool-calling proof.
+   */
+  readonly deploymentIdentitySha256?: string | undefined;
   readonly reasoningEfforts?: readonly ModelReasoningEffort[] | undefined;
   /**
    * True when the discovery payload explicitly declared a chat-compatible mode for this model

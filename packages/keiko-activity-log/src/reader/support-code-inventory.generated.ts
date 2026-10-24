@@ -1395,6 +1395,7 @@ export const SUPPORT_CODE_MODULES: readonly string[] = [
   "keiko-server/files",
   "keiko-server/files-deny",
   "keiko-server/gateway-context-window",
+  "keiko-server/gateway-deployment-identity",
   "keiko-server/gateway-discovery-log",
   "keiko-server/gateway-error-diagnostic",
   "keiko-server/gateway-instance-cache",

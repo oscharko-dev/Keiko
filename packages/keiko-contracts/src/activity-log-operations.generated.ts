@@ -16301,6 +16301,21 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: true,
       },
+      addedModelCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      removedModelCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      deploymentChangedModelCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
       elapsedMs: {
         type: "integer",
         dataClass: "duration",

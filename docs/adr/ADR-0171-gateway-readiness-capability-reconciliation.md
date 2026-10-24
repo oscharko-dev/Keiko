@@ -141,8 +141,10 @@ reset a retry already in flight. Conversation renewal and interactive readiness 
 existing recovery paths. Rejected credentials and
 conclusive invalid catalog responses stop scheduled discovery until the connection changes or a
 browser reload requests a new check. Startup catalog
-completion records the applied, unchanged, stale, cancelled or failed disposition and configured
-and changed-model counts under a fresh correlation linked to the triggering request. Real
+completion records the applied, unchanged, stale, cancelled or failed disposition and the
+configured, changed, added, removed and redeployed model counts under a fresh correlation linked to
+the triggering request. A changed count includes the added and removed models; a redeployed model is
+one whose observed deployment identity (D5) was first recorded or replaced. Real
 completions include the current initialization ordinal and generation. An explicitly tagged
 retry-decision phase on the same operation records scheduling, delay/deadline, exhaustion,
 coalescing and cache-skip dispositions without claiming another catalog request. Failed completion
@@ -247,6 +249,21 @@ A rule that judges an instant other than now takes it as `{ nowMs }`, never as a
 `isCodingWorkbenchModel` takes the capability alone: handed point-free to `Array.filter`, a numeric
 instant receives each element's index, and coding run 25 (2026-09-11) found the Coding Workbench
 judging every model as of the epoch and offering none (F76).
+
+A proof is also bound to the deployment the gateway reports behind the alias. Alias, endpoint and
+protocol do not name it: a gateway can re-point `gemma` to another underlying model without moving
+any of the three. Discovery therefore digests the management record of every replica of the alias
+(its deployment id, underlying model, provider and backend) into one order-independent value that
+the provider records as `deploymentIdentitySha256` and the proof fingerprint
+(`toolCallingConfigurationFingerprint`) includes once it is observed. A catalog refresh that
+observes a different value withdraws the proof the same way a lapsed one is withdrawn: the alias
+stays `tool-calling-unverified`, and the readiness queue renews it under a probe key that already
+changed with the fingerprint, so the six-hour cooldown of the previous deployment's probe does not
+apply. Only digests are stored or logged. A source that states no deployment (the serving list, a
+group summary) never clears a recorded identity. The first observation on a provider that had none
+also withdraws its proof once, because nothing proves the earlier proof was issued for the
+deployment now reported. A gateway declaration such as `supports_function_calling` never grants
+`toolCalling`: only the forced live probe does.
 
 ## Consequences
 
