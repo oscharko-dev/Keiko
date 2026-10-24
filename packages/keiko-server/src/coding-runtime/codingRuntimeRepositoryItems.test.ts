@@ -721,7 +721,7 @@ describe("repository item admission", () => {
       await port.admitForRun({ runId: RUN_ID, discoveryRoot: root });
 
       // 262144 / ~30050 per copy.
-      expect(Object.keys(written(root)).length).toBe(8);
+      expect(Object.keys(written(root))).toHaveLength(8);
       const { persisted } = expectAdmissionLine(records);
       expect(persisted).toMatchObject({ skillAdmittedCount: 8, skillRefusedCount: 4 });
       expect(Number(persisted.admittedByteCount)).toBeLessThanOrEqual(262_144);

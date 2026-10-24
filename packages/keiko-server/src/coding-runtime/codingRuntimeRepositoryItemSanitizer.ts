@@ -206,7 +206,8 @@ function splitFrontmatter(
   return ok({ frontmatter: lines.slice(1, closing), body: lines.slice(closing + 1).join("\n") });
 }
 
-const KEY_LINE = /^([A-Za-z_][A-Za-z0-9_-]*):(?:[ \t]+(.*))?$/u;
+// One separating blank, then the rest of the line; the value is trimmed where it is read.
+const KEY_LINE = /^([A-Za-z_][A-Za-z0-9_-]*):(?:[ \t](.*))?$/u;
 
 // A closed subset of YAML: top-level `key: scalar` lines, and indented or `-` lines that continue
 // the key above them. Anything else (a quoted key, a merge key, a document marker, a duplicate key)

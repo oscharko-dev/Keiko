@@ -630,7 +630,11 @@ function recordRepositoryItemsAdmission(
         strippedOtherKeyCount: tally.strippedOther,
         admittedByteCount: tally.bytes,
         ...(contentSha256 === undefined ? {} : { contentSha256 }),
-        ...(tally.reasons.size === 0 ? {} : { refusalReasons: [...tally.reasons].sort() }),
+        ...(tally.reasons.size === 0
+          ? {}
+          : {
+              refusalReasons: [...tally.reasons].sort((left, right) => left.localeCompare(right)),
+            }),
         ...(reason === undefined ? {} : { reason }),
         ...(error === undefined
           ? {}

@@ -947,7 +947,7 @@ describe("pinned native OpenCode repository items", () => {
         await runCommand(run, "rawshell", "");
 
         expect(existsSync(join(run.fixture.workspace, "CANARY-raw-shell"))).toBe(true);
-        expect(run.facade.requests.length).toBe(asked);
+        expect(run.facade.requests).toHaveLength(asked);
         // The admitted copy of the same repository file never reached the producer.
         expect(existsSync(run.fixture.canaries.shellCommand)).toBe(false);
       });
