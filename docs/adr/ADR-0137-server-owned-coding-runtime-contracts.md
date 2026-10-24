@@ -1107,6 +1107,15 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   `coding-runtime.native-narrowing.refused`) instead of acknowledged while a shell or a Code Mode
   `fetch` keeps Internet access; narrowing between the modes below Full access applies in place.
   Continuing the same OpenCode session under a relaunched, narrower tree is not implemented.
+- **The plan tool is on (#3897, parity row T19, owner decision of 2026-10-24).** The pinned 2.1.4
+  producer registers its plan tool `todowrite` only under `experimental.todo` (off by default in
+  standalone), so a native run used to show no plan card. `createNativeOpenCodeV2Config` sets the
+  switch on the native profile. The policy classifies the `todowrite` action as a read in every
+  mode, Ask for approval included, and the V2 history projects its completed part as the plan
+  snapshot, never as tool activity. Proven on the original executable
+  (`opencodeNativeQualification.real.test.ts`): the production launch offers the tool and an update
+  in Ask for approval is allowed without a human and projects as the plan; the control without the
+  switch is offered no plan tool and the call is the producer's own error.
 - **Built-in formatters follow the launch mode, and only Full access runs them (#3897, parity row
   C07).** The pinned 2.1.4 producer runs a built-in formatter (`gofmt`, `rustfmt`, `shfmt`,
   `prettier`, ...) after its own `write` and `edit` as a plain child process of the runtime. No

@@ -436,6 +436,10 @@ function createNativeOpenCodeV2Config(
     providers: fixedOpenCodeV2Provider(contextGeometry, contextGeometry.imageInput === true),
     compaction: { auto: true, keep: { tokens: recent }, buffer: reserved },
     tool_output: { max_bytes: CODING_TOOL_MAX_BODY_BYTES },
+    // The producer offers its plan tool (`todowrite`) only under this switch; Keiko classifies the
+    // update as a read in every mode and projects it as the plan card (parity row T19, owner
+    // decision of 2026-10-24).
+    experimental: { todo: true },
     permissions: [
       { action: "external_directory", resource: "*", effect: "deny" },
       // Last match wins: the plan agent's own plan directory is the one admitted external path.

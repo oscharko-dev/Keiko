@@ -923,10 +923,12 @@ describe("pinned native OpenCode plan tool (T19)", () => {
     },
   };
 
+  // Owner decision of 2026-10-24: Keiko sets the producer's `experimental.todo`, which is the only
+  // way 2.1.4 offers its plan tool. The control shows what the switch decides.
   it.skipIf(skip)(
-    "does not offer the plan tool to the coding alias, and a call to it is the producer's own error",
+    "control: without the experimental.todo switch the producer offers no plan tool and refuses a call",
     async () => {
-      await withRun({}, async (run) => {
+      await withRun({ overlay: { experimental: { todo: false } } }, async (run) => {
         const result = await scriptedTurn(run, PLAN_CALL);
         expect(advertisedToolNames(run.gateway)).not.toContain("todowrite");
         expect(advertisedToolNames(run.gateway)).not.toContain("todo");
@@ -943,44 +945,41 @@ describe("pinned native OpenCode plan tool (T19)", () => {
   );
 
   it.skipIf(skip)(
-    "control: under the producer's experimental.todo switch the update is a read and projects as the plan card",
+    "offers the plan tool; its update is a read in Ask for approval and projects as the plan card",
     async () => {
       // Ask for approval refuses every effect without a human, so an allowed plan update proves it
       // is classified as a read in the strictest mode.
-      await withRun(
-        { overlay: { experimental: { todo: true } }, mode: "governed-assist", approveAsks: false },
-        async (run) => {
-          const result = await scriptedTurn(run, PLAN_CALL);
-          expect(advertisedToolNames(run.gateway)).toContain("todowrite");
-          expect(advertisedToolNames(run.gateway)).not.toContain("todo");
-          expect(result).toBe(
-            'Todos updated: 0/2 completed, 1 in progress, 1 pending. In progress: "Step one"',
-          );
-          expect(run.facade.decisions).toEqual([
-            { permission: "todowrite", resources: ["*"], effect: "allow" },
-          ]);
-          const projection = createOpenCodeV2HistoryProjection({
-            runId: RUN_ID,
-            activityLog: undefined,
-            toolProfile: "native",
-          });
-          const signals = projection
-            .project(run.sessionId, await run.client.messages(run.sessionId), undefined)
-            .flatMap((event) => projection.takeSignal(event) ?? []);
-          // A plan snapshot and no productive tool activity for the plan tool.
-          expect(signals.filter(isPlanOrTool)).toEqual([
-            {
-              kind: "plan",
-              anchorMessageId: expect.stringMatching(/^msg_/u) as string,
-              steps: [
-                { text: "Step one", state: "active" },
-                { text: "Step two", state: "pending" },
-              ],
-              occurredAt: expect.any(String) as string,
-            },
-          ]);
-        },
-      );
+      await withRun({ mode: "governed-assist", approveAsks: false }, async (run) => {
+        const result = await scriptedTurn(run, PLAN_CALL);
+        expect(advertisedToolNames(run.gateway)).toContain("todowrite");
+        expect(advertisedToolNames(run.gateway)).not.toContain("todo");
+        expect(result).toBe(
+          'Todos updated: 0/2 completed, 1 in progress, 1 pending. In progress: "Step one"',
+        );
+        expect(run.facade.decisions).toEqual([
+          { permission: "todowrite", resources: ["*"], effect: "allow" },
+        ]);
+        const projection = createOpenCodeV2HistoryProjection({
+          runId: RUN_ID,
+          activityLog: undefined,
+          toolProfile: "native",
+        });
+        const signals = projection
+          .project(run.sessionId, await run.client.messages(run.sessionId), undefined)
+          .flatMap((event) => projection.takeSignal(event) ?? []);
+        // A plan snapshot and no productive tool activity for the plan tool.
+        expect(signals.filter(isPlanOrTool)).toEqual([
+          {
+            kind: "plan",
+            anchorMessageId: expect.stringMatching(/^msg_/u) as string,
+            steps: [
+              { text: "Step one", state: "active" },
+              { text: "Step two", state: "pending" },
+            ],
+            occurredAt: expect.any(String) as string,
+          },
+        ]);
+      });
     },
     120_000,
   );
@@ -989,13 +988,15 @@ describe("pinned native OpenCode plan tool (T19)", () => {
   // registers: the plan tool was recorded as `todo` while the executable registers `todowrite`,
   // which the policy then refused as an unclassified action.
   it.skipIf(skip)(
-    "registers every native tool id Keiko's inventory names, and the plan tool only under its switch",
+    "registers every native tool id Keiko's inventory names, the plan tool through its switch",
     async () => {
-      expect(await registeredWith({})).not.toContain("todowrite");
-      const withSwitch = await registeredWith({ overlay: { experimental: { todo: true } } });
+      const production = await registeredWith({});
       // `execute` is the Code Mode runner; the producer adds it to a request, not to the registry.
       const named = OPENCODE_NATIVE_TOOL_DEFINITIONS.filter((tool) => tool.id !== "execute");
-      expect(withSwitch).toEqual(expect.arrayContaining(named.map((tool) => tool.id)));
+      expect(production).toEqual(expect.arrayContaining(named.map((tool) => tool.id)));
+      expect(await registeredWith({ overlay: { experimental: { todo: false } } })).not.toContain(
+        "todowrite",
+      );
     },
     120_000,
   );
