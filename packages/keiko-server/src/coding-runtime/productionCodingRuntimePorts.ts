@@ -74,6 +74,7 @@ import {
   defineActivityLogOperation,
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import type { CodingRuntimeMentionables } from "./opencodeCommands.js";
 
 const CODING_RUNTIME_TASK_REPLACEMENT_REASON_FIELD = {
   type: "string",
@@ -208,6 +209,10 @@ export interface ProductionRuntimeTurnPort {
         runId: string,
         correlationId?: string,
       ) => Promise<readonly CodingWorkbenchCommand[] | undefined>)
+    | undefined;
+  /** The subagents and skills the run's runtime lists for the `@` and `$` menus (#3906). */
+  readonly listMentions?:
+    | ((runId: string, correlationId?: string) => Promise<CodingRuntimeMentionables | undefined>)
     | undefined;
   /**
    * Confirms the runtime lists the command an admitted turn names, ahead of every reservation. A
@@ -581,6 +586,7 @@ export function createOpenCodeRuntimeTurnPort(runPort: OpenCodeRunPort): Product
     ...(runPort.listCommands === undefined || runPort.admitCommand === undefined
       ? {}
       : { listCommands: runPort.listCommands, admitCommand: runPort.admitCommand }),
+    ...(runPort.listMentions === undefined ? {} : { listMentions: runPort.listMentions }),
     abortTurn: (runId) => runPort.abortTask(runId),
     waitForTerminal: async (runId, signal): Promise<CodingRuntimeTaskOutcome> => {
       const outcome = await runPort.waitForTerminal(runId, signal);
@@ -702,6 +708,8 @@ export function createProductionRuntimeTaskDispatcher(
     deliver: (request) => deliverRuntimePrompt(runs, request, diagnostics),
     commands: (runId, correlationId) =>
       runs.get(runId)?.turnPort.listCommands?.(runId, correlationId) ?? Promise.resolve(undefined),
+    mentions: (runId, correlationId) =>
+      runs.get(runId)?.turnPort.listMentions?.(runId, correlationId) ?? Promise.resolve(undefined),
     revert: (request) => revertRuntimeTask(runs, request, diagnostics),
     revertState: (runId) =>
       runs.get(runId)?.turnPort.revertState?.(runId) ?? Promise.resolve(undefined),
@@ -762,6 +770,7 @@ function carriesPromptInputs(request: CodingRuntimeTaskDispatchRequest): boolean
   return (
     request.delivery !== undefined ||
     request.command !== undefined ||
+    request.mentions !== undefined ||
     (request.references?.length ?? 0) > 0
   );
 }
@@ -782,6 +791,7 @@ function promptInputsRequest(request: CodingRuntimeTaskDispatchRequest): PromptI
             argumentBytes: Buffer.byteLength(request.taskIntent, "utf8"),
           },
         }),
+    ...(request.mentions === undefined ? {} : { mentions: request.mentions }),
     correlationId: request.correlationId,
     // The operator request: a delivery binds its native message id to it, so a retry of the same
     // request resends the id the unconfirmed attempt carried.
@@ -790,20 +800,44 @@ function promptInputsRequest(request: CodingRuntimeTaskDispatchRequest): PromptI
 }
 
 /**
- * Admits a turn's inputs, then confirms with the runtime that it lists the command the turn names,
- * all ahead of any reservation: a command the runtime does not list begins nothing. A port without
- * the confirmation takes no command.
+ * Confirms with the runtime that it lists the names a turn uses: the command it runs as and every
+ * subagent and skill it mentions (#3906). The runtime stores any name it is given, so this is what
+ * keeps an unlisted one out, ahead of any reservation. A port without the confirmation takes none.
+ */
+async function confirmListedInputs(
+  record: ProductionRuntimeRunRecord,
+  runId: string,
+  inputs: AdmittedPromptInputs,
+): Promise<TurnInputsAdmission> {
+  if (inputs.command === undefined && inputs.mentions === undefined) return { ok: true, inputs };
+  const confirm = record.turnPort.admitCommand;
+  if (confirm === undefined) return { ok: false };
+  const confirmed = await confirm(runId, inputs);
+  return confirmed.ok ? { ok: true, inputs: confirmed.inputs } : { ok: false };
+}
+
+/**
+ * Admits a turn's inputs, then confirms the runtime's own names it uses, all ahead of any
+ * reservation: a command or a mention the runtime does not list begins nothing.
  */
 async function admitTurn(
   record: ProductionRuntimeRunRecord,
   request: CodingRuntimeTaskDispatchRequest,
 ): Promise<TurnInputsAdmission> {
   const admitted = admitTurnInputs(record, request, "turn");
-  if (!admitted.ok || admitted.inputs?.command === undefined) return admitted;
-  const confirm = record.turnPort.admitCommand;
-  if (confirm === undefined) return { ok: false };
-  const confirmed = await confirm(request.runId, admitted.inputs);
-  return confirmed.ok ? { ok: true, inputs: confirmed.inputs } : { ok: false };
+  if (!admitted.ok || admitted.inputs === undefined) return admitted;
+  return confirmListedInputs(record, request.runId, admitted.inputs);
+}
+
+// A steered or queued message's inputs, its mentions confirmed like a turn's (#3906).
+async function admittedDelivery(
+  record: ProductionRuntimeRunRecord,
+  request: CodingRuntimeTaskDispatchRequest,
+): Promise<AdmittedPromptInputs | undefined> {
+  const admitted = admitTurnInputs(record, request, "delivery");
+  if (!admitted.ok || admitted.inputs === undefined) return undefined;
+  const listed = await confirmListedInputs(record, request.runId, admitted.inputs);
+  return listed.ok ? listed.inputs : undefined;
 }
 
 /**
@@ -820,13 +854,13 @@ async function deliverRuntimePrompt(
   if (record === undefined) return refusedDelivery(diagnostics, request, "no-record");
   if (record.controller.signal.aborted) return refusedDelivery(diagnostics, request, "aborted");
   const deliver = record.turnPort.deliverPrompt;
-  const admitted = admitTurnInputs(record, request, "delivery");
-  if (deliver === undefined || !admitted.ok || admitted.inputs === undefined)
+  const inputs = deliver === undefined ? undefined : await admittedDelivery(record, request);
+  if (deliver === undefined || inputs === undefined)
     return rejectedInputs(diagnostics, request.runId, request.correlationId);
   const reservation = record.operationGuard.reserve(request);
   if (reservation === undefined) return refusedDelivery(diagnostics, request, "no-reservation");
   try {
-    if (!(await deliver(request.runId, request.taskIntent, admitted.inputs))) {
+    if (!(await deliver(request.runId, request.taskIntent, inputs))) {
       reservation.release();
       return refusedDelivery(diagnostics, request, "adapter-rejected");
     }

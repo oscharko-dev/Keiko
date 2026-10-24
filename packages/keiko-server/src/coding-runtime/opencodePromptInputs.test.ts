@@ -40,6 +40,7 @@ import {
   openCodePromptInputs,
   recordPromptInputs,
   resolvePromptReferences,
+  runtimePromptInputs,
   type PromptInputsRefusal,
   type PromptInputsRun,
 } from "./opencodePromptInputs.js";
@@ -84,18 +85,60 @@ function refusal(path: string): PromptInputsRefusal | undefined {
   return resolved.ok ? undefined : resolved.reason;
 }
 
+describe("the runtime inputs of an admitted prompt (#3906)", () => {
+  const MENTIONS = {
+    agents: [{ name: "general", mention: { start: 4, end: 12, text: "@general" } }],
+    skills: [{ id: "review-method" }],
+  };
+  const admittedWith = (files: readonly { uri: string; name: string }[]) => ({
+    referenceCount: files.length,
+    files,
+    fileBytes: 0,
+    mentions: MENTIONS,
+  });
+
+  it("sends the mentions as typed when the text leads with nothing", () => {
+    expect(runtimePromptInputs(admittedWith([]))).toEqual({ mentions: MENTIONS });
+    expect(runtimePromptInputs(undefined)).toEqual({});
+  });
+
+  it("moves every span by the hidden context the sent text leads with, and only the span", () => {
+    const context = "Earlier context of the task.";
+    const sent = `${context}\n\nAsk @general now.`;
+    const moved = runtimePromptInputs(admittedWith([]), context.length + 2);
+    const span = moved.mentions?.agents?.[0]?.mention;
+
+    expect(span).toEqual({
+      start: 4 + context.length + 2,
+      end: 12 + context.length + 2,
+      text: "@general",
+    });
+    expect(sent.slice(span?.start, span?.end)).toBe("@general");
+    expect(moved.mentions?.skills).toEqual([{ id: "review-method" }]);
+  });
+
+  it("records how many agents and skills a prompt mentions, never a name", () => {
+    const sink = createBufferedServerLogSink();
+    recordPromptInputs(sink, "run-1", admittedWith([]), { outcome: "accepted", attachedBytes: 0 });
+    expect(sink.events[0]?.extra).toMatchObject({ agentMentionCount: 1, skillMentionCount: 1 });
+    expect(JSON.stringify(sink.events)).not.toMatch(/general|review-method/u);
+  });
+});
+
 describe("OpenCode prompt input capabilities", () => {
-  it("offers delivery, references and slash commands only on the native service", () => {
+  it("offers delivery, references, slash commands and mentions only on the native service", () => {
     expect(openCodePromptInputs("native")).toEqual({
       delivery: true,
       references: true,
       commands: true,
+      mentions: true,
     });
     for (const profile of ["direct", "code-mode"] as const) {
       expect(openCodePromptInputs(profile)).toEqual({
         delivery: false,
         references: false,
         commands: false,
+        mentions: false,
       });
     }
   });
@@ -495,11 +538,13 @@ describe("the run port that admits and delivers prompt inputs", () => {
       delivery: true,
       references: true,
       commands: true,
+      mentions: true,
     });
     expect(harness({ capabilities: MAPPED }).port.promptInputs).toEqual({
       delivery: false,
       references: false,
       commands: false,
+      mentions: false,
     });
   });
 

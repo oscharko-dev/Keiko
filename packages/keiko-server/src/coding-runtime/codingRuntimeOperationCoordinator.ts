@@ -56,6 +56,7 @@ import {
   keikoStackFrames,
 } from "@oscharko-dev/keiko-activity-log";
 import { processServerLogSink } from "../process-log-sink.js";
+import type { CodingRuntimeMentionables } from "./opencodeCommands.js";
 
 interface RuntimeOperationCoordinatorDeps {
   readonly current: () => CodingRuntimeSnapshot | undefined;
@@ -449,6 +450,7 @@ export class CodingRuntimeOperationCoordinator {
         ...(correlationId === undefined ? {} : { correlationId }),
         ...(admitted.delivery === undefined ? {} : { delivery: admitted.delivery }),
         ...(admitted.references === undefined ? {} : { references: admitted.references }),
+        ...(admitted.mentions === undefined ? {} : { mentions: admitted.mentions }),
       });
     } catch (error) {
       recordRuntimeOperationTransportFailure(this.deps.activityLog, {
@@ -485,6 +487,7 @@ export class CodingRuntimeOperationCoordinator {
         ...(isCodingWorkbenchAgent(agent) ? { agent } : {}),
         ...(admitted.references === undefined ? {} : { references: admitted.references }),
         ...(admitted.command === undefined ? {} : { command: admitted.command }),
+        ...(admitted.mentions === undefined ? {} : { mentions: admitted.mentions }),
       });
       return { result, generation };
     } catch (error) {
@@ -666,6 +669,21 @@ export class CodingRuntimeOperationCoordinator {
       return Promise.resolve(undefined);
     }
     return this.deps.taskDispatcher.commands?.(runId, correlationId) ?? Promise.resolve(undefined);
+  }
+
+  /**
+   * The subagents and skills the run's runtime lists right now (the `@` and `$` menus, #3906), or
+   * `undefined` when the run is not live or offers none. Reads only, like the commands listing.
+   */
+  public listMentions(
+    runId: string,
+    correlationId?: string,
+  ): Promise<CodingRuntimeMentionables | undefined> {
+    const current = this.deps.current();
+    if (current?.runId !== runId || !FOLLOW_UP_STATES.has(current.state)) {
+      return Promise.resolve(undefined);
+    }
+    return this.deps.taskDispatcher.mentions?.(runId, correlationId) ?? Promise.resolve(undefined);
   }
 
   /** The counts the Workbench shows beside the undo control; absent when no undo is available. */
@@ -1329,7 +1347,7 @@ function admittedInboxRequest(
 /** The admissible part of a follow-up that the dispatchers read; the contract validated its shape. */
 type AdmittedFollowUp = Pick<
   CodingWorkbenchRuntimeFollowUpRequest,
-  "taskIntent" | "delivery" | "references" | "command"
+  "taskIntent" | "delivery" | "references" | "command" | "mentions"
 >;
 
 /**
@@ -1349,6 +1367,7 @@ function admittedFollowUp(
     ...(body.delivery === undefined ? {} : { delivery: body.delivery }),
     ...(body.references === undefined ? {} : { references: body.references }),
     ...(body.command === undefined ? {} : { command: body.command }),
+    ...(body.mentions === undefined ? {} : { mentions: body.mentions }),
   };
 }
 

@@ -252,6 +252,170 @@ function commandEntryErrors(entry: unknown, index: number, seen: Set<string>): s
   return errors;
 }
 
+/**
+ * The native agents and skills a prompt may mention (S15, #3906), as the run's runtime lists them:
+ * `@name` names a subagent the runtime offers, `$id` one of its skills. An entry is the runtime's
+ * own untrusted display text, bounded here like a command. Mentioning one asks the runtime to
+ * involve it, exactly as its own interface does; it grants nothing, and every effect it causes
+ * still passes the run's native policy.
+ */
+export interface CodingWorkbenchMentionableAgent {
+  readonly name: string;
+  readonly description?: string | undefined;
+}
+
+export interface CodingWorkbenchMentionableSkill {
+  readonly id: string;
+  readonly name: string;
+  readonly description?: string | undefined;
+}
+
+/** At most this many agents or skills ride one listing, and this many mentions one prompt. */
+export const CODING_WORKBENCH_MENTIONABLES_MAX = 64;
+export const CODING_WORKBENCH_PROMPT_MENTIONS_MAX = 8;
+export const CODING_WORKBENCH_MENTION_DESCRIPTION_MAX_CHARS = 200;
+const CODING_WORKBENCH_MENTION_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
+
+/** Transport shape of an agent name or a skill id: bounded, no whitespace, path or control. */
+export function isCodingWorkbenchMentionName(value: unknown): value is string {
+  return typeof value === "string" && CODING_WORKBENCH_MENTION_NAME.test(value);
+}
+
+/**
+ * Where a mention stands in the prompt's text, as the runtime records it: the half-open range
+ * `[start, end)` of `text`, the token as typed (`@general`, `$review-method`).
+ */
+export interface CodingWorkbenchPromptMentionSpan {
+  readonly start: number;
+  readonly end: number;
+  readonly text: string;
+}
+
+export interface CodingWorkbenchAgentMention {
+  readonly name: string;
+  readonly mention?: CodingWorkbenchPromptMentionSpan | undefined;
+}
+
+export interface CodingWorkbenchSkillMention {
+  readonly id: string;
+  readonly mention?: CodingWorkbenchPromptMentionSpan | undefined;
+}
+
+/** The agents and skills a start or a follow-up mentions; whether the run lists them is the server's call. */
+export interface CodingWorkbenchPromptMentions {
+  readonly agents?: readonly CodingWorkbenchAgentMention[] | undefined;
+  readonly skills?: readonly CodingWorkbenchSkillMention[] | undefined;
+}
+
+/** Bound of a mention span's offsets: the prompt text is bounded far below this. */
+const MENTION_OFFSET_MAX = 1_000_000;
+
+function isMentionOffset(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= MENTION_OFFSET_MAX
+  );
+}
+
+function mentionSpanErrors(value: unknown, path: string): string[] {
+  if (value === undefined) return [];
+  if (!isRecord(value)) return [`${path} must be an object`];
+  const errors = exactKeys(value, ["start", "end", "text"], path);
+  const { start, end, text } = value;
+  if (!isMentionOffset(start) || !isMentionOffset(end) || end <= start) {
+    errors.push(`${path} must be a bounded half-open range`);
+  } else if (typeof text !== "string" || text.length !== end - start) {
+    errors.push(`${path}.text must be the mentioned token`);
+  }
+  return errors;
+}
+
+function mentionListErrors(
+  value: unknown,
+  key: "agents" | "skills",
+  field: "name" | "id",
+): string[] {
+  if (value === undefined) return [];
+  const path = `mentions.${key}`;
+  if (!Array.isArray(value)) return [`${path} must be an array`];
+  const errors: string[] = [];
+  if (value.length === 0 || value.length > CODING_WORKBENCH_PROMPT_MENTIONS_MAX) {
+    errors.push(`${path} must hold 1 to ${String(CODING_WORKBENCH_PROMPT_MENTIONS_MAX)} entries`);
+  }
+  const seen = new Set<string>();
+  value.forEach((entry: unknown, index) => {
+    const at = `${path}[${String(index)}]`;
+    if (!isRecord(entry)) {
+      errors.push(`${at} must be an object`);
+      return;
+    }
+    errors.push(...exactKeys(entry, [field, "mention"], at));
+    const identity = entry[field];
+    if (!isCodingWorkbenchMentionName(identity)) errors.push(`${at}.${field} is invalid`);
+    else if (seen.has(identity)) errors.push(`${at}.${field} repeats an earlier mention`);
+    else seen.add(identity);
+    errors.push(...mentionSpanErrors(entry.mention, `${at}.mention`));
+  });
+  return errors;
+}
+
+export function parseCodingWorkbenchPromptMentions(
+  value: unknown,
+): CodingWorkbenchValidationResult<CodingWorkbenchPromptMentions> {
+  if (!isRecord(value)) return invalid("mentions must be an object");
+  const errors = exactKeys(value, ["agents", "skills"], "mentions");
+  if (value.agents === undefined && value.skills === undefined) {
+    errors.push("mentions must name an agent or a skill");
+  }
+  errors.push(...mentionListErrors(value.agents, "agents", "name"));
+  errors.push(...mentionListErrors(value.skills, "skills", "id"));
+  return result(value, errors);
+}
+
+function mentionableErrors(
+  entry: unknown,
+  path: string,
+  keys: readonly string[],
+  seen: Set<string>,
+): string[] {
+  if (!isRecord(entry)) return [`${path} must be an object`];
+  const errors = exactKeys(entry, keys, path);
+  const identity = keys[0] === "id" ? entry.id : entry.name;
+  if (!isCodingWorkbenchMentionName(identity)) errors.push(`${path} identity is invalid`);
+  else if (seen.has(identity)) errors.push(`${path} repeats an earlier entry`);
+  else seen.add(identity);
+  if (keys[0] === "id" && !validateUntrustedDisplayText(entry.name, 64)) {
+    errors.push(`${path}.name must be bounded display text`);
+  }
+  if (
+    entry.description !== undefined &&
+    !validateUntrustedDisplayText(entry.description, CODING_WORKBENCH_MENTION_DESCRIPTION_MAX_CHARS)
+  ) {
+    errors.push(`${path}.description must be bounded display text`);
+  }
+  return errors;
+}
+
+function mentionablesErrors(
+  value: unknown,
+  key: "agents" | "skills",
+  keys: readonly string[],
+): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) return [`commandsChannelPayload.${key} must be an array`];
+  const errors: string[] = [];
+  if (value.length > CODING_WORKBENCH_MENTIONABLES_MAX) {
+    errors.push(`${key} must hold at most ${String(CODING_WORKBENCH_MENTIONABLES_MAX)} entries`);
+  }
+  const seen = new Set<string>();
+  value.forEach((entry: unknown, index) => {
+    errors.push(...mentionableErrors(entry, `${key}[${String(index)}]`, keys, seen));
+  });
+  return errors;
+}
+
 /** Session facet of the commands channel: the status of the presented cookie only (ADR-0141). */
 export const CODING_WORKBENCH_RUNTIME_COMMANDS_SESSION_STATES = ["active", "unpaired"] as const;
 
@@ -267,6 +431,10 @@ export type CodingWorkbenchRuntimeCommandsSession =
 export interface CodingWorkbenchRuntimeCommandsChannelPayload {
   readonly session: CodingWorkbenchRuntimeCommandsSession;
   readonly commands?: readonly CodingWorkbenchCommand[] | undefined;
+  /** The subagents a prompt may mention with `@` (#3906); absent, the run offers none. */
+  readonly agents?: readonly CodingWorkbenchMentionableAgent[] | undefined;
+  /** The skills a prompt may mention with `$` (#3906); absent, the run offers none. */
+  readonly skills?: readonly CodingWorkbenchMentionableSkill[] | undefined;
 }
 
 export function unpairedCodingWorkbenchRuntimeCommandsChannelPayload(): CodingWorkbenchRuntimeCommandsChannelPayload {
@@ -278,14 +446,21 @@ export function validateCodingWorkbenchRuntimeCommandsChannelPayload(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeCommandsChannelPayload> {
   if (!isRecord(value)) return invalid("commands channel payload must be an object");
-  const errors = exactKeys(value, ["session", "commands"], "commandsChannelPayload");
+  const errors = exactKeys(
+    value,
+    ["session", "commands", "agents", "skills"],
+    "commandsChannelPayload",
+  );
   if (!isOneOf(value.session, CODING_WORKBENCH_RUNTIME_COMMANDS_SESSION_STATES)) {
     errors.push("commandsChannelPayload.session is invalid");
   }
-  if (value.session === "unpaired" && value.commands !== undefined) {
-    errors.push("commandsChannelPayload.commands must be absent when the session is unpaired");
+  const listed = [value.commands, value.agents, value.skills].some((list) => list !== undefined);
+  if (value.session === "unpaired" && listed) {
+    errors.push("commandsChannelPayload listings must be absent when the session is unpaired");
   }
   if (value.commands !== undefined) errors.push(...commandListErrors(value.commands));
+  errors.push(...mentionablesErrors(value.agents, "agents", ["name", "description"]));
+  errors.push(...mentionablesErrors(value.skills, "skills", ["id", "name", "description"]));
   return result(value, errors);
 }
 
@@ -397,6 +572,11 @@ export interface CodingWorkbenchRuntimePromptInputs {
    * never offered.
    */
   readonly commands?: boolean | undefined;
+  /**
+   * A prompt may mention the runtime's subagents with `@` and its skills with `$` (S15, #3906): a
+   * start or a follow-up may carry `mentions`. Absent reads as false.
+   */
+  readonly mentions?: boolean | undefined;
 }
 
 export interface CodingWorkbenchRuntimeProjectMemoryRequest {
@@ -472,6 +652,12 @@ export interface CodingWorkbenchRuntimeStartRequest {
    * issue reference, whose context a command turn does not carry.
    */
   readonly command?: CodingWorkbenchCommandRequest | undefined;
+  /**
+   * The subagents and skills the first prompt mentions (S15, #3906). Like `references`, they are
+   * checked against the run's own runtime when its first turn is dispatched; a mention the runtime
+   * does not list refuses the start (`invalid-intent`) instead of starting without it.
+   */
+  readonly mentions?: CodingWorkbenchPromptMentions | undefined;
 }
 
 /**
@@ -495,6 +681,8 @@ export interface CodingWorkbenchRuntimeFollowUpRequest {
    * then be empty). It starts a turn like any follow-up, so it cannot also be a `delivery`.
    */
   readonly command?: CodingWorkbenchCommandRequest | undefined;
+  /** The subagents and skills this message mentions (S15, #3906), checked against the run's listing. */
+  readonly mentions?: CodingWorkbenchPromptMentions | undefined;
 }
 
 /**
@@ -976,6 +1164,13 @@ function validateTaskIntent(value: unknown, errors: string[], commandNamed = fal
   }
 }
 
+// Mentions are supplementary like a command: an absent field adds no key.
+function validateMentions(value: unknown, errors: string[]): void {
+  if (value === undefined) return;
+  const mentions = parseCodingWorkbenchPromptMentions(value);
+  if (!mentions.ok) errors.push(...mentions.errors);
+}
+
 // A command is a supplementary field like `agent`: an absent one adds no key, an invalid one
 // reports the command parser's own reasons.
 function validateCommandRequest(value: unknown, errors: string[]): void {
@@ -1055,27 +1250,7 @@ export function parseCodingWorkbenchRuntimeStartRequest(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeStartRequest> {
   if (!isRecord(value)) return invalid("start request must be an object");
-  const errors = exactKeys(
-    value,
-    [
-      "requestId",
-      "taskIntent",
-      "conversationId",
-      "requestedMode",
-      "runtimePreference",
-      "modelId",
-      "reasoningEffort",
-      "issueRef",
-      "expectedIssueBindingDigest",
-      "issuePurpose",
-      "projectMemory",
-      "agent",
-      "references",
-      "command",
-      "fork",
-    ],
-    "startRequest",
-  );
+  const errors = exactKeys(value, START_REQUEST_KEYS, "startRequest");
   validateRequestId(value.requestId, errors);
   validateTaskIntent(value.taskIntent, errors, value.command !== undefined);
   if (value.conversationId !== undefined)
@@ -1102,6 +1277,25 @@ export function parseCodingWorkbenchRuntimeStartRequest(
   return result(value, errors);
 }
 
+const START_REQUEST_KEYS: readonly string[] = [
+  "requestId",
+  "taskIntent",
+  "conversationId",
+  "requestedMode",
+  "runtimePreference",
+  "modelId",
+  "reasoningEffort",
+  "issueRef",
+  "expectedIssueBindingDigest",
+  "issuePurpose",
+  "projectMemory",
+  "agent",
+  "references",
+  "command",
+  "mentions",
+  "fork",
+];
+
 // A fork names the task to fork and, optionally, the message to fork before; it starts a NEW task, so
 // it cannot also continue one.
 function validateForkRequest(value: Record<string, unknown>, errors: string[]): void {
@@ -1125,6 +1319,7 @@ function validateStartPromptInputs(value: Record<string, unknown>, errors: strin
     const references = parseCodingWorkbenchPromptReferences(value.references);
     if (!references.ok) errors.push(...references.errors);
   }
+  validateMentions(value.mentions, errors);
   validateCommandRequest(value.command, errors);
   if (value.command !== undefined && value.issueRef !== undefined) {
     errors.push("command cannot be combined with an issue reference");
@@ -1146,7 +1341,16 @@ export function parseCodingWorkbenchRuntimeFollowUpRequest(
   if (!isRecord(value)) return invalid("follow-up request must be an object");
   const errors = exactKeys(
     value,
-    ["requestId", "expectedRevision", "taskIntent", "agent", "delivery", "references", "command"],
+    [
+      "requestId",
+      "expectedRevision",
+      "taskIntent",
+      "agent",
+      "delivery",
+      "references",
+      "command",
+      "mentions",
+    ],
     "followUpRequest",
   );
   validateRequestId(value.requestId, errors);
@@ -1157,6 +1361,7 @@ export function parseCodingWorkbenchRuntimeFollowUpRequest(
   validateAgent(value.agent, errors);
   validatePromptDelivery(value, errors);
   validateCommandRequest(value.command, errors);
+  validateMentions(value.mentions, errors);
   if (value.references !== undefined) {
     const references = parseCodingWorkbenchPromptReferences(value.references);
     if (!references.ok) errors.push(...references.errors);
@@ -1731,12 +1936,16 @@ function validatePromptInputs(value: unknown, errors: string[]): void {
     errors.push("promptInputs must be an object");
     return;
   }
-  errors.push(...exactKeys(value, ["delivery", "references", "commands"], "promptInputs"));
+  errors.push(
+    ...exactKeys(value, ["delivery", "references", "commands", "mentions"], "promptInputs"),
+  );
   for (const field of ["delivery", "references"] as const) {
     if (typeof value[field] !== "boolean") errors.push(`promptInputs.${field} must be boolean`);
   }
-  if (value.commands !== undefined && typeof value.commands !== "boolean") {
-    errors.push("promptInputs.commands must be boolean");
+  for (const field of ["commands", "mentions"] as const) {
+    if (value[field] !== undefined && typeof value[field] !== "boolean") {
+      errors.push(`promptInputs.${field} must be boolean`);
+    }
   }
 }
 

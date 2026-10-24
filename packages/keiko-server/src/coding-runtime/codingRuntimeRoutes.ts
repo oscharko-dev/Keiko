@@ -794,10 +794,16 @@ export async function handleCodingRuntimeCommands(
   const required = requireRuntime(deps, ctx.correlationId);
   if (isRouteResult(required)) return required;
   if (!required.orchestrator.getSnapshot(runId)) return notFound(ctx.correlationId);
-  const commands = await required.orchestrator.listCommands(runId, ctx.correlationId);
+  const [commands, mentionables] = await Promise.all([
+    required.orchestrator.listCommands(runId, ctx.correlationId),
+    required.orchestrator.listMentions(runId, ctx.correlationId),
+  ]);
   const payload: CodingWorkbenchRuntimeCommandsChannelPayload = {
     session: "active",
     ...(commands === undefined ? {} : { commands }),
+    ...(mentionables === undefined
+      ? {}
+      : { agents: mentionables.agents, skills: mentionables.skills }),
   };
   return { status: 200, body: payload };
 }

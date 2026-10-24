@@ -21,11 +21,13 @@ import {
   DEFAULT_CODING_WORKBENCH_AGENT,
   isCodingWorkbenchAgent,
   isCodingWorkbenchCommandName,
+  isCodingWorkbenchMentionName,
   isCodingWorkbenchPromptDelivery,
   isCodingWorkbenchPromptReferencePath,
   isCodingWorkbenchRuntimeInboxAction,
   isCodingWorkbenchRuntimeInboxItemId,
   parseCodingWorkbenchCommandRequest,
+  parseCodingWorkbenchPromptMentions,
   parseCodingWorkbenchPromptReferences,
   parseCodingWorkbenchRuntimeApprovalDecisionRequest,
   parseCodingWorkbenchRuntimeFollowUpRequest,
@@ -2028,6 +2030,79 @@ describe("Coding Workbench slash commands and first-prompt references", () => {
       expect(
         validateCodingWorkbenchRuntimeCommandsChannelPayload(payload).ok,
         JSON.stringify(payload).slice(0, 80),
+      ).toBe(false);
+    }
+  });
+});
+
+describe("Coding Workbench agent and skill mentions (#3906)", () => {
+  const START = {
+    requestId: "req_0000000000000001",
+    taskIntent: "Ask @general to look at the notes.",
+    requestedMode: "governed-assist",
+  };
+
+  it("admits bounded agent and skill mentions with the span of the typed token", () => {
+    const mentions = {
+      agents: [{ name: "general", mention: { start: 4, end: 12, text: "@general" } }],
+      skills: [{ id: "review-method" }],
+    };
+    expect(parseCodingWorkbenchPromptMentions(mentions)).toEqual({ ok: true, value: mentions });
+    expect(parseCodingWorkbenchRuntimeStartRequest({ ...START, mentions }).ok).toBe(true);
+    expect(
+      parseCodingWorkbenchRuntimeFollowUpRequest({
+        requestId: "req_0000000000000002",
+        expectedRevision: 3,
+        taskIntent: "Use $review-method.",
+        mentions: { skills: [{ id: "review-method" }] },
+      }).ok,
+    ).toBe(true);
+    expect(isCodingWorkbenchMentionName("explore")).toBe(true);
+  });
+
+  it.each([
+    ["no list", {}],
+    ["an empty list", { agents: [] }],
+    ["an unknown key", { agents: [{ name: "general" }], files: [] }],
+    ["a name with a path", { agents: [{ name: "../general" }] }],
+    ["a name with whitespace", { agents: [{ name: "gen eral" }] }],
+    ["a repeated agent", { agents: [{ name: "general" }, { name: "general" }] }],
+    ["an extra field", { skills: [{ id: "x", text: "the body" }] }],
+    ["an empty span", { agents: [{ name: "general", mention: { start: 4, end: 4, text: "" } }] }],
+    [
+      "a span that is not its token",
+      { agents: [{ name: "general", mention: { start: 0, end: 3, text: "@general" } }] },
+    ],
+    ["a negative offset", { skills: [{ id: "x", mention: { start: -1, end: 1, text: "$x" } }] }],
+    [
+      "too many",
+      { skills: Array.from({ length: 9 }, (_, index) => ({ id: `s${String(index)}` })) },
+    ],
+  ])("refuses %s", (_label, mentions) => {
+    expect(parseCodingWorkbenchPromptMentions(mentions).ok).toBe(false);
+    expect(parseCodingWorkbenchRuntimeStartRequest({ ...START, mentions }).ok).toBe(false);
+  });
+
+  it("lists mentionable agents and skills on the commands channel, never when unpaired", () => {
+    const payload = {
+      session: "active",
+      agents: [{ name: "general", description: "General-purpose agent" }],
+      skills: [{ id: "review-method", name: "review-method", description: "A method" }],
+    };
+    expect(validateCodingWorkbenchRuntimeCommandsChannelPayload(payload)).toEqual({
+      ok: true,
+      value: payload,
+    });
+    for (const invalid of [
+      { session: "unpaired", agents: [] },
+      { session: "active", agents: [{ name: "general", system: "the system prompt" }] },
+      { session: "active", skills: [{ id: "x", name: "x", content: "the body" }] },
+      { session: "active", skills: [{ id: "x" }] },
+      { session: "active", agents: [{ name: "a" }, { name: "a" }] },
+    ]) {
+      expect(
+        validateCodingWorkbenchRuntimeCommandsChannelPayload(invalid).ok,
+        JSON.stringify(invalid),
       ).toBe(false);
     }
   });

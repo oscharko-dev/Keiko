@@ -2055,6 +2055,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       state: [
         "coding-runtime.commands.listed",
         "coding-runtime.inbox.action",
+        "coding-runtime.mentions.listed",
         "coding-runtime.prompt-inputs.settled",
       ],
       end: [],
@@ -2064,18 +2065,21 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredCausalOperations: [
       "coding-runtime.commands.listed",
       "coding-runtime.inbox.action",
+      "coding-runtime.mentions.listed",
       "coding-runtime.prompt-inputs.settled",
     ],
     requiredLossOperations: [],
     requiredProofOperations: [
       "coding-runtime.commands.listed",
       "coding-runtime.inbox.action",
+      "coding-runtime.mentions.listed",
       "coding-runtime.prompt-inputs.settled",
     ],
     requiredReplayProofIds: [],
     requiredResourceOperations: [
       "coding-runtime.commands.listed",
       "coding-runtime.inbox.action",
+      "coding-runtime.mentions.listed",
       "coding-runtime.prompt-inputs.settled",
     ],
     requiredEvidenceClasses: [
@@ -2087,8 +2091,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "loss-state",
       "opaque-id",
     ],
-    requiredFrameOperations: ["coding-runtime.commands.listed", "coding-runtime.inbox.action"],
-    requiredCauseOperations: ["coding-runtime.commands.listed", "coding-runtime.inbox.action"],
+    requiredFrameOperations: [
+      "coding-runtime.commands.listed",
+      "coding-runtime.inbox.action",
+      "coding-runtime.mentions.listed",
+    ],
+    requiredCauseOperations: [
+      "coding-runtime.commands.listed",
+      "coding-runtime.inbox.action",
+      "coding-runtime.mentions.listed",
+    ],
   },
   {
     contractKind: "activity-log-failure-class",

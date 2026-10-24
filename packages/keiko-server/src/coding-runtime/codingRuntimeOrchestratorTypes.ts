@@ -65,6 +65,8 @@ export interface CodingRuntimeLaunchResolver {
      */
     readonly references?: CodingWorkbenchRuntimeStartRequest["references"];
     readonly command?: CodingWorkbenchRuntimeStartRequest["command"];
+    /** The first prompt's subagent and skill mentions (S15, #3906), refused like references. */
+    readonly mentions?: CodingWorkbenchRuntimeStartRequest["mentions"];
     readonly workspaceId: string;
     readonly workspaceRoot: string;
     readonly serverPrincipal: string;

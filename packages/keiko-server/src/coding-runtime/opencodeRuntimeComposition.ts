@@ -114,6 +114,7 @@ import { isAgentAdmitted, openCodeSelectableAgents } from "./opencodeAgents.js";
 import {
   acceptPromptInputs,
   createOpenCodePromptInputsRunPort,
+  runtimePromptInputs,
   openCodePromptInputs,
   type AdmittedPromptInputs,
   type OpenCodePromptInputsRunPort,
@@ -589,6 +590,8 @@ export interface OpenCodeRunPort {
    * turn that runs as a command is submitted through `submitTask` with the command in its inputs.
    */
   readonly listCommands?: OpenCodeCommandsRunPort["listCommands"] | undefined;
+  /** The run's subagents and skills for the `@` and `$` menus (S15, #3906). */
+  readonly listMentions?: OpenCodeCommandsRunPort["listMentions"] | undefined;
   readonly admitCommand?: OpenCodeCommandsRunPort["admitCommand"] | undefined;
   /**
    * The messages an operator sent into the running turn that the runtime has not handed to the model
@@ -948,13 +951,7 @@ async function postTurnCommand(
 ): Promise<boolean> {
   run.commandPresentation.arm(commandDisplayText(name, text));
   try {
-    await run.client.command(
-      run.sessionId,
-      name,
-      text,
-      undefined,
-      inputs.files.length === 0 ? undefined : { files: inputs.files },
-    );
+    await run.client.command(run.sessionId, name, text, undefined, runtimePromptInputs(inputs));
     acceptPromptInputs(activityLog, run, inputs);
     return run.ready;
   } catch (error) {
@@ -965,6 +962,9 @@ async function postTurnCommand(
     return false;
   }
 }
+
+// What separates a turn's hidden context from the operator's own text in the sent prompt.
+const PROMPT_CONTEXT_SEPARATOR = "\n\n";
 
 async function postTurnPrompt(
   run: ReadyRun,
@@ -985,7 +985,7 @@ async function postTurnPrompt(
   const post = (): Promise<void> =>
     run.client.prompt(
       run.sessionId,
-      initialContext === undefined ? text : `${initialContext}\n\n${text}`,
+      initialContext === undefined ? text : `${initialContext}${PROMPT_CONTEXT_SEPARATOR}${text}`,
       undefined,
       initialContext === undefined
         ? undefined
@@ -993,7 +993,16 @@ async function postTurnPrompt(
             displayText: text,
             hiddenContextSha256: createHash("sha256").update(initialContext).digest("hex"),
           },
-      { id, ...(inputs === undefined || inputs.files.length === 0 ? {} : { files: inputs.files }) },
+      // A hidden context leads the sent text, so the mentions move by its length and the separator.
+      {
+        id,
+        ...runtimePromptInputs(
+          inputs,
+          initialContext === undefined
+            ? 0
+            : initialContext.length + PROMPT_CONTEXT_SEPARATOR.length,
+        ),
+      },
     );
   try {
     await postOnceMore(post, diagnostics, run);

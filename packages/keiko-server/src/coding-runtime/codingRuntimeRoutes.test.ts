@@ -197,6 +197,15 @@ function runtime(
           ? [{ name: "init", description: "guided AGENTS.md setup" }, { name: "review" }]
           : undefined,
       ),
+    listMentions: (runId: string) =>
+      Promise.resolve(
+        runId === "run-1"
+          ? {
+              agents: [{ name: "general", description: "General-purpose agent" }],
+              skills: [{ id: "review-method", name: "review-method" }],
+            }
+          : undefined,
+      ),
     submitInboxAction: (_runId: string, body: unknown, correlationId?: string) => {
       calls.push(body);
       correlationIds.push(correlationId);
@@ -1003,6 +1012,9 @@ describe("coding runtime routes", () => {
         body: {
           session: "active",
           commands: [{ name: "init", description: "guided AGENTS.md setup" }, { name: "review" }],
+          // The subagents and skills a prompt may mention ride the same read (#3906).
+          agents: [{ name: "general", description: "General-purpose agent" }],
+          skills: [{ id: "review-method", name: "review-method" }],
         },
       });
     });
@@ -1031,6 +1043,8 @@ describe("coding runtime routes", () => {
       const session = pairedAppSession();
       const deps = runtime({ codingAppSessionChannel: session.channel });
       (deps.codingRuntimeOrchestrator as unknown as { listCommands: unknown }).listCommands = () =>
+        Promise.resolve(undefined);
+      (deps.codingRuntimeOrchestrator as unknown as { listMentions: unknown }).listMentions = () =>
         Promise.resolve(undefined);
 
       await expect(
@@ -1508,7 +1522,7 @@ describe("coding runtime routes", () => {
         // No tool profile is threaded either: the agents default to the baseline, never to plan.
         selectableAgents: ["build"],
         // ...and the prompt inputs default to none: no delivery, no references, no commands.
-        promptInputs: { delivery: false, references: false, commands: false },
+        promptInputs: { delivery: false, references: false, commands: false, mentions: false },
       },
     });
     const serialized = JSON.stringify(result.body);
@@ -1566,12 +1580,14 @@ describe("coding runtime routes", () => {
       delivery: true,
       references: true,
       commands: true,
+      mentions: true,
     });
     for (const profile of ["direct", "code-mode"]) {
       expect(promptInputs({ codingRuntimeHostQualified: true, ...registry(profile) })).toEqual({
         delivery: false,
         references: false,
         commands: false,
+        mentions: false,
       });
     }
     // No composed registry fails closed to nothing, and so does one that states no profile.
@@ -1579,10 +1595,11 @@ describe("coding runtime routes", () => {
       delivery: false,
       references: false,
       commands: false,
+      mentions: false,
     });
     expect(
       promptInputs({ codingRuntimeHostQualified: true, openCodeGatewayReadinessRegistry: {} }),
-    ).toEqual({ delivery: false, references: false, commands: false });
+    ).toEqual({ delivery: false, references: false, commands: false, mentions: false });
   });
 
   it("serves a readiness payload the shared contract validator accepts", () => {
@@ -2138,6 +2155,10 @@ function spyingRuntime(channel: UiHandlerDeps["codingAppSessionChannel"]): Spyin
     },
     listCommands: () => {
       invoked.push("listCommands");
+      return Promise.resolve(undefined);
+    },
+    listMentions: () => {
+      invoked.push("listMentions");
       return Promise.resolve(undefined);
     },
     submitInboxAction: settle("submitInboxAction"),

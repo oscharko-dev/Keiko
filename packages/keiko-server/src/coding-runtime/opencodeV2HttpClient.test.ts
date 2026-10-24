@@ -902,6 +902,117 @@ describe("OpenCode V2 slash commands", () => {
 
 // #3897 review: the runtime pages its session list (50 rows by default). The session-tree proof
 // read only the first page, so a later child could never be proven the run's.
+describe("OpenCode V2 agent and skill mentions (#3906)", () => {
+  function clientWith(respond: (url: URL) => Response): {
+    readonly client: ReturnType<typeof createOpenCodeV2HttpClient>;
+    readonly fetch: ReturnType<typeof vi.fn<typeof globalThis.fetch>>;
+  } {
+    const fetch = vi.fn<typeof globalThis.fetch>((input) =>
+      Promise.resolve(respond(input instanceof URL ? input : new URL(new Request(input).url))),
+    );
+    return {
+      client: createOpenCodeV2HttpClient({
+        endpoint: "http://127.0.0.1:1984/",
+        password: "test-only",
+        fetch,
+      }),
+      fetch,
+    };
+  }
+
+  const json = (body: unknown): Response =>
+    new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+
+  it("lists only visible subagents by id, for the run's workspace, and never their prompt", async () => {
+    const { client, fetch } = clientWith(() =>
+      json({
+        location: { directory: "/workspace/repo" },
+        data: [
+          { id: "build", name: "Build", mode: "primary", hidden: false },
+          {
+            id: "general",
+            name: "General",
+            mode: "subagent",
+            hidden: false,
+            description: "General",
+            system: "SECRET-SYSTEM",
+          },
+          { id: "explore", name: "Explore", mode: "all", hidden: false },
+          { id: "compaction", name: "Compaction", mode: "primary", hidden: true },
+          { id: "title", name: "Title", mode: "subagent", hidden: true },
+          { id: "../escape", name: "x", mode: "subagent", hidden: false },
+        ],
+      }),
+    );
+
+    const agents = await client.agents("/workspace/repo");
+
+    expect(agents).toEqual([{ name: "general", description: "General" }, { name: "explore" }]);
+    expect(JSON.stringify(agents)).not.toContain("SECRET-SYSTEM");
+    const url = fetch.mock.calls[0]?.[0] as URL;
+    expect(url.pathname).toBe("/api/agent");
+    expect(url.searchParams.get("location[directory]")).toBe("/workspace/repo");
+  });
+
+  it("lists skills by id and name and never their path or content", async () => {
+    const { client, fetch } = clientWith(() =>
+      json({
+        data: [
+          {
+            id: "review-method",
+            name: "review-method",
+            description: "A method",
+            path: "/secret/SKILL.md",
+            content: "SECRET-BODY",
+          },
+          { id: "bad id", name: "bad id" },
+        ],
+      }),
+    );
+
+    const skills = await client.skills("/workspace/repo");
+
+    expect(skills).toEqual([
+      { id: "review-method", name: "review-method", description: "A method" },
+    ]);
+    expect(JSON.stringify(skills)).not.toMatch(/SECRET/u);
+    expect((fetch.mock.calls[0]?.[0] as URL).pathname).toBe("/api/skill");
+    await expect(client.skills("relative/path")).rejects.toThrow("opencode-v2-directory-invalid");
+  });
+
+  it("sends mentions as the runtime's own attachments on a prompt and on a command", async () => {
+    const { client, fetch } = clientWith(() => json({ data: { id: "msg_1" } }));
+    const mentions = {
+      agents: [{ name: "general", mention: { start: 4, end: 12, text: "@general" } }],
+      skills: [{ id: "review-method" }],
+    };
+
+    await client.prompt("ses_prompt_1", "Ask @general now.", undefined, undefined, { mentions });
+    await client.command("ses_prompt_1", "review", "main", undefined, { mentions });
+
+    const bodies = fetch.mock.calls.map((call) => {
+      const body = call[1]?.body;
+      return JSON.parse(typeof body === "string" ? body : "null") as unknown;
+    });
+    expect(bodies[0]).toEqual({ text: "Ask @general now.", ...mentions });
+    expect(bodies[1]).toEqual({ name: "review", text: "main", ...mentions });
+  });
+
+  it("refuses a malformed mention before a byte is sent", async () => {
+    const { client, fetch } = clientWith(() => json({ data: { id: "msg_1" } }));
+
+    await expect(
+      client.prompt("ses_prompt_1", "x", undefined, undefined, {
+        mentions: { agents: [{ name: "../escape" }] },
+      }),
+    ).rejects.toThrow();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
 describe("OpenCode V2 session list", () => {
   type FetchStub = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   function pagedFetch(pages: readonly Readonly<Record<string, unknown>>[]): {

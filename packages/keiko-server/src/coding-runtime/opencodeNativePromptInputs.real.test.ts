@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
   CODING_WORKBENCH_BUILT_IN_COMMAND_NAMES,
   validateCodingWorkbenchRuntimeCommandsChannelPayload,
+  type CodingWorkbenchPromptMentions,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import {
   buildRuntimeGatewaySeatbeltCommand,
@@ -26,6 +27,7 @@ import {
   createOpenCodePromptInputsRunPort,
   openCodePromptInputs,
   resolvePromptReferences,
+  runtimePromptInputs,
   type PromptInputsRun,
 } from "./opencodePromptInputs.js";
 import {
@@ -1217,6 +1219,7 @@ interface TurnPath {
     readonly taskIntent: string;
     readonly command?: { readonly name: string };
     readonly references?: readonly { readonly path: string }[];
+    readonly mentions?: CodingWorkbenchPromptMentions;
   }) => Promise<{ readonly ok: boolean; readonly reason?: string | undefined }>;
 }
 
@@ -1238,7 +1241,7 @@ function turnPath(run: Run): TurnPath {
     recordPostFailure: (): void => undefined,
   });
   const commands = createOpenCodeCommandsRunPort({
-    readyRun: () => ({ runId: RUN_ID, client: run.client }),
+    readyRun: () => ({ runId: RUN_ID, workspaceRoot: run.fixture.workspace, client: run.client }),
     capabilities,
     activityLog: sink,
   });
@@ -1249,18 +1252,18 @@ function turnPath(run: Run): TurnPath {
         {
           turnPort: {
             submitTurn: async (_runId, text, _context, _agent, admitted): Promise<boolean> => {
-              const files = admitted?.files ?? [];
-              const withFiles = files.length === 0 ? undefined : { files };
+              // The composition's own mapping of admitted inputs to the runtime's attachments.
+              const sent = runtimePromptInputs(admitted);
               if (admitted?.command !== undefined) {
                 await run.client.command(
                   run.sessionId,
                   admitted.command.name,
                   text,
                   undefined,
-                  withFiles,
+                  sent,
                 );
               } else {
-                await run.client.prompt(run.sessionId, text, undefined, undefined, withFiles);
+                await run.client.prompt(run.sessionId, text, undefined, undefined, sent);
               }
               return true;
             },
@@ -1269,6 +1272,7 @@ function turnPath(run: Run): TurnPath {
             admitPromptInputs: inputs.admitPromptInputs,
             deliverPrompt: inputs.deliverPrompt,
             listCommands: commands.listCommands,
+            listMentions: commands.listMentions,
             admitCommand: commands.admitCommand,
           },
           controller: new AbortController(),
@@ -1289,6 +1293,48 @@ const lineOf = (event: unknown): Record<string, unknown> =>
 
 describe("pinned native OpenCode commands and first-prompt references through Keiko's admission", () => {
   const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
+
+  // S15 (#3906): an `@agent` mention travels as the runtime's own attachment, exactly as its own
+  // interface sends it, after Keiko confirmed the runtime lists the subagent for this workspace.
+  it.skipIf(skip)(
+    "mentions a listed subagent through Keiko's admission and refuses an unlisted one unsent",
+    async () => {
+      await withRun(["text"], async (run) => {
+        const path = turnPath(run);
+        const text = "Ask @explore to look at the notes.";
+        const mentions = {
+          agents: [{ name: "explore", mention: { start: 4, end: 12, text: "@explore" } }],
+        };
+
+        await expect(
+          path.dispatch({
+            requestId: "req-1",
+            expectedRevision: 1,
+            taskIntent: "x",
+            mentions: { agents: [{ name: "reviewer-that-does-not-exist" }] },
+          }),
+        ).resolves.toMatchObject({ ok: false });
+        expect(run.gateway.requests).toHaveLength(0);
+        expect(lineOf(path.sink.events[0])).toMatchObject({
+          outcome: "refused",
+          reason: "mention-unknown",
+          agentMentionCount: 1,
+        });
+
+        await expect(
+          path.dispatch({ requestId: "req-2", expectedRevision: 1, taskIntent: text, mentions }),
+        ).resolves.toMatchObject({ ok: true });
+        await settled(run);
+
+        expect(lastUserContent(run.gateway.requests[0])).toContain(text);
+        const stored = await run.raw("GET", `/api/session/${run.sessionId}/message`);
+        expect(JSON.stringify(stored.body)).toContain(
+          '"agents":[{"name":"explore","mention":{"start":4,"end":12,"text":"@explore"}}]',
+        );
+      });
+    },
+    120_000,
+  );
 
   it.skipIf(skip)(
     "starts a turn as review through the production dispatcher and records the command body-free",

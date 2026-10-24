@@ -5,6 +5,8 @@ import {
   CODING_WORKBENCH_RUNTIME_INBOX_PREVIEW_MAX_CHARS,
   isCodingWorkbenchPromptReferencePath,
   type CodingWorkbenchPromptDelivery,
+  type CodingWorkbenchPromptMentions,
+  type CodingWorkbenchPromptMentionSpan,
   type CodingWorkbenchPromptReference,
   type CodingWorkbenchRuntimePromptInputs,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
@@ -32,6 +34,7 @@ import {
   OPENCODE_PROMPT_FILE_MAX_BYTES,
   openCodeV2PromptFileData,
   type OpenCodeV2HttpClient,
+  type OpenCodeV2PromptInputs,
 } from "./opencodeV2HttpClient.js";
 
 /**
@@ -62,7 +65,7 @@ export function openCodePromptInputs(
   profile: OpenCodeToolProfile,
 ): CodingWorkbenchRuntimePromptInputs {
   const native = profile === "native";
-  return { delivery: native, references: native, commands: native };
+  return { delivery: native, references: native, commands: native, mentions: native };
 }
 
 /**
@@ -81,6 +84,8 @@ export interface PromptInputsRequest {
   readonly references?: readonly CodingWorkbenchPromptReference[] | undefined;
   /** Runs the turn as this command; a delivery never carries one. */
   readonly command?: PromptCommandRequest | undefined;
+  /** The runtime's subagents and skills the prompt mentions (S15, #3906). */
+  readonly mentions?: CodingWorkbenchPromptMentions | undefined;
   /** Request-scoped diagnostic join; never persisted or forwarded to the model. */
   readonly correlationId?: string | undefined;
   /**
@@ -104,6 +109,8 @@ export interface PromptInputsSummary {
   readonly delivery?: CodingWorkbenchPromptDelivery | undefined;
   readonly referenceCount: number;
   readonly command?: PromptCommandRequest | undefined;
+  /** Sent to the runtime as its own attachments; the log records only how many there are. */
+  readonly mentions?: CodingWorkbenchPromptMentions | undefined;
   /** Request-scoped diagnostic join; never persisted or forwarded to the model. */
   readonly correlationId?: string | undefined;
   /**
@@ -126,6 +133,9 @@ export type PromptInputsRefusal =
   | "command-unavailable"
   | "command-unknown"
   | "commands-unsupported"
+  | "mention-unavailable"
+  | "mention-unknown"
+  | "mentions-unsupported"
   | "delivery-unsupported"
   | "references-unsupported"
   | "run-unavailable"
@@ -334,6 +344,9 @@ const PROMPT_INPUTS_SETTLED_OPERATION = defineActivityLogOperation({
     commandDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
     // The UTF-8 size of the text after the command, the only trace of what the operator typed.
     commandArgumentBytes: { type: "integer", dataClass: "count", required: false },
+    // How many of the runtime's subagents and skills the prompt mentions (S15, #3906); never a name.
+    agentMentionCount: { type: "integer", dataClass: "count", required: false },
+    skillMentionCount: { type: "integer", dataClass: "count", required: false },
     reason: {
       type: "string",
       dataClass: "closed-enum",
@@ -343,6 +356,9 @@ const PROMPT_INPUTS_SETTLED_OPERATION = defineActivityLogOperation({
         "command-unavailable",
         "command-unknown",
         "commands-unsupported",
+        "mention-unavailable",
+        "mention-unknown",
+        "mentions-unsupported",
         "delivery-refused",
         "delivery-unconfirmed",
         "delivery-unsupported",
@@ -417,12 +433,67 @@ export function recordPromptInputs(
         ...(summary.requestId === undefined ? {} : { requestId: summary.requestId }),
         ...(settled.inputBinding === undefined ? {} : { inputBinding: settled.inputBinding }),
         ...commandFields(summary.command),
+        ...mentionCounts(summary.mentions),
         ...(settled.outcome === "accepted"
           ? { attachedBytes: settled.attachedBytes }
           : { reason: settled.reason }),
       },
     ),
   );
+}
+
+function mentionCounts(mentions: CodingWorkbenchPromptMentions | undefined): {
+  readonly agentMentionCount?: number;
+  readonly skillMentionCount?: number;
+} {
+  if (mentions === undefined) return {};
+  return {
+    agentMentionCount: mentions.agents?.length ?? 0,
+    skillMentionCount: mentions.skills?.length ?? 0,
+  };
+}
+
+/**
+ * The runtime's inputs for an admitted prompt: its files and mentions. `offset` moves every mention
+ * by the characters the sent text leads with (a turn's hidden context), so a span still names the
+ * token the operator typed.
+ */
+export function runtimePromptInputs(
+  inputs: AdmittedPromptInputs | undefined,
+  offset = 0,
+): Pick<OpenCodeV2PromptInputs, "files" | "mentions"> {
+  if (inputs === undefined) return {};
+  const mentions = inputs.mentions;
+  return {
+    ...(inputs.files.length === 0 ? {} : { files: inputs.files }),
+    ...(mentions === undefined ? {} : { mentions: shiftedMentions(mentions, offset) }),
+  };
+}
+
+function shiftedSpan<T extends { readonly mention?: CodingWorkbenchPromptMentionSpan | undefined }>(
+  entry: T,
+  offset: number,
+): T {
+  const { mention } = entry;
+  if (mention === undefined || offset === 0) return entry;
+  return {
+    ...entry,
+    mention: { ...mention, start: mention.start + offset, end: mention.end + offset },
+  };
+}
+
+function shiftedMentions(
+  mentions: CodingWorkbenchPromptMentions,
+  offset: number,
+): CodingWorkbenchPromptMentions {
+  return {
+    ...(mentions.agents === undefined
+      ? {}
+      : { agents: mentions.agents.map((entry) => shiftedSpan(entry, offset)) }),
+    ...(mentions.skills === undefined
+      ? {}
+      : { skills: mentions.skills.map((entry) => shiftedSpan(entry, offset)) }),
+  };
 }
 
 /** The log's words for a command turn: a built-in by name, any other by the digest of its name. */
@@ -509,6 +580,7 @@ function requestSummary(request: PromptInputsRequest): PromptInputsSummary {
     referenceCount: request.references?.length ?? 0,
     correlationId: request.correlationId,
     command: request.command,
+    ...(request.mentions === undefined ? {} : { mentions: request.mentions }),
   };
 }
 
@@ -516,14 +588,13 @@ function capabilityRefusal(
   capabilities: CodingWorkbenchRuntimePromptInputs,
   request: PromptInputsRequest,
 ): PromptInputsRefusal | undefined {
-  if (request.delivery !== undefined && !capabilities.delivery) return "delivery-unsupported";
-  if ((request.references?.length ?? 0) > 0 && !capabilities.references) {
-    return "references-unsupported";
-  }
-  if (request.command !== undefined && capabilities.commands !== true) {
-    return "commands-unsupported";
-  }
-  return undefined;
+  const asked: readonly (readonly [boolean, boolean | undefined, PromptInputsRefusal])[] = [
+    [request.delivery !== undefined, capabilities.delivery, "delivery-unsupported"],
+    [(request.references?.length ?? 0) > 0, capabilities.references, "references-unsupported"],
+    [request.command !== undefined, capabilities.commands, "commands-unsupported"],
+    [request.mentions !== undefined, capabilities.mentions, "mentions-unsupported"],
+  ];
+  return asked.find(([wanted, offered]) => wanted && offered !== true)?.[2];
 }
 
 function admittedInputs(
@@ -642,7 +713,14 @@ type NativeInputBinding =
  */
 function messageFingerprint(text: string, inputs: AdmittedPromptInputs): string {
   return createHash("sha256")
-    .update(JSON.stringify([inputs.delivery, text, inputs.files.map((f) => [f.uri, f.name])]))
+    .update(
+      JSON.stringify([
+        inputs.delivery,
+        text,
+        inputs.files.map((f) => [f.uri, f.name]),
+        inputs.mentions ?? null,
+      ]),
+    )
     .digest("hex");
 }
 
@@ -748,7 +826,7 @@ async function sendDelivery(context: DeliveryContext, attempt: DeliveryAttempt):
     await run.client.prompt(run.sessionId, text, undefined, undefined, {
       id: binding.messageId,
       delivery,
-      files: inputs.files,
+      ...runtimePromptInputs(inputs),
     });
   } catch (error) {
     return recordDeliveryFailure(context, attempt, error);

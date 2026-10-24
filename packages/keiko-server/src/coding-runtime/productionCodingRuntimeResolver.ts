@@ -718,16 +718,17 @@ function refuseUnsupportedAgent(
  * waits for the first turn's dispatch.
  */
 function refuseUnsupportedPromptInputs(
-  request: Pick<ProductionRuntimeBackendInput["request"], "references" | "command">,
+  request: Pick<ProductionRuntimeBackendInput["request"], "references" | "command" | "mentions">,
   runtimeSource: CodingRuntimeTrustedContext["runtimeSource"],
   toolProfile: OpenCodeToolProfile,
 ): void {
-  if (request.references === undefined && request.command === undefined) return;
   const offered = runtimeSource === "keiko-sidecar" ? openCodePromptInputs(toolProfile) : undefined;
-  if (request.references !== undefined && offered?.references !== true) {
-    throw new CodingRuntimeInputsUnsupportedError();
-  }
-  if (request.command !== undefined && offered?.commands !== true) {
+  const asked: readonly (readonly [boolean, boolean | undefined])[] = [
+    [request.references !== undefined, offered?.references],
+    [request.command !== undefined, offered?.commands],
+    [request.mentions !== undefined, offered?.mentions],
+  ];
+  if (asked.some(([wanted, honoured]) => wanted && honoured !== true)) {
     throw new CodingRuntimeInputsUnsupportedError();
   }
 }
@@ -1167,6 +1168,7 @@ export function bindExplicitSkillTurns(
     ...(turnPort.listCommands === undefined || turnPort.admitCommand === undefined
       ? {}
       : { listCommands: turnPort.listCommands, admitCommand: turnPort.admitCommand }),
+    ...(turnPort.listMentions === undefined ? {} : { listMentions: turnPort.listMentions }),
     abortTurn: async (runId): Promise<boolean> => {
       explicitSkills.clear();
       return turnPort.abortTurn(runId);

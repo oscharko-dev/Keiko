@@ -1616,7 +1616,7 @@ describe("unmounted OpenCode runtime composition", () => {
   // eslint-disable-next-line complexity -- this audit fixture keeps lifecycle evidence co-located.
   it("prepares secret-safe state before spawn, proves the private runtime, and disposes only after reap", async () => {
     expect(OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256).toBe(
-      "6a5345a5ecbed013c3ce8e03cf7a2ca86157fe041e5b0ab2c645017d5c7befd5",
+      "64fed78974757f65a486bb3008929416bb88de78e38f12b5b502b0033cc2b400",
     );
     const root = tempDir("keiko-opencode-composition-");
     const workspaceRoot = join(root, "workspace");
@@ -7615,9 +7615,9 @@ describe("prompt inputs on the run port (ADR-0137 D10)", () => {
 
   it("offers delivery, references and slash commands on the native service only", async () => {
     for (const [profile, expected] of [
-      ["native", { delivery: true, references: true, commands: true }],
-      ["direct", { delivery: false, references: false, commands: false }],
-      ["code-mode", { delivery: false, references: false, commands: false }],
+      ["native", { delivery: true, references: true, commands: true, mentions: true }],
+      ["direct", { delivery: false, references: false, commands: false, mentions: false }],
+      ["code-mode", { delivery: false, references: false, commands: false, mentions: false }],
     ] as const) {
       const { fixture, port } = await inputsFixture(profile);
       try {

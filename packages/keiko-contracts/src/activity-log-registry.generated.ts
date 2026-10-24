@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "fd70641397bc8bdb60b8f2dd2d41293af5f67c5ddb6b835b8a2dcfc2d81ed050" as const;
+  "008bee0fc62ad188f7825715f100194e98b5196fe879d8fbadbf341924b0f82c" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -9222,6 +9222,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         state: [
           "coding-runtime.commands.listed",
           "coding-runtime.inbox.action",
+          "coding-runtime.mentions.listed",
           "coding-runtime.prompt-inputs.settled",
         ],
         end: [],
@@ -9238,6 +9239,10 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
         {
+          op: "coding-runtime.mentions.listed",
+          mode: "correlation",
+        },
+        {
           op: "coding-runtime.prompt-inputs.settled",
           mode: "correlation",
         },
@@ -9246,6 +9251,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       resourceSignals: [
         "coding-runtime.commands.listed",
         "coding-runtime.inbox.action",
+        "coding-runtime.mentions.listed",
         "coding-runtime.prompt-inputs.settled",
       ],
       replayReferences: [],
@@ -9379,6 +9385,73 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           missingObligations: [],
         },
         {
+          op: "coding-runtime.mentions.listed",
+          owner: "keiko-server",
+          category: "process",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "agentCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "causeChain",
+              type: "string-array",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
+              name: "frames",
+              type: "string-array",
+              dataClass: "opaque-id",
+              required: false,
+            },
+            {
+              name: "outcome",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "runId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: true,
+            },
+            {
+              name: "skillCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "skippedCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "error-kind",
+            "loss-state",
+            "opaque-id",
+          ],
+          frameCauseEvidence: {
+            frames: true,
+            causeChain: true,
+          },
+          proofIds: ["coding-runtime.mentions.listed.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
           op: "coding-runtime.prompt-inputs.settled",
           owner: "keiko-server",
           category: "process",
@@ -9386,6 +9459,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           causal: "correlation",
           analyzerProjection: "timeline",
           safeContextFields: [
+            {
+              name: "agentMentionCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
             {
               name: "attachedBytes",
               type: "integer",
@@ -9451,6 +9530,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "string",
               dataClass: "opaque-id",
               required: true,
+            },
+            {
+              name: "skillMentionCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
             },
           ],
           evidenceClasses: [
@@ -44321,6 +44406,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "coding-runtime.initial-turn.dispatch-failed": "tools-workflows",
     "coding-runtime.initial-turn.stop-failed": "tools-workflows",
     "coding-runtime.initialization-transport": "tools-workflows",
+    "coding-runtime.mentions.listed": "tools-workflows",
     "coding-runtime.native-formatter.bound": "tools-workflows",
     "coding-runtime.native-narrowing.refused": "tools-workflows",
     "coding-runtime.native-policy.decided": "tools-workflows",

@@ -2,9 +2,13 @@ import {
   CODING_WORKBENCH_PROMPT_REFERENCES_MAX,
   isCodingWorkbenchAgent,
   isCodingWorkbenchCommandName,
+  isCodingWorkbenchMentionName,
   isCodingWorkbenchPromptDelivery,
+  parseCodingWorkbenchPromptMentions,
   type CodingWorkbenchAgent,
+  type CodingWorkbenchAgentMention,
   type CodingWorkbenchPromptDelivery,
+  type CodingWorkbenchSkillMention,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 
 import { SHELL_BLOCK_MARKER } from "./codingRuntimeRepositoryItemSanitizer.js";
@@ -77,6 +81,8 @@ export interface OpenCodeV2PromptInputs {
    * receipt must name this id, or the post fails with `OpenCodeV2ReceiptMismatchError`.
    */
   readonly id?: string | undefined;
+  /** The subagents and skills the prompt mentions (S15, #3906), already checked by the caller. */
+  readonly mentions?: OpenCodeV2PromptMentions | undefined;
 }
 
 /**
@@ -95,6 +101,32 @@ export interface OpenCodeV2Command {
  */
 const MAX_COMMANDS = 256;
 const COMMAND_DESCRIPTION_MAX_CHARS = 1_024;
+
+/**
+ * A subagent the runtime lists (`Agent.Info` of the pinned 2.1.4 schema, mode `subagent` or `all`,
+ * not hidden), by the id a prompt mentions it with, and a skill (`Skill.Info`) by its id and name.
+ * Only these closed fields are kept: an agent's system prompt and permissions and a skill's path and
+ * content never leave the client.
+ */
+export interface OpenCodeV2Agent {
+  readonly name: string;
+  readonly description?: string | undefined;
+}
+
+export interface OpenCodeV2Skill {
+  readonly id: string;
+  readonly name: string;
+  readonly description?: string | undefined;
+}
+
+/** The mentions a prompt carries, in the runtime's own attachment shape. */
+export interface OpenCodeV2PromptMentions {
+  readonly agents?: readonly CodingWorkbenchAgentMention[] | undefined;
+  readonly skills?: readonly CodingWorkbenchSkillMention[] | undefined;
+}
+
+/** A listing past this bound is refused whole; the built-in subagents are two. */
+const MAX_MENTIONABLES = 256;
 
 /**
  * One entry of a session's inbox (`Session.Inbox.Info` of the pinned 2.1.4 schema), reduced to the
@@ -214,6 +246,13 @@ export interface OpenCodeV2HttpClient {
    */
   commands(signal?: AbortSignal): Promise<readonly OpenCodeV2Command[]>;
   /**
+   * The subagents a prompt may mention (`GET /api/agent`, operation `agent.list`) for the run's
+   * workspace: an entry that is primary, hidden or not well named is dropped.
+   */
+  agents(directory: string, signal?: AbortSignal): Promise<readonly OpenCodeV2Agent[]>;
+  /** The skills a prompt may mention (`GET /api/skill`, operation `skill.list`) for the workspace. */
+  skills(directory: string, signal?: AbortSignal): Promise<readonly OpenCodeV2Skill[]>;
+  /**
    * Runs the session's next turn as a slash command (`POST /api/session/{sessionID}/command`,
    * operation `session.command`): the runtime expands the command's template with `text` as its
    * arguments and runs the turn. The body has no message id, so unlike a prompt the post cannot be
@@ -225,7 +264,7 @@ export interface OpenCodeV2HttpClient {
     name: string,
     text: string,
     signal?: AbortSignal,
-    inputs?: Pick<OpenCodeV2PromptInputs, "files">,
+    inputs?: Pick<OpenCodeV2PromptInputs, "files" | "mentions">,
   ): Promise<void>;
   /**
    * The ids of the session's newest messages, newest first (`GET /api/session/{sessionID}/message`,
@@ -434,6 +473,40 @@ function commandDescription(value: unknown): string | undefined {
     : undefined;
 }
 
+function locationQuery(directory: string): string {
+  if (!directory.startsWith("/")) throw new Error("opencode-v2-directory-invalid");
+  return `location%5Bdirectory%5D=${encodeURIComponent(directory)}`;
+}
+
+function mentionDescription(value: unknown): { readonly description?: string } {
+  const description = commandDescription(value);
+  return description === undefined ? {} : { description };
+}
+
+/** Only listed subagents that are not hidden, by their well-formed id. */
+function agentEntries(
+  entries: readonly Readonly<Record<string, unknown>>[],
+): readonly OpenCodeV2Agent[] {
+  if (entries.length > MAX_MENTIONABLES) throw new Error("opencode-v2-envelope-invalid");
+  return entries.flatMap((entry): readonly OpenCodeV2Agent[] => {
+    const { id, mode, hidden } = entry;
+    if (!isCodingWorkbenchMentionName(id) || hidden !== false) return [];
+    if (mode !== "subagent" && mode !== "all") return [];
+    return [{ name: id, ...mentionDescription(entry.description) }];
+  });
+}
+
+function skillEntries(
+  entries: readonly Readonly<Record<string, unknown>>[],
+): readonly OpenCodeV2Skill[] {
+  if (entries.length > MAX_MENTIONABLES) throw new Error("opencode-v2-envelope-invalid");
+  return entries.flatMap((entry): readonly OpenCodeV2Skill[] => {
+    const { id, name } = entry;
+    if (!isCodingWorkbenchMentionName(id) || !isCodingWorkbenchMentionName(name)) return [];
+    return [{ id, name, ...mentionDescription(entry.description) }];
+  });
+}
+
 /** Keeps the closed fields of every well-named entry; the rest of an entry is never copied. */
 function commandEntries(
   entries: readonly Readonly<Record<string, unknown>>[],
@@ -588,19 +661,44 @@ function safePromptFile(file: OpenCodeV2PromptFile): OpenCodeV2PromptFile {
 }
 
 /** The body fields the prompt inputs add; none when the prompt is an ordinary text prompt. */
-function promptInputFields(inputs: OpenCodeV2PromptInputs | undefined): Record<string, unknown> {
+function checkedFiles(inputs: OpenCodeV2PromptInputs | undefined): readonly OpenCodeV2PromptFile[] {
   const files = inputs?.files ?? [];
   if (files.length > CODING_WORKBENCH_PROMPT_REFERENCES_MAX) {
     throw new Error("opencode-v2-prompt-files-oversized");
   }
+  return files;
+}
+
+function checkedDelivery(
+  inputs: OpenCodeV2PromptInputs | undefined,
+): CodingWorkbenchPromptDelivery | undefined {
   const delivery = inputs?.delivery;
   if (delivery !== undefined && !isCodingWorkbenchPromptDelivery(delivery)) {
     throw new Error("opencode-v2-prompt-delivery-invalid");
   }
+  return delivery;
+}
+
+function promptInputFields(inputs: OpenCodeV2PromptInputs | undefined): Record<string, unknown> {
+  const files = checkedFiles(inputs);
+  const delivery = checkedDelivery(inputs);
   return {
     ...messageIdField(inputs?.id),
     ...(files.length === 0 ? {} : { files: files.map(safePromptFile) }),
+    ...mentionFields(inputs?.mentions),
     ...(delivery === undefined ? {} : { delivery }),
+  };
+}
+
+/** The attachments exactly as the runtime's own interface sends them; anything malformed refuses. */
+function mentionFields(mentions: OpenCodeV2PromptMentions | undefined): Record<string, unknown> {
+  if (mentions === undefined) return {};
+  const parsed = parseCodingWorkbenchPromptMentions(mentions);
+  if (!parsed.ok) throw new Error("opencode-v2-prompt-mentions-invalid");
+  const { agents, skills } = parsed.value;
+  return {
+    ...(agents === undefined ? {} : { agents }),
+    ...(skills === undefined ? {} : { skills }),
   };
 }
 
@@ -616,7 +714,7 @@ function preparedCommand(
   sessionId: string,
   name: string,
   text: string,
-  inputs: Pick<OpenCodeV2PromptInputs, "files"> | undefined,
+  inputs: Pick<OpenCodeV2PromptInputs, "files" | "mentions"> | undefined,
 ): { readonly path: string; readonly body: Record<string, unknown> } {
   try {
     if (Buffer.byteLength(text, "utf8") > MAX_TEXT_BYTES)
@@ -626,10 +724,17 @@ function preparedCommand(
     // against the original executable), so the text can never carry one.
     if (text.includes(SHELL_BLOCK_MARKER))
       throw new Error("opencode-v2-command-shell-substitution");
-    const { files } = promptInputFields(inputs);
+    // The command body has no message id and no delivery; files and mentions ride it like a prompt.
+    const { files, agents, skills } = promptInputFields(inputs);
     return {
       path: `/api/session/${safeSessionId(sessionId)}/command`,
-      body: { name: safeCommandName(name), text, ...(files === undefined ? {} : { files }) },
+      body: {
+        name: safeCommandName(name),
+        text,
+        ...(files === undefined ? {} : { files }),
+        ...(agents === undefined ? {} : { agents }),
+        ...(skills === undefined ? {} : { skills }),
+      },
     };
   } catch (error) {
     throw new OpenCodeV2PromptRefusedError(
@@ -906,6 +1011,18 @@ export function createOpenCodeV2HttpClient(
     },
     commands: async (signal) =>
       commandEntries(arrayEnvelope(await request("GET", "/api/command", undefined, signal))),
+    agents: async (directory, signal) =>
+      agentEntries(
+        arrayEnvelope(
+          await request("GET", `/api/agent?${locationQuery(directory)}`, undefined, signal),
+        ),
+      ),
+    skills: async (directory, signal) =>
+      skillEntries(
+        arrayEnvelope(
+          await request("GET", `/api/skill?${locationQuery(directory)}`, undefined, signal),
+        ),
+      ),
     command: async (sessionId, name, text, signal, inputs): Promise<void> => {
       const prepared = preparedCommand(sessionId, name, text, inputs);
       await request("POST", prepared.path, prepared.body, signal);

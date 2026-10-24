@@ -18,11 +18,17 @@ import {
   createOpenCodeCommandPresentation,
   createOpenCodeCommandsRunPort,
   projectCommands,
+  projectMentionables,
   recordCommandsListed,
   type CommandsRun,
 } from "./opencodeCommands.js";
 import { openCodePromptInputs, type AdmittedPromptInputs } from "./opencodePromptInputs.js";
-import { OpenCodeV2HttpStatusError, type OpenCodeV2Command } from "./opencodeV2HttpClient.js";
+import {
+  OpenCodeV2HttpStatusError,
+  type OpenCodeV2Agent,
+  type OpenCodeV2Command,
+  type OpenCodeV2Skill,
+} from "./opencodeV2HttpClient.js";
 
 const NATIVE = openCodePromptInputs("native");
 const MAPPED = openCodePromptInputs("direct");
@@ -38,22 +44,48 @@ interface Harness {
   readonly reads: { count: number };
 }
 
+const AGENTS: readonly OpenCodeV2Agent[] = [
+  { name: "general", description: "General-purpose agent for researching" },
+  { name: "explore", description: "Fast agent specialized for exploring code" },
+];
+const SKILLS: readonly OpenCodeV2Skill[] = [
+  { id: "review-method", name: "review-method", description: "A synthetic review method" },
+];
+const WORKSPACE = "/workspace/repo";
+
 function harness(
   options: {
     readonly capabilities?: typeof NATIVE;
     readonly missing?: boolean;
     readonly listing?: () => Promise<readonly OpenCodeV2Command[]>;
+    readonly agents?: () => Promise<readonly OpenCodeV2Agent[]>;
+    readonly skills?: () => Promise<readonly OpenCodeV2Skill[]>;
+    readonly directories?: string[];
+    readonly pauses?: number[];
   } = {},
 ): Harness {
   const sink = createBufferedServerLogSink();
   const reads = { count: 0 };
   const run: CommandsRun = {
     runId: "run-1",
+    workspaceRoot: WORKSPACE,
     client: {
       commands: () => {
         reads.count += 1;
         return (
           options.listing ?? ((): Promise<readonly OpenCodeV2Command[]> => Promise.resolve(LISTING))
+        )();
+      },
+      agents: (directory) => {
+        options.directories?.push(directory);
+        return (
+          options.agents ?? ((): Promise<readonly OpenCodeV2Agent[]> => Promise.resolve(AGENTS))
+        )();
+      },
+      skills: (directory) => {
+        options.directories?.push(directory);
+        return (
+          options.skills ?? ((): Promise<readonly OpenCodeV2Skill[]> => Promise.resolve(SKILLS))
         )();
       },
     },
@@ -63,6 +95,10 @@ function harness(
       readyRun: (runId) => (options.missing === true || runId !== "run-1" ? undefined : run),
       capabilities: options.capabilities ?? NATIVE,
       activityLog: sink,
+      pause: (ms): Promise<void> => {
+        options.pauses?.push(ms);
+        return Promise.resolve();
+      },
     }),
     sink,
     reads,
@@ -338,6 +374,136 @@ describe("confirming the command a turn names", () => {
     for (const h of refusals) {
       for (const event of h.sink.events) expect(activityLogEventWillBeRejected(event)).toBe(false);
     }
+  });
+});
+
+describe("the subagents and skills a prompt may mention (#3906)", () => {
+  function mentioned(
+    mentions: AdmittedPromptInputs["mentions"],
+    command?: string,
+  ): AdmittedPromptInputs {
+    return {
+      referenceCount: 0,
+      files: [],
+      fileBytes: 0,
+      ...(command === undefined ? {} : { command: { name: command, argumentBytes: 0 } }),
+      mentions,
+      correlationId: "corr-0123456789",
+    };
+  }
+
+  it("lists both for the run's own workspace and records counts only", async () => {
+    const directories: string[] = [];
+    const h = harness({ directories });
+
+    await expect(h.port.listMentions("run-1", "corr-mentions-1")).resolves.toEqual({
+      agents: AGENTS,
+      skills: SKILLS,
+    });
+
+    expect(directories).toEqual([WORKSPACE, WORKSPACE]);
+    expect(lines(h)).toEqual([
+      { runId: "run-1", outcome: "listed", agentCount: 2, skillCount: 1, skippedCount: 0 },
+    ]);
+    expect(h.sink.events[0]?.correlationId).toBe("corr-mentions-1");
+    expectActivityLogProof(
+      "coding-runtime.mentions.listed.emitted-line",
+      formatActivityLogProofLine(h.sink.events[0] ?? {}),
+    );
+    expect(JSON.stringify(h.sink.events)).not.toContain("review-method");
+  });
+
+  it("keeps the browser contract: an unsafe description is dropped, a repeat or a bad name is left out", () => {
+    const projected = projectMentionables(
+      [{ name: "general", description: "fine \u202eevil" }, { name: "general" }],
+      [{ id: "x", name: "x", description: "ok" }],
+    );
+    expect(projected).toEqual({
+      agents: [{ name: "general" }],
+      skills: [{ id: "x", name: "x", description: "ok" }],
+      skippedCount: 1,
+    });
+  });
+
+  it("offers none for a mapped profile, a run that is not live and a failed listing", async () => {
+    const unsupported = harness({ capabilities: MAPPED });
+    await expect(unsupported.port.listMentions("run-1")).resolves.toBeUndefined();
+    const missing = harness({ missing: true });
+    await expect(missing.port.listMentions("run-1")).resolves.toBeUndefined();
+    const failing = harness({
+      skills: () => Promise.reject(new OpenCodeV2HttpStatusError(500)),
+    });
+    await expect(failing.port.listMentions("run-1")).resolves.toBeUndefined();
+
+    expect(lines(unsupported)).toEqual([{ runId: "run-1", outcome: "unsupported" }]);
+    expect(lines(missing)).toEqual([{ runId: "run-1", outcome: "unavailable" }]);
+    expect(lines(failing)).toMatchObject([{ runId: "run-1", outcome: "failed" }]);
+    expect(failing.sink.events[0]).toMatchObject({ level: "warn" });
+  });
+
+  it("admits a turn whose every mention the runtime lists, a command's included", async () => {
+    const h = harness();
+    const inputs = mentioned(
+      { agents: [{ name: "explore" }], skills: [{ id: "review-method" }] },
+      "review",
+    );
+
+    await expect(h.port.admitCommand("run-1", inputs)).resolves.toEqual({ ok: true, inputs });
+    expect(lines(h)).toEqual([]);
+  });
+
+  it.each([
+    ["an unlisted agent", { agents: [{ name: "reviewer" }] }, "mention-unknown"],
+    ["an unlisted skill", { skills: [{ id: "deploy-method" }] }, "mention-unknown"],
+  ] as const)("refuses %s before anything is sent", async (_label, mentions, reason) => {
+    const h = harness();
+
+    await expect(h.port.admitCommand("run-1", mentioned(mentions))).resolves.toEqual({
+      ok: false,
+      reason,
+    });
+    expect(lines(h)).toMatchObject([
+      { outcome: "refused", reason, agentMentionCount: expect.any(Number) },
+    ]);
+  });
+
+  // The pinned 2.1.4 answers the first read of a location that is still loading with an empty
+  // listing (original executable); the mention is decided once the location has loaded.
+  it("reads a location that is still loading again before deciding, a bounded number of times", async () => {
+    const pauses: number[] = [];
+    let reads = 0;
+    const loading = harness({
+      pauses,
+      agents: () => {
+        reads += 1;
+        return Promise.resolve(reads < 3 ? [] : AGENTS);
+      },
+    });
+    const inputs = mentioned({ agents: [{ name: "explore" }] });
+
+    await expect(loading.port.admitCommand("run-1", inputs)).resolves.toEqual({ ok: true, inputs });
+    expect(pauses).toEqual([250, 250]);
+
+    const neverLoads = harness({ pauses: [], agents: () => Promise.resolve([]) });
+    await expect(neverLoads.port.admitCommand("run-1", inputs)).resolves.toEqual({
+      ok: false,
+      reason: "mention-unknown",
+    });
+  });
+
+  it("refuses mentions it cannot confirm: a listing that failed, a mapped profile, no live run", async () => {
+    const failing = harness({ agents: () => Promise.reject(new Error("socket hang up")) });
+    await expect(
+      failing.port.admitCommand("run-1", mentioned({ agents: [{ name: "general" }] })),
+    ).resolves.toEqual({ ok: false, reason: "mention-unavailable" });
+    const mapped = harness({ capabilities: MAPPED });
+    await expect(
+      mapped.port.admitCommand("run-1", mentioned({ skills: [{ id: "review-method" }] })),
+    ).resolves.toEqual({ ok: false, reason: "mentions-unsupported" });
+    const missing = harness({ missing: true });
+    await expect(
+      missing.port.admitCommand("run-1", mentioned({ skills: [{ id: "review-method" }] })),
+    ).resolves.toEqual({ ok: false, reason: "run-unavailable" });
   });
 });
 

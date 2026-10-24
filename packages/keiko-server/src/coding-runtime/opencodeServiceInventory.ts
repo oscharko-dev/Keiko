@@ -411,8 +411,8 @@ export const OPENCODE_SERVICE_DISPOSITIONS = flatten([
     [],
     ["experimental.voice.models", "experimental.voice.session", "experimental.voice.instructions"],
   ),
-  refused("not-yet-implemented", 3903, ["C01"], ["agent.list", "agent.get"]),
-  refused("not-yet-implemented", 3903, ["T17"], ["skill.list", "experimental.session.skill"]),
+  refused("not-yet-implemented", 3903, ["C01"], ["agent.get"]),
+  refused("not-yet-implemented", 3903, ["T17"], ["experimental.session.skill"]),
   refused(
     "not-yet-implemented",
     3903,

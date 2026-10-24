@@ -1,7 +1,11 @@
 import {
   CODING_WORKBENCH_COMMANDS_MAX,
+  CODING_WORKBENCH_MENTIONABLES_MAX,
   validateCodingWorkbenchRuntimeCommandsChannelPayload,
   type CodingWorkbenchCommand,
+  type CodingWorkbenchMentionableAgent,
+  type CodingWorkbenchMentionableSkill,
+  type CodingWorkbenchPromptMentions,
   type CodingWorkbenchRuntimePromptInputs,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import {
@@ -24,7 +28,12 @@ import {
   type PromptInputsAdmission,
   type PromptInputsRefusal,
 } from "./opencodePromptInputs.js";
-import type { OpenCodeV2Command, OpenCodeV2HttpClient } from "./opencodeV2HttpClient.js";
+import type {
+  OpenCodeV2Agent,
+  OpenCodeV2Command,
+  OpenCodeV2HttpClient,
+  OpenCodeV2Skill,
+} from "./opencodeV2HttpClient.js";
 
 /**
  * The slash commands of a native run (C02, ADR-0137 D10). A command is a prompt template the
@@ -38,7 +47,15 @@ import type { OpenCodeV2Command, OpenCodeV2HttpClient } from "./opencodeV2HttpCl
 /** The part of a ready run the commands need; `ReadyRun` of the composition satisfies it. */
 export interface CommandsRun {
   readonly runId: string;
-  readonly client: Pick<OpenCodeV2HttpClient, "commands">;
+  /** The run's workspace: the location the runtime lists its subagents and skills for. */
+  readonly workspaceRoot: string;
+  readonly client: Pick<OpenCodeV2HttpClient, "commands" | "agents" | "skills">;
+}
+
+/** The subagents and skills a prompt of the run may mention, as the browser may receive them. */
+export interface CodingRuntimeMentionables {
+  readonly agents: readonly CodingWorkbenchMentionableAgent[];
+  readonly skills: readonly CodingWorkbenchMentionableSkill[];
 }
 
 export interface OpenCodeCommandsRunPort {
@@ -52,9 +69,19 @@ export interface OpenCodeCommandsRunPort {
     correlationId?: string,
   ) => Promise<readonly CodingWorkbenchCommand[] | undefined>;
   /**
+   * The subagents and skills the run's runtime lists right now for the `@` and `$` menus (S15,
+   * #3906), or `undefined` when the run offers none. Never throws; one body-free line per listing.
+   */
+  readonly listMentions: (
+    runId: string,
+    correlationId?: string,
+  ) => Promise<CodingRuntimeMentionables | undefined>;
+  /**
    * Confirms, before anything is reserved or sent, that the runtime lists the command an admitted
-   * turn names. A turn that names none is returned unchanged. Never throws; a refusal is recorded
-   * as one body-free line on the prompt-inputs operation.
+   * turn names and every subagent and skill it mentions: the runtime itself stores any name it is
+   * given, so this check is what keeps an unlisted one out. A turn that names none is returned
+   * unchanged. Never throws; a refusal is recorded as one body-free line on the prompt-inputs
+   * operation.
    */
   readonly admitCommand: (
     runId: string,
@@ -66,6 +93,35 @@ export interface OpenCodeCommandsRunPortDeps {
   readonly readyRun: (runId: string) => CommandsRun | undefined;
   readonly capabilities: CodingWorkbenchRuntimePromptInputs;
   readonly activityLog: ServerLogSink | undefined;
+  /** Waits between the reads of a location that is still loading; injectable for tests. */
+  readonly pause?: ((ms: number) => Promise<void>) | undefined;
+}
+
+/**
+ * The pinned 2.1.4 loads a location's agents and skills on its first touch, and answers that first
+ * read with an empty listing (proven on the original executable). Its built-in subagents are always
+ * listed once it has loaded, so an empty agent listing means "not loaded yet": it is read again, a
+ * bounded number of times, before anything is decided from it.
+ */
+const LOCATION_LOAD_READS = 6;
+const LOCATION_LOAD_PAUSE_MS = 250;
+
+const realPause = (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+
+async function loadedAgents(
+  deps: OpenCodeCommandsRunPortDeps,
+  run: CommandsRun,
+): Promise<readonly OpenCodeV2Agent[]> {
+  const pause = deps.pause ?? realPause;
+  let agents = await run.client.agents(run.workspaceRoot);
+  for (let read = 1; read < LOCATION_LOAD_READS && agents.length === 0; read += 1) {
+    await pause(LOCATION_LOAD_PAUSE_MS);
+    agents = await run.client.agents(run.workspaceRoot);
+  }
+  return agents;
 }
 
 const COMMANDS_LISTED_OPERATION = defineActivityLogOperation({
@@ -151,6 +207,96 @@ export function recordCommandsListed(
   );
 }
 
+const MENTIONS_LISTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.mentions.listed",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.opencodeCommands.recordMentionsListed",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["failed", "listed", "unavailable", "unsupported"],
+    },
+    // How many subagents and skills the browser was given, and how many of the runtime's entries
+    // were left out (a name or description the contract does not admit, a repeat, past the bound).
+    agentCount: { type: "integer", dataClass: "count", required: false },
+    skillCount: { type: "integer", dataClass: "count", required: false },
+    skippedCount: { type: "integer", dataClass: "count", required: false },
+    frames: {
+      type: "string-array",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-runtime-prompt-inputs"],
+  proofIds: ["coding-runtime.mentions.listed.emitted-line"],
+  releaseImpact: "patch",
+});
+
+type MentionsListedSettlement =
+  | { readonly outcome: "unavailable" | "unsupported" }
+  | {
+      readonly outcome: "listed";
+      readonly agentCount: number;
+      readonly skillCount: number;
+      readonly skippedCount: number;
+    }
+  | { readonly outcome: "failed"; readonly error: unknown };
+
+/** One body-free line per mentions listing: counts only, never a name or a description. */
+export function recordMentionsListed(
+  activityLog: ServerLogSink | undefined,
+  runId: string,
+  settled: MentionsListedSettlement,
+  correlationId?: string,
+): void {
+  const failed = settled.outcome === "failed";
+  const { outcome } = settled;
+  (activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      MENTIONS_LISTED_OPERATION,
+      {
+        level: failed ? "warn" : "info",
+        correlationId: correlationIdOrUnknown(correlationId ?? runId),
+        ...(failed
+          ? { errorKind: activityLogErrorKindOr(errorKindOf(settled.error), "internal") }
+          : {}),
+      },
+      {
+        runId,
+        outcome,
+        ...(settled.outcome === "listed"
+          ? {
+              agentCount: settled.agentCount,
+              skillCount: settled.skillCount,
+              skippedCount: settled.skippedCount,
+            }
+          : {}),
+        ...(failed
+          ? { frames: keikoStackFrames(settled.error), causeChain: causeChain(settled.error) }
+          : {}),
+      },
+    ),
+  );
+}
+
 /**
  * The entry as the browser may receive it. The contract's own validator is the judge, so a listing
  * this module returns is one the browser's validation accepts: an entry whose description it
@@ -219,6 +365,128 @@ async function listRunCommands(
   }
 }
 
+// An entry the browser's validation would refuse is first offered without its description, then
+// left out; the contract's validator is the judge, as for a command.
+function acceptedEntry<T extends { readonly description?: string | undefined }>(
+  entry: T,
+  key: "agents" | "skills",
+): T | undefined {
+  const { description, ...bare } = entry;
+  const candidates = description === undefined ? [entry] : [entry, bare as T];
+  return candidates.find(
+    (candidate) =>
+      validateCodingWorkbenchRuntimeCommandsChannelPayload({
+        session: "active",
+        [key]: [candidate],
+      }).ok,
+  );
+}
+
+function projectList<T extends { readonly description?: string | undefined }>(
+  listing: readonly T[],
+  key: "agents" | "skills",
+  identity: (entry: T) => string,
+): readonly T[] {
+  const seen = new Set<string>();
+  const accepted: T[] = [];
+  for (const entry of listing) {
+    const kept = acceptedEntry(entry, key);
+    if (kept === undefined || seen.has(identity(kept))) continue;
+    if (accepted.length === CODING_WORKBENCH_MENTIONABLES_MAX) break;
+    seen.add(identity(kept));
+    accepted.push(kept);
+  }
+  return accepted;
+}
+
+/** Bounded, duplicate-free and contract-valid: what the browser is given of both listings. */
+export function projectMentionables(
+  agents: readonly OpenCodeV2Agent[],
+  skills: readonly OpenCodeV2Skill[],
+): CodingRuntimeMentionables & { readonly skippedCount: number } {
+  const keptAgents = projectList(agents, "agents", (entry) => entry.name);
+  const keptSkills = projectList(skills, "skills", (entry) => entry.id);
+  return {
+    agents: keptAgents,
+    skills: keptSkills,
+    skippedCount: agents.length + skills.length - keptAgents.length - keptSkills.length,
+  };
+}
+
+async function listRunMentions(
+  deps: OpenCodeCommandsRunPortDeps,
+  runId: string,
+  correlationId: string | undefined,
+): Promise<CodingRuntimeMentionables | undefined> {
+  const settle = (settled: MentionsListedSettlement): void => {
+    recordMentionsListed(deps.activityLog, runId, settled, correlationId);
+  };
+  if (deps.capabilities.mentions !== true) {
+    settle({ outcome: "unsupported" });
+    return undefined;
+  }
+  const run = deps.readyRun(runId);
+  if (run === undefined) {
+    settle({ outcome: "unavailable" });
+    return undefined;
+  }
+  try {
+    // The skills are read once the location has loaded, which the agent listing shows.
+    const agents = await loadedAgents(deps, run);
+    const skills = await run.client.skills(run.workspaceRoot);
+    const projected = projectMentionables(agents, skills);
+    settle({
+      outcome: "listed",
+      agentCount: projected.agents.length,
+      skillCount: projected.skills.length,
+      skippedCount: projected.skippedCount,
+    });
+    return { agents: projected.agents, skills: projected.skills };
+  } catch (error) {
+    settle({ outcome: "failed", error });
+    return undefined;
+  }
+}
+
+// Every mention must name an entry the runtime lists for the run's workspace right now, read once
+// the location has loaded.
+async function unlistedMention(
+  deps: OpenCodeCommandsRunPortDeps,
+  run: CommandsRun,
+  mentions: CodingWorkbenchPromptMentions,
+): Promise<boolean> {
+  const agents = await loadedAgents(deps, run);
+  const skills = mentions.skills === undefined ? [] : await run.client.skills(run.workspaceRoot);
+  const agentNames = new Set(agents.map((entry) => entry.name));
+  const skillIds = new Set(skills.map((entry) => entry.id));
+  return (
+    (mentions.agents ?? []).some((entry) => !agentNames.has(entry.name)) ||
+    (mentions.skills ?? []).some((entry) => !skillIds.has(entry.id))
+  );
+}
+
+async function admitRunMentions(
+  deps: OpenCodeCommandsRunPortDeps,
+  runId: string,
+  inputs: AdmittedPromptInputs,
+): Promise<PromptInputsAdmission> {
+  const mentions = inputs.mentions;
+  if (mentions === undefined) return { ok: true, inputs };
+  if (deps.capabilities.mentions !== true) {
+    return recordRefusal(deps, runId, inputs, "mentions-unsupported");
+  }
+  const run = deps.readyRun(runId);
+  if (run === undefined) return recordRefusal(deps, runId, inputs, "run-unavailable");
+  try {
+    return (await unlistedMention(deps, run, mentions))
+      ? recordRefusal(deps, runId, inputs, "mention-unknown")
+      : { ok: true, inputs };
+  } catch (error) {
+    // A listing the runtime could not give proves nothing about a name: the turn is not started.
+    return recordRefusal(deps, runId, inputs, "mention-unavailable", error);
+  }
+}
+
 function recordRefusal(
   deps: OpenCodeCommandsRunPortDeps,
   runId: string,
@@ -281,7 +549,13 @@ export function createOpenCodeCommandsRunPort(
 ): OpenCodeCommandsRunPort {
   return {
     listCommands: (runId, correlationId) => listRunCommands(deps, runId, correlationId),
-    admitCommand: (runId, inputs) => admitRunCommand(deps, runId, inputs),
+    listMentions: (runId, correlationId) => listRunMentions(deps, runId, correlationId),
+    // The command first, then the mentions: each refusal is its own closed line, and a turn that
+    // names neither passes through both unchanged.
+    admitCommand: async (runId, inputs): Promise<PromptInputsAdmission> => {
+      const command = await admitRunCommand(deps, runId, inputs);
+      return command.ok ? admitRunMentions(deps, runId, command.inputs) : command;
+    },
   };
 }
 

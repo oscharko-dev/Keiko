@@ -141,6 +141,7 @@ import {
   defineActivityLogOperation,
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import type { CodingRuntimeMentionables } from "./opencodeCommands.js";
 export type { CodingRuntimeIssueIntake } from "./codingRuntimeIssueIntake.js";
 
 const CODING_RUNTIME_STATE_FIELD = {
@@ -1174,11 +1175,12 @@ function agentField(agent: CodingWorkbenchAgent | undefined): {
 
 /** The first prompt's references and slash command as optional keys, so an absent one adds no key. */
 function promptInputFields(
-  request: Pick<CodingWorkbenchRuntimeStartRequest, "references" | "command">,
-): Pick<CodingWorkbenchRuntimeStartRequest, "references" | "command"> {
+  request: Pick<CodingWorkbenchRuntimeStartRequest, "references" | "command" | "mentions">,
+): Pick<CodingWorkbenchRuntimeStartRequest, "references" | "command" | "mentions"> {
   return {
     ...(request.references === undefined ? {} : { references: request.references }),
     ...(request.command === undefined ? {} : { command: request.command }),
+    ...(request.mentions === undefined ? {} : { mentions: request.mentions }),
   };
 }
 
@@ -2097,6 +2099,14 @@ export class CodingRuntimeOrchestrator {
   /** The messages still waiting for the running turn; see `CodingRuntimeOperationCoordinator`. */
   listInbox(runId: string, correlationId?: string): Promise<CodingRuntimeInboxItems | undefined> {
     return this.operations.listInbox(runId, correlationId);
+  }
+
+  /** The subagents and skills the run's runtime lists right now; see the coordinator. */
+  listMentions(
+    runId: string,
+    correlationId?: string,
+  ): Promise<CodingRuntimeMentionables | undefined> {
+    return this.operations.listMentions(runId, correlationId);
   }
 
   /** The slash commands the run's runtime lists right now; see `CodingRuntimeOperationCoordinator`. */

@@ -653,10 +653,10 @@ table with an owner. The diff unit test pins both fixtures.
 
 | Disposition                             | HTTP operations | CLI commands |
 | --------------------------------------- | --------------- | ------------ |
-| `admitted`                              | 26              | 0            |
+| `admitted`                              | 28              | 0            |
 | `covered`                               | 6               | 0            |
 | `keiko-operation`                       | 8               | 5            |
-| `refused`                               | 109             | 36           |
+| `refused`                               | 107             | 36           |
 | refused: `leaves-machine`               | 8               | 4            |
 | refused: `keiko-owns-workspace-binding` | 9               | 0            |
 | refused: `keiko-owns-authority`         | 6               | 0            |
@@ -664,7 +664,7 @@ table with an owner. The diff unit test pins both fixtures.
 | refused: `keiko-owns-credentials`       | 16              | 6            |
 | refused: `experimental-unadmitted`      | 19              | 0            |
 | refused: `host-surface`                 | 19              | 17           |
-| refused: `not-yet-implemented`          | 27              | 8            |
+| refused: `not-yet-implemented`          | 25              | 8            |
 | Total                                   | 149             | 41           |
 
 #### HTTP operations (149)
@@ -672,7 +672,7 @@ table with an owner. The diff unit test pins both fixtures.
 | operationId                                      | Endpoint                                                                   | Disposition       | Detail                                                                              | Owner | Rows     |
 | ------------------------------------------------ | -------------------------------------------------------------------------- | ----------------- | ----------------------------------------------------------------------------------- | ----- | -------- |
 | `agent.get`                                      | `GET /api/agent/{agentID}`                                                 | `refused`         | `not-yet-implemented`                                                               | #3903 | C01      |
-| `agent.list`                                     | `GET /api/agent`                                                           | `refused`         | `not-yet-implemented`                                                               | #3903 | C01      |
+| `agent.list`                                     | `GET /api/agent`                                                           | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
 | `command.list`                                   | `GET /api/command`                                                         | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
 | `config.get`                                     | `GET /api/config`                                                          | `refused`         | `keiko-owns-configuration`                                                          | #3903 | C06      |
 | `config.shells`                                  | `GET /api/config/shell`                                                    | `refused`         | `keiko-owns-configuration`                                                          | #3903 | C06      |
@@ -807,7 +807,7 @@ table with an owner. The diff unit test pins both fixtures.
 | `shell.list`                                     | `GET /api/shell`                                                           | `refused`         | `not-yet-implemented`                                                               | #3901 | T13      |
 | `shell.output`                                   | `GET /api/shell/{id}/output`                                               | `refused`         | `not-yet-implemented`                                                               | #3901 | T13      |
 | `shell.remove`                                   | `DELETE /api/shell/{id}`                                                   | `refused`         | `not-yet-implemented`                                                               | #3901 | T13      |
-| `skill.list`                                     | `GET /api/skill`                                                           | `refused`         | `not-yet-implemented`                                                               | #3903 | T17      |
+| `skill.list`                                     | `GET /api/skill`                                                           | `admitted`        | digest-pinned protocol surface                                                      | -     | -        |
 | `vcs.base`                                       | `GET /api/vcs/base`                                                        | `refused`         | `not-yet-implemented`                                                               | #3902 | T12      |
 | `vcs.branch.list`                                | `GET /api/vcs/branch`                                                      | `refused`         | `not-yet-implemented`                                                               | #3902 | T12      |
 | `vcs.diff`                                       | `GET /api/vcs/diff`                                                        | `refused`         | `not-yet-implemented`                                                               | #3902 | T12      |

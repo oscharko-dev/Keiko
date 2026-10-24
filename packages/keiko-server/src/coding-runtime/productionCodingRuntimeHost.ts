@@ -2,6 +2,7 @@ import type { CodingWorkbenchAgent } from "@oscharko-dev/keiko-contracts";
 import type {
   CodingWorkbenchCommand,
   CodingWorkbenchCommandRequest,
+  CodingWorkbenchPromptMentions,
   CodingWorkbenchPromptDelivery,
   CodingWorkbenchPromptReference,
   CodingWorkbenchRuntimeInboxAction,
@@ -9,6 +10,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 
 import type { CodingRuntimeHost } from "./codingRuntimeControlPlane.js";
+import type { CodingRuntimeMentionables } from "./opencodeCommands.js";
 import type { CodingRuntimeInboxItems, CodingRuntimeInboxResult } from "./codingRuntimeInbox.js";
 import type { CodingRuntimeRevertResult, CodingRuntimeRevertState } from "./codingRuntimeRevert.js";
 
@@ -62,6 +64,11 @@ export interface CodingRuntimeTaskDispatchRequest extends CodingRuntimeRunOperat
    * the name before anything is reserved.
    */
   readonly command?: CodingWorkbenchCommandRequest | undefined;
+  /**
+   * The runtime's subagents and skills the prompt mentions (S15, #3906). The dispatcher confirms the
+   * run's runtime lists every one before anything is reserved.
+   */
+  readonly mentions?: CodingWorkbenchPromptMentions | undefined;
 }
 
 /** One undo or restore of the run's newest turn, admitted like any other operator operation. */
@@ -107,6 +114,13 @@ export interface CodingRuntimeTaskDispatcher {
         runId: string,
         correlationId?: string,
       ) => Promise<readonly CodingWorkbenchCommand[] | undefined>)
+    | undefined;
+  /**
+   * The subagents and skills the run's runtime lists right now (S15, #3906), or `undefined` when the
+   * run offers none. Never rejects; the run port records one body-free line for each listing.
+   */
+  readonly mentions?:
+    | ((runId: string, correlationId?: string) => Promise<CodingRuntimeMentionables | undefined>)
     | undefined;
   /**
    * Undoes the run's newest turn or restores an undo (B3, S04). Absent for a runtime without
