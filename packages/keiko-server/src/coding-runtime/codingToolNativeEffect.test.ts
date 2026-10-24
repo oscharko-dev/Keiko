@@ -607,13 +607,35 @@ describe("native edits and checks reach the run's verification ledger (#3901)", 
     messageId: "msg_1",
     callId,
   });
+  /** A finished `npm test` line: its exit status is the test's own. */
+  const passedCheck = {
+    tool: "shell",
+    state: "succeeded",
+    exitCode: 0,
+    exitStatusCheck: "test",
+  } as const;
 
   it("needs verification after a native edit and accepts a passing check at its revision", () => {
     const { ledger, facet } = verifiedRun();
     facet.settled({ ...call("call_edit"), tool: "edit", state: "succeeded" });
     expect(ledger.needsVerification(RUN_ID)).toBe(true);
     facet.verificationAdmitted?.(call("call_test"), "test");
-    facet.settled({ ...call("call_test"), tool: "shell", state: "succeeded", exitCode: 0 });
+    facet.settled({ ...call("call_test"), ...passedCheck });
+    expect(ledger.needsVerification(RUN_ID)).toBe(false);
+  });
+
+  // #3897 review: `npm test; cd .` and `npm test || cd .` run a failing test and exit zero. The
+  // admission saw `npm test` and `cd .`; the finished line carries no check its status speaks for.
+  it("takes a zero exit status as no evidence when another command of the line decided it", () => {
+    const { ledger, facet } = verifiedRun();
+    facet.settled({ ...call("call_edit"), tool: "edit", state: "succeeded" });
+    facet.verificationAdmitted?.(call("call_listed"), "test");
+    facet.settled({ ...call("call_listed"), tool: "shell", state: "succeeded", exitCode: 0 });
+    facet.verificationAdmitted?.(call("call_other_kind"), "test");
+    facet.settled({ ...call("call_other_kind"), ...passedCheck, exitStatusCheck: "lint" });
+    expect(ledger.needsVerification(RUN_ID)).toBe(true);
+    facet.verificationAdmitted?.(call("call_test"), "test");
+    facet.settled({ ...call("call_test"), ...passedCheck });
     expect(ledger.needsVerification(RUN_ID)).toBe(false);
   });
 
@@ -622,7 +644,7 @@ describe("native edits and checks reach the run's verification ledger (#3901)", 
     facet.settled({ ...call("call_edit_1"), tool: "write", state: "succeeded" });
     facet.verificationAdmitted?.(call("call_test"), "test");
     facet.settled({ ...call("call_edit_2"), tool: "patch", state: "succeeded" });
-    facet.settled({ ...call("call_test"), tool: "shell", state: "succeeded", exitCode: 0 });
+    facet.settled({ ...call("call_test"), ...passedCheck });
     expect(ledger.needsVerification(RUN_ID)).toBe(true);
   });
 
@@ -630,7 +652,7 @@ describe("native edits and checks reach the run's verification ledger (#3901)", 
     const { ledger, facet } = verifiedRun();
     facet.settled({ ...call("call_edit"), tool: "edit", state: "succeeded" });
     facet.verificationAdmitted?.(call("call_test"), "test");
-    facet.settled({ ...call("call_test"), tool: "shell", state: "failed", exitCode: 3 });
+    facet.settled({ ...call("call_test"), ...passedCheck, state: "failed", exitCode: 3 });
     expect(ledger.needsVerification(RUN_ID)).toBe(true);
   });
 
@@ -643,7 +665,7 @@ describe("native edits and checks reach the run's verification ledger (#3901)", 
     facet.verificationAdmitted?.(call("call_background"), "test");
     facet.settled({ ...call("call_background"), tool: "shell", state: "succeeded" });
     // A shell call the policy never admitted as a check is no check, whatever it returned.
-    facet.settled({ ...call("call_other"), tool: "shell", state: "succeeded", exitCode: 0 });
+    facet.settled({ ...call("call_other"), ...passedCheck });
     expect(ledger.needsVerification(RUN_ID)).toBe(true);
   });
 

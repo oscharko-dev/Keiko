@@ -1,6 +1,7 @@
 import type { CodingHistoryMessage } from "./codingRuntimeHistory.js";
 import { createHash } from "node:crypto";
 
+import type { VerificationKind } from "@oscharko-dev/keiko-contracts";
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import {
   activityLogEvent,
@@ -35,6 +36,7 @@ import {
   isAdmissibleOpenCodeToolName,
   isOpenCodeCodeModeExecutionFailure,
 } from "./opencodeNativeTools.js";
+import { openCodeNativeVerificationKind } from "./opencodeNativePolicy.js";
 import { OPENCODE_PLAN_CARRIER_TOOLS } from "./opencodeProtocol.js";
 import { openCodePlanCarrierSignal } from "./opencodeSafeActivity.js";
 
@@ -534,6 +536,7 @@ function toolState(
   assertToolInput(part, state);
   if (!historyToolAdmitted(name, profile)) throw new Error("opencode-v2-tool-invalid");
   const exitCode = name === "shell" ? shellExitCode(state) : undefined;
+  const exitStatusCheck = exitCode === undefined ? undefined : shellLineCheck(state);
   // The runtime completes a shell call whatever its command returned (`metadata.exit`); a command
   // that exited non-zero failed, which the timeline and the run's evidence both say (#3901).
   const mapped =
@@ -546,7 +549,18 @@ function toolState(
     state: mapped,
     occurredAt: toolOccurredAt(part),
     ...(exitCode === undefined ? {} : { exitCode }),
+    ...(exitStatusCheck === undefined ? {} : { exitStatusCheck }),
   };
+}
+
+/**
+ * The project check a finished shell call's exit status speaks for (#3897 review). The permission
+ * check sees the line split into its commands, without the operators between them; the finished
+ * part still holds the whole line, so only it can show that no later command decided the status.
+ */
+function shellLineCheck(state: Readonly<Record<string, unknown>>): VerificationKind | undefined {
+  const command = record(state.input)?.command;
+  return typeof command === "string" ? openCodeNativeVerificationKind([command]) : undefined;
 }
 
 /** A completed shell call's own exit status; a job moved to the background reports none. */

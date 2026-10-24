@@ -350,24 +350,46 @@ function isVettedNodeInvocation(subcommand: string | undefined): boolean {
 }
 
 /**
- * The project check a native shell line runs (#3897 review, #3901): the line counts as verification
- * only when every simple command of it is a check or a `cd`, and at least one is a check, because
- * the runtime reports one exit status for the whole line. `npm test || true`, a pipe into another
- * program or any other command next to the check makes the line no verification at all.
+ * The project check a native shell line runs (#3897 review, #3901). The runtime reports one exit
+ * status for the whole line, so the line counts as verification only when that status is the
+ * check's own: simple commands joined by `&&` alone, each a check or a `cd`, at least one a check.
+ * An `&&` list exits zero only when every command in it did. `;`, `||`, a pipe, a background `&`
+ * or a second line lets a later command decide the status (`npm test; cd .` exits zero after a
+ * failed test), so such a line is no verification at all; it still runs under the shell policy.
  */
 export function openCodeNativeVerificationKind(
   resources: readonly string[],
 ): VerificationKind | undefined {
   let kind: VerificationKind | undefined;
-  for (const segment of resources.flatMap((resource) => commandSegments(resource))) {
-    const tokens = commandTokens(segment);
-    if (tokens[0] === "cd") continue;
-    const next = segmentVerificationKind(tokens);
-    if (next === undefined) return undefined;
-    kind ??= next;
+  for (const resource of resources) {
+    const segments = statusPreservingSegments(resource);
+    if (segments === undefined) return undefined;
+    for (const segment of segments) {
+      const tokens = commandTokens(segment);
+      if (tokens[0] === "cd") continue;
+      const next = segmentVerificationKind(tokens);
+      if (next === undefined) return undefined;
+      kind ??= next;
+    }
   }
   return kind;
 }
+
+/**
+ * The `&&`-joined simple commands of a line, or undefined when another operator could hand the
+ * line's exit status to a command after the check. A descriptor duplication (`2>&1`) is not one.
+ */
+function statusPreservingSegments(command: string): readonly string[] | undefined {
+  const segments = command.split("&&").map((segment) => segment.trim());
+  const decided = segments.some(
+    (segment) =>
+      segment.length === 0 || STATUS_HANDOVER.test(segment.replaceAll(DESCRIPTOR_DUPLICATION, "")),
+  );
+  return decided ? undefined : segments;
+}
+
+const DESCRIPTOR_DUPLICATION = /\d?>&\d/gu;
+const STATUS_HANDOVER = /[;|&\n\r]/u;
 
 const NPX_VERIFICATION_KINDS: ReadonlyMap<string, VerificationKind> = new Map([
   ["vitest", "test"],

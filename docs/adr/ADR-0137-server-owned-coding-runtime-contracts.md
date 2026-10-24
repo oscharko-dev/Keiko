@@ -1457,12 +1457,18 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   facade, so the governed verifier's ledger learned nothing from them and a native run that edited
   and never verified settled as succeeded. The native settlement owner now feeds the same ledger:
   a native `edit`, `write` or `patch` the runtime applied is the run's edit (`observeEditOutcome`),
-  and a shell line the policy admitted as a project check (`openCodeNativeVerificationKind`: every
-  simple command is a test, typecheck, lint or build invocation or a `cd`, so `npm test || true`,
-  a pipe or any other command is no check) is remembered with the edit revision and the admission
-  observer the governed verifier captures at the same point. Its exit status, which the producer
-  reports as `metadata.exit` on a completed part (a non-zero exit is projected as a failed call),
-  becomes the same `verification-summarized` event, so the settlement's verification continuation,
+  and a shell line the policy admitted as a project check (`openCodeNativeVerificationKind`: each
+  simple command is a test, typecheck, lint or build invocation or a `cd`) is remembered with the
+  edit revision and the admission observer the governed verifier captures at the same point. The
+  runtime reports one exit status for the whole line, so only a line whose status is the check's
+  own counts: simple commands joined by `&&` alone. `;`, `||`, a pipe, a background `&` or a second
+  line lets a later command decide it (`npm test; cd .` exits zero after a failed test). The
+  permission check receives the line already split into its commands, without the operators, so
+  the history reads the finished part's whole command line (`exitStatusCheck`, body-free) and the
+  settlement owner accepts the status only when that line names the admitted check. That exit
+  status, which the producer reports as `metadata.exit` on a completed part (a non-zero exit is
+  projected as a failed call), becomes the same `verification-summarized` event, so the
+  settlement's verification continuation,
   `verification-not-evidenced`, the human-refusal blocker and the Workbench's verification card
   treat both alike. A refused, backgrounded or unreported check proves nothing; a check admitted
   before the last edit cannot prove it.

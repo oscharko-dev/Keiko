@@ -2517,9 +2517,9 @@ describe("OpenCode V2 native shell exit status (#3901)", () => {
       .filter((signal) => signal.kind === "tool");
   }
 
-  const completed = (exit: unknown): Readonly<Record<string, unknown>> => ({
+  const completed = (exit: unknown, command = "npm test"): Readonly<Record<string, unknown>> => ({
     status: "completed",
-    input: { command: "npm test" },
+    input: { command },
     content: [{ type: "text", text: "PRIVATE_SHELL_OUTPUT" }],
     metadata: { status: "completed", truncated: false, exit },
   });
@@ -2534,6 +2534,20 @@ describe("OpenCode V2 native shell exit status (#3901)", () => {
     expect(toolSignals(shellHistory(completed(0)))).toEqual([
       expect.objectContaining({ state: "succeeded", exitCode: 0 }),
     ]);
+  });
+
+  // #3897 review: the permission check sees `npm test; cd .` as two commands; the finished line
+  // shows that `cd .` decided the zero, so the status speaks for no check.
+  it("names the check an exit status speaks for only when the whole line keeps it", () => {
+    const check = (command: string): unknown =>
+      (toolSignals(shellHistory(completed(0, command)))[0] as Record<string, unknown>)
+        .exitStatusCheck;
+    expect(check("npm test")).toBe("test");
+    expect(check("cd app && npx tsc --noEmit")).toBe("typecheck");
+    for (const command of ["npm test; cd .", "npm test || cd .", "npm test | cat", "ls"])
+      expect(check(command)).toBeUndefined();
+    const background = { status: "completed", input: { command: "npm test", background: true } };
+    expect(toolSignals(shellHistory(background))[0]).not.toHaveProperty("exitStatusCheck");
   });
 
   it("carries no exit status for a job moved to the background or a malformed one", () => {

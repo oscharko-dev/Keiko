@@ -19,7 +19,9 @@ import {
   createRuntimeGatewayConfinement,
   resolveDarwinGitExecutable,
 } from "@oscharko-dev/keiko-sandbox";
+import { CodingRuntimeRunEffortLedger } from "./codingRuntimeRunEffort.js";
 import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js";
+import { createCodingToolNativeSettlementFacet } from "./codingToolNativeEffect.js";
 import {
   buildOpenCodeLaunchProfile,
   openCodeConfigDirectory,
@@ -1153,6 +1155,100 @@ describe("pinned native OpenCode project checks (T10, #3901)", () => {
           expect.objectContaining({ state: "failed", exitCode: 1 }),
           expect.objectContaining({ state: "succeeded", exitCode: 0 }),
         ]);
+      });
+    },
+    120_000,
+  );
+
+  // #3897 review: the runtime reports one exit status for the whole line. A failing check followed
+  // by `; cd .`, `|| cd .` or `| cat` exits zero. The permission check sees the line split into its
+  // commands, so only the finished line can show whether that status is the check's own; the run's
+  // ledger must stay unverified after an edit until a line whose status is the check's own passes.
+  it.skipIf(skip)(
+    "counts a line as verification only when its exit status is the check's own",
+    async () => {
+      await withRun({ mode: "autonomous-delivery", approveAsks: true }, async (run) => {
+        const runner = join(run.fixture.workspace, "bin", "npm");
+        mkdirSync(dirname(runner), { recursive: true });
+        writeFileSync(
+          runner,
+          '#!/bin/sh\nif [ "$PASS" = 1 ]; then echo "1 passing"; exit 0; fi\necho "1 failing"\nexit 7\n',
+          { mode: 0o755 },
+        );
+        const lines = [
+          "./bin/npm test; cd .",
+          "./bin/npm test || cd .",
+          "./bin/npm test | cat",
+          "cd . && ./bin/npm test",
+          "./bin/npm test 2>&1",
+          "PASS=1 ./bin/npm test",
+        ];
+        const admitted: (string | undefined)[] = [];
+        for (const line of lines) {
+          const before = run.facade.decisions.length;
+          await scriptedTurn(run, shell(line));
+          const asked = run.facade.decisions
+            .slice(before)
+            .filter((decision) => decision.permission === "shell");
+          expect(asked).toHaveLength(1);
+          admitted.push(openCodeNativeVerificationKind(asked[0]?.resources ?? []));
+        }
+        // The cause: split into commands, the first two lines look like a plain test run.
+        expect(admitted).toEqual(["test", "test", undefined, "test", "test", "test"]);
+        const projection = createOpenCodeV2HistoryProjection({
+          runId: RUN_ID,
+          activityLog: undefined,
+          toolProfile: "native",
+        });
+        const shells = projection
+          .project(run.sessionId, await run.client.messages(run.sessionId), undefined)
+          .flatMap((event) => projection.takeSignal(event) ?? [])
+          .flatMap((signal) => (signal.kind === "tool" && signal.tool === "shell" ? [signal] : []));
+        expect(shells.map((signal) => [signal.exitCode, signal.exitStatusCheck])).toEqual([
+          [0, undefined],
+          [0, undefined],
+          [0, undefined],
+          [7, "test"],
+          [7, "test"],
+          [0, "test"],
+        ]);
+        // The producer's own facts through the native settlement facet into the run's ledger.
+        const ledger = new CodingRuntimeRunEffortLedger();
+        ledger.begin(RUN_ID);
+        const facet = createCodingToolNativeSettlementFacet(undefined, {
+          observeEditOutcome: (outcome): void => {
+            if (outcome.kind === "applied") ledger.edit(RUN_ID);
+          },
+          verification: {
+            revision: () => ledger.verificationRevision(RUN_ID),
+            publish: (result): void => {
+              ledger.verification(RUN_ID, result.passed, result.kind, result.editRevision);
+            },
+          },
+        });
+        facet.settled({
+          messageId: "msg_edit",
+          callId: "call_edit",
+          tool: "edit",
+          state: "succeeded",
+        });
+        const needs: boolean[] = [];
+        shells.forEach((signal, index) => {
+          const call = { messageId: signal.messageId ?? "", callId: signal.callId };
+          const kind = admitted[index];
+          if (kind !== undefined) facet.verificationAdmitted?.(call, kind);
+          facet.settled({
+            ...call,
+            tool: "shell",
+            state: signal.state === "failed" ? "failed" : "succeeded",
+            ...(signal.exitCode === undefined ? {} : { exitCode: signal.exitCode }),
+            ...(signal.exitStatusCheck === undefined
+              ? {}
+              : { exitStatusCheck: signal.exitStatusCheck }),
+          });
+          needs.push(ledger.needsVerification(RUN_ID));
+        });
+        expect(needs).toEqual([true, true, true, true, true, false]);
       });
     },
     120_000,

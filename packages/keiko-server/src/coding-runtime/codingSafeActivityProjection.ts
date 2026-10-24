@@ -7,6 +7,7 @@ import type {
   CodingSafeActivityTool,
   CodingSafeActivityToolState,
   UnavailableCodingSafeActivityFeed,
+  VerificationKind,
 } from "@oscharko-dev/keiko-contracts";
 import {
   CODING_SAFE_ACTIVITY_MAX_DROPPED_EVENT_COUNT,
@@ -194,6 +195,11 @@ export type CodingSafeActivitySignal =
       readonly presentation?: CodingSafeActivityToolPresentation;
       /** A finished native `shell` call's exit status: run evidence only, never projected. */
       readonly exitCode?: number | undefined;
+      /**
+       * The project check that exit status speaks for, read from the finished call's whole command
+       * line; absent when the line is no check or another command could decide its status.
+       */
+      readonly exitStatusCheck?: VerificationKind | undefined;
     })
   | (SignalBase & {
       readonly kind: "plan";

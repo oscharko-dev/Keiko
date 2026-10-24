@@ -286,6 +286,9 @@ function nativeVerificationTracker(hooks: CodingToolNativeVerificationHooks | un
       if (entry === undefined || hooks === undefined) return;
       pending.delete(key);
       if (refusedByPolicy || input.exitCode === undefined) return;
+      // The admission saw the line's commands; the finished line shows whether its status is the
+      // check's own. A line whose status another command decided proves nothing either way.
+      if (input.exitStatusCheck !== entry.kind) return;
       hooks.publish({
         kind: entry.kind,
         passed: input.exitCode === 0,

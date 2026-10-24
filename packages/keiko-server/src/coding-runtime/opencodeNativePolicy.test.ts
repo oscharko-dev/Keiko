@@ -558,6 +558,9 @@ describe("native verification commands (#3901, #3897 review)", () => {
     [["pytest -q"], "test"],
     [["python3 -m pytest tests"], "test"],
     [["node --test"], "test"],
+    [["cd packages/app && npm test"], "test"],
+    [["npm run lint && npm test"], "lint"],
+    [["npm test 2>&1"], "test"],
   ] as const)("classifies %j as a %s check", (resources, kind) => {
     expect(openCodeNativeVerificationKind(resources)).toBe(kind);
   });
@@ -573,6 +576,15 @@ describe("native verification commands (#3901, #3897 review)", () => {
     [["git status"]],
     [["rm -rf node_modules"]],
     [["bash -c 'npm test'"]],
+    // #3897 review: another command decides the line's exit status after a failed check.
+    [["npm test; cd ."]],
+    [["npm test || cd ."]],
+    [["npm test | cat"]],
+    [["npm test &"]],
+    [["npm test & npm run lint"]],
+    [["npm test\ncd ."]],
+    [["npm test && "]],
+    [["npm test &>log"]],
   ] as const)("does not count %j as verification", (resources) => {
     expect(openCodeNativeVerificationKind(resources)).toBeUndefined();
   });

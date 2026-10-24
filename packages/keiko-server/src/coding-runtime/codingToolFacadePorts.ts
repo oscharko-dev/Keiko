@@ -443,6 +443,11 @@ export interface CodingToolNativeSettlementInput extends CodingToolNativeCall {
   readonly state: "succeeded" | "failed";
   /** A finished native `shell` call's own exit status; absent for every other tool and a job. */
   readonly exitCode?: number | undefined;
+  /**
+   * The project check that exit status speaks for, read from the call's whole command line; absent
+   * when another command of the line could have decided it (`npm test; cd .`).
+   */
+  readonly exitStatusCheck?: VerificationKind | undefined;
 }
 
 /** A native verification command's result, as the runtime's own exit status reports it. */

@@ -1522,6 +1522,7 @@ function nativeToolSettlementObserver(
       tool: signal.tool,
       state: signal.state,
       ...(signal.exitCode === undefined ? {} : { exitCode: signal.exitCode }),
+      ...(signal.exitStatusCheck === undefined ? {} : { exitStatusCheck: signal.exitStatusCheck }),
     });
   };
 }
