@@ -733,6 +733,8 @@ interface PreparedRun {
   seenStepChanges?: Set<string> | undefined;
   initialTurnBaselineStable: boolean;
   ready: boolean;
+  /** A qualified native client retained for operator undo after productive monitoring stops. */
+  revertReady: boolean;
 }
 
 interface ReadyRun extends PreparedRun {
@@ -891,6 +893,10 @@ function createRunPort(
     const run = runs.get(runId);
     return isReadyRun(run) ? run : undefined;
   };
+  const revertRun = (runId: string): ReadyRun | undefined => {
+    const run = runs.get(runId);
+    return run?.revertReady === true && hasRunClient(run) ? run : undefined;
+  };
   const { ports: deliveryPorts, withdrawPendingInbox } = createDeliveryPorts(
     readyRun,
     promptInputs,
@@ -904,7 +910,9 @@ function createRunPort(
     ...createOpenCodeCommandsRunPort({ readyRun, capabilities: promptInputs, activityLog }),
     ...deliveryPorts,
     abortTask,
-    ...(snapshots ? createOpenCodeRevertRunPort({ readyRun, abortTask, activityLog }) : {}),
+    ...(snapshots
+      ? createOpenCodeRevertRunPort({ readyRun: revertRun, abortTask, activityLog })
+      : {}),
     waitForTerminal: async (runId, signal): Promise<OpenCodeTurnOutcome> => {
       const run = readyRun(runId);
       if (run === undefined) return false;
@@ -1419,11 +1427,12 @@ function createQuestionRunPort(
 }
 
 function isReadyRun(run: PreparedRun | undefined): run is ReadyRun {
+  return run?.ready === true && hasRunClient(run);
+}
+
+function hasRunClient(run: PreparedRun): run is ReadyRun {
   return (
-    run?.ready === true &&
-    run.client !== undefined &&
-    run.runtimeAdapter !== undefined &&
-    run.sessionId !== undefined
+    run.client !== undefined && run.runtimeAdapter !== undefined && run.sessionId !== undefined
   );
 }
 
@@ -1437,11 +1446,18 @@ function lifecycleAdapter(
     handshake: (request) => handshake(input, bridge, runs, request),
     monitor: ({ runId, onFailure }): (() => void) | undefined => {
       const run = runs.get(runId);
-      const dispose = run?.runtimeAdapter?.monitor(onFailure);
+      if (run === undefined) return undefined;
+      const dispose = run.runtimeAdapter?.monitor(() => {
+        run.ready = false;
+        run.revertReady = false;
+        onFailure();
+      });
       return dispose === undefined
         ? undefined
         : (): void => {
-            if (run !== undefined) run.ready = false;
+            // Holding a completed run quiesces productive work, retaining only its qualified
+            // operator revert client. Failure and disposal invalidate that client separately.
+            run.ready = false;
             dispose();
           };
     },
@@ -1459,7 +1475,10 @@ async function disposeRun(
   settlement?: OpenCodeLifecycleSettlement,
 ): Promise<boolean> {
   const run = runs.get(runId);
-  if (run !== undefined) run.ready = false;
+  if (run !== undefined) {
+    run.ready = false;
+    run.revertReady = false;
+  }
   try {
     const drained = bridge.close(signal);
     input.safeActivity?.clear();
@@ -1838,6 +1857,7 @@ function preparedRun(
     commandPresentation: createOpenCodeCommandPresentation(),
     initialTurnBaselineStable: false,
     ready: false,
+    revertReady: false,
   };
 }
 
@@ -1968,6 +1988,7 @@ async function handshake(
     run.client = client;
     run.sessionId = result.sessionId;
     run.ready = true;
+    run.revertReady = true;
     return { ok: true };
   } catch {
     return { ok: false, reason: "readiness-failed" };

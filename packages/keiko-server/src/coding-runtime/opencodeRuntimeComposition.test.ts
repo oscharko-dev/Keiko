@@ -7570,6 +7570,36 @@ describe("turn revert on the run port (B3, S04)", () => {
     }
   });
 
+  it("keeps held undo available after monitor quiescence while productive turns stay closed", async () => {
+    const { control, revert, promptBodies } = revertControl();
+    const fixture = await startBridgeFixture(revertFacade, undefined, control);
+    try {
+      const port = fixture.runtime.runPort;
+      revert.messages = TURN;
+      await port.waitForTerminal(FIXTURE_RUN_ID, AbortSignal.abort());
+      await expect(fixture.runtime.manager.hold?.(FIXTURE_RUN_ID)).resolves.toEqual({
+        ok: true,
+        status: "held",
+      });
+      await expect(port.submitTask(FIXTURE_RUN_ID, "no new productive turn")).resolves.toBe(false);
+      expect(promptBodies).toEqual([]);
+      await expect(port.revertState?.(FIXTURE_RUN_ID)).resolves.toMatchObject({ fileCount: 1 });
+      await expect(port.revertTurn?.(FIXTURE_RUN_ID, "undo")).resolves.toMatchObject({ ok: true });
+      revert.messages = [];
+      await expect(port.revertTurn?.(FIXTURE_RUN_ID, "restore")).resolves.toMatchObject({
+        ok: true,
+      });
+      await fixture.runtime.manager.stop(FIXTURE_RUN_ID);
+      await expect(port.revertState?.(FIXTURE_RUN_ID)).resolves.toBeUndefined();
+      await expect(port.revertTurn?.(FIXTURE_RUN_ID, "undo")).resolves.toMatchObject({
+        ok: false,
+        reason: "run-unavailable",
+      });
+    } finally {
+      await fixture.stop();
+    }
+  });
+
   it("stages an undo at the newest turn, blocks the next turn until it is restored, then runs it", async () => {
     const { control, revert, promptBodies, activityLog } = revertControl();
     const fixture = await startBridgeFixture(revertFacade, undefined, control);
