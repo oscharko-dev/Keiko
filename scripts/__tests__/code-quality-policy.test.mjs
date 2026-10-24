@@ -310,6 +310,11 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
       "voice-recap-version-audit-validator",
       "coding-repository-request-capture-validator",
       "support-event-loss-marker-observation",
+      "code-task-public-task-id-validator",
+      "code-task-public-run-id-validator",
+      "code-task-public-workspace-id-validator",
+      "code-task-public-grant-id-validator",
+      "code-task-public-idempotency-id-validator",
     ]);
     for (const record of policy.responsibilities.slice(0, 8)) {
       expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);

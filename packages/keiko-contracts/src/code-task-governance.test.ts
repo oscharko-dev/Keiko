@@ -3,6 +3,16 @@ import { validateCodeTaskParentTarget } from "./code-task-target-validation.js";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type { CodingWorkbenchValidationResult } from "@oscharko-dev/keiko-contracts";
 import {
+  isCodeTaskTaskId as publicTaskId,
+  isCodeTaskRunId as publicRunId,
+  isCodeTaskWorkspaceId as publicWorkspaceId,
+  isCodeTaskGrantId as publicGrantId,
+  isCodeTaskIdempotencyKey as publicIdempotencyKey,
+  type CodeTaskTaskId as PublicTaskId,
+  type CodeTaskRunId as PublicRunId,
+  type CodeTaskWorkspaceId as PublicWorkspaceId,
+  type CodeTaskGrantId as PublicGrantId,
+  type CodeTaskIdempotencyKey as PublicIdempotencyKey,
   validateGovernedActionV1 as publicGovernedAction,
   validateCodeTaskExecutionV1 as publicCodeTaskExecution,
   type GovernedActionV1 as PublicGovernedActionV1,
@@ -1433,5 +1443,98 @@ describe("code-task validation collection settlement", () => {
       "stateRevision",
       ...(throws ? [] : ["push:4"]),
     ]);
+  });
+});
+
+const PUBLIC_CODE_TASK_ID_VALIDATORS = [
+  ["task", isCodeTaskTaskId, publicTaskId],
+  ["run", isCodeTaskRunId, publicRunId],
+  ["workspace", isCodeTaskWorkspaceId, publicWorkspaceId],
+  ["grant", isCodeTaskGrantId, publicGrantId],
+  ["idempotency", isCodeTaskIdempotencyKey, publicIdempotencyKey],
+] as const;
+
+describe("public CodeTask ID validator ownership", () => {
+  it("retains actual predicate signatures", () => {
+    expectTypeOf(publicTaskId).toEqualTypeOf<(value: unknown) => value is PublicTaskId>();
+    expectTypeOf(publicRunId).toEqualTypeOf<(value: unknown) => value is PublicRunId>();
+    expectTypeOf(publicWorkspaceId).toEqualTypeOf<(value: unknown) => value is PublicWorkspaceId>();
+    expectTypeOf(publicGrantId).toEqualTypeOf<(value: unknown) => value is PublicGrantId>();
+    expectTypeOf(publicIdempotencyKey).toEqualTypeOf<
+      (value: unknown) => value is PublicIdempotencyKey
+    >();
+  });
+
+  it.each(PUBLIC_CODE_TASK_ID_VALIDATORS)(
+    "admits actual %s IDs through source and public",
+    (_kind, source, publicGuard) => {
+      for (const guard of [source, publicGuard]) {
+        expect(guard("A")).toBe(true);
+        expect(guard("a0._:-")).toBe(true);
+        expect(guard("A".repeat(128))).toBe(true);
+      }
+    },
+  );
+
+  it.each(PUBLIC_CODE_TASK_ID_VALIDATORS)(
+    "refuses malformed %s IDs through source and public",
+    (_kind, source, publicGuard) => {
+      const hostile = new Proxy(
+        {},
+        {
+          get(): never {
+            throw new TypeError("non-string ID must not be inspected");
+          },
+        },
+      );
+      const invalid: readonly unknown[] = [
+        "",
+        "A".repeat(129),
+        "_leading",
+        "contains space",
+        "line\nbreak",
+        "null\0byte",
+        null,
+        undefined,
+        false,
+        7,
+        [],
+        hostile,
+      ];
+      for (const guard of [source, publicGuard]) {
+        for (const value of invalid) expect(guard(value)).toBe(false);
+      }
+    },
+  );
+});
+
+describe("public CodeTask ID consumer", () => {
+  it.each([
+    ["task", "taskId", "taskId is invalid"],
+    ["run", "runId", "runId is invalid"],
+    ["workspace", "workspaceId", "workspaceId is invalid"],
+  ] as const)("refuses invalid %s identity", (_kind, field, diagnostic) => {
+    for (const validate of [validateCodeTaskExecutionV1, publicCodeTaskExecution]) {
+      const input = execution();
+      const accepted = validate(input);
+      expect(accepted.ok).toBe(true);
+      if (accepted.ok) expect(accepted.value).toBe(input);
+      expect(validate({ ...input, [field]: "" })).toEqual({ ok: false, errors: [diagnostic] });
+    }
+  });
+
+  it("refuses an invalid grant ID", () => {
+    for (const validate of [validateGovernedActionV1, publicGovernedAction]) {
+      const input = allowedAction();
+      const accepted = validate(input);
+      expect(accepted.ok).toBe(true);
+      if (accepted.ok) expect(accepted.value).toBe(input);
+      expect(
+        validate({
+          ...input,
+          grant: { outcome: "known", value: { grantId: "", grantScope: "task" } },
+        }),
+      ).toEqual({ ok: false, errors: ["grant.value.grantId is invalid"] });
+    }
   });
 });

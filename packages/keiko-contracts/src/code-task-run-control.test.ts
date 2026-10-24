@@ -1132,3 +1132,16 @@ it.each(["source", "public"])(
     }
   },
 );
+
+it("public CodeTask ID consumer refuses an invalid idempotency key", () => {
+  for (const validate of [validateRunControlSnapshotV1, publicRunControlSnapshot]) {
+    const input = snapshot();
+    const accepted = validate(input);
+    expect(accepted.ok).toBe(true);
+    if (accepted.ok) expect(accepted.value).toBe(input);
+    expect(validate({ ...input, idempotencyKey: "" })).toEqual({
+      ok: false,
+      errors: ["idempotencyKey is invalid"],
+    });
+  }
+});

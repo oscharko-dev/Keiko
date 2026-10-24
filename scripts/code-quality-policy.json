@@ -6727,6 +6727,244 @@
           "testName": "Support logger raw metadata preservation public: preserves a genuine refusal kind and one buffered-logger schema-loss count"
         }
       ]
+    },
+    {
+      "id": "code-task-public-task-id-validator",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "validator",
+      "rules": ["anti-slop/no-runtime-typeof"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-governance.ts",
+        "specifier": "./code-task-target-validation.js",
+        "exportName": "isCodeTaskTaskId",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-governance.ts",
+        "specifier": "./code-task-target-validation.js",
+        "exportName": "isCodeTaskTaskId"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-governance.ts",
+        "specifier": "./code-task-target-validation.js",
+        "exportName": "isCodeTaskTaskId"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/index.ts",
+        "specifier": "./code-task-governance.js",
+        "exportName": "validateCodeTaskExecutionV1",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/code-task-governance.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/code-task-governance.test.ts",
+          "testName": "public CodeTask ID validator ownership retains actual predicate signatures"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-governance.test.ts",
+          "testName": "public CodeTask ID validator ownership admits actual task IDs through source and public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-governance.test.ts",
+          "testName": "public CodeTask ID validator ownership refuses malformed task IDs through source and public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-governance.test.ts",
+          "testName": "public CodeTask ID consumer refuses invalid task identity"
+        }
+      ]
+    },
+    {
+      "id": "code-task-public-run-id-validator",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "validator",
+      "rules": ["anti-slop/no-runtime-typeof"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-governance.ts",
+        "specifier": "./code-task-target-validation.js",
+        "exportName": "isCodeTaskRunId",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-governance.ts",
+        "specifier": "./code-task-target-validation.js",
+        "exportName": "isCodeTaskRunId"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-governance.ts",
+        "specifier": "./code-task-target-validation.js",
+        "exportName": "isCodeTaskRunId"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/index.ts",
+        "specifier": "./code-task-governance.js",
+        "exportName": "validateCodeTaskExecutionV1",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/code-task-governance.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/code-task-governance.test.ts",
+          "testName": "public CodeTask ID validator ownership retains actual predicate signatures"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-governance.test.ts",
+          "testName": "public CodeTask ID validator ownership admits actual run IDs through source and public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-governance.test.ts",
+          "testName": "public CodeTask ID validator ownership refuses malformed run IDs through source and public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-governance.test.ts",
+          "testName": "public CodeTask ID consumer refuses invalid run identity"
+        }
+      ]
+    },
+    {
+      "id": "code-task-public-workspace-id-validator",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "validator",
+      "rules": ["anti-slop/no-runtime-typeof"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-governance.ts",
+        "specifier": "./code-task-target-validation.js",
+        "exportName": "isCodeTaskWorkspaceId",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-governance.ts",
+        "specifier": "./code-task-target-validation.js",
+        "exportName": "isCodeTaskWorkspaceId"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-governance.ts",
+        "specifier": "./code-task-target-validation.js",
+        "exportName": "isCodeTaskWorkspaceId"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/index.ts",
+        "specifier": "./code-task-governance.js",
+        "exportName": "validateCodeTaskExecutionV1",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/code-task-governance.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/code-task-governance.test.ts",
+          "testName": "public CodeTask ID validator ownership retains actual predicate signatures"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-governance.test.ts",
+          "testName": "public CodeTask ID validator ownership admits actual workspace IDs through source and public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-governance.test.ts",
+          "testName": "public CodeTask ID validator ownership refuses malformed workspace IDs through source and public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-governance.test.ts",
+          "testName": "public CodeTask ID consumer refuses invalid workspace identity"
+        }
+      ]
+    },
+    {
+      "id": "code-task-public-grant-id-validator",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "validator",
+      "rules": ["anti-slop/no-runtime-typeof"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-governance.ts",
+        "specifier": "./code-task-target-validation.js",
+        "exportName": "isCodeTaskGrantId",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-governance.ts",
+        "specifier": "./code-task-target-validation.js",
+        "exportName": "isCodeTaskGrantId"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-governance.ts",
+        "specifier": "./code-task-target-validation.js",
+        "exportName": "isCodeTaskGrantId"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/index.ts",
+        "specifier": "./code-task-governance.js",
+        "exportName": "validateGovernedActionV1",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": ["packages/keiko-contracts/src/code-task-governance.test.ts"],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/code-task-governance.test.ts",
+          "testName": "public CodeTask ID validator ownership retains actual predicate signatures"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-governance.test.ts",
+          "testName": "public CodeTask ID validator ownership admits actual grant IDs through source and public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-governance.test.ts",
+          "testName": "public CodeTask ID validator ownership refuses malformed grant IDs through source and public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-governance.test.ts",
+          "testName": "public CodeTask ID consumer refuses an invalid grant ID"
+        }
+      ]
+    },
+    {
+      "id": "code-task-public-idempotency-id-validator",
+      "owner": "@oscharko-dev/keiko-contracts",
+      "kind": "validator",
+      "rules": ["anti-slop/no-runtime-typeof"],
+      "input": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-run-control.ts",
+        "specifier": "./code-task-governance.js",
+        "exportName": "isCodeTaskIdempotencyKey",
+        "parameterIndex": 0
+      },
+      "transform": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-run-control.ts",
+        "specifier": "./code-task-governance.js",
+        "exportName": "isCodeTaskIdempotencyKey"
+      },
+      "output": {
+        "consumerPath": "packages/keiko-contracts/src/code-task-run-control.ts",
+        "specifier": "./code-task-governance.js",
+        "exportName": "isCodeTaskIdempotencyKey"
+      },
+      "consumer": {
+        "consumerPath": "packages/keiko-contracts/src/index.ts",
+        "specifier": "./code-task-run-control.js",
+        "exportName": "validateRunControlSnapshotV1",
+        "owner": "@oscharko-dev/keiko-contracts"
+      },
+      "proofs": [
+        "packages/keiko-contracts/src/code-task-governance.test.ts",
+        "packages/keiko-contracts/src/code-task-run-control.test.ts"
+      ],
+      "proofAssertions": [
+        {
+          "path": "packages/keiko-contracts/src/code-task-governance.test.ts",
+          "testName": "public CodeTask ID validator ownership retains actual predicate signatures"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-governance.test.ts",
+          "testName": "public CodeTask ID validator ownership admits actual idempotency IDs through source and public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-governance.test.ts",
+          "testName": "public CodeTask ID validator ownership refuses malformed idempotency IDs through source and public"
+        },
+        {
+          "path": "packages/keiko-contracts/src/code-task-run-control.test.ts",
+          "testName": "public CodeTask ID consumer refuses an invalid idempotency key"
+        }
+      ]
     }
   ]
 }
