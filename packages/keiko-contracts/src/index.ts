@@ -2149,6 +2149,7 @@ export type {
   isAsYouTypeCompletionModel,
   isCodingWorkbenchReadinessCandidate,
   isCodingWorkbenchModel,
+  isCodingWorkbenchProofRenewing,
   listCodingWorkbenchReadinessCandidates,
   selectCodingWorkbenchReadinessCandidate,
   isVoiceCapability,

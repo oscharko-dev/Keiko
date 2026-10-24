@@ -1859,6 +1859,25 @@ export function currentConversationReadinessObservation(
   return ageMs >= 0 && ageMs < CONVERSATION_READINESS_MAX_AGE_MS ? true : undefined;
 }
 
+/**
+ * True when the CURRENT generation holds a successful basic-chat observation that has aged past
+ * `CONVERSATION_READINESS_MAX_AGE_MS`. `currentConversationReadinessObservation` folds that case
+ * into `undefined`, exactly like a model nobody probed; this is the one place that tells them apart
+ * (#3905), and the models wire carries it as `conversationReadinessStale`. A failed observation
+ * never goes stale, and a malformed or future timestamp stays unknown.
+ */
+export function currentConversationReadinessStale(
+  deps: Pick<UiHandlerDeps, "gatewayConfig">,
+  modelId: string,
+): boolean {
+  const holder = deps.gatewayConfig;
+  if (holder === undefined) return false;
+  const observation = holder.verifiedCapability(modelId);
+  if (observation?.generation !== holder.generation()) return false;
+  if (observation.fields.conversationReady !== true) return false;
+  return conversationReadinessAgeMs(observation) >= CONVERSATION_READINESS_MAX_AGE_MS;
+}
+
 function configuredChatContextProfile(
   config: GatewayConfig,
   modelId: string,

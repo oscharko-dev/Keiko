@@ -169,9 +169,18 @@ current holder's freshly serving candidates. An explicit failed chat observation
 `model-verification-pending`. This check occurs when the new run's context is minted. An already
 admitted gateway request retains its captured profile and admission-time feature proof (F73), so
 chat freshness expiry does not strand its task. The Coding picker excludes only explicit negative
-serving observations, preserves selected or saved unknown choices as pending, and uses its existing
-first-offered ordering over fresh candidates only when no human choice remains. Recovery restores
-the offered model and start availability. Repeated pending-profile timer reads reuse the catalog
+serving observations, preserves selected or saved unknown choices as pending, and elects a default
+over fresh candidates only when no human choice remains, with the election Chat uses
+(`electConversationDefault`: gateway-declared chat models first, special-purpose engines last,
+wire order only as the tie-break). A human choice whose forced tool-call proof lapsed or was
+withdrawn is also kept pending while the server renews it: the models wire reports
+`toolCallingRenewalPending` for a LiteLLM chat model whose automatic verification is open, and the
+browser holds only such a choice (`isCodingWorkbenchProofRenewing`). A choice that is refuted,
+never proven, not a chat model, observed unready or not being renewed still falls back to a usable
+alternative. The same wire reports `conversationReadinessStale` for a successful serving
+observation that aged out, so "was ready, needs a fresh check" is no longer folded into "never
+probed"; both stay unknown for admission. Recovery restores the offered model and start
+availability. Repeated pending-profile timer reads reuse the catalog
 already held; the existing catalog projection poller and window bus deliver subsequent changes.
 Catalog adoption, held/restored/fallback/refused selections and profile refresh use the existing
 routine client-stage transport. Decisions carry closed outcomes and actual bounded catalog counts;

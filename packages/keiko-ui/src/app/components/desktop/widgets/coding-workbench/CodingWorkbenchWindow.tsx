@@ -55,7 +55,11 @@ import {
   isCodingWorkbenchMode,
   isCodingWorkbenchModeWidening,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
-import { isCodingWorkbenchModel } from "@oscharko-dev/keiko-contracts/runtime/gateway";
+import {
+  electConversationDefault,
+  isCodingWorkbenchModel,
+  isCodingWorkbenchProofRenewing,
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { useTranslate } from "@/lib/i18n";
 import { CodingWorkbenchCiReadiness } from "./CodingWorkbenchCiReadiness";
 import {
@@ -1053,13 +1057,29 @@ function pendingSelectedSource(
   };
 }
 
+// A model the Workbench would offer, or that it does not offer only while the server renews its
+// tool-call proof (#3905): a human choice of either stays pending instead of being replaced.
+function isOfferedOrRenewing(model: ModelCapability): boolean {
+  return isCodingWorkbenchModel(model) || isCodingWorkbenchProofRenewing(model);
+}
+
 function pendingCodingModelIds(catalog: ChatSessionCatalog | null): readonly string[] | undefined {
   const actual = catalog?.modelCatalogRead?.capabilities;
-  if (actual !== undefined) return actual.filter(isCodingWorkbenchModel).map((model) => model.id);
+  if (actual !== undefined) return actual.filter(isOfferedOrRenewing).map((model) => model.id);
   const excluded = new Set(
-    catalog?.models.filter((model) => !isCodingWorkbenchModel(model)).map((model) => model.id),
+    catalog?.models.filter((model) => !isOfferedOrRenewing(model)).map((model) => model.id),
   );
   return catalog?.configuredModelIds?.filter((id) => !excluded.has(id));
+}
+
+// The default a Workbench elects when no human choice remains is the one Chat elects: a gateway-
+// declared chat model first, a special-purpose engine only when nothing else is ready. Only freshly
+// ready models are candidates here, so wire order never decides it (#3905).
+function electedCodingDefault(models: readonly ModelCapability[]): ModelCapability | undefined {
+  return electConversationDefault(
+    models.filter((model) => model.conversationReady === true),
+    (model) => model.conversationReady,
+  );
 }
 
 function useCodingModelSelection(
@@ -1082,7 +1102,7 @@ function useCodingModelSelection(
     const next =
       selected?.id ??
       offeredSavedCodingModel(models)?.id ??
-      models.find((model) => model.conversationReady === true)?.id ??
+      electedCodingDefault(models)?.id ??
       null;
     if (next !== state.selectedModelId) {
       setHumanSelectedId(null);
@@ -1165,7 +1185,7 @@ function workbenchCatalogEvidenceSnapshot(
   const selected = read.capabilities.find((model) => model.id === selectedId);
   const fresh = isFreshSelectedCodingModel(selected);
   const selectionDigest = selectedId === null ? undefined : sha256Hex(selectedId);
-  const held = selected !== undefined && isCodingWorkbenchModel(selected) && !fresh;
+  const held = selected !== undefined && isOfferedOrRenewing(selected) && !fresh;
   const catalogDigest = sha256Hex(JSON.stringify(read.capabilities));
   return {
     next: {

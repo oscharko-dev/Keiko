@@ -2178,3 +2178,83 @@ it("re-probes a re-pointed alias even inside the cooldown of the earlier deploym
     toolCallingConfigurationFingerprint(onlyProvider(deps)),
   );
 });
+
+// #3905 AC4: the models wire says which models the server is renewing, so a browser can keep a human
+// choice of such a model pending. The flag lives exactly as long as the verification is open.
+function modelsWire(deps: UiHandlerDeps): Record<string, unknown> {
+  const body = handleModels({ url: new URL("http://127.0.0.1/api/models") } as RouteContext, deps)
+    .body as { readonly models: Record<string, unknown>[] };
+  const model = body.models[0];
+  if (model === undefined) throw new TypeError("Expected a projected model.");
+  return model;
+}
+
+function lapsedProofConfig(litellm: boolean): ReturnType<typeof parseGatewayConfig> {
+  const config = startupConfig();
+  const provider = requiredStartupProvider(config);
+  const { tokenCounter: _counter, ...unmanaged } = provider;
+  const subject = litellm ? provider : unmanaged;
+  return parseGatewayConfig({
+    ...rawConfigFromCurrent({ ...config, providers: [subject] }, undefined),
+    capabilities: config.capabilities?.map((model) => ({
+      ...model,
+      toolCalling: true,
+      toolCallingVerification: {
+        status: "verified",
+        probe: "gateway-tool-calling-v1",
+        checkedAt: new Date(Date.now() - 25 * 60 * 60_000).toISOString(),
+        configurationFingerprint: toolCallingConfigurationFingerprint(subject),
+      },
+    })),
+  });
+}
+
+it("flags a renewing tool proof on the models wire only while its verification is open", async () => {
+  const gate = deferredValue<boolean>();
+  const probe = stubToolProbe(gate.promise);
+  const deps = startupDeps(() => Promise.resolve(discoveredCatalog()));
+  deps.gatewayConfig?.set(provenOnDeploymentConfig(DEPLOYMENT_BEFORE), true);
+  expect(modelsWire(deps)).not.toHaveProperty("toolCallingRenewalPending");
+  deps.gatewayConfig?.set(lapsedProofConfig(true), true);
+  try {
+    await vi.waitFor(() => {
+      expect(probe.toolCalls()).toBe(1);
+    });
+    expect(modelsWire(deps)).toMatchObject({ toolCalling: false, toolCallingRenewalPending: true });
+  } finally {
+    gate.resolve(true);
+  }
+  await vi.waitFor(() => {
+    expect(onlyModel(deps).toolCalling).toBe(true);
+  });
+  expect(modelsWire(deps)).not.toHaveProperty("toolCallingRenewalPending");
+});
+
+it("does not flag a proof the server will not renew or has refuted", async () => {
+  stubReadyChat();
+  const unmanaged = startupDeps(() => Promise.resolve(discoveredCatalog()), undefined, {
+    KEIKO_CODING_SIDECAR_DISABLED: "1",
+  });
+  unmanaged.gatewayConfig?.set(lapsedProofConfig(false), true);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(onlyModel(unmanaged).toolCalling).toBe(false);
+  expect(modelsWire(unmanaged)).not.toHaveProperty("toolCallingRenewalPending");
+
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((_input: unknown, init: RequestInit) => {
+      const tools = typeof init.body === "string" && init.body.includes("report_readiness");
+      return Promise.resolve(
+        tools
+          ? new Response("", { status: 400 })
+          : Response.json({ choices: [{ message: { content: "OK" }, finish_reason: "stop" }] }),
+      );
+    }),
+  );
+  const refuted = startupDeps(() => Promise.resolve(discoveredCatalog()));
+  refuted.gatewayConfig?.set(lapsedProofConfig(true), true);
+  await vi.waitFor(() => {
+    expect(onlyModel(refuted).toolCallingVerification?.status).toBe("unsupported");
+  });
+  expect(modelsWire(refuted)).not.toHaveProperty("toolCallingRenewalPending");
+});

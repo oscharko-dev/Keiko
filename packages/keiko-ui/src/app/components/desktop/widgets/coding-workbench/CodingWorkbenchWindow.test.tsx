@@ -5097,6 +5097,142 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     expect(liveActions.setSelectedModel).toHaveBeenCalledWith(MODEL_A.id);
   });
 
+  // #3905 AC4: a human choice whose forced tool-call proof lapsed, or was withdrawn because the
+  // gateway re-pointed the alias, is not a refused choice. The server renews it by itself and says
+  // so on the models wire; until then the choice stays pending with Start withheld, and a choice
+  // that is NOT being renewed keeps falling back (the pin above).
+  describe("a human choice whose tool proof the server is renewing", () => {
+    const LAPSED_PROOF = {
+      status: "verified" as const,
+      checkedAt: "2000-01-01T00:00:00.000Z",
+      probe: "gateway-tool-calling-v1" as const,
+      configurationFingerprint: "fingerprint-1",
+    };
+    const renewing = (patch: Partial<ModelCapability> = {}): ModelCapability => ({
+      ...MODEL_B,
+      toolCalling: false,
+      toolCallingVerification: LAPSED_PROOF,
+      toolCallingRenewalPending: true,
+      ...patch,
+    });
+    const present = (unavailable: ModelCapability): void => {
+      chatCatalogMock.models = [MODEL_A, unavailable];
+      chatCatalogMock.configuredModelIds = [MODEL_A.id, MODEL_B.id];
+      chatCatalogMock.modelCatalogRead = {
+        capabilities: [MODEL_A, unavailable],
+        source: "background",
+        correlationId: "renewal-catalog-123",
+      };
+    };
+
+    it("keeps the choice pending instead of replacing it with the first ready model", () => {
+      present(renewing());
+      const liveActions = renderWorkbench(liveState({ selectedModelId: MODEL_B.id }));
+      expect(liveActions.setSelectedModel).not.toHaveBeenCalled();
+    });
+
+    it("keeps it through the renewal and offers it again once the proof is fresh", () => {
+      present(renewing());
+      const liveActions = actions();
+      runtimeHookMock.mockReturnValue({
+        state: liveState({ selectedModelId: MODEL_B.id }),
+        actions: liveActions,
+      });
+      const view = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+      chatCatalogMock.models = [MODEL_A, MODEL_B];
+      chatCatalogMock.modelCatalogRead = {
+        capabilities: [MODEL_A, MODEL_B],
+        source: "background",
+        correlationId: "renewal-catalog-456",
+      };
+      view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+      expect(liveActions.setSelectedModel).not.toHaveBeenCalled();
+    });
+
+    it("withholds Start while the choice is pending", async () => {
+      present(renewing());
+      taskSessionHookMock.mockReturnValue({ ...defaultTaskSession(), visibleRun: false });
+      const liveActions = actions();
+      runtimeHookMock.mockReturnValue({
+        state: liveState({
+          selectedModelId: MODEL_B.id,
+          run: { status: "ready", value: null, error: null },
+        }),
+        actions: liveActions,
+      });
+      render(
+        <ActiveWorkspaceProvider value={activeWorkspaceWithBinding("/repos/keiko", "/worktrees/t")}>
+          <CodingWorkbenchWindow selectedRoot={undefined} />
+        </ActiveWorkspaceProvider>,
+      );
+      await userEvent.setup().type(screen.getByLabelText("Task instructions"), "Add a unit test");
+      await userEvent.setup().click(screen.getByRole("button", { name: "Start coding run" }));
+      expect(liveActions.start).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { title: "an embedding model", patch: { kind: "embedding" as const } },
+      {
+        title: "a refuted proof",
+        patch: {
+          toolCalling: true,
+          toolCallingVerification: { ...LAPSED_PROOF, status: "unsupported" as const },
+        },
+      },
+      { title: "a model observed unready", patch: { conversationReady: false } },
+      {
+        title: "a model that never claimed tool calling",
+        patch: { toolCallingVerification: undefined },
+      },
+    ])("still falls back from $title even when it is flagged", ({ patch }) => {
+      present(renewing(patch));
+      const liveActions = renderWorkbench(liveState({ selectedModelId: MODEL_B.id }));
+      expect(liveActions.setSelectedModel).toHaveBeenCalledWith(MODEL_A.id);
+    });
+
+    it("records the pending choice as held, never as refused, then as restored", () => {
+      const diagnostic = vi.fn();
+      setClientDiagnosticWriter(diagnostic);
+      present(renewing());
+      const liveActions = actions();
+      runtimeHookMock.mockReturnValue({
+        state: liveState({ selectedModelId: MODEL_B.id }),
+        actions: liveActions,
+      });
+      const view = render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+      chatCatalogMock.models = [MODEL_A, MODEL_B];
+      chatCatalogMock.modelCatalogRead = {
+        capabilities: [MODEL_A, MODEL_B],
+        source: "background",
+        correlationId: "renewal-catalog-789",
+      };
+      view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
+      const outcomes = diagnostic.mock.calls
+        .map(([, meta]) => meta?.stageReport?.modelCatalog?.outcome)
+        .filter((outcome) => outcome === "held" || outcome === "refused" || outcome === "restored");
+      expect(outcomes).toEqual(["held", "restored"]);
+      resetClientDiagnosticWriter();
+    });
+  });
+
+  // The default a Workbench elects when no human choice remains is the one Chat elects: a model the
+  // gateway declared as chat, then an unremarkable one, and a special-purpose engine (OCR, speech)
+  // only when nothing else is ready. Wire order must not decide it.
+  it("elects the same default as Chat instead of the first ready model in wire order", () => {
+    const special = { ...MODEL_A, id: "dotsocr" };
+    chatCatalogMock.models = [special, MODEL_B];
+    const liveActions = renderWorkbench(liveState({ selectedModelId: null }));
+    expect(liveActions.setSelectedModel).toHaveBeenCalledWith(MODEL_B.id);
+    expect(liveActions.setSelectedModel).not.toHaveBeenCalledWith(special.id);
+  });
+
+  it("prefers a gateway-declared chat model among ready candidates", () => {
+    const declared = { ...MODEL_B, chatModeDeclared: true };
+    chatCatalogMock.models = [MODEL_A, declared];
+    const liveActions = renderWorkbench(liveState({ selectedModelId: null }));
+    expect(liveActions.setSelectedModel).toHaveBeenCalledWith(MODEL_B.id);
+  });
+
   it("records actual Workbench catalog and held/restored selection without raw identifiers", () => {
     const diagnostic = vi.fn();
     setClientDiagnosticWriter(diagnostic);
