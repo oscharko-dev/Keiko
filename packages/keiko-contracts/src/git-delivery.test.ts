@@ -1014,3 +1014,52 @@ describe("G2 actual preflight code vocabulary", () => {
     );
   }
 });
+
+const GIT_DELIVERY_MEMBERSHIP_CONTROLS = [
+  ["isGitDeliveryActionKind", "GIT_DELIVERY_ACTION_KINDS"],
+  ["isGitDeliveryRiskClass", "GIT_DELIVERY_RISK_CLASSES"],
+  ["isGitDeliveryProviderCapability", "GIT_DELIVERY_PROVIDER_CAPABILITIES"],
+  ["isGitDeliveryBranchMatchKind", "GIT_DELIVERY_BRANCH_MATCH_KINDS"],
+  ["isGitDeliveryBlockReason", "GIT_DELIVERY_BLOCK_REASONS"],
+  ["isGitDeliveryMergeBlockReason", "GIT_DELIVERY_MERGE_BLOCK_REASONS"],
+  ["isGitDeliveryMergeStrategyHint", "GIT_DELIVERY_MERGE_STRATEGY_HINTS"],
+  ["isGitDeliveryAbortableOperation", "GIT_DELIVERY_ABORTABLE_OPERATIONS"],
+  ["isGitDeliveryRecoveryStrategyHint", "GIT_DELIVERY_RECOVERY_STRATEGY_HINTS"],
+  ["isGitDeliveryExecutionOutcome", "GIT_DELIVERY_EXECUTION_OUTCOMES"],
+  ["isGitDeliveryExecutionErrorCode", "GIT_DELIVERY_EXECUTION_ERROR_CODES"],
+] as const;
+
+describe("Git delivery vocabulary membership", () => {
+  it.each(["source", "public"] as const)(
+    "preserves all vocabularies through %s",
+    async (surface) => {
+      const module =
+        surface === "source"
+          ? await import("./git-delivery.js")
+          : await import("@oscharko-dev/keiko-contracts/runtime/git-delivery");
+      const hostile = new Proxy(
+        {},
+        {
+          get(): never {
+            throw new TypeError("membership must not coerce objects");
+          },
+        },
+      );
+      const rejected: readonly unknown[] = [
+        "not-a-git-delivery-member",
+        "",
+        null,
+        undefined,
+        false,
+        0,
+        [],
+        hostile,
+      ];
+      for (const [guardName, vocabularyName] of GIT_DELIVERY_MEMBERSHIP_CONTROLS) {
+        const guard = module[guardName];
+        for (const member of module[vocabularyName]) expect(guard(member)).toBe(true);
+        for (const value of rejected) expect(guard(value)).toBe(false);
+      }
+    },
+  );
+});

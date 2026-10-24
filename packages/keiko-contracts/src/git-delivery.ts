@@ -541,6 +541,10 @@ function isString(value: unknown): value is string {
   return typeof value === "string";
 }
 
+function isGitDeliveryStringMember(value: unknown, values: readonly string[]): boolean {
+  return isString(value) && values.includes(value);
+}
+
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
@@ -584,75 +588,61 @@ function isUndefinedOr<T>(check: (v: unknown) => v is T): (v: unknown) => v is T
 // ─── Exported guards ─────────────────────────────────────────────────────────────
 
 export function isGitDeliveryActionKind(value: unknown): value is GitDeliveryActionKind {
-  const gitDeliveryActionKindsValues: readonly string[] = GIT_DELIVERY_ACTION_KINDS;
-  return isString(value) && gitDeliveryActionKindsValues.includes(value);
+  return isGitDeliveryStringMember(value, GIT_DELIVERY_ACTION_KINDS);
 }
 
 export function isGitDeliveryRiskClass(value: unknown): value is GitDeliveryRiskClass {
-  const gitDeliveryRiskClassesValues: readonly string[] = GIT_DELIVERY_RISK_CLASSES;
-  return isString(value) && gitDeliveryRiskClassesValues.includes(value);
+  return isGitDeliveryStringMember(value, GIT_DELIVERY_RISK_CLASSES);
 }
 
 export function isGitDeliveryProviderCapability(
   value: unknown,
 ): value is GitDeliveryProviderCapability {
-  const gitDeliveryProviderCapabilitiesValues: readonly string[] =
-    GIT_DELIVERY_PROVIDER_CAPABILITIES;
-  return isString(value) && gitDeliveryProviderCapabilitiesValues.includes(value);
+  return isGitDeliveryStringMember(value, GIT_DELIVERY_PROVIDER_CAPABILITIES);
 }
 
 export function isGitDeliveryBranchMatchKind(value: unknown): value is GitDeliveryBranchMatchKind {
-  const gitDeliveryBranchMatchKindsValues: readonly string[] = GIT_DELIVERY_BRANCH_MATCH_KINDS;
-  return isString(value) && gitDeliveryBranchMatchKindsValues.includes(value);
+  return isGitDeliveryStringMember(value, GIT_DELIVERY_BRANCH_MATCH_KINDS);
 }
 
 export function isGitDeliveryBlockReason(value: unknown): value is GitDeliveryBlockReason {
-  const gitDeliveryBlockReasonsValues: readonly string[] = GIT_DELIVERY_BLOCK_REASONS;
-  return isString(value) && gitDeliveryBlockReasonsValues.includes(value);
+  return isGitDeliveryStringMember(value, GIT_DELIVERY_BLOCK_REASONS);
 }
 
 export function isGitDeliveryMergeBlockReason(
   value: unknown,
 ): value is GitDeliveryMergeBlockReason {
-  const gitDeliveryMergeBlockReasonsValues: readonly string[] = GIT_DELIVERY_MERGE_BLOCK_REASONS;
-  return isString(value) && gitDeliveryMergeBlockReasonsValues.includes(value);
+  return isGitDeliveryStringMember(value, GIT_DELIVERY_MERGE_BLOCK_REASONS);
 }
 
 export function isGitDeliveryMergeStrategyHint(
   value: unknown,
 ): value is GitDeliveryMergeStrategyHint {
-  const gitDeliveryMergeStrategyHintsValues: readonly string[] = GIT_DELIVERY_MERGE_STRATEGY_HINTS;
-  return isString(value) && gitDeliveryMergeStrategyHintsValues.includes(value);
+  return isGitDeliveryStringMember(value, GIT_DELIVERY_MERGE_STRATEGY_HINTS);
 }
 
 export function isGitDeliveryAbortableOperation(
   value: unknown,
 ): value is GitDeliveryAbortableOperation {
-  const gitDeliveryAbortableOperationsValues: readonly string[] = GIT_DELIVERY_ABORTABLE_OPERATIONS;
-  return isString(value) && gitDeliveryAbortableOperationsValues.includes(value);
+  return isGitDeliveryStringMember(value, GIT_DELIVERY_ABORTABLE_OPERATIONS);
 }
 
 export function isGitDeliveryRecoveryStrategyHint(
   value: unknown,
 ): value is GitDeliveryRecoveryStrategyHint {
-  const gitDeliveryRecoveryStrategyHintsValues: readonly string[] =
-    GIT_DELIVERY_RECOVERY_STRATEGY_HINTS;
-  return isString(value) && gitDeliveryRecoveryStrategyHintsValues.includes(value);
+  return isGitDeliveryStringMember(value, GIT_DELIVERY_RECOVERY_STRATEGY_HINTS);
 }
 
 export function isGitDeliveryExecutionOutcome(
   value: unknown,
 ): value is GitDeliveryExecutionOutcome {
-  const gitDeliveryExecutionOutcomesValues: readonly string[] = GIT_DELIVERY_EXECUTION_OUTCOMES;
-  return isString(value) && gitDeliveryExecutionOutcomesValues.includes(value);
+  return isGitDeliveryStringMember(value, GIT_DELIVERY_EXECUTION_OUTCOMES);
 }
 
 export function isGitDeliveryExecutionErrorCode(
   value: unknown,
 ): value is GitDeliveryExecutionErrorCode {
-  const gitDeliveryExecutionErrorCodesValues: readonly string[] =
-    GIT_DELIVERY_EXECUTION_ERROR_CODES;
-  return isString(value) && gitDeliveryExecutionErrorCodesValues.includes(value);
+  return isGitDeliveryStringMember(value, GIT_DELIVERY_EXECUTION_ERROR_CODES);
 }
 
 export function isGitDeliveryBranchPattern(value: unknown): value is GitDeliveryBranchPattern {
