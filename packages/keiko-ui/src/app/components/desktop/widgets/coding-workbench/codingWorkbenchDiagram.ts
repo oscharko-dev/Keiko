@@ -20,6 +20,8 @@ import { clientErrorEvidence } from "@/lib/client-error-evidence";
 /** The part of Mermaid this surface uses. */
 export interface MermaidRenderer {
   readonly initialize: (config: MermaidConfig) => void;
+  /** With `suppressErrors`, a source Mermaid cannot read resolves `false` instead of throwing. */
+  readonly parse: (text: string, options: { readonly suppressErrors: true }) => Promise<unknown>;
   readonly render: (id: string, text: string) => Promise<{ readonly svg: string }>;
 }
 
@@ -164,11 +166,17 @@ async function renderSvg(mermaid: MermaidRenderer, source: string): Promise<stri
   renderedDiagrams += 1;
   const id = `keiko-diagram-${String(renderedDiagrams)}`;
   mermaid.initialize(mermaidConfig(prefersDark()));
+  // A syntax error, an unknown diagram type or a limit is an expected outcome for model-written text,
+  // not a defect: Mermaid answers it `false` and the source is shown as written.
+  if ((await mermaid.parse(source, { suppressErrors: true })) === false) return null;
   try {
     return (await mermaid.render(id, source)).svg;
-  } catch {
-    // A syntax error, an unknown diagram type or a limit is an expected outcome for model-written
-    // text, not a defect: the source is shown as written.
+  } catch (error) {
+    // A source Mermaid read but could not draw is a fault of the renderer. Body-free: the class only.
+    reportClientDiagnostic("Keiko diagram renderer failed on a diagram.", {
+      kind: "other",
+      errorEvidence: clientErrorEvidence(error),
+    });
     return null;
   } finally {
     document.getElementById(`d${id}`)?.remove();

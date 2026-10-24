@@ -335,11 +335,12 @@ function useDiagramView(text: string): DiagramView {
   return view;
 }
 
-// The checked nodes are adopted into a shadow root (cloned, so the drawing stays reusable): the
+// The checked nodes are adopted into a shadow root on a named region (a `section` may host one, a
+// `figure` may not), cloned so the drawing stays reusable: the
 // diagram's own stylesheet then styles that diagram and nothing else on the page.
 function DrawnDiagram({ nodes }: { readonly nodes: readonly Node[] }): ReactNode {
   const t = useCodingWorkbenchTranslate();
-  const ref = useRef<HTMLDivElement>(null);
+  const ref = useRef<HTMLElement>(null);
   useLayoutEffect(() => {
     const host = ref.current;
     if (host === null) return;
@@ -347,10 +348,9 @@ function DrawnDiagram({ nodes }: { readonly nodes: readonly Node[] }): ReactNode
     root.replaceChildren(...nodes.map((node) => node.cloneNode(true)));
   }, [nodes]);
   return (
-    <div
+    <section
       ref={ref}
       className={styles.cmpDiagramDrawing}
-      role="img"
       aria-label={t("codingWorkbench.richContent.diagram.region")}
       tabIndex={0}
       data-diagram-state="drawn"

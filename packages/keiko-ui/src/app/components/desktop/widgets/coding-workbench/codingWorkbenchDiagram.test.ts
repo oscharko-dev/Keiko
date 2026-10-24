@@ -11,6 +11,7 @@ const SVG = '<svg xmlns="http://www.w3.org/2000/svg"><g><rect width="1" height="
 
 interface RecordingRenderer extends MermaidRenderer {
   readonly initialize: ReturnType<typeof vi.fn<MermaidRenderer["initialize"]>>;
+  readonly parse: ReturnType<typeof vi.fn<MermaidRenderer["parse"]>>;
   readonly render: ReturnType<typeof vi.fn<MermaidRenderer["render"]>>;
 }
 
@@ -19,6 +20,7 @@ function renderer(
 ): RecordingRenderer {
   return {
     initialize: vi.fn<MermaidRenderer["initialize"]>(),
+    parse: vi.fn<MermaidRenderer["parse"]>(() => Promise.resolve({})),
     render: vi.fn<MermaidRenderer["render"]>(render),
   };
 }
@@ -59,14 +61,24 @@ describe("drawing a Mermaid diagram (#3906)", () => {
     expect(overlapped).toBe(false);
   });
 
-  it("removes Mermaid's scratch element even when the diagram is refused", async () => {
+  it("shows a source Mermaid cannot read as written, without drawing or reporting it", async () => {
+    const mermaid = renderer();
+    mermaid.parse.mockResolvedValueOnce(false);
+    await expect(drawDiagram(mermaid, "graph ??")).resolves.toEqual({
+      status: "verbatim",
+      reason: "rejected",
+    });
+    expect(mermaid.render).not.toHaveBeenCalled();
+  });
+
+  it("removes Mermaid's scratch element even when drawing a read diagram fails", async () => {
     const mermaid = renderer((id) => {
       const scratch = document.createElement("div");
       scratch.id = `d${id}`;
       document.body.append(scratch);
-      return Promise.reject(new Error("Parse error"));
+      return Promise.reject(new Error("layout failed"));
     });
-    await expect(drawDiagram(mermaid, "graph ??")).resolves.toEqual({
+    await expect(drawDiagram(mermaid, "graph TD\n A-->B")).resolves.toEqual({
       status: "verbatim",
       reason: "rejected",
     });

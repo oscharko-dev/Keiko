@@ -22,6 +22,8 @@ import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { resolveGitExecutable } from "./check-dependency-hygiene.mjs";
+
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const DUPES_BASELINE = "docs/qa/fallow/dupes-baseline.json";
 export const FALLOW_DUPES_ARGS = Object.freeze([
@@ -65,7 +67,7 @@ function report(args) {
 
 function changedFiles(ref) {
   const git = (args) => {
-    const result = spawnSync("git", args, { cwd: REPO_ROOT, encoding: "utf8" });
+    const result = spawnSync(resolveGitExecutable(), args, { cwd: REPO_ROOT, encoding: "utf8" });
     if (result.status !== 0) throw new Error(`git ${args.join(" ")} failed`);
     return result.stdout.split("\n").filter((line) => line.length > 0);
   };

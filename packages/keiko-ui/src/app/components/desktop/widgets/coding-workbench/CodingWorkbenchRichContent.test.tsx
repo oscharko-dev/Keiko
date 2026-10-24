@@ -12,6 +12,7 @@ const MATHML = "http://www.w3.org/1998/Math/MathML";
 // Mermaid needs a layout engine jsdom does not have; the module boundary is the diagram's input.
 const mermaidMock = vi.hoisted(() => ({
   initialize: vi.fn(),
+  parse: vi.fn((_text: string, _options: { suppressErrors: true }) => Promise.resolve({})),
   render: vi.fn((_id: string, _text: string) =>
     Promise.resolve({
       svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><style>.node{fill:#eee}</style><g class="node"><rect width="4" height="4"/><text>A</text></g></svg>',
@@ -372,7 +373,7 @@ describe("Mermaid fences", () => {
     const container = renderAnswer("```mermaid\ngraph TD\n  A-->B\n```");
     const host = await drawn(container);
 
-    expect(host).toHaveAttribute("role", "img");
+    expect(host.localName).toBe("section");
     expect(host).toHaveAccessibleName("Diagram");
     expect(host.shadowRoot?.querySelector("svg rect")).not.toBeNull();
     // The diagram's stylesheet lives in the shadow root, never in the page.
@@ -392,7 +393,7 @@ describe("Mermaid fences", () => {
   });
 
   it("shows the source under its caption when Mermaid cannot draw the diagram", async () => {
-    mermaidMock.render.mockRejectedValueOnce(new Error("Parse error on line 2"));
+    mermaidMock.parse.mockResolvedValueOnce(false);
     const container = renderAnswer("```mermaid\ngraph TD\n  A-->\n```");
     const figure = await verbatim(container);
 
@@ -487,7 +488,7 @@ describe("accessibility and localization", () => {
       expect(within(container).getByRole("group", { name: "Formel" })).toBeInTheDocument();
     });
     await waitFor(() => {
-      expect(within(container).getByRole("img", { name: "Diagramm" })).toBeInTheDocument();
+      expect(within(container).getByRole("region", { name: "Diagramm" })).toBeInTheDocument();
     });
   });
 });
