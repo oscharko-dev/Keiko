@@ -118,6 +118,24 @@ describe("an admitted MCP server's credential across runs (#3903 AC3)", () => {
     expect(JSON.stringify(records)).not.toContain("token-canary");
   });
 
+  // #3898 AC1 (MCP issuer migration): the SDK stamps an issuerless legacy credential with whatever
+  // issuer it discovers next and then presents its refresh token. Keiko never keeps or seeds one:
+  // only a credential the runtime itself bound to the expected issuer survives a run.
+  it("drops an issuerless legacy credential instead of binding it to the expected issuer", () => {
+    const legacy = credential(ISSUER);
+    const metadata = { ...(legacy.metadata as Record<string, unknown>) };
+    delete metadata.issuer;
+    const path = database([{ ...legacy, metadata }]);
+    const store = memoryStore();
+    const { sink: activityLog, records } = sink();
+    harvestMcpCredentials(RUN, path, store, activityLog, true);
+    expect(store.saved.size).toBe(0);
+    expect(rowCount(path)).toBe(0);
+    expect(lines(records)).toEqual([
+      expect.objectContaining({ action: "scrubbed", outcome: "ok", count: 0, droppedCount: 1 }),
+    ]);
+  });
+
   it("removes every credential from a reaped runtime's database before it is retained", () => {
     const path = database([credential(ISSUER), credential(ISSUER, "https://other.test/mcp")]);
     const store = memoryStore();
