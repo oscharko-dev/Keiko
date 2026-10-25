@@ -3404,7 +3404,7 @@ describe("handleGroundedAsk", () => {
     execFileSync("git", ["config", "user.name", "Keiko Test"], { cwd: tmp });
     writeFileSync(join(tmp, "README.md"), "managed grounding fixture\n");
     execFileSync("git", ["add", "README.md"], { cwd: tmp });
-    execFileSync("git", ["commit", "-qm", "fixture"], { cwd: tmp });
+    execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-qm", "fixture"], { cwd: tmp });
     mkdirSync(dirname(managedWorktree), { recursive: true });
     execFileSync(
       "git",
@@ -5565,6 +5565,8 @@ function seedHandbookGitHistory(): void {
       "user.name=Keiko Test",
       "-c",
       "user.email=test@example.invalid",
+      "-c",
+      "commit.gpgsign=false",
       "commit",
       "-qm",
       "Document handbook limits",
@@ -6150,4 +6152,45 @@ it("authenticates only actual prefix line ranges after partial prompt fitting", 
   );
   expect(result.citedScopePaths.size).toBe(0);
   expect(result.unsupported).toHaveLength(1);
+});
+
+it("carries a legacy grounded request id into the actual captured memory write", async () => {
+  const { chatId, projectPath } = await setupChatWithScope();
+  const memoryDir = join(tmp, "grounded-context-vault");
+  mkdirSync(memoryDir);
+  const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+  const insertion = vi.spyOn(memoryVault, "insertMemory");
+  try {
+    const result = await handleGroundedAsk(
+      {
+        ...ctx(
+          JSON.stringify({
+            chatId,
+            content: "remember that I prefer dark mode",
+            memory: {
+              enabled: true,
+              budgetTokens: 1200,
+              mode: "governed-assist",
+              context: {
+                userId: "local-operator",
+                workspaceId: projectPath,
+                projectId: projectPath,
+                conversationId: chatId,
+              },
+            },
+          }),
+        ),
+        correlationId: "legacy-grounded-memory-request",
+      },
+      deps(undefined, {}, { memoryVault }),
+      runner(emptyPack(), "Preference acknowledged."),
+    );
+    expect(result.status).toBe(200);
+    expect(insertion.mock.calls.length).toBeGreaterThan(0);
+    expect(insertion.mock.calls[0]?.[1]).toEqual({
+      correlationId: "legacy-grounded-memory-request",
+    });
+  } finally {
+    memoryVault.close();
+  }
 });

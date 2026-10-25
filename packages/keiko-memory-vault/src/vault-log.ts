@@ -40,7 +40,10 @@ import {
   defineActivityLogOperation,
   recordActivityLogLoss,
   type RejectedActivityLogEvent,
+  type ActivityLogEventEnvelope,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+
+import type { MemoryWriteContext } from "./types.js";
 
 export type MemoryVaultLogLevel = "debug" | "info" | "warn" | "error";
 
@@ -53,7 +56,8 @@ export type MemoryVaultLogOp =
   | "memory-vault.store.quarantined"
   | "memory-vault.store.encryption-migrated"
   | "memory-vault.store.encryption-checkpoint-degraded"
-  | "memory-vault.log.sink-failed";
+  | "memory-vault.log.sink-failed"
+  | "memory-vault.write.rejected";
 
 // A closed mirror of cipher.ts's `VaultKeySource` ("env" | "keychain" | "keyfile"), duplicated
 // rather than imported: cipher.ts imports from db.ts (for keyfile hardening) and db.ts imports
@@ -68,7 +72,14 @@ export type MemoryVaultLogKeySource = "env" | "keychain" | "keyfile";
 // attempts + busy signal from a post-migration WAL checkpoint that could not fully truncate
 // (#2906 KEIKO-0713 / KEIKO-0877). Never a memory body, a tag, a scope coordinate, a vault
 // key, or a filesystem path.
+export type MemoryWriteMethod = "insert" | "update" | "update-batch" | "graph";
+
 export interface MemoryVaultLogExtra {
+  readonly method?: MemoryWriteMethod | undefined;
+  readonly stage?: "caller-admission" | undefined;
+  readonly reason?: "invalid-record" | undefined;
+  readonly rejectionCount?: number | undefined;
+  readonly admitted?: boolean | undefined;
   readonly store?: "ui" | "memory-vault" | "local-knowledge" | undefined;
   readonly keySource?: MemoryVaultLogKeySource | undefined;
   readonly reopened?: boolean | undefined;
@@ -87,6 +98,7 @@ export interface MemoryVaultLogEvent {
   readonly category: MemoryVaultLogCategory;
   readonly op: MemoryVaultLogOp;
   readonly correlationId?: string | undefined;
+  readonly parentCorrelationId?: string | undefined;
   readonly durationMs?: number | undefined;
   readonly status?: number | undefined;
   readonly errorKind?: string | undefined;
@@ -243,4 +255,72 @@ function warnFailedMemoryVaultLogSink(droppedOpDigest: string, errorKind: string
   } catch {
     // The process warning channel is the last one there is; a report beyond it does not exist.
   }
+}
+
+const MEMORY_WRITE_REJECTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "memory-vault.write.rejected",
+  category: "memory",
+  owner: "keiko-memory-vault",
+  emitter: "vault-log.emitMemoryWriteRejected",
+  fields: {
+    method: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["insert", "update", "update-batch", "graph"],
+    },
+    stage: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["caller-admission"],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["invalid-record"],
+    },
+    rejectionCount: { type: "integer", dataClass: "count", required: true },
+    admitted: { type: "boolean", dataClass: "closed-enum", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "timeline",
+  diagnosticWhen: [{ field: "admitted", values: [false] }],
+  failureClasses: ["memory-write-validation"],
+  proofIds: ["memory-vault.write.rejected.initial-admission"],
+  releaseImpact: "patch",
+});
+
+function writeRefusalEnvelope(context: MemoryWriteContext | undefined): ActivityLogEventEnvelope {
+  return {
+    level: "warn",
+    errorKind: "validation-failed",
+    get correlationId(): string | undefined {
+      return context?.correlationId;
+    },
+    get parentCorrelationId(): string | undefined {
+      return context?.parentCorrelationId;
+    },
+  };
+}
+
+export function emitMemoryWriteRejected(
+  sink: MemoryVaultLogSink | undefined,
+  method: MemoryWriteMethod,
+  context: MemoryWriteContext | undefined,
+): void {
+  emitMemoryVaultLogEvent(
+    sink,
+    activityLogEvent(MEMORY_WRITE_REJECTED_OPERATION, writeRefusalEnvelope(context), {
+      method,
+      stage: "caller-admission",
+      reason: "invalid-record",
+      rejectionCount: 1,
+      admitted: false,
+    }),
+  );
 }

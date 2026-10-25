@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "6d495f548fdd02dc45b01f910695ba5f8228fa67a3e5f717c82a25dcf5fae8ec",
+    "catalogDigest": "8ed752f1c4396867d9edbc55238f09696fad437b147de74f126e36bc489d8f94",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -26119,8 +26119,8 @@
         "failureClasses": ["activity-log-sink"],
         "proofIds": ["memory-vault.log.sink-failed.body-free"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-memory-vault/src/vault-log.ts:169",
-        "emitterSites": ["packages/keiko-memory-vault/src/vault-log.ts:222"]
+        "registrationSite": "packages/keiko-memory-vault/src/vault-log.ts:181",
+        "emitterSites": ["packages/keiko-memory-vault/src/vault-log.ts:234"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -26242,8 +26242,8 @@
         "failureClasses": ["memory-vault-open"],
         "proofIds": ["memory-vault.store.opened.key-source"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-memory-vault/src/vault.ts:122",
-        "emitterSites": ["packages/keiko-memory-vault/src/vault.ts:449"]
+        "registrationSite": "packages/keiko-memory-vault/src/vault.ts:125",
+        "emitterSites": ["packages/keiko-memory-vault/src/vault.ts:454"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -26283,6 +26283,68 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-memory-vault/src/db.ts:38",
         "emitterSites": ["packages/keiko-memory-vault/src/db.ts:155"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "memory-vault.write.rejected",
+        "category": "memory",
+        "owner": "keiko-memory-vault",
+        "emitter": "vault-log.emitMemoryWriteRejected",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "method": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["insert", "update", "update-batch", "graph"]
+          },
+          "stage": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["caller-admission"]
+          },
+          "reason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["invalid-record"]
+          },
+          "rejectionCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "admitted": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "failure",
+        "analyzerProjection": "timeline",
+        "diagnosticWhen": [
+          {
+            "field": "admitted",
+            "values": [false]
+          }
+        ],
+        "failureClasses": ["memory-write-validation"],
+        "proofIds": ["memory-vault.write.rejected.initial-admission"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-memory-vault/src/vault-log.ts:260",
+        "emitterSites": ["packages/keiko-memory-vault/src/vault-log.ts:318"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -37399,6 +37461,27 @@
       {
         "contractKind": "activity-log-failure-class",
         "schemaVersion": 1,
+        "failureClass": "memory-write-validation",
+        "requiredProductSurfaces": ["keiko-memory-vault"],
+        "requiredLifecycleOperations": {
+          "start": [],
+          "state": [],
+          "end": [],
+          "failure": ["memory-vault.write.rejected"],
+          "loss": []
+        },
+        "requiredCausalOperations": ["memory-vault.write.rejected"],
+        "requiredLossOperations": [],
+        "requiredProofOperations": ["memory-vault.write.rejected"],
+        "requiredReplayProofIds": [],
+        "requiredResourceOperations": [],
+        "requiredEvidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+        "requiredFrameOperations": [],
+        "requiredCauseOperations": []
+      },
+      {
+        "contractKind": "activity-log-failure-class",
+        "schemaVersion": 1,
         "failureClass": "knowledge-manual-summary-validation",
         "requiredProductSurfaces": ["keiko-local-knowledge"],
         "requiredLifecycleOperations": {
@@ -47186,8 +47269,8 @@
     "failureClassCoverage": {
       "schemaVersion": 1,
       "releaseExpectation": "100%-complete",
-      "supportedClassCount": 348,
-      "completeClassCount": 348,
+      "supportedClassCount": 349,
+      "completeClassCount": 349,
       "completeness": "complete",
       "classes": [
         {
@@ -78715,6 +78798,80 @@
           "completeness": "complete"
         },
         {
+          "failureClass": "memory-write-validation",
+          "requirementContract": "memory-write-validation",
+          "productSurfaces": ["keiko-memory-vault"],
+          "lifecycleTransitions": ["failure"],
+          "lifecycleOperations": {
+            "start": [],
+            "state": [],
+            "end": [],
+            "failure": ["memory-vault.write.rejected"],
+            "loss": []
+          },
+          "causalEdges": [
+            {
+              "op": "memory-vault.write.rejected",
+              "mode": "correlation"
+            }
+          ],
+          "lossSignals": [],
+          "resourceSignals": [],
+          "replayReferences": [],
+          "operations": [
+            {
+              "op": "memory-vault.write.rejected",
+              "owner": "keiko-memory-vault",
+              "category": "memory",
+              "lifecycle": "failure",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "admitted",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "method",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "reason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "rejectionCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "stage",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["memory-vault.write.rejected.initial-admission"],
+              "replayReferences": [],
+              "missingObligations": []
+            }
+          ],
+          "missingObligations": [],
+          "completeness": "complete"
+        },
+        {
           "failureClass": "native-file-dialog-projection",
           "requirementContract": "native-file-dialog-projection",
           "productSurfaces": ["keiko-server"],
@@ -90518,7 +90675,7 @@
     {
       "op": "memory-vault.log.sink-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-memory-vault/src/vault-log.ts:172",
+      "site": "packages/keiko-memory-vault/src/vault-log.ts:184",
       "package": "keiko-memory-vault"
     },
     {
@@ -90536,13 +90693,19 @@
     {
       "op": "memory-vault.store.opened",
       "category": "memory",
-      "site": "packages/keiko-memory-vault/src/vault.ts:125",
+      "site": "packages/keiko-memory-vault/src/vault.ts:128",
       "package": "keiko-memory-vault"
     },
     {
       "op": "memory-vault.store.quarantined",
       "category": "diagnostic",
       "site": "packages/keiko-memory-vault/src/db.ts:41",
+      "package": "keiko-memory-vault"
+    },
+    {
+      "op": "memory-vault.write.rejected",
+      "category": "memory",
+      "site": "packages/keiko-memory-vault/src/vault-log.ts:263",
       "package": "keiko-memory-vault"
     },
     {
@@ -91125,7 +91288,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:1708",
+      "site": "packages/keiko-server/src/chat-handlers.ts:1734",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -91569,7 +91732,7 @@
     {
       "op": "chat.compaction.summary.scheduled",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:2057",
+      "site": "packages/keiko-server/src/chat-handlers.ts:2083",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -91624,7 +91787,7 @@
     {
       "op": "chat.memory.auto-maintenance",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:1403",
+      "site": "packages/keiko-server/src/chat-handlers.ts:1404",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -93811,14 +93974,14 @@
     {
       "op": "memory.maintenance.autonomy-mode",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/memory-maintenance-handlers.ts:638",
+      "site": "packages/keiko-server/src/memory-maintenance-handlers.ts:660",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "memory.maintenance.retention-policy",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/memory-maintenance-handlers.ts:657",
+      "site": "packages/keiko-server/src/memory-maintenance-handlers.ts:679",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -94214,7 +94377,7 @@
     {
       "op": "store-rejected",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-embedding.ts:949",
+      "site": "packages/keiko-server/src/memory-embedding.ts:950",
       "package": "keiko-server"
     },
     {
@@ -95214,6 +95377,7 @@
     "memory-vault.store.encryption-migrated",
     "memory-vault.store.opened",
     "memory-vault.store.quarantined",
+    "memory-vault.write.rejected",
     "memory.audit.persist",
     "memory.audit.state-cache.seeded",
     "memory.capture.novelty-gate",

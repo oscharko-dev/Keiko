@@ -736,12 +736,16 @@ describe("memory handlers", () => {
     const vault = makeVault();
     vault.insertMemory(makeMemory("conflict-3", "retire me", { status: "conflicted" }));
 
+    const updating = vi.spyOn(vault, "updateMemory");
     const result = await handleArchiveMemory(
-      makeCtx(
-        "/api/memory/conflict-3/archive",
-        { reason: "archived conflicting memory from review queue" },
-        { id: "conflict-3" },
-      ),
+      {
+        ...makeCtx(
+          "/api/memory/conflict-3/archive",
+          { reason: "archived conflicting memory from review queue" },
+          { id: "conflict-3" },
+        ),
+        correlationId: "archive-write-request",
+      },
       makeDeps({ memoryVault: vault }),
     );
 
@@ -756,6 +760,7 @@ describe("memory handlers", () => {
     // survives to disk verbatim; the closed-vocabulary sanitiser collapses out-of-enum
     // strings (which may contain PII/secrets from a coerced client) to a safe default.
     expect(archived.staleReason).not.toContain("archived conflicting memory");
+    expect(updating.mock.calls[0]?.[3]).toEqual({ correlationId: "archive-write-request" });
   });
 
   it("persists a client-provided in-enum archive reason as-is (KEIKO-0348)", async () => {

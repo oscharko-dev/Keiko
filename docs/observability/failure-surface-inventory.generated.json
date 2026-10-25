@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "6d495f548fdd02dc45b01f910695ba5f8228fa67a3e5f717c82a25dcf5fae8ec"
+    "catalogDigest": "8ed752f1c4396867d9edbc55238f09696fad437b147de74f126e36bc489d8f94"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,10 +55,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 541,
-    "proofCount": 553,
-    "resolvedProofCount": 553,
-    "failureClassCount": 348,
+    "operationCount": 542,
+    "proofCount": 554,
+    "resolvedProofCount": 554,
+    "failureClassCount": 349,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -470,6 +470,7 @@
         "memory-vault.store.encryption-migrated",
         "memory-vault.store.opened",
         "memory-vault.store.quarantined",
+        "memory-vault.write.rejected",
         "memory.capture.novelty-gate",
         "memory.embedding.invalidated",
         "memory.embedding.invalidation-failed",
@@ -715,6 +716,7 @@
     }
   ],
   "failureClassScenarios": {
+    "memory-write-validation": ["memory-knowledge.rejection"],
     "knowledge-manual-summary-validation": ["memory-knowledge.rejection"],
     "chat-draft-persistence": ["bff.dependency-failure"],
     "markdown-skill-library": ["bff.dependency-failure"],
@@ -2167,6 +2169,10 @@
     ],
     "memory-vault.store.opened.key-source": ["packages/keiko-memory-vault/src/vault.test.ts"],
     "memory-vault.store.quarantined.recovery": ["packages/keiko-memory-vault/src/db.test.ts"],
+    "memory-vault.write.rejected.initial-admission": [
+      "packages/keiko-memory-vault/src/vault-log.test.ts",
+      "packages/keiko-memory-vault/src/vault.test.ts"
+    ],
     "memory.audit.state-cache.seeded.count": ["packages/keiko-server/src/deps-activity.test.ts"],
     "memory.capture.novelty-gate.line": ["packages/keiko-server/src/memory-embedding.test.ts"],
     "memory.embedding.invalidated.line": ["packages/keiko-server/src/memory-embedding.test.ts"],

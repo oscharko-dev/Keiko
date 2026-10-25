@@ -373,6 +373,7 @@ describe("captureSalientFromTurn", () => {
   // Fails before the fix (the summary's correlationId would be an unrelated fresh UUID).
   it("carries the turn's correlation id on the capture summary diagnostic", async () => {
     const vault = makeVault();
+    const insertion = vi.spyOn(vault, "insertMemory");
     const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
     const deps = makeDeps({ memoryVault: vault, diagnostics });
 
@@ -392,6 +393,9 @@ describe("captureSalientFromTurn", () => {
         errorClass: "SalienceCaptureSummary",
         correlationId: "assistant-summary-turn",
       }),
+    );
+    expect(insertion.mock.calls.map((call) => call[1]?.correlationId)).toEqual(
+      actions.map(() => "assistant-summary-turn"),
     );
   });
 

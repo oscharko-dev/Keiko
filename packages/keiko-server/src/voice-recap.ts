@@ -308,6 +308,7 @@ async function persistRecapOutcome(
   outcome: CaptureOutcome,
   mode: ReturnType<typeof resolvePersistedMemoryAutonomyMode>,
   autoAcceptEligible: boolean,
+  writeContext: MemoryWriteContext,
 ): Promise<RecapPersistedMemory | null> {
   if (!isPersistableMemoryCandidate(outcome)) return null;
   const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
@@ -317,7 +318,7 @@ async function persistRecapOutcome(
     autoAcceptEligible && memoryCaptureAutoAcceptEligible(mode, outcome)
       ? promoteEligibleMemoryRecord(record)
       : record;
-  const result = persistCapturedMemory(vault, candidate, true);
+  const result = persistCapturedMemory(vault, candidate, true, writeContext);
   if (!result.inserted && !result.promoted) return null;
   const inserted = result.memory;
   if (result.inserted) await embedAndStoreMemory(deps, vault, inserted.id, inserted.body);
@@ -335,13 +336,21 @@ async function persistRecapOutcomes(
   vault: MemoryVaultStore,
   outcomes: readonly CaptureOutcome[],
   autoAcceptEligible: boolean,
+  writeContext: MemoryWriteContext,
 ): Promise<RecapPersistResult> {
   const proposed: { id: MemoryId; scope: MemoryScope }[] = [];
   const accepted: { id: MemoryId; scope: MemoryScope }[] = [];
   const mode = resolvePersistedMemoryAutonomyMode(deps);
   let rejected = 0;
   for (const outcome of outcomes) {
-    const persisted = await persistRecapOutcome(deps, vault, outcome, mode, autoAcceptEligible);
+    const persisted = await persistRecapOutcome(
+      deps,
+      vault,
+      outcome,
+      mode,
+      autoAcceptEligible,
+      writeContext,
+    );
     if (persisted === null) {
       rejected += 1;
       continue;
@@ -405,6 +414,7 @@ async function buildRecapResponse(
   request: RecapRequest,
   runtime: ConversationMemoryRuntimeContext,
   provenance: RecapResponseBody["provenance"],
+  writeContext: MemoryWriteContext,
 ): Promise<RecapResponseBody> {
   const startedAtMs = Date.now();
   const captureContext = buildCaptureContext(runtime);
@@ -416,7 +426,13 @@ async function buildRecapResponse(
     outcomes.push(...extractCandidatesFromUserText(span, captureContext, policy));
   }
   const autoAcceptEligible = provenance === "attested";
-  const persisted = await persistRecapOutcomes(deps, vault, outcomes, autoAcceptEligible);
+  const persisted = await persistRecapOutcomes(
+    deps,
+    vault,
+    outcomes,
+    autoAcceptEligible,
+    writeContext,
+  );
   recordRecapAudits(deps, profile, request, persisted, startedAtMs);
   return {
     status: "ok",
@@ -530,9 +546,12 @@ export async function handleBuildVoiceRecap(
       { ...request, projectPath },
       runtime,
       provenance,
+      { correlationId: ctx.correlationId },
     );
     return { status: 200, body: response };
   } catch (error) {
     return desktopChatErrorResult(error, deps);
   }
 }
+
+type MemoryWriteContext = Parameters<MemoryVaultStore["insertMemory"]>[1];

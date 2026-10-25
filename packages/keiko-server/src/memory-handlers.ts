@@ -936,12 +936,13 @@ async function applyMemoryEdit(
   vault: MemoryVaultStore,
   id: MemoryId,
   input: EditInput,
+  writeContext: MemoryWriteContext,
 ): Promise<RouteResult> {
   const existing = vault.getMemory(id);
   if (existing === undefined) {
     return { status: 404, body: errorBody("NOT_FOUND", "Memory not found.") };
   }
-  const updated = vault.updateMemory(id, buildEditPatch(input, existing), Date.now());
+  const updated = vault.updateMemory(id, buildEditPatch(input, existing), Date.now(), writeContext);
   if (typeof input.newBody === "string" && input.newBody.trim().length > 0) {
     await refreshMemoryEmbeddingAfterBodyEdit(deps, vault, updated.id, updated.body);
   }
@@ -961,7 +962,7 @@ export async function handleEditMemory(
   if (isRouteResult(input)) return input;
 
   try {
-    return await applyMemoryEdit(deps, vault, id, input);
+    return await applyMemoryEdit(deps, vault, id, input, { correlationId: ctx.correlationId });
   } catch (err) {
     if (err instanceof MemoryStorageError) {
       reportMemoryHandlerFailure(
@@ -1000,7 +1001,9 @@ export function handlePinMemory(ctx: RouteContext, deps: UiHandlerDeps): RouteRe
       reviewerId: reviewerIdForMemoryMutation(deps),
       nowMs: Date.now(),
     });
-    const updated = vault.updateMemory(id as MemoryId, { pinned: true }, Date.now());
+    const updated = vault.updateMemory(id as MemoryId, { pinned: true }, Date.now(), {
+      correlationId: ctx.correlationId,
+    });
     return { status: 200, body: { memory: redactMemory(deps, updated) } };
   } catch (err) {
     if (err instanceof GovernanceError) {
@@ -1043,7 +1046,9 @@ export function handleUnpinMemory(ctx: RouteContext, deps: UiHandlerDeps): Route
       reviewerId: reviewerIdForMemoryMutation(deps),
       nowMs: Date.now(),
     });
-    const updated = vault.updateMemory(id as MemoryId, { pinned: false }, Date.now());
+    const updated = vault.updateMemory(id as MemoryId, { pinned: false }, Date.now(), {
+      correlationId: ctx.correlationId,
+    });
     return { status: 200, body: { memory: redactMemory(deps, updated) } };
   } catch (err) {
     if (err instanceof GovernanceError) {
@@ -1106,6 +1111,7 @@ export async function handleArchiveMemory(
       id as MemoryId,
       { status: "archived", staleReason: reason },
       Date.now(),
+      { correlationId: ctx.correlationId },
     );
     return { status: 200, body: { memory: redactMemory(deps, updated) } };
   } catch (err) {
@@ -1672,6 +1678,7 @@ function persistConflictTransitions(
   vault: MemoryVaultStore,
   resolution: ReturnType<typeof buildConflictTransitions>,
   reason: string,
+  writeContext: MemoryWriteContext,
 ): void {
   // Bi-temporal-lite (#204, C1) deliberately does NOT apply here. `buildConflictTransitions` moves
   // every loser to `conflicted`, and MEMORY_STATUS_TRANSITIONS lets `conflicted` return to
@@ -1685,6 +1692,7 @@ function persistConflictTransitions(
       transition.memoryId,
       { status: transition.to, staleReason: reason },
       transition.transitionedAt,
+      writeContext,
     );
   }
 }
@@ -1718,6 +1726,7 @@ function executeConflictResolution(
   vault: MemoryVaultStore,
   deps: UiHandlerDeps,
   input: ConflictResolutionInput,
+  writeContext: MemoryWriteContext,
 ): Record<string, unknown> | RouteResult {
   const memories = loadConflictMemories(vault, input);
   if (isRouteResult(memories)) return memories;
@@ -1728,7 +1737,7 @@ function executeConflictResolution(
     { winner: input.winner, losers: input.losers },
     { reviewerId: reviewerIdForMemoryMutation(deps), nowMs },
   );
-  persistConflictTransitions(vault, resolution, input.reason);
+  persistConflictTransitions(vault, resolution, input.reason, writeContext);
   const edgeIds = persistConflictSupersessions(
     vault,
     deps,
@@ -1765,7 +1774,9 @@ export async function handleResolveMemoryConflict(
   if (isRouteResult(input)) return input;
 
   try {
-    const result = executeConflictResolution(vault, deps, input);
+    const result = executeConflictResolution(vault, deps, input, {
+      correlationId: ctx.correlationId,
+    });
     if (isRouteResult(result)) return result;
     return { status: 200, body: result };
   } catch (err) {
@@ -1896,6 +1907,7 @@ function executeCorrectMemory(
   existing: MemoryRecord,
   input: { readonly correctedBody: string },
   id: string,
+  writeContext: MemoryWriteContext,
 ): RouteResult {
   const nowMs = Date.now();
   const correctionId = randomUUID() as MemoryId;
@@ -1907,7 +1919,10 @@ function executeCorrectMemory(
     newMemoryId: correctionId,
   });
   const auditCountBeforeInsert = auditEventCountForDay(deps, nowMs);
-  const inserted = vault.insertMemory(buildCorrectionRecord(proposal, correctionId, nowMs));
+  const inserted = vault.insertMemory(
+    buildCorrectionRecord(proposal, correctionId, nowMs),
+    writeContext,
+  );
   recordCorrectionProposalAuditIfNeeded(deps, inserted, nowMs, auditCountBeforeInsert);
   // Bind the reviewer-selected predecessor while the correction is proposed, but do not claim a
   // supersession before acceptance. The actual `supersedes` edge is committed atomically with the
@@ -1943,7 +1958,9 @@ export async function handleCorrectMemory(
     if (existing === undefined) {
       return { status: 404, body: errorBody("NOT_FOUND", "Memory not found.") };
     }
-    return executeCorrectMemory(vault, deps, existing, input, id);
+    return executeCorrectMemory(vault, deps, existing, input, id, {
+      correlationId: ctx.correlationId,
+    });
   } catch (err) {
     if (err instanceof GovernanceError) {
       return { status: 400, body: governanceErrorBody(err) };
@@ -2224,27 +2241,31 @@ function commitCorrectionAcceptance(
   proposal: MemoryRecord,
   origins: readonly CorrectionSupersessionOrigin[],
   bodyOverride: string | undefined,
+  writeContext: MemoryWriteContext,
 ): CommittedCorrectionAcceptance | RouteResult {
   const nowMs = Date.now();
   const acceptPatch = buildAcceptProposalPatch(origins, bodyOverride);
   const updates = buildCorrectionAcceptanceUpdates(proposal, acceptPatch, origins, nowMs);
   try {
-    const mutation = vault.applyGraphMutation({
-      preconditions: [
-        {
-          id: proposal.id,
-          expectedStatus: proposal.status,
-          expectedUpdatedAt: proposal.updatedAt,
-        },
-        ...origins.map((origin) => ({
-          id: origin.original.id,
-          expectedStatus: origin.original.status,
-          expectedUpdatedAt: origin.original.updatedAt,
-        })),
-      ],
-      updates,
-      edges: correctionAcceptanceEdges(proposal, origins, nowMs),
-    });
+    const mutation = vault.applyGraphMutation(
+      {
+        preconditions: [
+          {
+            id: proposal.id,
+            expectedStatus: proposal.status,
+            expectedUpdatedAt: proposal.updatedAt,
+          },
+          ...origins.map((origin) => ({
+            id: origin.original.id,
+            expectedStatus: origin.original.status,
+            expectedUpdatedAt: origin.original.updatedAt,
+          })),
+        ],
+        updates,
+        edges: correctionAcceptanceEdges(proposal, origins, nowMs),
+      },
+      writeContext,
+    );
     const updated = mutation.memories[0];
     if (updated === undefined) {
       throw new GovernanceError("invalid-resolution", "acceptance update produced no records");
@@ -2264,6 +2285,7 @@ function acceptMemoryProposal(
   deps: UiHandlerDeps,
   id: MemoryId,
   input: AcceptMemoryProposalOptions,
+  writeContext: MemoryWriteContext,
 ): RouteResult {
   const existing = ensureProposedMemory(vault.getMemory(id));
   if (isRouteResult(existing)) return existing;
@@ -2274,7 +2296,13 @@ function acceptMemoryProposal(
   if (origins.some((origin) => !scopeAuthorized(origin.original.scope, authorizedScopes))) {
     return correctionPredecessorFailure("CORRECTION_PREDECESSOR_FORBIDDEN");
   }
-  const committed = commitCorrectionAcceptance(vault, existing, origins, input.bodyOverride);
+  const committed = commitCorrectionAcceptance(
+    vault,
+    existing,
+    origins,
+    input.bodyOverride,
+    writeContext,
+  );
   if (isRouteResult(committed)) return committed;
   // Outcome-driven forgetting (#204, O-V1): acceptance is a positive retention outcome for the
   // proposal; any origin it supersedes proved wrong (utility 0). Both feed the maintenance utility
@@ -2354,7 +2382,9 @@ export async function handleAcceptMemoryProposal(
   if (isRouteResult(input)) return input;
 
   try {
-    return acceptMemoryProposal(vault, deps, id as MemoryId, input);
+    return acceptMemoryProposal(vault, deps, id as MemoryId, input, {
+      correlationId: ctx.correlationId,
+    });
   } catch (err) {
     return memoryMutationErrorBody(
       deps,
@@ -2468,6 +2498,7 @@ export async function handleRejectMemoryProposal(
       id as MemoryId,
       { status: "rejected", staleReason: reason },
       nowMs,
+      { correlationId: ctx.correlationId },
     );
     // Outcome-driven forgetting (#204, O-V1): a user rejection is a negative retention outcome
     // (utility 0), so the rejected memory fades faster under maintenance instead of lingering.
@@ -2533,3 +2564,5 @@ export function createBffMemoryVault(
     securityLogSink: activityLog,
   });
 }
+
+type MemoryWriteContext = Parameters<MemoryVaultStore["insertMemory"]>[1];

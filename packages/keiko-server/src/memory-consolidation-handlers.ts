@@ -930,27 +930,31 @@ function conflictApplication(
   itemId: string,
   targets: { readonly winner: MemoryId; readonly losers: readonly MemoryId[] },
   nowMs: number,
+  writeContext: MemoryWriteContext,
 ): MemoryConsolidationApplicationWire | undefined {
   const current = targets.losers.map((id) => vault.getMemory(id));
   if (current.some((memory) => memory?.status !== "proposed")) {
     return undefined;
   }
   const records = current.filter((memory): memory is MemoryRecord => memory !== undefined);
-  vault.applyGraphMutation({
-    preconditions: records.map((memory) => ({
-      id: memory.id,
-      expectedStatus: "proposed",
-      expectedUpdatedAt: memory.updatedAt,
-    })),
-    updates: records.map((memory) => ({
-      id: memory.id,
-      expectedStatus: "proposed",
-      expectedUpdatedAt: memory.updatedAt,
-      patch: { status: "conflicted", staleReason: "consolidation review changed before apply" },
-      nowMs,
-    })),
-    edges: [],
-  });
+  vault.applyGraphMutation(
+    {
+      preconditions: records.map((memory) => ({
+        id: memory.id,
+        expectedStatus: "proposed",
+        expectedUpdatedAt: memory.updatedAt,
+      })),
+      updates: records.map((memory) => ({
+        id: memory.id,
+        expectedStatus: "proposed",
+        expectedUpdatedAt: memory.updatedAt,
+        patch: { status: "conflicted", staleReason: "consolidation review changed before apply" },
+        nowMs,
+      })),
+      edges: [],
+    },
+    writeContext,
+  );
   return applicationResult(itemId, "conflicted", targets.winner, targets.losers, nowMs);
 }
 
@@ -958,23 +962,27 @@ function executeApply(
   vault: MemoryVaultStore,
   itemId: string,
   inputs: Exclude<ReturnType<typeof findApplyInputs>, RouteResult>,
+  writeContext: MemoryWriteContext,
 ): MemoryConsolidationApplicationWire | RouteResult {
   const nowMs = Math.max(Date.now(), ...inputs.snapshot.memories.map((item) => item.updatedAt)) + 1;
   try {
-    vault.applyGraphMutation({
-      preconditions: inputs.snapshot.memories.map((memory) => ({
-        id: memory.memoryId,
-        expectedStatus: memory.status,
-        expectedUpdatedAt: memory.updatedAt,
-      })),
-      updates: inputs.targets.losers.map((id) => ({
-        id,
-        expectedStatus: "proposed",
-        patch: { status: "superseded", staleReason: "applied consolidation review" },
-        nowMs,
-      })),
-      edges: inputs.item.proposedEdges ?? [],
-    });
+    vault.applyGraphMutation(
+      {
+        preconditions: inputs.snapshot.memories.map((memory) => ({
+          id: memory.memoryId,
+          expectedStatus: memory.status,
+          expectedUpdatedAt: memory.updatedAt,
+        })),
+        updates: inputs.targets.losers.map((id) => ({
+          id,
+          expectedStatus: "proposed",
+          patch: { status: "superseded", staleReason: "applied consolidation review" },
+          nowMs,
+        })),
+        edges: inputs.item.proposedEdges ?? [],
+      },
+      writeContext,
+    );
     return applicationResult(
       itemId,
       "applied",
@@ -984,7 +992,7 @@ function executeApply(
     );
   } catch (error) {
     if (!(error instanceof MemoryStoragePreconditionError)) throw error;
-    const application = conflictApplication(vault, itemId, inputs.targets, nowMs);
+    const application = conflictApplication(vault, itemId, inputs.targets, nowMs, writeContext);
     if (application !== undefined) return application;
     return {
       status: 409,
@@ -1059,8 +1067,12 @@ export async function handleApplyConsolidationReviewItem(
       body: errorBody("PRECONDITION_MISMATCH", "Review preconditions do not match the job."),
     };
   }
-  const application = executeApply(route.vault, route.itemId, inputs);
+  const application = executeApply(route.vault, route.itemId, inputs, {
+    correlationId: ctx.correlationId,
+  });
   if (isRouteResult(application)) return application;
   route.registry.recordApplication(route.jobId, application);
   return applicationResponse(application);
 }
+
+type MemoryWriteContext = Parameters<MemoryVaultStore["insertMemory"]>[1];

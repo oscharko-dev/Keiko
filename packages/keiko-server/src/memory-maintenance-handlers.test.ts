@@ -166,10 +166,18 @@ describe("handleRunMaintenance", () => {
   it("promotes a strong public proposed memory to accepted when the mode permits it", () => {
     const vault = makeVault();
     insert(vault, { id: "m", status: "proposed", sensitivity: "public", confidence: 0.6 });
-    const result = handleRunMaintenance(makeCtx(), makeUnattendedDeps(vault));
+    const updating = vi.spyOn(vault, "updateMemory");
+    const result = handleRunMaintenance(
+      { ...makeCtx(), correlationId: "maintenance-write-request" },
+      makeUnattendedDeps(vault),
+    );
     expect(result.status).toBe(200);
     expect(counts(result).promoted).toBe(1);
     expect(vault.getMemory(mid("m"))?.status).toBe("accepted");
+    expect(updating.mock.calls[0]?.[3]).toEqual({
+      correlationId: "maintenance-write-request",
+      parentCorrelationId: undefined,
+    });
   });
 
   it("does NOT mutate confidence when a memory is frequently recalled (O-V2 immutability)", () => {
@@ -994,5 +1002,26 @@ describe("handleRunMaintenance — type-aware decay (semanticization, env-gated)
     expect(counts(result).archived).toBe(1);
     expect(vault.getMemory(mid("ep"))?.status).toBe("archived");
     expect(vault.getMemory(mid("se"))?.status).toBe("accepted");
+  });
+});
+
+it("keeps the background pass id and known triggering parent on its actual record updates", () => {
+  const vault = makeVault();
+  insert(vault, {
+    id: "background-context-memory",
+    status: "proposed",
+    sensitivity: "public",
+    confidence: 0.6,
+  });
+  const updating = vi.spyOn(vault, "updateMemory");
+  const result = runMemoryMaintenance(vault, undefined, {
+    autonomyMode: "supervised-coding",
+    correlationId: "maintenance-background-pass",
+    parentCorrelationId: "maintenance-trigger-request",
+  });
+  expect(result.promoted).toBe(1);
+  expect(updating.mock.calls[0]?.[3]).toEqual({
+    correlationId: "maintenance-background-pass",
+    parentCorrelationId: "maintenance-trigger-request",
   });
 });

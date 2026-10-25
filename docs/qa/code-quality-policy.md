@@ -1663,3 +1663,23 @@ declare the dictionary rule for their original raw-record boolean checks. Canoni
 flow, complete incoming references, current contributing proofs and existing limits determine
 each actual slot. This grants no dictionary result, helper admission or governance authority;
 unknown-input declarations, physical member checks and repeated-read refusals remain intact.
+
+## Memory initial-admission correlation proof (#3918)
+
+The initial Memory record gate owns `memory-vault.write.rejected`. The four existing mutation
+methods carry an optional per-invocation context; real request, maintenance-pass, salience-turn and
+workflow-run ids reach the registered domain port without mutating singleton dependency state.
+Buffered, streamed and grounded capture preserve a known request id even without `clientTurnId`.
+
+Whole vault/caller proofs exercise real producers and inspect the actual mutation arguments.
+The Activity Log scenario drives the real initial rejection through the registered writer, queries
+each invocation with zero optional context and reaches validated support analysis. Its closed
+fields distinguish initial invalid-record refusal from a foreign observational exception; selective
+transport failure remains explicit loss. Existing healthy, rollback and identity pins remain in the
+whole owners. Generated registries and failure inventory must be regenerated and checked together.
+
+Initial-admission evidence does not prove the physical post-redaction SQL boundary. The four
+actual 400 physical failures remain open until the separate admitted-snapshot repair passes its
+unchanged row/no-success/reopen controls and proves that SQL, return values and success events use
+the same admitted values. Source proposal, proof authorship and a scope allowance are not runtime
+qualification or whole-gate clearance.

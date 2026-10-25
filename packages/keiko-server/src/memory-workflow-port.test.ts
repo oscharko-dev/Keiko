@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { MemoryRecord } from "@oscharko-dev/keiko-contracts";
@@ -247,6 +247,7 @@ describe("createWorkflowMemoryPort", () => {
     const { dir, vault } = createVault();
     cleanup.push(dir);
     const evidenceStore = createEvidenceStore();
+    const insertion = vi.spyOn(vault, "insertMemory");
     const port = createWorkflowMemoryPort({
       vault,
       evidenceStore,
@@ -281,6 +282,7 @@ describe("createWorkflowMemoryPort", () => {
     });
     expect(JSON.stringify(events)).not.toContain("the test runner is vitest");
     vault.close();
+    expect(insertion.mock.calls[0]?.[1]).toEqual({ correlationId: "wr-3" });
   });
 
   it("persists confidential workflow candidates as proposed review records", () => {

@@ -34,7 +34,6 @@ import type { ChatMessage } from "./store/index.js";
 import { awaitInitializedConversationReadiness } from "./gateway-readiness.js";
 import type { ConversationMemoryRuntimeContext } from "./memory-conversation-context.js";
 import type {
-  ConversationMemoryActionWire,
   ConversationMemoryResultWire,
   DesktopChatSendResponse,
   DesktopChatStreamEvent,
@@ -229,14 +228,11 @@ async function persistStreamedTurn(
   turn: StreamedTurn,
   userMessage: ChatMessage,
   signal: AbortSignal,
+  correlationId: string | undefined,
 ): Promise<DesktopChatSendResponse | undefined> {
   const { request, chat, modelId, memoryContext } = prepared;
   const redactedContent = deps.redactor(turn.response.content) as string;
-  const actions: readonly ConversationMemoryActionWire[] = await collectMemoryActions(
-    deps,
-    request,
-    memoryContext,
-  );
+  const actions = await collectMemoryActions(deps, request, memoryContext, { correlationId });
   if (signal.aborted) return undefined;
   const createdAssistant = createAssistantMessage(
     deps,
@@ -375,6 +371,7 @@ async function streamAndPersist(
     turn,
     userMessage,
     controller.signal,
+    ctx.correlationId,
   );
   if (payload === undefined) {
     failCancelledStreamTurn(ctx, deps, request, true);

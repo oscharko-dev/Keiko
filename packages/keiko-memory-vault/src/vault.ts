@@ -36,6 +36,8 @@ import {
 } from "./cipher.js";
 import {
   emitMemoryVaultLogEvent,
+  emitMemoryWriteRejected,
+  type MemoryWriteMethod,
   startMemoryVaultLogTimer,
   type MemoryVaultLogSink,
 } from "./vault-log.js";
@@ -117,6 +119,7 @@ import type {
   MemoryUpdatePatch,
   MemoryVaultFactoryOptions,
   MemoryVaultStore,
+  MemoryWriteContext,
 } from "./types.js";
 
 const MEMORY_VAULT_STORE_OPENED_OPERATION = defineActivityLogOperation({
@@ -143,6 +146,7 @@ const MEMORY_VAULT_STORE_OPENED_OPERATION = defineActivityLogOperation({
 });
 
 interface ResolvedOptions {
+  readonly logSink: MemoryVaultLogSink | undefined;
   readonly now: () => number;
   readonly newTombstoneId: () => string;
   readonly redactString: (input: string) => string;
@@ -166,13 +170,14 @@ function defaultEnv(): Readonly<Record<string, string | undefined>> {
 }
 
 function resolveOptions(
-  opts: MemoryVaultFactoryOptions | undefined,
+  opts: CreateMemoryVaultOptions | undefined,
   cipher: MemoryContentCipher,
   dbPath: string,
   bodySuppressionKey: Buffer,
 ): ResolvedOptions {
-  const resolved: MemoryVaultFactoryOptions = opts ?? {};
+  const resolved: CreateMemoryVaultOptions = opts ?? {};
   return {
+    logSink: resolved.logSink,
     now: resolved.now ?? DEFAULT_NOW,
     newTombstoneId: resolved.newTombstoneId ?? DEFAULT_NEW_TOMBSTONE_ID,
     redactString: resolved.redactString ?? IDENTITY,
@@ -458,9 +463,32 @@ function emitVaultOpened(
 // validation failure carries the caller's exact failure list. Redaction runs SECOND so the SQL
 // row is the redacted form — a secret-shaped string that slipped past the capture-layer gate
 // in #207 is scrubbed before persistence.
-function preparedForWrite(record: MemoryRecord, opts: ResolvedOptions): MemoryRecord {
-  const validated = gateMemoryRecord(record);
-  return redactMemoryRecord(validated, opts.redactString);
+interface RecordWriteOptions extends ResolvedOptions {
+  readonly writeMethod: MemoryWriteMethod;
+  readonly writeContext: MemoryWriteContext | undefined;
+}
+
+function recordWriteOptions(
+  opts: ResolvedOptions,
+  writeMethod: MemoryWriteMethod,
+  writeContext: MemoryWriteContext | undefined,
+): RecordWriteOptions {
+  return { ...opts, writeMethod, writeContext };
+}
+
+function admittedCallerRecord(record: MemoryRecord, opts: RecordWriteOptions): MemoryRecord {
+  try {
+    return gateMemoryRecord(record);
+  } catch (error) {
+    if (error instanceof MemoryStorageValidationError) {
+      emitMemoryWriteRejected(opts.logSink, opts.writeMethod, opts.writeContext);
+    }
+    throw error;
+  }
+}
+
+function preparedForWrite(record: MemoryRecord, opts: RecordWriteOptions): MemoryRecord {
+  return redactMemoryRecord(admittedCallerRecord(record, opts), opts.redactString);
 }
 
 function preparedEdgeForWrite(edge: MemoryEdge, opts: ResolvedOptions): MemoryEdge {
@@ -671,7 +699,7 @@ interface UpdatedMemory {
 function updateMemoryInPlace(
   db: DatabaseSync,
   update: MemoryBatchUpdate,
-  opts: ResolvedOptions,
+  opts: RecordWriteOptions,
 ): UpdatedMemory {
   const existing = existingMemoryOrThrow(db, update.id, opts.cipher);
   if (update.expectedStatus !== undefined && existing.status !== update.expectedStatus) {
@@ -692,7 +720,7 @@ function updateMemoryInPlace(
 function runGraphMutation(
   db: DatabaseSync,
   mutation: MemoryGraphMutation,
-  opts: ResolvedOptions,
+  opts: RecordWriteOptions,
 ): { readonly memories: readonly UpdatedMemory[]; readonly edges: readonly MemoryEdge[] } {
   const edges = mutation.edges.map((edge) => preparedEdgeForWrite(edge, opts));
   const memories: UpdatedMemory[] = [];
@@ -740,7 +768,7 @@ function assertGraphPrecondition(
 function runSingleUpdateMemory(
   db: DatabaseSync,
   update: MemoryBatchUpdate,
-  opts: ResolvedOptions,
+  opts: RecordWriteOptions,
 ): UpdatedMemory {
   db.exec("BEGIN IMMEDIATE");
   try {
@@ -756,7 +784,7 @@ function runSingleUpdateMemory(
 function runBatchUpdateMemories(
   db: DatabaseSync,
   updates: readonly MemoryBatchUpdate[],
-  opts: ResolvedOptions,
+  opts: RecordWriteOptions,
 ): readonly UpdatedMemory[] {
   const ready: UpdatedMemory[] = [];
   // PR-review follow-up (Codex thread 3772030490): BEGIN (deferred) only takes the write lock
@@ -821,40 +849,66 @@ type MemoryReadOps = Pick<
   | "countAcceptedMemoriesMissingEmbedding"
 >;
 
+function insertMemoryWithEvents(
+  db: DatabaseSync,
+  record: MemoryRecord,
+  opts: RecordWriteOptions,
+): MemoryRecord {
+  return withSidecarHardening(opts, () => {
+    const ready = preparedForWrite(record, opts);
+    insertMemoryRow(db, ready, opts.cipher);
+    opts.emit({ kind: "memory:inserted", record: ready });
+    return ready;
+  });
+}
+
+function updateMemoryWithEvents(
+  db: DatabaseSync,
+  update: MemoryBatchUpdate,
+  opts: RecordWriteOptions,
+): MemoryRecord {
+  return withSidecarHardening(opts, () => {
+    const ready = runSingleUpdateMemory(db, update, opts);
+    opts.emit({ kind: "memory:updated", record: ready.record, previous: ready.previous });
+    return ready.record;
+  });
+}
+
+function updateBatchWithEvents(
+  db: DatabaseSync,
+  updates: readonly MemoryBatchUpdate[],
+  opts: RecordWriteOptions,
+): readonly MemoryRecord[] {
+  return withSidecarHardening(opts, () => {
+    const ready = runBatchUpdateMemories(db, updates, opts);
+    emitUpdatedRecords(ready, opts);
+    return ready.map((updated) => updated.record);
+  });
+}
+
+function graphMutationWithEvents(
+  db: DatabaseSync,
+  mutation: MemoryGraphMutation,
+  opts: RecordWriteOptions,
+): MemoryGraphMutationResult {
+  return withSidecarHardening(opts, () => {
+    const ready = runGraphMutation(db, mutation, opts);
+    emitUpdatedRecords(ready.memories, opts);
+    for (const edge of ready.edges) opts.emit({ kind: "edge:inserted", edge });
+    return { memories: ready.memories.map((updated) => updated.record), edges: ready.edges };
+  });
+}
+
 function buildMemoryWriteOps(db: DatabaseSync, opts: ResolvedOptions): MemoryWriteOps {
   return {
-    insertMemory: (record: MemoryRecord): MemoryRecord => {
-      return withSidecarHardening(opts, () => {
-        const ready = preparedForWrite(record, opts);
-        insertMemoryRow(db, ready, opts.cipher);
-        opts.emit({ kind: "memory:inserted", record: ready });
-        return ready;
-      });
-    },
-    updateMemory: (id: MemoryId, patch: MemoryUpdatePatch, nowMs: number): MemoryRecord => {
-      return withSidecarHardening(opts, () => {
-        const ready = runSingleUpdateMemory(db, { id, patch, nowMs }, opts);
-        opts.emit({ kind: "memory:updated", record: ready.record, previous: ready.previous });
-        return ready.record;
-      });
-    },
-    updateMemories: (updates: readonly MemoryBatchUpdate[]): readonly MemoryRecord[] => {
-      return withSidecarHardening(opts, () => {
-        const ready = runBatchUpdateMemories(db, updates, opts);
-        emitUpdatedRecords(ready, opts);
-        return ready.map((updated) => updated.record);
-      });
-    },
-    applyGraphMutation: (mutation: MemoryGraphMutation): MemoryGraphMutationResult => {
-      return withSidecarHardening(opts, () => {
-        const ready = runGraphMutation(db, mutation, opts);
-        emitUpdatedRecords(ready.memories, opts);
-        for (const edge of ready.edges) {
-          opts.emit({ kind: "edge:inserted", edge });
-        }
-        return { memories: ready.memories.map((updated) => updated.record), edges: ready.edges };
-      });
-    },
+    insertMemory: (record, context): MemoryRecord =>
+      insertMemoryWithEvents(db, record, recordWriteOptions(opts, "insert", context)),
+    updateMemory: (id, patch, nowMs, context): MemoryRecord =>
+      updateMemoryWithEvents(db, { id, patch, nowMs }, recordWriteOptions(opts, "update", context)),
+    updateMemories: (updates, context): readonly MemoryRecord[] =>
+      updateBatchWithEvents(db, updates, recordWriteOptions(opts, "update-batch", context)),
+    applyGraphMutation: (mutation, context): MemoryGraphMutationResult =>
+      graphMutationWithEvents(db, mutation, recordWriteOptions(opts, "graph", context)),
     deleteMemory: (id: MemoryId, options: DeleteMemoryOptions): void => {
       withSidecarHardening(opts, () => {
         deleteMemoryWithEvents(db, id, options, opts);

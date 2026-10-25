@@ -180,11 +180,27 @@ export interface DeleteMemoryOptions {
   readonly nowMs: number;
 }
 
+export interface MemoryWriteContext {
+  readonly correlationId?: string | undefined;
+  readonly parentCorrelationId?: string | undefined;
+}
+
 export interface MemoryVaultStore {
-  readonly insertMemory: (record: MemoryRecord) => MemoryRecord;
-  readonly updateMemory: (id: MemoryId, patch: MemoryUpdatePatch, nowMs: number) => MemoryRecord;
-  readonly updateMemories: (updates: readonly MemoryBatchUpdate[]) => readonly MemoryRecord[];
-  readonly applyGraphMutation: (mutation: MemoryGraphMutation) => MemoryGraphMutationResult;
+  readonly insertMemory: (record: MemoryRecord, context?: MemoryWriteContext) => MemoryRecord;
+  readonly updateMemory: (
+    id: MemoryId,
+    patch: MemoryUpdatePatch,
+    nowMs: number,
+    context?: MemoryWriteContext,
+  ) => MemoryRecord;
+  readonly updateMemories: (
+    updates: readonly MemoryBatchUpdate[],
+    context?: MemoryWriteContext,
+  ) => readonly MemoryRecord[];
+  readonly applyGraphMutation: (
+    mutation: MemoryGraphMutation,
+    context?: MemoryWriteContext,
+  ) => MemoryGraphMutationResult;
   readonly getMemory: (id: MemoryId) => MemoryRecord | undefined;
   readonly deleteMemory: (id: MemoryId, options: DeleteMemoryOptions) => void;
   readonly deleteMemories: (deletes: readonly MemoryBatchDelete[]) => readonly MemoryDeleteResult[];

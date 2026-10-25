@@ -513,10 +513,14 @@ describe("insertSalienceMemoryWithNoveltyGate (#204, O-F1)", () => {
   it("inserts a genuinely new memory and stores its embedding", async () => {
     const deps = makeDeps();
     const vault = makeVault();
+    const insertion = vi.spyOn(vault, "insertMemory");
     const rec = makeRecord("the user prefers tabs over spaces");
-    const outcome = await insertSalienceMemoryWithNoveltyGate(deps, vault, rec);
+    const outcome = await insertSalienceMemoryWithNoveltyGate(deps, vault, rec, {
+      correlationId: "novelty-write-request",
+    });
     expectInserted(outcome, rec.id);
     expect(vault.getEmbedding(rec.id)).toBeDefined();
+    expect(insertion.mock.calls[0]?.[1]).toEqual({ correlationId: "novelty-write-request" });
   });
 
   it("merges a semantic near-duplicate into the canonical and reinforces it instead of inserting", async () => {

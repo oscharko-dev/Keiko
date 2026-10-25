@@ -25127,6 +25127,66 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "memory-vault.write.rejected",
+    category: "memory",
+    owner: "keiko-memory-vault",
+    emitter: "vault-log.emitMemoryWriteRejected",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      method: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["insert", "update", "update-batch", "graph"],
+      },
+      stage: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["caller-admission"],
+      },
+      reason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["invalid-record"],
+      },
+      rejectionCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      admitted: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "failure",
+    analyzerProjection: "timeline",
+    failureClasses: ["memory-write-validation"],
+    proofIds: ["memory-vault.write.rejected.initial-admission"],
+    releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "admitted",
+        values: [false],
+      },
+    ],
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "memory.audit.state-cache.seeded",
     category: "memory",
     owner: "keiko-server",

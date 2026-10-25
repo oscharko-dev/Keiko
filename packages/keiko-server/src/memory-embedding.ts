@@ -908,6 +908,7 @@ export async function insertSalienceMemoryWithNoveltyGate(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
   record: MemoryRecord,
+  writeContext?: MemoryWriteContext,
 ): Promise<NoveltyInsertOutcome> {
   const embedding = await embedMemoryText(deps, record.body, "document");
   const embedded = embedding !== null;
@@ -935,7 +936,7 @@ export async function insertSalienceMemoryWithNoveltyGate(
     });
     return { kind: "merged", mergedInto: duplicateOf };
   }
-  const inserted = vault.insertMemory(record);
+  const inserted = vault.insertMemory(record, writeContext);
   logNoveltyDecision(scopeKind, embedded, {
     outcome: "inserted",
     dedupThreshold,
@@ -960,3 +961,5 @@ const EMBEDDING_FAILURE_KIND = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/u;
 function boundedEmbeddingFailureKind(errorKind: string): string {
   return EMBEDDING_FAILURE_KIND.test(errorKind) ? errorKind : "unknown";
 }
+
+type MemoryWriteContext = Parameters<MemoryVaultStore["insertMemory"]>[1];

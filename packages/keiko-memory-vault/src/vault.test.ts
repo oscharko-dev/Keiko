@@ -1413,3 +1413,191 @@ function normalFixtureEvent(
   if (event?.category === "diagnostic") throw new TypeError("Expected normal fixture evidence");
   return event;
 }
+
+describe("initial record refusal invocation evidence", () => {
+  it.each(["insert", "update", "update-batch", "graph"] as const)(
+    "records the actual %s admission refusal without a success event",
+    (method) => {
+      const lines: MemoryVaultLogTransport[] = [];
+      const events: MemoryEvent[] = [];
+      const vault = createMemoryVault({
+        memoryDir: freshDir(),
+        vaultKey: TEST_VAULT_KEY,
+        logSink: {
+          write: (event): void => {
+            lines.push(event);
+          },
+        },
+        onMemoryEvent: (event): void => {
+          events.push(event);
+        },
+      });
+      const seed = makeMemory({ id: "refusal-seed" as MemoryId });
+      try {
+        vault.insertMemory(seed);
+        events.length = 0;
+        const context = { correlationId: `record-${method}-request` };
+        expect(() => {
+          invokeInvalidRecordWrite(vault, method, seed, context);
+        }).toThrow(MemoryStorageValidationError);
+        const refusals = lines.filter((event) => event.op === "memory-vault.write.rejected");
+        expect(refusals).toHaveLength(1);
+        expect(
+          expectActivityLogProof(
+            "memory-vault.write.rejected.initial-admission",
+            formatActivityLogProofLine(refusals[0] ?? {}),
+          ),
+        ).toMatchObject({
+          correlationId: context.correlationId,
+          errorKind: "validation-failed",
+          method,
+          stage: "caller-admission",
+          reason: "invalid-record",
+          admitted: false,
+          rejectionCount: 1,
+        });
+        expect(events).toEqual([]);
+        expect(vault.getMemory(seed.id)).toEqual(seed);
+        expect(JSON.stringify(refusals)).not.toContain(seed.body);
+      } finally {
+        vault.close();
+      }
+    },
+  );
+
+  it("keeps nested invocation ids separate on one vault", () => {
+    const lines: MemoryVaultLogTransport[] = [];
+    const vault = createMemoryVault({
+      memoryDir: freshDir(),
+      vaultKey: TEST_VAULT_KEY,
+      logSink: {
+        write: (event): void => {
+          lines.push(event);
+        },
+      },
+    });
+    const invalid = makeMemory({ id: "nested-refusal" as MemoryId, body: "" });
+    let entered = false;
+    const outer = { ...invalid };
+    Object.defineProperty(outer, "body", {
+      get(): string {
+        if (!entered) {
+          entered = true;
+          expect(() =>
+            vault.insertMemory(invalid, { correlationId: "inner-write-request" }),
+          ).toThrow(MemoryStorageValidationError);
+        }
+        return "";
+      },
+    });
+    try {
+      expect(() => vault.insertMemory(outer, { correlationId: "outer-write-request" })).toThrow(
+        MemoryStorageValidationError,
+      );
+      expect(
+        lines
+          .filter((event) => event.op === "memory-vault.write.rejected")
+          .map((event) => ("correlationId" in event ? event.correlationId : undefined)),
+      ).toEqual(["inner-write-request", "outer-write-request"]);
+    } finally {
+      vault.close();
+    }
+  });
+
+  it("preserves arbitrary observation failures without calling them invalid records", () => {
+    const lines: MemoryVaultLogTransport[] = [];
+    const vault = createMemoryVault({
+      memoryDir: freshDir(),
+      vaultKey: TEST_VAULT_KEY,
+      logSink: {
+        write: (event): void => {
+          lines.push(event);
+        },
+      },
+    });
+    const failure = new TypeError("private-observation-canary");
+    const record = makeMemory({ id: "observation-refusal" as MemoryId });
+    Object.defineProperty(record, "body", {
+      get(): never {
+        throw failure;
+      },
+    });
+    try {
+      let caught: unknown;
+      try {
+        vault.insertMemory(record, { correlationId: "observation-request" });
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBe(failure);
+      expect(lines.filter((event) => event.op === "memory-vault.write.rejected")).toEqual([]);
+    } finally {
+      vault.close();
+    }
+  });
+});
+
+function invokeInvalidRecordWrite(
+  vault: MemoryVaultStore,
+  method: "insert" | "update" | "update-batch" | "graph",
+  seed: MemoryRecord,
+  context: Parameters<MemoryVaultStore["insertMemory"]>[1],
+): void {
+  if (method === "insert") {
+    vault.insertMemory({ ...seed, body: "" }, context);
+    return;
+  }
+  if (method === "update") {
+    vault.updateMemory(seed.id, { body: "" }, seed.updatedAt + 1, context);
+    return;
+  }
+  const updates = [{ id: seed.id, patch: { body: "" }, nowMs: seed.updatedAt + 1 }];
+  if (method === "update-batch") {
+    vault.updateMemories(updates, context);
+    return;
+  }
+  vault.applyGraphMutation({ updates, edges: [] }, context);
+}
+
+it.each(["update-batch", "graph"] as const)(
+  "settles rollback after a later %s caller-admission refusal",
+  (method) => {
+    const lines: MemoryVaultLogTransport[] = [];
+    const events: MemoryEvent[] = [];
+    const vault = createMemoryVault({
+      memoryDir: freshDir(),
+      vaultKey: TEST_VAULT_KEY,
+      logSink: {
+        write: (event): void => {
+          lines.push(event);
+        },
+      },
+      onMemoryEvent: (event): void => {
+        events.push(event);
+      },
+    });
+    const first = makeMemory({ id: "rollback-first" as MemoryId });
+    const second = makeMemory({ id: "rollback-second" as MemoryId });
+    try {
+      vault.insertMemory(first);
+      vault.insertMemory(second);
+      events.length = 0;
+      const updates = [
+        { id: first.id, patch: { body: "healthy staged update" }, nowMs: first.updatedAt + 1 },
+        { id: second.id, patch: { body: "" }, nowMs: second.updatedAt + 1 },
+      ];
+      const context = { correlationId: `later-${method}-request` };
+      expect(() =>
+        method === "graph"
+          ? vault.applyGraphMutation({ updates, edges: [] }, context)
+          : vault.updateMemories(updates, context),
+      ).toThrow(MemoryStorageValidationError);
+      expect(vault.getMemory(first.id)).toEqual(first);
+      expect(vault.getMemory(second.id)).toEqual(second);
+      expect(events).toEqual([]);
+      expect(lines.filter((event) => event.op === "memory-vault.write.rejected")).toHaveLength(1);
+    } finally {
+      vault.close();
+    }
+  },
+);

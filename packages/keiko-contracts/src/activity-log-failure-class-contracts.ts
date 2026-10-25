@@ -6,6 +6,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "memory-write-validation",
+    requiredProductSurfaces: ["keiko-memory-vault"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: [],
+      end: [],
+      failure: ["memory-vault.write.rejected"],
+      loss: [],
+    },
+    requiredCausalOperations: ["memory-vault.write.rejected"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["memory-vault.write.rejected"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: [],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "knowledge-manual-summary-validation",
     requiredProductSurfaces: ["keiko-local-knowledge"],
     requiredLifecycleOperations: {

@@ -433,7 +433,9 @@ export async function handleMemoryCaptureFromConversation(
   // /api/memory/proposals/:id/accept route can find it by the returned proposalId. Uses the
   // shared `buildMemoryRecordFromProposal` builder for parity with chat-handlers.ts.
   const persistableOutcomes = outcomes.map(enforcePersistableMemoryOutcome);
-  const persistedOutcomes = persistCandidateOutcomes(deps, vault, persistableOutcomes);
+  const persistedOutcomes = persistCandidateOutcomes(deps, vault, persistableOutcomes, {
+    correlationId: ctx.correlationId,
+  });
   // Redact every outcome (proposal bodies may carry user text that needs scrubbing).
   return {
     status: 200,
@@ -445,9 +447,12 @@ function persistCandidateOutcomes(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
   outcomes: readonly CaptureOutcome[],
+  writeContext: MemoryWriteContext,
 ): readonly PersistedCaptureOutcome[] {
   const mode = resolvePersistedMemoryAutonomyMode(deps);
-  return outcomes.map((outcome) => persistCandidateOutcome(deps, vault, mode, outcome));
+  return outcomes.map((outcome) =>
+    persistCandidateOutcome(deps, vault, mode, outcome, writeContext),
+  );
 }
 
 function persistCandidateOutcome(
@@ -455,6 +460,7 @@ function persistCandidateOutcome(
   vault: MemoryVaultStore,
   mode: CodingWorkbenchMode,
   outcome: CaptureOutcome,
+  writeContext: MemoryWriteContext,
 ): PersistedCaptureOutcome {
   if (outcome.kind !== "candidate") return outcome;
   if (!isPersistableMemoryCandidate(outcome)) {
@@ -468,7 +474,7 @@ function persistCandidateOutcome(
   const candidate = memoryCaptureAutoAcceptEligible(mode, outcome)
     ? promoteEligibleMemoryRecord(record)
     : record;
-  const persisted = persistCapturedMemory(vault, candidate, true);
+  const persisted = persistCapturedMemory(vault, candidate, true, writeContext);
   const accepted = persisted.memory.status === "accepted";
   if ((persisted.inserted || persisted.promoted) && accepted) {
     recordAutoAcceptedMemoryCaptureDecision(deps, mode, "desktop", persisted.memory);
@@ -498,3 +504,5 @@ function redactCaptureOutcome(deps: UiHandlerDeps, outcome: PersistedCaptureOutc
   }
   return deps.redactor(outcome);
 }
+
+type MemoryWriteContext = Parameters<MemoryVaultStore["insertMemory"]>[1];

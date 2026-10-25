@@ -9,8 +9,10 @@
 //   * the timer is monotonic and never reports a negative duration.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as vaultLog from "./vault-log.js";
 import {
   activityLogLossCounters,
+  activityLogEventWillBeRejected,
   resetActivityLogLossCountersForTests,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
@@ -344,5 +346,77 @@ describe("emitMemoryVaultLogEvent loss accounting", () => {
     } finally {
       resetActivityLogLossCountersForTests();
     }
+  });
+});
+
+describe("initial write refusal log producer", () => {
+  it("preserves known and parent ids and supplies the canonical unknown fallback", () => {
+    expect(vaultLog).toHaveProperty("emitMemoryWriteRejected");
+    const events: MemoryVaultLogTransport[] = [];
+    const sink = {
+      write: (event: MemoryVaultLogTransport): void => {
+        events.push(event);
+      },
+    };
+    vaultLog.emitMemoryWriteRejected(sink, "insert", {
+      correlationId: "request-one",
+      parentCorrelationId: "parent-request",
+    });
+    vaultLog.emitMemoryWriteRejected(sink, "update", { correlationId: "request-two" });
+    vaultLog.emitMemoryWriteRejected(sink, "graph", undefined);
+    vaultLog.emitMemoryWriteRejected(sink, "insert", { correlationId: "bad" });
+    expect(
+      events.map((event) =>
+        expectActivityLogProof(
+          "memory-vault.write.rejected.initial-admission",
+          formatActivityLogProofLine(event),
+        ),
+      ),
+    ).toMatchObject([
+      { correlationId: "request-one", parentCorrelationId: "parent-request", admitted: false },
+      { correlationId: "request-two", admitted: false },
+      { correlationId: "unknown-correlation-id", admitted: false },
+      { correlationId: "unknown-correlation-id", admitted: false },
+    ]);
+  });
+
+  it("never lets an unreadable context or failed sink escape the evidence boundary", () => {
+    expect(vaultLog).toHaveProperty("emitMemoryWriteRejected");
+    const context = {
+      get correlationId(): string {
+        throw new TypeError("private-context-canary");
+      },
+    };
+    const events: MemoryVaultLogTransport[] = [];
+    expect(() => {
+      vaultLog.emitMemoryWriteRejected(
+        {
+          write: (event): void => {
+            events.push(event);
+          },
+        },
+        "insert",
+        context,
+      );
+    }).not.toThrow();
+    expect(events).toHaveLength(1);
+    expect(activityLogEventWillBeRejected(events[0] ?? {})).toBe(true);
+    expect(JSON.stringify(events)).not.toContain("private-context-canary");
+    const before = activityLogLossCounters()["port-sink-failed"];
+    expect(() => {
+      vaultLog.emitMemoryWriteRejected(
+        {
+          write: (): never => {
+            throw new TypeError("private-sink-canary");
+          },
+        },
+        "update",
+        { correlationId: "sink-request" },
+      );
+    }).not.toThrow();
+    expect(activityLogLossCounters()["port-sink-failed"]).toBe(before + 1);
+    const unwired = activityLogLossCounters()["port-unwired"];
+    vaultLog.emitMemoryWriteRejected(undefined, "insert", undefined);
+    expect(activityLogLossCounters()["port-unwired"]).toBe(unwired + 1);
   });
 });

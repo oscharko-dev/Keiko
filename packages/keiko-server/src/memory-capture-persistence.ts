@@ -45,10 +45,11 @@ function reuseCapturedMemory(
   vault: MemoryVaultStore,
   existing: MemoryRecord,
   record: MemoryRecord,
+  context: MemoryWriteContext,
 ): PersistedCapturedMemory {
   if (existing.status === "proposed" && record.status === "accepted") {
     return {
-      memory: vault.updateMemory(existing.id, { status: "accepted" }, record.updatedAt),
+      memory: vault.updateMemory(existing.id, { status: "accepted" }, record.updatedAt, context),
       inserted: false,
       promoted: true,
     };
@@ -59,6 +60,7 @@ function reuseCapturedMemory(
 function insertOrReuseCanonicalMemory(
   vault: MemoryVaultStore,
   record: MemoryRecord,
+  context: MemoryWriteContext,
 ): PersistedCapturedMemory {
   const existingById = vault.getMemory(record.id);
   if (
@@ -69,15 +71,18 @@ function insertOrReuseCanonicalMemory(
   }
   const existing = existingById ?? reusableScopedMemory(vault, record);
   return existing === undefined
-    ? { memory: vault.insertMemory(record), inserted: true, promoted: false }
-    : reuseCapturedMemory(vault, existing, record);
+    ? { memory: vault.insertMemory(record, context), inserted: true, promoted: false }
+    : reuseCapturedMemory(vault, existing, record, context);
 }
 
 export function persistCapturedMemory(
   vault: MemoryVaultStore,
   candidate: MemoryRecord,
   canonicalCapture: boolean,
+  context?: MemoryWriteContext,
 ): PersistedCapturedMemory {
-  if (canonicalCapture) return insertOrReuseCanonicalMemory(vault, candidate);
-  return { memory: vault.insertMemory(candidate), inserted: true, promoted: false };
+  if (canonicalCapture) return insertOrReuseCanonicalMemory(vault, candidate, context);
+  return { memory: vault.insertMemory(candidate, context), inserted: true, promoted: false };
 }
+
+type MemoryWriteContext = Parameters<MemoryVaultStore["insertMemory"]>[1];
