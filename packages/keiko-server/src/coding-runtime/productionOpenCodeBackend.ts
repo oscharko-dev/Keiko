@@ -61,7 +61,12 @@ import {
 } from "./opencodeConfigDocuments.js";
 import { gatewayAgentModel, type OpenCodeAgentModelCatalog } from "./opencodeNativeAgentModels.js";
 import type { OutboundHttpEgressConfig } from "@oscharko-dev/keiko-model-gateway/internal/http";
-import type { NativeWorktreeProvisionPort } from "./opencodeNativeWorktree.js";
+import type {
+  NativeWorkspaceSource,
+  NativeWorktreeProvisionPort,
+} from "./opencodeNativeWorktree.js";
+import { continuationWorkspaceKey } from "./opencodeSessionContinuation.js";
+import type { RetainedSessionSource } from "./opencodeSessionRetention.js";
 import {
   recordNativeExternalRootsResolved,
   resolveNativeExternalReadRoots,
@@ -585,13 +590,28 @@ function sessionContinuityFor(
   input: LaunchInput,
   run: ProductionRuntimeBackendInput,
 ): Pick<OpenCodeRuntimeCompositionInput, "sessionContinuity"> {
-  return input.sessionContinuity === undefined
-    ? {}
+  if (input.sessionContinuity === undefined) return {};
+  const source = input.nativeWorktrees?.source;
+  return {
+    sessionContinuity: {
+      service: input.sessionContinuity,
+      workspaceId: run.context.workspaceId,
+      // #3903 AC4, #3902 AC3: a task of the workspace this one was provisioned from may be forked.
+      ...(source === undefined
+        ? {}
+        : { forkSource: () => forkSourceOf(source(run.context.workspaceId)) }),
+    },
+  };
+}
+
+function forkSourceOf(
+  source: NativeWorkspaceSource | undefined,
+): RetainedSessionSource | undefined {
+  return source === undefined
+    ? undefined
     : {
-        sessionContinuity: {
-          service: input.sessionContinuity,
-          workspaceId: run.context.workspaceId,
-        },
+        workspaceKey: continuationWorkspaceKey(source.workspaceId, source.root),
+        directory: source.root,
       };
 }
 

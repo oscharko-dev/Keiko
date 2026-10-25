@@ -570,7 +570,7 @@ export const OPENCODE_SERVICE_DISPOSITIONS = flatten<
     "keiko-owns-workspace-binding",
     3902,
     ["S17", "T22"],
-    ["session.move", "worktree.list", "worktree.create", "worktree.remove", "worktree.refresh"],
+    ["worktree.list", "worktree.create", "worktree.remove", "worktree.refresh"],
   ),
   refused(
     "keiko-owns-configuration",

@@ -9,7 +9,7 @@ export const OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM =
   "keiko-opencode-protocol-surface-v2" as const;
 /** The current pin's structural digest; per-version values live in `opencodeRuntimeVersions.ts`. */
 export const OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256 =
-  "b9e03ab8df20bee7616fd796897c74fe2ca9f77d4fe8177d3391afa66c49e48a";
+  "941a87888e62c1b22bc9b4c6a8b7fbc6baacaa1c52dd47aa384248fc4fe8c857";
 
 /**
  * The admitted operations as `METHOD path`. The complete service inventory
@@ -42,6 +42,8 @@ export const OPENCODE_V2_APPROVED_ENDPOINTS = [
   "GET /api/agent",
   "GET /api/skill",
   "POST /api/session/{sessionID}/fork",
+  // #3903 AC4, #3902 AC3: Keiko moves a task's continued session into its run's new workspace.
+  "POST /api/session/{sessionID}/move",
   "DELETE /api/session/{sessionID}",
   "GET /api/session/{sessionID}/inbox",
   "DELETE /api/session/{sessionID}/inbox/{inboxID}",

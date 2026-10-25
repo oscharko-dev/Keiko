@@ -110,6 +110,12 @@ export type RetentionAuditCheck =
   | "count-invalid"
   | "schema-drift";
 
+/** The workspace a fork's target was provisioned from, and where its session was retained. */
+export interface RetainedSessionSource {
+  readonly workspaceKey: string;
+  readonly directory: string;
+}
+
 /** What a retained entry is valid for. A resume must present the same task, workspace and version. */
 export interface RetainedSessionBinding {
   readonly taskId: string;
@@ -149,6 +155,8 @@ export type CheckoutResult =
       readonly databaseBytes: number;
       readonly messageCount: number;
       readonly ageMs: number;
+      /** Present when the session was retained at its fork source's location, not the asker's. */
+      readonly sourceDirectory?: string;
     }
   | {
       readonly ok: false;
@@ -186,6 +194,12 @@ export interface RetainedSessionStore {
     readonly destinationDatabase: string;
     /** A fork may refuse the asking run's binding without destroying its source task's entry. */
     readonly purpose?: "fork";
+    /**
+     * A fork into a workspace provisioned from another one (#3903 AC4, #3902 AC3): the entry is
+     * admitted when it is bound to exactly this source workspace, and its copy is audited at the
+     * source's location. Honoured only with `purpose: "fork"`; nothing else about the binding moves.
+     */
+    readonly source?: RetainedSessionSource | undefined;
   }): CheckoutResult;
   remove(taskId: string): void;
   /** Removes expired, invalid, orphaned and over-quota entries and any interrupted staging. */
@@ -280,7 +294,7 @@ class Store {
     const refusal =
       manifest === undefined
         ? ("integrity-failed" as const)
-        : this.bindingRefusal(manifest, input.binding);
+        : this.bindingRefusal(manifest, input.binding, forkSource(input));
     if (
       input.purpose === "fork" &&
       (refusal === "workspace-changed" || refusal === "version-changed")
@@ -399,12 +413,14 @@ class Store {
       rmSync(input.destinationDatabase, { force: true });
       return this.refuse(input.binding.taskId, verdict);
     }
+    const relocated = retainedAtSource(manifest, input);
     return {
       ok: true,
       sessionId: manifest.sessionId,
       databaseBytes: manifest.databaseBytes,
       messageCount: verdict.messageCount,
       ageMs: Math.max(0, this.now() - manifest.retainedAtMs),
+      ...(relocated === undefined ? {} : { sourceDirectory: relocated.directory }),
     };
   }
 
@@ -419,11 +435,16 @@ class Store {
   private bindingRefusal(
     manifest: RetainedSessionManifest,
     binding: RetainedSessionBinding,
+    source: RetainedSessionSource | undefined,
   ): RetentionRefusal | undefined {
     if (manifest.taskId !== binding.taskId) return "integrity-failed";
     if (this.now() - manifest.retainedAtMs > this.limits.maxAgeMs) return "expired";
     if (manifest.runtimeVersion !== binding.runtimeVersion) return "version-changed";
-    if (manifest.workspaceKey !== binding.workspaceKey) return "workspace-changed";
+    if (
+      manifest.workspaceKey !== binding.workspaceKey &&
+      manifest.workspaceKey !== source?.workspaceKey
+    )
+      return "workspace-changed";
     if (binding.maxInputTokens < manifest.maxInputTokens) return "window-shrunk";
     return undefined;
   }
@@ -505,17 +526,37 @@ interface PrunableEntry {
   readonly retainedAtMs: number;
 }
 
+type CheckoutInput = Parameters<RetainedSessionStore["checkout"]>[0];
+
+/** The fork source a checkout names; only a fork may name one. */
+function forkSource(input: CheckoutInput): RetainedSessionSource | undefined {
+  return input.purpose === "fork" ? input.source : undefined;
+}
+
+/** The source the entry was retained at, when it is not the asking run's own workspace. */
+function retainedAtSource(
+  manifest: RetainedSessionManifest,
+  input: CheckoutInput,
+): RetainedSessionSource | undefined {
+  const source = forkSource(input);
+  return manifest.workspaceKey !== input.binding.workspaceKey &&
+    manifest.workspaceKey === source?.workspaceKey
+    ? source
+    : undefined;
+}
+
 /** The refusal for a copy that is not the entry's database, or the audit of the copy that is. */
 function copyVerdict(
   manifest: RetainedSessionManifest,
-  input: Parameters<RetainedSessionStore["checkout"]>[0],
+  input: CheckoutInput,
 ): RetentionRefusal | { readonly messageCount: number } {
   if (hashFile(input.destinationDatabase).sha256 !== manifest.databaseSha256) {
     return "integrity-failed";
   }
+  // The copy is audited where its session was retained: the asker's location, or the fork source's.
   const audit = auditDatabase(input.destinationDatabase, {
     sessionId: manifest.sessionId,
-    directory: input.directory,
+    directory: retainedAtSource(manifest, input)?.directory ?? input.directory,
     version: input.binding.runtimeVersion,
   });
   return audit.ok ? { messageCount: audit.messageCount } : audit.reason;

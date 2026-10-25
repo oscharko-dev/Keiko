@@ -637,6 +637,34 @@ export interface WorkspaceInstance {
   readonly auditCorrelationId: string;
 }
 
+// A workspace still being created, failed or being removed never hosted a settled run.
+const UNSETTLED_SOURCE_STATES: ReadonlySet<TaskWorkspaceLifecycleState> = new Set([
+  "provisioning",
+  "failed",
+  "cleanup-pending",
+]);
+
+/**
+ * The managed workspace another one was provisioned from (#3903 AC4, #3902 AC3): the one other
+ * settled workspace of the same repository whose task branch is the workspace's base branch.
+ * `undefined` when the workspace is unknown, or there is no such source or more than one.
+ */
+export function taskWorkspaceProvisioningSource(
+  instances: readonly WorkspaceInstance[],
+  workspaceId: string,
+): WorkspaceInstance | undefined {
+  const target = instances.find((instance) => instance.workspaceId === workspaceId);
+  if (target === undefined) return undefined;
+  const sources = instances.filter(
+    (instance) =>
+      instance.workspaceId !== target.workspaceId &&
+      instance.repositoryId === target.repositoryId &&
+      instance.taskBranch === target.baseBranch &&
+      !UNSETTLED_SOURCE_STATES.has(instance.lifecycleState),
+  );
+  return sources.length === 1 ? sources[0] : undefined;
+}
+
 function validateWorkspaceLock(input: unknown, reasons: string[]): void {
   if (!isRecord(input)) {
     reasons.push("lock must be an object or null");

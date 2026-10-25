@@ -44,9 +44,22 @@ export interface CodingHistoryForkPlan {
   readonly sourceCount: number;
 }
 
+/** The workspace fields a Coding History task is scoped by. */
+export interface CodingHistoryTaskScope {
+  readonly projectPath: string;
+  readonly workspaceId: string;
+  readonly taskId: string;
+  readonly branch: string;
+}
+
 export interface CodingHistoryForkSource extends CodingHistoryCreateInput {
   /** The task to fork. It must belong to the same operator, workspace, task workspace and branch. */
   readonly sourceId: string;
+  /**
+   * The task workspace the new task's own one was provisioned from (#3903 AC4, #3902 AC3): the
+   * source may belong to it instead. Absent, the source belongs to the new task's workspace.
+   */
+  readonly sourceScope?: CodingHistoryTaskScope | undefined;
   /** A user message of the source to fork just before; absent forks the source as it ended. */
   readonly beforeMessageId?: string;
 }
@@ -237,6 +250,15 @@ function forkBoundary(
  * earlier messages Coding History no longer lists cannot have its user turns counted, and no turn is
  * guessed. A source of another workspace, task workspace, branch or operator is not forked.
  */
+function inTaskScope(task: CodingHistoryTaskScope, scope: CodingHistoryTaskScope): boolean {
+  return (
+    task.workspaceId === scope.workspaceId &&
+    task.taskId === scope.taskId &&
+    task.branch === scope.branch &&
+    task.projectPath === scope.projectPath
+  );
+}
+
 function selectFork(
   db: DatabaseSync,
   store: UiStore,
@@ -244,10 +266,11 @@ function selectFork(
 ): ForkSelection | undefined {
   const source = readTask(db, store, input.sourceId, input.operatorDigest);
   if (
-    source?.workspaceId !== input.workspaceId ||
-    source.taskId !== input.taskId ||
-    source.branch !== input.branch ||
-    source.projectPath !== input.projectPath
+    source === undefined ||
+    !(
+      inTaskScope(source, input) ||
+      (input.sourceScope !== undefined && inTaskScope(source, input.sourceScope))
+    )
   ) {
     return undefined;
   }

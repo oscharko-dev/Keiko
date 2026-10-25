@@ -111,6 +111,7 @@ function harness(
     taskOfRun?: (runId: string) => string | undefined;
     results?: Parameters<typeof fakeStore>[0];
     workspaceId?: string;
+    forkSource?: SessionContinuationContext["forkSource"];
   } = {},
 ): Harness {
   const fake = fakeStore(options.results);
@@ -138,6 +139,7 @@ function harness(
       runtimeVersion: "2.1.4",
       maxInputTokens: 24_000,
       activityLog: log,
+      ...(options.forkSource === undefined ? {} : { forkSource: options.forkSource }),
     },
   };
 }
@@ -265,6 +267,37 @@ describe("seeding a run's database from a task's retained entry", () => {
     expect(lines(h)).toMatchObject([
       { action: "resume", outcome, reason, taskDigest: retainedSessionKey(TASK) },
     ]);
+  });
+
+  // #3903 AC4, #3902 AC3: the workspace the run's own one was provisioned from.
+  it("names the provisioning source to a fork's checkout, never to a resume's", () => {
+    const source = { workspaceKey: "f".repeat(64), directory: "/work/source" };
+    const h = harness({
+      forkSource: () => source,
+      results: {
+        checkout: {
+          ok: true,
+          sessionId: SESSION,
+          databaseBytes: 2048,
+          messageCount: 9,
+          ageMs: 4000,
+          sourceDirectory: source.directory,
+        },
+      },
+    });
+    h.service.declare(RUN, {
+      kind: "fork",
+      sourceTaskId: "source-task",
+      boundary: { kind: "end" },
+    });
+    expect(seedContinuation(h.context, location())).toMatchObject({
+      sourceDirectory: source.directory,
+    });
+    expect(h.calls.checkouts[0]).toMatchObject({ purpose: "fork", source });
+
+    h.service.declare(RUN, RESUME);
+    seedContinuation(h.context, location());
+    expect(h.calls.checkouts[1]).not.toHaveProperty("source");
   });
 
   it("names a fork's source and boundary on its fallback and the new task by digest", () => {
@@ -428,6 +461,7 @@ function fakeClient(
     fork?: (source: string, before: string | undefined) => unknown;
     removeFails?: boolean;
     switchFails?: boolean;
+    moveFails?: boolean;
   } = {},
 ): FakeClient {
   const calls: string[] = [];
@@ -453,6 +487,10 @@ function fakeClient(
             : { type: "before", messageId: before },
       };
       return Promise.resolve(result as Awaited<ReturnType<ContinuationClient["forkSession"]>>);
+    },
+    moveSession: (sessionId, directory) => {
+      calls.push(`move:${sessionId}:${directory}`);
+      return options.moveFails === true ? Promise.reject(new Error("move")) : Promise.resolve();
     },
     removeSession: (sessionId) => {
       calls.push(`remove:${sessionId}`);
@@ -617,6 +655,74 @@ describe("binding a run to a fork of the retained session", () => {
       "sessions",
       "messages:ses_fork_1",
     ]);
+  });
+
+  // #3903 AC4, #3902 AC3: the runtime itself moves a session retained at the fork source.
+  it("moves a session retained at its source into the run's workspace before it forks", async () => {
+    const SOURCE_DIR = "/work/source";
+    const fake = fakeClient({
+      sessions: (calls) => {
+        if (calls.includes(`remove:${SESSION}`)) return [session("ses_fork_1")];
+        const moved = calls.includes(`move:${SESSION}:${WORKSPACE}`);
+        return [session(SESSION, { location: { directory: moved ? WORKSPACE : SOURCE_DIR } })];
+      },
+      messages: { ses_fork_1: [message("msg_f1", "user")] },
+    });
+
+    const bound = await bindContinuedSession(
+      fake.client,
+      { ...FORK(END), sourceDirectory: SOURCE_DIR },
+      WORKSPACE,
+      undefined,
+    );
+
+    expect(bound).toMatchObject({ ok: true, sessionId: "ses_fork_1" });
+    expect(fake.calls).toEqual([
+      "sessions",
+      `move:${SESSION}:${WORKSPACE}`,
+      "sessions",
+      `fork:${SESSION}:end`,
+      `remove:${SESSION}`,
+      "sessions",
+      "messages:ses_fork_1",
+    ]);
+  });
+
+  it("refuses a move the runtime refuses, and a session the move left elsewhere", async () => {
+    const SOURCE_DIR = "/work/source";
+    const atSource = (): readonly SessionRecord[] => [
+      session(SESSION, { location: { directory: SOURCE_DIR } }),
+    ];
+    const refused = fakeClient({ sessions: atSource, moveFails: true });
+    expect(
+      await bindContinuedSession(
+        refused.client,
+        { ...FORK(END), sourceDirectory: SOURCE_DIR },
+        WORKSPACE,
+        undefined,
+      ),
+    ).toMatchObject({ ok: false, reason: "move-failed" });
+    const stayed = fakeClient({ sessions: atSource });
+    expect(
+      await bindContinuedSession(
+        stayed.client,
+        { ...FORK(END), sourceDirectory: SOURCE_DIR },
+        WORKSPACE,
+        undefined,
+      ),
+    ).toMatchObject({ ok: false, reason: "session-mismatch" });
+    expect(stayed.calls.some((call) => call.startsWith("fork:"))).toBe(false);
+    // A session that is already where the run is, but was declared at its source, is refused too.
+    const elsewhere = fakeClient();
+    expect(
+      await bindContinuedSession(
+        elsewhere.client,
+        { ...FORK(END), sourceDirectory: SOURCE_DIR },
+        WORKSPACE,
+        undefined,
+      ),
+    ).toMatchObject({ ok: false, reason: "session-mismatch" });
+    expect(elsewhere.calls).toEqual(["sessions"]);
   });
 
   it("forks just before the user turn the boundary names, the runtime's handshake not counting", async () => {

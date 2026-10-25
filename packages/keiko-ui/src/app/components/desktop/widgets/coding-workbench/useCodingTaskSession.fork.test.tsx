@@ -230,3 +230,97 @@ describe("forking the loaded coding task", () => {
     await waitFor(() => expect(result.current.fork).toBeNull());
   });
 });
+
+// #3903 AC4, #3902 AC3: the task continues as a fork in a workspace provisioned from its own.
+describe("continuing the loaded task in a workspace provisioned from its own", () => {
+  type Instance = NonNullable<ActiveWorkspaceApi["activeInstance"]>;
+  const base = workspace();
+  const source = base.activeInstance as Instance;
+  const target: Instance = {
+    ...source,
+    workspaceId: "ws-two",
+    taskId: "task-two",
+    baseBranch: "keiko/task/one",
+    taskBranch: "keiko/task/two",
+    managedWorktreePath: "/managed/two",
+  };
+  const unrelated: Instance = {
+    ...source,
+    workspaceId: "ws-three",
+    taskId: "task-three",
+    taskBranch: "keiko/task/three",
+  };
+
+  async function rendered(switched: boolean): Promise<{
+    readonly hook: RenderHookResult<CodingTaskSession, { readonly api: ActiveWorkspaceApi }>;
+    readonly switchTo: ReturnType<typeof vi.fn>;
+    readonly after: ActiveWorkspaceApi;
+  }> {
+    const switchTo = vi.fn(async () => switched);
+    const api: ActiveWorkspaceApi = { ...base, instances: [source, target, unrelated], switchTo };
+    const hook = renderHook(
+      (props: { readonly api: ActiveWorkspaceApi }) =>
+        useCodingTaskSession({
+          snapshot: snapshot(),
+          active: false,
+          root: "/repo",
+          workspace: props.api,
+          selection: undefined,
+        }),
+      { initialProps: { api } },
+    );
+    await waitFor(() => expect(hook.result.current.detail).not.toBeNull());
+    return {
+      hook,
+      switchTo,
+      after: { ...api, activeInstance: target, activeRoot: "/managed/two" },
+    };
+  }
+
+  it("offers only the workspaces provisioned from the task's own", async () => {
+    const { hook } = await rendered(true);
+
+    expect(hook.result.current.forkTargets).toEqual([{ workspaceId: "ws-two", name: "task-two" }]);
+  });
+
+  it("switches there and keeps the task on display as the fork's source until it is cancelled", async () => {
+    const { hook, switchTo, after } = await rendered(true);
+    const [targetChoice] = hook.result.current.forkTargets;
+    if (targetChoice === undefined) throw new Error("fixture-no-target");
+
+    await act(async () => {
+      await hook.result.current.continueIn(targetChoice);
+    });
+    hook.rerender({ api: after });
+
+    expect(switchTo).toHaveBeenCalledWith("ws-two");
+    expect(hook.result.current.detail?.task.id).toBe("chat-one");
+    expect(hook.result.current.fork).toEqual({
+      taskId: "chat-one",
+      title: "Inspect the parser",
+      targetWorkspace: { workspaceId: "ws-two", name: "task-two" },
+    });
+    // Another continuation is not offered while one is pending.
+    expect(hook.result.current.forkTargets).toEqual([]);
+
+    act(() => {
+      hook.result.current.cancelFork();
+    });
+    // Without the pending fork, the other workspace's task is out of scope again.
+    await waitFor(() => expect(hook.result.current.detail).toBeNull());
+    expect(hook.result.current.fork).toBeNull();
+  });
+
+  it("drops the request when the workspace cannot be switched", async () => {
+    const { hook } = await rendered(false);
+    const [targetChoice] = hook.result.current.forkTargets;
+    if (targetChoice === undefined) throw new Error("fixture-no-target");
+
+    await act(async () => {
+      await hook.result.current.continueIn(targetChoice);
+    });
+
+    expect(hook.result.current.fork).toBeNull();
+    expect(hook.result.current.detail?.task.id).toBe("chat-one");
+  });
+});

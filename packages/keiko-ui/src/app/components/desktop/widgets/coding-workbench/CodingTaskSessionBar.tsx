@@ -16,6 +16,27 @@ interface SessionBarProps {
   readonly onHistory: () => void;
 }
 
+// #3903 AC4: continue the task as a fork in a workspace provisioned from its own.
+function continueActions(
+  session: CodingTaskSession,
+  locked: boolean,
+  t: ReturnType<typeof useCodingWorkbenchTranslate>,
+): readonly SessionAction[] {
+  return session.forkTargets.map((target) => ({
+    label: t("codingWorkbench.history.continueIn", { workspace: target.name }),
+    icon: Icons.branch,
+    run: (): void => void session.continueIn(target),
+    disabled: locked || session.detail === null || session.fork !== null,
+  }));
+}
+
+interface SessionAction {
+  readonly label: string;
+  readonly icon: (typeof Icons)[keyof typeof Icons];
+  readonly run: () => void;
+  readonly disabled: boolean;
+}
+
 function TaskSessionActions({ session, active, onHistory }: SessionBarProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const locked = active || session.pending;
@@ -34,6 +55,7 @@ function TaskSessionActions({ session, active, onHistory }: SessionBarProps): Re
       },
       disabled: locked || session.detail === null || session.fork !== null,
     },
+    ...continueActions(session, locked, t),
     {
       label: t("codingWorkbench.history.finish"),
       icon: Icons.check,

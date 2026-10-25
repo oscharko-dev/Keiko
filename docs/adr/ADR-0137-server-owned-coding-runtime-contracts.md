@@ -1088,9 +1088,25 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   with the run's correlation. The producer's own call is always blocked, so no unmanaged git
   worktree is ever added; the model reads Keiko's result, labelled creation only, as the call's
   message. The run keeps its
-  binding: the new workspace opens as its own task, and a session move into it stays refused until
-  a governed rebinding exists. The decision line records how it ended (`worktree`: `provisioned`,
-  `resumed`, `unavailable`, `workspace-changed`, `provision-failed`).
+  binding: the new workspace opens as its own task, and the model's own session move into it stays
+  refused. The decision line records how it ended (`worktree`: `provisioned`, `resumed`,
+  `unavailable`, `workspace-changed`, `provision-failed`).
+- **A task continues in a workspace provisioned from its own only as a fork started there (#3903
+  AC4, #3902 AC3).** The person switches to the new managed workspace (Task Workspaces) and forks
+  the task; the new run is minted, bounded and approved for that workspace like any other, and the
+  source run keeps its binding (no live rebinding, no second path). The continuity context names
+  the run's provisioning source: the one other settled managed workspace of the same repository
+  whose task branch is the run's base branch (`provisioningSource`, `opencodeNativeWorktree.ts`;
+  none when there is none or more than one). The retention store admits the fork's entry only when
+  its manifest is bound to exactly that source's key (its workspace id and root), only for
+  `purpose: "fork"`; any other key stays `workspace-changed` and leaves the entry. The copy passes
+  the unchanged audit (no grant, credential, pending input or staged revert) at the source's
+  location, and the runtime's own `session.move` (`POST /api/session/{sessionID}/move`, admitted
+  for this alone, re-projected pins 2.1.4 `941a8788…` and 2.0.10 `285ecf83…`) places the session at
+  the run's root before the fork; a refused move is `move-failed`, a session the move left
+  elsewhere `session-mismatch`. The source task's entry is never touched and still resumes in its
+  own workspace. Evidence: `coding-runtime.session-continuity` with `relocated: true` on the fork's
+  line and the closed reason `move-failed`.
 - **Accepted external references are read-only and named before the run (#3900 AC5).** The
   operator names directories in `KEIKO_CODING_EXTERNAL_READ_ROOTS` (absolute, separated like
   `PATH`, at most 8). `opencodeNativeExternalRoots.ts` resolves them once per native run, all or

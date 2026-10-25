@@ -12339,6 +12339,12 @@
               "required": false
             },
             {
+              "name": "relocated",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "runId",
               "type": "string",
               "dataClass": "opaque-id",

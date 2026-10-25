@@ -17,6 +17,8 @@ function session(): CodingTaskSession {
     fork: null,
     beginFork: vi.fn(),
     cancelFork: vi.fn(),
+    forkTargets: [],
+    continueIn: vi.fn(() => Promise.resolve()),
   };
 }
 
@@ -141,6 +143,21 @@ describe("forking from the task chrome", () => {
     render(<CodingTaskSessionBar session={current} active={active} onHistory={vi.fn()} />);
 
     expect(screen.getByRole("button", { name: "Fork task" })).toBeDisabled();
+  });
+
+  // #3903 AC4: a workspace provisioned from the task's own is offered for the task to continue in.
+  it("offers each workspace provisioned from the task's own to continue the task in", () => {
+    const target = { workspaceId: "workspace-2", name: "feature-x" };
+    const offered = { ...sessionWith([]), forkTargets: [target] };
+    const { rerender } = render(
+      <CodingTaskSessionBar session={offered} active={false} onHistory={vi.fn()} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue in “feature-x”" }));
+
+    expect(offered.continueIn).toHaveBeenCalledWith(target);
+    rerender(<CodingTaskSessionBar session={offered} active onHistory={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Continue in “feature-x”" })).toBeDisabled();
   });
 
   it("offers a fork before each user message, and only to a caller that can fork", () => {

@@ -25,8 +25,10 @@ import type {
   CodingWorkbenchRuntimeStartRequest,
   CodingWorkbenchRuntimeStateName,
   SkillDiscoveryResultV1,
+  WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
 import { isNativeActionPermissionRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { taskWorkspaceProvisioningSource } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import { isLegalCodingWorkbenchRuntimeTransition } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import { isDeliveredDraftDeliveryPhase } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
@@ -3797,7 +3799,7 @@ export class CodingRuntimeOrchestrator {
       const fork =
         request.fork === undefined
           ? undefined
-          : this.deps.history?.beginFork(request, active, runId);
+          : this.deps.history?.beginFork(request, active, runId, this.forkSourceWorkspace(active));
       this.declareContinuity(request, runId, fork?.boundary);
       return true;
     } catch (error) {
@@ -3839,9 +3841,21 @@ export class CodingRuntimeOrchestrator {
     const active = this.activeWorkspaceOrUndefined();
     // Without an active workspace the start's own scope check refuses with its own cause.
     if (active === undefined) return false;
+    const source = this.forkSourceWorkspace(active);
     return (
-      this.deps.history?.admits(request.fork.taskId, active) !== true ||
-      this.deps.history.planFork(request.fork, active) === undefined
+      this.deps.history?.admitsForkSource(request.fork.taskId, active, source) !== true ||
+      this.deps.history.planFork(request.fork, active, source) === undefined
+    );
+  }
+
+  /**
+   * The managed workspace the active one was provisioned from (#3903 AC4, #3902 AC3): a fork may
+   * continue one of its tasks in the active workspace. The run is still minted for the active one.
+   */
+  private forkSourceWorkspace(active: ActiveWorkspaceView): WorkspaceInstance | undefined {
+    return taskWorkspaceProvisioningSource(
+      this.deps.workspaceLifecycle.listAll(),
+      active.instance.workspaceId,
     );
   }
 

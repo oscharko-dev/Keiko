@@ -43,6 +43,24 @@ describe("CodingTaskForkNotice", () => {
     expect(before).not.toBe(ended);
   });
 
+  // #3903 AC4: a continuation names the workspace the new task starts in.
+  it("says the next message continues the task in the workspace it names", () => {
+    render(
+      <CodingTaskForkNotice
+        fork={{
+          taskId: "task-7",
+          title: "Repair the parser",
+          targetWorkspace: { workspaceId: "workspace-2", name: "feature-x" },
+        }}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Your next message starts a new task in the workspace “feature-x”, continued from “Repair the parser”.",
+    );
+  });
+
   it("lets the person take the request back", () => {
     const onCancel = vi.fn();
     render(

@@ -9,6 +9,7 @@ import {
 } from "react";
 import type { CodingHistoryDetail } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { CodingWorkbenchRuntimeSnapshot } from "@oscharko-dev/keiko-contracts";
+import { taskWorkspaceProvisioningSource } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import type { ActiveWorkspaceApi } from "../../context/ActiveWorkspaceContext";
 import {
   CODING_HISTORY_CHANGED,
@@ -27,6 +28,18 @@ export interface CodingTaskForkSource {
   readonly taskId: string;
   readonly title: string;
   readonly beforeMessageId?: string | undefined;
+  /**
+   * The managed workspace the fork continues in (#3903 AC4, #3902 AC3): one provisioned from the
+   * task's own. Absent, the fork stays in the task's own workspace.
+   */
+  readonly targetWorkspace?: CodingTaskForkTarget | undefined;
+}
+
+/** A managed workspace provisioned from the loaded task's own, where the task may continue. */
+interface CodingTaskForkTarget {
+  readonly workspaceId: string;
+  /** The workspace's task name, as Task Workspaces shows it. */
+  readonly name: string;
 }
 
 export interface CodingTaskSession {
@@ -45,6 +58,10 @@ export interface CodingTaskSession {
   /** Forks the loaded task as it ended, or just before one of its user messages. */
   readonly beginFork: (beforeMessageId?: string) => void;
   readonly cancelFork: () => void;
+  /** The workspaces provisioned from the loaded task's own, where it may continue as a fork. */
+  readonly forkTargets: readonly CodingTaskForkTarget[];
+  /** Switches to one of them and forks the loaded task there; nothing starts until the next message. */
+  readonly continueIn: (target: CodingTaskForkTarget) => Promise<void>;
 }
 
 interface SessionInput {
@@ -56,6 +73,8 @@ interface SessionInput {
   readonly selection: string | undefined;
   readonly onSelectionHandled?: (() => void) | undefined;
   readonly onDraftReset?: (() => void) | undefined;
+  /** The workspace a pending fork continues in, while it is the active one. */
+  readonly forkTarget?: string | undefined;
 }
 
 function reportFailure(error: unknown): void {
@@ -76,9 +95,11 @@ interface TaskLoader {
 }
 
 export function useCodingTaskSession(options: SessionInput): CodingTaskSession {
+  const [forkTarget, setForkTarget] = useState<string | undefined>(undefined);
   const input = {
     ...options,
     root: options.root ?? options.workspace?.activeInstance?.repositoryRoot,
+    forkTarget,
   };
   const ignoredRun = useRef<string | undefined>(undefined);
   const latest = useRef(input);
@@ -101,7 +122,7 @@ export function useCodingTaskSession(options: SessionInput): CodingTaskSession {
     }
   };
   const scoped = detail !== null && taskScopeMatches(detail, input, false) ? detail : null;
-  const fork = useTaskFork(input, scoped);
+  const fork = useTaskFork(input, scoped, setForkTarget);
   return {
     detail: scoped,
     conversationId: scoped?.task.id,
@@ -110,8 +131,24 @@ export function useCodingTaskSession(options: SessionInput): CodingTaskSession {
     newTask,
     finish,
     visibleRun: sessionRunVisible(input, scoped, ignoredRun.current),
+    forkTargets: forkTargetsOf(input, scoped),
     ...fork,
   };
+}
+
+/** The managed workspaces provisioned from the task's own (#3903 AC4, #3902 AC3). */
+function forkTargetsOf(
+  input: SessionInput,
+  detail: CodingHistoryDetail | null,
+): readonly CodingTaskForkTarget[] {
+  const instances = input.workspace?.instances ?? [];
+  if (detail === null || input.forkTarget !== undefined) return [];
+  return instances.flatMap((instance) =>
+    taskWorkspaceProvisioningSource(instances, instance.workspaceId)?.workspaceId ===
+    detail.task.workspaceId
+      ? [{ workspaceId: instance.workspaceId, name: instance.taskId }]
+      : [],
+  );
 }
 
 interface PendingFork {
@@ -127,16 +164,18 @@ interface PendingFork {
 function useTaskFork(
   input: SessionInput,
   detail: CodingHistoryDetail | null,
-): Pick<CodingTaskSession, "fork" | "beginFork" | "cancelFork"> {
+  setForkTarget: (workspaceId: string | undefined) => void,
+): Pick<CodingTaskSession, "fork" | "beginFork" | "cancelFork" | "continueIn"> {
   const [pending, setPending] = useState<PendingFork | null>(null);
   const runId = input.snapshot?.runId;
   const taskId = detail?.task.id;
   useEffect(() => {
     if (pending === null) return;
-    if (input.active || taskId !== pending.source.taskId || runId !== pending.runId) {
+    if (input.active || taskId !== pending.source.taskId || forkRunChanged(pending, runId)) {
       setPending(null);
+      setForkTarget(undefined);
     }
-  }, [pending, input.active, taskId, runId]);
+  }, [pending, input.active, taskId, runId, setForkTarget]);
   const beginFork = useCallback(
     (beforeMessageId?: string): void => {
       if (input.active || detail === null) return;
@@ -157,8 +196,40 @@ function useTaskFork(
   );
   const cancelFork = useCallback((): void => {
     setPending(null);
-  }, []);
-  return { fork: pending?.source ?? null, beginFork, cancelFork };
+    setForkTarget(undefined);
+  }, [setForkTarget]);
+  const continueIn = useContinueIn(input, detail, setPending, setForkTarget);
+  return { fork: pending?.source ?? null, beginFork, cancelFork, continueIn };
+}
+
+/** Requests the fork in the target workspace and switches there; a refused switch drops it. */
+function useContinueIn(
+  input: SessionInput,
+  detail: CodingHistoryDetail | null,
+  setPending: (pending: PendingFork | null) => void,
+  setForkTarget: (workspaceId: string | undefined) => void,
+): CodingTaskSession["continueIn"] {
+  const runId = input.snapshot?.runId;
+  return useCallback(
+    async (target: CodingTaskForkTarget): Promise<void> => {
+      if (input.active || detail === null || input.workspace === null) return;
+      setPending({
+        runId,
+        source: { taskId: detail.task.id, title: detail.task.title, targetWorkspace: target },
+      });
+      setForkTarget(target.workspaceId);
+      if (await input.workspace.switchTo(target.workspaceId)) return;
+      setPending(null);
+      setForkTarget(undefined);
+    },
+    [detail, input.active, input.workspace, runId, setPending, setForkTarget],
+  );
+}
+
+// A different run ends a fork request; the workspace switch of a continuation may hide the run.
+function forkRunChanged(pending: PendingFork, runId: string | undefined): boolean {
+  if (runId === pending.runId) return false;
+  return !(pending.source.targetWorkspace !== undefined && runId === undefined);
 }
 
 function sessionRunVisible(
@@ -183,7 +254,22 @@ function taskScopeMatches(
   return (
     activate ||
     ((input.root === undefined || detail.task.projectPath === input.root) &&
-      (activeWorkspaceId === undefined || detail.task.workspaceId === activeWorkspaceId))
+      (activeWorkspaceId === undefined ||
+        detail.task.workspaceId === activeWorkspaceId ||
+        continuesInto(detail, input, activeWorkspaceId)))
+  );
+}
+
+// A task stays on display while a pending fork continues it in a workspace provisioned from its own.
+function continuesInto(
+  detail: CodingHistoryDetail,
+  input: SessionInput,
+  activeWorkspaceId: string,
+): boolean {
+  return (
+    input.forkTarget === activeWorkspaceId &&
+    taskWorkspaceProvisioningSource(input.workspace?.instances ?? [], activeWorkspaceId)
+      ?.workspaceId === detail.task.workspaceId
   );
 }
 

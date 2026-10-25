@@ -36,6 +36,9 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Deine nächste Nachricht startet eine neue Aufgabe, die von „{title}“ abzweigt. Die neue Aufgabe behält diesen Verlauf bis zum Verzweigungspunkt und verändert „{title}“ nicht.",
   "codingWorkbench.history.forkNoticeBefore":
     "Deine nächste Nachricht startet eine neue Aufgabe, die von „{title}“ abzweigt, direkt vor der gewählten Nachricht. Die neue Aufgabe behält den Verlauf bis dahin und verändert „{title}“ nicht.",
+  "codingWorkbench.history.forkNoticeWorkspace":
+    "Deine nächste Nachricht startet eine neue Aufgabe im Arbeitsbereich „{workspace}“, fortgesetzt aus „{title}“. Die neue Aufgabe behält diesen Verlauf und verändert „{title}“ nicht.",
+  "codingWorkbench.history.continueIn": "In „{workspace}“ fortsetzen",
   "codingWorkbench.history.forkCancel": "Verzweigung abbrechen",
   "codingWorkbench.history.location": "Speicherort des Aufgaben-Arbeitsbereichs",
   "codingWorkbench.history.transcript": "Bisheriger Verlauf",

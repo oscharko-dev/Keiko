@@ -366,6 +366,12 @@ export interface OpenCodeV2HttpClient {
     signal?: AbortSignal,
   ): Promise<OpenCodeV2ForkedSession>;
   /**
+   * Moves a session to another project directory (`POST /api/session/{sessionID}/move`, operation
+   * `session.move`). Keiko moves only a session it continues into a run's own new workspace
+   * (#3903 AC4, #3902 AC3); the run then finds it there or refuses it.
+   */
+  moveSession(sessionId: string, directory: string, signal?: AbortSignal): Promise<void>;
+  /**
    * Deletes a session and its messages (`DELETE /api/session/{sessionID}`, operation
    * `session.remove`). Keiko removes only sessions it created itself in a run's private state: the
    * source of a fork and the scratch session of a readiness challenge.
@@ -1327,6 +1333,9 @@ export function createOpenCodeV2HttpClient(
           ),
         ),
       ),
+    moveSession: async (sessionId, directory, signal): Promise<void> => {
+      await request("POST", `/api/session/${safeSessionId(sessionId)}/move`, { directory }, signal);
+    },
     removeSession: async (sessionId, signal): Promise<void> => {
       await request("DELETE", `/api/session/${safeSessionId(sessionId)}`, undefined, signal);
     },

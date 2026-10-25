@@ -91,6 +91,7 @@ import type {
   CodingWorkbenchIssueBindingFailure,
   MemoryId,
   SkillDiscoveryResultV1,
+  WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
 import { validateSkillDiscoveryResultV1 } from "@oscharko-dev/keiko-contracts/runtime/coding-skill-discovery";
 import type { CodingWorkbenchTurnFailureCode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
@@ -285,6 +286,8 @@ function fixture(
   activeRoot: () => string = (): string => "/workspace",
   // S02/S03 (#3904): the native session continuity the orchestrator declares to and reads from.
   sessionContinuity?: CodingSessionContinuity,
+  // #3903 AC4: the persisted task workspaces, the inventory a fork's provisioning source is read from.
+  workspaceInventory?: readonly WorkspaceInstance[],
 ) {
   const rows = new Map<string, CodingRuntimeSnapshot>(seededRows.map((row) => [row.runId, row]));
   const listPrunableSettled = vi.fn((): readonly string[] => []);
@@ -502,6 +505,7 @@ function fixture(
           },
           binding: { activeRoot: activeRoot() },
         }),
+        listAll: () => workspaceInventory ?? [],
       } as never,
       launchResolver,
       taskDispatcher,
@@ -8332,6 +8336,7 @@ describe("native session continuity requested by a start", () => {
     /** The history's spied methods, held apart so an assertion never reads one off the instance. */
     readonly spies: {
       readonly admits: ReturnType<typeof vi.spyOn>;
+      readonly admitsForkSource: ReturnType<typeof vi.spyOn>;
       readonly begin: ReturnType<typeof vi.spyOn>;
       readonly beginFork: ReturnType<typeof vi.spyOn>;
       readonly initialContext: ReturnType<typeof vi.spyOn>;
@@ -8340,10 +8345,19 @@ describe("native session continuity requested by a start", () => {
     readonly f: ReturnType<typeof fixture>;
   }
 
-  function world(options: { admitted?: boolean; plan?: typeof PLAN | undefined } = {}): World {
+  function world(
+    options: {
+      admitted?: boolean;
+      plan?: typeof PLAN | undefined;
+      inventory?: readonly WorkspaceInstance[];
+    } = {},
+  ): World {
     const store = createInMemoryUiStore();
     const history = new CodingRuntimeHistory(store, () => "operator", undefined);
     const admits = vi.spyOn(history, "admits").mockReturnValue(options.admitted ?? true);
+    const admitsForkSource = vi
+      .spyOn(history, "admitsForkSource")
+      .mockReturnValue(options.admitted ?? true);
     vi.spyOn(history, "planFork").mockReturnValue("plan" in options ? options.plan : PLAN);
     vi.spyOn(history, "previousRunId").mockReturnValue("run-prior");
     const begin = vi.spyOn(history, "begin").mockImplementation(() => undefined);
@@ -8370,8 +8384,15 @@ describe("native session continuity requested by a start", () => {
       undefined,
       undefined,
       continuity,
+      options.inventory,
     );
-    return { store, history, spies: { admits, begin, beginFork, initialContext }, continuity, f };
+    return {
+      store,
+      history,
+      spies: { admits, admitsForkSource, begin, beginFork, initialContext },
+      continuity,
+      f,
+    };
   }
 
   /** The runtime reporting what it did, as the composition does while it prepares the run. */
@@ -8391,7 +8412,11 @@ describe("native session continuity requested by a start", () => {
     const started = await w.f.orchestrator.start({ ...start, ...fork });
 
     expect(started).toMatchObject({ ok: true });
-    expect(w.spies.admits).toHaveBeenCalledWith("task-source", expect.anything());
+    expect(w.spies.admitsForkSource).toHaveBeenCalledWith(
+      "task-source",
+      expect.anything(),
+      undefined,
+    );
     expect(w.spies.beginFork).toHaveBeenCalledOnce();
     expect(w.spies.begin).not.toHaveBeenCalled();
     expect(w.continuity.take("run-2")).toEqual({
@@ -8401,6 +8426,36 @@ describe("native session continuity requested by a start", () => {
     });
     // The run belongs to the NEW task, which is the conversation the browser follows.
     expect(started).toMatchObject({ snapshot: { conversationId: "task-forked" } });
+  });
+
+  // #3903 AC4, #3902 AC3: a task of the workspace the active one was provisioned from.
+  it("names the active workspace's provisioning source to the fork's admission and its start", async () => {
+    const source = {
+      workspaceId: "workspace-0",
+      repositoryId: ACTIVE_REPOSITORY_ID,
+      taskBranch: "dev",
+      baseBranch: "main",
+      lifecycleState: "paused",
+    } as WorkspaceInstance;
+    const target = {
+      workspaceId: "workspace-1",
+      repositoryId: ACTIVE_REPOSITORY_ID,
+      taskBranch: "keiko/task/one",
+      baseBranch: "dev",
+      lifecycleState: "active",
+    } as WorkspaceInstance;
+    const w = world({ inventory: [source, target] });
+    vi.spyOn(w.history, "forRun").mockReturnValue(FORKED_TASK);
+
+    expect(await w.f.orchestrator.start({ ...start, ...fork })).toMatchObject({ ok: true });
+
+    expect(w.spies.admitsForkSource).toHaveBeenCalledWith("task-source", expect.anything(), source);
+    expect(w.spies.beginFork).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      "run-2",
+      source,
+    );
   });
 
   it("declares a resume of the task a start continues", async () => {

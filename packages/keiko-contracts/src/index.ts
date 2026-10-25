@@ -4748,6 +4748,7 @@ export type {
   isWorkspaceCleanupMode,
   isWorkspaceSurface,
   isWorkspaceEventType,
+  taskWorkspaceProvisioningSource,
   validateWorkspaceEvent,
   validateWorkspaceInstance,
   validateWorkspaceBinding,

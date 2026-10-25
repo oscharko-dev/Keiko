@@ -33,6 +33,9 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Your next message starts a new task forked from “{title}”. The new task keeps this conversation up to the fork point and does not change “{title}”.",
   "codingWorkbench.history.forkNoticeBefore":
     "Your next message starts a new task forked from “{title}”, just before the message you picked. The new task keeps the conversation up to that point and does not change “{title}”.",
+  "codingWorkbench.history.forkNoticeWorkspace":
+    "Your next message starts a new task in the workspace “{workspace}”, continued from “{title}”. The new task keeps this conversation and does not change “{title}”.",
+  "codingWorkbench.history.continueIn": "Continue in “{workspace}”",
   "codingWorkbench.history.forkCancel": "Cancel fork",
   "codingWorkbench.history.location": "Task workspace location",
   "codingWorkbench.history.transcript": "Previous conversation",

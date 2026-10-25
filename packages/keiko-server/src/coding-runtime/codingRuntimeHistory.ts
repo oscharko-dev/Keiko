@@ -7,6 +7,7 @@ import type {
   CodingSafeActivityMessage,
   CodingWorkbenchRuntimeForkRequest,
   CodingWorkbenchRuntimeStartRequest,
+  WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
 import type {
   CodingHistoryDetail,
@@ -16,7 +17,11 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import type { CodingHistoryFork, CodingHistoryForkPlan } from "../store/codingHistory.js";
+import type {
+  CodingHistoryFork,
+  CodingHistoryForkPlan,
+  CodingHistoryTaskScope,
+} from "../store/codingHistory.js";
 import type { UiStore } from "../store/types.js";
 import type { ActiveWorkspaceView } from "../task-workspace/types.js";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
@@ -268,26 +273,32 @@ function operatorConversation<T extends { readonly role: string }>(
   return conversation;
 }
 
+/** The Coding History scope of a task workspace: its repository, identity and task branch. */
+function taskScopeOf(instance: WorkspaceInstance): CodingHistoryTaskScope {
+  return {
+    projectPath: instance.repositoryRoot,
+    workspaceId: instance.workspaceId,
+    taskId: instance.taskId,
+    branch: instance.taskBranch,
+  };
+}
+
 function forkSourceFields(
   fork: CodingWorkbenchRuntimeForkRequest,
   active: ActiveWorkspaceView,
-): {
+  source: WorkspaceInstance | undefined,
+): CodingHistoryTaskScope & {
   readonly sourceId: string;
   readonly beforeMessageId?: string;
-  readonly projectPath: string;
-  readonly workspaceId: string;
-  readonly taskId: string;
-  readonly branch: string;
+  readonly sourceScope?: CodingHistoryTaskScope;
   readonly title: string;
   readonly modelId: string;
 } {
   return {
     sourceId: fork.taskId,
     ...(fork.beforeMessageId === undefined ? {} : { beforeMessageId: fork.beforeMessageId }),
-    projectPath: active.instance.repositoryRoot,
-    workspaceId: active.instance.workspaceId,
-    taskId: active.instance.taskId,
-    branch: active.instance.taskBranch,
+    ...taskScopeOf(active.instance),
+    ...(source === undefined ? {} : { sourceScope: taskScopeOf(source) }),
     title: "",
     modelId: "coding",
   };
@@ -371,13 +382,30 @@ export class CodingRuntimeHistory {
 
   public admits(id: string | undefined, active: ActiveWorkspaceView): boolean {
     if (id === undefined) return true;
+    return this.taskIn(id, active.instance);
+  }
+
+  /**
+   * Whether a fork may start from `id`: a task of the active workspace, or of the managed
+   * workspace the active one was provisioned from (#3903 AC4, #3902 AC3).
+   */
+  public admitsForkSource(
+    id: string,
+    active: ActiveWorkspaceView,
+    source: WorkspaceInstance | undefined,
+  ): boolean {
+    return this.taskIn(id, active.instance) || (source !== undefined && this.taskIn(id, source));
+  }
+
+  private taskIn(id: string, instance: WorkspaceInstance): boolean {
     const operator = this.operator();
     const task = operator === undefined ? undefined : this.store.codingHistory?.get(id, operator);
+    const scope = taskScopeOf(instance);
     return (
-      task?.workspaceId === active.instance.workspaceId &&
-      task.taskId === active.instance.taskId &&
-      task.branch === active.instance.taskBranch &&
-      task.projectPath === active.instance.repositoryRoot
+      task?.workspaceId === scope.workspaceId &&
+      task.taskId === scope.taskId &&
+      task.branch === scope.branch &&
+      task.projectPath === scope.projectPath
     );
   }
 
@@ -422,11 +450,12 @@ export class CodingRuntimeHistory {
   public planFork(
     fork: CodingWorkbenchRuntimeForkRequest,
     active: ActiveWorkspaceView,
+    source?: WorkspaceInstance,
   ): CodingHistoryForkPlan | undefined {
     const operatorDigest = this.operator();
     if (operatorDigest === undefined) return undefined;
     return this.store.codingHistory?.planFork({
-      ...forkSourceFields(fork, active),
+      ...forkSourceFields(fork, active, source),
       operatorDigest,
     });
   }
@@ -439,13 +468,14 @@ export class CodingRuntimeHistory {
     request: CodingWorkbenchRuntimeStartRequest,
     active: ActiveWorkspaceView,
     runId: string,
+    source?: WorkspaceInstance,
   ): CodingHistoryFork {
     const history = this.store.codingHistory;
     const operatorDigest = this.operator();
     if (history === undefined || operatorDigest === undefined || request.fork === undefined)
       throw new Error("Coding History unavailable.");
     const forked = history.fork({
-      ...forkSourceFields(request.fork, active),
+      ...forkSourceFields(request.fork, active, source),
       title: request.taskIntent.trim().slice(0, 100),
       modelId: request.modelId ?? "coding",
       operatorDigest,

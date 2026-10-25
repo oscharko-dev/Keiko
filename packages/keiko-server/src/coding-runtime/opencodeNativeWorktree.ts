@@ -1,4 +1,6 @@
 import { resolve } from "node:path";
+import type { WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
+import { taskWorkspaceProvisioningSource } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import { TaskWorkspaceError } from "../task-workspace/errors.js";
 import type {
   WorkspaceLifecycleService,
@@ -10,8 +12,8 @@ import type {
  * unmanaged git worktree outside the task workspace, so it never runs: the policy asks the human
  * in every mode, and an approved request is provisioned by Keiko's managed task-workspace owner as
  * a new task workspace, branched from the run's current task branch. The run keeps its own
- * workspace binding: the new workspace opens as its own task, and a session move into it stays
- * refused until a governed rebinding exists.
+ * workspace binding: the new workspace opens as its own task. A task of the run's workspace then
+ * continues there only as a fork started in the new workspace (`source`), never by moving the run.
  */
 export interface NativeWorktreeProvisionRequest {
   readonly runId: string;
@@ -36,17 +38,32 @@ export type NativeWorktreeRefusal = "unavailable" | "workspace-changed" | "provi
 /** How the run's `worktree_create` ended, for the policy decision line. */
 export type NativeWorktreeDisposition = "provisioned" | "resumed" | NativeWorktreeRefusal;
 
+/** A managed workspace another one was provisioned from: its identity and its root. */
+export interface NativeWorkspaceSource {
+  readonly workspaceId: string;
+  readonly root: string;
+}
+
 export interface NativeWorktreeProvisionPort {
   readonly provision: (
     request: NativeWorktreeProvisionRequest,
   ) => Promise<NativeWorktreeProvisionResult>;
+  /**
+   * The workspace `workspaceId` was provisioned from (#3903 AC4, #3902 AC3): the one other managed
+   * workspace of the same repository whose task branch is its base branch. Absent when there is
+   * none, more than one, or it is not a settled workspace.
+   */
+  readonly source?: ((workspaceId: string) => NativeWorkspaceSource | undefined) | undefined;
 }
 
 /** Who the managed owner records as the requester: the human approved it for this run. */
 const NATIVE_WORKTREE_REQUESTER = "coding-runtime-native-worktree";
 
 export interface NativeWorktreeProvisionPortInput {
-  readonly lifecycle: Pick<WorkspaceLifecycleService, "getActive"> | undefined;
+  readonly lifecycle:
+    | (Pick<WorkspaceLifecycleService, "getActive"> &
+        Partial<Pick<WorkspaceLifecycleService, "listAll">>)
+    | undefined;
   readonly provisioning: Pick<WorkspaceProvisioningService, "provision"> | undefined;
 }
 
@@ -54,7 +71,27 @@ export interface NativeWorktreeProvisionPortInput {
 export function createNativeWorktreeProvisionPort(
   input: NativeWorktreeProvisionPortInput,
 ): NativeWorktreeProvisionPort {
-  return { provision: (request) => provisionNativeWorktree(input, request) };
+  const lifecycle = input.lifecycle;
+  return {
+    provision: (request) => provisionNativeWorktree(input, request),
+    ...(lifecycle?.listAll === undefined
+      ? {}
+      : {
+          source: (workspaceId: string): NativeWorkspaceSource | undefined =>
+            provisioningSource(lifecycle.listAll?.() ?? [], workspaceId),
+        }),
+  };
+}
+
+/** The workspace `workspaceId` was branched from, among the persisted instances. */
+export function provisioningSource(
+  instances: readonly WorkspaceInstance[],
+  workspaceId: string,
+): NativeWorkspaceSource | undefined {
+  const source = taskWorkspaceProvisioningSource(instances, workspaceId);
+  return source === undefined
+    ? undefined
+    : { workspaceId: source.workspaceId, root: source.managedWorktreePath };
 }
 
 async function provisionNativeWorktree(
@@ -99,7 +136,8 @@ export function nativeWorktreeAnswer(result: NativeWorktreeProvisionResult): {
       message:
         `Keiko ${result.created ? "created" : "found"} the managed task workspace ` +
         `"${result.taskId}" on branch ${result.branch}. This is creation only: it opens as ` +
-        "its own task in Task Workspaces, and this session does not move there; keep working " +
+        "its own task in Task Workspaces, and this session does not move there; the person can " +
+        "continue this task there by switching to it and forking the task. Keep working " +
         "in the current workspace.",
     };
   return { disposition: result.reason, message: NATIVE_WORKTREE_REFUSALS[result.reason] };

@@ -170,6 +170,8 @@ describe("Coding Workbench transcript rich content", () => {
       fork: null,
       beginFork: vi.fn(),
       cancelFork: vi.fn(),
+      forkTargets: [],
+      continueIn: vi.fn(() => Promise.resolve()),
     };
   }
 

@@ -285,6 +285,47 @@ describe("forking a Coding History task", () => {
     ).toThrow();
   });
 
+  // #3903 AC4, #3902 AC3: a new task in a workspace provisioned from the source's own.
+  it("forks a source of the workspace the new task's own was provisioned from, and no other", () => {
+    const source = sourceTask();
+    const target = binding({
+      title: "Continue there",
+      workspaceId: "ws_target",
+      taskId: "task_target",
+      branch: "keiko/task/target",
+    });
+    const sourceScope = {
+      projectPath: root,
+      workspaceId: "ws_source",
+      taskId: "task_source",
+      branch: "keiko/task/source",
+    };
+    // Without the provisioning source the source is another workspace's task.
+    expect(history().planFork({ ...target, sourceId: source.id })).toBeUndefined();
+    expect(
+      history().planFork({
+        ...target,
+        sourceId: source.id,
+        sourceScope: { ...sourceScope, workspaceId: "ws_elsewhere" },
+      }),
+    ).toBeUndefined();
+
+    const fork = history().fork({
+      ...target,
+      sourceId: source.id,
+      sourceScope,
+      runId: "run-fork-target",
+      intent: "Continue in the new workspace",
+    });
+
+    expect(fork.task).toMatchObject({ workspaceId: "ws_target", branch: "keiko/task/target" });
+    expect(contents(shown(fork.task.id))).toEqual([
+      ...contents(source.messages),
+      "Continue in the new workspace",
+    ]);
+    expect(shown(source.id)).toEqual(source.messages);
+  });
+
   it("refuses a fork point in a conversation Coding History no longer lists in full, and forks it whole", () => {
     const task = history().begin({ ...binding(), runId: "run-long", intent: "m0" });
     for (let index = 1; index < 205; index += 1) {

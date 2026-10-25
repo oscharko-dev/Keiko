@@ -23,6 +23,7 @@ import {
   type RetainedSessionLimits,
   retainedSessionKey,
   type RetainedSessionBinding,
+  type RetainedSessionSource,
   type RetainedSessionStore,
 } from "./opencodeSessionRetention.js";
 
@@ -680,6 +681,91 @@ describe("checking a retained entry out for a resuming run", () => {
     const refused = checkout(f, {}, "/another/root");
 
     expect(refused.result).toEqual({ ok: false, reason: "session-mismatch", removed: true });
+  });
+});
+
+// #3903 AC4, #3902 AC3: a fork into a workspace provisioned from the entry's own.
+describe("checking a retained entry out into a workspace provisioned from its own", () => {
+  const TARGET_KEY = createHash("sha256").update("target").digest("hex");
+  const SOURCE: RetainedSessionSource = { workspaceKey: WORKSPACE_KEY, directory: WORKSPACE };
+
+  function forkInto(
+    f: Fixture,
+    input: { readonly source?: RetainedSessionSource; readonly purpose?: "fork" },
+  ): {
+    readonly destination: string;
+    readonly result: ReturnType<RetainedSessionStore["checkout"]>;
+  } {
+    const destination = join(f.root, `forked-${String(Math.random()).slice(2)}.db`);
+    return {
+      destination,
+      result: f.store.checkout({
+        binding: binding({ workspaceKey: TARGET_KEY }),
+        directory: "/target/root",
+        destinationDatabase: destination,
+        ...input,
+      }),
+    };
+  }
+
+  it("admits a fork from exactly its source and audits the copy where it was retained", () => {
+    const f = fixture();
+    retain(f);
+
+    const { destination, result } = forkInto(f, { purpose: "fork", source: SOURCE });
+
+    expect(result).toEqual({
+      ok: true,
+      sessionId: SESSION_ID,
+      databaseBytes: statSync(destination).size,
+      messageCount: 3,
+      ageMs: 0,
+      sourceDirectory: WORKSPACE,
+    });
+    expect(sha256(destination)).toBe(sha256(join(entryDirectory(f), "opencode.db")));
+    // The source task keeps its entry: its own workspace can still resume it.
+    expect(checkout(f).result).toMatchObject({ ok: true });
+    expect(checkout(f).result).not.toHaveProperty("sourceDirectory");
+  });
+
+  it("ignores a source a resume names and refuses another source without touching the entry", () => {
+    const f = fixture();
+    retain(f);
+
+    expect(forkInto(f, { purpose: "fork" }).result).toEqual({
+      ok: false,
+      reason: "workspace-changed",
+      removed: false,
+    });
+    const elsewhere = { ...SOURCE, workspaceKey: createHash("sha256").update("x").digest("hex") };
+    const mismatched = f.store.checkout({
+      binding: binding({ workspaceKey: TARGET_KEY }),
+      directory: "/target/root",
+      destinationDatabase: join(f.root, "mismatched.db"),
+      purpose: "fork",
+      source: elsewhere,
+    });
+    expect(mismatched).toEqual({ ok: false, reason: "workspace-changed", removed: false });
+    expect(existsSync(join(f.root, "mismatched.db"))).toBe(false);
+    expect(entryNames(f)).toEqual([retainedSessionKey("task-1")]);
+    // Only a fork may name a source: a resume that does is an ordinary workspace change.
+    expect(forkInto(f, { source: SOURCE }).result).toEqual({
+      ok: false,
+      reason: "workspace-changed",
+      removed: true,
+    });
+  });
+
+  it("refuses a copy whose session is not where its source says it was retained", () => {
+    const f = fixture();
+    retain(f);
+
+    const { result } = forkInto(f, {
+      purpose: "fork",
+      source: { ...SOURCE, directory: "/another/root" },
+    });
+
+    expect(result).toEqual({ ok: false, reason: "session-mismatch", removed: true });
   });
 });
 

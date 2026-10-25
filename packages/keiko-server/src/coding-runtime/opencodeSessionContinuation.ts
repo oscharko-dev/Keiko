@@ -11,7 +11,12 @@ import {
   type SessionContinuityRecord,
 } from "./codingSessionContinuity.js";
 import { OPENCODE_RUNTIME_READINESS_PROMPT } from "./opencodeLaunchProfile.js";
-import type { CheckoutResult, RetainedSessionBinding } from "./opencodeSessionRetention.js";
+import type {
+  CheckoutResult,
+  RetainedSessionBinding,
+  RetainedSessionSource,
+  RetainedSessionStore,
+} from "./opencodeSessionRetention.js";
 import type { OpenCodeV2HttpClient } from "./opencodeV2HttpClient.js";
 import { codingRuntimeFactDigest } from "./runtimeAuthorityService.js";
 
@@ -33,6 +38,12 @@ export interface SessionContinuationContext {
   /** The input window of the run's model, the bound a retained history must fit. */
   readonly maxInputTokens: number;
   readonly activityLog: ServerLogSink | undefined;
+  /**
+   * The managed workspace the run's own one was provisioned from (#3903 AC4, #3902 AC3), as its
+   * retained entries are bound: a fork may continue a task retained there. Absent, a fork continues
+   * only a task retained in the run's own workspace.
+   */
+  readonly forkSource?: (() => RetainedSessionSource | undefined) | undefined;
 }
 
 export interface ContinuedRunLocation {
@@ -53,6 +64,8 @@ export interface RunContinuation {
   readonly ageMs: number;
   /** Set once the session is bound: the messages of the session at that moment. */
   baselineIds?: ReadonlySet<string> | undefined;
+  /** The fork source's location, where the retained session still is until it is moved. */
+  readonly sourceDirectory?: string | undefined;
 }
 
 const BENIGN_REASONS: ReadonlySet<ContinuityReason> = new Set([
@@ -65,6 +78,15 @@ export function runtimeDatabasePath(runRoot: string): string {
   return join(runRoot, "state", "opencode.db");
 }
 
+/** The key a workspace's retained entries are bound to: a digest of its id and its root. */
+export function continuationWorkspaceKey(workspaceId: string, workspaceRoot: string): string {
+  return codingRuntimeFactDigest([
+    "keiko.retained-session.workspace.v1",
+    workspaceId,
+    workspaceRoot,
+  ]);
+}
+
 function bindingOf(
   context: SessionContinuationContext,
   location: ContinuedRunLocation,
@@ -72,11 +94,7 @@ function bindingOf(
 ): RetainedSessionBinding {
   return {
     taskId,
-    workspaceKey: codingRuntimeFactDigest([
-      "keiko.retained-session.workspace.v1",
-      context.workspaceId,
-      location.workspaceRoot,
-    ]),
+    workspaceKey: continuationWorkspaceKey(context.workspaceId, location.workspaceRoot),
     runtimeVersion: context.runtimeVersion,
     maxInputTokens: context.maxInputTokens,
   };
@@ -122,12 +140,7 @@ export function seedContinuation(
   }
   let checkout: CheckoutResult;
   try {
-    checkout = store.checkout({
-      binding: bindingOf(context, location, taskId),
-      directory: location.workspaceRoot,
-      destinationDatabase: runtimeDatabasePath(location.runRoot),
-      ...(intent.kind === "fork" ? { purpose: "fork" as const } : {}),
-    });
+    checkout = store.checkout(checkoutInput(context, location, intent, taskId));
   } catch (error) {
     // A filesystem or database failure of the copy: the run starts fresh and the line carries it.
     recordFallBack(context, location, intent, "copy-failed", error);
@@ -137,13 +150,32 @@ export function seedContinuation(
     recordFallBack(context, location, intent, checkout.reason);
     return undefined;
   }
+  const { sessionId, databaseBytes, messageCount, ageMs, sourceDirectory } = checkout;
   return {
     intent,
     taskId,
-    sessionId: checkout.sessionId,
-    databaseBytes: checkout.databaseBytes,
-    messageCount: checkout.messageCount,
-    ageMs: checkout.ageMs,
+    sessionId,
+    databaseBytes,
+    messageCount,
+    ageMs,
+    ...(sourceDirectory === undefined ? {} : { sourceDirectory }),
+  };
+}
+
+/** What a run asks the store for: its own binding, and for a fork the provisioning source too. */
+function checkoutInput(
+  context: SessionContinuationContext,
+  location: ContinuedRunLocation,
+  intent: ContinuityIntent,
+  taskId: string,
+): Parameters<RetainedSessionStore["checkout"]>[0] {
+  const source = intent.kind === "fork" ? context.forkSource?.() : undefined;
+  return {
+    binding: bindingOf(context, location, taskId),
+    directory: location.workspaceRoot,
+    destinationDatabase: runtimeDatabasePath(location.runRoot),
+    ...(intent.kind === "fork" ? { purpose: "fork" as const } : {}),
+    ...(source === undefined ? {} : { source }),
   };
 }
 
@@ -173,7 +205,13 @@ function freshOutcome(reason: ContinuityReason): "failed" | "fresh" | "refused" 
 /** The part of the runtime client the session binding uses. */
 export type ContinuationClient = Pick<
   OpenCodeV2HttpClient,
-  "sessions" | "messages" | "forkSession" | "removeSession" | "switchAgent" | "createSession"
+  | "sessions"
+  | "messages"
+  | "forkSession"
+  | "removeSession"
+  | "switchAgent"
+  | "createSession"
+  | "moveSession"
 >;
 
 export type ContinuedSession =
@@ -195,7 +233,8 @@ class ContinuationRefused extends Error {
  * it is; a fork copies it (to just before a user turn, or through its end) into a new session and
  * removes the source from this run's private database, so the run holds exactly one session and the
  * retained entry of the source task is untouched. Either way the session must be the retained one in
- * the run's own workspace; anything else is a refusal.
+ * the run's own workspace; anything else is a refusal. A session retained at the fork source's
+ * location is first moved to the run's own workspace by the runtime itself (`session.move`).
  */
 export async function bindContinuedSession(
   client: ContinuationClient,
@@ -204,7 +243,7 @@ export async function bindContinuedSession(
   signal: AbortSignal | undefined,
 ): Promise<ContinuedSession> {
   try {
-    const retained = await soleSession(client, continuation.sessionId, directory, signal);
+    const retained = await relocatedSession(client, continuation, directory, signal);
     const sessionId =
       continuation.intent.kind === "fork"
         ? await forkAndReplace(client, continuation.intent.boundary, retained, directory, signal)
@@ -244,6 +283,28 @@ async function soleSession(
       : undefined;
   if (sessionDirectory !== directory) throw new ContinuationRefused("session-mismatch");
   return { id: expectedId, agent: session.agent };
+}
+
+/**
+ * The retained session in the run's own workspace (#3903 AC4, #3902 AC3). One retained at the fork
+ * source's location is moved by the runtime's own `session.move` into this run's root, the only
+ * root its sandbox and authority bind, and must then be there; it is never used where it was.
+ */
+async function relocatedSession(
+  client: ContinuationClient,
+  continuation: RunContinuation,
+  directory: string,
+  signal: AbortSignal | undefined,
+): Promise<RetainedSessionView> {
+  const source = continuation.sourceDirectory;
+  if (source === undefined) return soleSession(client, continuation.sessionId, directory, signal);
+  await soleSession(client, continuation.sessionId, source, signal);
+  try {
+    await client.moveSession(continuation.sessionId, directory, signal);
+  } catch (error) {
+    throw new ContinuationRefused("move-failed", { cause: error });
+  }
+  return soleSession(client, continuation.sessionId, directory, signal);
 }
 
 async function messageIds(

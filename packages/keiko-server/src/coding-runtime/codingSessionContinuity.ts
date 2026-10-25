@@ -71,7 +71,8 @@ export type ContinuityReason =
   | "history-oversized"
   | "scratch-session-failed"
   | "fork-boundary-unresolved"
-  | "fork-failed";
+  | "fork-failed"
+  | "move-failed";
 
 export type ContinuityOutcome =
   /** The run has a fresh session; the task's history context applies as before. */
@@ -263,8 +264,12 @@ const SESSION_CONTINUITY_OPERATION = defineActivityLogOperation({
         "scratch-session-failed",
         "fork-boundary-unresolved",
         "fork-failed",
+        "move-failed",
       ],
     },
+    // A fork continued a task retained in the workspace its run's own one was provisioned from,
+    // moved into the run's root by the runtime (#3903 AC4, #3902 AC3).
+    relocated: { type: "boolean", dataClass: "closed-enum", required: false },
     // A digest of the Coding History task (never its id) so a retain, a resume and a fork of one
     // task read as one chain; a fork also names the task it was forked from.
     taskDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
@@ -328,6 +333,7 @@ export interface SessionContinuityRecord {
   readonly taskId?: string;
   readonly sourceTaskId?: string;
   readonly boundary?: ForkBoundary["kind"];
+  readonly relocated?: boolean;
   readonly databaseBytes?: number;
   readonly messageCount?: number;
   readonly entryCount?: number;

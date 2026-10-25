@@ -665,6 +665,8 @@ export interface OpenCodeRuntimeCompositionInput {
     | {
         readonly service: CodingSessionContinuity;
         readonly workspaceId: string;
+        /** The workspace the run's own one was provisioned from (#3903 AC4); see the context. */
+        readonly forkSource?: SessionContinuationContext["forkSource"];
       }
     | undefined;
 }
@@ -2086,6 +2088,7 @@ function continuationContext(
     runtimeVersion: input.portable.verification.summary.upstreamVersion,
     maxInputTokens: input.contextGeometry.maxInputTokens,
     activityLog: input.activityLog,
+    ...(continuity.forkSource === undefined ? {} : { forkSource: continuity.forkSource }),
   };
 }
 
@@ -2884,7 +2887,7 @@ function continuedSessionLine(
   continuation: RunContinuation,
 ): Pick<
   Parameters<typeof recordSessionContinuity>[1],
-  "runId" | "action" | "taskId" | "sourceTaskId" | "boundary"
+  "runId" | "action" | "taskId" | "sourceTaskId" | "boundary" | "relocated"
 > {
   const intent = continuation.intent;
   const taskId = intent.kind === "resume" ? intent.taskId : context.service.taskOfRun(run.runId);
@@ -2895,6 +2898,7 @@ function continuedSessionLine(
     ...(intent.kind === "fork"
       ? { sourceTaskId: intent.sourceTaskId, boundary: intent.boundary.kind }
       : {}),
+    ...(continuation.sourceDirectory === undefined ? {} : { relocated: true }),
   };
 }
 

@@ -12155,7 +12155,13 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "scratch-session-failed",
           "fork-boundary-unresolved",
           "fork-failed",
+          "move-failed",
         ],
+      },
+      relocated: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
       },
       taskDigest: {
         type: "string",
