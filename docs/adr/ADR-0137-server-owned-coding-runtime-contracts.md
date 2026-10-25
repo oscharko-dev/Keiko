@@ -129,9 +129,31 @@ admitted. After a change the turn waits out the producer's watcher before its pr
 file the guided `init` command creates and a removal reach the next model call as the producer's
 own instruction update. The initial turn then attaches no block, so the text reaches the model
 once; the mapped profiles keep the first-message block. The `instructions` setting is server-owned
-and empty, so no layer can name another source. Each refresh records the same
+and empty, so no layer can name a source the run would read itself. Each refresh records the same
 `coding-runtime.repository-instructions.context` line, and a copy that cannot be written is a
 `refused` line with the `exception` reason, its frames and cause chain, never a failed turn.
+
+The same copy carries the further sources a standalone run loads (#3900 AC3,
+`codingRuntimeInstructionSources.ts`), in the producer's own order: the user's global OpenCode
+instructions (`AGENTS.md` in `$XDG_CONFIG_HOME/opencode` or `~/.config/opencode`), the workspace
+root's file, every `AGENTS.md` above the workspace up to the producer's stop (the home directory
+when the workspace lies inside it, otherwise the repository root that contains it), then each
+`instructions` entry of the user's global `opencode.json`/`config.json` and of the project's
+`opencode.json`. The run reads none of them itself: its kernel profile keeps it inside the
+workspace and its project layer stays off. Keiko reads a source outside the workspace as an
+owner-private regular file opened without following a link (an ancestor with a second link is
+refused), and a workspace entry through the same exact-workspace read, expanding `*`, `?` and `**`
+through the secure native listing (bounded; `[...]` and `{...}` are refused, never approximated).
+A project entry never names a file outside the workspace; a global entry may name the user's own
+file. A remote (`https://`) entry is pulled once per run, only for a run launched in Full access,
+through Keiko's egress with no redirect and no loopback or private target; below Full access it is
+refused. Every source passes the same credential projection and the 16 KiB/800-line bound under a
+line naming it; together the additional sources stay within 48 KiB, and what does not fit is
+omitted and counted. The context line adds per-kind counts (`globalSourceCount`,
+`ancestorSourceCount`, `configuredSourceCount`, `remoteSourceCount`) and the refused and omitted
+counts; a failed discovery or remote pull is its own `refused` line (`sourceKind`) with frames, and
+the root file's copy is kept. `KEIKO_CODING_REPOSITORY_INSTRUCTIONS_ENABLED=false` disables every
+source. 2.1.4 reads no `CLAUDE.md`.
 
 An application upgrade may still resolve the immutable npm runtime 1.1.3. Its previously approved
 helper digests remain admitted with their original 64 KiB wire capability; unknown bytes remain

@@ -6,9 +6,11 @@ import {
   linkSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -39,7 +41,11 @@ import { createCodingRuntimeRepositoryInstructionsPort } from "./codingRuntimeRe
 import { resolveNativeExternalReadRoots } from "./opencodeNativeExternalRoots.js";
 import { nativeLinkedFilesField } from "./opencodeNativeLinkedFiles.js";
 import { resolveOpenCodeRipgrep } from "./opencodeRipgrepLaunch.js";
-import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
+import type {
+  SecureWorkspaceNativeFileIO,
+  SecureWorkspaceTextReadPort,
+} from "./secureWorkspaceTextRead.js";
+import { globalOpenCodeConfigDirectory } from "./codingRuntimeInstructionSources.js";
 import { OPENCODE_NATIVE_TOOL_DEFINITIONS } from "./opencodeNativeTools.js";
 import {
   decideOpenCodeNativePolicy,
@@ -2176,6 +2182,161 @@ describe("pinned native OpenCode repository instructions (C03, #3900 AC3)", () =
           expect(requestText(run, before)).toContain("CREATED-RULE");
           expect(copyText(run)).not.toContain(CANARY);
           expect(requestText(run, 0)).not.toContain(CANARY);
+        },
+      );
+    },
+    180_000,
+  );
+
+  /** Production's secure read for the run's workspace, with the native listing the patterns use. */
+  function listingWorkspaceSource(fixture: Fixture): SecureWorkspaceTextReadPort {
+    const nativeFileIO: SecureWorkspaceNativeFileIO = {
+      readBytes: () => Promise.reject(new Error("fixture-unused")),
+      stat: () => Promise.reject(new Error("fixture-unused")),
+      list: ({ relativePath }) => {
+        const directory = join(fixture.workspace, relativePath);
+        if (!existsSync(directory)) return Promise.resolve({ ok: false, reason: "not-found" });
+        const info = statSync(directory);
+        return Promise.resolve({
+          ok: true,
+          entries: readdirSync(directory, { withFileTypes: true }).map((entry) => ({
+            name: entry.name,
+            type: entry.isDirectory() ? "directory" : "file",
+          })),
+          info: { type: "directory", size: info.size, mtimeMs: info.mtimeMs },
+        } as Awaited<ReturnType<SecureWorkspaceNativeFileIO["list"]>>);
+      },
+    };
+    return {
+      nativeFileIO,
+      readText: ({ relativePath }): ReturnType<SecureWorkspaceTextReadPort["readText"]> => {
+        const path = join(fixture.workspace, relativePath);
+        return Promise.resolve(
+          existsSync(path)
+            ? { ok: true, text: readFileSync(path, "utf8") }
+            : { ok: false, reason: "not-found" },
+        );
+      },
+    };
+  }
+
+  /** The port production composes for a native run, its home being the fixture's root. */
+  function discoveringPort(
+    fixture: Fixture,
+  ): ReturnType<typeof createCodingRuntimeRepositoryInstructionsPort> {
+    return createCodingRuntimeRepositoryInstructionsPort({
+      enabled: true,
+      delivery: "native-instructions",
+      source: listingWorkspaceSource(fixture),
+      activityLog: undefined,
+      discovery: {
+        workspaceRoot: fixture.workspace,
+        home: fixture.root,
+        globalConfigDirectory: globalOpenCodeConfigDirectory({}, fixture.root),
+      },
+    });
+  }
+
+  function copyRequest(fixture: Fixture): {
+    readonly runId: string;
+    readonly isRunWorkspace: () => boolean;
+    readonly targetPath: string;
+  } {
+    return {
+      runId: RUN_ID,
+      isRunWorkspace: (): boolean => true,
+      targetPath: openCodeRepositoryInstructionsPath(fixture.state),
+    };
+  }
+
+  // #3900 AC3 (auditor 6395392347): the global, ancestor and configured sources a standalone run
+  // loads reach the original runtime's model call, each named, in the producer's own order, with
+  // credentials masked; a repository-named path outside the workspace stays out.
+  it.skipIf(skip)(
+    "loads the user's global, the ancestor and the configured instructions Keiko copies",
+    async () => {
+      await withRun(
+        {
+          files: {
+            "AGENTS.md": "ROOT-RULE\n",
+            "docs/style.md": `STYLE-RULE\nGITHUB_TOKEN=${CANARY}\n`,
+            "docs/deep/nested.md": "NESTED-RULE\n",
+            "opencode.json": JSON.stringify({
+              instructions: ["docs/*.md", "docs/**/nested.md", "../outside.md"],
+            }),
+            "src/a.ts": "export const a = 1;\n",
+          },
+          prepare: async (fixture) => {
+            const config = globalOpenCodeConfigDirectory({}, fixture.root);
+            mkdirSync(config, { recursive: true });
+            writeFileSync(join(config, "AGENTS.md"), "GLOBAL-RULE\n");
+            writeFileSync(join(fixture.root, "AGENTS.md"), "ANCESTOR-RULE\n");
+            writeFileSync(join(fixture.root, "outside.md"), "OUTSIDE-CANARY\n");
+            expect(await discoveringPort(fixture).materializeForRun(copyRequest(fixture))).toBe(
+              true,
+            );
+          },
+        },
+        async (run) => {
+          await scriptedTurn(run, read("src/a.ts"));
+          const first = JSON.stringify(run.gateway.requests[0]?.body);
+          const order = ["GLOBAL-RULE", "ROOT-RULE", "ANCESTOR-RULE", "STYLE-RULE", "NESTED-RULE"];
+          const positions = order.map((rule) => first.indexOf(rule));
+          expect(
+            positions.every((position) => position >= 0),
+            first,
+          ).toBe(true);
+          expect([...positions].sort((a, b) => a - b)).toEqual(positions);
+          expect(first).toContain("copied by Keiko");
+          expect(first).toContain("docs/style.md, named by an instructions setting");
+          expect(requestText(run, 0)).not.toContain(CANARY);
+          expect(requestText(run, 0)).not.toContain("OUTSIDE-CANARY");
+        },
+      );
+    },
+    180_000,
+  );
+
+  // #3900 AC3: the original `init` command writes the workspace's AGENTS.md through the native
+  // write tool; Keiko's refresh before the next turn copies it into the slot the producer has
+  // watched since launch, and that next native turn carries it.
+  it.skipIf(skip)(
+    "runs init, which creates AGENTS.md, and the next native turn carries the new instructions",
+    async () => {
+      let materialize = (): Promise<boolean> => Promise.resolve(false);
+      await withRun(
+        {
+          mode: "autonomous-delivery",
+          files: { "src/a.ts": "export const a = 1;\n" },
+          prepare: async (fixture) => {
+            const port = discoveringPort(fixture);
+            materialize = (): Promise<boolean> => port.materializeForRun(copyRequest(fixture));
+            expect(await materialize()).toBe(false);
+          },
+        },
+        async (run) => {
+          run.gateway.calls.push({
+            name: "write",
+            arguments: { path: "AGENTS.md", content: "INIT-CREATED-RULE\n" },
+          });
+          const before = run.gateway.requests.length;
+          await run.client.command(run.sessionId, "init", "");
+          await expect
+            .poll(() => run.gateway.requests.length, { timeout: 60_000 })
+            .toBeGreaterThanOrEqual(before + 2);
+          await settledIdle(run);
+          // The init template reached the model, and the native write created the file.
+          expect(requestText(run, before)).toContain("AGENTS.md");
+          expect(readFileSync(join(run.fixture.workspace, "AGENTS.md"), "utf8")).toBe(
+            "INIT-CREATED-RULE\n",
+          );
+          expect(requestText(run, before)).not.toContain("copied by Keiko");
+          // What the composition does before every turn.
+          expect(await materialize()).toBe(true);
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          const next = run.gateway.requests.length;
+          await scriptedTurn(run, read("src/a.ts"));
+          expect(requestText(run, next)).toContain("INIT-CREATED-RULE");
         },
       );
     },

@@ -10696,6 +10696,12 @@
           "analyzerProjection": "timeline",
           "safeContextFields": [
             {
+              "name": "ancestorSourceCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "byteCount",
               "type": "integer",
               "dataClass": "count",
@@ -10705,6 +10711,12 @@
               "name": "causeChain",
               "type": "string-array",
               "dataClass": "error-kind",
+              "required": false
+            },
+            {
+              "name": "configuredSourceCount",
+              "type": "integer",
+              "dataClass": "count",
               "required": false
             },
             {
@@ -10726,10 +10738,22 @@
               "required": false
             },
             {
+              "name": "globalSourceCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "lineCount",
               "type": "integer",
               "dataClass": "count",
               "required": true
+            },
+            {
+              "name": "omittedSourceCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
             },
             {
               "name": "reason",
@@ -10738,10 +10762,28 @@
               "required": false
             },
             {
+              "name": "refusedSourceCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "remoteSourceCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "runId",
               "type": "string",
               "dataClass": "opaque-id",
               "required": true
+            },
+            {
+              "name": "sourceKind",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
             },
             {
               "name": "state",

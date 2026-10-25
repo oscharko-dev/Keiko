@@ -54,6 +54,8 @@ import {
   type OperatorPluginsPort,
 } from "./opencodeOperatorPlugins.js";
 import { createCodingRuntimeRepositoryInstructionsPort } from "./codingRuntimeRepositoryInstructions.js";
+import { globalOpenCodeConfigDirectory } from "./codingRuntimeInstructionSources.js";
+import type { OutboundHttpEgressConfig } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import type { NativeWorktreeProvisionPort } from "./opencodeNativeWorktree.js";
 import {
   recordNativeExternalRootsResolved,
@@ -187,6 +189,11 @@ export interface ProductionOpenCodeBackendInput {
   readonly repositoryItemsEnabled?: boolean | undefined;
   /** The operator's opt-out of the workspace AGENTS.md (#3900 AC3); absent keeps it on. */
   readonly repositoryInstructionsEnabled?: boolean | undefined;
+  /**
+   * Keiko's egress for a Full access run's remote `instructions` entries (#3900 AC3); absent, a
+   * remote source is refused in every mode.
+   */
+  readonly instructionSourceEgress?: (() => OutboundHttpEgressConfig | undefined) | undefined;
   /** Keiko's managed task-workspace owner for an approved Code Mode `worktree_create` (#3903 AC4). */
   readonly nativeWorktrees?: NativeWorktreeProvisionPort | undefined;
   /** The operator's raw `KEIKO_CODING_EXTERNAL_READ_ROOTS` (#3900 AC5); absent admits none. */
@@ -553,17 +560,28 @@ function sessionContinuityFor(
       };
 }
 
-// The run's AGENTS.md as the native runtime's own instruction source (#3900 AC3), read only while
-// its workspace is still the active one.
+// The run's AGENTS.md and the further sources a standalone run loads, as the native runtime's own
+// instruction source (#3900 AC3), read only while its workspace is still the active one. Remote
+// sources are pulled only for a run launched in Full access, which cannot be narrowed in place.
 function repositoryInstructionsFor(
   input: LaunchInput,
   run: ProductionRuntimeBackendInput,
 ): NonNullable<OpenCodeRuntimeCompositionInput["repositoryInstructions"]> {
+  const home = homedir();
+  const egress = input.instructionSourceEgress;
   const port = createCodingRuntimeRepositoryInstructionsPort({
     enabled: input.repositoryInstructionsEnabled !== false,
     delivery: "native-instructions",
     source: input.secureWorkspaceTextRead,
     activityLog: input.activityLog ?? processServerLogSink(),
+    discovery: {
+      workspaceRoot: run.context.workspaceRoot,
+      home,
+      globalConfigDirectory: globalOpenCodeConfigDirectory(input.processEnv ?? {}, home),
+      ...(egress !== undefined && run.minted.effectiveMode === "autonomous-delivery"
+        ? { remote: { egress } }
+        : {}),
+    },
   });
   return {
     materializeForRun: (request) =>

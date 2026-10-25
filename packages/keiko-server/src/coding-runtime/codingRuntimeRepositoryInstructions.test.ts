@@ -1,4 +1,12 @@
-import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -775,5 +783,240 @@ describe("credential-safe projection of the instructions (r4369385467)", () => {
     const { copy } = await copied(INSTRUCTIONS);
     expect(copy).toContain(INSTRUCTIONS.trimEnd());
     expect(copy).not.toContain("[REDACTED]");
+  });
+});
+
+// #3900 AC3: the further sources a standalone run loads ride in the same copy, named, in the
+// producer's order, masked like the root file; every failure leaves the root file's copy intact.
+describe("additional instruction sources in the native copy", () => {
+  const GITHUB_TOKEN = "ghp_" + "ADDITIONALSOURCECANARY0123456789ABCD";
+
+  function homeTree(): {
+    readonly home: string;
+    readonly workspace: string;
+    readonly config: string;
+  } {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), "keiko-instruction-home-")));
+    const config = join(home, ".config", "opencode");
+    const workspace = join(home, "work", "repo");
+    mkdirSync(config, { recursive: true });
+    mkdirSync(join(workspace, "docs"), { recursive: true });
+    return { home, workspace, config };
+  }
+
+  /** The workspace answered from disk: text reads only (no native listing, so no patterns). */
+  function diskSource(workspace: string): SecureWorkspaceTextReadPort {
+    return {
+      readText: ({ relativePath }): Promise<SecureWorkspaceTextReadResult> => {
+        const path = join(workspace, relativePath);
+        return Promise.resolve(
+          existsSync(path)
+            ? { ok: true, text: readFileSync(path, "utf8") }
+            : { ok: false, reason: "not-found" },
+        );
+      },
+    };
+  }
+
+  function discoveringPort(
+    tree: ReturnType<typeof homeTree>,
+    remote?: { readonly fetchImpl: typeof fetch },
+  ): {
+    readonly port: ReturnType<typeof createCodingRuntimeRepositoryInstructionsPort>;
+    readonly records: ServerLogEvent[];
+  } {
+    const { activityLog, records } = captureActivityLog();
+    return {
+      port: createCodingRuntimeRepositoryInstructionsPort({
+        enabled: true,
+        delivery: "native-instructions",
+        source: diskSource(tree.workspace),
+        activityLog,
+        discovery: {
+          workspaceRoot: tree.workspace,
+          home: tree.home,
+          globalConfigDirectory: tree.config,
+          ...(remote === undefined
+            ? {}
+            : { remote: { egress: () => undefined, fetchImpl: remote.fetchImpl } }),
+        },
+      }),
+      records,
+    };
+  }
+
+  const request = (
+    targetPath: string,
+  ): {
+    readonly runId: string;
+    readonly isRunWorkspace: () => boolean;
+    readonly targetPath: string;
+  } => ({
+    runId: RUN_ID,
+    isRunWorkspace: RUN_WORKSPACE,
+    targetPath,
+  });
+
+  function copyAt(): string {
+    return join(mkdtempSync(join(tmpdir(), "keiko-instructions-copy-")), "AGENTS.md");
+  }
+
+  it("copies global, root, ancestor and configured sources in order, masked and counted", async () => {
+    const tree = homeTree();
+    writeFileSync(join(tree.config, "AGENTS.md"), "GLOBAL-RULE\n");
+    writeFileSync(join(tree.workspace, "AGENTS.md"), "ROOT-RULE\n");
+    writeFileSync(join(tree.home, "AGENTS.md"), "ANCESTOR-RULE\n");
+    writeFileSync(
+      join(tree.workspace, "docs", "style.md"),
+      `STYLE-RULE\nGITHUB_TOKEN=${GITHUB_TOKEN}\n`,
+    );
+    writeFileSync(
+      join(tree.workspace, "opencode.json"),
+      JSON.stringify({ instructions: ["docs/style.md", "../../outside.md"] }),
+    );
+    const { port, records } = discoveringPort(tree);
+    const targetPath = copyAt();
+
+    await expect(port.materializeForRun(request(targetPath))).resolves.toBe(true);
+    const copy = readFileSync(targetPath, "utf8");
+    const order = ["GLOBAL-RULE", "ROOT-RULE", "ANCESTOR-RULE", "STYLE-RULE"].map((rule) =>
+      copy.indexOf(rule),
+    );
+    expect(order.every((position) => position >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(copy).toMatch(/^Working instructions copied by Keiko: /u);
+    expect(copy).toContain("Instructions from ~/AGENTS.md, above the task workspace:");
+    expect(copy).toContain("Instructions from docs/style.md, named by an instructions setting:");
+    expect(copy).not.toContain(GITHUB_TOKEN);
+    const { persisted } = expectInstructionsLine(records);
+    expect(persisted).toMatchObject({
+      state: "attached",
+      globalSourceCount: 1,
+      ancestorSourceCount: 1,
+      configuredSourceCount: 1,
+      remoteSourceCount: 0,
+      refusedSourceCount: 1,
+      omittedSourceCount: 0,
+    });
+    expect(JSON.stringify(persisted)).not.toContain("STYLE-RULE");
+  });
+
+  it("copies the additional sources even when the workspace has no AGENTS.md", async () => {
+    const tree = homeTree();
+    writeFileSync(join(tree.config, "AGENTS.md"), "GLOBAL-ONLY\n");
+    const { port, records } = discoveringPort(tree);
+    const targetPath = copyAt();
+
+    await expect(port.materializeForRun(request(targetPath))).resolves.toBe(true);
+    expect(readFileSync(targetPath, "utf8")).toContain("GLOBAL-ONLY");
+    expect(readFileSync(targetPath, "utf8")).not.toContain("task workspace root (AGENTS.md)");
+    expect(records.filter((record) => record.op === OP)).toMatchObject([
+      { extra: { state: "absent", reason: "not-found", globalSourceCount: 1 } },
+    ]);
+  });
+
+  it("refuses a remote source below Full access and pulls it once in Full access", async () => {
+    const tree = homeTree();
+    writeFileSync(
+      join(tree.config, "opencode.json"),
+      JSON.stringify({ instructions: ["https://rules.example.test/team.md"] }),
+    );
+    const below = discoveringPort(tree);
+    const belowCopy = copyAt();
+    await below.port.materializeForRun(request(belowCopy));
+    expect(existsSync(belowCopy)).toBe(false);
+    expect(below.records.filter((record) => record.op === OP)).toMatchObject([
+      { extra: { state: "absent", refusedSourceCount: 1, remoteSourceCount: 0 } },
+    ]);
+
+    const fetchImpl = vi.fn<typeof fetch>(() =>
+      Promise.resolve(new Response("REMOTE-RULE\n", { status: 200 })),
+    );
+    const full = discoveringPort(tree, { fetchImpl });
+    const fullCopy = copyAt();
+    await full.port.materializeForRun(request(fullCopy));
+    await full.port.materializeForRun(request(fullCopy));
+    expect(readFileSync(fullCopy, "utf8")).toContain(
+      "Instructions from https://rules.example.test/team.md, named by an instructions setting and pulled by Keiko:\nREMOTE-RULE",
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(full.records.filter((record) => record.op === OP).at(-1)).toMatchObject({
+      extra: { remoteSourceCount: 1, refusedSourceCount: 0 },
+    });
+  });
+
+  it("records a failed remote pull with its frames and keeps every other source", async () => {
+    const tree = homeTree();
+    writeFileSync(join(tree.workspace, "AGENTS.md"), "ROOT-RULE\n");
+    writeFileSync(
+      join(tree.config, "opencode.json"),
+      JSON.stringify({ instructions: ["https://rules.example.test/down.md"] }),
+    );
+    const { port, records } = discoveringPort(tree, {
+      fetchImpl: () => Promise.reject(new Error("connect refused")),
+    });
+    const targetPath = copyAt();
+
+    await port.materializeForRun(request(targetPath));
+    expect(readFileSync(targetPath, "utf8")).toContain("ROOT-RULE");
+    const lines = records.filter((record) => record.op === OP);
+    expect(lines).toMatchObject([
+      {
+        level: "warn",
+        extra: { state: "refused", reason: "source-unavailable", sourceKind: "remote" },
+      },
+      { extra: { state: "attached", refusedSourceCount: 1 } },
+    ]);
+    expect(lines[0]?.extra?.frames).toEqual(expect.any(Array));
+  });
+
+  it("records a discovery failure with its frames and still copies the root file", async () => {
+    const tree = homeTree();
+    writeFileSync(join(tree.workspace, "AGENTS.md"), "ROOT-RULE\n");
+    const { activityLog, records } = captureActivityLog();
+    const port = createCodingRuntimeRepositoryInstructionsPort({
+      enabled: true,
+      delivery: "native-instructions",
+      source: {
+        readText: ({ relativePath }) =>
+          relativePath === "AGENTS.md"
+            ? Promise.resolve({ ok: true, text: "ROOT-RULE\n" })
+            : Promise.reject(new Error("helper crashed")),
+      },
+      activityLog,
+      discovery: {
+        workspaceRoot: tree.workspace,
+        home: tree.home,
+        globalConfigDirectory: tree.config,
+      },
+    });
+    const targetPath = copyAt();
+
+    await port.materializeForRun(request(targetPath));
+    expect(readFileSync(targetPath, "utf8")).toMatch(/^Repository working instructions: /u);
+    expect(records.filter((record) => record.op === OP)).toMatchObject([
+      { level: "warn", extra: { state: "refused", reason: "exception", sourceKind: "discovery" } },
+      { extra: { state: "attached" } },
+    ]);
+  });
+
+  it("discovers nothing while the operator disabled the loader", async () => {
+    const tree = homeTree();
+    writeFileSync(join(tree.config, "AGENTS.md"), "GLOBAL-RULE\n");
+    const { activityLog } = captureActivityLog();
+    const port = createCodingRuntimeRepositoryInstructionsPort({
+      enabled: false,
+      delivery: "native-instructions",
+      source: diskSource(tree.workspace),
+      activityLog,
+      discovery: {
+        workspaceRoot: tree.workspace,
+        home: tree.home,
+        globalConfigDirectory: tree.config,
+      },
+    });
+    const targetPath = copyAt();
+    await port.materializeForRun(request(targetPath));
+    expect(existsSync(targetPath)).toBe(false);
   });
 });

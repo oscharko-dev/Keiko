@@ -34,7 +34,10 @@ import {
   type McpOAuthCredentialStore,
 } from "../mcp/mcpOAuthCredentialStore.js";
 import type { McpOAuthIssuerPort } from "./opencodeRuntimeComposition.js";
-import { resolveOutboundHttpEgressConfig } from "@oscharko-dev/keiko-model-gateway";
+import {
+  resolveOutboundHttpEgressConfig,
+  type OutboundHttpEgressConfig,
+} from "@oscharko-dev/keiko-model-gateway";
 import { KEIKO_CODING_EXTERNAL_READ_ROOTS_ENV } from "./opencodeNativeExternalRoots.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import type { CodingRuntimeEvidenceAggregator } from "./codingRuntimeEvidenceAggregator.js";
@@ -240,8 +243,11 @@ function memoizedPerRun<Value>(load: (runId: string) => Value): (runId: string) 
 function repositoryOptions(env: NodeJS.ProcessEnv): {
   readonly repositoryItemsEnabled: boolean;
   readonly repositoryInstructionsEnabled: boolean;
+  readonly instructionSourceEgress: () => OutboundHttpEgressConfig | undefined;
 } {
   return {
+    // #3900 AC3: a Full access run's remote instruction sources take Keiko's own egress.
+    instructionSourceEgress: () => resolveOutboundHttpEgressConfig(undefined, env),
     repositoryItemsEnabled: configuredCodingRuntimeRepositoryItemsEnabled(
       env[KEIKO_CODING_REPOSITORY_ITEMS_ENABLED_ENV],
     ),

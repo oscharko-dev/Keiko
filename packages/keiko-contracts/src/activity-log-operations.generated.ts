@@ -9971,6 +9971,42 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         maxLength: 128,
         maxItems: 5,
       },
+      globalSourceCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      ancestorSourceCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      configuredSourceCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      remoteSourceCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      refusedSourceCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      omittedSourceCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      sourceKind: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["discovery", "remote"],
+      },
     },
     causal: "correlation",
     lifecycle: "state",
