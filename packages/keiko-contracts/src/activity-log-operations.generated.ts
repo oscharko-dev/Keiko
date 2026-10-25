@@ -6623,6 +6623,88 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "coding-runtime.descendants.swept",
+    category: "process",
+    owner: "keiko-server",
+    emitter: "coding-runtime.darwinRuntimeDescendants.recordDescendantSweep",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      outcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["clean", "reaped", "survivors", "listing-failed"],
+      },
+      trackedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      signalledCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      survivorCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      failedSampleCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      refusedSignalCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      durationMs: {
+        type: "integer",
+        dataClass: "duration",
+        required: true,
+      },
+      frames: {
+        type: "string-array",
+        dataClass: "opaque-id",
+        required: false,
+        maxLength: 512,
+        maxItems: 8,
+      },
+      causeChain: {
+        type: "string-array",
+        dataClass: "error-kind",
+        required: false,
+        maxLength: 128,
+        maxItems: 5,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "process-lifecycle",
+    failureClasses: ["coding-runtime-descendant-sweep"],
+    proofIds: ["coding-runtime.descendants.swept.emitted-line"],
+    releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "outcome",
+        values: ["survivors", "listing-failed"],
+      },
+    ],
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "coding-runtime.description",
     category: "process",
     owner: "keiko-server",

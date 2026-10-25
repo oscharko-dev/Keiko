@@ -15,9 +15,16 @@ import type {
   EditorVerificationEvent,
 } from "@oscharko-dev/keiko-contracts";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
+import type { GatewayRequest } from "@oscharko-dev/keiko-model-gateway";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { createNodeGitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 
+import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../../tests/support/buffered-server-log.js";
+import { createServerLogger, setServerLogger } from "../observability/index.js";
 import { createUiServer, UI_HOST } from "../server.js";
 import { fakePairingRequestBody } from "../coding-app-session/_support.js";
 import { productionOpenCodeToolProfile, type UiHandlerDeps } from "../deps.js";
@@ -56,12 +63,15 @@ import {
 } from "./opencodeFunctionalHarness/_support.js";
 import { devLaneEnvEnabled } from "./devLanePortableCodingRuntime.js";
 import { openCodeSelectableAgents } from "./opencodeAgents.js";
+import { openCodePromptInputs } from "./opencodePromptInputs.js";
 import {
   createFunctionalRuntimeResolver,
   functionalBffDeps,
   productionDiscoveryBffDeps,
   FUNCTIONAL_ACTIVITY_ASSISTANT_PREFIX,
   FUNCTIONAL_ACTIVITY_TRUNCATED_TAIL,
+  FUNCTIONAL_LIFECYCLE_BACKGROUND_COMMAND,
+  FUNCTIONAL_LIFECYCLE_FOREGROUND_COMMAND,
   FUNCTIONAL_PLAN_STEP_READ,
   FUNCTIONAL_PLAN_STEP_VERIFY,
   type ScriptState,
@@ -81,6 +91,7 @@ interface FunctionalWorkspaceFixture {
   readonly repository: string;
   readonly db: DatabaseSync;
   readonly lifecycle: ReturnType<typeof createWorkspaceLifecycleService>;
+  readonly provisioning: ReturnType<typeof createWorkspaceProvisioningService>;
   readonly managedRoot: string;
   readonly workspace: string;
   readonly target: string;
@@ -284,14 +295,19 @@ function devLaneDiscoveryFunctionalEnabled(): boolean {
  */
 async function bootDiscoveryPipeline(
   fixture: FunctionalWorkspaceFixture,
+  observeGatewayRequest?: (request: GatewayRequest) => void,
 ): Promise<FunctionalPipeline> {
   const verification = createVerification(fixture.workspace);
   const port = await reserveLoopbackPort();
   const deps = productionDiscoveryBffDeps({
     stateRoot: join(fixture.root, "bff-state"),
     workspaceLifecycle: fixture.lifecycle,
+    // The run's Git preparation re-proves the managed workspace through the same provisioning
+    // owner that created it, as the composed server does.
+    workspaceProvisioning: fixture.provisioning,
     script: fixture.script,
     uiPort: port,
+    ...(observeGatewayRequest === undefined ? {} : { observeGatewayRequest }),
   });
   disposers.push(async () => {
     await deps.codingRuntimeOrchestrator?.shutdown();
@@ -347,6 +363,7 @@ async function assertLiveReadiness(baseUrl: string): Promise<void> {
     runtimeEvidenceClass: "functional-not-platform-qualified",
     // Derived from the production entry points, not restated: the platform picks the profile.
     selectableAgents: openCodeSelectableAgents(productionOpenCodeToolProfile()),
+    promptInputs: openCodePromptInputs(productionOpenCodeToolProfile()),
   });
 }
 
@@ -850,6 +867,7 @@ function setupWorkspace(
         repository,
         db,
         lifecycle,
+        provisioning,
         managedRoot,
         workspace,
         target,
@@ -1034,4 +1052,322 @@ function git(cwd: string, args: readonly string[]): string {
 
 function readFile(path: string): string {
   return readFileSync(path, "utf8");
+}
+
+// #3899 AC2: the original pinned service, started by the production lifecycle owner from the
+// dev lane's verified artifact (no runtime seam), observed as the processes and sockets it really
+// has. Only the model is scripted; it starts one background and one foreground child through the
+// runtime's own shell tool, so every ending has a live process tree to reap.
+describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
+  "original OpenCode service lifecycle through the production owner (#3899 AC2)",
+  () => {
+    it("starts the attested service behind an authenticated loopback transport, bound to the task's workspace", async () => {
+      const run = await startLifecycleRun("lifecycle-identity");
+      const phases = readinessPhases(run.log, run.runId);
+      expect(orderedSubsequence(phases, ATTESTED_SERVICE_PHASES), phases.join(",")).toBe(true);
+      const addresses = listeningAddresses(run.service.pid);
+      expect(addresses.length).toBeGreaterThan(0);
+      for (const address of addresses) {
+        expect(address).toMatch(/^127\.0\.0\.1:\d+$/u);
+        await expectRefusedWithoutTheRunPassword(`http://${address}`);
+      }
+      expect(
+        realpathSync(processDirectory(onlyProcess(FUNCTIONAL_LIFECYCLE_FOREGROUND_COMMAND).pid)),
+      ).toBe(realpathSync(run.fixture.workspace));
+      await stopRun(run.pipeline.baseUrl, run.runId);
+      await expectServiceTreeReaped(run.service);
+    }, 180_000);
+
+    it("cancels a busy turn and reaps the service with its foreground and background children", async () => {
+      const run = await startLifecycleRun("lifecycle-cancel");
+      expect(childCommands(run.service.pid)).toEqual(
+        expect.arrayContaining([
+          FUNCTIONAL_LIFECYCLE_BACKGROUND_COMMAND,
+          FUNCTIONAL_LIFECYCLE_FOREGROUND_COMMAND,
+        ]),
+      );
+      await stopRun(run.pipeline.baseUrl, run.runId);
+      await expectServiceTreeReaped(run.service);
+      expect(run.pipeline.orchestrator.getSnapshot(run.runId)?.state).toBe("cancelled");
+    }, 180_000);
+
+    it("ends the children of a crashed service and continues the task in a new service", async () => {
+      const transcripts: string[] = [];
+      const run = await startLifecycleRun("lifecycle-crash", (request) => {
+        transcripts.push(JSON.stringify(request.messages));
+      });
+      // A crash while the command runs. The record samples twice a second, so a child forked in the
+      // last interval before a crash is outside its reach; only an Endpoint Security monitor sees
+      // every fork (ADR-0163 D4).
+      await new Promise((resolve) => setTimeout(resolve, 1_200));
+      process.kill(run.service.pid, "SIGKILL");
+      await expectServiceTreeReaped(run.service);
+      expect(sweepLines(run.log, run.runId)).toEqual([
+        { outcome: "reaped", signalledCount: 2, survivorCount: 0 },
+      ]);
+      await vi.waitFor(
+        () => {
+          expect(run.pipeline.orchestrator.getSnapshot(run.runId)?.state).not.toBe("running");
+        },
+        { timeout: 30_000, interval: 100 },
+      );
+      // A runtime ended by a signal nobody in Keiko sent is a human reconciliation (ADR-0137 D5):
+      // the Workbench offers "Acknowledge recovery", and the next start takes the slot.
+      const crashed = run.pipeline.orchestrator.getSnapshot(run.runId);
+      expect(crashed?.state).toBe("recovery-required");
+      const acknowledged = await post(
+        run.pipeline.baseUrl,
+        `/api/coding-workbench/runtime/runs/${run.runId}/recovery-ack`,
+        { requestId: run.runId, acknowledged: true },
+      );
+      expect(acknowledged.status).toBe(200);
+      run.fixture.script.mode = "lifecycle-continue";
+      transcripts.length = 0;
+      const continued = await startRun(run.pipeline, {
+        ...startBody("lifecycle-restart"),
+        taskIntent: "Continue after the crash",
+        conversationId: crashed?.conversationId,
+      });
+      const restarted = onlyService();
+      expect(restarted.pid).not.toBe(run.service.pid);
+      await vi.waitFor(() => {
+        expect(transcripts.some((transcript) => transcript.includes(SECRET))).toBe(true);
+      });
+      await stopRun(run.pipeline.baseUrl, continued);
+      await expectServiceTreeReaped(restarted);
+    }, 240_000);
+
+    it("reaps a service that dies during startup, refuses that start, and starts the next one", async () => {
+      const fixture = await setupWorkspace(["bff-state", "ui-db", "task-workspaces"]);
+      fixture.script.mode = "lifecycle-continue";
+      const pipeline = await bootDiscoveryPipeline(fixture);
+      const killed = killServiceOnSpawn();
+      const refused = await post(
+        pipeline.baseUrl,
+        "/api/coding-workbench/runtime/runs",
+        startBody("lifecycle-startup-failure"),
+      );
+      const service = await killed;
+      const body = (await refused.json()) as { readonly state?: string };
+      expect(refused.status === 200 && body.state === "running").toBe(false);
+      await expectServiceTreeReaped(service);
+      const runId = await startRun(pipeline, startBody("lifecycle-after-startup-failure"));
+      const next = onlyService();
+      await stopRun(pipeline.baseUrl, runId);
+      await expectServiceTreeReaped(next);
+    }, 240_000);
+
+    it("ends an active run and reaps its service tree when the server shuts down", async () => {
+      const run = await startLifecycleRun("lifecycle-shutdown");
+      await run.pipeline.deps.dispose?.();
+      await expectServiceTreeReaped(run.service);
+      expect(settledStates(run.log, run.runId)).toContain("cancelled");
+    }, 180_000);
+  },
+);
+
+interface ProcessRow {
+  readonly pid: number;
+  readonly ppid: number;
+  readonly command: string;
+}
+
+interface LifecycleRun {
+  readonly fixture: FunctionalWorkspaceFixture;
+  readonly pipeline: FunctionalPipeline;
+  readonly runId: string;
+  readonly service: ProcessRow;
+  readonly log: BufferedServerLogSink;
+}
+
+// The readiness phases that attest the service before its first turn: the verified artifact, the
+// announced loopback endpoint, authenticated health (which refuses any version but the pinned one),
+// the refusal of an unauthenticated request, the producer's protocol digest and the session echoed
+// at the bound workspace Location (opencodeRuntimeAdapter.ts).
+const ATTESTED_SERVICE_PHASES = [
+  "target-attestation",
+  "endpoint",
+  "authenticated-health",
+  "unauthenticated-health",
+  "openapi-digest",
+  "session-echo",
+] as const;
+const SERVICE_COMMAND = "/opencode-compatible/payload/bin/opencode serve --hostname 127.0.0.1 ";
+
+async function startLifecycleRun(
+  tag: string,
+  observeGatewayRequest?: (request: GatewayRequest) => void,
+): Promise<LifecycleRun> {
+  const log = recordActivityLog();
+  const fixture = await setupWorkspace(["bff-state", "ui-db", "task-workspaces"]);
+  fixture.script.mode = "lifecycle";
+  const pipeline = await bootDiscoveryPipeline(fixture, observeGatewayRequest);
+  const runId = await startRun(pipeline, startBody(tag));
+  await vi.waitFor(
+    () => {
+      expect(childCommands(onlyService().pid)).toContain(FUNCTIONAL_LIFECYCLE_FOREGROUND_COMMAND);
+    },
+    { timeout: 60_000, interval: 200 },
+  );
+  return { fixture, pipeline, runId, service: onlyService(), log };
+}
+
+async function startRun(pipeline: FunctionalPipeline, body: unknown): Promise<string> {
+  const started = await post(pipeline.baseUrl, "/api/coding-workbench/runtime/runs", body);
+  const text = await started.clone().text();
+  expect(started.status, text).toBe(200);
+  const run = (await started.json()) as { readonly runId: string; readonly state: string };
+  expect(run.state, text).toBe("running");
+  return run.runId;
+}
+
+function recordActivityLog(): BufferedServerLogSink {
+  const sink = createBufferedServerLogSink();
+  setServerLogger(createServerLogger({ sink, level: "info" }));
+  disposers.push(() => {
+    resetServerLogger();
+  });
+  return sink;
+}
+
+function readinessPhases(log: BufferedServerLogSink, runId: string): readonly string[] {
+  return log.events.flatMap((event) => {
+    const phase = event.extra?.phase;
+    return event.op === "coding-runtime.readiness.phase" &&
+      event.correlationId === runId &&
+      typeof phase === "string"
+      ? [phase]
+      : [];
+  });
+}
+
+function sweepLines(
+  log: BufferedServerLogSink,
+  runId: string,
+): readonly Readonly<Record<string, unknown>>[] {
+  return log.events.flatMap((event) =>
+    event.op === "coding-runtime.descendants.swept" && event.correlationId === runId
+      ? [
+          {
+            outcome: event.extra?.outcome,
+            signalledCount: event.extra?.signalledCount,
+            survivorCount: event.extra?.survivorCount,
+          },
+        ]
+      : [],
+  );
+}
+
+function settledStates(log: BufferedServerLogSink, runId: string): readonly unknown[] {
+  return log.events.flatMap((event) =>
+    event.op === "coding-runtime.run.settled" && event.extra?.runId === runId
+      ? [event.extra.state]
+      : [],
+  );
+}
+
+function orderedSubsequence(values: readonly string[], expected: readonly string[]): boolean {
+  let next = 0;
+  for (const value of values) if (value === expected[next]) next += 1;
+  return next === expected.length;
+}
+
+function processTable(): readonly ProcessRow[] {
+  return execFileSync("/bin/ps", ["-axo", "pid=,ppid=,command="], { encoding: "utf8" })
+    .split("\n")
+    .flatMap((line) => {
+      const match = /^\s*(\d+)\s+(\d+)\s+(.*)$/u.exec(line);
+      return match === null
+        ? []
+        : [{ pid: Number(match[1]), ppid: Number(match[2]), command: match[3] ?? "" }];
+    });
+}
+
+/** The original services this server process owns right now. */
+function services(): readonly ProcessRow[] {
+  return processTable().filter(
+    (row) => row.ppid === process.pid && row.command.includes(SERVICE_COMMAND),
+  );
+}
+
+function onlyService(): ProcessRow {
+  const owned = services();
+  expect(owned).toHaveLength(1);
+  const [service] = owned;
+  if (service === undefined) throw new Error("expected-one-original-service");
+  return service;
+}
+
+function onlyProcess(command: string): ProcessRow {
+  const matching = processTable().filter((row) => row.command === command);
+  expect(matching).toHaveLength(1);
+  const [row] = matching;
+  if (row === undefined) throw new Error("expected-one-process");
+  return row;
+}
+
+function childCommands(pid: number): readonly string[] {
+  return processTable()
+    .filter((row) => row.ppid === pid)
+    .map((row) => row.command);
+}
+
+function lsofNames(args: readonly string[]): readonly string[] {
+  return execFileSync("/usr/sbin/lsof", [...args, "-Fn"], { encoding: "utf8" })
+    .split("\n")
+    .filter((line) => line.startsWith("n"))
+    .map((line) => line.slice(1));
+}
+
+function listeningAddresses(pid: number): readonly string[] {
+  return lsofNames(["-a", "-nP", "-p", String(pid), "-iTCP", "-sTCP:LISTEN"]);
+}
+
+function processDirectory(pid: number): string {
+  const [directory] = lsofNames(["-a", "-p", String(pid), "-d", "cwd"]);
+  if (directory === undefined) throw new Error("expected-process-directory");
+  return directory;
+}
+
+// Only Keiko holds the run's password: the service answers nothing without it, with a wrong one,
+// or for a state-changing request.
+async function expectRefusedWithoutTheRunPassword(origin: string): Promise<void> {
+  const wrong = `Basic ${Buffer.from("opencode:not-the-run-password").toString("base64")}`;
+  const statuses = [
+    (await fetch(`${origin}/api/info`)).status,
+    (await fetch(`${origin}/api/info`, { headers: { Authorization: wrong } })).status,
+    (await fetch(`${origin}/api/session`, { method: "POST", body: "{}" })).status,
+  ];
+  expect(statuses).toEqual([401, 401, 401]);
+}
+
+async function expectServiceTreeReaped(service: ProcessRow): Promise<void> {
+  await vi.waitFor(
+    () => {
+      const live = processTable();
+      expect(live.filter((row) => row.pid === service.pid || row.ppid === service.pid)).toEqual([]);
+      expect(
+        live.filter(
+          (row) =>
+            row.command === FUNCTIONAL_LIFECYCLE_BACKGROUND_COMMAND ||
+            row.command === FUNCTIONAL_LIFECYCLE_FOREGROUND_COMMAND,
+        ),
+      ).toEqual([]);
+    },
+    { timeout: 20_000, interval: 200 },
+  );
+}
+
+/** Kills the first original service this process starts, the moment it appears. */
+async function killServiceOnSpawn(): Promise<ProcessRow> {
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
+    const [service] = services();
+    if (service !== undefined) {
+      process.kill(service.pid, "SIGKILL");
+      return service;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error("original-service-never-started");
 }

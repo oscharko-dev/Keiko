@@ -19,6 +19,7 @@ import {
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
 
+import { RuntimeDescendantTracker, type ProcessIdentity } from "./darwinRuntimeDescendants.js";
 import {
   createDevLaneRuntimeProcessBackend as createProductionDevLaneRuntimeProcessBackend,
   type DevLaneRuntimeChildProcess,
@@ -557,6 +558,105 @@ describe("dev-lane runtime process backend", () => {
   });
 
   // The activity line exposes the bounded child-executable policy without logging either path.
+  // #3899 AC2: the original service starts its shell children in their own process groups, so a
+  // crashed service's children outlive the group kill unless the recorded descendants are ended.
+  describe("macOS descendants of the service", () => {
+    function descendantBackend(
+      rows: ProcessIdentity[],
+      keep: (pid: number) => boolean,
+    ): {
+      readonly backend: RuntimeProcessBackend;
+      readonly child: FakeChild;
+      readonly signals: number[];
+      readonly fixture: Fixture;
+    } {
+      const fixture = stageFixture();
+      const child = fakeChild(4711);
+      const signals: number[] = [];
+      const backend = createDevLaneRuntimeProcessBackend({
+        identity: IDENTITY,
+        gatewayConfinement: gatewayConfinement(),
+        runtimeRoot: fixture.runtimeRoot,
+        spawnRuntime: () => child,
+        killProcessGroup: () => undefined,
+        trackDescendants: (options) =>
+          new RuntimeDescendantTracker({
+            ...options,
+            list: (): Promise<readonly ProcessIdentity[]> => Promise.resolve([...rows]),
+            signal: (pid): void => {
+              signals.push(pid);
+              if (!keep(pid))
+                rows.splice(
+                  rows.findIndex((row) => row.pid === pid),
+                  1,
+                );
+            },
+            sampleIntervalMs: 2,
+            settleMs: 1,
+          }),
+      });
+      return { backend, child, signals, fixture };
+    }
+
+    async function crash(
+      rows: ProcessIdentity[],
+      keep: (pid: number) => boolean,
+    ): Promise<{ readonly complete: boolean; readonly signals: readonly number[] }> {
+      const { backend, child, signals, fixture } = descendantBackend(rows, keep);
+      const tree = backend.spawnOwnedTree(launchRequest(fixture), SANDBOX);
+      // Let the record sample the running service's child once.
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      rows.splice(0, rows.length, { pid: 4800, ppid: 1, started: "T1" });
+      const wait = backend.waitForCompleteTreeExit(tree, 5_000);
+      child.settle(null);
+      return { complete: await wait, signals };
+    }
+
+    it("ends the recorded child of a crashed service before the tree counts as ended", async () => {
+      const rows = [
+        { pid: 4711, ppid: 1, started: "T0" },
+        { pid: 4800, ppid: 4711, started: "T1" },
+      ];
+      await expect(crash(rows, () => false)).resolves.toEqual({ complete: true, signals: [4800] });
+    });
+
+    it("keeps the tree unproven while a recorded child survives every round", async () => {
+      const rows = [
+        { pid: 4711, ppid: 1, started: "T0" },
+        { pid: 4800, ppid: 4711, started: "T1" },
+      ];
+      const result = await crash(rows, () => true);
+      expect(result.complete).toBe(false);
+      expect(new Set(result.signals)).toEqual(new Set([4800]));
+    });
+
+    it("never records a Linux tree, whose namespace launcher owns its own descendants", () => {
+      const fixture = stageFixture();
+      const trackDescendants = vi.fn();
+      const backend = createProductionDevLaneRuntimeProcessBackend({
+        identity: LINUX_IDENTITY,
+        gatewayConfinement: gatewayConfinement(),
+        runtimeRoot: fixture.runtimeRoot,
+        platform: "linux",
+        probeAvailability: () => ({
+          bubblewrap: true,
+          unshare: true,
+          seatbelt: false,
+          docker: false,
+          podman: false,
+        }),
+        spawnRuntime: () => fakeChild(4711, true),
+        killProcessGroup: () => undefined,
+        trackDescendants,
+      });
+      backend.spawnOwnedTree({
+        ...launchRequest(fixture),
+        qualification: { ...LINUX_IDENTITY, releaseReceipt: `sha256:${"0".repeat(64)}` },
+      });
+      expect(trackDescendants).not.toHaveBeenCalled();
+    });
+  });
+
   it("records the runtime-and-attested-git executable boundary (#3390)", () => {
     const fixture = stageFixture();
     const activityLog = createBufferedServerLogSink();

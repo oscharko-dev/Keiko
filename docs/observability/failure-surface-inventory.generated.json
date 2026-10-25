@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "5ae0184f48dd5983923d8a079ce87deade4957fd1bdbd06bffd6cbcb24c7d49e"
+    "catalogDigest": "2e27d29c245aa611d8667f2a46f7cb1f02a4d21a6576fb2c2136f8a0bff49622"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -59,10 +59,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 587,
-    "proofCount": 600,
-    "resolvedProofCount": 600,
-    "failureClassCount": 368,
+    "operationCount": 588,
+    "proofCount": 601,
+    "resolvedProofCount": 601,
+    "failureClassCount": 369,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -320,6 +320,7 @@
         "coding-runtime.commands.listed",
         "coding-runtime.compaction",
         "coding-runtime.context-usage.observed",
+        "coding-runtime.descendants.swept",
         "coding-runtime.description",
         "coding-runtime.description-authority",
         "coding-runtime.dev-lane.activated",
@@ -844,6 +845,7 @@
     "coding-runtime-remote-skills": ["tools-workflows.dependency-failure"],
     "coding-runtime-mcp-credentials": ["tools-workflows.dependency-failure"],
     "coding-runtime-mcp-relay": ["tools-workflows.dependency-failure"],
+    "coding-runtime-descendant-sweep": ["tools-workflows.dependency-failure"],
     "coding-runtime-mcp-authorization": ["tools-workflows.dependency-failure"],
     "mcp-oauth-issuer": ["tools-workflows.dependency-failure"],
     "coding-runtime-question-authority": ["tools-workflows.dependency-failure"],
@@ -1432,6 +1434,9 @@
     ],
     "coding-runtime.context-usage.observed.emitted-line": [
       "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.test.ts"
+    ],
+    "coding-runtime.descendants.swept.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.test.ts"
     ],
     "coding-runtime.description.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.test.ts"

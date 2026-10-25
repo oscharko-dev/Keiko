@@ -102,6 +102,7 @@
   "coding-runtime.commands.listed": "tools-workflows",
   "coding-runtime.compaction": "tools-workflows",
   "coding-runtime.context-usage.observed": "tools-workflows",
+  "coding-runtime.descendants.swept": "tools-workflows",
   "coding-runtime.description": "tools-workflows",
   "coding-runtime.description-authority": "tools-workflows",
   "coding-runtime.dev-lane.activated": "tools-workflows",

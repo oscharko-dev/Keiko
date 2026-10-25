@@ -79,7 +79,14 @@ export const FUNCTIONAL_PLAN_STEP_READ = "PLAN_STEP_READ_2480";
 export const FUNCTIONAL_PLAN_STEP_VERIFY = "PLAN_STEP_VERIFY_2480";
 
 export interface ScriptState {
-  mode: "productive" | "productive-search" | "out-of-scope" | "discovery" | "research";
+  mode:
+    | "productive"
+    | "productive-search"
+    | "out-of-scope"
+    | "discovery"
+    | "research"
+    | "lifecycle"
+    | "lifecycle-continue";
   calls: number;
   readonly old: string;
   readonly next: string;
@@ -284,15 +291,28 @@ export interface FunctionalBffDepsInput {
 }
 
 /**
+ * Hermetic state for one composed server: its directories and the fixture provider profile as the
+ * server's own gateway configuration file, which `buildUiHandlerDeps` loads like any other.
+ */
+function prepareFunctionalState(stateRoot: string): void {
+  for (const dir of ["state", "ui-db", "evidence"]) {
+    mkdirSync(join(stateRoot, dir), { recursive: true, mode: 0o700 });
+  }
+  writeFileSync(
+    join(stateRoot, "ui-db", "keiko.config.json"),
+    `${JSON.stringify(functionalGatewayConfig(), null, 2)}\n`,
+    { encoding: "utf8", mode: 0o600 },
+  );
+}
+
+/**
  * Boots the real BFF dependency composition (`buildUiHandlerDeps`) against hermetic tmp state and
- * replaces exactly two seams: the gateway config (fixture profile) and the OpenAI-compatible chat
- * factories (scripted model). Everything else — routes, control plane, orchestrator, evidence,
- * stores — is the production wiring.
+ * replaces exactly two seams: the provider transport of the readiness probes and the
+ * OpenAI-compatible chat factories (scripted model). Everything else — gateway configuration,
+ * routes, control plane, orchestrator, evidence, stores — is the production wiring.
  */
 export function functionalBffDeps(input: FunctionalBffDepsInput): UiHandlerDeps {
-  for (const dir of ["state", "ui-db", "evidence"]) {
-    mkdirSync(join(input.stateRoot, dir), { recursive: true, mode: 0o700 });
-  }
+  prepareFunctionalState(input.stateRoot);
   const deps = buildUiHandlerDeps({
     configPath: undefined,
     evidenceDir: join(input.stateRoot, "evidence"),
@@ -301,6 +321,7 @@ export function functionalBffDeps(input: FunctionalBffDepsInput): UiHandlerDeps 
       KEIKO_STATE_DIR: join(input.stateRoot, "state"),
     },
     uiDbPath: join(input.stateRoot, "ui-db", "keiko-ui.db"),
+    gatewayReadinessFetch: functionalReadinessFetch,
     workspaceLifecycle: input.workspaceLifecycle,
     codingRuntimeResolver: input.codingRuntimeResolver,
     codingRuntimeDeploymentCeiling: "autonomous-delivery",
@@ -338,14 +359,7 @@ export interface DiscoveryBffDepsInput {
  * the model seam (scripted gateway responses) and the task-workspace fixture are replaced.
  */
 export function productionDiscoveryBffDeps(input: DiscoveryBffDepsInput): UiHandlerDeps {
-  for (const dir of ["state", "ui-db", "evidence"]) {
-    mkdirSync(join(input.stateRoot, dir), { recursive: true, mode: 0o700 });
-  }
-  writeFileSync(
-    join(input.stateRoot, "ui-db", "keiko.config.json"),
-    `${JSON.stringify(functionalGatewayConfig(), null, 2)}\n`,
-    { encoding: "utf8", mode: 0o600 },
-  );
+  prepareFunctionalState(input.stateRoot);
   const env: NodeJS.ProcessEnv = {
     PATH: process.env.PATH ?? "",
     KEIKO_STATE_DIR: join(input.stateRoot, "state"),
@@ -361,6 +375,7 @@ export function productionDiscoveryBffDeps(input: DiscoveryBffDepsInput): UiHand
     evidenceDir: join(input.stateRoot, "evidence"),
     env,
     uiDbPath: join(input.stateRoot, "ui-db", "keiko-ui.db"),
+    gatewayReadinessFetch: functionalReadinessFetch,
     ...(input.store === undefined ? {} : { store: input.store }),
     ...(input.codingRuntimeSnapshotStore === undefined
       ? {}
@@ -392,11 +407,11 @@ function withScriptedModelSeams(
     observeGatewayRequest?.(request);
     return Promise.resolve(scriptedResponse(script, scriptedTranscript(request)));
   };
+  // The configuration stays the composed server's own: it loaded the same file, and its runtime
+  // holder carries the readiness probe's fresh evidence that admits a new run (ADR-0171). Replacing
+  // either with a copy leaves that evidence unreadable, and the Workbench would wait forever.
   return {
     ...deps,
-    config: functionalGatewayConfig(),
-    configPresent: true,
-    gatewayConfig: undefined,
     codingSidecarGatewayChatFactory: () => chat,
     codingSidecarGatewayChatStreamFactory: () =>
       async function* (request: GatewayRequest): AsyncIterable<GatewayStreamChunk> {
@@ -727,6 +742,8 @@ function scriptedResponseFor(script: ScriptState, transcript: string): Normalize
   if (script.mode === "productive-search")
     return productiveSearchResponse(step, script, transcript);
   if (script.mode === "research") return researchScriptedResponse(step, transcript, script);
+  if (script.mode === "lifecycle" || script.mode === "lifecycle-continue")
+    return lifecycleResponse(script, transcript);
   if (script.mode === "out-of-scope") {
     return step === 0
       ? tool("keiko_changeset_edit", {
@@ -756,6 +773,37 @@ function scriptedResponseFor(script: ScriptState, transcript: string): Normalize
     return step === 1 ? tool("question", question()) : normal();
   }
   return productiveResponse(step, script);
+}
+
+/** The background child a lifecycle turn starts through the runtime's own shell tool. */
+export const FUNCTIONAL_LIFECYCLE_BACKGROUND_COMMAND = "sleep 3899.2";
+/** The foreground child that keeps a lifecycle turn busy until it is cancelled or killed. */
+export const FUNCTIONAL_LIFECYCLE_FOREGROUND_COMMAND = "sleep 3899.1";
+const TITLE_GENERATION_PREFIX = "Generate a title for this conversation:";
+
+// #3899 AC2: one background and one foreground child of the original service, so cancellation,
+// a crash and shutdown each have a live process tree to reap. A continued task answers plainly.
+// The runtime's own title request carries no tools and never advances the turn.
+function lifecycleResponse(script: ScriptState, transcript: string): NormalizedResponse {
+  if (script.mode === "lifecycle-continue" || transcript.includes(TITLE_GENERATION_PREFIX))
+    return normal();
+  const replies = toolReplyCount(transcript);
+  if (replies === 0)
+    return tool("shell", { command: FUNCTIONAL_LIFECYCLE_BACKGROUND_COMMAND, background: true });
+  return replies === 1
+    ? tool("shell", { command: FUNCTIONAL_LIFECYCLE_FOREGROUND_COMMAND, timeout: 0 })
+    : normal();
+}
+
+function toolReplyCount(transcript: string): number {
+  const messages: unknown = transcript === "" ? [] : JSON.parse(transcript);
+  if (!Array.isArray(messages)) return 0;
+  return messages.filter(
+    (message: unknown) =>
+      typeof message === "object" &&
+      message !== null &&
+      (message as { readonly role?: unknown }).role === "tool",
+  ).length;
 }
 
 function productiveResponse(step: number, script: ScriptState): NormalizedResponse {
@@ -885,7 +933,8 @@ function tool(
     | "keiko_skill_discover"
     | "keiko_skill"
     | "keiko_child_agent"
-    | "question",
+    | "question"
+    | "shell",
   args: Record<string, unknown>,
   callId?: string,
 ): NormalizedResponse {
@@ -900,10 +949,32 @@ function tool(
   };
 }
 
+const FUNCTIONAL_PROVIDER_ORIGIN = "https://provider.invalid";
+
+/**
+ * The provider transport of the gateway's readiness probes. A new run is admitted only after a
+ * fresh basic-chat success (ADR-0171), and that probe calls the provider directly, past the
+ * scripted chat seam; the fixture provider answers it the way a working endpoint would. Any other
+ * destination fails like an unreachable host, so the probe can never pass for a different provider.
+ */
+function functionalReadinessFetch(input: string | URL | Request): Promise<Response> {
+  const url = new URL(input instanceof Request ? input.url : input);
+  if (url.origin !== FUNCTIONAL_PROVIDER_ORIGIN)
+    return Promise.reject(new TypeError("functional-readiness-destination-unknown"));
+  return Promise.resolve(
+    Response.json({
+      id: "chatcmpl-functional-readiness",
+      object: "chat.completion",
+      choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: "OK" } }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    }),
+  );
+}
+
 export function functionalGatewayConfig(): GatewayConfig {
   const provider = {
     modelId: "functional-model",
-    baseUrl: "https://provider.invalid/v1",
+    baseUrl: `${FUNCTIONAL_PROVIDER_ORIGIN}/v1`,
     apiKey: "functional-provider-secret",
     apiKeyHeaderName: "api-key",
     endpointStyle: "azure-openai-deployment" as const,

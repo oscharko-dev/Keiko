@@ -1,6 +1,7 @@
-import { spawn, type StdioOptions } from "node:child_process";
+import { execFile, spawn, type StdioOptions } from "node:child_process";
 import { dirname } from "node:path";
 import { Readable, Writable } from "node:stream";
+import { promisify } from "node:util";
 import {
   copyRuntimeGatewayConfinement,
   currentPlatform,
@@ -23,6 +24,13 @@ import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import { processServerLogSink } from "../process-log-sink.js";
 import { createCodingRuntimeLineParser } from "./codingRuntimeProcessIo.js";
+import {
+  parseProcessListing,
+  RuntimeDescendantTracker,
+  type DescendantSweep,
+  type DescendantTrackerOptions,
+  type ProcessIdentity,
+} from "./darwinRuntimeDescendants.js";
 import {
   RUNTIME_CONFINEMENT_FAILED_OPERATION,
   RUNTIME_CONFINEMENT_UNAVAILABLE_OPERATION,
@@ -104,6 +112,13 @@ export interface DevLaneRuntimeProcessBackendOptions {
   readonly platform?: NodeJS.Platform | undefined;
   /** Test seam; production resolves and attests one developer-tool Git executable per launch. */
   readonly resolveGitExecutable?: (() => AttestedDarwinGitExecutable) | undefined;
+  /**
+   * Test seam for the macOS descendant record and sweep. By default it reads the host's process
+   * table, but only for children this backend really spawned: a substituted spawn has no real
+   * process tree, and its fake PIDs must never be matched against the host's processes.
+   */
+  readonly trackDescendants?:
+    ((options: DescendantTrackerOptions) => RuntimeDescendantTracker) | undefined;
 }
 
 interface DevLaneTree extends RuntimeProcessTree {
@@ -113,6 +128,8 @@ interface DevLaneTree extends RuntimeProcessTree {
   reapUncertain: boolean;
   exited: boolean;
   exitCode: number | null;
+  /** macOS: the service's descendants, ended once it has exited (darwinRuntimeDescendants.ts). */
+  descendants?: RuntimeDescendantTracker;
 }
 
 type DevLaneLaunchPhase =
@@ -139,7 +156,25 @@ export function createDevLaneRuntimeProcessBackend(
     options.probeAvailability ?? probeBackends,
     options.platform ?? currentPlatform(),
     options.resolveGitExecutable ?? resolveDarwinGitExecutable,
+    options.trackDescendants ??
+      (options.spawnRuntime === undefined
+        ? (tracker): RuntimeDescendantTracker => new RuntimeDescendantTracker(tracker)
+        : undefined),
   );
+}
+
+const execFileAsync = promisify(execFile);
+const PS_PATH = "/bin/ps";
+const PS_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
+
+/** The host's process table as the same user sees it, locale-independent (macOS `ps`). */
+async function listDarwinProcesses(): Promise<readonly ProcessIdentity[]> {
+  const { stdout } = await execFileAsync(PS_PATH, ["-axo", "pid=,ppid=,lstart="], {
+    encoding: "utf8",
+    env: { LC_ALL: "C" },
+    maxBuffer: PS_MAX_BUFFER_BYTES,
+  });
+  return parseProcessListing(stdout);
 }
 
 class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
@@ -156,6 +191,8 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
     private readonly probeAvailability: () => BackendAvailability,
     private readonly platform: NodeJS.Platform,
     private readonly resolveGitExecutable: () => AttestedDarwinGitExecutable,
+    private readonly createDescendantTracker:
+      ((options: DescendantTrackerOptions) => RuntimeDescendantTracker) | undefined,
   ) {}
 
   public get supportsStdinLifetime(): true | undefined {
@@ -212,6 +249,7 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
       },
     );
     this.ownedTrees.add(tree);
+    this.trackDescendants(tree, request.runId);
     return tree;
   }
 
@@ -265,7 +303,30 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
       },
     );
     this.ownedTrees.add(tree);
+    this.trackDescendants(tree, request.runId);
     return tree;
+  }
+
+  // macOS only: Linux's namespace launcher owns its own tree, and its exit is the proof it gives.
+  private trackDescendants(tree: DevLaneTree, runId: string): void {
+    const rootPid = tree.child.pid;
+    if (
+      this.identity.platform !== "darwin" ||
+      rootPid === undefined ||
+      this.createDescendantTracker === undefined
+    )
+      return;
+    const tracker = this.createDescendantTracker({
+      rootPid,
+      runId,
+      activityLog: this.activityLog,
+      list: listDarwinProcesses,
+    });
+    tree.descendants = tracker;
+    tracker.start();
+    tree.onTreeExit(() => {
+      void tracker.sweep();
+    });
   }
 
   private attestedGit(
@@ -316,25 +377,37 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
     owned.child.kill(posixSignal);
   }
 
+  // Ownership is refused synchronously, before any waiting starts.
   public waitForCompleteTreeExit(tree: RuntimeProcessTree, timeoutMs: number): Promise<boolean> {
-    const owned = this.ownedTree(tree);
-    if (owned.exited) return Promise.resolve(this.completedTreeExit(owned));
-    return new Promise<boolean>((resolve) => {
+    return this.completeTreeExit(this.ownedTree(tree), timeoutMs);
+  }
+
+  public reconcileTreeExit(tree: RuntimeProcessTree): Promise<boolean> {
+    return this.completeTreeExit(this.ownedTree(tree), 0);
+  }
+
+  private async completeTreeExit(tree: DevLaneTree, timeoutMs: number): Promise<boolean> {
+    const deadline = performance.now() + timeoutMs;
+    if (!tree.exited && timeoutMs > 0) await this.rootExit(tree, timeoutMs);
+    if (!this.completedTreeExit(tree)) return false;
+    // Reconciliation answers for an exited tree: its sweep is awaited to its own end.
+    const remaining = timeoutMs > 0 ? deadline - performance.now() : Number.POSITIVE_INFINITY;
+    return descendantsEnded(await sweepWithin(tree, remaining));
+  }
+
+  private rootExit(tree: DevLaneTree, timeoutMs: number): Promise<void> {
+    return new Promise<void>((resolve) => {
       const timeout = setTimeout(() => {
-        owned.exits.delete(onExit);
-        resolve(this.completedTreeExit(owned));
+        tree.exits.delete(onExit);
+        resolve();
       }, timeoutMs);
       timeout.unref();
       const onExit = (): void => {
         clearTimeout(timeout);
-        resolve(this.completedTreeExit(owned));
+        resolve();
       };
-      owned.exits.add(onExit);
+      tree.exits.add(onExit);
     });
-  }
-
-  public reconcileTreeExit(tree: RuntimeProcessTree): Promise<boolean> {
-    return Promise.resolve(this.completedTreeExit(this.ownedTree(tree)));
   }
 
   private completedTreeExit(tree: DevLaneTree): boolean {
@@ -348,6 +421,36 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
     if (!this.ownedTrees.has(tree)) throw new Error("dev-lane-runtime-tree-not-owned");
     return tree as DevLaneTree;
   }
+}
+
+/** The tree's sweep, or undefined while it is still running at the deadline or never ran. */
+function sweepWithin(
+  tree: DevLaneTree,
+  remainingMs: number,
+): Promise<DescendantSweep | "untracked" | undefined> {
+  if (tree.descendants === undefined) return Promise.resolve("untracked");
+  if (!tree.exited) return Promise.resolve(undefined);
+  const sweep = tree.descendants.sweep();
+  if (!Number.isFinite(remainingMs)) return sweep;
+  return new Promise((resolve) => {
+    const timeout = setTimeout(
+      () => {
+        resolve(undefined);
+      },
+      Math.max(0, remainingMs),
+    );
+    timeout.unref();
+    void sweep.then((result) => {
+      clearTimeout(timeout);
+      resolve(result);
+    });
+  });
+}
+
+// A process the sweep could not end, or a listing it could not take, leaves the tree unproven.
+function descendantsEnded(sweep: DescendantSweep | "untracked" | undefined): boolean {
+  if (sweep === "untracked") return true;
+  return sweep !== undefined && sweep.outcome !== "listing-failed" && sweep.survivorCount === 0;
 }
 
 function resolveLaunchPaths(

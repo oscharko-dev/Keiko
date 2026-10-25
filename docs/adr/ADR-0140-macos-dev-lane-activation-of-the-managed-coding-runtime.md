@@ -130,6 +130,17 @@ only for the direct child; Windows uses its native Job Object supervisor. Neithe
 a platform signature chain (digest pinning replaces Developer ID/notarization or Authenticode
 evidence).
 
+The original service starts each shell child in its own process group, so the group signal ends
+only the service; on a graceful stop the service ends its own children, but a crashed service
+cannot (#3899 AC2). The macOS backend therefore records the service's descendants by PID and start
+time twice a second while it runs, and once it has exited ends every recorded process that is
+still the same process, together with its descendants (SIGTERM, then SIGKILL, in bounded rounds).
+A recorded process that survives every round, or a process listing the sweep cannot take, leaves
+the tree unended, so the manager reports `runtime-reap-unproven` instead of a stopped runtime.
+`coding-runtime.descendants.swept` records the outcome and the tracked, signalled and surviving
+counts. This is cleanup, not proof: a child forked after the last sample and orphaned before the
+sweep is not seen; only the Endpoint Security monitor of ADR-0163 D4 observes every fork.
+
 ### D4 — Honest, content-free unavailability reasons
 
 The readiness projection names the first failed activation prerequisite through a closed,

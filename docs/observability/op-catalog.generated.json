@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "5ae0184f48dd5983923d8a079ce87deade4957fd1bdbd06bffd6cbcb24c7d49e",
+    "catalogDigest": "2e27d29c245aa611d8667f2a46f7cb1f02a4d21a6576fb2c2136f8a0bff49622",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -6936,6 +6936,90 @@
         "emitterSites": [
           "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:1496"
         ]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "coding-runtime.descendants.swept",
+        "category": "process",
+        "owner": "keiko-server",
+        "emitter": "coding-runtime.darwinRuntimeDescendants.recordDescendantSweep",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "outcome": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["clean", "reaped", "survivors", "listing-failed"]
+          },
+          "trackedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "signalledCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "survivorCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "failedSampleCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "refusedSignalCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "durationMs": {
+            "type": "integer",
+            "dataClass": "duration",
+            "required": true
+          },
+          "frames": {
+            "type": "string-array",
+            "dataClass": "opaque-id",
+            "required": false,
+            "maxLength": 512,
+            "maxItems": 8
+          },
+          "causeChain": {
+            "type": "string-array",
+            "dataClass": "error-kind",
+            "required": false,
+            "maxLength": 128,
+            "maxItems": 5
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "process-lifecycle",
+        "diagnosticWhen": [
+          {
+            "field": "outcome",
+            "values": ["survivors", "listing-failed"]
+          }
+        ],
+        "failureClasses": ["coding-runtime-descendant-sweep"],
+        "proofIds": ["coding-runtime.descendants.swept.emitted-line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.ts:57",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.ts:276"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -31736,8 +31820,8 @@
         },
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeActivityOperations.ts:181",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:414",
-          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:486",
+          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:517",
+          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:589",
           "packages/keiko-server/src/coding-runtime/nativeRuntimeProcessBackend.ts:255"
         ]
       },
@@ -31915,7 +31999,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeActivityOperations.ts:188",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:462",
+          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:565",
           "packages/keiko-server/src/coding-runtime/nativeRuntimeProcessBackend.ts:281"
         ]
       },
@@ -43500,6 +43584,35 @@
       {
         "contractKind": "activity-log-failure-class",
         "schemaVersion": 1,
+        "failureClass": "coding-runtime-descendant-sweep",
+        "requiredProductSurfaces": ["keiko-server"],
+        "requiredLifecycleOperations": {
+          "start": [],
+          "state": ["coding-runtime.descendants.swept"],
+          "end": [],
+          "failure": [],
+          "loss": []
+        },
+        "requiredCausalOperations": ["coding-runtime.descendants.swept"],
+        "requiredLossOperations": [],
+        "requiredProofOperations": ["coding-runtime.descendants.swept"],
+        "requiredReplayProofIds": [],
+        "requiredResourceOperations": ["coding-runtime.descendants.swept"],
+        "requiredEvidenceClasses": [
+          "closed-enum",
+          "completeness-state",
+          "count",
+          "duration",
+          "error-kind",
+          "loss-state",
+          "opaque-id"
+        ],
+        "requiredFrameOperations": ["coding-runtime.descendants.swept"],
+        "requiredCauseOperations": ["coding-runtime.descendants.swept"]
+      },
+      {
+        "contractKind": "activity-log-failure-class",
+        "schemaVersion": 1,
         "failureClass": "coding-runtime-mcp-authorization",
         "requiredProductSurfaces": ["keiko-server"],
         "requiredLifecycleOperations": {
@@ -51655,8 +51768,8 @@
     "failureClassCoverage": {
       "schemaVersion": 1,
       "releaseExpectation": "100%-complete",
-      "supportedClassCount": 368,
-      "completeClassCount": 368,
+      "supportedClassCount": 369,
+      "completeClassCount": 369,
       "completeness": "complete",
       "classes": [
         {
@@ -59460,6 +59573,112 @@
                 "causeChain": false
               },
               "proofIds": ["coding-runtime.run.delivery-unevidenced.emitted-line"],
+              "replayReferences": [],
+              "missingObligations": []
+            }
+          ],
+          "missingObligations": [],
+          "completeness": "complete"
+        },
+        {
+          "failureClass": "coding-runtime-descendant-sweep",
+          "requirementContract": "coding-runtime-descendant-sweep",
+          "productSurfaces": ["keiko-server"],
+          "lifecycleTransitions": ["state"],
+          "lifecycleOperations": {
+            "start": [],
+            "state": ["coding-runtime.descendants.swept"],
+            "end": [],
+            "failure": [],
+            "loss": []
+          },
+          "causalEdges": [
+            {
+              "op": "coding-runtime.descendants.swept",
+              "mode": "correlation"
+            }
+          ],
+          "lossSignals": [],
+          "resourceSignals": ["coding-runtime.descendants.swept"],
+          "replayReferences": [],
+          "operations": [
+            {
+              "op": "coding-runtime.descendants.swept",
+              "owner": "keiko-server",
+              "category": "process",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "process-lifecycle",
+              "safeContextFields": [
+                {
+                  "name": "causeChain",
+                  "type": "string-array",
+                  "dataClass": "error-kind",
+                  "required": false
+                },
+                {
+                  "name": "durationMs",
+                  "type": "integer",
+                  "dataClass": "duration",
+                  "required": true
+                },
+                {
+                  "name": "failedSampleCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "frames",
+                  "type": "string-array",
+                  "dataClass": "opaque-id",
+                  "required": false
+                },
+                {
+                  "name": "outcome",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "refusedSignalCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "signalledCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "survivorCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "trackedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": [
+                "closed-enum",
+                "completeness-state",
+                "count",
+                "duration",
+                "error-kind",
+                "loss-state",
+                "opaque-id"
+              ],
+              "frameCauseEvidence": {
+                "frames": true,
+                "causeChain": true
+              },
+              "proofIds": ["coding-runtime.descendants.swept.emitted-line"],
               "replayReferences": [],
               "missingObligations": []
             }
@@ -100337,6 +100556,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "coding-runtime.descendants.swept",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.ts:60",
+      "package": "keiko-server"
+    },
+    {
       "op": "coding-runtime.description",
       "category": "process",
       "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:922",
@@ -100420,7 +100645,7 @@
     {
       "op": "coding-runtime.functional-workspace-read",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.functional/_support.ts:468",
+      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.functional/_support.ts:483",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -103438,6 +103663,7 @@
     "coding-runtime.commands.listed",
     "coding-runtime.compaction",
     "coding-runtime.context-usage.observed",
+    "coding-runtime.descendants.swept",
     "coding-runtime.description",
     "coding-runtime.description-authority",
     "coding-runtime.dev-lane.activated",
