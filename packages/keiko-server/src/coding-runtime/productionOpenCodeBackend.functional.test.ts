@@ -297,6 +297,7 @@ function devLaneDiscoveryFunctionalEnabled(): boolean {
 async function bootDiscoveryPipeline(
   fixture: FunctionalWorkspaceFixture,
   observeGatewayRequest?: (request: GatewayRequest) => void,
+  operatorEnv?: Readonly<Record<string, string>>,
 ): Promise<FunctionalPipeline> {
   const verification = createVerification(fixture.workspace);
   const port = await reserveLoopbackPort();
@@ -309,6 +310,7 @@ async function bootDiscoveryPipeline(
     script: fixture.script,
     uiPort: port,
     ...(observeGatewayRequest === undefined ? {} : { observeGatewayRequest }),
+    ...(operatorEnv === undefined ? {} : { operatorEnv }),
   });
   disposers.push(async () => {
     await deps.codingRuntimeOrchestrator?.shutdown();
@@ -1392,4 +1394,102 @@ async function killServiceOnSpawn(): Promise<ProcessRow> {
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
   throw new Error("original-service-never-started");
+}
+
+// #3901 AC4: the execution boundary as the run's own shell sees it, on the production path with
+// the original 2.1.4 in Full access. One probe reports what a command of the run can reach.
+const PROBE_SCRIPT = `#!/bin/sh
+foreign="$1"; state="$2"
+if ps -p "$foreign" -o pid= >/dev/null 2>&1; then echo probe.introspect=visible; else echo probe.introspect=hidden; fi
+if kill -0 "$foreign" 2>/dev/null; then echo probe.signal=allowed; else echo probe.signal=denied; fi
+if cat .env >/dev/null 2>&1; then echo probe.dotenv=readable; else echo probe.dotenv=denied; fi
+if cat "$state" >/dev/null 2>&1; then echo probe.state=readable; else echo probe.state=denied; fi
+echo "probe.secrets=$(env | grep -c -E '^(OPENCODE_SERVER_PASSWORD|KEIKO_MODEL_GATEWAY_CAPABILITY|KEIKO_TOOL_FACADE_CAPABILITY|OPENCODE_CONFIG_CONTENT)=')"
+echo "probe.openssl_conf=\${OPENSSL_CONF:-unset}"
+if [ -n "\${OPENSSL_CONF:-}" ] && cat "$OPENSSL_CONF" >/dev/null 2>&1; then echo probe.openssl_read=ok; else echo probe.openssl_read=denied; fi
+echo "probe.node_options=\${NODE_OPTIONS:-unset}"
+if node -e 'require("node:crypto").createHash("sha256")' >/dev/null 2>&1; then echo probe.node=ok; else echo probe.node=failed; fi
+echo probe.done=1
+`;
+
+describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
+  "original OpenCode execution boundary on macOS (#3901 AC4)",
+  () => {
+    it("hides foreign processes, sensitive files and run secrets, and keeps the operator's OpenSSL configuration", async () => {
+      const probe = await probeBoundary((opensslConf) => ({
+        OPENSSL_CONF: opensslConf,
+        NODE_OPTIONS: "--openssl-shared-config",
+      }));
+      expect(probe.facts).toEqual({
+        introspect: "hidden",
+        signal: "denied",
+        dotenv: "denied",
+        state: "denied",
+        secrets: "0",
+        openssl_conf: probe.opensslConf,
+        openssl_read: "ok",
+        node_options: "--openssl-shared-config",
+        node: "ok",
+      });
+      expect(probe.transcript).not.toContain("DOTENV_CANARY_3901");
+    }, 180_000);
+
+    it("keeps NODE_OPTIONS that carry anything besides OpenSSL and FIPS switches out of the run", async () => {
+      const probe = await probeBoundary(() => ({
+        NODE_OPTIONS: "--openssl-shared-config --max-old-space-size=64",
+      }));
+      expect(probe.facts).toMatchObject({
+        node_options: "unset",
+        openssl_conf: "unset",
+        node: "ok",
+      });
+    }, 180_000);
+  },
+);
+
+interface BoundaryProbe {
+  readonly facts: Readonly<Record<string, string>>;
+  readonly transcript: string;
+  readonly opensslConf: string;
+}
+
+async function probeBoundary(
+  operatorEnv: (opensslConf: string) => Readonly<Record<string, string>>,
+): Promise<BoundaryProbe> {
+  const fixture = await setupWorkspace(["bff-state", "ui-db", "task-workspaces"]);
+  writeFileSync(join(fixture.workspace, ".env"), "API_KEY=DOTENV_CANARY_3901\n");
+  writeFileSync(join(fixture.workspace, "probe.sh"), PROBE_SCRIPT, { mode: 0o755 });
+  const openssl = join(fixture.root, "openssl");
+  mkdirSync(openssl, { recursive: true });
+  const opensslConf = join(openssl, "openssl.cnf");
+  writeFileSync(opensslConf, "openssl_conf = openssl_init\n[openssl_init]\n");
+  const state = join(fixture.root, "bff-state", "ui-db", "keiko.config.json");
+  fixture.script.mode = "probe";
+  fixture.script.probeCommand = `sh ./probe.sh ${String(process.pid)} '${state}'`;
+  const transcripts: string[] = [];
+  const pipeline = await bootDiscoveryPipeline(
+    fixture,
+    (request) => {
+      transcripts.push(JSON.stringify(request.messages));
+    },
+    operatorEnv(opensslConf),
+  );
+  const runId = await startRun(pipeline, startBody("boundary-probe"));
+  await vi.waitFor(
+    () => {
+      expect(transcripts.join("\n")).toContain("probe.done=1");
+    },
+    { timeout: 60_000, interval: 200 },
+  );
+  await stopRun(pipeline.baseUrl, runId);
+  return { facts: probeFacts(transcripts), transcript: transcripts.join("\n"), opensslConf };
+}
+
+function probeFacts(transcripts: readonly string[]): Readonly<Record<string, string>> {
+  const facts: Record<string, string> = {};
+  for (const match of transcripts.join("\n").matchAll(/probe\.([a-z_]+)=([^\s"\\]+)/gu)) {
+    const [, key, value] = match;
+    if (key !== undefined && value !== undefined && key !== "done") facts[key] = value;
+  }
+  return facts;
 }

@@ -2,7 +2,12 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { nativeHomeDeniedReadRoots, nativeToolchainReadRoots } from "./native-toolchain-roots.js";
+import {
+  nativeHomeDeniedReadRoots,
+  nativeOpenSslNodeOptions,
+  nativeOpenSslReadRoots,
+  nativeToolchainReadRoots,
+} from "./native-toolchain-roots.js";
 
 describe("nativeToolchainReadRoots", () => {
   const created: string[] = [];
@@ -175,5 +180,85 @@ describe("nativeToolchainReadRoots", () => {
       .join(delimiter);
     expect(nativeToolchainReadRoots(path, "/Users/nobody")).toEqual([join(root, "a")]);
     expect(nativeToolchainReadRoots(undefined, "/Users/nobody")).toEqual([]);
+  });
+});
+
+// #3901 AC4: an operator's explicit OpenSSL configuration opens read-only, under the toolchain rule.
+describe("nativeOpenSslReadRoots", () => {
+  const created: string[] = [];
+  afterEach(() => {
+    for (const directory of created.splice(0)) rmSync(directory, { recursive: true, force: true });
+  });
+
+  function tree(): string {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-openssl-roots-")));
+    created.push(root);
+    return root;
+  }
+
+  it("opens the configuration's directory, its include directory and the modules", () => {
+    const root = tree();
+    mkdirSync(join(root, "ssl", "conf.d"), { recursive: true });
+    mkdirSync(join(root, "ossl-modules"), { recursive: true });
+    writeFileSync(join(root, "ssl", "openssl.cnf"), "");
+    symlinkSync(join(root, "ssl", "openssl.cnf"), join(root, "linked.cnf"));
+    expect(
+      nativeOpenSslReadRoots(
+        {
+          OPENSSL_CONF: join(root, "linked.cnf"),
+          OPENSSL_CONF_INCLUDE: join(root, "ssl", "conf.d"),
+          OPENSSL_MODULES: join(root, "ossl-modules"),
+        },
+        join(root, "home"),
+      ),
+    ).toEqual([join(root, "ossl-modules"), join(root, "ssl"), join(root, "ssl", "conf.d")]);
+  });
+
+  it("follows --openssl-config only in NODE_OPTIONS that is nothing but OpenSSL switches", () => {
+    const root = tree();
+    mkdirSync(join(root, "fips"), { recursive: true });
+    writeFileSync(join(root, "fips", "node.cnf"), "");
+    const config = `--openssl-config=${join(root, "fips", "node.cnf")}`;
+    const home = join(root, "home");
+    expect(nativeOpenSslReadRoots({ NODE_OPTIONS: `${config} --enable-fips` }, home)).toEqual([
+      join(root, "fips"),
+    ]);
+    expect(nativeOpenSslReadRoots({ NODE_OPTIONS: `${config} --require x.js` }, home)).toEqual([]);
+  });
+
+  it("never opens the home, a system prefix, a credential store, or a relative or missing path", () => {
+    const root = tree();
+    const home = join(root, "home");
+    mkdirSync(join(home, ".ssh"), { recursive: true });
+    writeFileSync(join(home, ".ssh", "openssl.cnf"), "");
+    writeFileSync(join(home, "openssl.cnf"), "");
+    expect(
+      nativeOpenSslReadRoots(
+        {
+          OPENSSL_CONF: join(home, "openssl.cnf"),
+          OPENSSL_CONF_INCLUDE: join(home, ".ssh"),
+          OPENSSL_MODULES: "/usr/lib",
+        },
+        home,
+      ),
+    ).toEqual([]);
+    expect(
+      nativeOpenSslReadRoots(
+        { OPENSSL_CONF: "relative.cnf", OPENSSL_MODULES: join(root, "missing") },
+        home,
+      ),
+    ).toEqual([]);
+    expect(nativeOpenSslReadRoots({}, home)).toEqual([]);
+  });
+
+  it("recognizes NODE_OPTIONS made only of Node's OpenSSL and FIPS switches", () => {
+    expect(nativeOpenSslNodeOptions("--openssl-shared-config")).toBe(true);
+    expect(nativeOpenSslNodeOptions(" --enable-fips  --openssl-config=/etc/ssl/fips.cnf ")).toBe(
+      true,
+    );
+    expect(nativeOpenSslNodeOptions("--force-fips --max-old-space-size=64")).toBe(false);
+    expect(nativeOpenSslNodeOptions("--require ./hook.js")).toBe(false);
+    expect(nativeOpenSslNodeOptions("")).toBe(false);
+    expect(nativeOpenSslNodeOptions(undefined)).toBe(false);
   });
 });

@@ -1960,7 +1960,13 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   disposition is part of the policy digest. The child inherits the launcher's allowlisted
   environment (`PATH`, locale, `TZ`, `TERM`, `SHELL`) with the attested Git directory first, so the
   agent's shell finds the project's toolchains the way it does standalone; the mapped profiles
-  still inherit nothing. The launch gate that keeps a host secret out of the child compares the
+  still inherit nothing. An operator's explicit OpenSSL and FIPS configuration is kept as a
+  standalone shell keeps it (#3901 AC4): `OPENSSL_CONF`, `OPENSSL_CONF_INCLUDE` and
+  `OPENSSL_MODULES` are inherited, `NODE_OPTIONS` only when it consists of Node's OpenSSL and FIPS
+  switches alone (`--openssl-*`, `--enable-fips`, `--force-fips`), and the directories they name
+  (the configuration file's directory, the include directory, the modules, an
+  `--openssl-config=` file's directory) open read-only through `nativeOpenSslReadRoots`, under the
+  toolchain root rule: never the user's home or above it, a system prefix or a credential store. The launch gate that keeps a host secret out of the child compares the
   child env (allowlisted non-secret names plus Keiko's own run projection) against the host values
   whose name says they carry a credential; comparing against every host value refused each
   Full-access run on a host that also exports the deployment ceiling, because the projected mode

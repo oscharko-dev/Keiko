@@ -86,7 +86,8 @@ export interface ScriptState {
     | "discovery"
     | "research"
     | "lifecycle"
-    | "lifecycle-continue";
+    | "lifecycle-continue"
+    | "probe";
   calls: number;
   readonly old: string;
   readonly next: string;
@@ -104,6 +105,8 @@ export interface ScriptState {
   readonly observeSkillDiscovery?: (proof: SkillDiscoveryConsumptionProof) => void;
   /** Keeps a completed verification turn cancellable for browser journeys that prove Stop. */
   readonly holdAfterVerification?: boolean;
+  /** The one shell command a `probe` turn runs through the runtime's own shell tool. */
+  probeCommand?: string;
   verificationIssued?: boolean;
 }
 
@@ -348,6 +351,8 @@ export interface DiscoveryBffDepsInput {
   readonly script: ScriptState;
   readonly uiPort: number;
   readonly launcherSessionSecret?: string | undefined;
+  /** The launcher environment an operator adds, e.g. an explicit OpenSSL configuration. */
+  readonly operatorEnv?: Readonly<Record<string, string>> | undefined;
   readonly observeGatewayRequest?: ((request: GatewayRequest) => void) | undefined;
 }
 
@@ -369,6 +374,7 @@ export function productionDiscoveryBffDeps(input: DiscoveryBffDepsInput): UiHand
     ...(input.launcherSessionSecret === undefined
       ? {}
       : { [SESSION_PAIRING_LAUNCHER_SECRET_ENV]: input.launcherSessionSecret }),
+    ...input.operatorEnv,
   };
   const deps = buildUiHandlerDeps({
     configPath: undefined,
@@ -742,8 +748,8 @@ function scriptedResponseFor(script: ScriptState, transcript: string): Normalize
   if (script.mode === "productive-search")
     return productiveSearchResponse(step, script, transcript);
   if (script.mode === "research") return researchScriptedResponse(step, transcript, script);
-  if (script.mode === "lifecycle" || script.mode === "lifecycle-continue")
-    return lifecycleResponse(script, transcript);
+  const driven = processResponse(script, transcript);
+  if (driven !== undefined) return driven;
   if (script.mode === "out-of-scope") {
     return step === 0
       ? tool("keiko_changeset_edit", {
@@ -799,6 +805,23 @@ function lifecycleResponse(script: ScriptState, transcript: string): NormalizedR
     });
   return replies === 2
     ? tool("shell", { command: FUNCTIONAL_LIFECYCLE_FOREGROUND_COMMAND, timeout: 0 })
+    : normal();
+}
+
+/** The modes that drive the runtime's own processes (#3899 AC2, #3901 AC3/AC4). */
+function processResponse(script: ScriptState, transcript: string): NormalizedResponse | undefined {
+  if (script.mode === "lifecycle" || script.mode === "lifecycle-continue")
+    return lifecycleResponse(script, transcript);
+  return script.mode === "probe" ? probeResponse(script, transcript) : undefined;
+}
+
+// #3901 AC4: one shell command observes the boundary from inside the run; its output returns to
+// the model, where the test reads it.
+function probeResponse(script: ScriptState, transcript: string): NormalizedResponse {
+  if (transcript.includes(TITLE_GENERATION_PREFIX) || script.probeCommand === undefined)
+    return normal();
+  return toolReplyCount(transcript) === 0
+    ? tool("shell", { command: script.probeCommand, timeout: 60_000 })
     : normal();
 }
 

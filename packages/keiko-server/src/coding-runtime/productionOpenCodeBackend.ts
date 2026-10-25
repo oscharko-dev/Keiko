@@ -21,6 +21,9 @@ import {
 import {
   createRuntimeGatewayConfinement,
   nativeHomeDeniedReadRoots,
+  NATIVE_OPENSSL_ENV_NAMES,
+  nativeOpenSslNodeOptions,
+  nativeOpenSslReadRoots,
   nativeToolchainReadRoots,
   type LongLivedRuntimeSandboxAttestation,
   type RuntimeGatewayEgress,
@@ -1151,7 +1154,19 @@ const NATIVE_INHERITED_ENV_ALLOWLIST: readonly string[] = Object.freeze([
   "TZ",
   "TERM",
   "SHELL",
+  ...NATIVE_OPENSSL_ENV_NAMES,
 ]);
+
+/**
+ * An operator's explicit OpenSSL and FIPS configuration reaches the native tree as it would a
+ * standalone shell (#3901 AC4): the OpenSSL names always, NODE_OPTIONS only when it carries nothing
+ * but Node's OpenSSL and FIPS switches. Its files open read-only through `nativeOpenSslReadRoots`.
+ */
+function nativeInheritedEnvAllowlist(env: NodeJS.ProcessEnv): readonly string[] {
+  return nativeOpenSslNodeOptions(env.NODE_OPTIONS)
+    ? [...NATIVE_INHERITED_ENV_ALLOWLIST, "NODE_OPTIONS"]
+    : NATIVE_INHERITED_ENV_ALLOWLIST;
+}
 
 function openCodeLaunchMaterial(
   input: LaunchInput,
@@ -1170,7 +1185,7 @@ function openCodeLaunchMaterial(
     args: [],
     inheritedEnvAllowlist:
       toolProfile === "native"
-        ? NATIVE_INHERITED_ENV_ALLOWLIST
+        ? nativeInheritedEnvAllowlist(input.processEnv ?? process.env)
         : ripgrepMappedInheritedEnvNames(input.ripgrep),
     shutdownTimeoutMs: 5_000,
     startTimeoutMs: OPEN_CODE_START_TIMEOUT_MS,
@@ -1319,6 +1334,21 @@ function nativeEgress(mode: string): RuntimeGatewayEgress {
   return openCodeNativeEgress(mode);
 }
 
+// The launcher's PATH plus the one verified ripgrep directory the child gets in front of it, so the
+// kernel opens exactly what the child can run and nothing broader; and the operator's explicit
+// OpenSSL configuration (#3901 AC4), from the same environment the run inherits it from.
+function nativeSupportReadRoots(
+  input: LaunchInput,
+  run: ProductionRuntimeBackendInput,
+): readonly string[] {
+  const path = ripgrepNativePath(process.env.PATH, input.ripgrep) ?? process.env.PATH;
+  const mcpServers = input.mcpServers?.(run.minted.authorityRef.runId) ?? [];
+  return [
+    ...nativeToolchainReadRoots(withMcpExecutableDirectories(path, mcpServers), homedir()),
+    ...nativeOpenSslReadRoots(input.processEnv ?? process.env, homedir()),
+  ];
+}
+
 function gatewayFilesystem(
   portable: ResolvedPortableOpenCodeRuntime,
   input: LaunchInput,
@@ -1339,15 +1369,7 @@ function gatewayFilesystem(
       ...(native
         ? {
             deniedReadRoots: nativeDeniedReadRoots(input.runtimeStateRoot),
-            // The launcher's PATH plus the one verified ripgrep directory the child gets in front
-            // of it, so the kernel opens exactly what the child can run and nothing broader.
-            toolchainReadRoots: nativeToolchainReadRoots(
-              withMcpExecutableDirectories(
-                ripgrepNativePath(process.env.PATH, input.ripgrep) ?? process.env.PATH,
-                input.mcpServers?.(run.minted.authorityRef.runId) ?? [],
-              ),
-              homedir(),
-            ),
+            toolchainReadRoots: nativeSupportReadRoots(input, run),
             ...nativeGitMetadataReadRoots(input, run),
             ...externalReadRootsField(input, run, macos),
             ...linkedFilesField(input, run, macos),

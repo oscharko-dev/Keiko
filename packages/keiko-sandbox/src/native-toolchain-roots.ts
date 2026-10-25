@@ -142,3 +142,61 @@ export function nativeToolchainReadRoots(
     .filter((root) => !roots.some((other) => other !== root && insideOrEqual(other, root)))
     .slice(0, ROOTS_MAX);
 }
+
+/** The environment names that carry an operator's explicit OpenSSL configuration (#3901 AC4). */
+export const NATIVE_OPENSSL_ENV_NAMES: readonly string[] = Object.freeze([
+  "OPENSSL_CONF",
+  "OPENSSL_CONF_INCLUDE",
+  "OPENSSL_MODULES",
+]);
+
+// Node's own OpenSSL and FIPS switches; any other option keeps NODE_OPTIONS out of the run.
+const OPENSSL_NODE_OPTION = /^--(?:openssl-[a-z-]+(?:=\S+)?|enable-fips|force-fips)$/u;
+const OPENSSL_CONFIG_OPTION = /^--openssl-config=(\S+)$/u;
+
+/** NODE_OPTIONS that consists of nothing but Node's OpenSSL and FIPS switches. */
+export function nativeOpenSslNodeOptions(value: string | undefined): boolean {
+  const options =
+    value
+      ?.trim()
+      .split(/\s+/u)
+      .filter((option) => option !== "") ?? [];
+  return options.length > 0 && options.every((option) => OPENSSL_NODE_OPTION.test(option));
+}
+
+function openSslLocations(env: Readonly<Record<string, string | undefined>>): readonly string[] {
+  const configuration = env.OPENSSL_CONF;
+  const nodeConfiguration = nativeOpenSslNodeOptions(env.NODE_OPTIONS)
+    ? (env.NODE_OPTIONS ?? "")
+        .trim()
+        .split(/\s+/u)
+        .flatMap((option) => OPENSSL_CONFIG_OPTION.exec(option)?.[1] ?? [])
+    : [];
+  const files = [...(configuration === undefined ? [] : [configuration]), ...nodeConfiguration];
+  const directories = [env.OPENSSL_CONF_INCLUDE, env.OPENSSL_MODULES].flatMap((value) =>
+    value === undefined ? [] : [value],
+  );
+  return [
+    ...files.flatMap((file) => {
+      const real = resolvedPath(file);
+      return real === undefined ? [] : [dirname(real)];
+    }),
+    ...directories.flatMap((directory) => resolvedPath(directory) ?? []),
+  ];
+}
+
+/**
+ * The directories an operator's explicit OpenSSL configuration names: the configuration file's
+ * directory (its includes and FIPS module configuration live beside it), the include directory and
+ * the provider modules. They open read-only, under the same rule as a toolchain root: never the
+ * user's home or above it, a system prefix, or a credential store. Nothing when nothing is named.
+ */
+export function nativeOpenSslReadRoots(
+  env: Readonly<Record<string, string | undefined>>,
+  home: string,
+): readonly string[] {
+  const resolvedHome = resolvedPath(home) ?? home;
+  return [...new Set(openSslLocations(env).filter((root) => admissible(root, resolvedHome)))].sort(
+    compareStrings,
+  );
+}
