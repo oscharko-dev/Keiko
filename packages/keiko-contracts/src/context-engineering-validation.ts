@@ -8,6 +8,7 @@
 // Split from context-engineering.ts to keep both files under the 400-LOC budget (mirrors the
 // memory-validation.ts / memory-operations-validation.ts split).
 
+import { isOneOf } from "./contract-validation-primitives.js";
 import {
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
   CONTEXT_EVICTION_POLICIES,
@@ -61,13 +62,11 @@ function schemaMismatch(actual: unknown): boolean {
 
 // ─── Enum guards ────────────────────────────────────────────────────────────────
 export function isContextLaneId(value: unknown): value is ContextLaneId {
-  const allowed: readonly string[] = CONTEXT_LANE_IDS;
-  return typeof value === "string" && allowed.includes(value);
+  return isOneOf(value, CONTEXT_LANE_IDS);
 }
 
 function isEvictionPolicy(value: unknown): value is ContextEvictionPolicy {
-  const allowed: readonly string[] = CONTEXT_EVICTION_POLICIES;
-  return typeof value === "string" && allowed.includes(value);
+  return isOneOf(value, CONTEXT_EVICTION_POLICIES);
 }
 
 function isBudgetPressure(value: unknown): value is ContextBudgetPressure {
@@ -76,8 +75,7 @@ function isBudgetPressure(value: unknown): value is ContextBudgetPressure {
 }
 
 function isTokenAccountingSource(value: unknown): value is ContextTokenAccountingSource {
-  const allowed: readonly string[] = CONTEXT_TOKEN_ACCOUNTING_SOURCES;
-  return typeof value === "string" && allowed.includes(value);
+  return isOneOf(value, CONTEXT_TOKEN_ACCOUNTING_SOURCES);
 }
 
 // ─── ContextProfile ─────────────────────────────────────────────────────────────

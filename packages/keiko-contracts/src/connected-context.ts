@@ -6,6 +6,7 @@
 // rather than mutating "1". Leaf-package rule (ADR-0019 direction 1) means no
 // `@oscharko-dev/keiko-*` imports may appear in this module.
 
+import { isOneOf } from "./contract-validation-primitives.js";
 import type { ContextBudget } from "./context-engineering.js";
 import type { GroundedRerankerDiagnostics } from "./bff-wire.js";
 import { validateContextBudget } from "./context-engineering-validation.js";
@@ -767,18 +768,15 @@ function isRuntimeSelectedScope(value: unknown): value is SelectedScope {
 }
 
 function isCandidateOmissionReason(value: unknown): value is CandidateOmissionReason {
-  const allowed: readonly string[] = CANDIDATE_OMISSION_REASONS;
-  return typeof value === "string" && allowed.includes(value);
+  return isOneOf(value, CANDIDATE_OMISSION_REASONS);
 }
 
 function isConnectedFileRole(value: unknown): value is ConnectedFileRole {
-  const allowed: readonly string[] = CONNECTED_FILE_ROLES;
-  return typeof value === "string" && allowed.includes(value);
+  return isOneOf(value, CONNECTED_FILE_ROLES);
 }
 
 function isUncertaintyMarkerKind(value: unknown): value is UncertaintyMarkerKind {
-  const allowed: readonly string[] = UNCERTAINTY_MARKER_KINDS;
-  return typeof value === "string" && allowed.includes(value);
+  return isOneOf(value, UNCERTAINTY_MARKER_KINDS);
 }
 
 function validateScopeKindPaths(scope: SelectedScope, reasons: string[]): void {

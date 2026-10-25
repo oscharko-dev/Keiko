@@ -2,6 +2,7 @@
 // Every string is a closed enum/literal. Raw paths, environment values, source, stderr, command
 // lines, endpoints, and credentials are unrepresentable by these interfaces.
 
+import { hasOnlyKeys, isOneOf, isRecord } from "./contract-validation-primitives.js";
 import {
   MANAGED_LSP_ACTIVATION_SCHEMA_VERSION,
   MANAGED_LSP_EFFECTIVE_STATES,
@@ -82,37 +83,24 @@ export type ManagedLspEvidenceParseResult =
 
 type UnknownRecord = Readonly<Record<string, unknown>>;
 
-function isRecord(value: unknown): value is UnknownRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function hasOnlyKeys(value: UnknownRecord, allowed: readonly string[]): boolean {
-  return Object.keys(value).every((key) => allowed.includes(key));
-}
-
 function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
 function isActorClass(value: unknown): value is ManagedLspEvidenceActorClass {
-  const managedLspEvidenceActorClassesValues: readonly string[] =
-    MANAGED_LSP_EVIDENCE_ACTOR_CLASSES;
-  return typeof value === "string" && managedLspEvidenceActorClassesValues.includes(value);
+  return isOneOf(value, MANAGED_LSP_EVIDENCE_ACTOR_CLASSES);
 }
 
 function isManagedLanguage(value: unknown): value is ManagedLspLanguage {
-  const managedLspLanguagesValues: readonly string[] = MANAGED_LSP_LANGUAGES;
-  return typeof value === "string" && managedLspLanguagesValues.includes(value);
+  return isOneOf(value, MANAGED_LSP_LANGUAGES);
 }
 
 function isAction(value: unknown): value is ManagedLspEvidenceAction {
-  const managedLspEvidenceActionsValues: readonly string[] = MANAGED_LSP_EVIDENCE_ACTIONS;
-  return typeof value === "string" && managedLspEvidenceActionsValues.includes(value);
+  return isOneOf(value, MANAGED_LSP_EVIDENCE_ACTIONS);
 }
 
 function isOutcome(value: unknown): value is ManagedLspEvidenceOutcome {
-  const managedLspEvidenceOutcomesValues: readonly string[] = MANAGED_LSP_EVIDENCE_OUTCOMES;
-  return typeof value === "string" && managedLspEvidenceOutcomesValues.includes(value);
+  return isOneOf(value, MANAGED_LSP_EVIDENCE_OUTCOMES);
 }
 
 function isKindActionConsistent(value: UnknownRecord): boolean {
@@ -122,8 +110,7 @@ function isKindActionConsistent(value: UnknownRecord): boolean {
 }
 
 function isEffectiveState(value: unknown): value is ManagedLspEffectiveState {
-  const managedLspEffectiveStatesValues: readonly string[] = MANAGED_LSP_EFFECTIVE_STATES;
-  return typeof value === "string" && managedLspEffectiveStatesValues.includes(value);
+  return isOneOf(value, MANAGED_LSP_EFFECTIVE_STATES);
 }
 
 function hasConsistentEffectiveStatus(value: UnknownRecord): boolean {
