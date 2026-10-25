@@ -939,3 +939,93 @@ describe.each([
     },
   );
 });
+
+import * as debugPublic from "@oscharko-dev/keiko-contracts/runtime/dap-debug";
+
+function debugInspectionInput(failure: unknown): unknown {
+  return new Proxy(
+    {},
+    {
+      ownKeys(): never {
+        throwDebugInspection(failure);
+      },
+      get(): never {
+        throwDebugInspection(failure);
+      },
+    },
+  );
+}
+
+function throwDebugInspection(value: unknown): never {
+  throw value;
+}
+
+function debugCaughtFailure(kind: "name" | "revoked" | "private"): unknown {
+  if (kind === "revoked") {
+    const value = Proxy.revocable({}, {});
+    value.revoke();
+    return value.proxy;
+  }
+  const error = new Error("private-debug-message");
+  error.stack = "";
+  if (kind === "private") error.name = "private-debug-name";
+  else
+    Object.defineProperty(error, "name", {
+      get(): never {
+        throw new Error("private-debug-name-inspection");
+      },
+    });
+  return error;
+}
+
+const publicDebugParsers = [
+  debugPublic.parseDebugBootstrapRequest,
+  debugPublic.parseDebugSessionStartRequest,
+  debugPublic.parseDebugSessionControlRequest,
+  debugPublic.parseSetBreakpointsRequest,
+  debugPublic.parseSetExceptionBreakpointsRequest,
+  debugPublic.parseStackTraceRequest,
+  debugPublic.parseScopesRequest,
+  debugPublic.parseVariablesRequest,
+  debugPublic.parseSetVariableRequest,
+  debugPublic.parseSetWatchesRequest,
+  debugPublic.parseEvaluateWatchRequest,
+] as const;
+
+for (const [index, [name, source, healthy]] of validRequests.entries()) {
+  const publicParser = publicDebugParsers[index];
+  if (publicParser === undefined) throw new TypeError("matching public debug parser required");
+  describe.each([
+    { surface: "source", parse: source },
+    { surface: "public", parse: publicParser },
+  ])(`closed DAP inspection: ${name} $surface`, ({ parse }) => {
+    it.each([
+      { kind: "name", expected: "unknown" },
+      { kind: "revoked", expected: "unknown" },
+      { kind: "private", expected: "Error" },
+    ] as const)("contains hostile caught $kind", ({ kind, expected }) => {
+      const result = parse(debugInspectionInput(debugCaughtFailure(kind)));
+      expect(result).toEqual({
+        ok: false,
+        errors: [`payload could not be inspected: ${expected}`],
+      });
+      expect(JSON.stringify(result)).not.toContain("private");
+    });
+
+    it.each([
+      { failure: new TypeError("private"), expected: "TypeError" },
+      { failure: new RangeError("private"), expected: "RangeError" },
+      { failure: "private", expected: "unknown" },
+    ])("keeps ordinary caught $expected classification", ({ failure, expected }) => {
+      expect(parse(debugInspectionInput(failure))).toEqual({
+        ok: false,
+        errors: [`payload could not be inspected: ${expected}`],
+      });
+    });
+
+    it("preserves healthy construction and ordinary malformed-input refusal", () => {
+      expect(parse(healthy).ok).toBe(true);
+      expect(parse(null).ok).toBe(false);
+    });
+  });
+}

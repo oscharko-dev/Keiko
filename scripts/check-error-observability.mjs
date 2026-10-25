@@ -141,6 +141,10 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
     "Pure hostile payload inspection returns a fixed closed refusal without inspecting the thrown value. Request admission propagates BAD_REQUEST before execution; command UI response admission records the existing correlated contract-validation diagnostic.",
   ],
   [
+    "packages/keiko-contracts/src/managed-lsp-parse-safely.ts:parserInspectionClass",
+    "Pure leaf error classification performs no I/O and returns a fixed unknown fallback without inspecting the caught inspection failure. The parser propagates its existing closed rejection to the consumer diagnostic boundary; no separate logged fact is emitted.",
+  ],
+  [
     "packages/keiko-contracts/src/git-editor.ts:parserInspectionClass",
     "Pure hostile error classification returns the fixed unknown-error refusal without reading private fields. The parser propagates a closed rejection; UI failBffResponse reports the existing correlated contract-validation diagnostic and server blame admission uses its fixed BAD_REQUEST refusal. The classifier does not emit a separate logged fact.",
   ],
@@ -505,9 +509,12 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
 ]);
 
 function isReviewedFailurePath(path, owner, node) {
-  if (!REVIEWED_FAILURE_PATH_EXEMPTIONS.has(`${path}:${owner}`)) return false;
+  const site = `${path}:${owner}`;
+  if (!REVIEWED_FAILURE_PATH_EXEMPTIONS.has(site)) return false;
   if (path === "packages/keiko-contracts/src/git-editor.ts" && owner === "parserInspectionClass")
     return exactFailureFallback(node, "unknown error");
+  if (site === "packages/keiko-contracts/src/managed-lsp-parse-safely.ts:parserInspectionClass")
+    return exactFailureFallback(node, "unknown");
   if (path === "packages/keiko-contracts/src/command-runner.ts")
     return exactCommandInspectionRefusal(node);
   if (path === "packages/keiko-contracts/src/prompt-enhancer-validation.ts")

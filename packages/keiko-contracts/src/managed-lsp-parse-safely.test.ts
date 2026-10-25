@@ -56,3 +56,191 @@ function throwLiteralString(value: string): never {
   // eslint-disable-next-line @typescript-eslint/only-throw-error -- exercising the non-Error branch
   throw value;
 }
+
+import * as activationSource from "./managed-lsp-activation.js";
+import * as activationPublic from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-activation";
+import * as capabilitiesSource from "./managed-lsp-capabilities.js";
+import * as capabilitiesPublic from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-capabilities";
+import * as runtimeSource from "./managed-lsp-runtime.js";
+import * as runtimePublic from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-runtime";
+import * as routeSource from "./managed-lsp-route.js";
+import * as routePublic from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-route";
+import * as evidenceSource from "./managed-lsp-evidence.js";
+import * as evidencePublic from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-evidence";
+
+function healthyRuntimeConfiguration(): unknown {
+  return {
+    schemaVersion: "1",
+    language: "python",
+    revision: 7,
+    etag: '"lspcfg-7-abcdefghijklmnop"',
+    activation: "enabled",
+    runtime: { kind: "operatorApproved", runtimeId: "python.language-server.production" },
+    provenance: {
+      activation: "workspace",
+      runtime: "operatorProvisioning",
+      settings: "workspace",
+    },
+    restartRequired: false,
+    restartFields: [],
+    settings: {
+      interpreter: { kind: "operatorApproved", runtimeId: "python.3.13.production" },
+      venv: { kind: "operatorApproved", runtimeId: "python.venv.workspace-a" },
+      typeCheckingMode: "strict",
+      extraPaths: [],
+      configurationFile: { kind: "workspaceRelative", path: "config/pyright.json" },
+      configurationPrecedence: ["workspaceConfiguration", "pyproject", "builtInDefault"],
+    },
+  };
+}
+
+const parserBoundaryOwners = [
+  {
+    name: "activation status",
+    source: activationSource.parseManagedLspActivationStatus,
+    public: activationPublic.parseManagedLspActivationStatus,
+    healthy: (): unknown => ({
+      ok: true,
+      schemaVersion: "1",
+      language: "python",
+      configurationRevision: 7,
+      state: "active",
+      reasonCode: "ACTIVE",
+      policyResult: "allowed",
+    }),
+  },
+  {
+    name: "candidate capabilities",
+    source: capabilitiesSource.parseManagedLspCandidateCapabilities,
+    public: capabilitiesPublic.parseManagedLspCandidateCapabilities,
+    healthy: (): unknown => ({
+      schemaVersion: "1",
+      language: "python",
+      operations: ["diagnostics", "hover"],
+      semanticTokensCandidate: true,
+    }),
+  },
+  {
+    name: "runtime configuration",
+    source: runtimeSource.parseManagedLspRuntimeConfiguration,
+    public: runtimePublic.parseManagedLspRuntimeConfiguration,
+    healthy: healthyRuntimeConfiguration,
+  },
+  {
+    name: "control request",
+    source: routeSource.parseManagedLspControlRequest,
+    public: routePublic.parseManagedLspControlRequest,
+    healthy: (): unknown => ({
+      root: "workspace",
+      language: "python",
+      action: "activate",
+      expectedRevision: 7,
+    }),
+  },
+  {
+    name: "evidence",
+    source: evidenceSource.parseManagedLspEvidence,
+    public: evidencePublic.parseManagedLspEvidence,
+    healthy: (): unknown => ({
+      schemaVersion: "1",
+      kind: "activationChange",
+      action: "activate",
+      outcome: "accepted",
+      actorClass: "localHuman",
+      language: "python",
+      priorState: "available",
+      effectiveState: "active",
+      reasonCode: "ACTIVE",
+      revision: 7,
+      timestampMs: 1_725_000_000_000,
+      policyResult: "allowed",
+    }),
+  },
+] as const;
+
+function errorWithUnreadableName(): Error {
+  const error = new Error("private-parser-message");
+  error.stack = "";
+  Object.defineProperty(error, "name", {
+    get(): never {
+      throw new Error("private-name-inspection");
+    },
+  });
+  return error;
+}
+
+function revokedCaughtValue(): unknown {
+  const revoked = Proxy.revocable({}, {});
+  revoked.revoke();
+  return revoked.proxy;
+}
+
+function privateNamedError(): Error {
+  const error = new Error("private-parser-message");
+  error.stack = "";
+  error.name = "private-parser-name";
+  return error;
+}
+
+function throwingParserInput(value: unknown): unknown {
+  return new Proxy(
+    {},
+    {
+      ownKeys(): never {
+        throwParserValue(value);
+      },
+      get(): never {
+        throwParserValue(value);
+      },
+    },
+  );
+}
+
+function throwParserValue(value: unknown): never {
+  throw value;
+}
+
+const caughtValueCases = [
+  { name: "unreadable Error name", make: errorWithUnreadableName, expected: "unknown" },
+  { name: "revoked caught proxy", make: revokedCaughtValue, expected: "unknown" },
+  { name: "private Error name", make: privateNamedError, expected: "Error" },
+  {
+    name: "ordinary TypeError",
+    make: (): unknown => new TypeError("private"),
+    expected: "TypeError",
+  },
+  {
+    name: "ordinary RangeError",
+    make: (): unknown => new RangeError("private"),
+    expected: "RangeError",
+  },
+  { name: "primitive thrown value", make: (): unknown => "private", expected: "unknown" },
+] as const;
+
+for (const owner of parserBoundaryOwners) {
+  describe.each([
+    { surface: "source", parse: owner.source },
+    { surface: "public", parse: owner.public },
+  ])(`closed parser inspection: ${owner.name} $surface`, ({ parse }) => {
+    it.each(caughtValueCases)("contains $name without leaking its fields", ({ make, expected }) => {
+      const result = parse(throwingParserInput(make()));
+      expect(result).toEqual({
+        ok: false,
+        errors: [`payload could not be inspected: ${expected}`],
+      });
+      expect(JSON.stringify(result)).not.toContain("private");
+    });
+
+    it("keeps healthy admission and ordinary validation refusal", () => {
+      expect(parse(owner.healthy()).ok).toBe(true);
+      expect(parse(null).ok).toBe(false);
+    });
+  });
+}
+
+it("preserves the exact success and validation-refusal Result objects", () => {
+  const success = { ok: true, value: { retained: true } } as const;
+  const refusal = { ok: false, errors: ["ordinary validation refusal"] } as const;
+  expect(parseSafely(() => success)).toBe(success);
+  expect(parseSafely(() => refusal)).toBe(refusal);
+});

@@ -2,6 +2,8 @@
 // This leaf owns strict wire vocabulary, hostile-input parsing, and bounded live projections.
 // It owns no process lifecycle, launch resolution, route authority, persistence, or evidence.
 
+import { parseSafely } from "./managed-lsp-parse-safely.js";
+
 export const DAP_DEBUG_CONTRACT_SCHEMA_VERSION = "1" as const;
 
 export type DebugSessionStatus =
@@ -469,19 +471,6 @@ function isDenseArray<T>(
     if (!(index in value) || !predicate(value[index])) return false;
   }
   return true;
-}
-
-function parseSafely<T>(parser: () => DebugParseResult<T>): DebugParseResult<T> {
-  try {
-    return parser();
-  } catch (error: unknown) {
-    return {
-      ok: false,
-      errors: [
-        `payload could not be inspected: ${error instanceof Error ? error.name : "unknown"}`,
-      ],
-    };
-  }
 }
 
 function parseObject<S extends UnknownRecord>(

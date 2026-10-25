@@ -662,12 +662,6 @@
       "count": 1
     },
     {
-      "path": "packages/keiko-contracts/src/dap-debug.ts",
-      "owner": "parseSafely",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-contracts/src/debug-activation.ts",
       "owner": "parseDebugActivationInput",
       "kind": "unregistered-catch",
