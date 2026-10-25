@@ -5,9 +5,11 @@
 // same inputs always produce the same decision. Callers (keiko-server, keiko-workflows)
 // assemble packs from storage BEFORE calling evaluateGitPolicy.
 //
-// Imports ONLY from ./git-delivery.js (action kinds, risk class, constraint union, policy decision,
-// provider capability, parse result). No imports from git-delivery-provider.ts — one-directional DAG.
+// Domain imports come from ./git-delivery.js (action kinds, risk class, constraint union, policy decision,
+// provider capability, parse result); structural traversal uses the import-free primitive.
+// No imports from git-delivery-provider.ts — one-directional DAG.
 
+import { isPhysicalArrayOf, isUndefinedOr } from "./contract-validation-primitives.js";
 import type {
   GitDeliveryActionKind,
   GitDeliveryBlockReason,
@@ -313,16 +315,7 @@ function isNonEmptyString(value: unknown): value is string {
 }
 
 function isStringArray(value: unknown): value is readonly string[] {
-  if (!Array.isArray(value)) return false;
-  const extent = value.length;
-  for (let index = 0; index < extent; index += 1) {
-    if (!(index in value) || typeof value[index] !== "string") return false;
-  }
-  return true;
-}
-
-function isUndefinedOr<T>(check: (v: unknown) => v is T): (v: unknown) => v is T | undefined {
-  return (v: unknown): v is T | undefined => v === undefined || check(v);
+  return isPhysicalArrayOf(value, (member: unknown): boolean => typeof member === "string");
 }
 
 function isRuleDecision(value: unknown): value is GitDeliveryRuleDecision {
@@ -337,13 +330,7 @@ function isActionKind(value: unknown): boolean {
 }
 
 function isConstraintArray(value: unknown): value is readonly GitDeliveryConstraint[] {
-  if (!Array.isArray(value)) return false;
-  const extent = value.length;
-  for (let index = 0; index < extent; index += 1) {
-    if (!(index in value)) return false;
-    if (!isGitDeliveryConstraint(value[index])) return false;
-  }
-  return true;
+  return isPhysicalArrayOf(value, isGitDeliveryConstraint);
 }
 
 // A decision's per-decision required fields must validate. approval-gated requires a string-array

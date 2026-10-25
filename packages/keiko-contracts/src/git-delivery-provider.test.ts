@@ -395,3 +395,100 @@ describe("G2 healthy inherited provider members", () => {
     });
   }
 });
+
+describe("provider physical member observation preservation", () => {
+  for (const [surface, validate] of [
+    ["source", isGitDeliveryProviderDescriptor],
+    ["public", g2PublicProvider.isGitDeliveryProviderDescriptor],
+  ] as const) {
+    it.each(["hole", "invalid"])(`${surface} stops at the first %s capability`, (shape) => {
+      const trace: string[] = [];
+      const entries: unknown[] = shape === "hole" ? Array(2) : [42, "draft-pr"];
+      Object.defineProperty(entries, "1", {
+        get: (): never => {
+          throw new TypeError("later capability must remain unread");
+        },
+      });
+      const capabilities = new Proxy(entries, {
+        has(target, key): boolean {
+          trace.push(`has:${String(key)}`);
+          return Reflect.has(target, key);
+        },
+        get(target, key, receiver): unknown {
+          trace.push(`get:${String(key)}`);
+          return Reflect.get(target, key, receiver);
+        },
+      });
+      expect(validate({ schemaVersion: "1", providerInstanceId: "fixture", capabilities })).toBe(
+        false,
+      );
+      expect(trace).toEqual(
+        shape === "hole" ? ["get:length", "has:0"] : ["get:length", "has:0", "get:0"],
+      );
+    });
+    it(`${surface} admits the captured capability prefix when its getter grows the array`, () => {
+      const trace: string[] = [];
+      const entries: unknown[] = ["draft-pr"];
+      const capabilities = new Proxy(entries, {
+        has(target, key): boolean {
+          trace.push(`has:${String(key)}`);
+          return Reflect.has(target, key);
+        },
+        get(target, key, receiver): unknown {
+          trace.push(`get:${String(key)}`);
+          if (key === "0") target.push(42);
+          return Reflect.get(target, key, receiver);
+        },
+      });
+      const input = { schemaVersion: "1", providerInstanceId: "fixture", capabilities };
+      expect(validate(input)).toBe(true);
+      expect(input.capabilities).toBe(capabilities);
+      expect(entries).toHaveLength(2);
+      expect(trace).toEqual(["get:length", "has:0", "get:0"]);
+    });
+  }
+  for (const [surface, validate] of [
+    ["source", isGitDeliveryRemoteTargetPolicy],
+    ["public", g2PublicProvider.isGitDeliveryRemoteTargetPolicy],
+  ] as const) {
+    it(`${surface} refuses a captured pattern slot deleted by the first member`, () => {
+      const entries: unknown[] = [null, { matchKind: "exact", value: "dev" }];
+      entries[0] = {
+        get matchKind(): string {
+          Reflect.deleteProperty(entries, "1");
+          return "exact";
+        },
+        value: "dev",
+      };
+      const trace: string[] = [];
+      const allowedPushTargetPatterns = new Proxy(entries, {
+        has(target, key): boolean {
+          trace.push(`has:${String(key)}`);
+          return Reflect.has(target, key);
+        },
+        get(target, key, receiver): unknown {
+          trace.push(`get:${String(key)}`);
+          return Reflect.get(target, key, receiver);
+        },
+      });
+      expect(validate({ allowedPushTargetPatterns, forcePushGloballyDenied: false })).toBe(false);
+      expect(trace).toEqual(["get:length", "has:0", "get:0", "has:1"]);
+    });
+    it(`${surface} propagates the exact member inspection failure`, () => {
+      const failure = new TypeError("opaque pattern inspection");
+      const pattern = {
+        get matchKind(): never {
+          throw failure;
+        },
+        value: "dev",
+      };
+      let observed: unknown;
+      try {
+        validate({ allowedPushTargetPatterns: [pattern], forcePushGloballyDenied: false });
+      } catch (error) {
+        observed = error;
+      }
+      expect(observed).toBe(failure);
+    });
+  }
+});

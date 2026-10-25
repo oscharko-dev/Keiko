@@ -544,3 +544,24 @@ describe("G2 healthy inherited action sheet members", () => {
     });
   }
 });
+
+describe("action state factory boundary preservation", () => {
+  for (const [surface, module] of [
+    ["source", { GIT_DELIVERY_ACTION_SHEET_STATES, isGitDeliveryActionSheetState }],
+    ["public", g2PublicSheet],
+  ] as const) {
+    it(`${surface} preserves the complete action state vocabulary without input coercion`, () => {
+      for (const state of module.GIT_DELIVERY_ACTION_SHEET_STATES) {
+        expect(module.isGitDeliveryActionSheetState(state)).toBe(true);
+      }
+      const hostile = {
+        get [Symbol.toPrimitive](): never {
+          throw new TypeError("action state membership must not inspect coercion");
+        },
+      };
+      for (const value of ["unknown-state", "", null, undefined, 0, false, hostile]) {
+        expect(module.isGitDeliveryActionSheetState(value)).toBe(false);
+      }
+    });
+  }
+});

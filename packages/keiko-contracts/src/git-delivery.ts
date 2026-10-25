@@ -7,9 +7,10 @@
 // This is the CORE atom module for the git-delivery surface. It imports NOTHING from its two
 // siblings (git-delivery-policy.ts / git-delivery-provider.ts). The siblings import FROM here, so
 // the dependency graph is a one-directional DAG with no cycles (verified by arch:check). The only
-// internal helpers come from workflow-handoff (approval shape) and git-repository (Git identity);
-// both are legal intra-package relative imports.
+// internal helpers come from workflow-handoff (approval shape), git-repository (Git identity),
+// and contract-validation-primitives (physical array members); all are intra-package imports.
 
+import { isPhysicalArrayOf, isUndefinedOr } from "./contract-validation-primitives.js";
 import { isApprovalTokenShape } from "./workflow-handoff.js";
 import { isGitObjectId } from "./git-repository.js";
 
@@ -558,13 +559,7 @@ function isBoolean(value: unknown): value is boolean {
 }
 
 function isStringArray(value: unknown): value is readonly string[] {
-  if (!Array.isArray(value)) return false;
-  const extent = value.length;
-  for (let index = 0; index < extent; index += 1) {
-    if (!(index in value)) return false;
-    if (!isString(value[index])) return false;
-  }
-  return true;
+  return isPhysicalArrayOf(value, isString);
 }
 
 export function isGitDeliveryNonEmptyConstraints(
@@ -579,10 +574,6 @@ export function isGitDeliveryNonEmptyConstraints(
     if (!isGitDeliveryConstraint(value[index])) return false;
   }
   return true;
-}
-
-function isUndefinedOr<T>(check: (v: unknown) => v is T): (v: unknown) => v is T | undefined {
-  return (v: unknown): v is T | undefined => v === undefined || check(v);
 }
 
 // ─── Exported guards ─────────────────────────────────────────────────────────────
@@ -654,13 +645,7 @@ export function isGitDeliveryBranchPattern(value: unknown): value is GitDelivery
 }
 
 function isBranchPatternArray(value: unknown): value is readonly GitDeliveryBranchPattern[] {
-  if (!Array.isArray(value)) return false;
-  const extent = value.length;
-  for (let index = 0; index < extent; index += 1) {
-    if (!(index in value)) return false;
-    if (!isGitDeliveryBranchPattern(value[index])) return false;
-  }
-  return true;
+  return isPhysicalArrayOf(value, isGitDeliveryBranchPattern);
 }
 
 export function isGitDeliveryConstraint(value: unknown): value is GitDeliveryConstraint {

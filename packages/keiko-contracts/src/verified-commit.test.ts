@@ -347,3 +347,55 @@ it("revalidates the captured verified reason against its actual closed membershi
     }
   }
 });
+
+describe("verified violation precheck and capture observations", () => {
+  for (const [surface, validate] of [
+    ["source", isVerifiedCommitResult],
+    ["public", g2PublicVerified.isVerifiedCommitResult],
+  ] as const) {
+    it(`${surface} keeps minimum maximum and captured violation extents distinct`, () => {
+      const trace: string[] = [];
+      let lengths = 0;
+      const violations = new Proxy(["empty-subject", "not-a-violation"], {
+        has(target, key): boolean {
+          trace.push(`has:${String(key)}`);
+          return Reflect.has(target, key);
+        },
+        get(target, key, receiver): unknown {
+          trace.push(`get:${String(key)}`);
+          if (key === "length") return ++lengths === 1 ? 1 : lengths === 2 ? 0 : 2;
+          return Reflect.get(target, key, receiver);
+        },
+      });
+      expect(
+        validate({ ...receipt, status: "blocked", reason: "message-policy", violations }),
+      ).toBe(false);
+      expect(trace).toEqual([
+        "get:length",
+        "get:length",
+        "get:length",
+        "has:0",
+        "get:0",
+        "has:1",
+        "get:1",
+      ]);
+    });
+    it(`${surface} stops an empty violation precheck before capture or member reads`, () => {
+      const trace: string[] = [];
+      const violations = new Proxy(["empty-subject"], {
+        get(_target, key): unknown {
+          trace.push(`get:${String(key)}`);
+          if (key === "length") return 0;
+          throw new TypeError("refused violation member must remain unread");
+        },
+        has(): never {
+          throw new TypeError("refused violation extent must remain unvisited");
+        },
+      });
+      expect(
+        validate({ ...receipt, status: "blocked", reason: "message-policy", violations }),
+      ).toBe(false);
+      expect(trace).toEqual(["get:length"]);
+    });
+  }
+});

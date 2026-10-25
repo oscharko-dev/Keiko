@@ -643,3 +643,23 @@ describe("readiness forbidden-advisory observations", () => {
     });
   }
 });
+
+import { isGitPullRequestChangeNarrative } from "./git-pull-request.js";
+import { isGitPullRequestChangeNarrative as publicNarrativeGuard } from "@oscharko-dev/keiko-contracts/runtime/git-pull-request";
+
+describe("PR narrative array admission observations", () => {
+  for (const [surface, validate] of [
+    ["source", isGitPullRequestChangeNarrative],
+    ["public", publicNarrativeGuard],
+  ] as const) {
+    it(`${surface} refuses a non-array without inspecting length and preserves an empty array`, () => {
+      const areas = {
+        get length(): never {
+          throw new TypeError("non-array extent must remain unread");
+        },
+      };
+      expect(validate({ ...NARRATIVE, areas })).toBe(false);
+      expect(validate({ ...NARRATIVE, areas: [] })).toBe(true);
+    });
+  }
+});

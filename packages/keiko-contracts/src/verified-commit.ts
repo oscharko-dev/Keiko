@@ -1,3 +1,4 @@
+import { isPhysicalArrayOf } from "./contract-validation-primitives.js";
 import { isGitDeliveryBlockReason, type GitDeliveryBlockReason } from "./git-delivery.js";
 import { isGitPreflightFindingCode, type GitPreflightFinding } from "./git-preflight.js";
 import {
@@ -195,23 +196,11 @@ function validFinding(value: unknown): boolean {
   ].every(Boolean);
 }
 function validViolationMembers(value: unknown): value is readonly GitCommitMessageViolationCode[] {
-  if (!Array.isArray(value)) return false;
-  const extent = value.length;
-  for (let index = 0; index < extent; index += 1) {
-    if (!(index in value)) return false;
-    if (!isGitCommitMessageViolationCode(value[index])) return false;
-  }
-  return true;
+  return isPhysicalArrayOf(value, isGitCommitMessageViolationCode);
 }
 
 function validFindingMembers(value: unknown): value is readonly GitPreflightFinding[] {
-  if (!Array.isArray(value)) return false;
-  const extent = value.length;
-  for (let index = 0; index < extent; index += 1) {
-    if (!(index in value)) return false;
-    if (!validFinding(value[index])) return false;
-  }
-  return true;
+  return isPhysicalArrayOf(value, validFinding);
 }
 
 function validMessagePolicyViolations(value: unknown): boolean {

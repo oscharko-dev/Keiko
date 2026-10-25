@@ -250,3 +250,23 @@ function validateNonNegativeSafeInteger(
   }
   return true;
 }
+
+export function validateCodingPhysicalMembers<Member>(
+  value: readonly unknown[],
+  path: string,
+  errors: string[],
+  validateMember: (value: unknown, path: string, errors: string[]) => value is Member,
+): value is readonly Member[] {
+  const count = value.length;
+  let admitted = true;
+  for (let index = 0; index < count; index += 1) {
+    const memberPath = `${path}[${String(index)}]`;
+    if (!(index in value)) {
+      errors.push(`${memberPath} must be an object`);
+      return false;
+    }
+    const member: unknown = value[index];
+    admitted = validateMember(member, memberPath, errors) && admitted;
+  }
+  return admitted;
+}

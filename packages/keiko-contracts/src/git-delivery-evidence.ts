@@ -16,7 +16,7 @@
 //
 // Leaf-package rules (ADR-0019, ADR-0061): pure types, frozen const tables, and pure functions only.
 // No IO, no clock, no crypto, no randomness. Relative imports end in ".js" and reference only the
-// git-delivery sibling atoms — never a kernel (keiko-tools) type. The kernel's lifecycle-phase,
+// git-delivery sibling atoms or import-free structural primitives — never a kernel type. The kernel's lifecycle-phase,
 // status, and failure-category vocabularies are keiko-tools concerns; the keiko-tools evidence
 // builder maps them onto the self-contained, mirrored vocabularies defined here so this contract
 // stays a standalone, serialisable artifact.
@@ -27,6 +27,7 @@
 // the provider-assigned external id, and the repository identity are stored as opaque SHA-256
 // hashes; the approval token is recorded as a hash by the #471 contract and never appears here.
 
+import { isPhysicalArrayOf, isUndefinedOr, isInSet } from "./contract-validation-primitives.js";
 import type {
   GitDeliveryActionKind,
   GitDeliveryBlockReason,
@@ -349,26 +350,11 @@ function isBoolean(value: unknown): value is boolean {
 }
 
 function isStringArray(value: unknown): value is readonly string[] {
-  if (!Array.isArray(value)) return false;
-  const extent = value.length;
-  for (let index = 0; index < extent; index += 1) {
-    if (!(index in value)) return false;
-    if (!isString(value[index])) return false;
-  }
-  return true;
+  return isPhysicalArrayOf(value, isString);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isUndefinedOr<T>(check: (v: unknown) => v is T): (v: unknown) => v is T | undefined {
-  return (v: unknown): v is T | undefined => v === undefined || check(v);
-}
-
-function isInSet<T extends string>(set: readonly T[]): (v: unknown) => v is T {
-  const values: readonly string[] = set;
-  return (v: unknown): v is T => isString(v) && values.includes(v);
 }
 
 const POLICY_OUTCOMES: readonly GitDeliveryPolicyDecision["outcome"][] = [
@@ -540,13 +526,7 @@ function isDispositionCounts(
 }
 
 function isEvidenceRecordArray(value: unknown): value is readonly GitDeliveryEvidenceRecord[] {
-  if (!Array.isArray(value)) return false;
-  const extent = value.length;
-  for (let index = 0; index < extent; index += 1) {
-    if (!(index in value)) return false;
-    if (!isGitDeliveryEvidenceRecord(value[index])) return false;
-  }
-  return true;
+  return isPhysicalArrayOf(value, isGitDeliveryEvidenceRecord);
 }
 
 export function isGitDeliveryAuditPacket(value: unknown): value is GitDeliveryAuditPacket {

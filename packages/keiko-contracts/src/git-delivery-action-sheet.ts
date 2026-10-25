@@ -6,7 +6,7 @@
 //
 // Leaf-package rules (ADR-0019, ADR-0060): pure types and frozen const tables and pure functions
 // only. No IO, no clock, no crypto, no randomness. Relative imports end in ".js" and reference only
-// the git-delivery sibling atoms — never a kernel (keiko-tools) type. The kernel's preflight finding
+// the git-delivery sibling atoms or import-free structural primitives — never a kernel type. The kernel's preflight finding
 // codes are a keiko-tools concern; they reach this layer only as opaque, closed-vocabulary display
 // keys (GitDeliveryExpectedBlocker.reasonCode), never as a type this leaf re-enumerates. All
 // behavioural meaning is carried by typed fields (source/severity/remediation/cause/state), never
@@ -15,6 +15,7 @@
 // This module is content-free: it carries counts, flags, branch names, and typed codes only. It
 // never carries diff content, file paths, secrets, command strings, or raw subprocess output.
 
+import { isPhysicalArrayOf, isUndefinedOr, isInSet } from "./contract-validation-primitives.js";
 import type {
   GitDeliveryAbortableOperation,
   GitDeliveryActionKind,
@@ -355,22 +356,7 @@ function isNonNegativeInteger(value: unknown): value is number {
 }
 
 function isStringArray(value: unknown): value is readonly string[] {
-  if (!Array.isArray(value)) return false;
-  const extent = value.length;
-  for (let index = 0; index < extent; index += 1) {
-    if (!(index in value)) return false;
-    if (!isString(value[index])) return false;
-  }
-  return true;
-}
-
-function isUndefinedOr<T>(check: (v: unknown) => v is T): (v: unknown) => v is T | undefined {
-  return (v: unknown): v is T | undefined => v === undefined || check(v);
-}
-
-function isInSet<T extends string>(set: readonly T[]): (v: unknown) => v is T {
-  const values: readonly string[] = set;
-  return (v: unknown): v is T => isString(v) && values.includes(v);
+  return isPhysicalArrayOf(value, isString);
 }
 
 // ─── Exported enum guards ────────────────────────────────────────────────────────────
@@ -435,23 +421,11 @@ export const GIT_DELIVERY_POLICY_DECISION_OUTCOMES: readonly GitDeliveryPolicyDe
 export const isGitDeliveryPolicyDecisionOutcome = isInSet(GIT_DELIVERY_POLICY_DECISION_OUTCOMES);
 
 function isConstraintArray(value: unknown): value is readonly GitDeliveryConstraint[] {
-  if (!Array.isArray(value)) return false;
-  const extent = value.length;
-  for (let index = 0; index < extent; index += 1) {
-    if (!(index in value)) return false;
-    if (!isGitDeliveryConstraint(value[index])) return false;
-  }
-  return true;
+  return isPhysicalArrayOf(value, isGitDeliveryConstraint);
 }
 
 function isRecoveryHintArray(value: unknown): value is readonly GitDeliveryRecoveryHint[] {
-  if (!Array.isArray(value)) return false;
-  const extent = value.length;
-  for (let index = 0; index < extent; index += 1) {
-    if (!(index in value)) return false;
-    if (!isGitDeliveryRecoveryHint(value[index])) return false;
-  }
-  return true;
+  return isPhysicalArrayOf(value, isGitDeliveryRecoveryHint);
 }
 
 export function isGitDeliveryPolicyExplanation(
@@ -468,13 +442,7 @@ export function isGitDeliveryPolicyExplanation(
 }
 
 function isExpectedBlockerArray(value: unknown): value is readonly GitDeliveryExpectedBlocker[] {
-  if (!Array.isArray(value)) return false;
-  const extent = value.length;
-  for (let index = 0; index < extent; index += 1) {
-    if (!(index in value)) return false;
-    if (!isGitDeliveryExpectedBlocker(value[index])) return false;
-  }
-  return true;
+  return isPhysicalArrayOf(value, isGitDeliveryExpectedBlocker);
 }
 
 function previewProviderFieldsValid(value: Record<string, unknown>): boolean {

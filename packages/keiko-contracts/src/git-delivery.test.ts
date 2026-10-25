@@ -1063,3 +1063,53 @@ describe("Git delivery vocabulary membership", () => {
     },
   );
 });
+
+describe("optional execution detail factory boundary preservation", () => {
+  for (const [surface, validate] of [
+    ["source", isGitDeliveryExecutionResult],
+    ["public", g2PublicDelivery.isGitDeliveryExecutionResult],
+  ] as const) {
+    it(`${surface} preserves absent healthy and malformed defined execution details`, () => {
+      const input = { schemaVersion: "1", outcome: "partial", durationMs: 1 };
+      expect(validate(input)).toBe(true);
+      const partialDetail = { attemptedUnitCount: 3, succeededUnitCount: 1 };
+      const defined = { ...input, partialDetail };
+      expect(validate(defined)).toBe(true);
+      expect(defined.partialDetail).toBe(partialDetail);
+      expect(validate({ ...input, partialDetail: null })).toBe(false);
+      expect(
+        validate({
+          ...input,
+          partialDetail: { attemptedUnitCount: "three", succeededUnitCount: 1 },
+        }),
+      ).toBe(false);
+    });
+    it(`${surface} propagates the exact error from a defined optional checker`, () => {
+      const failure = new TypeError("opaque execution detail inspection");
+      const partialDetail = {
+        get attemptedUnitCount(): never {
+          throw failure;
+        },
+        succeededUnitCount: 1,
+      };
+      let observed: unknown;
+      try {
+        validate({ schemaVersion: "1", outcome: "partial", durationMs: 1, partialDetail });
+      } catch (error) {
+        observed = error;
+      }
+      expect(observed).toBe(failure);
+    });
+    it(`${surface} preserves earlier refusal before the optional field observation`, () => {
+      const input = {
+        schemaVersion: "1",
+        outcome: "partial",
+        durationMs: -1,
+        get partialDetail(): never {
+          throw new TypeError("later optional detail must remain unread");
+        },
+      };
+      expect(validate(input)).toBe(false);
+    });
+  }
+});

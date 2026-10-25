@@ -6,6 +6,7 @@ import {
   invalid,
   isOneOf,
   isRecord,
+  validateCodingPhysicalMembers,
   validateSafeId,
   validateUntrustedDisplayText,
 } from "./coding-workbench-runtime-api-validation.js";
@@ -240,18 +241,7 @@ function validateQuestions(
     errors.push(`${path}.questions must be a bounded non-empty array`);
     return false;
   }
-  const count = value.length;
-  let admitted = true;
-  for (let index = 0; index < count; index += 1) {
-    const memberPath = `${path}.questions[${String(index)}]`;
-    if (!(index in value)) {
-      errors.push(`${memberPath} must be an object`);
-      return false;
-    }
-    const question: unknown = value[index];
-    admitted = validateQuestion(question, memberPath, errors) && admitted;
-  }
-  return admitted;
+  return validateCodingPhysicalMembers(value, `${path}.questions`, errors, validateQuestion);
 }
 
 function validateQuestion(

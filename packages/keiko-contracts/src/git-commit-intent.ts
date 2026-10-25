@@ -13,6 +13,7 @@
 // Leaf-package rules (ADR-0019, ADR-0062): pure types, frozen const tables, and pure functions only.
 // No IO, no clock, no crypto, no randomness. Relative imports end in ".js".
 
+import { isUndefinedOr, isInSet } from "./contract-validation-primitives.js";
 import { validateGitCommitMessage, type GitCommitMessagePolicy } from "./git-commit-policy.js";
 
 // Pinned schema version. A breaking change adds a NEW literal member; this one is never mutated.
@@ -90,15 +91,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isStringArray(value: unknown): value is readonly string[] {
   return Array.isArray(value) && value.every(isString);
-}
-
-function isUndefinedOr<T>(check: (v: unknown) => v is T): (v: unknown) => v is T | undefined {
-  return (v: unknown): v is T | undefined => v === undefined || check(v);
-}
-
-function isInSet<T extends string>(set: readonly T[]): (v: unknown) => v is T {
-  const values: readonly string[] = set;
-  return (v: unknown): v is T => isString(v) && values.includes(v);
 }
 
 // ─── Message structure ──────────────────────────────────────────────────────────────────────────

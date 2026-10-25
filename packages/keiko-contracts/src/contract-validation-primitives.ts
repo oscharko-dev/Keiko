@@ -32,3 +32,28 @@ export function validateStableExtent(
   }
   return true;
 }
+
+export function isPhysicalArrayOf(
+  value: unknown,
+  checkMember: (member: unknown) => boolean,
+): boolean {
+  if (!Array.isArray(value)) return false;
+  const entries: readonly unknown[] = value;
+  const extent = entries.length;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in entries)) return false;
+    if (!checkMember(entries[index])) return false;
+  }
+  return true;
+}
+
+export function isUndefinedOr<T>(
+  check: (v: unknown) => v is T,
+): (v: unknown) => v is T | undefined {
+  return (v: unknown): v is T | undefined => v === undefined || check(v);
+}
+
+export function isInSet<T extends string>(set: readonly T[]): (v: unknown) => v is T {
+  const values: readonly string[] = set;
+  return (v: unknown): v is T => typeof v === "string" && values.includes(v);
+}

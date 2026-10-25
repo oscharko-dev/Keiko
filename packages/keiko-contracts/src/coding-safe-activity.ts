@@ -4,6 +4,7 @@ import {
   invalid,
   isOneOf,
   isRecord,
+  validateCodingPhysicalMembers,
   validateSafeId,
 } from "./coding-workbench-runtime-api-validation.js";
 import { stripUnsafeFormatChars } from "./text-safety.js";
@@ -357,18 +358,7 @@ function validatePlanSteps(
     errors.push(`${path}.steps must be a bounded array`);
     return false;
   }
-  const count = value.length;
-  let admitted = true;
-  for (let index = 0; index < count; index += 1) {
-    const memberPath = `${path}.steps[${String(index)}]`;
-    if (!(index in value)) {
-      errors.push(`${memberPath} must be an object`);
-      return false;
-    }
-    const member: unknown = value[index];
-    admitted = validatePlanStep(member, memberPath, errors) && admitted;
-  }
-  return admitted;
+  return validateCodingPhysicalMembers(value, `${path}.steps`, errors, validatePlanStep);
 }
 
 function validatePlanStep(
@@ -477,18 +467,13 @@ function validateMessages(
     errors.push(`${path}.messages must be a bounded array`);
     return false;
   }
-  const count = value.length;
-  let admitted = true;
-  for (let index = 0; index < count; index += 1) {
-    const memberPath = `${path}.messages[${String(index)}]`;
-    if (!(index in value)) {
-      errors.push(`${memberPath} must be an object`);
-      return false;
-    }
-    const member: unknown = value[index];
-    admitted = validateMessage(member, memberPath, ids, errors) && admitted;
-  }
-  return admitted;
+  return validateCodingPhysicalMembers(
+    value,
+    `${path}.messages`,
+    errors,
+    (member, memberPath, memberErrors): member is CodingSafeActivityMessage =>
+      validateMessage(member, memberPath, ids, memberErrors),
+  );
 }
 
 function validateMessage(
@@ -552,18 +537,7 @@ function validateSegments(
     errors.push(`${path}.segments must be a bounded array`);
     return false;
   }
-  const count = value.length;
-  let admitted = true;
-  for (let index = 0; index < count; index += 1) {
-    const segmentPath = `${path}.segments[${String(index)}]`;
-    if (!(index in value)) {
-      errors.push(`${segmentPath} must be an object`);
-      return false;
-    }
-    const segment: unknown = value[index];
-    admitted = validateSegment(segment, segmentPath, errors) && admitted;
-  }
-  return admitted;
+  return validateCodingPhysicalMembers(value, `${path}.segments`, errors, validateSegment);
 }
 
 function validateSegment(
@@ -641,18 +615,13 @@ function validateTools(
     errors.push(`${path}.tools must be a bounded array`);
     return false;
   }
-  const count = value.length;
-  let admitted = true;
-  for (let index = 0; index < count; index += 1) {
-    const memberPath = `${path}.tools[${String(index)}]`;
-    if (!(index in value)) {
-      errors.push(`${memberPath} must be an object`);
-      return false;
-    }
-    const member: unknown = value[index];
-    admitted = validateTool(member, memberPath, ids, errors) && admitted;
-  }
-  return admitted;
+  return validateCodingPhysicalMembers(
+    value,
+    `${path}.tools`,
+    errors,
+    (member, memberPath, memberErrors): member is CodingSafeActivityTool =>
+      validateTool(member, memberPath, ids, memberErrors),
+  );
 }
 
 function validateTool(

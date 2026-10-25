@@ -747,3 +747,234 @@ describe("C2 observed safe-activity scalar admissions", () => {
     expect(reads).toBe(4);
   });
 });
+
+// Fixed ORIGINAL characterization includes admission and the existing later truncation scan.
+type PhysicalActivityField = "steps" | "segments" | "messages" | "tools";
+
+const PHYSICAL_ACTIVITY_GROWTH_TRACE = [
+  "get:length",
+  "get:length",
+  "has:0",
+  "get:0",
+  "get:length",
+  "has:0",
+  "get:0",
+  "has:1",
+  "get:1",
+];
+const PHYSICAL_ACTIVITY_CASES = [
+  {
+    field: "steps",
+    parentError: "safeActivityFeed.plan.revision must be a positive safe integer",
+    reads: PHYSICAL_ACTIVITY_GROWTH_TRACE,
+  },
+  {
+    field: "segments",
+    parentError: "safeActivityFeed.turns[0].messages[0].role is invalid",
+    reads: PHYSICAL_ACTIVITY_GROWTH_TRACE,
+  },
+  {
+    field: "messages",
+    parentError: "safeActivityFeed.turns[0].turnId must be a bounded safe identifier",
+    reads: PHYSICAL_ACTIVITY_GROWTH_TRACE,
+  },
+  {
+    field: "tools",
+    parentError: "safeActivityFeed.turns[0].turnId must be a bounded safe identifier",
+    reads: ["get:length", "get:length", "has:0", "get:0"],
+  },
+] as const;
+
+async function physicalActivityValidator(
+  surface: "source" | "public",
+): Promise<typeof validateCodingSafeActivityFeed> {
+  return surface === "source"
+    ? validateCodingSafeActivityFeed
+    : (await import("@oscharko-dev/keiko-contracts/runtime/coding-safe-activity"))
+        .validateCodingSafeActivityFeed;
+}
+
+function physicalActivityInput(field: PhysicalActivityField, members: unknown): unknown {
+  const feed = availableFeed();
+  if (feed.availability !== "available") throw new TypeError("Expected available fixture");
+  const turn = feed.turns[0];
+  const message = turn?.messages[0];
+  if (turn === undefined || message === undefined) throw new TypeError("Expected nested fixture");
+  if (field === "steps")
+    return { ...feed, turns: [], plan: { ...plan(), revision: 0, steps: members } };
+  if (field === "segments")
+    return {
+      ...feed,
+      turns: [
+        { ...turn, messages: [{ ...message, role: "invalid", segments: members }], tools: [] },
+      ],
+    };
+  if (field === "messages")
+    return { ...feed, turns: [{ ...turn, turnId: "", messages: members, tools: [] }] };
+  return { ...feed, turns: [{ ...turn, turnId: "", messages: [], tools: members }] };
+}
+
+function physicalActivityMember(field: PhysicalActivityField): unknown {
+  if (field === "steps") return planStep({});
+  const feed = availableFeed();
+  if (feed.availability !== "available") throw new TypeError("Expected available fixture");
+  const turn = feed.turns[0];
+  const message = turn?.messages[0];
+  const segment = message?.segments[0];
+  const tool = turn?.tools[0];
+  if (message === undefined || segment === undefined || tool === undefined)
+    throw new TypeError("Expected nested fixture");
+  const members = { messages: message, segments: segment, tools: tool };
+  return members[field];
+}
+
+function observedPhysicalActivityMembers(
+  members: unknown[],
+  reads: string[],
+): { readonly values: unknown[]; readonly lengthReads: () => number } {
+  let lengths = 0;
+  const values = new Proxy(members, {
+    get(target, key, receiver): unknown {
+      reads.push(`get:${String(key)}`);
+      if (key === "length") lengths += 1;
+      return Reflect.get(target, key, receiver);
+    },
+    has(target, key): boolean {
+      reads.push(`has:${String(key)}`);
+      return Reflect.has(target, key);
+    },
+  });
+  return { values, lengthReads: (): number => lengths };
+}
+
+for (const surface of ["source", "public"] as const) {
+  it.each(PHYSICAL_ACTIVITY_CASES)(
+    `${surface}: retains inherited $field growth outside its captured admission extent`,
+    async ({ field, parentError, reads: expectedReads }) => {
+      const validate = await physicalActivityValidator(surface);
+      const reads: string[] = [];
+      const members = new Array<unknown>(1);
+      const member = physicalActivityMember(field);
+      Object.setPrototypeOf(
+        members,
+        Object.defineProperty([], "0", {
+          get: (): unknown => {
+            if (members.length === 1) members.push(null);
+            return member;
+          },
+        }),
+      );
+      const observed = observedPhysicalActivityMembers(members, reads);
+      expect(validate(physicalActivityInput(field, observed.values))).toEqual({
+        ok: false,
+        errors: [parentError],
+      });
+      expect(reads).toEqual(expectedReads);
+      expect(members).toHaveLength(2);
+    },
+  );
+
+  it(`${surface}: stops plan admission at a hole before the later truncation observation`, async () => {
+    const validate = await physicalActivityValidator(surface);
+    const reads: string[] = [];
+    const members = new Array<unknown>(2);
+    const observed = observedPhysicalActivityMembers(members, reads);
+    Object.defineProperty(members, "1", {
+      get: (): unknown => {
+        if (observed.lengthReads() === 2) throw new TypeError("Admission reached a later member");
+        return planStep({});
+      },
+    });
+    expect(validate(physicalActivityInput("steps", observed.values))).toEqual({
+      ok: false,
+      errors: [
+        "safeActivityFeed.plan.revision must be a positive safe integer",
+        "safeActivityFeed.plan.steps[0] must be an object",
+      ],
+    });
+    expect(reads).toEqual([
+      "get:length",
+      "get:length",
+      "has:0",
+      "get:length",
+      "has:0",
+      "has:1",
+      "get:1",
+    ]);
+  });
+
+  it(`${surface}: continues after an invalid message and keeps the inspection refusal`, async () => {
+    const validate = await physicalActivityValidator(surface);
+    const reads: string[] = [];
+    const failure = new TypeError("fixture-activity-inspection");
+    const member = physicalActivityMember("messages");
+    if (typeof member !== "object" || member === null) throw new TypeError("Expected message");
+    const throwing = Object.defineProperty(member, "messageId", {
+      get: (): never => {
+        throw failure;
+      },
+    });
+    const observed = observedPhysicalActivityMembers([null, throwing], reads);
+    expect(validate(physicalActivityInput("messages", observed.values))).toEqual({
+      ok: false,
+      errors: ["safe activity feed validation failed"],
+    });
+    expect(reads).toEqual(["get:length", "get:length", "has:0", "get:0", "has:1", "get:1"]);
+  });
+
+  it(`${surface}: retains message and tool identity sets across turns`, async () => {
+    const validate = await physicalActivityValidator(surface);
+    const feed = availableFeed();
+    const healthy = validate(feed);
+    expect(healthy.ok).toBe(true);
+    if (healthy.ok) expect(healthy.value).toBe(feed);
+    if (feed.availability !== "available") throw new TypeError("Expected available fixture");
+    const turn = feed.turns[0];
+    const message = turn?.messages[0];
+    const tool = turn?.tools[0];
+    if (turn === undefined || message === undefined || tool === undefined)
+      throw new TypeError("Expected nested fixture");
+    expect(
+      validate({
+        ...feed,
+        turns: [turn, { ...turn, turnId: "turn_array_second", messages: [message], tools: [tool] }],
+      }),
+    ).toEqual({
+      ok: false,
+      errors: [
+        "safeActivityFeed.turns[1].messages[0].messageId must be unique",
+        "safeActivityFeed.turns[1].tools[0].callId must be unique",
+      ],
+    });
+  });
+}
+
+for (const surface of ["source", "public"] as const) {
+  it(`${surface}: uses the later captured tool extent after a different bound observation`, async () => {
+    const validate = await physicalActivityValidator(surface);
+    const reads: string[] = [];
+    let lengths = 0;
+    const values = new Proxy([physicalActivityMember("tools"), null], {
+      get(target, key, receiver): unknown {
+        reads.push(`get:${String(key)}`);
+        if (key === "length") {
+          lengths += 1;
+          return lengths === 1 ? 1 : 2;
+        }
+        return Reflect.get(target, key, receiver);
+      },
+      has(target, key): boolean {
+        reads.push(`has:${String(key)}`);
+        return Reflect.has(target, key);
+      },
+    });
+    expect(validate(physicalActivityInput("tools", values))).toEqual({
+      ok: false,
+      errors: [
+        "safeActivityFeed.turns[0].turnId must be a bounded safe identifier",
+        "safeActivityFeed.turns[0].tools[1] must be an object",
+      ],
+    });
+    expect(reads).toEqual(["get:length", "get:length", "has:0", "get:0", "has:1", "get:1"]);
+  });
+}

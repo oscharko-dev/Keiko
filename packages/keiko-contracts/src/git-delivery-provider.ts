@@ -6,8 +6,9 @@
 // the leaf-package boundary (ADR-0019 rule 1): keiko-contracts cannot import a provider SDK.
 // Leaf-package rules: pure types and frozen const tables only. No IO.
 //
-// Imports ONLY from ./git-delivery.js (GitDeliveryMergeBlockReason, GitDeliveryProviderCapability).
+// Domain imports come from ./git-delivery.js; structural traversal uses the import-free primitive.
 
+import { isPhysicalArrayOf, isUndefinedOr } from "./contract-validation-primitives.js";
 import type {
   GitDeliveryBranchPattern,
   GitDeliveryMergeBlockReason,
@@ -152,32 +153,16 @@ function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
 
-function isUndefinedOr<T>(check: (v: unknown) => v is T): (v: unknown) => v is T | undefined {
-  return (v: unknown): v is T | undefined => v === undefined || check(v);
-}
-
 function isProviderCapability(value: unknown): boolean {
   return isGitDeliveryProviderCapability(value);
 }
 
 function isCapabilityArray(value: unknown): value is readonly GitDeliveryProviderCapability[] {
-  if (!Array.isArray(value)) return false;
-  const extent = value.length;
-  for (let index = 0; index < extent; index += 1) {
-    if (!(index in value)) return false;
-    if (!isProviderCapability(value[index])) return false;
-  }
-  return true;
+  return isPhysicalArrayOf(value, isProviderCapability);
 }
 
 function isPatternArray(value: unknown): value is readonly GitDeliveryBranchPattern[] {
-  if (!Array.isArray(value)) return false;
-  const extent = value.length;
-  for (let index = 0; index < extent; index += 1) {
-    if (!(index in value)) return false;
-    if (!isGitDeliveryBranchPattern(value[index])) return false;
-  }
-  return true;
+  return isPhysicalArrayOf(value, isGitDeliveryBranchPattern);
 }
 
 // ─── Guards ──────────────────────────────────────────────────────────────────────

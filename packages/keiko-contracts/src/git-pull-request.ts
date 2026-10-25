@@ -12,13 +12,14 @@
 //
 // Leaf-package rules (ADR-0019, ADR-0058, ADR-0064): pure types, frozen const tables, and pure
 // functions only. No IO, no clock, no crypto, no randomness, no provider field names. Relative imports
-// end in ".js" and reference only sibling git-delivery*.ts leaves.
+// end in ".js" and reference sibling Git leaves or import-free structural primitives.
 //
 // Content-free by construction: the synthesizer's INPUTS are counts, coarse area tokens, typed enums,
 // and branch names — never raw diff content, file paths, or commit message bodies. The composed
 // title/body DRAFT it returns is user-editable and is NEVER persisted to evidence (evidence carries only
 // the titleByteLength / bodyByteLength already defined on the GitDeliveryPr*Inputs).
 
+import { isPhysicalArrayOf, isInSet } from "./contract-validation-primitives.js";
 import {
   hasGitReadinessForbiddenAdvisory,
   isGitReadinessSeverityRanked,
@@ -292,11 +293,6 @@ function isNonNegativeInteger(value: unknown): value is number {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isInSet<T extends string>(set: readonly T[]): (v: unknown) => v is T {
-  const values: readonly string[] = set;
-  return (v: unknown): v is T => isString(v) && values.includes(v);
 }
 
 // ─── Exported enum guards ─────────────────────────────────────────────────────────────────────────
@@ -627,13 +623,7 @@ export function isGitPullRequestReadinessBlocker(
 }
 
 function isBlockerArray(value: unknown): value is readonly GitPullRequestReadinessBlocker[] {
-  if (!Array.isArray(value)) return false;
-  const extent = value.length;
-  for (let index = 0; index < extent; index += 1) {
-    if (!(index in value)) return false;
-    if (!isGitPullRequestReadinessBlocker(value[index])) return false;
-  }
-  return true;
+  return isPhysicalArrayOf(value, isGitPullRequestReadinessBlocker);
 }
 
 function hasBlockingBlocker(blockers: readonly GitPullRequestReadinessBlocker[]): boolean {
@@ -673,13 +663,7 @@ export function isGitPullRequestReadinessSummary(
 }
 
 function isStringArray(value: unknown): value is readonly string[] {
-  if (!Array.isArray(value)) return false;
-  const extent = value.length;
-  for (let index = 0; index < extent; index += 1) {
-    if (!(index in value)) return false;
-    if (!isString(value[index])) return false;
-  }
-  return true;
+  return isPhysicalArrayOf(value, isString);
 }
 
 export function isGitPullRequestChangeNarrative(

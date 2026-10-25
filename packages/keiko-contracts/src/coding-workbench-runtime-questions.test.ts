@@ -773,3 +773,164 @@ describe("runtime question aggregate object measurement (#3918)", () => {
     }
   });
 });
+
+// Earlier canonical-id refusal keeps aggregate serialization separate from these fixed traces.
+function physicalQuestionInput(members: unknown): unknown {
+  const first = response.questions[0];
+  if (first === undefined) throw new TypeError("Expected question request");
+  return { questions: [{ ...first, id: "invalid", questions: members }] };
+}
+
+function physicalQuestionMember(): unknown {
+  const member = response.questions[0]?.questions[0];
+  if (member === undefined) throw new TypeError("Expected question fixture");
+  return member;
+}
+
+function observedPhysicalQuestions(members: unknown[], reads: string[]): unknown[] {
+  return new Proxy(members, {
+    get(target, key, receiver): unknown {
+      reads.push(`get:${String(key)}`);
+      return Reflect.get(target, key, receiver);
+    },
+    has(target, key): boolean {
+      reads.push(`has:${String(key)}`);
+      return Reflect.has(target, key);
+    },
+  });
+}
+
+for (const [surface, validate] of [
+  ["source", validateCodingWorkbenchRuntimeQuestionsResponse],
+  ["public", publicQuestionsResponse],
+] as const) {
+  it(`${surface}: preserves question minimum maximum and captured-extent observations`, () => {
+    const reads: string[] = [];
+    const members = new Array<unknown>(1);
+    Object.setPrototypeOf(
+      members,
+      Object.defineProperty([], "0", {
+        get: (): unknown => {
+          if (members.length === 1) members.push(null);
+          return physicalQuestionMember();
+        },
+      }),
+    );
+    expect(validate(physicalQuestionInput(observedPhysicalQuestions(members, reads)))).toEqual({
+      ok: false,
+      errors: ["questions[0].id is invalid"],
+    });
+    expect(reads).toEqual(["get:length", "get:length", "get:length", "has:0", "get:0"]);
+    expect(members).toHaveLength(2);
+  });
+
+  it(`${surface}: preserves question empty maximum and nonarray refusal phases`, async () => {
+    const { CODING_WORKBENCH_RUNTIME_QUESTIONS_MAX_COUNT } =
+      await import("./coding-workbench-runtime-questions.js");
+    const emptyReads: string[] = [];
+    const empty = observedPhysicalQuestions([], emptyReads);
+    const expected = {
+      ok: false,
+      errors: [
+        "questions[0].id is invalid",
+        "questions[0].questions must be a bounded non-empty array",
+      ],
+    };
+    expect(validate(physicalQuestionInput(empty))).toEqual(expected);
+    expect(emptyReads).toEqual(["get:length"]);
+    const maximumReads: string[] = [];
+    const maximum = observedPhysicalQuestions(
+      new Array<unknown>(CODING_WORKBENCH_RUNTIME_QUESTIONS_MAX_COUNT + 1),
+      maximumReads,
+    );
+    expect(validate(physicalQuestionInput(maximum))).toEqual(expected);
+    expect(maximumReads).toEqual(["get:length", "get:length"]);
+    const nonarray = Object.defineProperty({}, "length", {
+      get: (): never => {
+        throw new TypeError("Nonarray length must remain unread");
+      },
+    });
+    expect(validate(physicalQuestionInput(nonarray))).toEqual(expected);
+  });
+
+  it(`${surface}: stops questions at a hole before a later throwing getter`, () => {
+    const reads: string[] = [];
+    const members = new Array<unknown>(2);
+    Object.defineProperty(members, "1", {
+      get: (): never => {
+        throw new TypeError("Later question must remain unread");
+      },
+    });
+    expect(validate(physicalQuestionInput(observedPhysicalQuestions(members, reads)))).toEqual({
+      ok: false,
+      errors: ["questions[0].id is invalid", "questions[0].questions[0] must be an object"],
+    });
+    expect(reads).toEqual(["get:length", "get:length", "get:length", "has:0"]);
+  });
+
+  it(`${surface}: continues after an invalid question and propagates the inspection error`, () => {
+    const reads: string[] = [];
+    const failure = new TypeError("fixture-question-inspection");
+    const member = physicalQuestionMember();
+    if (typeof member !== "object" || member === null) throw new TypeError("Expected question");
+    const throwing = Object.defineProperty({ ...member }, "question", {
+      get: (): never => {
+        throw failure;
+      },
+    });
+    let caught: unknown;
+    try {
+      validate(physicalQuestionInput(observedPhysicalQuestions([null, throwing], reads)));
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBe(failure);
+    expect(reads).toEqual([
+      "get:length",
+      "get:length",
+      "get:length",
+      "has:0",
+      "get:0",
+      "has:1",
+      "get:1",
+    ]);
+  });
+}
+
+for (const [surface, validate] of [
+  ["source", validateCodingWorkbenchRuntimeQuestionsResponse],
+  ["public", publicQuestionsResponse],
+] as const) {
+  it(`${surface}: preserves distinct question minimum maximum and captured extents`, () => {
+    const reads: string[] = [];
+    let lengths = 0;
+    const values = new Proxy([physicalQuestionMember(), null], {
+      get(target, key, receiver): unknown {
+        reads.push(`get:${String(key)}`);
+        if (key === "length") {
+          lengths += 1;
+          if (lengths === 1) return 1;
+          return lengths === 2 ? 0 : 2;
+        }
+        return Reflect.get(target, key, receiver);
+      },
+      has(target, key): boolean {
+        reads.push(`has:${String(key)}`);
+        return Reflect.has(target, key);
+      },
+    });
+    expect(validate(physicalQuestionInput(values))).toEqual({
+      ok: false,
+      errors: ["questions[0].id is invalid", "questions[0].questions[1] must be an object"],
+    });
+    expect(reads).toEqual([
+      "get:length",
+      "get:length",
+      "get:length",
+      "has:0",
+      "get:0",
+      "has:1",
+      "get:1",
+    ]);
+  });
+}
