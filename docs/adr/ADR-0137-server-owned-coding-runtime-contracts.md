@@ -77,7 +77,12 @@ raw context stays absent from runtime snapshots, generated runtime configuration
 The same server-only `initialContext` field also carries the repository's own working instructions
 (2026-10-06). For every run the server reads exactly `AGENTS.md` at the task workspace root — no
 other file, no parent directory, no symlink — through the same secure workspace read helper that
-answers `keiko_workspace_read`, never a second filesystem path. That helper resolves its root from
+answers `keiko_workspace_read`, never a second filesystem path. That read proves the file's path,
+type, size and identity, not that its text is free of credentials, so the text then passes the one
+canonical model-safe projection of workspace text (`redactWorkspaceSource`, the
+`@oscharko-dev/keiko-workspace/source-redaction` subpath) before anything is bounded, attached or
+copied; a file that projection cannot handle is `refused` with `redaction-unavailable`, and the
+recorded digest stays the file's own (PR #4064 review r4369385467). That helper resolves its root from
 the global active pointer, so the read is bracketed by the run's own exact-workspace check before
 and after it (`exactWorkspaceRead`, shared with the auxiliary ports): a workspace switch while the
 run starts is recorded as `refused` with `workspace-unavailable` and never attaches another

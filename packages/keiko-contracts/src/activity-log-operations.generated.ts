@@ -9378,6 +9378,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "unstable",
           "source-unavailable",
           "prompt-budget-exhausted",
+          "redaction-unavailable",
           "exception",
         ],
       },

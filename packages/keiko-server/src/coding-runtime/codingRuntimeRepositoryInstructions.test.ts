@@ -723,3 +723,57 @@ describe("native delivery through the runtime's own instruction plugin", () => {
     expect(copy).not.toContain(`line ${String(REPOSITORY_INSTRUCTIONS_MAX_LINES + 4)}`);
   });
 });
+
+// PR #4064 review r4369385467: the secure read proves the file, not its text. A credential in
+// AGENTS.md reaches neither the native copy nor the initial-turn block; the rest of the file does.
+describe("credential-safe projection of the instructions (r4369385467)", () => {
+  // Split so no contiguous credential literal sits in the source.
+  const TOKEN = "ghp_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  const KEY = "AKIA" + "IOSFODNN7EXAMPLE";
+  const WITH_CREDENTIALS = `# Rules\n\nKeep CANARY-RULE.\nGITHUB_TOKEN=${TOKEN}\naws_access_key_id = ${KEY}\n`;
+
+  async function copied(text: string): Promise<{
+    readonly copy: string;
+    readonly records: ServerLogEvent[];
+  }> {
+    const { activityLog, records } = captureActivityLog();
+    const port = createCodingRuntimeRepositoryInstructionsPort({
+      enabled: true,
+      delivery: "native-instructions",
+      source: sourceAnswering({ ok: true, text }).source,
+      activityLog,
+    });
+    const targetPath = join(mkdtempSync(join(tmpdir(), "keiko-instructions-safe-")), "AGENTS.md");
+    await port.materializeForRun({ runId: RUN_ID, isRunWorkspace: RUN_WORKSPACE, targetPath });
+    return { copy: readFileSync(targetPath, "utf8"), records };
+  }
+
+  it("masks credentials in the native copy, keeps the rest and names the file's own digest", async () => {
+    const { copy, records } = await copied(WITH_CREDENTIALS);
+    expect(copy).toContain("Keep CANARY-RULE.");
+    expect(copy).not.toContain(TOKEN);
+    expect(copy).not.toContain(KEY);
+    expect(copy).toContain("[REDACTED]");
+    expect(records.filter((record) => record.op === OP)).toMatchObject([
+      { extra: { state: "attached", contentSha256: sha256(WITH_CREDENTIALS) } },
+    ]);
+  });
+
+  it("masks credentials in the initial-turn block of the mapped profiles", async () => {
+    const port = createCodingRuntimeRepositoryInstructionsPort({
+      enabled: true,
+      source: sourceAnswering({ ok: true, text: WITH_CREDENTIALS }).source,
+      activityLog: undefined,
+    });
+    const block = await port.loadForRun({ runId: RUN_ID, isRunWorkspace: RUN_WORKSPACE });
+    expect(block).toContain("Keep CANARY-RULE.");
+    expect(block).not.toContain(TOKEN);
+    expect(block).not.toContain(KEY);
+  });
+
+  it("leaves harmless instructions exactly as written", async () => {
+    const { copy } = await copied(INSTRUCTIONS);
+    expect(copy).toContain(INSTRUCTIONS.trimEnd());
+    expect(copy).not.toContain("[REDACTED]");
+  });
+});

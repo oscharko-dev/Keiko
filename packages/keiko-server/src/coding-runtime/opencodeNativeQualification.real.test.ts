@@ -1890,6 +1890,14 @@ describe("pinned native OpenCode repository instructions (C03, #3900 AC3)", () =
     });
   }
 
+  // Credential canaries (r4369385467), split so no contiguous literal sits in the source.
+  const CANARY = "ghp_" + "QUALIFICATIONCANARY0123456789ABCDEFGH";
+  const SECOND_CANARY = "AKIA" + "QUALCANARY000042";
+
+  function copyText(run: Run): string {
+    return readFileSync(openCodeRepositoryInstructionsPath(run.fixture.state), "utf8");
+  }
+
   function requestText(run: Run, from: number): string {
     return JSON.stringify(run.gateway.requests.slice(from).map((request) => request.body));
   }
@@ -1899,7 +1907,7 @@ describe("pinned native OpenCode repository instructions (C03, #3900 AC3)", () =
     async () => {
       let materialize = (): Promise<boolean> => Promise.resolve(false);
       const files = {
-        "AGENTS.md": "ROOT-RULE-ONE\n",
+        "AGENTS.md": `ROOT-RULE-ONE\nGITHUB_TOKEN=${CANARY}\n`,
         "src/AGENTS.md": "NESTED-RULE\n",
         "src/a.ts": "export const a = 1;\n",
       };
@@ -1926,7 +1934,11 @@ describe("pinned native OpenCode repository instructions (C03, #3900 AC3)", () =
           // The read of src/a.ts walked past src/AGENTS.md: a later call of the turn carries it.
           expect(requestText(run, 1)).toContain("NESTED-RULE");
 
-          writeFileSync(join(run.fixture.workspace, "AGENTS.md"), "ROOT-RULE-TWO\n");
+          expect(copyText(run)).not.toContain(CANARY);
+          writeFileSync(
+            join(run.fixture.workspace, "AGENTS.md"),
+            `ROOT-RULE-TWO\naws_access_key_id = ${SECOND_CANARY}\n`,
+          );
           // What the composition does before every turn.
           expect(await materialize()).toBe(true);
           await new Promise((resolve) => setTimeout(resolve, 250));
@@ -1942,6 +1954,10 @@ describe("pinned native OpenCode repository instructions (C03, #3900 AC3)", () =
             .find((content) => content.includes("The instructions changed"));
           expect(update).toContain("ROOT-RULE-TWO");
           expect(update).not.toContain("ROOT-RULE-ONE");
+          // Neither credential left the run: not in the copy, not in any outgoing model request.
+          expect(copyText(run)).not.toContain(SECOND_CANARY);
+          expect(requestText(run, 0)).not.toContain(CANARY);
+          expect(requestText(run, 0)).not.toContain(SECOND_CANARY);
         },
       );
     },
@@ -1985,12 +2001,17 @@ describe("pinned native OpenCode repository instructions (C03, #3900 AC3)", () =
         async (run) => {
           await scriptedTurn(run, read("src/a.ts"));
           expect(requestText(run, 0)).not.toContain("CREATED-RULE");
-          writeFileSync(join(run.fixture.workspace, "AGENTS.md"), "CREATED-RULE\n");
+          writeFileSync(
+            join(run.fixture.workspace, "AGENTS.md"),
+            `CREATED-RULE\nGITHUB_TOKEN=${CANARY}\n`,
+          );
           expect(await materialize()).toBe(true);
           await new Promise((resolve) => setTimeout(resolve, 250));
           const before = run.gateway.requests.length;
           await scriptedTurn(run, read("src/a.ts"));
           expect(requestText(run, before)).toContain("CREATED-RULE");
+          expect(copyText(run)).not.toContain(CANARY);
+          expect(requestText(run, 0)).not.toContain(CANARY);
         },
       );
     },

@@ -3,6 +3,8 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { dirname } from "node:path";
 import { causeChain, keikoStackFrames, type ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { estimateTokens } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { WorkspaceReadError } from "@oscharko-dev/keiko-workspace";
+import { redactWorkspaceSource } from "@oscharko-dev/keiko-workspace/source-redaction";
 import {
   activityLogEvent,
   defineActivityLogOperation,
@@ -94,10 +96,12 @@ const REPOSITORY_INSTRUCTIONS_REASONS = [
   "unstable",
   "source-unavailable",
   "prompt-budget-exhausted",
+  "redaction-unavailable",
   "exception",
 ] as const;
 type RepositoryInstructionsReason = (typeof REPOSITORY_INSTRUCTIONS_REASONS)[number];
-type LoaderReason = "source-unavailable" | "prompt-budget-exhausted" | "exception";
+type LoaderReason =
+  "source-unavailable" | "prompt-budget-exhausted" | "redaction-unavailable" | "exception";
 
 const REPOSITORY_INSTRUCTIONS_ERROR_KINDS: Readonly<
   Record<SecureWorkspaceTextReadFailure | LoaderReason, ActivityLogErrorKind>
@@ -117,6 +121,7 @@ const REPOSITORY_INSTRUCTIONS_ERROR_KINDS: Readonly<
   unstable: "conflict",
   "source-unavailable": "unavailable",
   "prompt-budget-exhausted": "validation-failed",
+  "redaction-unavailable": "unavailable",
   exception: "internal",
 };
 
@@ -356,12 +361,15 @@ export function repositoryInstructionsContentBudget(
 export function boundRepositoryInstructions(
   text: string,
   maxBytes = REPOSITORY_INSTRUCTIONS_MAX_BYTES,
+  file = text,
 ): BoundedRepositoryInstructions {
   const window = readWindow(text, 1, REPOSITORY_INSTRUCTIONS_MAX_LINES);
   const whole = {
     totalByteCount: Buffer.byteLength(text, "utf8"),
     totalLineCount: window.totalLines,
-    contentSha256: wholeFileDigest(text),
+    // The file's own digest, as the read tool reports it; the text and its counts are what the
+    // model may see.
+    contentSha256: wholeFileDigest(file),
   };
   if (window.nextStartLine === undefined && whole.totalByteCount <= maxBytes) {
     return {
@@ -511,13 +519,25 @@ async function readBoundedInstructions(
       relativePath: REPOSITORY_INSTRUCTIONS_FILE_NAME,
       ...(signal === undefined ? {} : { signal }),
     });
-    if (result.ok) return boundRepositoryInstructions(result.text, maxBytes);
+    if (result.ok)
+      return boundRepositoryInstructions(modelSafeInstructions(result.text), maxBytes, result.text);
     recordEmpty(activityLog, runId, readFailureOutcome(result.reason));
     return undefined;
   } catch (error) {
-    recordEmpty(activityLog, runId, refusal("exception", error));
+    const reason = error instanceof WorkspaceReadError ? "redaction-unavailable" : "exception";
+    recordEmpty(activityLog, runId, refusal(reason, error));
     return undefined;
   }
+}
+
+/**
+ * The file as the model may see it (PR #4064 review r4369385467): the secure read proves the path,
+ * type, size and identity, not that the text is free of credentials. The one canonical projection
+ * of workspace text masks them before anything is bounded, copied or attached, for the native copy
+ * and the initial-turn block alike, and throws when it cannot project the file safely.
+ */
+function modelSafeInstructions(text: string): string {
+  return redactWorkspaceSource(text, REPOSITORY_INSTRUCTIONS_FILE_NAME);
 }
 
 function admissionRefusal(
