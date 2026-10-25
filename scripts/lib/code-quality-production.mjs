@@ -29,11 +29,9 @@ function observeModuleSyntax(source, syntax, node) {
       start: node.getStart(),
       bindings: moduleStatementBindings(node),
     });
-  const statement = ts.isImportSpecifier(node)
-    ? node.parent.parent.parent
-    : ts.isExportSpecifier(node)
-      ? node.parent.parent
-      : null;
+  let statement = null;
+  if (ts.isImportSpecifier(node)) statement = node.parent.parent.parent;
+  else if (ts.isExportSpecifier(node)) statement = node.parent.parent;
   if (statement?.parent !== source) return;
   syntax.statements.get(statement.getStart()).bindings?.push({
     name: (node.propertyName ?? node.name).text,

@@ -2531,7 +2531,7 @@ function namedRawImport(node) {
     !node.isTypeOnly &&
     (node.propertyName ?? node.name).text !== "default" &&
     ts.isNamedImports(node.parent) &&
-    !node.parent.parent.isTypeOnly &&
+    node.parent.parent.phaseModifier !== ts.SyntaxKind.TypeKeyword &&
     ts.isImportDeclaration(node.parent.parent.parent) &&
     node.parent.parent.parent.moduleSpecifier.text.startsWith(".")
   );
@@ -2734,19 +2734,23 @@ function privateValueExportDeclaration(declaration) {
     : !statement.isTypeOnly && !declaration.isTypeOnly;
 }
 
+function privateIncomingModuleExposure(state, index, entry, producerModule) {
+  if (producerModule && !privateIncomingRelevant(state, index, entry)) return false;
+  return privateModuleExportsHelper(state, entry.path);
+}
+
 function privateReachableModules(state, index, path) {
   const reachable = new Set([path]);
   const queue = [path];
   for (const target of queue)
-    for (const entry of index.incoming.get(target) ?? [])
-      if (!reachable.has(entry.path)) {
-        if (target === path && !privateIncomingRelevant(state, index, entry)) continue;
-        const exposed = privateModuleExportsHelper(state, entry.path);
-        if (exposed === null) return null;
-        if (!exposed) continue;
-        reachable.add(entry.path);
-        queue.push(entry.path);
-      }
+    for (const entry of index.incoming.get(target) ?? []) {
+      if (reachable.has(entry.path)) continue;
+      const exposed = privateIncomingModuleExposure(state, index, entry, target === path);
+      if (exposed === null) return null;
+      if (!exposed) continue;
+      reachable.add(entry.path);
+      queue.push(entry.path);
+    }
   return reachable;
 }
 
@@ -3865,9 +3869,10 @@ function collectiveRawComponents(compiler, requests) {
     components.push(joined);
   }
   compiler.assertCurrent();
-  return components.map(({ roots }) =>
-    roots.sort((a, b) => compareStrings(a.recordId, b.recordId)),
-  );
+  return components.map(({ roots }) => {
+    roots.sort((a, b) => compareStrings(a.recordId, b.recordId));
+    return roots;
+  });
 }
 
 function collectiveJsonByteMeasurement(compiler, requests) {
