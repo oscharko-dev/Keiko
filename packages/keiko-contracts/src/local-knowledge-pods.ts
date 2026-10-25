@@ -10,6 +10,7 @@ import {
   isCapturedExtent,
   isRecord,
   validateStableExtent,
+  validateStableArrayMembers,
 } from "./contract-validation-primitives.js";
 import type {
   EmbeddingProfileCompatibilityReason,
@@ -799,27 +800,16 @@ function validateSafeTextArray(
   errors: string[],
   allowEmpty: boolean,
 ): boolean {
-  let valid = true;
   if (!Array.isArray(value)) {
-    valid = reject(errors, `${field} must be an array`);
-    return valid;
+    return reject(errors, `${field} must be an array`);
   }
-  const members = value;
-  const extent = members.length;
-  if (!isCapturedExtent(extent)) {
-    reject(errors, `${field} must have a valid array length`);
-    return false;
-  }
-  for (let index = 0; index < extent; index += 1) {
-    const entry: unknown = members[index];
-
-    if (!isSafePodText(entry, allowEmpty)) {
-      valid = reject(errors, `${field} entries must be evidence-safe strings`);
-      return valid;
-    }
-  }
-  valid = combineAdmissions(valid, validateStableExtent(members, extent, field, errors));
-  return valid;
+  return validateStableArrayMembers(
+    value,
+    field,
+    errors,
+    (entry): boolean => isSafePodText(entry, allowEmpty),
+    "entries must be evidence-safe strings",
+  );
 }
 
 function validateCounts(value: unknown, errors: string[]): boolean {

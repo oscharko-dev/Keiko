@@ -120,3 +120,25 @@ export function hasOnlyKeys(
 ): boolean {
   return Object.keys(value).every((key) => allowed.includes(key));
 }
+
+export function validateStableArrayMembers(
+  members: readonly unknown[],
+  field: string,
+  errors: string[],
+  checkMember: (member: unknown) => boolean,
+  memberDiagnosticSuffix: string,
+): boolean {
+  const extent = members.length;
+  if (!isCapturedExtent(extent)) {
+    errors.push(`${field} must have a valid array length`);
+    return false;
+  }
+  for (let index = 0; index < extent; index += 1) {
+    const entry: unknown = members[index];
+    if (!checkMember(entry)) {
+      errors.push(`${field} ${memberDiagnosticSuffix}`);
+      return false;
+    }
+  }
+  return validateStableExtent(members, extent, field, errors);
+}

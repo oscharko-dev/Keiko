@@ -11,6 +11,7 @@ import {
   isCapturedExtent,
   isRecord,
   validateStableExtent,
+  validateStableArrayMembers,
 } from "./contract-validation-primitives.js";
 import type {
   CapsuleContextualRetrievalSettings,
@@ -146,27 +147,16 @@ function validateSafeDisplayStringArrayField(
   field: string,
   value: unknown,
 ): boolean {
-  let valid = true;
   if (!Array.isArray(value)) {
-    valid = reject(errors, `${field} must be a string array`);
-    return valid;
+    return reject(errors, `${field} must be a string array`);
   }
-  const members = value;
-  const extent = members.length;
-  if (!isCapturedExtent(extent)) {
-    reject(errors, `${field} must have a valid array length`);
-    return false;
-  }
-  for (let index = 0; index < extent; index += 1) {
-    const entry: unknown = members[index];
-
-    if (!isSafeDisplayString(entry)) {
-      valid = reject(errors, `${field} entry must be a browser-safe non-empty trimmed string`);
-      return valid;
-    }
-  }
-  valid = combineAdmissions(valid, validateStableExtent(members, extent, field, errors));
-  return valid;
+  return validateStableArrayMembers(
+    value,
+    field,
+    errors,
+    isSafeDisplayString,
+    "entry must be a browser-safe non-empty trimmed string",
+  );
 }
 
 function validateSafeMetadataMap(errors: string[], field: string, value: unknown): boolean {

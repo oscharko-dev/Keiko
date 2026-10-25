@@ -1164,3 +1164,89 @@ it.each(["source", "public"])("propagates final extent getter failure through %s
   expect(observed).toBe(refusal);
   expect(trace).toEqual(["length", "0", "length"]);
 });
+
+it.each(["source", "public"] as const)(
+  "stops at the first invalid text member before later index or final extent through %s",
+  (surface) => {
+    const validate = surface === "source" ? validateKnowledgePodSummary : publicValidateSummary;
+    const trace: string[] = [];
+    let lengthReads = 0;
+    const values: unknown[] = [7];
+    Object.defineProperty(values, "1", {
+      get: (): never => {
+        throw new TypeError("Later text member must not be inspected");
+      },
+    });
+    const members = new Proxy(values, {
+      get(target, key, receiver): unknown {
+        trace.push(`get:${String(key)}`);
+        if (key === "length" && ++lengthReads === 2)
+          throw new TypeError("Rejected text array must not read final extent");
+        const value: unknown = Reflect.get(target, key, receiver);
+        return value;
+      },
+      has(target, key): boolean {
+        trace.push(`has:${String(key)}`);
+        return Reflect.has(target, key);
+      },
+    });
+    expect(validate({ ...happySummary(), tags: members })).toEqual({
+      ok: false,
+      errors: ["summary.tags entries must be evidence-safe strings"],
+    });
+    expect(trace).toEqual(["get:length", "get:0"]);
+  },
+);
+
+it.each(["source", "public"] as const)(
+  "reads a sparse text member directly and skips final extent after refusal through %s",
+  (surface) => {
+    const validate = surface === "source" ? validateKnowledgePodSummary : publicValidateSummary;
+    const trace: string[] = [];
+    let lengthReads = 0;
+    const members = new Proxy(new Array<unknown>(1), {
+      get(target, key, receiver): unknown {
+        trace.push(`get:${String(key)}`);
+        if (key === "length" && ++lengthReads === 2)
+          throw new TypeError("Sparse text refusal must not read final extent");
+        const value: unknown = Reflect.get(target, key, receiver);
+        return value;
+      },
+      has(target, key): boolean {
+        trace.push(`has:${String(key)}`);
+        return Reflect.has(target, key);
+      },
+    });
+    expect(validate({ ...happySummary(), tags: members })).toEqual({
+      ok: false,
+      errors: ["summary.tags entries must be evidence-safe strings"],
+    });
+    expect(trace).toEqual(["get:length", "get:0"]);
+  },
+);
+
+it.each(["source", "public"] as const)(
+  "retains inherited text members and the success-only final extent through %s",
+  (surface) => {
+    const validate = surface === "source" ? validateKnowledgePodSummary : publicValidateSummary;
+    const trace: string[] = [];
+    const values = new Array<unknown>(1);
+    Object.setPrototypeOf(values, Object.defineProperty([], "0", { get: (): string => "healthy" }));
+    const members = new Proxy(values, {
+      get(target, key, receiver): unknown {
+        trace.push(`get:${String(key)}`);
+        const value: unknown = Reflect.get(target, key, receiver);
+        return value;
+      },
+      has(target, key): boolean {
+        trace.push(`has:${String(key)}`);
+        return Reflect.has(target, key);
+      },
+    });
+    const input = { ...happySummary(), tags: members };
+    const result = validate(input);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(input);
+    expect(trace).toEqual(["get:length", "get:0", "get:length"]);
+  },
+);
