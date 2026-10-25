@@ -1032,6 +1032,9 @@ async function applyHistoryPlan(
     if (receipt !== "applied" && receipt !== "duplicate") throw new Error("sink-receipt-invalid");
   }
   if (!prepared.commit()) throw new Error("reconciler-commit-conflict");
+  // Successful sink receipts make these projections safe to evict; undelivered critical events
+  // still retain the bounded staging protection. Checkpoints and recent replay identities remain.
+  state.reconciler.acknowledge(prepared.projections);
   recordCompactionActivity(ports, prepared.projections);
   replaceMap(state.checkpoints, planned.checkpoints);
   replaceMap(state.evidenceCheckpoints, planned.evidenceCheckpoints);

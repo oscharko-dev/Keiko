@@ -284,6 +284,7 @@ function launch(
   binary: string,
   runtimeRoot: string,
   ports: { readonly gateway: number; readonly facade: number },
+  privateServiceCwd = false,
 ): Launched {
   const profile = buildOpenCodeLaunchProfile({
     executable: binary,
@@ -321,7 +322,7 @@ function launch(
   return {
     password,
     child: spawn(command.command, [...command.args], {
-      cwd: fixture.workspace,
+      cwd: privateServiceCwd ? fixture.state : fixture.workspace,
       env: {
         ...profile.env,
         PATH: `${dirname(git.path)}:/usr/bin:/bin`,
@@ -381,17 +382,26 @@ interface Run {
   readonly raw: (method: string, path: string, payload?: unknown) => Promise<unknown>;
 }
 
-async function withRun(body: (run: Run) => Promise<void>): Promise<void> {
+async function withRun(
+  body: (run: Run) => Promise<void>,
+  privateServiceCwd = false,
+): Promise<void> {
   if (BINARY === undefined || RESOURCE_ROOT === undefined)
     throw new Error("fixture-binary-missing");
   expect(process.platform).toBe("darwin");
   const fixture = createFixture();
   const gateway = await startGateway();
   const facade = await startFacade();
-  const launched = launch(fixture, realpathSync(BINARY), realpathSync(RESOURCE_ROOT), {
-    gateway: gateway.port,
-    facade: facade.port,
-  });
+  const launched = launch(
+    fixture,
+    realpathSync(BINARY),
+    realpathSync(RESOURCE_ROOT),
+    {
+      gateway: gateway.port,
+      facade: facade.port,
+    },
+    privateServiceCwd,
+  );
   try {
     const endpoint = await childEndpoint(launched.child);
     const client = createOpenCodeV2HttpClient({ endpoint, password: launched.password });
@@ -964,6 +974,57 @@ describe("pinned native OpenCode session tree: questions", () => {
       return questions.length > 0 ? questions : undefined;
     });
   }
+
+  it.skipIf(skip)(
+    "lists and answers the workspace question when the native service cwd is private state",
+    async () => {
+      await withRun(async (run) => {
+        const owners = await startOwners(run);
+        try {
+          run.gateway.script = asking;
+          const turn = startTurn(run, owners, "PARENT_TASK ask a workspace question");
+          const [question] = await pending(owners);
+          expect(question?.sessionID).toBe(run.sessionId);
+          expect(await run.client.forms()).toEqual([]);
+          await expect(owners.questions.answer(question?.id ?? "", [["Blue"]])).resolves.toBe(true);
+          await expect(turn.settled).resolves.toBe(true);
+          expect(await owners.questions.list()).toEqual([]);
+          expect(await activeIds(run)).toEqual([]);
+        } finally {
+          await owners.stop();
+        }
+      }, true);
+    },
+    60_000,
+  );
+
+  it.skipIf(skip)(
+    "completes 300 native tool rounds through bounded acknowledged reconciliation",
+    async () => {
+      await withRun(async (run) => {
+        const owners = await startOwners(run);
+        let rounds = 0;
+        try {
+          run.gateway.script = (): ModelPlan =>
+            rounds++ < 300
+              ? { kind: "tool", name: "read", arguments: { path: "README.md" } }
+              : { kind: "text", text: "Completed sustained native reads." };
+          const turn = startTurn(run, owners, "PARENT_TASK perform sustained native reads");
+          await expect(turn.settled).resolves.toBe(true);
+          expect(rounds).toBe(301);
+          expect(await activeIds(run)).toEqual([]);
+          expect(
+            owners.activityLog.events
+              .filter((event) => event.op === "coding-runtime.history-projection")
+              .map((event) => event.extra),
+          ).toContainEqual(expect.objectContaining({ completeness: "complete", loss: "none" }));
+        } finally {
+          await owners.stop();
+        }
+      });
+    },
+    60_000,
+  );
 
   it.skipIf(skip)(
     "routes a child's question to the human, answers it through the child and lets both continue",

@@ -52,6 +52,9 @@ interface Fixture {
   readonly failures: unknown[];
   readonly state: {
     forms: readonly Record_[];
+    formDirectories: (string | undefined)[];
+    formsByDirectory?: ReadonlyMap<string, readonly Record_[]>;
+    locations: Set<string>;
     sessions: readonly Record_[];
     sessionReads: number;
     open: boolean;
@@ -68,6 +71,8 @@ interface Fixture {
 function fixture(forms: readonly Record_[], sessions: readonly Record_[]): Fixture {
   const state: Fixture["state"] = {
     forms,
+    formDirectories: [],
+    locations: new Set(),
     sessions,
     sessionReads: 0,
     open: true,
@@ -84,11 +89,16 @@ function fixture(forms: readonly Record_[], sessions: readonly Record_[]): Fixtu
   const deps: NativeQuestionPortDeps = {
     runId: "run-questions",
     client: {
-      forms: () => {
+      forms: (directory) => {
+        state.formDirectories.push(directory);
         state.onForms();
         return state.failForms
           ? Promise.reject(new Error("forms-unavailable"))
-          : Promise.resolve(state.forms);
+          : Promise.resolve(
+              state.formsByDirectory === undefined
+                ? state.forms
+                : (state.formsByDirectory.get(directory ?? "") ?? []),
+            );
       },
       sessions: () => {
         state.sessionReads += 1;
@@ -108,7 +118,12 @@ function fixture(forms: readonly Record_[], sessions: readonly Record_[]): Fixtu
         return Promise.resolve();
       },
     },
-    tree: { sessionId: PRIMARY, workspaceRoot: WORKSPACE, children: new Set() },
+    tree: {
+      sessionId: PRIMARY,
+      workspaceRoot: WORKSPACE,
+      children: new Set(),
+      locations: state.locations,
+    },
     open: () => state.open,
     activityLog,
     onFailure: (error) => failures.push(error),
@@ -139,6 +154,25 @@ describe("a native run's questions across its session tree", () => {
     session("ses_foreign"),
     session("ses_elsewhere", PRIMARY, "/elsewhere"),
   ];
+
+  it("reads the workspace and admitted moved locations instead of the service cwd", async () => {
+    const moved = `${WORKSPACE}/moved`;
+    const run = fixture([], [session("ses_child", PRIMARY, moved), session("ses_foreign")]);
+    run.state.locations.add(moved);
+    run.state.formsByDirectory = new Map([
+      [WORKSPACE, [form("primary", PRIMARY), form("foreign", "ses_foreign")]],
+      [moved, [form("child", "ses_child")]],
+    ]);
+    expect((await run.port.list()).map(({ id }) => id)).toEqual(["que_primary", "que_child"]);
+    expect(run.state.formDirectories).toEqual([WORKSPACE, moved]);
+    expect(routedLines(run)).toContainEqual(
+      expect.objectContaining({
+        action: "list",
+        outcome: "listed",
+        childFormCount: 1,
+      }),
+    );
+  });
 
   it("lists the forms of the primary session and of its owned children, and no other", async () => {
     const run = fixture(

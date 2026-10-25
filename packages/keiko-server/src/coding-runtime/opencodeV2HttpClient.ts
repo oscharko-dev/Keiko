@@ -445,7 +445,11 @@ export interface OpenCodeV2HttpClient {
   permissions(signal?: AbortSignal): Promise<readonly Readonly<Record<string, unknown>>[]>;
   /** The producer's plugins and their load state (`GET /api/plugin`, operation `plugin.list`). */
   plugins(signal?: AbortSignal): Promise<readonly Readonly<Record<string, unknown>>[]>;
-  forms(signal?: AbortSignal): Promise<readonly Readonly<Record<string, unknown>>[]>;
+  /** Pending forms belong to a location; omit it only when the service cwd is the intended scope. */
+  forms(
+    directory?: string,
+    signal?: AbortSignal,
+  ): Promise<readonly Readonly<Record<string, unknown>>[]>;
   replyForm(
     sessionId: string,
     formId: string,
@@ -1419,7 +1423,15 @@ export function createOpenCodeV2HttpClient(
       arrayEnvelope(await request("GET", "/api/permission/request", undefined, signal)),
     plugins: async (signal) =>
       arrayEnvelope(await request("GET", "/api/plugin", undefined, signal)),
-    forms: async (signal) => arrayEnvelope(await request("GET", "/api/form", undefined, signal)),
+    forms: async (directory, signal) =>
+      arrayEnvelope(
+        await request(
+          "GET",
+          directory === undefined ? "/api/form" : `/api/form?${locationQuery(directory)}`,
+          undefined,
+          signal,
+        ),
+      ),
     replyForm: async (sessionId, formId, answer, signal): Promise<void> => {
       await request(
         "POST",

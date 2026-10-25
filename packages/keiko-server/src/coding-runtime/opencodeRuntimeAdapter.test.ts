@@ -1427,6 +1427,31 @@ describe("OpenCode runtime adapter readiness", () => {
     await adapter.close();
   });
 
+  it("delivers more than 256 critical events across acknowledged pages exactly once", async () => {
+    const harness = readinessPorts();
+    let sequence = 0;
+    const activityLog = createBufferedServerLogSink();
+    harness.ports.readiness.history = (): Promise<readonly GovernedEvent[]> => {
+      const page = Array.from({ length: 64 }, () => event(sequence++, "tool"));
+      return Promise.resolve(page);
+    };
+    const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter({
+      ...harness.ports,
+      activityLog,
+    });
+    await expect(adapter.start()).resolves.toMatchObject({ ok: true });
+    for (let page = 0; page < 8; page += 1)
+      await expect(adapter.reconcile()).resolves.toMatchObject({ ok: true });
+    expect(harness.effects.filter((value) => value.startsWith("evt_"))).toHaveLength(sequence);
+    expect(new Set(harness.effects).size).toBe(harness.effects.length);
+    expect(
+      activityLog.events
+        .filter((event) => event.op === "coding-runtime.readiness.phase")
+        .map((event) => event.extra),
+    ).toContainEqual(expect.objectContaining({ phase: "sse-history-reconciliation" }));
+    await adapter.close();
+  });
+
   it("fails closed when a critical-only reconciliation page exceeds bounded staging", async () => {
     const harness = readinessPorts();
     harness.ports.readiness.history = (): Promise<readonly GovernedEvent[]> =>

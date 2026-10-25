@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "10aa653de55c5dc4c21bd1dc192bd1d3ab0823b360994a6a65d5e76b96749693",
+    "catalogDigest": "91db5d11f6764f74f39cbb53bf715a57029dba3192edab0be67ef7af74b76bf7",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -6827,7 +6827,7 @@
         "failureClasses": ["coding-runtime-compaction"],
         "proofIds": ["coding-runtime.compaction.emitted-line"],
         "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:178",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:1073"]
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:1076"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -8952,7 +8952,7 @@
         "proofIds": ["coding-runtime.native-question.routed.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeNativeQuestions.ts:28",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeNativeQuestions.ts:311"]
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeNativeQuestions.ts:316"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -9104,7 +9104,7 @@
         "failureClasses": ["coding-runtime-session-continuity"],
         "proofIds": ["coding-runtime.native-turn.interrupted.emitted-line"],
         "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:226",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:1050"]
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:1053"]
       },
       {
         "contractKind": "activity-log-operation",

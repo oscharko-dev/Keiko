@@ -507,7 +507,10 @@ function toolResponse(
 
 function scriptedProductiveResponse(): ProductiveResponseControl {
   const changeset = {
-    patch: "--- a/src/example.ts\n+++ b/src/example.ts\n@@\n-old\n+new\n",
+    edits: [{ file: "src/example.ts", oldString: "old", newString: "new", replaceAll: false }],
+    deletions: [],
+    renames: [],
+    selectedFiles: ["src/example.ts"],
     files: [{ file: "src/example.ts", expectedContentHash: "a".repeat(64) }],
   };
   let held = false;
@@ -913,7 +916,7 @@ function statusCapturingFetch(
         : input instanceof URL
           ? input
           : new URL(input.url);
-    if (url.pathname === "/session/status")
+    if (url.pathname === "/api/session/active")
       statuses.push(await sessionStatusSummary(response.clone()));
     if (url.pathname === "/sync/history")
       histories.push(await historyEventSummary(response.clone()));
@@ -945,11 +948,10 @@ async function sessionStatusSummary(response: Response): Promise<string> {
     const value: unknown = await response.json();
     if (typeof value !== "object" || value === null || Array.isArray(value))
       return "status=invalid";
-    const states = Object.values(value as Record<string, unknown>)
-      .map((entry) => {
-        const record = entry as { type?: unknown };
-        return typeof record.type === "string" ? record.type : "invalid";
-      })
+    const data = (value as Record<string, unknown>).data;
+    if (!isRecord(data)) return "status=invalid";
+    const states = Object.keys(data)
+      .map(() => "busy")
       .join("|");
     return `status=${states}`;
   } catch {
@@ -968,12 +970,12 @@ function runtimeDatabaseProjection(databasePath: string): string {
     try {
       const messages = database
         .prepare(
-          "SELECT json_extract(data, '$.role') AS role, json_extract(data, '$.finish') AS finish, json_extract(data, '$.error.name') AS error_name FROM message ORDER BY time_created",
+          "SELECT type AS role, json_extract(data, '$.finish') AS finish, json_extract(data, '$.error.name') AS error_name FROM session_message ORDER BY time_created",
         )
         .all() as readonly Record<string, unknown>[];
       const parts = database
         .prepare(
-          "WITH message_ordinals AS (SELECT id, json_extract(data, '$.role') AS role, SUM(CASE WHEN json_extract(data, '$.role') = 'assistant' THEN 1 ELSE 0 END) OVER (ORDER BY time_created, id) AS assistant_ordinal FROM message) SELECT message_ordinals.assistant_ordinal AS assistant_ordinal, json_extract(part.data, '$.type') AS type, json_extract(part.data, '$.reason') AS reason, json_extract(part.data, '$.tool') AS tool, json_extract(part.data, '$.state.status') AS state_status, json_extract(part.data, '$.metadata.providerExecuted') AS provider_executed FROM part JOIN message_ordinals ON message_ordinals.id = part.message_id WHERE message_ordinals.role = 'assistant' ORDER BY part.time_created",
+          "WITH messages AS (SELECT data, type, SUM(CASE WHEN type = 'assistant' THEN 1 ELSE 0 END) OVER (ORDER BY time_created, id) AS assistant_ordinal FROM session_message) SELECT messages.assistant_ordinal AS assistant_ordinal, json_extract(part.value, '$.type') AS type, json_extract(part.value, '$.reason') AS reason, json_extract(part.value, '$.tool') AS tool, json_extract(part.value, '$.state.status') AS state_status, json_extract(part.value, '$.metadata.providerExecuted') AS provider_executed FROM messages, json_each(json_extract(messages.data, '$.content')) AS part WHERE messages.type = 'assistant'",
         )
         .all() as readonly Record<string, unknown>[];
       return `messages=${messages.map(runtimeDatabaseMessageSummary).join("|")}:parts=${parts.map(runtimeDatabasePartSummary).join("|")}`;
@@ -985,11 +987,11 @@ function runtimeDatabaseProjection(databasePath: string): string {
   }
 }
 
-function runtimeDatabasePartTypes(databasePath: string): readonly string[] {
+function runtimeDatabaseMessageTypes(databasePath: string): readonly string[] {
   const database = new DatabaseSync(databasePath, { readOnly: true });
   try {
     const rows = database
-      .prepare("SELECT DISTINCT json_extract(data, '$.type') AS type FROM part ORDER BY type")
+      .prepare("SELECT DISTINCT type FROM session_message ORDER BY type")
       .all() as readonly Record<string, unknown>[];
     return rows.flatMap((row) => (typeof row.type === "string" ? [row.type] : []));
   } finally {
@@ -1426,9 +1428,9 @@ describe("[functional-only] real staged OpenCode runtime", () => {
         expect(state.recoveryMessageCounts[0]).toBeLessThanOrEqual(512);
         expect(state.rounds).toBeGreaterThan(1);
         expect(harness.productiveActions.length).toBeGreaterThan(0);
-        expect(runtimeDatabasePartTypes(join(harness.runRoot, "state", "opencode.db"))).toContain(
-          "compaction",
-        );
+        expect(
+          runtimeDatabaseMessageTypes(join(harness.runRoot, "state", "opencode.db")),
+        ).toContain("compaction");
       } finally {
         await closeNativeCompactionHarness(harness);
       }
@@ -1608,6 +1610,8 @@ describe("[functional-only] real staged OpenCode runtime", () => {
             question: "Approve the prepared bounded edit?",
             header: "Approval",
             options: [{ label: "Approve", description: "Continue safely" }],
+            multiple: false,
+            custom: true,
           },
         ]);
         await expect(
@@ -1673,7 +1677,7 @@ describe("[functional-only] real staged OpenCode runtime", () => {
         responseControl.release();
         await expect(
           runtime.runPort.waitForTerminal(RUN_ID, AbortSignal.timeout(20_000)),
-        ).resolves.toBe(true);
+        ).resolves.toBe("interrupted");
         await expect(
           waitForCondition(
             () => gateway.responseCloses() === gateway.calls(),

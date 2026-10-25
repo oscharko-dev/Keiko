@@ -1022,6 +1022,15 @@ describe("OpenCode V2 agent and skill mentions (#3906)", () => {
     expect(url.searchParams.get("location[directory]")).toBe("/workspace/repo");
   });
 
+  it("lists pending forms in the explicit session location", async () => {
+    const { client, fetch } = clientWith(() => json({ data: [] }));
+    await expect(client.forms("/workspace/linked worktree")).resolves.toEqual([]);
+    const url = fetch.mock.calls[0]?.[0] as URL;
+    expect(url.pathname).toBe("/api/form");
+    expect(url.searchParams.get("location[directory]")).toBe("/workspace/linked worktree");
+    await expect(client.forms("relative/path")).rejects.toThrow("opencode-v2-directory-invalid");
+  });
+
   it("lists skills by id and name and never their path or content", async () => {
     const { client, fetch } = clientWith(() =>
       json({

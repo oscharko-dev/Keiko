@@ -1964,7 +1964,9 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
     `coding-runtime.native-session-tree.observed` (`held`, `released`, `interrupted`; counts only,
     `activeShellCount` for jobs, a line per change, never per poll).
   - *Questions.* `opencodeNativeQuestions.ts` lists the pending forms of the primary session and of
-    its owned children, binds an answer or a rejection to the session that asked, and refuses
+    its owned children. The producer scopes this list by location: Keiko queries the run's workspace
+    and its admitted moved locations explicitly, never the runtime service's default directory.
+    It binds an answer or a rejection to the session that asked, and refuses
     instead of routing a stale id or a form of any other session (another parent chain, outside
     the workspace). Run authority and revision checks stay with the callers. The producer's General
     and Explore agents deny `question`, so a child form arises only for an agent whose rules allow
@@ -1976,6 +1978,12 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
     Valid sibling forms stay listed, and a form of another session is never dismissed. Evidence:
     `coding-runtime.native-question.routed` (action, outcome, relation, counts, a closed refusal;
     `dismiss` with `form-unrepresentable`).
+  - *Sustained history reconciliation.* Critical projections become evictable from bounded staging
+    only after every governing sink returns an applied or duplicate receipt and the prepared
+    reconciliation commits. Undelivered critical events remain protected. Acknowledgement does not
+    widen the event or byte limits; recent identity/digest checks and committed sequence checkpoints
+    continue to refuse conflicts and gaps. Existing `coding-runtime.history-projection` evidence
+    records the complete, loss-free history projection across sustained native tool rounds.
   - *A refused primary question.* The producer ends that turn with `session.execution.interrupted`,
     removes the session from the active list and writes an assistant message with
     `error.type = aborted`, but no idle message. The live hint is observed only for an execution the
