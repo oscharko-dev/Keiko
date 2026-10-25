@@ -215,9 +215,10 @@ function applyFadeEffects(
   plan: MemoryMaintenancePlan,
   byId: Map<MemoryId, MemoryRecord>,
   counts: MaintenanceAccumulator,
+  writeContext: MemoryWriteContext,
 ): void {
-  applyArchives(vault, auditSink, nowMs, plan.archive, byId, counts);
-  applyExpirations(vault, auditSink, nowMs, plan.expire, byId, counts);
+  applyArchives(vault, auditSink, nowMs, plan.archive, byId, counts, writeContext);
+  applyExpirations(vault, auditSink, nowMs, plan.expire, byId, counts, writeContext);
   applyForgets(vault, auditSink, nowMs, plan.forget, byId, counts);
 }
 
@@ -228,11 +229,12 @@ function applyPromotions(
   ids: readonly MemoryId[],
   byId: Map<MemoryId, MemoryRecord>,
   counts: MaintenanceAccumulator,
+  writeContext: MemoryWriteContext,
 ): void {
   for (const id of ids) {
     const record = byId.get(id);
     if (record === undefined) continue;
-    vault.updateMemory(id, { status: "accepted" }, nowMs);
+    vault.updateMemory(id, { status: "accepted" }, nowMs, writeContext);
     counts.promoted += 1;
     // `retention`, not `memory-center`: this promotion is the unattended maintenance sweep, not an
     // operator acting in the Memory Center. The audit envelope must not attribute an autonomous
@@ -255,11 +257,12 @@ function applyArchives(
   ids: readonly MemoryId[],
   byId: Map<MemoryId, MemoryRecord>,
   counts: MaintenanceAccumulator,
+  writeContext: MemoryWriteContext,
 ): void {
   for (const id of ids) {
     const record = byId.get(id);
     if (record === undefined) continue;
-    vault.updateMemory(id, { status: "archived" }, nowMs);
+    vault.updateMemory(id, { status: "archived" }, nowMs, writeContext);
     counts.archived += 1;
     emitAudit(auditSink, nowMs, "memory:archived", "retention", "Archived a faded memory.", {
       memoryId: id,
@@ -279,11 +282,17 @@ function applyExpirations(
   expirations: readonly { id: MemoryId; reason: string }[],
   byId: Map<MemoryId, MemoryRecord>,
   counts: MaintenanceAccumulator,
+  writeContext: MemoryWriteContext,
 ): void {
   for (const expiry of expirations) {
     const record = byId.get(expiry.id);
     if (record?.status !== "proposed") continue;
-    vault.updateMemory(expiry.id, { status: "expired", staleReason: expiry.reason }, nowMs);
+    vault.updateMemory(
+      expiry.id,
+      { status: "expired", staleReason: expiry.reason },
+      nowMs,
+      writeContext,
+    );
     counts.expired += 1;
     emitAudit(
       auditSink,
@@ -382,6 +391,7 @@ export interface RunMaintenanceOptions {
   // fail-open default `resolveMaintenanceAutonomyMode`/`reportRetentionPolicyFailure` already use,
   // so an existing caller that supplies no id keeps compiling and logging unchanged.
   readonly correlationId?: string;
+  readonly parentCorrelationId?: string | undefined;
 }
 
 const MILLIS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -440,6 +450,7 @@ function runPromotionPhase(
   planPolicy: Partial<MemoryMaintenancePolicy>,
   counts: MaintenanceAccumulator,
   scopes: readonly MemoryScope[],
+  writeContext: MemoryWriteContext,
 ): void {
   const beforePromote = vault.listMemoriesAcrossScopes(scopes, { includeExpired: true });
   const promoteStats: ReadonlyMap<MemoryId, MemoryAccessStatLike> = vault.getAccessStats();
@@ -447,7 +458,15 @@ function runPromotionPhase(
     nowMs,
     policy: planPolicy,
   });
-  applyPromotions(vault, auditSink, nowMs, promotePlan.promote, recordsById(beforePromote), counts);
+  applyPromotions(
+    vault,
+    auditSink,
+    nowMs,
+    promotePlan.promote,
+    recordsById(beforePromote),
+    counts,
+    writeContext,
+  );
 }
 
 // Split out of `runMemoryMaintenance` solely to keep that function's cyclomatic complexity at the
@@ -467,6 +486,7 @@ export function runMemoryMaintenance(
   // injected (the deterministic-verification invariant the rest of the stack honours).
   const nowMs = options?.nowMs ?? Date.now();
   const correlationId = resolveRunCorrelationId(options);
+  const writeContext = { correlationId, parentCorrelationId: options?.parentCorrelationId };
   const planPolicy =
     options?.decayHalfLifeMultiplierByType !== undefined
       ? { decayHalfLifeMultiplierByType: options.decayHalfLifeMultiplierByType }
@@ -479,7 +499,7 @@ export function runMemoryMaintenance(
   // In "Ask for approval" the pass still archives, expires and forgets — none of those accept
   // anything on the human's behalf — but nothing is promoted (0.3.0 audit P0, #2802).
   if (memoryUnattendedAcceptanceAllowed(options?.autonomyMode)) {
-    runPromotionPhase(vault, auditSink, nowMs, planPolicy, counts, scopes);
+    runPromotionPhase(vault, auditSink, nowMs, planPolicy, counts, scopes, writeContext);
   }
   // Phase 2 — consolidate live reviewable records: link safe near-duplicate metadata and surface
   // proposed/conflicted conflicts or merges as explicit review items. Status mutations require a
@@ -498,7 +518,7 @@ export function runMemoryMaintenance(
   const all = vault.listMemoriesAcrossScopes(scopes, { includeExpired: true });
   const accessStats: ReadonlyMap<MemoryId, MemoryAccessStatLike> = vault.getAccessStats();
   const plan = planMemoryMaintenance(all, accessStats, { nowMs, policy: planPolicy });
-  applyFadeEffects(vault, auditSink, nowMs, plan, recordsById(all), counts);
+  applyFadeEffects(vault, auditSink, nowMs, plan, recordsById(all), counts, writeContext);
   // Phase 4 — explicit retention and tombstone purge. It shares this bounded pass, scope snapshot,
   // and deterministic clock; there is deliberately no timer or hidden background loop.
   if (options?.retentionPolicy !== undefined) {
@@ -557,6 +577,7 @@ export interface MaybeRunAutoMaintenanceOptions {
   // Absent mints a fresh one inside `runMemoryMaintenance`, so an existing caller keeps compiling
   // unchanged; the chat auto-maintenance caller threads the ONE id it already mints for this pass.
   readonly correlationId?: string;
+  readonly parentCorrelationId?: string | undefined;
 }
 
 function notifyAutoMaintenanceFailure(
@@ -587,6 +608,7 @@ export function maybeRunAutoMaintenance(
     return runMemoryMaintenance(vault, auditSink, {
       nowMs: options.nowMs,
       ...(options.correlationId !== undefined ? { correlationId: options.correlationId } : {}),
+      parentCorrelationId: options.parentCorrelationId,
       ...(options.autonomyMode !== undefined ? { autonomyMode: options.autonomyMode } : {}),
       ...(options.decayHalfLifeMultiplierByType !== undefined
         ? { decayHalfLifeMultiplierByType: options.decayHalfLifeMultiplierByType }
@@ -727,3 +749,5 @@ export function handleRunMaintenance(ctx: RouteContext, deps: UiHandlerDeps): Ro
     };
   }
 }
+
+type MemoryWriteContext = Parameters<MemoryVaultStore["insertMemory"]>[1];

@@ -1,4 +1,5 @@
 import {
+  ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
   supportIncidentPrivateProjection,
   activityLogLossCounters,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
@@ -6,6 +7,7 @@ import {
   checkActivityLogReadiness,
   persistActivityLogLossSummary,
   recordUserReportedIncident,
+  recordRegisteredFailureIncident,
   supportIncidentSegmentFiles,
 } from "@oscharko-dev/keiko-activity-log";
 import {
@@ -27,13 +29,15 @@ import { resetServerLogger } from "../support/activity-log-test-support.js";
 // `keiko support analyze` to a complete report (tests/support/activity-log-scenario.ts).
 
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
   ChunkId,
+  MemoryRecord,
+  MemoryId,
   DocumentId,
   EmbeddingModelIdentity,
   KnowledgeCapsuleId,
@@ -97,8 +101,13 @@ import {
   createFileServerLogSink,
   type ServerLogSink,
 } from "../../packages/keiko-server/src/observability/index.js";
-import { processServerLogSink } from "../../packages/keiko-server/src/process-log-sink.js";
+import {
+  processServerLogSink,
+  processServerLogSinkFor,
+} from "../../packages/keiko-server/src/process-log-sink.js";
 import { expectActivityLogScenario } from "../support/activity-log-scenario.js";
+
+import { createMemoryVault, MemoryStorageValidationError } from "@oscharko-dev/keiko-memory-vault";
 
 function digest16(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 16);
@@ -643,4 +652,240 @@ describe("Activity Log scenario: memory-knowledge", () => {
       store.close();
     }
   });
+  it("retains complete initial memory refusal facts for two requests and a background run", async () => {
+    const startedAtMs = Date.now();
+    const vault = createMemoryVault({
+      memoryDir: join(realpathSync(stateDir), "vault"),
+      vaultKey: Buffer.alloc(32, 7),
+      logSink: processServerLogSinkFor("bootstrap-memory"),
+    });
+    try {
+      for (const correlationId of [
+        "memory-request-one",
+        "memory-request-two",
+        "memory-background-run",
+      ]) {
+        expect(() => vault.insertMemory(refusedMemoryRecord(), { correlationId })).toThrow(
+          MemoryStorageValidationError,
+        );
+      }
+      vault.insertMemory(
+        { ...refusedMemoryRecord(), tags: [] },
+        { correlationId: "healthy-memory-request" },
+      );
+      const trace = await expectActivityLogScenario("memory-knowledge.rejection", {
+        stateDir,
+        startedAtMs,
+        expectedOps: ["memory-vault.write.rejected"],
+      });
+      expect(trace.failureClasses).toContain("memory-write-validation");
+      for (const correlationId of [
+        "memory-request-one",
+        "memory-request-two",
+        "memory-background-run",
+      ]) {
+        const selection = await resolveSupportSelection({ correlationId, filter: {} }, stateDir);
+        const query = executeSupportQuery(
+          stateDir,
+          selection,
+          { ...DEFAULT_SUPPORT_QUERY_LIMITS, contextMs: 0, maxContextEvents: 0 },
+          { trigger: "query" },
+        ).result;
+        expect(query.metrics.contextEventCount).toBe(0);
+        expect(query.diagnosticSufficiency).toMatchObject({ status: "complete", reasons: [] });
+        expect(
+          query.events.some((event) => event.parsed.view.op === "memory-vault.write.rejected"),
+        ).toBe(true);
+      }
+      const raw = readPersistedActivityLog(stateDir);
+      const lines = persistedActivityLogLines(raw, "memory-vault.write.rejected");
+      expect(lines).toHaveLength(3);
+      for (const line of lines)
+        expect(
+          expectActivityLogProof("memory-vault.write.rejected.initial-admission", line),
+        ).toMatchObject({
+          reason: "invalid-record",
+          stage: "caller-admission",
+          admitted: false,
+          rejectionCount: 1,
+        });
+      expect(lines.every((line) => !line.includes("healthy-memory-request"))).toBe(true);
+      expect(raw).not.toContain("private-memory-refusal-canary");
+    } finally {
+      vault.close();
+    }
+  });
+
+  it("retains unknown-context refusal as degraded correlation evidence", async () => {
+    const vault = createMemoryVault({
+      memoryDir: join(realpathSync(stateDir), "unknown-context-vault"),
+      vaultKey: Buffer.alloc(32, 7),
+      logSink: processServerLogSinkFor("bootstrap-memory"),
+    });
+    try {
+      expect(() => vault.insertMemory(refusedMemoryRecord(), { correlationId: undefined })).toThrow(
+        MemoryStorageValidationError,
+      );
+      const raw = readPersistedActivityLog(stateDir);
+      const lines = persistedActivityLogLines(raw, "memory-vault.write.rejected");
+      expect(lines).toHaveLength(1);
+      expect(
+        expectActivityLogProof("memory-vault.write.rejected.initial-admission", lines[0] ?? ""),
+      ).toMatchObject({
+        correlationId: ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+        errorKind: "validation-failed",
+        reason: "invalid-record",
+        stage: "caller-admission",
+        admitted: false,
+        rejectionCount: 1,
+      });
+      await proveUnknownMemoryWriteCorrelation(stateDir);
+      expect(raw).not.toContain("private-memory-refusal-canary");
+    } finally {
+      vault.close();
+    }
+  });
+
+  it("preserves initial refusal while recording selective refusal-event transport loss", async () => {
+    const before = activityLogLossCounters()["port-sink-failed"];
+    const vault = createMemoryVault({
+      memoryDir: join(realpathSync(stateDir), "loss-vault"),
+      vaultKey: Buffer.alloc(32, 7),
+      logSink: {
+        write: (event): void => {
+          if (event.op === "memory-vault.write.rejected")
+            throw new TypeError("private-memory-log-loss-canary");
+          processServerLogSink().write(event);
+        },
+      },
+    });
+    try {
+      expect(() =>
+        vault.insertMemory(refusedMemoryRecord(), { correlationId: "lost-memory-request" }),
+      ).toThrow(MemoryStorageValidationError);
+      expect(activityLogLossCounters()["port-sink-failed"]).toBe(before + 1);
+      expect(persistActivityLogLossSummary("heartbeat")).toBe("persisted");
+      const raw = readPersistedActivityLog(stateDir);
+      expect(persistedActivityLogLines(raw, "memory-vault.write.rejected")).toHaveLength(0);
+      expect(persistedActivityLogLines(raw, "memory-vault.log.sink-failed")).toHaveLength(1);
+      checkActivityLogReadiness({ stateDir });
+      await proveMemoryWriteTransportLoss(stateDir);
+      expect(persistedActivityLogLines(raw, "activity-log.loss")).toHaveLength(1);
+      expect(raw).not.toContain("private-memory-log-loss-canary");
+      expect(raw).not.toContain("private-memory-refusal-canary");
+    } finally {
+      vault.close();
+    }
+  });
 });
+
+function refusedMemoryRecord(): MemoryRecord {
+  return {
+    id: "scenario-refused-memory" as MemoryId,
+    schemaVersion: "1",
+    scope: { kind: "global" },
+    type: "preference",
+    body: "private-memory-refusal-canary",
+    status: "accepted",
+    pinned: false,
+    tags: [""],
+    provenance: {
+      sourceKind: "explicit-user-instruction",
+      capturedAt: 100,
+      confidence: 0.9,
+      sensitivity: "public",
+    },
+    validity: { validFrom: 100 },
+    createdAt: 100,
+    updatedAt: 100,
+  };
+}
+
+async function proveMemoryWriteTransportLoss(stateDir: string): Promise<void> {
+  const creation = recordUserReportedIncident(stateDir);
+  if (creation.status === "rejected" || creation.record === undefined)
+    throw new TypeError("Expected selective Memory loss incident");
+  const selection = await resolveSupportSelection(
+    { incidentId: creation.incidentId, filter: {} },
+    stateDir,
+  );
+  const query = executeSupportQuery(stateDir, selection, DEFAULT_SUPPORT_QUERY_LIMITS, {
+    trigger: "query",
+  }).result;
+  const incident = supportIncidentPrivateProjection(
+    resolveSupportIncident(
+      creation.record,
+      supportIncidentSegmentFiles(stateDir, creation.record),
+      stateDir,
+    ),
+  );
+  const report = buildSupportReport(incident, query);
+  const analyzed = analyzeSupportReport(serializeSupportReport(report));
+  expect(analyzed.analysis.evidence.classification).toBe("supported");
+  expect(analyzed.analysis.sufficiency.status).toBe("degraded");
+  expect(analyzed.analysis.sufficiency.classes).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        failureClass: "activity-log-sink",
+        status: "degraded",
+        reasons: ["activity-log-loss"],
+      }),
+    ]),
+  );
+  expect(query.diagnosticSufficiency).toMatchObject({
+    status: "insufficient",
+    reasons: ["no-registered-failure", "evidence-not-retained"],
+  });
+  expect(query.events.map((event) => event.parsed.view.op)).toEqual(
+    expect.arrayContaining(["memory-vault.log.sink-failed", "activity-log.loss"]),
+  );
+}
+
+async function proveUnknownMemoryWriteCorrelation(stateDir: string): Promise<void> {
+  const creation = recordRegisteredFailureIncident(stateDir, {
+    op: "memory-vault.write.rejected",
+    errorKind: "validation-failed",
+    correlationId: ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+  });
+  if (creation === undefined || creation.status === "rejected" || creation.record === undefined)
+    throw new TypeError("Expected retained unknown-correlation Memory refusal incident");
+  const selection = await resolveSupportSelection(
+    { incidentId: creation.incidentId, filter: {} },
+    stateDir,
+  );
+  const query = executeSupportQuery(
+    stateDir,
+    selection,
+    { ...DEFAULT_SUPPORT_QUERY_LIMITS, contextMs: 0, maxContextEvents: 0 },
+    { trigger: "query" },
+  ).result;
+  expect(query.metrics.contextEventCount).toBe(0);
+  expect(query.events.some((event) => event.parsed.view.op === "memory-vault.write.rejected")).toBe(
+    true,
+  );
+  const expected = { status: "degraded", reasons: ["correlation-unknown"] };
+  expect(query.diagnosticSufficiency).toMatchObject(expected);
+  const incident = supportIncidentPrivateProjection(
+    resolveSupportIncident(
+      creation.record,
+      supportIncidentSegmentFiles(stateDir, creation.record),
+      stateDir,
+    ),
+  );
+  const report = buildSupportReport(incident, query);
+  const analyzed = analyzeSupportReport(serializeSupportReport(report));
+  expect(report.evidence.recordCount).toBe(query.events.length);
+  expect(analyzed.analysis.evidence.classification).toBe("supported");
+  expect(report.selection).toMatchObject(expected);
+  expect(analyzed.selection).toMatchObject(expected);
+  expect(analyzed.selection.reasons).toEqual(report.selection.reasons);
+  expect(analyzed.analysis.sufficiency.classes).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        failureClass: "memory-write-validation",
+        status: "degraded",
+        reasons: ["correlation-unknown"],
+      }),
+    ]),
+  );
+}

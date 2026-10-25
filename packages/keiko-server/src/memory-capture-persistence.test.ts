@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -104,4 +104,19 @@ describe("persistCapturedMemory", () => {
     });
     expect(store.getMemory("confidential-capture" as MemoryId)?.status).toBe("proposed");
   });
+});
+
+it("forwards independent capture and promotion contexts through actual vault writes", () => {
+  const store = vault();
+  const insertion = vi.spyOn(store, "insertMemory");
+  const updating = vi.spyOn(store, "updateMemory");
+  const first = { correlationId: "capture-write-one" };
+  const second = { correlationId: "capture-write-two" };
+  expect(persistCapturedMemory(store, record("proposed"), true, first).inserted).toBe(true);
+  expect(persistCapturedMemory(store, record("accepted", 200), true, second).promoted).toBe(true);
+  expect(insertion.mock.calls[0]?.[1]).toBe(first);
+  expect(updating.mock.calls[0]?.[3]).toBe(second);
+  expect(persistCapturedMemory(store, record("accepted", 200), true, second).inserted).toBe(false);
+  expect(insertion).toHaveBeenCalledTimes(1);
+  expect(updating).toHaveBeenCalledTimes(1);
 });

@@ -5212,4 +5212,35 @@ it("publishes a complete code block larger than the real HTTP high-water mark to
   expect(store.listMessages(chatId).find((message) => message.role === "assistant")?.content).toBe(
     source,
   );
+it("carries a legacy streamed request id into the actual captured memory write", async () => {
+  const memoryDir = join(tmp, "stream-context-vault");
+  mkdirSync(memoryDir);
+  const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+  const insertion = vi.spyOn(memoryVault, "insertMemory");
+  const chatId = seedChat();
+  const { model } = streamingModel("Preference acknowledged.");
+  const response = captureResWithEvents();
+  try {
+    await handleSendDesktopChatStream(
+      {
+        ...routeContext(
+          makeReq({
+            chatId,
+            projectPath: projectDir,
+            modelId: CHAT_MODEL,
+            content: "remember that I prefer dark mode",
+            memory: { enabled: true, budgetTokens: 900, context: {} },
+          }),
+          response.res,
+        ),
+        correlationId: "legacy-stream-memory-request",
+      },
+      deps(model, { memoryVault }),
+    );
+    expect(response.status).toBe(200);
+    expect(insertion.mock.calls.length).toBeGreaterThan(0);
+    expect(insertion.mock.calls[0]?.[1]).toEqual({ correlationId: "legacy-stream-memory-request" });
+  } finally {
+    memoryVault.close();
+  }
 });
