@@ -9088,6 +9088,12 @@
           "analyzerProjection": "timeline",
           "safeContextFields": [
             {
+              "name": "configuredEntryCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "disposition",
               "type": "string",
               "dataClass": "closed-enum",
@@ -9100,13 +9106,25 @@
               "required": true
             },
             {
+              "name": "refusedEntryCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "runId",
               "type": "string",
               "dataClass": "opaque-id",
               "required": true
             }
           ],
-          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state", "opaque-id"],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "loss-state",
+            "opaque-id"
+          ],
           "frameCauseEvidence": {
             "frames": false,
             "causeChain": false

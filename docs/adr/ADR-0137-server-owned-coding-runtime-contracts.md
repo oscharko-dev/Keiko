@@ -1210,15 +1210,28 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   native Seatbelt wrapper (`opencodeNativeFormatter.real.test.ts`): in Full access a native
   `write` and a native `edit` are each followed by the PATH-resolved `gofmt` built-in with no
   permission asked for it; in Ask for approval and Supervised workspace the same calls land
-  verbatim; without the key the producer runs no formatter even in Full access. The producer
-  resolves `prettier`, `oxfmt` and `biome` through its own package manager and package cache
-  rather than the repository's `node_modules/.bin`, and Keiko keeps that package manager offline
-  (`npm_config_offline`), so a repository's own prettier is never executed (real binary, registry
-  unreachable); formatters that resolve a binary on the launcher's `PATH` run when it is installed
-  and readable inside the kernel read allowlist's toolchain roots. `pint` runs the repository's
-  `./vendor/bin/pint` (read from the bundle, not exercised) and so is covered by the same
-  Full-access-only rule. Each prepared native run records its decision body-free as
-  `coding-runtime.native-formatter.bound` (closed `disposition` and `launchMode`).
+  verbatim; without the key the producer runs no formatter even in Full access. In Full access the
+  setting carries the user's global and the project's own `formatter` configuration (#3900 AC4,
+  `opencodeConfigDocuments.ts`), merged in the producer's order (a boolean replaces, an object
+  merges entry by entry and its environment key by key) and re-validated by Keiko: `disabled`,
+  `command` (argv with `$FILE`), `environment` and `extensions` only, bounded, and no value with a
+  `{env:...}` or `{file:...}` placeholder, which the producer would substitute with the run's own
+  capability or a file the run may not open; without configuration the built-ins run (`true`).
+  Every other mode stays `false` whatever is configured. The producer resolves `prettier`, `oxfmt`
+  and `biome` through its own package manager into its package cache, never the repository's
+  `node_modules/.bin`. Below Full access that package manager stays offline
+  (`npm_config_offline`); a Full access run keeps its internet egress, so the package manager
+  reaches its registry as standalone does, with one bounded retry so an unreachable registry
+  fails promptly (startup unchanged against a blackholed registry). Formatters that resolve a
+  binary on the launcher's `PATH` run when it is installed and readable inside the kernel read
+  allowlist's toolchain roots. `pint` runs the repository's `./vendor/bin/pint` (read from the
+  bundle, not exercised) and so is covered by the same Full-access-only rule. Real binary: a
+  project-configured custom formatter runs and a project-disabled built-in does not in Full access,
+  neither runs in Ask or Supervised, and the producer installs prettier from a loopback registry
+  and runs it (red with the old offline switch); with loopback-only egress a repository's own
+  prettier is still never executed. Each prepared native run records its decision body-free as
+  `coding-runtime.native-formatter.bound` (closed `disposition` and `launchMode`, plus the
+  configured and refused entry counts).
 - **Repository configuration is data until the operator admits its executable effects (#3903).**
   A first increment loaded the repository's `opencode.json` and `.opencode/` directory like
   standalone. That is retired. The pinned 2.1.4 producer discovers a project's `opencode.json`,

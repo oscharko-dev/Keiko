@@ -552,15 +552,12 @@ function composedNativeSettings(): readonly string[] {
     maxOutputTokens: 4_096,
     imageInput: true,
   };
-  const config = createFixedOpenCodeV2Config(
-    geometry,
-    undefined,
-    "native",
-    "/state",
-    "enabled",
+  const config = createFixedOpenCodeV2Config(geometry, undefined, "native", {
+    stateRoot: "/state",
+    formatter: "enabled",
     mcp,
-    ["/Users/owner/reference/docs"],
-  );
+    externalReadRoots: ["/Users/owner/reference/docs"],
+  });
   return [...new Set(declaredSettings(config, new Set(CONFIGURATION_PATHS)))].sort();
 }
 

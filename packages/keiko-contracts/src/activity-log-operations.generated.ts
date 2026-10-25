@@ -8327,6 +8327,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: ["governed-assist", "supervised-coding", "autonomous-delivery", "unknown"],
       },
+      configuredEntryCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      refusedEntryCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
     },
     causal: "correlation",
     lifecycle: "state",

@@ -2,7 +2,11 @@ import { lstatSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 
 import { OwnerPrivateFileRefused, readOwnerPrivateFile } from "../ownerPrivateStateFile.js";
-import { PROJECT_CONFIG_FILES } from "./codingRuntimeRepositoryConfig.js";
+import {
+  readGlobalConfigDocuments,
+  readProjectConfigDocuments,
+  type ConfigDocumentRefusal,
+} from "./opencodeConfigDocuments.js";
 import type {
   SecureWorkspaceNativeFileIO,
   SecureWorkspaceTextReadPort,
@@ -70,8 +74,6 @@ const MAX_SOURCES = 32;
 const MAX_ANCESTORS = 32;
 const MAX_PATTERN_MATCHES = 16;
 const MAX_PATTERN_DIRECTORIES = 256;
-const GLOBAL_CONFIG_FILES = ["opencode.json", "config.json"] as const;
-const UNSUPPORTED_CONFIG_FILES = ["opencode.jsonc"] as const;
 const GLOB_CHARACTER = /[*?[\]{}]/u;
 
 /** `$XDG_CONFIG_HOME/opencode`, or `~/.config/opencode`, as the producer resolves it. */
@@ -169,22 +171,10 @@ function homeLabel(path: string, home: string): string {
   return inside(home, path) ? `~/${relative(home, path).split(sep).join("/")}` : path;
 }
 
-function plainObject(value: unknown): Readonly<Record<string, unknown>> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Readonly<Record<string, unknown>>)
-    : undefined;
-}
-
 /** The string entries of a configuration document's `instructions`, or why there are none. */
-export function configuredInstructionEntries(text: string): readonly string[] | "config-malformed" {
-  let document: Readonly<Record<string, unknown>> | undefined;
-  try {
-    document = plainObject(JSON.parse(text.replace(/^\uFEFF/u, "")));
-  } catch (error) {
-    if (error instanceof SyntaxError) return "config-malformed";
-    throw error;
-  }
-  if (document === undefined) return "config-malformed";
+export function configuredInstructionEntries(
+  document: Readonly<Record<string, unknown>>,
+): readonly string[] | "config-malformed" {
   const entries = document.instructions;
   if (entries === undefined) return [];
   return Array.isArray(entries)
@@ -192,34 +182,15 @@ export function configuredInstructionEntries(text: string): readonly string[] | 
     : "config-malformed";
 }
 
-function globalEntries(input: InstructionSourceDiscoveryInput, tally: Tally): readonly string[] {
-  for (const name of UNSUPPORTED_CONFIG_FILES) {
-    if (lstatSync(join(input.globalConfigDirectory, name), { throwIfNoEntry: false }) !== undefined)
-      tally.refuse("unsupported-format");
-  }
-  const entries: string[] = [];
-  for (const name of GLOBAL_CONFIG_FILES) {
-    const text = hostText(join(input.globalConfigDirectory, name), tally, false);
-    if (text === undefined) continue;
-    const parsed = configuredInstructionEntries(text);
-    if (parsed === "config-malformed") tally.refuse(parsed);
-    else entries.push(...parsed);
-  }
-  return entries;
-}
-
-async function projectEntries(
-  input: InstructionSourceDiscoveryInput,
+function documentEntries(
+  documents: readonly Readonly<Record<string, unknown>>[],
+  refused: readonly ConfigDocumentRefusal[],
   tally: Tally,
-): Promise<readonly string[]> {
+): readonly string[] {
+  for (const reason of refused) tally.refuse(reason);
   const entries: string[] = [];
-  for (const relativePath of PROJECT_CONFIG_FILES) {
-    const result = await input.workspace.readText({
-      relativePath,
-      ...(input.signal === undefined ? {} : { signal: input.signal }),
-    });
-    if (!result.ok) continue;
-    const parsed = configuredInstructionEntries(result.text);
+  for (const document of documents) {
+    const parsed = configuredInstructionEntries(document);
     if (parsed === "config-malformed") tally.refuse(parsed);
     else entries.push(...parsed);
   }
@@ -399,8 +370,11 @@ export async function discoverInstructionSources(
   const tally = new Tally();
   globalAgents(input, tally);
   ancestorAgents(input, tally);
-  for (const entry of globalEntries(input, tally)) await configuredEntry(input, entry, true, tally);
-  for (const entry of await projectEntries(input, tally))
+  const global = readGlobalConfigDocuments(input.globalConfigDirectory);
+  for (const entry of documentEntries(global.documents, global.refused, tally))
+    await configuredEntry(input, entry, true, tally);
+  const project = await readProjectConfigDocuments(input.workspace, input.signal);
+  for (const entry of documentEntries(project.documents, project.refused, tally))
     await configuredEntry(input, entry, false, tally);
   return { sources: tally.sources, remote: tally.remote, refused: tally.refused };
 }

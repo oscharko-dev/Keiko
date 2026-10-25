@@ -1,4 +1,5 @@
 import { spawn, spawnSync, type ChildProcessByStdio } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   cpSync,
   mkdirSync,
@@ -22,6 +23,7 @@ import {
   resolveDarwinGitExecutable,
 } from "@oscharko-dev/keiko-sandbox";
 import { buildOpenCodeLaunchProfile, openCodeConfigDirectory } from "./opencodeLaunchProfile.js";
+import { readProjectConfigDocuments } from "./opencodeConfigDocuments.js";
 import { openCodeNativeEgress } from "./opencodeNativeEgress.js";
 import { createGeneratedOpenCodeV2Plugins } from "./opencodeRuntimeAdapter.js";
 import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
@@ -209,6 +211,17 @@ async function startFacade(): Promise<Stub> {
 function writeHostToolchain(state: string): string {
   const bin = join(state, "toolchain", "bin");
   mkdirSync(bin, { recursive: true, mode: 0o700 });
+  // A custom formatter a project configures by command (#3900 AC4): upper-cases the file.
+  writeFileSync(
+    join(bin, "keiko-upper"),
+    [
+      "#!/bin/sh",
+      'tmp="$1.upper.$$"',
+      '/usr/bin/tr a-z A-Z < "$1" > "$tmp" && /bin/mv "$tmp" "$1"',
+      "",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
   writeFileSync(
     join(bin, "gofmt"),
     [
@@ -240,6 +253,64 @@ function installRepositoryPrettier(workspace: string): void {
   const prettier = dirname(createRequire(import.meta.url).resolve("prettier/package.json"));
   cpSync(prettier, join(workspace, "node_modules", "prettier"), { recursive: true });
   symlinkSync("../prettier/bin/prettier.cjs", join(workspace, "node_modules", ".bin", "prettier"));
+}
+
+/**
+ * A loopback npm registry that serves one package named `prettier`: a stand-in whose executable
+ * rewrites the file it is given to `FORMATTED_JS`. The producer resolves its package-manager
+ * formatters by installing them into its own cache from the registry npm is configured with, as in
+ * standalone OpenCode; this fixture is that registry, so the proof stays hermetic.
+ */
+async function startPrettierRegistry(root: string): Promise<Stub & { readonly url: string }> {
+  const source = join(root, "registry-source", "package");
+  mkdirSync(join(source, "bin"), { recursive: true });
+  writeFileSync(
+    join(source, "package.json"),
+    JSON.stringify({ name: "prettier", version: "3.0.0", bin: { prettier: "bin/prettier.cjs" } }),
+  );
+  writeFileSync(
+    join(source, "bin", "prettier.cjs"),
+    [
+      "#!/usr/bin/env node",
+      'const file = process.argv.find((arg) => !arg.startsWith("-") && arg !== process.argv[0] && arg !== process.argv[1]);',
+      `require("node:fs").writeFileSync(file, ${JSON.stringify(FORMATTED_JS)});`,
+      "",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+  const tarball = join(root, "prettier-3.0.0.tgz");
+  const packed = spawnSync("/usr/bin/tar", ["-czf", tarball, "-C", dirname(source), "package"]);
+  if (packed.status !== 0) throw new Error("fixture-tarball-failed");
+  const bytes = readFileSync(tarball);
+  const integrity = `sha512-${createHash("sha512").update(bytes).digest("base64")}`;
+  const shasum = createHash("sha1").update(bytes).digest("hex");
+  const registry = await startStub((self, _recorded, response) => {
+    const url = `http://127.0.0.1:${String(self.port)}`;
+    const path = (response.req.url ?? "").split("?")[0];
+    if (path === "/prettier") {
+      response.writeHead(200, { "Content-Type": "application/json" }).end(
+        JSON.stringify({
+          name: "prettier",
+          "dist-tags": { latest: "3.0.0" },
+          versions: {
+            "3.0.0": {
+              name: "prettier",
+              version: "3.0.0",
+              bin: { prettier: "bin/prettier.cjs" },
+              dist: { tarball: `${url}/prettier/-/prettier-3.0.0.tgz`, integrity, shasum },
+            },
+          },
+        }),
+      );
+      return;
+    }
+    if (path === "/prettier/-/prettier-3.0.0.tgz") {
+      response.writeHead(200, { "Content-Type": "application/octet-stream" }).end(bytes);
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  return Object.assign(registry, { url: `http://127.0.0.1:${String(registry.port)}/` });
 }
 
 function createFixture(prettier: boolean): Fixture {
@@ -275,6 +346,29 @@ interface LaunchOptions {
   readonly repositoryPrettier?: true;
   /** `absent` is the control: the binding says nothing about formatters, so the producer decides. */
   readonly formatterKey: "bound" | "absent";
+  /** The workspace's own `opencode.json`, read as production reads it (#3900 AC4). */
+  readonly projectConfig?: Readonly<Record<string, unknown>>;
+  /** The registry the producer's package manager resolves its package formatters from. */
+  readonly npmRegistry?: string;
+}
+
+/** The project's configuration documents, through production's reader over the fixture workspace. */
+async function projectDocuments(
+  fixture: Fixture,
+): Promise<readonly Readonly<Record<string, unknown>>[]> {
+  const read = await readProjectConfigDocuments({
+    readText: ({ relativePath }) => {
+      try {
+        return Promise.resolve({
+          ok: true,
+          text: readFileSync(join(fixture.workspace, relativePath), "utf8"),
+        });
+      } catch {
+        return Promise.resolve({ ok: false, reason: "not-found" });
+      }
+    },
+  });
+  return read.documents;
 }
 
 /** The production profile for a mode, optionally without the formatter key (the control only). */
@@ -282,12 +376,14 @@ function profileFor(
   fixture: Fixture,
   binary: string,
   options: LaunchOptions,
+  formatterDocuments: readonly Readonly<Record<string, unknown>>[],
 ): { readonly config: string; readonly env: Record<string, string>; readonly args: string[] } {
   const profile = buildOpenCodeLaunchProfile({
     executable: binary,
     stateRoot: fixture.state,
     toolProfile: "native",
     mode: options.mode,
+    formatterDocuments,
     contextGeometry: {
       contextWindowTokens: 32_768,
       maxInputTokens: 24_000,
@@ -332,8 +428,9 @@ function launch(
   runtimeRoot: string,
   stubs: { readonly gateway: Stub; readonly facade: Stub },
   options: LaunchOptions,
+  formatterDocuments: readonly Readonly<Record<string, unknown>>[],
 ): Launched {
-  const profile = profileFor(fixture, binary, options);
+  const profile = profileFor(fixture, binary, options, formatterDocuments);
   materializePrivateConfiguration(fixture.state, profile.config);
   const git = resolveDarwinGitExecutable();
   // The production derivation: the launcher's PATH feeds the child and the kernel read allowlist.
@@ -375,6 +472,7 @@ function launch(
         KEIKO_TOOL_FACADE_CAPABILITY: FACADE_CAPABILITY,
         KEIKO_CODING_RUN_ID: "run-native-formatter",
         KEIKO_CODING_MODE: options.mode,
+        ...(options.npmRegistry === undefined ? {} : { npm_config_registry: options.npmRegistry }),
       },
       stdio: ["ignore", "pipe", "pipe"],
     }),
@@ -433,6 +531,8 @@ async function withRun(options: LaunchOptions, body: (run: Run) => Promise<void>
     throw new Error("fixture-binary-missing");
   expect(process.platform).toBe("darwin");
   const fixture = createFixture(options.repositoryPrettier === true);
+  if (options.projectConfig !== undefined)
+    writeFileSync(join(fixture.workspace, "opencode.json"), JSON.stringify(options.projectConfig));
   const [gateway, facade] = [await startGateway(), await startFacade()];
   const launched = launch(
     fixture,
@@ -440,6 +540,7 @@ async function withRun(options: LaunchOptions, body: (run: Run) => Promise<void>
     realpathSync(RESOURCE_ROOT),
     { gateway, facade },
     options,
+    await projectDocuments(fixture),
   );
   try {
     const client = createOpenCodeV2HttpClient({
@@ -559,5 +660,80 @@ describe("pinned native OpenCode built-in formatter governance", () => {
       });
     },
     120_000,
+  );
+
+  // #3900 AC4: in Full access the project's own `formatter` configuration selects, disables and
+  // adds formatters exactly as in standalone OpenCode; every other mode runs none of them.
+  const configured = {
+    formatter: {
+      gofmt: { disabled: true },
+      upper: { command: ["keiko-upper", "$FILE"], extensions: [".txt"] },
+    },
+  };
+
+  it.skipIf(skip)(
+    "Full access: runs a custom formatter the project configures and honors a disabled built-in",
+    async () => {
+      await withRun(
+        { mode: "autonomous-delivery", formatterKey: "bound", projectConfig: configured },
+        async (run) => {
+          await scriptedTurn(run, writeCall("notes.txt", "hello formatter\n"));
+          expect(read(run, "notes.txt")).toBe("HELLO FORMATTER\n");
+          await scriptedTurn(run, writeCall("main.go", MIS_FORMATTED));
+          expect(read(run, "main.go")).toBe(MIS_FORMATTED);
+        },
+      );
+    },
+    180_000,
+  );
+
+  it.skipIf(skip)(
+    "Ask for approval and Supervised workspace: the configured custom formatter never runs",
+    async () => {
+      for (const mode of ["governed-assist", "supervised-coding"] as const) {
+        await withRun({ mode, formatterKey: "bound", projectConfig: configured }, async (run) => {
+          await scriptedTurn(run, writeCall("notes.txt", "hello formatter\n"));
+          expect(read(run, "notes.txt")).toBe("hello formatter\n");
+        });
+      }
+    },
+    240_000,
+  );
+
+  // The package formatters (prettier, oxfmt, biome) are installed by the producer's own package
+  // manager into its cache, as in standalone OpenCode. In Full access that package manager reaches
+  // its registry; here the registry is a loopback fixture serving a stand-in prettier.
+  it.skipIf(skip)(
+    "Full access: the producer's package manager installs prettier from the registry and runs it",
+    async () => {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-formatter-registry-")));
+      const registry = await startPrettierRegistry(root);
+      try {
+        await withRun(
+          {
+            mode: "autonomous-delivery",
+            formatterKey: "bound",
+            npmRegistry: registry.url,
+            projectConfig: {},
+          },
+          async (run) => {
+            writeFileSync(
+              join(run.fixture.workspace, "package.json"),
+              JSON.stringify({
+                name: "fixture",
+                private: true,
+                devDependencies: { prettier: "*" },
+              }),
+            );
+            await scriptedTurn(run, writeCall("module.js", MIS_FORMATTED_JS));
+            await expect.poll(() => read(run, "module.js"), { timeout: 60_000 }).toBe(FORMATTED_JS);
+          },
+        );
+      } finally {
+        await closeStub(registry);
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+    240_000,
   );
 });

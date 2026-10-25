@@ -190,13 +190,12 @@ describe("instruction discovery bounds", () => {
     );
   });
 
-  it("reads only string entries of a well-formed configuration", () => {
-    expect(configuredInstructionEntries('{"instructions":["a.md",3,"",null,"b.md"]}')).toEqual([
+  it("reads only string entries of a configuration's instructions", () => {
+    expect(configuredInstructionEntries({ instructions: ["a.md", 3, "", null, "b.md"] })).toEqual([
       "a.md",
       "b.md",
     ]);
-    expect(configuredInstructionEntries("{}")).toEqual([]);
-    expect(configuredInstructionEntries('{"instructions":"a.md"}')).toBe("config-malformed");
-    expect(configuredInstructionEntries("not json")).toBe("config-malformed");
+    expect(configuredInstructionEntries({})).toEqual([]);
+    expect(configuredInstructionEntries({ instructions: "a.md" })).toBe("config-malformed");
   });
 });

@@ -55,6 +55,10 @@ import {
 } from "./opencodeOperatorPlugins.js";
 import { createCodingRuntimeRepositoryInstructionsPort } from "./codingRuntimeRepositoryInstructions.js";
 import { globalOpenCodeConfigDirectory } from "./codingRuntimeInstructionSources.js";
+import {
+  readGlobalConfigDocuments,
+  readProjectConfigDocuments,
+} from "./opencodeConfigDocuments.js";
 import type { OutboundHttpEgressConfig } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import type { NativeWorktreeProvisionPort } from "./opencodeNativeWorktree.js";
 import {
@@ -466,10 +470,12 @@ function nativeRunInputs(
   | "remoteSkills"
   | "nativeWorktrees"
   | "externalReadRoots"
+  | "configDocuments"
 > {
   if (toolProfile !== "native") return {};
   return {
     repositoryItems: repositoryItemsFor(input, run),
+    configDocuments: configDocumentsFor(input, run),
     ...(input.operatorPluginRegistry === undefined
       ? {}
       : { operatorPlugins: operatorPluginsFor(input, run, input.operatorPluginRegistry) }),
@@ -586,6 +592,26 @@ function repositoryInstructionsFor(
   return {
     materializeForRun: (request) =>
       port.materializeForRun({ ...request, isRunWorkspace: run.workspaceIsCurrent }),
+  };
+}
+
+// The user's global and the project's OpenCode configuration documents (#3900 AC4), the project's
+// read only while the run's workspace is still the active one. Without a secure read source a run
+// reads the global documents alone.
+function configDocumentsFor(
+  input: LaunchInput,
+  run: ProductionRuntimeBackendInput,
+): NonNullable<OpenCodeRuntimeCompositionInput["configDocuments"]> {
+  const directory = globalOpenCodeConfigDirectory(input.processEnv ?? {}, homedir());
+  const source = input.secureWorkspaceTextRead;
+  return async ({ signal }) => {
+    const global = readGlobalConfigDocuments(directory).documents;
+    if (source === undefined) return global;
+    const project = await readProjectConfigDocuments(
+      exactWorkspaceRead(source, run.workspaceIsCurrent, "workspace-unavailable"),
+      signal,
+    );
+    return [...global, ...project.documents];
   };
 }
 

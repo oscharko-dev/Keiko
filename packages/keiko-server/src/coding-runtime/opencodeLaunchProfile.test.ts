@@ -413,6 +413,35 @@ describe("OpenCode launch profile", () => {
       expect(formatterFor(mode)).toEqual({ content: on, file: on, disposition: why });
     });
 
+    // #3900 AC4: Full access carries the configured entries on both layers and lets the producer's
+    // package manager reach the registry; every other mode stays false and offline.
+    it("carries configured formatter entries and an online package manager in Full access only", () => {
+      const documents = [{ formatter: { shfmt: { command: ["shfmt", "-w", "$FILE"] } } }];
+      for (const mode of ["autonomous-delivery", "supervised-coding", "governed-assist"]) {
+        const profile = buildOpenCodeLaunchProfile({
+          executable: "/managed/opencode",
+          stateRoot: "/private/run",
+          toolProfile: "native",
+          ...CONTEXT_INPUT,
+          mode,
+          formatterDocuments: documents,
+          randomBytes: () => Buffer.alloc(32, 7),
+        });
+        if (!profile.ok) throw new Error("expected native launch profile");
+        const content = JSON.parse(profile.env.OPENCODE_CONFIG_CONTENT ?? "null") as Record<
+          string,
+          unknown
+        >;
+        const full = mode === "autonomous-delivery";
+        expect(content.formatter).toEqual(full ? documents[0]?.formatter : false);
+        expect((JSON.parse(profile.config) as Record<string, unknown>).formatter).toEqual(
+          content.formatter,
+        );
+        expect(profile.env.npm_config_offline).toBe(full ? undefined : "true");
+        expect(profile.formatterEntries).toEqual({ admitted: full ? 1 : 0, refused: 0 });
+      }
+    });
+
     it("fails closed to an explicit false for an absent or unrecognized mode", () => {
       for (const mode of [undefined, "", "Autonomous-Delivery", "full-access", "unknown"])
         expect(formatterFor(mode)).toEqual({
@@ -915,7 +944,7 @@ it("threads the selected profile into the actual launch configuration", () => {
 describe("plan agent directory (#3897)", () => {
   it("admits exactly the run's plan directory after the external-directory denial", () => {
     const fixed = createFixedOpenCodeV2Config;
-    const config = fixed(CONTEXT_GEOMETRY, undefined, "native", "/state/run-1");
+    const config = fixed(CONTEXT_GEOMETRY, undefined, "native", { stateRoot: "/state/run-1" });
     expect(config.permissions).toEqual([
       { action: "external_directory", resource: "*", effect: "deny" },
       {

@@ -351,6 +351,9 @@ const NATIVE_FORMATTER_BOUND_OPERATION = defineActivityLogOperation({
       required: true,
       values: [...CODING_WORKBENCH_MODE_VALUES, "unknown"],
     },
+    // #3900 AC4: the configured formatter entries the binding carries, and those refused.
+    configuredEntryCount: { type: "integer", dataClass: "count", required: false },
+    refusedEntryCount: { type: "integer", dataClass: "count", required: false },
   },
   causal: "correlation",
   lifecycle: "state",
@@ -510,6 +513,17 @@ export interface OpenCodeRuntimeCompositionInput {
    * `worktree_create` (#3903 AC4); absent refuses every such request.
    */
   readonly nativeWorktrees?: NativeWorktreeProvisionPort | undefined;
+  /**
+   * Native profile only: the user's global and the project's OpenCode configuration documents for
+   * one run, in merge order (#3900 AC4, `opencodeConfigDocuments.ts`), read before its launch
+   * profile is built. Absent reads none.
+   */
+  readonly configDocuments?:
+    | ((request: {
+        readonly runId: string;
+        readonly signal?: AbortSignal | undefined;
+      }) => Promise<readonly Readonly<Record<string, unknown>>[]>)
+    | undefined;
   /**
    * Native profile only: the run's accepted external references (#3900 AC5), the roots its kernel
    * allowlist reads; the launch profile hands them to the policy, which decides each read.
@@ -1747,7 +1761,11 @@ async function materializePrepare(
   const continuation = seedRun(input, request, runRoot);
   await bridge.start();
   const validations = await mcpIssuerValidations(input, request);
-  const { profile, mcp } = runLaunchProfile(input, request, runRoot, validations);
+  const documents =
+    input.toolProfile === "native"
+      ? await input.configDocuments?.({ runId: request.runId, signal: request.signal })
+      : undefined;
+  const { profile, mcp } = runLaunchProfile(input, request, runRoot, validations, documents);
   const config = profile.config;
   materialize(runRoot, config, createGeneratedOpenCodeV2Plugins(input.toolProfile));
   await admitRepositoryItems(input, request, runRoot);
@@ -1767,7 +1785,12 @@ async function materializePrepare(
     mcp,
     media: promptMedia(input),
   });
-  recordNativeFormatterBound(input.activityLog, request, profile.formatter);
+  recordNativeFormatterBound(
+    input.activityLog,
+    request,
+    profile.formatter,
+    profile.formatterEntries,
+  );
   recordProviderPolicyBound(input.activityLog, request, profile, input.toolProfile ?? "direct");
   return result;
 }
@@ -1778,6 +1801,7 @@ function runLaunchProfile(
   request: OpenCodeLifecyclePrepareRequest,
   runRoot: string,
   validations: ReadonlyMap<string, McpOAuthIssuerValidation>,
+  formatterDocuments?: readonly Readonly<Record<string, unknown>>[],
 ): {
   readonly profile: Extract<OpenCodeLaunchProfileResult, { readonly ok: true }>;
   readonly mcp: OpenCodeNativeMcpAdmission | undefined;
@@ -1789,6 +1813,7 @@ function runLaunchProfile(
     contextGeometry: input.contextGeometry,
     toolProfile: input.toolProfile,
     mode: request.env.KEIKO_CODING_MODE,
+    ...(formatterDocuments === undefined ? {} : { formatterDocuments }),
     ...(mcp === undefined ? {} : { mcp: mcp.config }),
     ...(input.toolProfile === "native" && input.externalReadRoots !== undefined
       ? { externalReadRoots: input.externalReadRoots }
@@ -1994,6 +2019,7 @@ function recordNativeFormatterBound(
   activityLog: ServerLogSink | undefined,
   request: OpenCodeLifecyclePrepareRequest,
   disposition: OpenCodeNativeFormatterDisposition | undefined,
+  entries?: { readonly admitted: number; readonly refused: number },
 ): void {
   if (disposition === undefined) return;
   const mode = CODING_WORKBENCH_MODE_VALUES.find(
@@ -2003,7 +2029,14 @@ function recordNativeFormatterBound(
     activityLogEvent(
       NATIVE_FORMATTER_BOUND_OPERATION,
       { correlationId: request.runId },
-      { runId: request.runId, disposition, launchMode: mode ?? "unknown" },
+      {
+        runId: request.runId,
+        disposition,
+        launchMode: mode ?? "unknown",
+        ...(entries === undefined
+          ? {}
+          : { configuredEntryCount: entries.admitted, refusedEntryCount: entries.refused }),
+      },
     ),
   );
 }

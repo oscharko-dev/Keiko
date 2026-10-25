@@ -6,6 +6,7 @@ import type { CodingWorkbenchSidecarGatewayRunMetadata } from "@oscharko-dev/kei
 import { CODING_TOOL_MAX_BODY_BYTES } from "./codingToolIpc.js";
 import {
   openCodeNativeFormatterDisposition,
+  openCodeNativeFormatterAdmission,
   openCodeNativeFormatterSetting,
   type OpenCodeNativeFormatterDisposition,
 } from "./opencodeNativeFormatter.js";
@@ -100,6 +101,12 @@ export interface OpenCodeLaunchProfileInput {
    */
   readonly mode?: string | undefined;
   /**
+   * The user's global and the project's OpenCode configuration documents, in merge order (#3900
+   * AC4, `opencodeConfigDocuments.ts`). Only a Full access native run reads their `formatter`
+   * setting; absent carries the built-ins alone.
+   */
+  readonly formatterDocuments?: readonly Readonly<Record<string, unknown>>[] | undefined;
+  /**
    * The native run's admitted MCP servers (`openCodeNativeMcpAdmission`), written on the
    * server-owned binding. Absent means none: the binding still names an empty set, so no other
    * configuration layer can add a server.
@@ -176,6 +183,8 @@ export type OpenCodeLaunchProfileResult =
       readonly configValue: ReturnType<typeof createFixedOpenCodeV2Config>;
       /** What the native binding decided for the built-in formatters; absent on mapped profiles. */
       readonly formatter?: OpenCodeNativeFormatterDisposition;
+      /** The configured formatter entries the binding carries and those Keiko refused (#3900 AC4). */
+      readonly formatterEntries?: { readonly admitted: number; readonly refused: number };
     }
   | { readonly ok: false; readonly reason: "invalid-launch-input" | "secret-generation-failed" };
 
@@ -190,59 +199,102 @@ export function buildOpenCodeLaunchProfile(
   }
   const secret = (input.randomBytes ?? nodeRandomBytes)(32);
   if (secret.length < 32) return { ok: false, reason: "secret-generation-failed" };
-  const home = join(input.stateRoot, "home");
   const formatter = openCodeNativeFormatterDisposition(input.mode);
   const configValue = createFixedOpenCodeV2Config(
     input.contextGeometry,
     input.unavailableOptionalTools,
     input.toolProfile,
-    input.stateRoot,
-    formatter,
-    input.mcp,
-    input.externalReadRoots,
+    {
+      stateRoot: input.stateRoot,
+      formatter,
+      mcp: input.mcp,
+      externalReadRoots: input.externalReadRoots,
+      formatterDocuments: input.formatterDocuments,
+    },
   );
   return {
     ok: true,
     executable: input.executable,
     args: ["serve", "--hostname", "127.0.0.1", "--port", "0"],
-    env: Object.freeze({
-      HOME: home,
-      USERPROFILE: home,
-      XDG_CONFIG_HOME: join(input.stateRoot, "config"),
-      XDG_STATE_HOME: join(input.stateRoot, "state"),
-      TMPDIR: join(input.stateRoot, "tmp"),
-      TEMP: join(input.stateRoot, "tmp"),
-      TMP: join(input.stateRoot, "tmp"),
-      OPENCODE_CONFIG_DIR: openCodeConfigDirectory(input.stateRoot),
-      // Repository configuration is data until the operator admits its executable effects
-      // (#3903). The pinned runtime offers no per-item admission: its project layer discovers
-      // `opencode.json`, `.opencode/` agents, commands, skills and `plugins/` modules together,
-      // imports a plugin's top-level code before any permission is evaluated, and merges a
-      // project `providers` entry above Keiko's private file. Every profile therefore keeps the
-      // whole layer off. The native profile still reads the workspace-root AGENTS.md, which Keiko
-      // attaches to the first message through its own bounded loader, and admits the Markdown-only
-      // items (custom agents, commands and skills) one by one as sanitized copies in this run's
-      // private discovery directory (`codingRuntimeRepositoryItems.ts`), which this switch does
-      // not touch.
-      OPENCODE_DISABLE_PROJECT_CONFIG: "true",
-      ...(input.toolProfile === "native"
-        ? { OPENCODE_CONFIG_CONTENT: JSON.stringify(nativeServerOwnedBinding(configValue)) }
-        : {}),
-      // The pinned runtime checks plugin dependencies before loading even dependency-free custom
-      // tools. Registry retries cannot succeed inside the gateway-only network boundary. Keep its
-      // package manager offline so absent optional packages fail promptly, without registry egress.
-      npm_config_offline: "true",
-      // Keeps OpenCode's hosted free models out of the catalog (proven on the original executable);
-      // the provider policy above refuses them too. The model catalog is never fetched from
-      // models.dev: the one model is the gateway's, and a firewalled customer has no route there.
-      OPENCODE_DISABLE_FREE_MODELS: "1",
-      OPENCODE_DISABLE_MODELS_FETCH: "1",
-      OPENCODE_DB: join(input.stateRoot, "state", "opencode.db"),
-      OPENCODE_SERVER_PASSWORD: secret.toString("base64url"),
-    }),
+    env: launchEnvironment(input, formatter, configValue, secret),
     config: JSON.stringify(configValue),
     configValue,
-    ...(input.toolProfile === "native" ? { formatter } : {}),
+    ...nativeFormatterFacts(input, formatter),
+  };
+}
+
+/** The child environment: private state roots, the server-owned binding and the run's password. */
+function launchEnvironment(
+  input: OpenCodeLaunchProfileInput,
+  formatter: OpenCodeNativeFormatterDisposition,
+  configValue: Readonly<Record<string, unknown>>,
+  secret: Buffer,
+): Readonly<Record<string, string>> {
+  const home = join(input.stateRoot, "home");
+  return Object.freeze({
+    HOME: home,
+    USERPROFILE: home,
+    XDG_CONFIG_HOME: join(input.stateRoot, "config"),
+    XDG_STATE_HOME: join(input.stateRoot, "state"),
+    TMPDIR: join(input.stateRoot, "tmp"),
+    TEMP: join(input.stateRoot, "tmp"),
+    TMP: join(input.stateRoot, "tmp"),
+    OPENCODE_CONFIG_DIR: openCodeConfigDirectory(input.stateRoot),
+    // Repository configuration is data until the operator admits its executable effects
+    // (#3903). The pinned runtime offers no per-item admission: its project layer discovers
+    // `opencode.json`, `.opencode/` agents, commands, skills and `plugins/` modules together,
+    // imports a plugin's top-level code before any permission is evaluated, and merges a
+    // project `providers` entry above Keiko's private file. Every profile therefore keeps the
+    // whole layer off. The native profile still reads the workspace-root AGENTS.md, which Keiko
+    // attaches to the first message through its own bounded loader, and admits the Markdown-only
+    // items (custom agents, commands and skills) one by one as sanitized copies in this run's
+    // private discovery directory (`codingRuntimeRepositoryItems.ts`), which this switch does
+    // not touch.
+    OPENCODE_DISABLE_PROJECT_CONFIG: "true",
+    ...(input.toolProfile === "native"
+      ? { OPENCODE_CONFIG_CONTENT: JSON.stringify(nativeServerOwnedBinding(configValue)) }
+      : {}),
+    ...packageManagerEnvironment(input, formatter),
+    // Keeps OpenCode's hosted free models out of the catalog (proven on the original executable);
+    // the provider policy above refuses them too. The model catalog is never fetched from
+    // models.dev: the one model is the gateway's, and a firewalled customer has no route there.
+    OPENCODE_DISABLE_FREE_MODELS: "1",
+    OPENCODE_DISABLE_MODELS_FETCH: "1",
+    OPENCODE_DB: join(input.stateRoot, "state", "opencode.db"),
+    OPENCODE_SERVER_PASSWORD: secret.toString("base64url"),
+  });
+}
+
+/**
+ * The pinned runtime checks plugin dependencies before loading even dependency-free custom tools.
+ * Registry retries cannot succeed inside the gateway-only network boundary, so its package manager
+ * stays offline and absent optional packages fail promptly, without registry egress. A native Full
+ * access run keeps internet egress: its package manager resolves the package formatters (prettier,
+ * biome, oxfmt) from the registry as standalone does (#3900 AC4), with bounded retries, so an
+ * unreachable registry fails promptly too.
+ */
+function packageManagerEnvironment(
+  input: OpenCodeLaunchProfileInput,
+  formatter: OpenCodeNativeFormatterDisposition,
+): Readonly<Record<string, string>> {
+  return input.toolProfile === "native" && formatter === "enabled"
+    ? { npm_config_fetch_retries: "1", npm_config_fetch_timeout: "15000" }
+    : { npm_config_offline: "true" };
+}
+
+/** What the native binding decided for the formatters; absent on the mapped profiles. */
+function nativeFormatterFacts(
+  input: OpenCodeLaunchProfileInput,
+  formatter: OpenCodeNativeFormatterDisposition,
+): Pick<
+  Extract<OpenCodeLaunchProfileResult, { readonly ok: true }>,
+  "formatter" | "formatterEntries"
+> {
+  if (input.toolProfile !== "native") return {};
+  const admission = openCodeNativeFormatterAdmission(formatter, input.formatterDocuments);
+  return {
+    formatter,
+    formatterEntries: { admitted: admission.entryCount, refused: admission.refusedCount },
   };
 }
 
@@ -409,24 +461,34 @@ const NO_MCP_SERVERS: { readonly servers: Readonly<Record<string, unknown>> } = 
 });
 
 /** Original V2 execution with exactly the server-selected governed tool profile. */
+/** What only the native profile's configuration carries; every field has a fail-closed default. */
+export interface OpenCodeNativeConfigOptions {
+  readonly stateRoot?: string | undefined;
+  readonly formatter?: OpenCodeNativeFormatterDisposition | undefined;
+  readonly mcp?: { readonly servers: Readonly<Record<string, unknown>> } | undefined;
+  readonly externalReadRoots?: readonly string[] | undefined;
+  readonly formatterDocuments?: readonly Readonly<Record<string, unknown>>[] | undefined;
+}
+
 export function createFixedOpenCodeV2Config(
   contextGeometry: OpenCodeContextGeometry,
   unavailableOptionalTools?: ReadonlySet<OpenCodeOptionalToolName>,
   profile: OpenCodeToolProfile = "direct",
-  stateRoot?: string,
-  formatter: OpenCodeNativeFormatterDisposition = "disabled-unknown-mode",
-  mcp: { readonly servers: Readonly<Record<string, unknown>> } = NO_MCP_SERVERS,
-  externalReadRoots: readonly string[] = [],
+  native: OpenCodeNativeConfigOptions = {},
 ): Readonly<Record<string, unknown>> {
+  const {
+    stateRoot,
+    formatter = "disabled-unknown-mode",
+    mcp = NO_MCP_SERVERS,
+    externalReadRoots = [],
+    formatterDocuments = [],
+  } = native;
   openCodeVisibleToolNames(profile);
   if (profile === "native")
-    return createNativeOpenCodeV2Config(
-      contextGeometry,
-      stateRoot,
-      formatter,
-      mcp,
-      externalReadRoots,
-    );
+    return createNativeOpenCodeV2Config(contextGeometry, stateRoot, mcp, externalReadRoots, {
+      disposition: formatter,
+      documents: formatterDocuments,
+    });
   const unavailable = unavailableOptionalTools ?? new Set<OpenCodeOptionalToolName>();
   const reserved = Math.min(
     OPENCODE_COMPACTION_MAX_RESERVED_TOKENS,
@@ -483,9 +545,12 @@ export function createFixedOpenCodeV2Config(
 function createNativeOpenCodeV2Config(
   contextGeometry: OpenCodeContextGeometry,
   stateRoot: string | undefined,
-  formatter: OpenCodeNativeFormatterDisposition,
   mcp: { readonly servers: Readonly<Record<string, unknown>> },
   externalReadRoots: readonly string[],
+  formatter: {
+    readonly disposition: OpenCodeNativeFormatterDisposition;
+    readonly documents: readonly Readonly<Record<string, unknown>>[];
+  },
 ): Readonly<Record<string, unknown>> {
   const reserved = Math.min(
     OPENCODE_COMPACTION_MAX_RESERVED_TOKENS,
@@ -500,8 +565,8 @@ function createNativeOpenCodeV2Config(
     share: "disabled",
     snapshots: true,
     // Always explicit: the producer's own default is off, and a disabled run must stay off even if
-    // a later layer or release changes that default.
-    formatter: openCodeNativeFormatterSetting(formatter),
+    // a later layer or release changes that default. Full access carries the configured entries.
+    formatter: openCodeNativeFormatterSetting(formatter.disposition, formatter.documents),
     model: `${OPENCODE_RUNTIME_PROVIDER_ID}/${OPENCODE_RUNTIME_MODEL_ALIAS}`,
     default_agent: "build",
     providers: fixedOpenCodeV2Provider(contextGeometry, {
