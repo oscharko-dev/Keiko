@@ -187,6 +187,23 @@ tags and is narrower than the full producer's two separately bounded outputs; no
 Callers release retained graphs with `close`; released resolvers cannot be reused.
 Unsupported or unresolved semantic situations remain incomplete or fail closed. Runtime semantic qualification and further migration/scope activation remain subsequent #3918 checkpoints.
 
+A compiler-owned source-byte refusal is sticky for that live compiler context. The first fixed
+`symbol-source-budget` error is retained privately and rethrown outside TypeScript's host-read
+catches before Program/checker results or resolved modules can be returned or cached. Subsequent
+work, including admitted reads, cached Programs and currentness, refuses with that same error and
+performs no further Keiko text admission. Attempted bytes retain the first refused read's overshoot;
+the refused source has no admitted witness. Programs actually returned by TypeScript are counted
+before an outside refusal, while failed contexts are not cached as qualified. The source ceiling,
+node/alias/emission limits and ordinary production semantic-pending behavior are unchanged.
+Numeric stats remain readable and close remains unconditional/idempotent; normal work after close
+reports the existing closed reason. A new compiler is the recovery boundary. The live private marker
+survives exposed counter/limit/snapshot/cache edits, without promising protection against deliberate
+closed/preparation-field rewrites or revocation of previously returned raw Programs. TypeScript may
+still perform existence/directory probes or keep internal empty SourceFiles while its guarded call
+unwinds; this is not a pre-read I/O or heap-allocation quota. Whole-owner real-host proofs distinguish
+swallowed declaration reads from direct metadata-resolution failures, preserve exact error identity
+and attempted/admitted accounting, and retain healthy unresolved/semantic controls.
+
 Declaration-position lookup visits only parsed raw spans that can contain the requested UTF-16
 offset. It charges every inspected node, including a pruned sibling, through the unchanged
 cumulative node ruler. Selection still uses token start, exclusive end and the last minimum raw-span

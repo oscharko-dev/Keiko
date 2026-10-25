@@ -12,6 +12,7 @@ import { compareStrings } from "./compare-strings.mjs";
 
 // Witnesses remain private: exposed compiler metadata cannot rewrite the admitted text or bytes.
 const SNAPSHOT_WITNESSES = new WeakMap();
+const SOURCE_REFUSALS = new WeakMap();
 
 export function subjectPath(subject, absolute) {
   const path = relative(subject.root, absolute).replaceAll("\\", "/");
@@ -132,15 +133,7 @@ export function createCompilerContext(subject, options = {}, roots = []) {
     program: (path) => programFor(state, path),
     proofProgram: (path) => programFor(state, path, "proof"),
     resolveModule: (source, specifier, config, mode) =>
-      ts.resolveModuleName(
-        specifier,
-        source,
-        config.options,
-        compilerHost(state, config),
-        undefined,
-        undefined,
-        mode,
-      ).resolvedModule,
+      resolveModule(state, source, specifier, config, mode),
     assertCurrent: () => assertCurrent(state),
     close: () => {
       state.programs.clear();
@@ -149,6 +142,7 @@ export function createCompilerContext(subject, options = {}, roots = []) {
       state.proofFailures.clear();
       for (const previous of state.snapshots.values()) SNAPSHOT_WITNESSES.delete(previous);
       state.snapshots.clear();
+      SOURCE_REFUSALS.delete(state);
       state.closed = true;
     },
   };
@@ -157,6 +151,8 @@ export function createCompilerContext(subject, options = {}, roots = []) {
 function assertOpen(state) {
   if (state.closed) throw new TypeError("symbol-resolver-closed");
   if (state.preparationError) throw state.preparationError;
+  const refusal = SOURCE_REFUSALS.get(state);
+  if (refusal) throw refusal;
 }
 
 function initializePreparation(state) {
@@ -171,11 +167,16 @@ function initializePreparation(state) {
 }
 
 function snapshot(state, absolute, text, digest = policyDigest(text)) {
+  assertOpen(state);
   const previous = state.snapshots.get(absolute);
   if (previous && previous.digest !== digest) throw new TypeError("symbol-subject-changed");
   if (!previous) {
     state.bytes += Buffer.byteLength(text);
-    if (state.bytes > state.limits.sourceBytes) throw new TypeError("symbol-source-budget");
+    if (state.bytes > state.limits.sourceBytes) {
+      const refusal = new TypeError("symbol-source-budget");
+      SOURCE_REFUSALS.set(state, refusal);
+      throw refusal;
+    }
     const admitted = { digest };
     SNAPSHOT_WITNESSES.set(admitted, text.includes("\uFFFD") ? Buffer.from(text, "utf8") : text);
     state.snapshots.set(absolute, admitted);
@@ -208,6 +209,7 @@ function compilerHost(state, config) {
   const host = ts.createCompilerHost(config.options, true);
   const read = host.readFile;
   host.readFile = (absolute) => {
+    assertOpen(state);
     const text = read(absolute);
     if (text === undefined) return undefined;
     const path = relative(state.subject.root, absolute).replaceAll("\\", "/");
@@ -215,6 +217,23 @@ function compilerHost(state, config) {
     return snapshot(state, absolute, text);
   };
   return host;
+}
+
+function resolveModule(state, source, specifier, config, mode) {
+  assertOpen(state);
+  try {
+    return ts.resolveModuleName(
+      specifier,
+      source,
+      config.options,
+      compilerHost(state, config),
+      undefined,
+      undefined,
+      mode,
+    ).resolvedModule;
+  } finally {
+    assertOpen(state);
+  }
 }
 
 function immutableProofOption(value) {
@@ -265,6 +284,14 @@ function programConfig(state, path, role) {
 
 function programFor(state, path, role = "production") {
   assertOpen(state);
+  try {
+    return acquireProgram(state, path, role);
+  } finally {
+    assertOpen(state);
+  }
+}
+
+function acquireProgram(state, path, role) {
   if (role === "proof") assertCurrent(state);
   const { owner, config, key } = programConfig(state, path, role);
   const failure = state.proofFailures.get(key);
@@ -283,7 +310,10 @@ function programFor(state, path, role = "production") {
     host: compilerHost(state, config),
   });
   state.created += 1;
-  if (role === "proof" && ts.getPreEmitDiagnostics(program).length) {
+  assertOpen(state);
+  const diagnostics = role === "proof" ? ts.getPreEmitDiagnostics(program) : [];
+  assertOpen(state);
+  if (diagnostics.length) {
     const error = new TypeError("unqualified-proof-context");
     state.proofFailures.set(key, error);
     throw error;
@@ -296,6 +326,7 @@ function programFor(state, path, role = "production") {
     checker: program.getTypeChecker(),
     qualified: new Set(),
   };
+  assertOpen(state);
   state.programs.set(key, context);
   if (state.programs.size > state.limits.programs)
     state.programs.delete(state.programs.keys().next().value);

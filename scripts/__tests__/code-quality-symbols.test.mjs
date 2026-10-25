@@ -2222,6 +2222,284 @@ async function currentnessFixture(prepare, options = {}) {
   return { ...own, compiler };
 }
 
+function configureSourceBudgetOwner(own, kind) {
+  const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json"), "utf8"));
+  own.put("packages/budget/package.json", {
+    name: "budget",
+    version: "0.0.0",
+    type: "module",
+    exports: {},
+  });
+  own.put("packages/budget/tsconfig.json", config);
+  own.budgetPath = "packages/budget/src/consumer.ts";
+  own.metadataPath = "packages/budget/node_modules/fixture-bound/package.json";
+  own.declarationPath = "packages/budget/node_modules/fixture-bound/index.d.ts";
+  own.put(
+    own.budgetPath,
+    'import type { Bound } from "fixture-bound";\n' +
+      "export const observed: Bound = { value: 1 };\n",
+  );
+  own.put(own.metadataPath, {
+    name: "fixture-bound",
+    version: "0.0.0",
+    types: "index.d.ts",
+    ...(kind === "metadata"
+      ? { fixturePadding: "fixture-owned package metadata bytes ".repeat(8192) }
+      : {}),
+  });
+  own.put(
+    own.declarationPath,
+    (kind === "source" ? `/* ${"fixture-owned source budget bytes ".repeat(8192)} */\n` : "") +
+      "export interface Bound { readonly value: number; }\n",
+  );
+}
+
+async function sourceBudgetFixture(kind = "source") {
+  const own = createSymbolFixture(false, (value) => configureSourceBudgetOwner(value, kind), [
+    "packages/budget",
+  ]);
+  own.resources = [];
+  own.resolver = { close: () => own.resources.forEach((resource) => resource.close()) };
+  fixtures.push(own);
+  own.subject = await collectPolicySubject(own.root);
+  return own;
+}
+
+function sourceBudgetCompiler(own, options = {}) {
+  const compiler = createCompilerContext(own.subject, options);
+  own.resources.push(compiler);
+  return compiler;
+}
+
+function observedSourceBudgetError(work) {
+  try {
+    work();
+    return undefined;
+  } catch (error) {
+    return error;
+  }
+}
+
+function measuredSourceBudgetProgram(own) {
+  const compiler = sourceBudgetCompiler(own);
+  compiler.program("packages/alpha/src/owner.ts");
+  const context = compiler.program(own.budgetPath);
+  const dependencyPath = join(own.subject.root, own.declarationPath);
+  const dependency = context.program.getSourceFile(dependencyPath);
+  expect(dependency).toBeDefined();
+  expect(dependency.text.length).toBeGreaterThan(0);
+  expect(dependency.text).toContain("export interface Bound");
+  expect(compiler.state.snapshots.has(dependencyPath)).toBe(true);
+  const dependencyBytes = Buffer.byteLength(
+    readFileSync(join(own.subject.root, own.declarationPath), "utf8"),
+  );
+  return { total: compiler.state.bytes, limit: compiler.state.bytes - dependencyBytes };
+}
+
+function refusedSourceBudgetProgram(own, control) {
+  const compiler = sourceBudgetCompiler(own, { sourceBytes: control.limit });
+  compiler.program("packages/alpha/src/owner.ts");
+  const refusal = observedSourceBudgetError(() => compiler.program(own.budgetPath));
+  expect(compiler.state.bytes).toBeGreaterThan(control.limit);
+  expect(compiler.state.snapshots.has(join(own.subject.root, own.declarationPath))).toBe(false);
+  const admission = {
+    attemptedBytes: compiler.state.bytes,
+    sourceLimit: control.limit,
+    refusedWitnessAbsent: !compiler.state.snapshots.has(
+      join(own.subject.root, own.declarationPath),
+    ),
+  };
+  expect(refusal, JSON.stringify(admission)).toBeInstanceOf(TypeError);
+  expect(refusal.message).toBe("symbol-source-budget");
+  return { compiler, refusal };
+}
+
+function sourceBudgetWork(compiler, own) {
+  const source = join(own.subject.root, own.budgetPath);
+  const config = own.subject.contexts.get("packages/budget");
+  return [
+    () => compiler.read("packages/alpha/src/owner.ts"),
+    () => compiler.context(own.budgetPath),
+    () => compiler.program("packages/alpha/src/owner.ts"),
+    () => compiler.program(own.budgetPath),
+    () => compiler.assertCurrent(),
+    () => compiler.resolveModule(source, "fixture-bound", config, ts.ModuleKind.ESNext),
+  ];
+}
+
+describe("compiler-owned source admission refusal (#3918)", () => {
+  it("rejects a real swallowed TypeScript declaration read before returning a Program", async () => {
+    const own = await sourceBudgetFixture();
+    const control = measuredSourceBudgetProgram(own);
+    const { compiler } = refusedSourceBudgetProgram(own, control);
+    expect(compiler.state.programs.size).toBe(1);
+    expect(
+      [...compiler.state.programs.values()].every((entry) => entry.owner === "packages/alpha"),
+    ).toBe(true);
+    expect(
+      compiler.state.snapshots.has(join(own.subject.root, "packages/alpha/src/owner.ts")),
+    ).toBe(true);
+  }, 30_000);
+
+  it("keeps the first own error across admitted reads, cached Programs and currentness", async () => {
+    const own = await sourceBudgetFixture();
+    const { compiler, refusal } = refusedSourceBudgetProgram(own, measuredSourceBudgetProgram(own));
+    const before = {
+      bytes: compiler.state.bytes,
+      snapshots: compiler.state.snapshots.size,
+      created: compiler.state.created,
+    };
+    for (const work of sourceBudgetWork(compiler, own))
+      expect(observedSourceBudgetError(work)).toBe(refusal);
+    expect({
+      bytes: compiler.state.bytes,
+      snapshots: compiler.state.snapshots.size,
+      created: compiler.state.created,
+    }).toEqual(before);
+  }, 30_000);
+
+  it("keeps a live private error after exposed observation metadata is rewritten", async () => {
+    const own = await sourceBudgetFixture();
+    const { compiler, refusal } = refusedSourceBudgetProgram(own, measuredSourceBudgetProgram(own));
+    compiler.state.bytes = 0;
+    compiler.state.limits.sourceBytes = Number.MAX_SAFE_INTEGER;
+    compiler.state.snapshots.clear();
+    compiler.state.programs.clear();
+    for (const work of sourceBudgetWork(compiler, own))
+      expect(observedSourceBudgetError(work)).toBe(refusal);
+    expect(compiler.state.bytes).toBe(0);
+    expect(compiler.state.snapshots.size).toBe(0);
+    expect(compiler.state.programs.size).toBe(0);
+  }, 30_000);
+
+  it("admits the actual exact-byte profile and refuses one byte below it", async () => {
+    const own = await sourceBudgetFixture();
+    const control = measuredSourceBudgetProgram(own);
+    const exact = sourceBudgetCompiler(own, { sourceBytes: control.total });
+    exact.program("packages/alpha/src/owner.ts");
+    const context = exact.program(own.budgetPath);
+    expect(
+      context.program.getSourceFile(join(own.subject.root, own.declarationPath)).text,
+    ).toContain("export interface Bound");
+    expect(exact.state.bytes).toBe(control.total);
+    const lower = sourceBudgetCompiler(own, { sourceBytes: control.total - 1 });
+    lower.program("packages/alpha/src/owner.ts");
+    const refusal = observedSourceBudgetError(() => lower.program(own.budgetPath));
+    expect(refusal).toBeInstanceOf(TypeError);
+    expect(refusal.message).toBe("symbol-source-budget");
+    expect(lower.state.bytes).toBeGreaterThan(control.total - 1);
+  }, 30_000);
+
+  it.each([ts.ModuleKind.ESNext, ts.ModuleKind.CommonJS])(
+    "preserves first metadata refusal and healthy module resolution in mode %s",
+    async (mode) => {
+      const own = await sourceBudgetFixture("metadata");
+      const source = join(own.subject.root, own.budgetPath);
+      const config = own.subject.contexts.get("packages/budget");
+      const healthy = sourceBudgetCompiler(own);
+      healthy.read("packages/budget/package.json");
+      const resolved = healthy.resolveModule(source, "fixture-bound", config, mode);
+      expect(resolved.resolvedFileName).toBe(join(own.subject.root, own.declarationPath));
+      expect(healthy.state.snapshots.has(join(own.subject.root, own.metadataPath))).toBe(true);
+      const metadataBytes = Buffer.byteLength(
+        readFileSync(join(own.subject.root, own.metadataPath), "utf8"),
+      );
+      const limit = healthy.state.bytes - metadataBytes;
+      expect(limit).toBeGreaterThan(0);
+      const bounded = sourceBudgetCompiler(own, { sourceBytes: limit });
+      bounded.read("packages/budget/package.json");
+      const refusal = observedSourceBudgetError(() =>
+        bounded.resolveModule(source, "fixture-bound", config, mode),
+      );
+      expect(refusal).toBeInstanceOf(TypeError);
+      expect(refusal.message).toBe("symbol-source-budget");
+      expect(bounded.state.bytes).toBeGreaterThan(limit);
+      expect(bounded.state.snapshots.has(join(own.subject.root, own.metadataPath))).toBe(false);
+      expect(bounded.state.created).toBe(0);
+      const before = { bytes: bounded.state.bytes, snapshots: bounded.state.snapshots.size };
+      for (const work of sourceBudgetWork(bounded, own))
+        expect(observedSourceBudgetError(work)).toBe(refusal);
+      expect({ bytes: bounded.state.bytes, snapshots: bounded.state.snapshots.size }).toEqual(
+        before,
+      );
+      expect(bounded.state.created).toBe(0);
+      const unresolved = sourceBudgetCompiler(own);
+      expect(unresolved.resolveModule(source, "fixture-missing", config, mode)).toBeUndefined();
+      expect(() => unresolved.assertCurrent()).not.toThrow();
+    },
+    30_000,
+  );
+
+  it("preserves cached public facts refusal, stats and unconditional close", async () => {
+    const own = await sourceBudgetFixture();
+    const path = join(own.subject.root, own.budgetPath);
+    const offset = readFileSync(path, "utf8").indexOf("observed");
+    const healthy = createSymbolResolver(own.subject);
+    own.resources.push(healthy);
+    const expected = healthy.resolveExport(reference);
+    healthy.describeAt({ path: own.budgetPath, offset });
+    const dependencyBytes = Buffer.byteLength(
+      readFileSync(join(own.subject.root, own.declarationPath), "utf8"),
+    );
+    const resolver = createSymbolResolver(own.subject, {
+      sourceBytes: healthy.stats().sourceBytes - dependencyBytes,
+    });
+    own.resources.push(resolver);
+    expect(resolver.resolveExport(reference)).toEqual(expected);
+    const refusal = observedSourceBudgetError(() =>
+      resolver.describeAt({ path: own.budgetPath, offset }),
+    );
+    expect(refusal).toBeInstanceOf(TypeError);
+    expect(refusal.message).toBe("symbol-source-budget");
+    const before = resolver.stats();
+    expect(observedSourceBudgetError(() => resolver.resolveExport(reference))).toBe(refusal);
+    expect(resolver.stats()).toEqual(before);
+    expect(() => resolver.close()).not.toThrow();
+    expect(() => resolver.close()).not.toThrow();
+    expect(resolver.stats().programs).toBe(0);
+    expect(resolver.stats().sourceBytes).toBe(before.sourceBytes);
+    expect(() => resolver.assertCurrent()).toThrow("symbol-resolver-closed");
+    const fresh = sourceBudgetCompiler(own);
+    expect(fresh.program(own.budgetPath).program.getSourceFile(path).text).toContain("observed");
+  }, 30_000);
+
+  it("does not latch an unrelated same-message input observation error", async () => {
+    const own = await currentnessFixture();
+    const inputs = own.compiler.state.inputs;
+    const original = inputs[Symbol.iterator];
+    const sentinel = new TypeError("symbol-source-budget");
+    inputs[Symbol.iterator] = () => {
+      throw sentinel;
+    };
+    try {
+      expect(observedSourceBudgetError(() => own.compiler.assertCurrent())).toBe(sentinel);
+    } finally {
+      inputs[Symbol.iterator] = original;
+    }
+    expect(() => own.compiler.assertCurrent()).not.toThrow();
+    expect(() => own.compiler.read("src/consumer.ts")).not.toThrow();
+  });
+
+  it("retains production semantic facts and proof-role semantic rejection", async () => {
+    const own = await currentnessFixture(({ put }) => {
+      put("src/consumer.ts", 'export const wrong: number = "wrong";\n');
+      put("src/semantic.test.ts", 'export const wrong: number = "wrong";\n');
+    });
+    const context = own.compiler.program("src/consumer.ts");
+    expect(ts.getPreEmitDiagnostics(context.program).length).toBeGreaterThan(0);
+    expect(() => own.compiler.assertCurrent()).not.toThrow();
+    own.compiler.close();
+    const proof = createCompilerContext(own.compiler.state.subject, {}, [
+      { owner: "", paths: ["src/semantic.test.ts"] },
+    ]);
+    try {
+      expect(() => proof.proofProgram("src/semantic.test.ts")).toThrow("unqualified-proof-context");
+    } finally {
+      proof.close();
+    }
+  }, 30_000);
+});
+
 function currentnessTargetBufferAllocations(compiler, byteLength) {
   const allocate = Buffer.allocUnsafe;
   let allocations = 0;
