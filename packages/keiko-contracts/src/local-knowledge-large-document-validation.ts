@@ -5,6 +5,11 @@
 // Each validator returns the same discriminated `{ ok: true; value } | { ok: false; errors }`
 // shape as the other Local Knowledge validators so callers branch without throwing.
 
+import {
+  isCapturedExtent,
+  isRecord,
+  validateStableExtent,
+} from "./contract-validation-primitives.js";
 import type {
   CoverageQuality,
   ExtractionCheckpointRecord,
@@ -26,8 +31,8 @@ import {
 } from "./local-knowledge-validation.js";
 
 // ─── Local primitive guards ───────────────────────────────────────────────────
-// Mirror the private guards in local-knowledge-validation.ts. Kept local rather than exported
-// across the module boundary to avoid widening that file's public surface.
+// Domain scalar guards stay local; structural record and extent admission use the existing
+// internal primitive owner without widening the public Local Knowledge surface.
 type DiagnosticStructure = Omit<ParserDiagnostic, "documentId"> & { readonly documentId?: string };
 type CheckpointStructure = Omit<
   ExtractionCheckpointRecord,
@@ -39,21 +44,6 @@ type CheckpointStructure = Omit<
   readonly terminalDiagnostics: readonly DiagnosticStructure[];
 };
 
-function isCapturedExtent(value: number): boolean {
-  return Number.isSafeInteger(value) && value >= 0;
-}
-
-function validateStableExtent(
-  members: readonly unknown[],
-  extent: number,
-  field: string,
-  errors: string[],
-): boolean {
-  if (members.length !== extent)
-    return reject(errors, `${field} must not change length during validation`);
-  return true;
-}
-
 function combineAdmissions(previous: boolean, current: boolean): boolean {
   return previous && current;
 }
@@ -62,10 +52,6 @@ function combineAdmissions(previous: boolean, current: boolean): boolean {
 function reject(errors: string[], ...reasons: string[]): false {
   errors.push(...reasons);
   return false;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isFiniteNonNegativeInteger(value: unknown): value is number {

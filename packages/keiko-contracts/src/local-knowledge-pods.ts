@@ -6,6 +6,11 @@
 // privacy posture, and compatibility lineage. It carries no document bodies, source paths, prompts,
 // endpoints, credentials, vectors, or raw evidence.
 
+import {
+  isCapturedExtent,
+  isRecord,
+  validateStableExtent,
+} from "./contract-validation-primitives.js";
 import type {
   EmbeddingProfileCompatibilityReason,
   EmbeddingProfileCompatibilityStatus,
@@ -489,21 +494,6 @@ type PodSummaryStructure = Omit<KnowledgePodSummary, "id" | "compatibility"> & {
   };
 };
 
-function isCapturedExtent(value: number): boolean {
-  return Number.isSafeInteger(value) && value >= 0;
-}
-
-function validateStableExtent(
-  members: readonly unknown[],
-  extent: number,
-  field: string,
-  errors: string[],
-): boolean {
-  if (members.length !== extent)
-    return reject(errors, `${field} must not change length during validation`);
-  return true;
-}
-
 function combineAdmissions(previous: boolean, current: boolean): boolean {
   return previous && current;
 }
@@ -512,10 +502,6 @@ function combineAdmissions(previous: boolean, current: boolean): boolean {
 function reject(errors: string[], ...reasons: string[]): false {
   errors.push(...reasons);
   return false;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isUrlTerminator(char: string): boolean {

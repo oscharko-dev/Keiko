@@ -1097,3 +1097,70 @@ describe("Knowledge pod summary public responsibility (#3918)", () => {
 });
 
 import type { LocalKnowledgeValidation } from "./local-knowledge-validation.js";
+
+it.each(["source", "public"])("preserves captured extent observations through %s", (surface) => {
+  const validate = surface === "source" ? validateKnowledgePodSummary : publicValidateSummary;
+  for (const state of ["stable", "growth", "shrink", "invalid"]) {
+    const trace: string[] = [];
+    let lengthReads = 0;
+    const members = new Proxy<unknown[]>(["healthy"], {
+      get(target, key): unknown {
+        if (key === "length") {
+          trace.push("length");
+          lengthReads += 1;
+          if (state === "invalid") return Number.NaN;
+          if (lengthReads > 1 && state === "growth") return 2;
+          if (lengthReads > 1 && state === "shrink") return 0;
+          return 1;
+        }
+        if (key === "0") trace.push("0");
+        const value: unknown = Reflect.get(target, key);
+        return value;
+      },
+    });
+    const input = { ...happySummary(), tags: members };
+    const result = validate(input);
+    if (state === "stable") {
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.value).toBe(input);
+    } else {
+      expect(result).toEqual({
+        ok: false,
+        errors: [
+          state !== "invalid"
+            ? "summary.tags must not change length during validation"
+            : "summary.tags must have a valid array length",
+        ],
+      });
+    }
+    expect(trace).toEqual(state === "invalid" ? ["length"] : ["length", "0", "length"]);
+  }
+});
+
+it.each(["source", "public"])("propagates final extent getter failure through %s", (surface) => {
+  const validate = surface === "source" ? validateKnowledgePodSummary : publicValidateSummary;
+  const trace: string[] = [];
+  const refusal = new TypeError("fixture-final-extent");
+  let lengthReads = 0;
+  const members = new Proxy<unknown[]>(["healthy"], {
+    get(target, key): unknown {
+      if (key === "length") {
+        trace.push("length");
+        lengthReads += 1;
+        if (lengthReads === 2) throw refusal;
+      }
+      if (key === "0") trace.push("0");
+      const value: unknown = Reflect.get(target, key);
+      return value;
+    },
+  });
+  const input = { ...happySummary(), tags: members };
+  let observed: unknown;
+  try {
+    validate(input);
+  } catch (error) {
+    observed = error;
+  }
+  expect(observed).toBe(refusal);
+  expect(trace).toEqual(["length", "0", "length"]);
+});
