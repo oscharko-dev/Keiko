@@ -659,7 +659,7 @@ describe("dev-lane runtime process backend", () => {
     it("keeps the tree unproven while a process of the run never ends", async () => {
       const result = await crash(() => true);
       expect(result.complete).toBe(false);
-      expect(result.signals.length).toBe(50);
+      expect(result.signals).toHaveLength(50);
     });
 
     // Without the member nothing proves the end, and no host signal may stand in for it.

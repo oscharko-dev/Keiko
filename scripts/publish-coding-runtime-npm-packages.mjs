@@ -19,6 +19,7 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 import { verifyCodingRuntimeNpmCandidate } from "./build-coding-runtime-npm-package.mjs";
+import { compareStrings } from "./lib/compare-strings.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 import { isMainModule } from "./lib/is-main-module.mjs";
 import { oidcTrustedPublishingAvailable } from "./lib/npm-publish-preflight.mjs";
@@ -52,7 +53,7 @@ function checkedEntry(target, entry, version) {
 export function reviewedRelease(document, version) {
   if (!VERSION.test(version)) throw new TypeError(`runtime version ${version} is not x.y.z`);
   const release = document?.schemaVersion === 1 ? document.releases?.[version] : undefined;
-  const targets = Object.keys(release ?? {}).sort();
+  const targets = Object.keys(release ?? {}).sort(compareStrings);
   if (targets.length === 0) throw new TypeError(`runtime version ${version} was never reviewed`);
   return targets.map((target) => checkedEntry(target, release[target], version));
 }
