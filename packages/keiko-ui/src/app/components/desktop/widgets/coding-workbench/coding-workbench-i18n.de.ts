@@ -1031,6 +1031,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Genehmigen erlaubt dem Agenten für diese Anfrage einmal den Zugriff auf das Internet; Ablehnen lässt den Agenten ohne ihn weiterarbeiten. Internetzugriff gibt es nur im Modus Vollzugriff.",
   "codingWorkbench.approval.native.help.execute":
     "Genehmigen führt dieses Code-Mode-Programm einmal in der Skript-Sandbox von OpenCode aus: Es kann die Verwaltungswerkzeuge von OpenCode aufrufen und unterhalb von Vollzugriff nur lokale Adressen erreichen. Ablehnen lässt den Agenten ohne es weiterarbeiten.",
+  "codingWorkbench.approval.native.help.worktree":
+    "Genehmigen legt einen neuen verwalteten Task-Workspace mit diesem Namen an, auf einem eigenen Branch vom aktuellen Task-Branch; er öffnet sich als eigene Aufgabe, und dieser Lauf arbeitet hier weiter. Ablehnen lässt den Agenten ohne ihn weiterarbeiten.",
   "codingWorkbench.approval.native.resources": "Angeforderter Befehl, Pfade oder Adressen",
   "codingWorkbench.approval.native.noResources":
     "Weder Befehl noch Pfad noch Adresse wurde genannt.",
@@ -1047,6 +1049,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.approval.native.permission.webfetch": "Webabruf",
   "codingWorkbench.approval.native.permission.websearch": "Websuche",
   "codingWorkbench.approval.native.permission.execute": "Code-Mode-Skript",
+  "codingWorkbench.approval.native.permission.worktree": "Neuer Task-Workspace",
   "codingWorkbench.approval.native.permission.other": "Native Aktion",
   "codingWorkbench.approval.native.label.native-shell": "Nativer Shell-Befehl",
   "codingWorkbench.approval.native.label.native-edit": "Native Dateiänderung",

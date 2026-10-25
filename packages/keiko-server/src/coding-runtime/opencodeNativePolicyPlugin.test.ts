@@ -271,7 +271,7 @@ describe("generated native policy plugin Code Mode governance (#3897)", () => {
     );
     expect(refused.requests[0]).toMatchObject({
       permission: "opencode_worktree_create",
-      resources: [],
+      resources: ["feature"],
       source: { type: "tool", messageID: "msg_code_mode", id: "call_execute" },
     });
     const allowed = await pluginHarness("autonomous-delivery", { effect: "allow" });
@@ -280,7 +280,7 @@ describe("generated native policy plugin Code Mode governance (#3897)", () => {
   });
 
   // #3903 AC4: a move is decided by the directory it names and the session it moves.
-  it("sends a session move's directory and target session, and nothing else for a worktree", async () => {
+  it("sends a session move's directory and target session, and a new worktree's name", async () => {
     const harness = await pluginHarness("supervised-coding", { effect: "allow" });
     await harness.toolBefore({
       ...nested("opencode_session_move"),
@@ -296,7 +296,7 @@ describe("generated native policy plugin Code Mode governance (#3897)", () => {
       { resources: ["/workspace/src"], targetSessionID: null },
       { resources: ["/workspace"], targetSessionID: "ses_other" },
       { resources: [], targetSessionID: null },
-      { permission: "opencode_worktree_create", resources: [], targetSessionID: null },
+      { permission: "opencode_worktree_create", resources: ["/x"], targetSessionID: null },
     ]);
   });
 

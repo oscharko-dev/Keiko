@@ -8146,6 +8146,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
         values: ["primary", "child"],
       },
+      worktree: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["provisioned", "resumed", "unavailable", "workspace-changed", "provision-failed"],
+      },
       risk: {
         type: "string",
         dataClass: "closed-enum",

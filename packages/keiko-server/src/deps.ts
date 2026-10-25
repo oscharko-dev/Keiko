@@ -482,6 +482,7 @@ export function productionOpenCodeToolProfile(
   return platform === "darwin" ? "native" : "direct";
 }
 import { resolveProductionOpenCodeActivation } from "./coding-runtime/productionOpenCodeActivation.js";
+import { createNativeWorktreeProvisionPort } from "./coding-runtime/opencodeNativeWorktree.js";
 import { readProductionWorkspaceHead } from "./coding-runtime/productionWorkspaceHeadReader.js";
 import type { GitHubCodeContextApiPort } from "./coding-context/githubCodeContextConnector.js";
 import type { JiraCodeContextHttpPort } from "./coding-context/jiraCodeContextConnector.js";
@@ -5987,6 +5988,18 @@ function configuredRuntimeEnvelopeBounds(env: EnvSource): RuntimeEnvelopeBounds 
   };
 }
 
+// #3903 AC4: an approved Code Mode `worktree_create` becomes a managed task workspace through the
+// existing lifecycle and provisioning owners.
+function nativeWorktreeProvisioning(
+  workspaceLifecycle: WorkspaceLifecycleService,
+  bundle: Pick<PersistenceBundle, "workspaceProvisioning">,
+): ReturnType<typeof createNativeWorktreeProvisionPort> {
+  return createNativeWorktreeProvisionPort({
+    lifecycle: workspaceLifecycle,
+    provisioning: bundle.workspaceProvisioning,
+  });
+}
+
 // The attested-portable activation path supplies Keiko's own confirmation plane; injected
 // ports never receive a fallback consumer, so external composition stays fail-closed (#2377).
 function resolveProductionRuntimePorts(
@@ -6022,6 +6035,7 @@ function resolveProductionRuntimePorts(
       return result.status === "available" ? result.runMetadata : undefined;
     },
     activityLog: processServerLogSink(),
+    nativeWorktrees: nativeWorktreeProvisioning(workspaceLifecycle, args.bundle),
     // A proof that could not run (IDENTITY_PROOF_FAILED, logged at its source) yields no root: the
     // activation stays unavailable rather than crashing the resolution or trusting an unproven tree.
     resolveWorkspaceRoot: (): string | undefined => {

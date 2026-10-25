@@ -50,6 +50,7 @@ describe("CodingWorkbenchNativeActionReview", () => {
     ["webfetch", "Internet access is only available in Full access."],
     ["websearch", "Internet access is only available in Full access."],
     ["execute", "Approve runs this Code Mode program once"],
+    ["opencode_worktree_create", "Approve creates a new managed task workspace with this name"],
     ["external_directory", "Approve allows exactly this action once"],
   ])("states what approving a %s ask does, per permission", (permission, expected) => {
     render(review({ permission, resources: ["x"] }));
@@ -73,6 +74,19 @@ describe("CodingWorkbenchNativeActionReview", () => {
     unmount();
     render(review({ permission: "execute", resources: [program] }, de));
     expect(screen.getByText(/Code-Mode-Programm einmal/u)).toBeVisible();
+  });
+
+  // #3903 AC4: a Code Mode worktree is a new managed task workspace the human names and approves.
+  it("names a new task workspace by its requested name, in both languages", () => {
+    const { unmount } = render(
+      review({ permission: "opencode_worktree_create", resources: ["feature-x"] }),
+    );
+    expect(screen.getByText(/New task workspace/u)).toBeVisible();
+    expect(screen.getByRole("listitem")).toHaveTextContent("feature-x");
+    unmount();
+    render(review({ permission: "opencode_worktree_create", resources: ["feature-x"] }, de));
+    expect(screen.getByText(/Neuer Task-Workspace/u)).toBeVisible();
+    expect(screen.getByText(/verwalteten Task-Workspace mit diesem Namen/u)).toBeVisible();
   });
 
   it("claims the task workspace only for the shell command, never for web access", () => {

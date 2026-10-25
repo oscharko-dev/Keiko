@@ -1057,9 +1057,18 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   Files root, the Authority Envelope and the task binding stay the task workspace. A moved session
   is not retained for a later continuation: the retention audit finds its directory changed
   (`session-mismatch`), so the follow-up starts a fresh session.
-  `opencode_worktree_create` stays refused: a worktree outside the task workspace would leave the
-  workspace binding (ADR-0088, ADR-0089), and the managed task-workspace owner admits only a
-  human-initiated provision while a live run's binding cannot change.
+  `opencode_worktree_create` adds a new branch and worktree, so the policy classifies it as a
+  delivery-scoped action the human decides in every mode, Full access included; the hook sends the
+  name it carries, which must be one plain name (letters, digits, dots, dashes, underscores, at
+  most 64). An approved request is provisioned by the existing managed task-workspace owner
+  (`opencodeNativeWorktree.ts` over `WorkspaceProvisioningService.provision`): a new task workspace
+  from the active workspace's repository, branched from the run's current task branch, recorded
+  with the run's correlation. The producer's own call is always blocked, so no unmanaged git
+  worktree is ever added; the model reads Keiko's result, labelled creation only, as the call's
+  message. The run keeps its
+  binding: the new workspace opens as its own task, and a session move into it stays refused until
+  a governed rebinding exists. The decision line records how it ended (`worktree`: `provisioned`,
+  `resumed`, `unavailable`, `workspace-changed`, `provision-failed`).
 - **An unoffered native tool name is the producer's to answer.** The gateway binds a native call
   by name only and grants nothing (ADR-0175 D2). A model that names a tool the request did not
   offer (a hallucinated `bash`, say) reaches OpenCode, which answers with its own unavailable-tool

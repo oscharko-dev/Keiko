@@ -31,6 +31,12 @@ export const OPENCODE_CODE_MODE_GOVERNED_TOOLS = Object.freeze([
  */
 export const OPENCODE_CODE_MODE_SESSION_MOVE = "opencode_session_move";
 
+/**
+ * The governed management tool that would add an unmanaged worktree (#3903 AC4): the hook sends
+ * the name it carries, and Keiko's managed task-workspace owner provisions an approved one.
+ */
+export const OPENCODE_CODE_MODE_WORKTREE_CREATE = "opencode_worktree_create";
+
 /** Secrets and Keiko bindings never reach a shell the native agent starts. */
 export const OPENCODE_NATIVE_SHELL_ENV_DENYLIST = Object.freeze([
   "OPENCODE_SERVER_PASSWORD",
@@ -117,10 +123,11 @@ function pluginConstantsSource(): readonly string[] {
 function managementSource(): readonly string[] {
   return [
     "// A session move is reviewed by the directory it names and the session it moves (absent: the",
-    "// calling one); the other governed management tool names no path.",
+    "// calling one); a new worktree by the name it is given.",
     "function managementResources(tool, input) {",
-    `  if (tool !== ${JSON.stringify(OPENCODE_CODE_MODE_SESSION_MOVE)} || !input || typeof input !== "object") return [];`,
-    '  return typeof input.directory === "string" ? [input.directory] : [];',
+    '  if (!input || typeof input !== "object") return [];',
+    `  const value = tool === ${JSON.stringify(OPENCODE_CODE_MODE_SESSION_MOVE)} ? input.directory : tool === ${JSON.stringify(OPENCODE_CODE_MODE_WORKTREE_CREATE)} ? input.name : undefined;`,
+    '  return typeof value === "string" ? [value] : [];',
     "}",
     "function managementTarget(tool, input) {",
     `  if (tool !== ${JSON.stringify(OPENCODE_CODE_MODE_SESSION_MOVE)} || !input || typeof input !== "object") return null;`,

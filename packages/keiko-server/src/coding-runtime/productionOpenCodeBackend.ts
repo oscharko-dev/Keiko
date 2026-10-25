@@ -49,6 +49,7 @@ import {
 } from "./codingSafeActivityProjection.js";
 import { createCodingRuntimeRepositoryItemsPort } from "./codingRuntimeRepositoryItems.js";
 import { createCodingRuntimeRepositoryInstructionsPort } from "./codingRuntimeRepositoryInstructions.js";
+import type { NativeWorktreeProvisionPort } from "./opencodeNativeWorktree.js";
 import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
 import { createDevLaneRuntimeProcessBackend } from "./devLaneRuntimeProcessBackend.js";
 import { createNativeRuntimeProcessBackend } from "./nativeRuntimeProcessBackend.js";
@@ -171,6 +172,8 @@ export interface ProductionOpenCodeBackendInput {
   readonly repositoryItemsEnabled?: boolean | undefined;
   /** The operator's opt-out of the workspace AGENTS.md (#3900 AC3); absent keeps it on. */
   readonly repositoryInstructionsEnabled?: boolean | undefined;
+  /** Keiko's managed task-workspace owner for an approved Code Mode `worktree_create` (#3903 AC4). */
+  readonly nativeWorktrees?: NativeWorktreeProvisionPort | undefined;
   /** The operator's MCP server registry for one native run (`mcpServerRegistry.ts`). */
   readonly mcpServers?: ((correlationId: string) => readonly McpServerDefinition[]) | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
@@ -424,13 +427,14 @@ function nativeRunInputs(
   toolProfile: OpenCodeToolProfile,
 ): Pick<
   OpenCodeRuntimeCompositionInput,
-  "repositoryItems" | "repositoryInstructions" | "mcpServers"
+  "repositoryItems" | "repositoryInstructions" | "mcpServers" | "nativeWorktrees"
 > {
   if (toolProfile !== "native") return {};
   return {
     repositoryItems: repositoryItemsFor(input, run),
     repositoryInstructions: repositoryInstructionsFor(input, run),
     ...(input.mcpServers === undefined ? {} : { mcpServers: input.mcpServers }),
+    ...(input.nativeWorktrees === undefined ? {} : { nativeWorktrees: input.nativeWorktrees }),
   };
 }
 

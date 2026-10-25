@@ -999,6 +999,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Approve lets the agent use the internet once for this request; deny tells the agent to continue without it. Internet access is only available in Full access.",
   "codingWorkbench.approval.native.help.execute":
     "Approve runs this Code Mode program once in OpenCode's script sandbox: it can call OpenCode's management tools and, below Full access, reach only local addresses. Deny tells the agent to continue without it.",
+  "codingWorkbench.approval.native.help.worktree":
+    "Approve creates a new managed task workspace with this name, on its own branch from the current task branch; it opens as its own task, and this run keeps working here. Deny tells the agent to continue without it.",
   "codingWorkbench.approval.native.resources": "Requested command, paths, or addresses",
   "codingWorkbench.approval.native.noResources": "No command, path, or address was named.",
   "codingWorkbench.approval.native.nothingNamed":
@@ -1014,6 +1016,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.approval.native.permission.webfetch": "Web fetch",
   "codingWorkbench.approval.native.permission.websearch": "Web search",
   "codingWorkbench.approval.native.permission.execute": "Code Mode script",
+  "codingWorkbench.approval.native.permission.worktree": "New task workspace",
   "codingWorkbench.approval.native.permission.other": "Native action",
   "codingWorkbench.approval.native.label.native-shell": "Native shell command",
   "codingWorkbench.approval.native.label.native-edit": "Native file change",

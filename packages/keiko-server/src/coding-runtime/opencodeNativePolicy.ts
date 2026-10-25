@@ -27,11 +27,13 @@ import type { CodingToolNativeCharge } from "./codingToolFacadePorts.js";
 import { OPENCODE_NATIVE_DELIVERY_REFUSAL_MESSAGE } from "./opencodeNativeDeliveryTools.js";
 import {
   OPENCODE_CODE_MODE_SESSION_MOVE,
+  OPENCODE_CODE_MODE_WORKTREE_CREATE,
   OPENCODE_NATIVE_POLICY_ACTION,
   OPENCODE_NATIVE_POLICY_MAX_RESOURCES,
   OPENCODE_NATIVE_POLICY_MAX_RESOURCE_CHARS,
 } from "./opencodeNativePolicyPlugin.js";
 import { OPENCODE_NATIVE_PERMISSION_ACTIONS } from "./opencodeNativeTools.js";
+import type { NativeWorktreeDisposition } from "./opencodeNativeWorktree.js";
 import { projectOpenCodePermissionRequestId } from "./opencodeProtocol.js";
 
 /**
@@ -107,12 +109,8 @@ type NativeActionLabel =
   | "native-mcp";
 
 const SEARCH_ACTIONS = new Set(["glob", "grep"]);
-/**
- * The Code Mode management tool that would create a worktree outside Keiko's workspace binding
- * (ADR-0088/0089); the policy plugin routes it here through its tool hook. A session move is
- * decided on its own (`classifySessionMove`).
- */
-const CODE_MODE_KEIKO_OWNED = new Set(["opencode_worktree_create"]);
+/** A new managed task workspace's name: the task id the managed owner derives its branch from. */
+const WORKTREE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
 const READ_ACTIONS = new Set([
   "read",
   "list",
@@ -793,12 +791,7 @@ function classifyNativeAction(
   const { permission, resources } = request;
   if (permission === OPENCODE_CODE_MODE_SESSION_MOVE)
     return classifySessionMove(request, roots.workspaceRoot);
-  if (CODE_MODE_KEIKO_OWNED.has(permission))
-    return {
-      reason: "unsupported-action",
-      message:
-        "Keiko refused this action: the task workspace and its worktrees are managed by Keiko. Keep working in the current workspace.",
-    };
+  if (permission === OPENCODE_CODE_MODE_WORKTREE_CREATE) return classifyWorktreeCreate(request);
   if (!KNOWN_ACTIONS.has(permission))
     return {
       reason: "unsupported-action",
@@ -844,6 +837,30 @@ function classifySessionMove(
           "Keiko refused this action: the target is not an existing directory inside the task workspace.",
       }
     : guarded;
+}
+
+/**
+ * Code Mode's `worktree_create` (#3903 AC4): a new branch and worktree of the repository, so a
+ * delivery-scoped action the human decides in every mode. An approved one is provisioned by the
+ * managed task-workspace owner (`opencodeNativeWorktree.ts`), never by the producer's own git call.
+ */
+const NATIVE_WORKTREE: OpenCodeNativeActionClassification = Object.freeze({
+  actionClass: "workspace-write",
+  kind: "workspace-write",
+  scope: "delivery",
+  risk: "high",
+  label: "native-edit",
+});
+
+function classifyWorktreeCreate(request: OpenCodeNativePolicyRequest): Classified {
+  const [name, ...rest] = request.resources;
+  return name !== undefined && rest.length === 0 && WORKTREE_NAME.test(name)
+    ? NATIVE_WORKTREE
+    : {
+        reason: "unsupported-action",
+        message:
+          "Keiko refused this action: name the new task workspace with letters, digits, dots, dashes or underscores (at most 64 characters).",
+      };
 }
 
 /**
@@ -1348,6 +1365,13 @@ export const CODING_RUNTIME_NATIVE_POLICY_DECIDED_OPERATION = defineActivityLogO
       required: false,
       values: ["primary", "child"],
     },
+    // #3903 AC4: how an approved Code Mode `worktree_create` ended at the managed owner.
+    worktree: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["provisioned", "resumed", "unavailable", "workspace-changed", "provision-failed"],
+    },
     risk: {
       type: "string",
       dataClass: "closed-enum",
@@ -1460,6 +1484,7 @@ export function recordOpenCodeNativePolicyDecision(
     readonly outcome: OpenCodeNativePolicyOutcome;
     readonly sessionRelation?: OpenCodeNativeSessionRelation | undefined;
     readonly authority?: OpenCodeNativeAuthorityEvidence | undefined;
+    readonly worktree?: NativeWorktreeDisposition | undefined;
   },
 ): void {
   const { request, decision } = input;
@@ -1482,6 +1507,7 @@ export function recordOpenCodeNativePolicyDecision(
           .digest("hex"),
         ...(requestId === undefined ? {} : { requestId }),
         ...(request.patchBytes === undefined ? {} : { patchBytes: request.patchBytes }),
+        ...(input.worktree === undefined ? {} : { worktree: input.worktree }),
         ...authorityEvidenceFields(input.authority),
       },
     ),

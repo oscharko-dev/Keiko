@@ -8877,6 +8877,12 @@
               "type": "string",
               "dataClass": "closed-enum",
               "required": false
+            },
+            {
+              "name": "worktree",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
             }
           ],
           "evidenceClasses": [

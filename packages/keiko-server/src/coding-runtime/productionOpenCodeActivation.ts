@@ -172,6 +172,8 @@ export interface ProductionOpenCodeActivationInput {
   readonly activityLog?: ServerLogSink | undefined;
   /** The configured Authority Envelope duration (ms) the backend's safe-activity retention follows. */
   readonly runtimeMaxDurationMs?: number | undefined;
+  /** Keiko's managed task-workspace owner for an approved Code Mode `worktree_create` (#3903 AC4). */
+  readonly nativeWorktrees?: ProductionOpenCodeBackendInput["nativeWorktrees"];
 }
 
 export type ProductionOpenCodeActivationResult =
@@ -273,6 +275,7 @@ function activatedPorts(
       gatewayReadiness: input.gatewayReadiness,
       ...(input.activityLog ? { activityLog: input.activityLog } : {}),
       ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
+      ...(input.nativeWorktrees ? { nativeWorktrees: input.nativeWorktrees } : {}),
       ...(input.fetch ? { fetch: input.fetch } : {}),
       ...(input.runtimeMaxDurationMs === undefined
         ? {}

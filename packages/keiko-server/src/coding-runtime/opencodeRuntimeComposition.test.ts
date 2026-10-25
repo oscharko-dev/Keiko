@@ -96,6 +96,7 @@ import {
 import type { SecureWorkspaceNativeFileIO } from "./secureWorkspaceTextRead.js";
 import type { CodingRuntimeRepositoryItemsPort } from "./codingRuntimeRepositoryItems.js";
 import { NATIVE_SESSION_LOCATION_MAX } from "./opencodeNativeSessionTree.js";
+import type { NativeWorktreeProvisionPort } from "./opencodeNativeWorktree.js";
 import { createProductionAcceptedInitializationAuthority } from "./productionCodingRuntimeResolver.js";
 import {
   catalogRuntimeFixture,
@@ -685,6 +686,8 @@ interface StartBridgeControl {
   readonly repositoryItems?: CodingRuntimeRepositoryItemsPort;
   /** The native AGENTS.md copy the composition is handed (#3900 AC3). */
   readonly repositoryInstructions?: InstructionsCopyPort;
+  /** The managed owner for an approved Code Mode `worktree_create` (#3903 AC4). */
+  readonly nativeWorktrees?: NativeWorktreeProvisionPort;
   readonly startTimeoutMs?: number;
   readonly shutdownTimeoutMs?: number;
   readonly onRelease?: (runId: string) => void;
@@ -1006,6 +1009,12 @@ function optionalRepositoryInstructions(control: StartBridgeControl | undefined)
   return control?.repositoryInstructions === undefined
     ? {}
     : { repositoryInstructions: control.repositoryInstructions };
+}
+
+function optionalNativeWorktrees(control: StartBridgeControl | undefined): {
+  readonly nativeWorktrees?: NativeWorktreeProvisionPort;
+} {
+  return control?.nativeWorktrees === undefined ? {} : { nativeWorktrees: control.nativeWorktrees };
 }
 
 function optionalToolResultCorrelation(control: StartBridgeControl | undefined): {
@@ -1428,6 +1437,7 @@ async function startBridgeFixture(
     ...optionalActivityLog(control),
     ...optionalRepositoryItems(control),
     ...optionalRepositoryInstructions(control),
+    ...optionalNativeWorktrees(control),
     ...optionalToolResultCorrelation(control),
     ...optionalRuntimeEvents(control),
     ...optionalSpawnGuard(control),
@@ -3370,6 +3380,128 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
       await fixture.stop();
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  // #3903 AC4: an approved Code Mode `worktree_create` becomes a managed task workspace; the
+  // producer's own unmanaged worktree call never runs, not even after the human approved it.
+  describe("Code Mode worktree creation through the managed owner (#3903 AC4)", () => {
+    const worktreeAsk = (name: string): string =>
+      JSON.stringify({
+        action: "native-policy",
+        runId: FIXTURE_RUN_ID,
+        sessionID: "ses_tool",
+        permission: "opencode_worktree_create",
+        resources: [name],
+        configured: "ask",
+        source: { type: "tool", messageID: "msg_worktree", id: "call_worktree" },
+      });
+    const provisioned = vi.fn<NativeWorktreeProvisionPort["provision"]>(() =>
+      Promise.resolve({
+        ok: true,
+        taskId: "feature-x",
+        branch: "keiko/task/feature-x-0a1b2c3d",
+        created: true,
+      }),
+    );
+
+    async function askedHuman(events: readonly CodingWorkbenchRuntimeEvent[]): Promise<string> {
+      await vi.waitFor(() => {
+        expect(events.some((event) => event.kind === "permission-requested")).toBe(true);
+      });
+      const permission = events.find(
+        (event) => event.kind === "permission-requested",
+      )?.permissionRequest;
+      if (permission === undefined || Array.isArray(permission))
+        throw new Error("expected a permission request");
+      return permission.requestId;
+    }
+
+    async function decidedWorktree(
+      reply: "once" | "reject",
+      nativeWorktrees: NativeWorktreeProvisionPort | undefined,
+    ): Promise<{
+      readonly body: Readonly<Record<string, unknown>>;
+      readonly decided: Readonly<Record<string, unknown>> | undefined;
+    }> {
+      const runtimeEvents: CodingWorkbenchRuntimeEvent[] = [];
+      const activityLog = createBufferedServerLogSink();
+      const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+        mode: "autonomous-delivery",
+        runtimeEvents,
+        activityLog,
+        ...(nativeWorktrees === undefined ? {} : { nativeWorktrees }),
+      });
+      try {
+        const answer = fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers(authorized),
+          body: worktreeAsk("feature-x"),
+        });
+        const requestId = await askedHuman(runtimeEvents);
+        await expect(
+          fixture.runtime.runPort.replyPermission(FIXTURE_RUN_ID, requestId, reply),
+        ).resolves.toBe(true);
+        const response = await answer;
+        const decided = activityLog.events.find(
+          (event) => event.op === "coding-runtime.native-policy.decided",
+        )?.extra;
+        return { body: JSON.parse(response.body) as Readonly<Record<string, unknown>>, decided };
+      } finally {
+        await fixture.stop();
+      }
+    }
+
+    it("asks the human even in Full access, provisions the approved one and blocks the producer's call", async () => {
+      provisioned.mockClear();
+      const { body, decided } = await decidedWorktree("once", { provision: provisioned });
+      expect(body).toMatchObject({
+        effect: "deny",
+        message: expect.stringContaining(
+          'created the managed task workspace "feature-x"',
+        ) as string,
+      });
+      expect(provisioned).toHaveBeenCalledExactlyOnceWith({
+        runId: FIXTURE_RUN_ID,
+        workspaceRoot: expect.any(String) as string,
+        name: "feature-x",
+        correlationId: FIXTURE_RUN_ID,
+      });
+      expect(decided).toMatchObject({
+        permission: "opencode_worktree_create",
+        effect: "ask",
+        outcome: "approved",
+        worktree: "provisioned",
+      });
+    });
+
+    it("provisions nothing when the human declines", async () => {
+      provisioned.mockClear();
+      const { body, decided } = await decidedWorktree("reject", { provision: provisioned });
+      expect(body).toMatchObject({ effect: "deny" });
+      expect(provisioned).not.toHaveBeenCalled();
+      expect(decided).not.toHaveProperty("worktree");
+    });
+
+    it("refuses an approved request the managed owner fails without an answer, and records why", async () => {
+      const failing = vi.fn<NativeWorktreeProvisionPort["provision"]>(() =>
+        Promise.reject(new Error("disk")),
+      );
+      const { body, decided } = await decidedWorktree("once", { provision: failing });
+      expect(body).toMatchObject({
+        effect: "deny",
+        message: expect.stringContaining("could not be created") as string,
+      });
+      expect(decided).toMatchObject({ outcome: "approved", worktree: "provision-failed" });
+    });
+
+    it("refuses an approved request when no managed owner is composed", async () => {
+      const { body, decided } = await decidedWorktree("once", undefined);
+      expect(body).toMatchObject({
+        effect: "deny",
+        message: expect.stringContaining("not available here") as string,
+      });
+      expect(decided).toMatchObject({ outcome: "approved", worktree: "unavailable" });
+    });
   });
 
   it("hands the measured size of an edit's diff to the authority owner with its invocation", async () => {

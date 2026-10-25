@@ -185,8 +185,15 @@ import {
 } from "./opencodeNativeMcp.js";
 import {
   OPENCODE_CODE_MODE_SESSION_MOVE,
+  OPENCODE_CODE_MODE_WORKTREE_CREATE,
   OPENCODE_NATIVE_POLICY_ACTION,
 } from "./opencodeNativePolicyPlugin.js";
+import {
+  nativeWorktreeAnswer,
+  type NativeWorktreeDisposition,
+  type NativeWorktreeProvisionPort,
+  type NativeWorktreeProvisionResult,
+} from "./opencodeNativeWorktree.js";
 import { awaitOpenCodeNativePlugins } from "./opencodeNativePluginReadiness.js";
 import { createNativeQuestionPort, type NativeQuestionPort } from "./opencodeNativeQuestions.js";
 import {
@@ -467,6 +474,11 @@ export interface OpenCodeRuntimeCompositionInput {
         ) => Promise<boolean>;
       }
     | undefined;
+  /**
+   * Native profile only: Keiko's managed task-workspace owner for an approved Code Mode
+   * `worktree_create` (#3903 AC4); absent refuses every such request.
+   */
+  readonly nativeWorktrees?: NativeWorktreeProvisionPort | undefined;
   /**
    * The operator's MCP server registry, read once per native run at launch (#3903,
    * `mcpServerRegistry.ts`); absent admits no MCP server.
@@ -796,6 +808,7 @@ export function createOpenCodeRuntimeComposition(
       renderedResults: renderedResultLog(input),
       resolveWorkspaceRootAccess: input.resolveWorkspaceRootAccess,
       activityLog: input.activityLog ?? processServerLogSink(),
+      ...(input.nativeWorktrees === undefined ? {} : { nativeWorktrees: input.nativeWorktrees }),
     },
     input.toolBridge,
     input.toolFacadeOrigin,
@@ -2930,6 +2943,7 @@ interface ToolBridgeExecutionDeps {
   readonly beginTool?: NonNullable<OpenCodeRuntimeCompositionInput["safeActivity"]>["beginTool"];
   readonly diagnostics: ServerDiagnosticSink | undefined;
   readonly renderedResults?: RenderedResultLog | undefined;
+  readonly nativeWorktrees?: NativeWorktreeProvisionPort | undefined;
 }
 
 /** Where a delivered tool result's model-facing rendering is recorded (#3873). */
@@ -3387,17 +3401,86 @@ async function handleNativePolicyRequest(
     approvals,
     sessionRelation,
   });
+  return answerNativePolicy(run, request, decision, { ...settled, sessionRelation }, deps);
+}
+
+// The settled decision becomes the hook's answer and its one body-free line; an approved
+// `worktree_create` is answered with the managed owner's result instead (#3903 AC4).
+async function answerNativePolicy(
+  run: PreparedRun,
+  request: OpenCodeNativePolicyRequest,
+  decision: OpenCodeNativePolicyDecision,
+  settled: NativePolicySettlement & { readonly sessionRelation: OpenCodeNativeSessionRelation },
+  deps: ToolBridgeExecutionDeps,
+): Promise<OpenCodeToolBridgeResponse> {
   const { outcome } = settled;
-  if (outcome !== "allowed" && outcome !== "approved") noteNativeCallRefused(deps, request);
+  const worktree = await nativeWorktreeOutcome(run, request, outcome, deps);
+  if ((outcome !== "allowed" && outcome !== "approved") || worktree !== undefined)
+    noteNativeCallRefused(deps, request);
   recordOpenCodeNativePolicyDecision(deps.activityLog, run.runId, {
     mode: run.mode,
     request,
     decision,
     outcome,
-    sessionRelation,
+    sessionRelation: settled.sessionRelation,
     ...(settled.authority === undefined ? {} : { authority: settled.authority }),
+    ...(worktree === undefined ? {} : { worktree: worktree.disposition }),
   });
-  return nativePolicyResult(outcome, decision);
+  return worktree === undefined
+    ? nativePolicyResult(outcome, decision)
+    : nativePolicyResponse("deny", worktree.message);
+}
+
+/**
+ * An approved Code Mode `worktree_create` is provisioned by Keiko's managed task-workspace owner
+ * (#3903 AC4); the producer's own unmanaged worktree call is always blocked, and the model reads
+ * the managed result as its message. `undefined` for every other action and for a refused one.
+ */
+async function nativeWorktreeOutcome(
+  run: PreparedRun,
+  request: OpenCodeNativePolicyRequest,
+  outcome: OpenCodeNativePolicyOutcome,
+  deps: ToolBridgeExecutionDeps,
+): Promise<
+  { readonly message: string; readonly disposition: NativeWorktreeDisposition } | undefined
+> {
+  if (request.permission !== OPENCODE_CODE_MODE_WORKTREE_CREATE) return undefined;
+  if (outcome !== "allowed" && outcome !== "approved") return undefined;
+  const [name] = request.resources;
+  const port = deps.nativeWorktrees;
+  return nativeWorktreeAnswer(
+    port === undefined || name === undefined
+      ? { ok: false, reason: "unavailable" }
+      : await provisionedWorktree(port, run, name, deps.diagnostics),
+  );
+}
+
+// The managed owner records its classified failures itself; an unclassified one is recorded here,
+// body-free under the run's correlation, and still refuses the request.
+async function provisionedWorktree(
+  port: NativeWorktreeProvisionPort,
+  run: PreparedRun,
+  name: string,
+  diagnostics: ServerDiagnosticSink | undefined,
+): Promise<NativeWorktreeProvisionResult> {
+  try {
+    return await port.provision({
+      runId: run.runId,
+      workspaceRoot: run.workspaceRoot,
+      name,
+      correlationId: run.runId,
+    });
+  } catch (error) {
+    emitServerDiagnostic(diagnostics, {
+      correlationId: run.runId,
+      timestamp: new Date().toISOString(),
+      operation: "coding-runtime.tool-bridge",
+      source: "opencode-runtime-composition.native-worktree",
+      errorClass: contentFreeErrorClass(error),
+      message: "native-worktree-provision-failed",
+    });
+    return { ok: false, reason: "provision-failed" };
+  }
 }
 
 // A refused call ends as a failed tool in the runtime's history; the run's effort evidence reads it

@@ -2293,13 +2293,45 @@ describe("pinned native OpenCode MCP servers from the operator's registry (C04, 
 // Code Mode's `session_move` with Keiko's policy present: the run's own session may move inside the
 // task workspace, and the run's tree follows it there, so a background job the moved session starts
 // is still the run's and stops with its turn. Every other target is refused and moves nothing.
-describe("pinned native OpenCode Code Mode session move (#3903 AC4)", () => {
+describe("pinned native OpenCode Code Mode session move and worktree creation (#3903 AC4)", () => {
   const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
   const move = (input: Readonly<Record<string, unknown>>): ScriptedCall => ({
     name: "execute",
     arguments: { code: `return await tools.opencode.session_move(${JSON.stringify(input)});` },
   });
   const files = { "src/a.ts": "export const a = 1;\n" };
+
+  function workspaceGit(fixture: Fixture, ...args: string[]): string {
+    const git = resolveDarwinGitExecutable();
+    const result = spawnSync(git.path, ["-C", fixture.workspace, ...args], {
+      encoding: "utf8",
+      env: {
+        HOME: fixture.state,
+        PATH: dirname(git.path),
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_AUTHOR_NAME: "fixture",
+        GIT_AUTHOR_EMAIL: "fixture@example.invalid",
+        GIT_COMMITTER_NAME: "fixture",
+        GIT_COMMITTER_EMAIL: "fixture@example.invalid",
+      },
+    });
+    if (result.status !== 0) throw new Error("fixture-git-failed");
+    return result.stdout;
+  }
+
+  function commitWorkspace(fixture: Fixture): void {
+    workspaceGit(fixture, "add", "-A");
+    workspaceGit(fixture, "commit", "-q", "-m", "fixture");
+  }
+
+  /** Every worktree of the fixture repository, the main one first. */
+  function worktreeList(fixture: Fixture): readonly string[] {
+    return workspaceGit(fixture, "worktree", "list", "--porcelain")
+      .split("\n")
+      .filter((line) => line.startsWith("worktree "))
+      .map((line) => realpathSync(line.slice("worktree ".length)));
+  }
 
   async function directoryOf(run: Run, sessionId = run.sessionId): Promise<unknown> {
     const session = (await run.client.sessions()).find((entry) => entry.id === sessionId);
@@ -2361,6 +2393,35 @@ describe("pinned native OpenCode Code Mode session move (#3903 AC4)", () => {
           await expect(run.client.shells(src)).resolves.toEqual([]);
           await expect.poll(() => processesCarrying(marker).length, { timeout: 10_000 }).toBe(0);
         });
+      });
+    },
+    180_000,
+  );
+
+  // `worktree_create` (#3903 AC4) is a delivery-scoped ask in every mode: the hook hands the policy
+  // its name, and a refusal keeps the producer from adding any worktree. An approved one is
+  // provisioned by the managed owner, never by this call (composition test, "Code Mode worktree
+  // creation through the managed owner").
+  it.skipIf(skip)(
+    "asks before a new worktree, even in Full access, and a refusal adds no worktree",
+    async () => {
+      await withRun({ mode: "autonomous-delivery", approveAsks: false, files }, async (run) => {
+        commitWorkspace(run.fixture);
+        const result = await scriptedTurn(run, {
+          name: "execute",
+          arguments: {
+            code: 'return await tools.opencode.worktree_create({ name: "feature-x" });',
+          },
+        });
+        expect(run.facade.decisions).toContainEqual(
+          expect.objectContaining({
+            permission: "opencode_worktree_create",
+            resources: ["feature-x"],
+            effect: "ask",
+          }),
+        );
+        expect(result).toContain("approval-required");
+        expect(worktreeList(run.fixture)).toEqual([run.fixture.workspace]);
       });
     },
     180_000,

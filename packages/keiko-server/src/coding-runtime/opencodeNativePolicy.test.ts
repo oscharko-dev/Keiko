@@ -452,12 +452,34 @@ describe("Code Mode management tools (#3897, #3903 AC4)", () => {
   const MODES = ["governed-assist", "supervised-coding", "autonomous-delivery"] as const;
   const OWN = "ses_native0000000000001";
 
-  it("refuses worktree creation in every mode with an explanation", () => {
+  // A new worktree is a new branch of the repository: the human decides it in every mode, Full
+  // access included, and an approved one is provisioned by the managed owner, never by the
+  // producer (the composition blocks the producer's own call after the decision).
+  it("asks the human before a new managed task workspace in every mode", () => {
     for (const mode of MODES) {
-      const decision = decide(mode, "opencode_worktree_create", []);
-      expect(decision.effect, mode).toBe("deny");
-      expect(decision.effect === "deny" ? decision.message : "").toMatch(/managed by Keiko/u);
+      const decision = decide(mode, "opencode_worktree_create", ["feature-x.2_b"]);
+      expect(decision.effect, mode).toBe("ask");
+      expect(decision.classification).toMatchObject({
+        actionClass: "workspace-write",
+        scope: "delivery",
+        risk: "high",
+      });
     }
+  });
+
+  it("refuses a worktree without one plain name", () => {
+    for (const mode of MODES)
+      for (const resources of [
+        [],
+        ["a", "b"],
+        ["../x"],
+        [".hidden"],
+        ["with space"],
+        ["x".repeat(65)],
+      ])
+        expect(effectOf(mode, "opencode_worktree_create", resources), resources.join()).toBe(
+          "deny:unsupported-action",
+        );
   });
 
   // A real workspace: a move is decided against the directory the session would land in.
