@@ -99,6 +99,7 @@ import {
 import type { SecureWorkspaceNativeFileIO } from "./secureWorkspaceTextRead.js";
 import type { CodingRuntimeRepositoryItemsPort } from "./codingRuntimeRepositoryItems.js";
 import type { OperatorPluginsPort } from "./opencodeOperatorPlugins.js";
+import type { RemoteSkillsPort } from "./opencodeRemoteSkills.js";
 import type { McpOAuthIssuerPort } from "./opencodeRuntimeComposition.js";
 
 const ISSUER = "https://login.example.test";
@@ -701,6 +702,8 @@ interface StartBridgeControl {
   readonly repositoryItems?: CodingRuntimeRepositoryItemsPort;
   /** The operator plugin admission the composition is handed (#3903 AC2). */
   readonly operatorPlugins?: OperatorPluginsPort;
+  /** The operator's remote skill sources the composition pulls (#3903 AC3). */
+  readonly remoteSkills?: RemoteSkillsPort;
   /** The operator's MCP registry and the issuer validation of its OAuth servers (#3903 AC3). */
   readonly mcpServers?: () => readonly McpServerDefinition[];
   readonly mcpOAuthIssuer?: McpOAuthIssuerPort;
@@ -1035,8 +1038,12 @@ function optionalMcp(control: StartBridgeControl | undefined): {
 
 function optionalOperatorPlugins(control: StartBridgeControl | undefined): {
   readonly operatorPlugins?: OperatorPluginsPort;
+  readonly remoteSkills?: RemoteSkillsPort;
 } {
-  return control?.operatorPlugins === undefined ? {} : { operatorPlugins: control.operatorPlugins };
+  return {
+    ...(control?.operatorPlugins === undefined ? {} : { operatorPlugins: control.operatorPlugins }),
+    ...(control?.remoteSkills === undefined ? {} : { remoteSkills: control.remoteSkills }),
+  };
 }
 
 function optionalRepositoryInstructions(control: StartBridgeControl | undefined): {
@@ -3942,30 +3949,35 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
     ["native", "supervised-coding", 1],
     ["direct", "autonomous-delivery", 0],
   ] as const)(
-    "hands the %s profile's operator plugin admission the %s launch mode before the spawn",
+    "hands the %s profile's operator plugin and remote skill admissions the %s launch mode before the spawn",
     async (profile, mode, expected) => {
       const order: string[] = [];
       const calls: { readonly mode: string | undefined; readonly discoveryRoot: string }[] = [];
+      const admission = (name: string): OperatorPluginsPort & RemoteSkillsPort => ({
+        admitForRun: (request: {
+          readonly mode: string | undefined;
+          readonly discoveryRoot: string;
+        }): Promise<void> => {
+          order.push(name);
+          calls.push({ mode: request.mode, discoveryRoot: request.discoveryRoot });
+          return Promise.resolve();
+        },
+      });
       const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
         mode,
         readToolProfile: () => profile,
-        operatorPlugins: {
-          admitForRun: (request): Promise<void> => {
-            order.push("admit");
-            calls.push({ mode: request.mode, discoveryRoot: request.discoveryRoot });
-            return Promise.resolve();
-          },
-        },
+        operatorPlugins: admission("plugins"),
+        remoteSkills: admission("skills"),
         onSpawn: () => order.push("spawn"),
       });
       try {
-        expect(calls).toHaveLength(expected);
+        expect(calls).toHaveLength(expected * 2);
         if (expected === 0) return;
-        expect(calls[0]?.mode).toBe(mode);
+        expect(calls.map((call) => call.mode)).toEqual([mode, mode]);
         expect(calls[0]?.discoveryRoot.endsWith(join(FIXTURE_RUN_ID, "config", "opencode"))).toBe(
           true,
         );
-        expect(order).toEqual(["admit", "spawn"]);
+        expect(order).toEqual(["plugins", "skills", "spawn"]);
       } finally {
         await fixture.stop();
       }

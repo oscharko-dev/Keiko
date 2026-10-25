@@ -1338,6 +1338,21 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
     Markdown item wins over a configuration entry of the same name; the configuration entry is
     refused as a duplicate. The real-binary suite proves the configuration's agents and commands
     list and run while none of its plugins, providers or MCP servers load.
+- **Remote skill sources are pulled by Keiko, not by the runtime (#3903 AC3, parity row T17).** The
+  producer's `skills` setting pulls `<url>/index.json` and each listed skill's files from the same
+  origin over its own egress and loads them unsanitized; that setting stays Keiko's. Instead
+  `opencodeRemoteSkills.ts` pulls the sources the operator names in the owner-private
+  `<stateDir>/opencode-skill-sources.json` (`{ "schemaVersion": 1, "sources": [{ "url" }] }`, at most
+  4 `https` sources without credentials, query or fragment), only for a run launched in Full access,
+  through Keiko's egress configuration with no redirect and loopback and private targets refused.
+  It reads only the index (64 KiB, 64 entries) and each skill's `SKILL.md` (32 KiB), passes every one
+  through the repository skill sanitizer, and writes at most 16 copies to the private `skill/`
+  discovery directory beside the repository's `skills/`, where the producer's own `skill` tool lists
+  and loads them; sibling files are never copied and a repository skill keeps its name. Each prepare
+  first removes the previous pull. Evidence: `coding-runtime.remote-skills.admitted` (a registry
+  line or one line per source with counts, closed refusal reasons and SHA-256 digests of the source
+  and of the copies; never a URL, a name or a body). The staged 2.1.4 executable lists a pulled
+  skill beside the repository's own, sanitized, and pulls nothing itself.
 - **Plugins are operator code, admitted by digest for Full access only (#3903 AC2).** A plugin is a
   module the producer imports into its own process, so no repository text can register one. The
   operator registers local plugins in the owner-private `<stateDir>/opencode-plugins.json`

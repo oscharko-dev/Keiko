@@ -144,6 +144,7 @@
   "coding-runtime.read-only-child.runner-failed": "tools-workflows",
   "coding-runtime.readiness.failed": "tools-workflows",
   "coding-runtime.readiness.phase": "tools-workflows",
+  "coding-runtime.remote-skills.admitted": "tools-workflows",
   "coding-runtime.repository-instructions.context": "tools-workflows",
   "coding-runtime.repository-items.admitted": "tools-workflows",
   "coding-runtime.repository-rerank": "tools-workflows",

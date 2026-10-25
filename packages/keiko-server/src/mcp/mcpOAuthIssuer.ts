@@ -10,6 +10,7 @@ import {
   readBytesCapped,
   type OutboundHttpEgressConfig,
 } from "@oscharko-dev/keiko-model-gateway/internal/http";
+import { plainRecord } from "../operatorRegistryJson.js";
 
 /**
  * The authorization server an operator names for a remote MCP server, proven before a run may use
@@ -190,12 +191,6 @@ function httpsUrl(value: unknown): string | undefined {
 
 function listIncludes(value: unknown, entry: string): boolean {
   return Array.isArray(value) && value.includes(entry);
-}
-
-function plainRecord(value: unknown): Readonly<Record<string, unknown>> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Readonly<Record<string, unknown>>)
-    : undefined;
 }
 
 const CANDIDATE_OUTCOMES = ["validated", "not-found", "unreadable", ...REFUSALS] as const;

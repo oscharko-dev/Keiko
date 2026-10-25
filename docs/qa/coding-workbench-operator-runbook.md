@@ -214,6 +214,30 @@ appear, read its `refusalReasons`: `invalid-name`, `reserved-name`, `duplicate-n
 `name-mismatch`, `not-regular-file`, `unreadable`, `directory-unreadable`, `limit-exceeded`,
 `restriction-unrepresentable`, `config-malformed` or `config-unsupported-format`.
 
+## Remote skill sources
+
+A native run can use skills published on a team server, the way OpenCode's `skills` setting pulls a
+remote skill index. Keiko pulls them itself, only for a run launched in **Full access**, from the
+sources the operator names in `opencode-skill-sources.json` in Keiko's state directory (owned by the
+user Keiko runs as, `chmod 600`; a missing file means no remote source):
+
+```json
+{ "schemaVersion": 1, "sources": [{ "url": "https://skills.example.com/team/" }] }
+```
+
+- At most 4 `https` sources, without credentials, query or fragment.
+- Each source publishes `index.json` (`{ "skills": [{ "name": "release", "files": ["SKILL.md"] }] }`)
+  and each skill's `SKILL.md` below `<source>/<name>/`, as OpenCode expects. Keiko reads only the
+  index and `SKILL.md`, through its own proxy and CA settings, never following a redirect or reaching
+  a loopback or private address. Sibling files are not copied, as for a repository skill.
+- Every `SKILL.md` passes the same checks as a repository skill (closed frontmatter, `name` and
+  `description` kept, everything else dropped); at most 16 remote skills per run, 32 KiB each. A
+  name the repository already uses stays the repository's.
+- The Activity Log records `coding-runtime.remote-skills.admitted`: one registry line (`absent`,
+  `registry-refused`, `mode-restricted`, `failed`) or one line per source (`admitted` with counts and
+  closed refusal reasons, `index-invalid`, `source-failed`), with a digest of the source, never its
+  address or a skill name.
+
 ## OpenCode plugins
 
 A plugin is code the runtime runs inside its own process, so a repository can never register one.

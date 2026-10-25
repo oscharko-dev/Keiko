@@ -41,6 +41,7 @@ import {
 import { createOpenCodeMcpAuthorizationRunPort } from "./opencodeNativeMcpAuthorization.js";
 import { harvestMcpCredentials, seedMcpCredentials } from "./opencodeNativeMcpCredentials.js";
 import { createMcpOAuthCredentialStore } from "../mcp/mcpOAuthCredentialStore.js";
+import { createRemoteSkillsPort } from "./opencodeRemoteSkills.js";
 import { createGeneratedOpenCodeV2Plugins } from "./opencodeRuntimeAdapter.js";
 import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import {
@@ -577,6 +578,8 @@ interface OperatorPluginsOption {
 }
 
 interface RunOptions {
+  /** Another admission into the discovery directory before the launch, as the composition runs it. */
+  readonly beforeLaunch?: (fixture: Fixture) => Promise<void>;
   /** The run's MCP binding, as `openCodeNativeMcpAdmission` composes it (#3903 AC3). */
   readonly mcp?: OpenCodeNativeMcpAdmission["config"];
   /** The operator's registered plugins, admitted the way the composition admits them (#3903 AC2). */
@@ -619,6 +622,7 @@ async function withRun(options: RunOptions, body: (run: Run) => Promise<void>): 
   }).admitForRun({ runId: RUN_ID, discoveryRoot: openCodeConfigDirectory(fixture.state) });
   if (options.operatorPlugins !== undefined)
     await admitOperatorPlugins(fixture, options.operatorPlugins, admission);
+  await options.beforeLaunch?.(fixture);
   for (const [path, text] of Object.entries(options.rawDiscoveryFiles ?? {})) {
     write(join(openCodeConfigDirectory(fixture.state), path), text);
   }
@@ -1685,6 +1689,61 @@ describe("pinned native OpenCode MCP OAuth", () => {
       } finally {
         await closeStub({ server: oauth.server, port: 0, requests: [] });
       }
+    },
+    120_000,
+  );
+});
+
+// #3903 AC3 (parity row T17): a remote skill source the operator registered is pulled by Keiko,
+// sanitized, and the producer's own `skill` tool lists and loads it; the runtime pulls nothing.
+describe("pinned native OpenCode remote skill sources", () => {
+  const live = BINARY !== undefined && RESOURCE_ROOT !== undefined ? it : it.skip;
+  const SOURCE = "https://skills.example.test/team/";
+  const REMOTE_SKILL =
+    "---\nname: release\ndescription: Drafts the release notes\nallowed-tools: shell\n---\nREMOTE-SKILL-BODY-MARKER\n";
+
+  live(
+    "lists a remote skill Keiko pulled and sanitized, beside the repository's own",
+    async () => {
+      const evidence = createBufferedServerLogSink();
+      const served: string[] = [];
+      const fetchImpl = ((input: string | URL | Request): Promise<Response> => {
+        const url = String(input instanceof Request ? input.url : input);
+        served.push(url);
+        if (url === `${SOURCE}index.json`)
+          return Promise.resolve(
+            new Response(JSON.stringify({ skills: [{ name: "release", files: ["SKILL.md"] }] })),
+          );
+        if (url === `${SOURCE}release/SKILL.md`) return Promise.resolve(new Response(REMOTE_SKILL));
+        return Promise.resolve(new Response("missing", { status: 404 }));
+      }) as typeof fetch;
+      await withRun(
+        {
+          beforeLaunch: async (fixture) => {
+            await createRemoteSkillsPort({
+              registry: () => ({ state: "loaded", sources: [SOURCE] }),
+              egress: () => undefined,
+              activityLog: evidence,
+              fetchImpl,
+            }).admitForRun({
+              runId: RUN_ID,
+              discoveryRoot: openCodeConfigDirectory(fixture.state),
+              mode: "autonomous-delivery",
+            });
+          },
+        },
+        async (run) => {
+          const skills = await listedWhen(run, "/api/skill", "release");
+          expect(idsOf(skills)).toContain("demo");
+          const copy = readFileSync(
+            join(openCodeConfigDirectory(run.fixture.state), "skill", "release", "SKILL.md"),
+            "utf8",
+          );
+          expect(copy).toContain("REMOTE-SKILL-BODY-MARKER");
+          expect(copy).not.toContain("allowed-tools");
+          expect(served).toEqual([`${SOURCE}index.json`, `${SOURCE}release/SKILL.md`]);
+        },
+      );
     },
     120_000,
   );

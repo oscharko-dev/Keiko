@@ -9,6 +9,7 @@ import {
 import type { McpOAuthCredentialStore } from "../mcp/mcpOAuthCredentialStore.js";
 import type { AdmittedMcpOAuthServer } from "./opencodeNativeMcp.js";
 import type { OpenCodeV2HttpClient } from "./opencodeV2HttpClient.js";
+import { plainRecord } from "../operatorRegistryJson.js";
 
 /**
  * The OAuth credential of an admitted MCP server between runs (#3903 AC3). The runtime keeps the
@@ -149,12 +150,6 @@ function issuedFor(row: CredentialRow, admitted: AdmittedMcpOAuthServer): boolea
     metadata.issuer === admitted.oauth.issuer &&
     (admitted.oauth.clientId === undefined || client?.client_id === admitted.oauth.clientId)
   );
-}
-
-function plainRecord(value: unknown): Readonly<Record<string, unknown>> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Readonly<Record<string, unknown>>)
-    : undefined;
 }
 
 const ACTIONS = ["seeded", "harvested", "scrubbed"] as const;

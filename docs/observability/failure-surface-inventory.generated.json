@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "5c38b620b27595bdcd0e43842775f1d6c45a2bbb5554d4602b067f93002d2b66"
+    "catalogDigest": "10aa653de55c5dc4c21bd1dc192bd1d3ab0823b360994a6a65d5e76b96749693"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -59,10 +59,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 583,
-    "proofCount": 596,
-    "resolvedProofCount": 596,
-    "failureClassCount": 365,
+    "operationCount": 584,
+    "proofCount": 597,
+    "resolvedProofCount": 597,
+    "failureClassCount": 366,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -362,6 +362,7 @@
         "coding-runtime.read-only-child.runner-failed",
         "coding-runtime.readiness.failed",
         "coding-runtime.readiness.phase",
+        "coding-runtime.remote-skills.admitted",
         "coding-runtime.repository-instructions.context",
         "coding-runtime.repository-items.admitted",
         "coding-runtime.repository-rerank",
@@ -837,6 +838,7 @@
     "coding-runtime-repository-items": ["tools-workflows.dependency-failure"],
     "coding-runtime-operator-plugins": ["tools-workflows.dependency-failure"],
     "mcp-registry": ["tools-workflows.dependency-failure"],
+    "coding-runtime-remote-skills": ["tools-workflows.dependency-failure"],
     "coding-runtime-mcp-credentials": ["tools-workflows.dependency-failure"],
     "coding-runtime-mcp-authorization": ["tools-workflows.dependency-failure"],
     "mcp-oauth-issuer": ["tools-workflows.dependency-failure"],
@@ -1554,6 +1556,9 @@
     ],
     "coding-runtime.readiness.phase.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.test.ts"
+    ],
+    "coding-runtime.remote-skills.admitted.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/opencodeRemoteSkills.test.ts"
     ],
     "coding-runtime.repository-instructions.context.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingRuntimeRepositoryInstructions.test.ts"

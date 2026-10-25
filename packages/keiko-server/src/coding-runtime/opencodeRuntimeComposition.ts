@@ -234,6 +234,7 @@ import type {
 } from "./opencodeLaunchProfile.js";
 import type { CodingRuntimeRepositoryItemsPort } from "./codingRuntimeRepositoryItems.js";
 import type { OperatorPluginsPort } from "./opencodeOperatorPlugins.js";
+import type { RemoteSkillsPort } from "./opencodeRemoteSkills.js";
 import type { CodingRuntimeRepositoryInstructionsCopyRequest } from "./codingRuntimeRepositoryInstructions.js";
 import {
   createGeneratedOpenCodeV2Plugins,
@@ -488,6 +489,11 @@ export interface OpenCodeRuntimeCompositionInput {
    * Native profile only; absent loads none of them.
    */
   readonly operatorPlugins?: OperatorPluginsPort | undefined;
+  /**
+   * Pulls the operator's remote skill sources for a run launched in Full access (#3903 AC3,
+   * `opencodeRemoteSkills.ts`). Native profile only; absent pulls none.
+   */
+  readonly remoteSkills?: RemoteSkillsPort | undefined;
   /**
    * Native profile only: writes Keiko's bounded copy of the workspace's AGENTS.md into the
    * producer's own global instruction slot (#3900 AC3); true when the copy changed.
@@ -1746,6 +1752,7 @@ async function materializePrepare(
   materialize(runRoot, config, createGeneratedOpenCodeV2Plugins(input.toolProfile));
   await admitRepositoryItems(input, request, runRoot);
   await admitOperatorPlugins(input, request, runRoot);
+  await admitRemoteSkills(input, request, runRoot);
   await refreshRepositoryInstructions(input, request.runId, runRoot, request.signal);
   const password = profile.env.OPENCODE_SERVER_PASSWORD;
   if (password === undefined) throw new Error("password-missing");
@@ -1918,6 +1925,21 @@ async function admitRepositoryItems(
   await input.repositoryItems?.admitForRun({
     runId: request.runId,
     discoveryRoot: openCodeConfigDirectory(runRoot),
+    ...(request.signal === undefined ? {} : { signal: request.signal }),
+  });
+}
+
+// After the repository's items, so a repository skill keeps its name (#3903 AC3).
+async function admitRemoteSkills(
+  input: OpenCodeRuntimeCompositionInput,
+  request: OpenCodeLifecyclePrepareRequest,
+  runRoot: string,
+): Promise<void> {
+  if (input.toolProfile !== "native") return;
+  await input.remoteSkills?.admitForRun({
+    runId: request.runId,
+    discoveryRoot: openCodeConfigDirectory(runRoot),
+    mode: request.env.KEIKO_CODING_MODE,
     ...(request.signal === undefined ? {} : { signal: request.signal }),
   });
 }

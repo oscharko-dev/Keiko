@@ -23,6 +23,11 @@ import type { ServerDiagnosticSink } from "../diagnostics-log.js";
 import type { ServerLogSink } from "../observability/index.js";
 import { loadMcpServerRegistry } from "../mcp/mcpServerRegistry.js";
 import { loadOperatorPluginRegistry } from "./opencodeOperatorPlugins.js";
+import {
+  createRemoteSkillsPort,
+  loadSkillSourceRegistry,
+  type RemoteSkillsPort,
+} from "./opencodeRemoteSkills.js";
 import { validateMcpOAuthIssuer } from "../mcp/mcpOAuthIssuer.js";
 import {
   createMcpOAuthCredentialStore,
@@ -248,10 +253,12 @@ function repositoryOptions(env: NodeJS.ProcessEnv): {
 
 // #3903 AC3: a remote server's expected OAuth issuer is validated before each native launch,
 // through Keiko's own egress configuration (proxy and CA) with loopback targets refused; its
-// credential is kept in Keiko's vault, which opens on first use, never at activation.
+// credential is kept in Keiko's vault, which opens on first use, never at activation. Remote skill
+// sources are pulled through the same egress for a Full access run (#3903 AC3).
 function mcpOAuthPorts(input: ProductionOpenCodeActivationInput): {
   readonly mcpOAuthIssuer: McpOAuthIssuerPort;
   readonly mcpCredentials: McpOAuthCredentialStore;
+  readonly remoteSkills: RemoteSkillsPort;
 } {
   return {
     mcpOAuthIssuer: (server, oauth, correlationId, signal) =>
@@ -264,6 +271,11 @@ function mcpOAuthPorts(input: ProductionOpenCodeActivationInput): {
     mcpCredentials: createMcpOAuthCredentialStore({
       stateDir: input.runtimeStateDir,
       env: input.env,
+    }),
+    remoteSkills: createRemoteSkillsPort({
+      registry: () => loadSkillSourceRegistry(input.runtimeStateDir),
+      egress: () => resolveOutboundHttpEgressConfig(undefined, input.env),
+      activityLog: input.activityLog ?? processServerLogSink(),
     }),
   };
 }

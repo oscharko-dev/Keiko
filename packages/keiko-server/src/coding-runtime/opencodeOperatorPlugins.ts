@@ -12,6 +12,7 @@ import {
   OwnerPrivateFileRefused,
   readOwnerPrivateFile,
 } from "../ownerPrivateStateFile.js";
+import { onlyKeys, plainRecord } from "../operatorRegistryJson.js";
 import { CODING_RUNTIME_FAILURE_TRACE_FIELDS } from "./codingRuntimeActivityOperations.js";
 import type { SecureWorkspaceTextReadResult } from "./secureWorkspaceTextRead.js";
 
@@ -141,16 +142,6 @@ function containedRelative(path: string): boolean {
 
 function moduleFile(path: string): boolean {
   return PLUGIN_EXTENSIONS.has(extname(path));
-}
-
-function plainRecord(value: unknown): Readonly<Record<string, unknown>> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Readonly<Record<string, unknown>>)
-    : undefined;
-}
-
-function onlyKeys(record: Readonly<Record<string, unknown>>, allowed: readonly string[]): boolean {
-  return Object.keys(record).every((key) => allowed.includes(key));
 }
 
 const ADMISSION_STATES = [

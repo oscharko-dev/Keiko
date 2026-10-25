@@ -63,6 +63,7 @@ import { exactWorkspaceRead, type SecureWorkspaceTextReadPort } from "./secureWo
 import { createDevLaneRuntimeProcessBackend } from "./devLaneRuntimeProcessBackend.js";
 import { createNativeRuntimeProcessBackend } from "./nativeRuntimeProcessBackend.js";
 import type { McpOAuthCredentialStore } from "../mcp/mcpOAuthCredentialStore.js";
+import type { RemoteSkillsPort } from "./opencodeRemoteSkills.js";
 import {
   createOpenCodeRuntimeComposition,
   type McpOAuthIssuerPort,
@@ -195,6 +196,8 @@ export interface ProductionOpenCodeBackendInput {
   readonly mcpOAuthIssuer?: McpOAuthIssuerPort | undefined;
   /** Keeps an admitted MCP server's OAuth credential between native runs (#3903 AC3). */
   readonly mcpCredentials?: McpOAuthCredentialStore | undefined;
+  /** Pulls the operator's remote skill sources for a Full access native run (#3903 AC3). */
+  readonly remoteSkills?: RemoteSkillsPort | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly activityLog?: ServerLogSink | undefined;
   readonly historyCapture?: CodingRuntimeHistory["captureNative"] | undefined;
@@ -452,6 +455,7 @@ function nativeRunInputs(
   | "mcpServers"
   | "mcpOAuthIssuer"
   | "mcpCredentials"
+  | "remoteSkills"
   | "nativeWorktrees"
   | "externalReadRoots"
 > {
@@ -465,6 +469,7 @@ function nativeRunInputs(
     ...(input.mcpServers === undefined ? {} : { mcpServers: input.mcpServers }),
     ...(input.mcpOAuthIssuer === undefined ? {} : { mcpOAuthIssuer: input.mcpOAuthIssuer }),
     ...(input.mcpCredentials === undefined ? {} : { mcpCredentials: input.mcpCredentials }),
+    ...(input.remoteSkills === undefined ? {} : { remoteSkills: input.remoteSkills }),
     ...(input.nativeWorktrees === undefined ? {} : { nativeWorktrees: input.nativeWorktrees }),
     externalReadRoots: nativeExternalReadRoots(input, run),
   };
