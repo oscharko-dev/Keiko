@@ -1,5 +1,5 @@
-import { exactKeys, isRecord } from "./contract-validation-primitives.js";
-export { exactKeys, isRecord } from "./contract-validation-primitives.js";
+import { exactKeys, isOneOf, isRecord } from "./contract-validation-primitives.js";
+export { exactKeys, isOneOf, isRecord } from "./contract-validation-primitives.js";
 import {
   CODING_WORKBENCH_AUXILIARY_STATUSES,
   CODING_WORKBENCH_CONTENT_TRUST_VALUES,
@@ -20,11 +20,6 @@ import { stripUnsafeFormatChars } from "./text-safety.js";
 
 const SAFE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const STRICT_UTC_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u;
-
-export function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value is T {
-  const strings: readonly string[] = allowed;
-  return typeof value === "string" && strings.includes(value);
-}
 
 export function invalid<T>(error: string): CodingWorkbenchValidationResult<T> {
   return { ok: false, errors: [error] };

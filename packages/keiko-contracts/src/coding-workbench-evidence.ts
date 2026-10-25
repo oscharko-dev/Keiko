@@ -1,4 +1,10 @@
 import {
+  appendValidationIssues,
+  isRecord,
+  isOneOf,
+  validateAllowedKeys,
+} from "./contract-validation-primitives.js";
+import {
   containsAbsolutePath,
   containsPseudoRoleMarker,
   stripUnsafeFormatChars,
@@ -353,45 +359,12 @@ export const APPROVED_EVIDENCE_LITERALS = new Set<string>([
   "network-egress",
 ]);
 
-function appendValidationIssues(errors: string[], ...issues: readonly string[]): boolean {
-  errors.push(...issues);
-  return issues.length === 0;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value is T {
-  const values: readonly string[] = allowed;
-  return typeof value === "string" && values.includes(value);
-}
-
 function isSafeIntegerOrZero(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
 function isIsoInstant(value: unknown): value is string {
   return isCodeTaskIsoInstant(value);
-}
-
-function validateAllowedKeys(
-  record: Record<string, unknown>,
-  allowed: readonly string[],
-  path: string,
-  errors: string[],
-): boolean {
-  let valid = true;
-  Object.keys(record)
-    .filter((key) => !allowed.includes(key))
-    .forEach(
-      (key) =>
-        (valid = [appendValidationIssues(errors, `${path}.${key} is not allowed`), valid].every(
-          Boolean,
-        )),
-    );
-
-  return valid;
 }
 
 function validateEvidenceIdentityFields(

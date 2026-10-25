@@ -1,3 +1,9 @@
+import {
+  appendValidationIssues,
+  isRecord,
+  isOneOf,
+  validateAllowedKeys,
+} from "./contract-validation-primitives.js";
 import { isCodeTaskChildRunId, isCodeTaskSkillId } from "./code-task-auxiliary.js";
 import { isCodingWorkbenchEvidenceSafeText } from "./coding-workbench-evidence.js";
 import {
@@ -53,20 +59,6 @@ const CODING_WORKBENCH_PERMISSION_REQUEST_KIND_TO_ACTION_CLASS: Readonly<
   "delivery-substrate": "delivery-substrate",
 } as const);
 
-function appendValidationIssues(errors: string[], ...issues: readonly string[]): boolean {
-  errors.push(...issues);
-  return issues.length === 0;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value is T {
-  const values: readonly string[] = allowed;
-  return typeof value === "string" && values.includes(value);
-}
-
 function isPositiveSafeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
@@ -79,25 +71,6 @@ function isIsoInstant(value: unknown): value is string {
   const errors: string[] = [];
   validateStrictUtcInstant(value, "instant", errors);
   return typeof value === "string" && errors.length === 0;
-}
-
-function validateAllowedKeys(
-  record: Record<string, unknown>,
-  allowed: readonly string[],
-  path: string,
-  errors: string[],
-): boolean {
-  let valid = true;
-  Object.keys(record)
-    .filter((key) => !allowed.includes(key))
-    .forEach(
-      (key) =>
-        (valid = [appendValidationIssues(errors, `${path}.${key} is not allowed`), valid].every(
-          Boolean,
-        )),
-    );
-
-  return valid;
 }
 
 function validateStringArray(

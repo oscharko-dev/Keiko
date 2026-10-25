@@ -57,3 +57,32 @@ export function isInSet<T extends string>(set: readonly T[]): (v: unknown) => v 
   const values: readonly string[] = set;
   return (v: unknown): v is T => typeof v === "string" && values.includes(v);
 }
+
+export function appendValidationIssues(errors: string[], ...issues: readonly string[]): boolean {
+  errors.push(...issues);
+  return issues.length === 0;
+}
+
+export function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value is T {
+  const values: readonly string[] = allowed;
+  return typeof value === "string" && values.includes(value);
+}
+
+export function validateAllowedKeys(
+  record: Record<string, unknown>,
+  allowed: readonly string[],
+  path: string,
+  errors: string[],
+): boolean {
+  let valid = true;
+  Object.keys(record)
+    .filter((key) => !allowed.includes(key))
+    .forEach(
+      (key) =>
+        (valid = [appendValidationIssues(errors, `${path}.${key} is not allowed`), valid].every(
+          Boolean,
+        )),
+    );
+
+  return valid;
+}

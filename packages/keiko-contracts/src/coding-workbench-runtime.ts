@@ -27,8 +27,8 @@ import {
   type CodingWorkbenchRuntimeFailureCode,
   type CodingWorkbenchRuntimeStateName,
 } from "./coding-workbench-runtime-constants.js";
-// The object/enum-member/exact-key/result/strict-UTC-instant validation primitives are owned by
-// coding-workbench-runtime-api-validation.ts alone; this module no longer keeps its own copies.
+// Object/enum-member/exact-key mechanics come from contract-validation-primitives.ts through
+// coding-workbench-runtime-api-validation.ts; result/strict-UTC helpers remain owned there.
 import {
   exactKeys,
   isOneOf,

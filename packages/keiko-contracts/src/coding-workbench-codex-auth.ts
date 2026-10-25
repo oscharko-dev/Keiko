@@ -1,4 +1,10 @@
 import {
+  appendValidationIssues,
+  isRecord,
+  isOneOf,
+  validateAllowedKeys,
+} from "./contract-validation-primitives.js";
+import {
   CODING_WORKBENCH_SCHEMA_VERSION,
   type CodingWorkbenchModelSource,
   type CodingWorkbenchRuntimeSource,
@@ -121,39 +127,6 @@ export interface CodingWorkbenchRuntimeProfileSelection {
   readonly sidecarGatewayAllowed: boolean;
   readonly codexSubscriptionAllowed: boolean;
   readonly runtimeBinarySources: readonly CodingWorkbenchCodexRuntimeBinarySource[];
-}
-
-function appendValidationIssues(errors: string[], ...issues: readonly string[]): boolean {
-  errors.push(...issues);
-  return issues.length === 0;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value is T {
-  const values: readonly string[] = allowed;
-  return typeof value === "string" && values.includes(value);
-}
-
-function validateAllowedKeys(
-  record: Record<string, unknown>,
-  allowed: readonly string[],
-  path: string,
-  errors: string[],
-): boolean {
-  let valid = true;
-  Object.keys(record)
-    .filter((key) => !allowed.includes(key))
-    .forEach(
-      (key) =>
-        (valid = [appendValidationIssues(errors, `${path}.${key} is not allowed`), valid].every(
-          Boolean,
-        )),
-    );
-
-  return valid;
 }
 
 function validateBooleanField(

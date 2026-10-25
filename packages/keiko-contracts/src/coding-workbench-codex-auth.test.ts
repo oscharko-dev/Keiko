@@ -251,3 +251,108 @@ describe("C1B Codex primitive refusal coverage", () => {
     expect(module[name](null).ok).toBe(false);
   });
 });
+
+describe("Coding structural admission mechanics preservation", () => {
+  for (const surface of ["source", "public"]) {
+    it(`${surface} keeps enumerated unknown-key errors before a later Boolean error`, async () => {
+      const module =
+        surface === "source"
+          ? await import("./coding-workbench-codex-auth.js")
+          : await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-codex-auth");
+      const trace: string[] = [];
+      const input = new Proxy(
+        {
+          ...c1bCoverageProfile(),
+          extraFirst: true,
+          extraSecond: true,
+          get headless(): unknown {
+            trace.push("headless");
+            return 7;
+          },
+        },
+        {
+          ownKeys(target): (string | symbol)[] {
+            trace.push("keys");
+            return Reflect.ownKeys(target);
+          },
+          getOwnPropertyDescriptor(target, key): PropertyDescriptor | undefined {
+            if (key === "extraFirst" || key === "extraSecond") trace.push(`descriptor:${key}`);
+            return Reflect.getOwnPropertyDescriptor(target, key);
+          },
+        },
+      );
+      expect(module.validateCodingWorkbenchCodexSubscriptionProfile(input)).toEqual({
+        ok: false,
+        errors: [
+          "profile.extraFirst is not allowed",
+          "profile.extraSecond is not allowed",
+          "profile.headless must be a boolean",
+        ],
+      });
+      expect(trace).toEqual([
+        "keys",
+        "descriptor:extraFirst",
+        "descriptor:extraSecond",
+        "headless",
+      ]);
+    });
+
+    it(`${surface} propagates the exact key-enumeration failure before later field reads`, async () => {
+      const module =
+        surface === "source"
+          ? await import("./coding-workbench-codex-auth.js")
+          : await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-codex-auth");
+      const failure = new TypeError("opaque Coding key inspection");
+      const input = new Proxy(
+        {
+          ...c1bCoverageProfile(),
+          get profileId(): never {
+            throw new TypeError("later profile field must remain unread");
+          },
+        },
+        {
+          ownKeys(): never {
+            throw failure;
+          },
+        },
+      );
+      let observed: unknown;
+      try {
+        module.validateCodingWorkbenchCodexSubscriptionProfile(input);
+      } catch (error) {
+        observed = error;
+      }
+      expect(observed).toBe(failure);
+    });
+
+    it(`${surface} returns separate ordered error arrays for separate refusal calls`, async () => {
+      const module =
+        surface === "source"
+          ? await import("./coding-workbench-codex-auth.js")
+          : await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-codex-auth");
+      const input = { ...c1bCoverageProfile(), headless: 7 };
+      const first = module.validateCodingWorkbenchCodexSubscriptionProfile(input);
+      const second = module.validateCodingWorkbenchCodexSubscriptionProfile(input);
+      if (first.ok || second.ok) throw new TypeError("malformed profile fixture was admitted");
+      expect(first.errors).toEqual(["profile.headless must be a boolean"]);
+      expect(second.errors).toEqual(first.errors);
+      expect(second.errors).not.toBe(first.errors);
+    });
+
+    it(`${surface} refuses a non-string enum without inspecting its coercion hook`, async () => {
+      const module =
+        surface === "source"
+          ? await import("./coding-workbench-codex-auth.js")
+          : await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-codex-auth");
+      const method = {
+        get [Symbol.toPrimitive](): never {
+          throw new TypeError("Coding enum membership must not inspect coercion");
+        },
+      };
+      expect(module.validateCodingWorkbenchCodexAuthSetupRequest({ method })).toEqual({
+        ok: false,
+        errors: ["setup.method is invalid"],
+      });
+    });
+  }
+});
