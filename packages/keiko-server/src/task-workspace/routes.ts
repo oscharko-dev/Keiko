@@ -433,6 +433,9 @@ export async function handleSetActiveTaskWorkspace(
       }
       // requestedBy is persisted as the active-pointer setBy — reject control/zero-width/bidi chars.
       assertSafeFieldValue(requestedBy, "requestedBy");
+      if (!guard.listAll().some((instance) => instance.workspaceId === workspaceId)) {
+        throw new TaskWorkspaceError("WORKSPACE_NOT_FOUND", "workspace not found");
+      }
       await admitWorkspaceSelection(deps);
       const result = await guard.setActive({
         workspaceId,

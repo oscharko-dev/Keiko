@@ -526,6 +526,21 @@ function postLocal(
   });
 }
 
+describe("POST /api/task-workspaces/active rejected target", () => {
+  it("keeps the held undo window when the managed workspace id is unknown", async () => {
+    const fixture = await localRouteFixture();
+    const response = await fetch(`${baseUrl()}/api/task-workspaces/active`, {
+      method: "POST",
+      headers: csrfHeaders(),
+      body: JSON.stringify({ workspaceId: "ws-missing", requestedBy: "u" }),
+    });
+    expect(response.status).toBe(404);
+    expect(await response.json()).toMatchObject({ error: { code: "WORKSPACE_NOT_FOUND" } });
+    expect(fixture.admitWorkspaceSelection).not.toHaveBeenCalled();
+    expect(fixture.pointer.get()).toBeUndefined();
+  });
+});
+
 describe("POST /api/task-workspaces/local", () => {
   it.each(["missing requester", "unregistered root"] as const)(
     "keeps the held undo window when rejecting %s before selection admission",
