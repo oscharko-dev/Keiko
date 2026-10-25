@@ -6,6 +6,7 @@ import {
   readdirSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
@@ -554,6 +555,56 @@ describe("pinned native OpenCode and the verified ripgrep", () => {
       );
     },
     240_000,
+  );
+
+  // #3900 AC2: the verified search finds everything in a large, deep repository, while the kernel
+  // keeps a credential file and a link to a file outside the workspace unreadable to the same
+  // tools. The policy stub here allows every action, so the denials are the kernel's own.
+  it.skipIf(skip)(
+    "discovers a large, deep repository completely and never reads a credential or an outside file",
+    async () => {
+      const resolution = provisionedResolution();
+      await withRun(
+        () => resolution,
+        async (run) => {
+          const at = (name: string): string => join(run.fixture.workspace, name);
+          // 2,000 files over 25 packages, and one file 40 directories deep.
+          for (let pkg = 0; pkg < 25; pkg += 1) {
+            mkdirSync(at(`packages/p${String(pkg)}/src`), { recursive: true });
+            for (let file = 0; file < 80; file += 1)
+              writeFileSync(
+                at(`packages/p${String(pkg)}/src/f${String(file)}.ts`),
+                `export const v${String(file)} = ${String(file)};\n`,
+              );
+          }
+          const deep = Array.from({ length: 40 }, (_, index) => `d${String(index)}`).join("/");
+          mkdirSync(at(deep), { recursive: true });
+          writeFileSync(at(`${deep}/deepest.ts`), "export const DEEP_NEEDLE = 'found';\n");
+          writeFileSync(at(".env"), "DEEP_NEEDLE=credential-canary\n");
+          const outside = join(run.fixture.root, "outside.ts");
+          writeFileSync(outside, "export const DEEP_NEEDLE = 'outside-canary';\n");
+          symlinkSync(outside, at("linked.ts"));
+          const call = (name: string, args: Readonly<Record<string, unknown>>): Promise<string> =>
+            scriptedTurn(run, { name, arguments: args });
+
+          expect(await call("glob", { pattern: "**/deepest.ts" })).toContain(`${deep}/deepest.ts`);
+          const listed = await call("glob", { pattern: "packages/p24/src/*.ts" });
+          expect(listed.split("\n").filter((line) => line.trim().endsWith(".ts"))).toHaveLength(80);
+          const found = await call("grep", { pattern: "DEEP_NEEDLE" });
+          expect(found).toContain("deepest.ts");
+          expect(found).not.toContain("credential-canary");
+          expect(found).not.toContain("outside-canary");
+          expect(await call("grep", { pattern: "export const v79", include: "*.ts" })).toContain(
+            "packages/p24/src/f79.ts",
+          );
+          const linked = await call("read", { path: "linked.ts" });
+          expect(linked).not.toContain("outside-canary");
+          expect(await call("read", { path: ".env" })).not.toContain("credential-canary");
+          expect(downloadedBinaries(run.fixture)).toEqual([]);
+        },
+      );
+    },
+    300_000,
   );
 
   it.skipIf(skip)(
