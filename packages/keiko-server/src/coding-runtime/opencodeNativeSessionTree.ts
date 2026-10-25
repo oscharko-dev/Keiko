@@ -243,9 +243,15 @@ async function treeShells(
   run: NativeSessionTreeRun,
   signal: AbortSignal | undefined,
 ): Promise<readonly NativeShellJob[]> {
+  const listed = await Promise.all(
+    treeLocations(run).map(async (directory) => ({
+      directory,
+      shells: await client.shells(directory, signal),
+    })),
+  );
   const jobs = new Map<string, NativeShellJob>();
-  for (const directory of treeLocations(run)) {
-    for (const shell of await client.shells(directory, signal)) {
+  for (const { directory, shells } of listed) {
+    for (const shell of shells) {
       const owned = shell.sessionId === undefined || ownedSession(run, shell.sessionId);
       if (owned && !jobs.has(shell.id)) jobs.set(shell.id, { id: shell.id, directory });
     }
