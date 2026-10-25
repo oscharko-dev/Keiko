@@ -126,9 +126,14 @@ export function parsedProjectConfigObject(
   format: "json" | "jsonc" = "json",
 ): Readonly<Record<string, unknown>> | undefined {
   // Both known producer filenames accept JSONC; parse text only, with no filesystem discovery.
-  const parsed = ts.parseConfigFileTextToJson(`opencode.${format}`, text);
-  const value: unknown = parsed.config;
-  return parsed.error === undefined && onlyPlainObjects(value) ? plainObject(value) : undefined;
+  try {
+    const parsed = ts.parseConfigFileTextToJson(`opencode.${format}`, text);
+    const value: unknown = parsed.config;
+    return parsed.error === undefined && onlyPlainObjects(value) ? plainObject(value) : undefined;
+  } catch (error: unknown) {
+    if (error instanceof RangeError) return undefined;
+    throw error;
+  }
 }
 
 /** The compiler parser may assign __proto__; configuration can carry own JSON data only. */

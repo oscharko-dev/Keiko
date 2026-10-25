@@ -121,6 +121,15 @@ describe("OpenCode configuration documents (#3900 AC3/AC4)", () => {
     expect(parsedConfigDocument('// comment\n{"instructions":[],}')).toEqual({ instructions: [] });
   });
 
+  it.each(["json", "jsonc"] as const)(
+    "refuses parser depth overflow without admitting partial %s configuration",
+    (format) => {
+      const text = `{"instructions":["must-not-load.md"],"depth":${"[".repeat(4096)}0${"]".repeat(4096)}}`;
+      expect(Buffer.byteLength(text)).toBeLessThan(16_384);
+      expect(parsedConfigDocument(text, format)).toBe("config-malformed");
+    },
+  );
+
   it.each([
     '{"__proto__":{"instructions":["inherited.md"]}}',
     '{"agents":{"review":{"__proto__":{"model":"inherited"}}}}',
