@@ -77,6 +77,7 @@ interface Recorded {
 }
 
 interface Stub {
+  replyText?: string | undefined;
   readonly server: Server;
   port: number;
   readonly requests: Recorded[];
@@ -178,7 +179,7 @@ async function startGateway(): Promise<Stub> {
       response.flushHeaders();
       return;
     }
-    streamedText(response, `Answer number ${String(self.requests.length)}.`);
+    streamedText(response, self.replyText ?? `Answer number ${String(self.requests.length)}.`);
   });
 }
 
@@ -339,6 +340,7 @@ async function stopChild(child: ChildProcessByStdio<null, Readable, Readable>): 
 }
 
 interface Runtime {
+  readonly compact: (sessionId: string) => Promise<number>;
   readonly client: OpenCodeV2HttpClient;
   readonly gateway: Stub;
   readonly stateRoot: string;
@@ -370,7 +372,28 @@ async function withRuntime(
     const endpoint = await childEndpoint(launched.child);
     const client = createOpenCodeV2HttpClient({ endpoint, password: launched.password });
     expect((await client.info()).version).toBe(OPENCODE_PINNED_VERSION);
-    await body({ client, gateway: world.gateway, stateRoot, database });
+    await body({
+      client,
+      gateway: world.gateway,
+      stateRoot,
+      database,
+      compact: async (sessionId: string): Promise<number> => {
+        const response = await fetch(
+          new URL(`/api/session/${encodeURIComponent(sessionId)}/compact`, endpoint),
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Basic ${Buffer.from(`opencode:${launched.password}`).toString("base64")}`,
+            },
+            body: "{}",
+            signal: AbortSignal.timeout(30_000),
+          },
+        );
+        await response.arrayBuffer();
+        return response.status;
+      },
+    });
   } finally {
     await stopChild(launched.child);
   }
@@ -442,14 +465,17 @@ async function settledRun(
 
 async function terminalHistoryRun(
   world: World,
-  status: "failed" | "cancelled",
+  status: "succeeded" | "failed" | "cancelled",
+  beforeTerminal?: (runtime: Runtime, sessionId: string) => Promise<void>,
 ): Promise<{ readonly sessionId: string; readonly context: SessionContinuationContext }> {
   let sessionId = "";
   const name = `terminal-${status}`;
   const marker = `FIXTURE-${status.toUpperCase()}-TERMINAL-TURN`;
-  await withRuntime(world, name, undefined, async ({ client, gateway }) => {
+  await withRuntime(world, name, undefined, async (runtime) => {
+    const { client, gateway } = runtime;
     sessionId = String((await client.createSession(world.fixture.workspace)).id);
     await turn(client, sessionId, "BEFORE-TERMINAL-TURN");
+    await beforeTerminal?.(runtime, sessionId);
     await client.prompt(sessionId, marker);
     if (status === "cancelled") {
       await expect.poll(() => userTexts(gateway.requests.at(-1)).at(-1)).toBe(marker);
@@ -484,6 +510,43 @@ async function terminalHistoryRun(
   );
   expect(existsSync(join(world.fixture.root, "retained", retainedSessionKey(TASK_ID)))).toBe(true);
   return { sessionId, context };
+}
+
+/** The original compactor requires its summary envelope, not an arbitrary assistant answer. */
+async function compactCheckpoint(runtime: Runtime, sessionId: string): Promise<void> {
+  runtime.gateway.replyText =
+    "<summary>\n## Objective\nKeep COMPACTED_RECEIPT_4064.\n\n## Next Move\nContinue the accepted task.\n</summary>";
+  try {
+    expect(await runtime.compact(sessionId)).toBe(200);
+    await expect
+      .poll(
+        async () =>
+          (await runtime.client.messages(sessionId)).some(
+            (message) => message.type === "compaction" && message.status === "completed",
+          ),
+        { timeout: 30_000 },
+      )
+      .toBe(true);
+    await idle(runtime.client, sessionId);
+  } finally {
+    runtime.gateway.replyText = undefined;
+  }
+}
+
+function seedCompactedRun(
+  world: World,
+  context: SessionContinuationContext,
+  name: string,
+): RunContinuation {
+  const runId = "run-100000003";
+  context.service.declare(runId, { kind: "resume", taskId: TASK_ID });
+  const continued = seedContinuation(context, {
+    runId,
+    runRoot: join(world.fixture.root, name),
+    workspaceRoot: world.fixture.workspace,
+  });
+  if (continued === undefined) throw new Error("fixture-compacted-session-not-retained");
+  return continued;
 }
 
 function continuation(sessionId: string, intent: RunContinuation["intent"]): RunContinuation {
@@ -552,6 +615,46 @@ interface ProjectedRun {
 
 describe("native session continuity on the pinned OpenCode runtime", () => {
   const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
+
+  it.skipIf(skip).each(["succeeded", "failed", "cancelled"] as const)(
+    "resumes a native compaction checkpoint after a %s terminal turn and process restart",
+    async (status) => {
+      await withWorld(async (world) => {
+        const { sessionId, context } = await terminalHistoryRun(world, status, compactCheckpoint);
+        const name = `compacted-resume-${status}`;
+        let continued: RunContinuation | undefined;
+        await withRuntime(
+          world,
+          name,
+          () => {
+            continued = seedCompactedRun(world, context, name);
+            expect(continued.sessionId).toBe(sessionId);
+          },
+          async ({ client, gateway }) => {
+            if (continued === undefined) throw new Error("fixture-compaction-checkout-missing");
+            expect(
+              await bindContinuedSession(client, continued, world.fixture.workspace, undefined),
+            ).toMatchObject({ ok: true, sessionId });
+            expect(await client.messages(sessionId)).toContainEqual(
+              expect.objectContaining({ type: "compaction", status: "completed" }),
+            );
+            await turn(client, sessionId, "AFTER-COMPACTION-RESTART");
+            const request = gateway.requests.find((entry) =>
+              requestHasUserText(entry, "AFTER-COMPACTION-RESTART"),
+            );
+            expect(request).toBeDefined();
+            // This marker occurs only in the compactor's response, never in a user prompt.
+            expect(
+              modelMessages(request).some((message) =>
+                JSON.stringify(message.content).includes("COMPACTED_RECEIPT_4064"),
+              ),
+            ).toBe(true);
+          },
+        );
+      });
+    },
+    120_000,
+  );
 
   it.skipIf(skip).each(["failed", "cancelled"] as const)(
     "retains a real %s turn after reaping and resumes its earlier native history",
