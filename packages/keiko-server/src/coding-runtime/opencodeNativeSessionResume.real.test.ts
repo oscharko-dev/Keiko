@@ -26,11 +26,8 @@ import {
 } from "./opencodeLaunchProfile.js";
 import { OPENCODE_PERSISTENCE_SCHEMAS } from "./opencodePersistenceContract.js";
 import { createGeneratedOpenCodeV2Plugins } from "./opencodeRuntimeAdapter.js";
-import {
-  OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
-  projectOpenCodeV2ProtocolSurface,
-} from "./opencodeProtocolSurface.js";
-import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
+import { projectOpenCodeV2ProtocolSurface } from "./opencodeProtocolSurface.js";
+import { OPENCODE_PINNED_VERSION, openCodeRuntimeVersionPin } from "./opencodeRuntimeVersions.js";
 import { createCodingSessionContinuity } from "./codingSessionContinuity.js";
 import {
   bindContinuedSession,
@@ -62,7 +59,10 @@ import type { CodingHistoryMessage } from "./codingRuntimeHistory.js";
  * runtime database is retained through Keiko's store, a second runtime is started on a copy of it,
  * and the session is resumed or forked through Keiko's own binding. Run with
  * KEIKO_OPENCODE_REAL_BINARY and KEIKO_OPENCODE_REAL_RESOURCE_ROOT set; otherwise it is skipped.
+ * KEIKO_OPENCODE_REAL_VERSION selects another admitted version, such as the published 2.0.10 lane;
+ * its actual protocol digest and persistence schema must match that version's own contracts.
  */
+const RUNTIME_VERSION = process.env.KEIKO_OPENCODE_REAL_VERSION ?? OPENCODE_PINNED_VERSION;
 const BINARY = process.env.KEIKO_OPENCODE_REAL_BINARY;
 const RESOURCE_ROOT = process.env.KEIKO_OPENCODE_REAL_RESOURCE_ROOT;
 const GATEWAY_CAPABILITY = "fixture-gateway-capability";
@@ -371,7 +371,7 @@ async function withRuntime(
   try {
     const endpoint = await childEndpoint(launched.child);
     const client = createOpenCodeV2HttpClient({ endpoint, password: launched.password });
-    expect((await client.info()).version).toBe(OPENCODE_PINNED_VERSION);
+    expect((await client.info()).version).toBe(RUNTIME_VERSION);
     await body({
       client,
       gateway: world.gateway,
@@ -436,7 +436,7 @@ function binding(overrides: Partial<RetainedSessionBinding> = {}): RetainedSessi
   return {
     taskId: TASK_ID,
     workspaceKey: WORKSPACE_KEY,
-    runtimeVersion: OPENCODE_PINNED_VERSION,
+    runtimeVersion: RUNTIME_VERSION,
     maxInputTokens: 24_000,
     ...overrides,
   };
@@ -494,7 +494,7 @@ async function terminalHistoryRun(
     service: createCodingSessionContinuity({ store: world.store, taskOfRun: () => TASK_ID }),
     workspaceId: "workspace-terminal-history",
     native: true,
-    runtimeVersion: OPENCODE_PINNED_VERSION,
+    runtimeVersion: RUNTIME_VERSION,
     maxInputTokens: 24_000,
     activityLog: undefined,
   };
@@ -704,7 +704,7 @@ describe("native session continuity on the pinned OpenCode runtime", () => {
       await withWorld(async (world) => {
         await withRuntime(world, "surface", undefined, async ({ client }) => {
           const { digest, projection } = projectOpenCodeV2ProtocolSurface(await client.document());
-          expect(digest).toBe(OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256);
+          expect(digest).toBe(openCodeRuntimeVersionPin(RUNTIME_VERSION)?.protocolSurfaceSha256);
           const paths = (projection as { readonly paths: Record<string, object> }).paths;
           expect(Object.keys(paths["/api/session/{sessionID}"] ?? {})).toEqual(["delete"]);
           expect(Object.keys(paths["/api/session/{sessionID}/fork"] ?? {})).toEqual(["post"]);
@@ -944,7 +944,7 @@ describe("native session continuity on the pinned OpenCode runtime", () => {
               auditDatabase(compact, {
                 sessionId: bound.sessionId,
                 directory: world.fixture.workspace,
-                version: OPENCODE_PINNED_VERSION,
+                version: RUNTIME_VERSION,
               }),
             ).toMatchObject({ ok: true });
           },
@@ -1019,7 +1019,7 @@ describe("native session continuity on the pinned OpenCode runtime", () => {
       await withWorld(async (world) => {
         const { sessionId } = await settledRun(world, ["FIRST-QUESTION"]);
         const source = join(world.fixture.root, "first-run", "state", "opencode.db");
-        const contract = OPENCODE_PERSISTENCE_SCHEMAS[OPENCODE_PINNED_VERSION];
+        const contract = OPENCODE_PERSISTENCE_SCHEMAS[RUNTIME_VERSION];
         expect(contract).toBeDefined();
         expect(persistenceSchema(source)).toEqual(
           Object.fromEntries(

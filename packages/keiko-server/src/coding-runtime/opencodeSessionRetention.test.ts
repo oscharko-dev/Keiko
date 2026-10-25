@@ -358,6 +358,47 @@ describe("retaining a settled run's session state", () => {
     expect(entryNames(f)).toEqual([]);
   });
 
+  it("retains and restores the still-admitted 2.0.10 producer's database", () => {
+    const f = fixture({
+      session: { version: "2.0.10" },
+      alter:
+        "ALTER TABLE project DROP COLUMN time_active; ALTER TABLE project DROP COLUMN time_archived;",
+    });
+    const before = sha256(f.source);
+
+    expect(retain(f, { runtimeVersion: "2.0.10" })).toMatchObject({ ok: true });
+    const restored = checkout(f, { runtimeVersion: "2.0.10" });
+    expect(restored.result).toMatchObject({ ok: true, sessionId: SESSION_ID });
+    expect(sha256(restored.destination)).toBe(sha256(join(entryDirectory(f), "opencode.db")));
+    expect(sha256(f.source)).toBe(before);
+  });
+
+  it.each([
+    ["permission", "grant-present"],
+    ["credential", "credential-present"],
+  ] as const)("refuses persisted %s in the admitted 2.0.10 schema", (table, reason) => {
+    const f = fixture({
+      session: { version: "2.0.10" },
+      alter:
+        "ALTER TABLE project DROP COLUMN time_active; ALTER TABLE project DROP COLUMN time_archived;",
+      rows: { [table]: 1 },
+    });
+
+    expect(retain(f, { runtimeVersion: "2.0.10" })).toMatchObject({ ok: false, reason });
+    expect(entryNames(f)).toEqual([]);
+  });
+
+  it("refuses a 2.1.4 schema claiming to be a 2.0.10 session", () => {
+    const f = fixture({ session: { version: "2.0.10" } });
+
+    expect(retain(f, { runtimeVersion: "2.0.10" })).toEqual({
+      ok: false,
+      reason: "schema-unknown",
+      check: "schema-drift",
+    });
+    expect(entryNames(f)).toEqual([]);
+  });
+
   it("refuses an unrelated session id and a database that is not one", () => {
     const f = fixture();
     expect(

@@ -2192,9 +2192,13 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
     table, no suspended or archived session, no staged revert and an empty permission ruleset;
     an unknown schema is refused rather than guessed. Because the whole database crosses this
     boundary, its schema is bound to the producer's persistence contract
-    (`opencodePersistenceContract.ts`, #3908 AC4): exactly the tables and columns the pinned
-    runtime's own migrations create for the session's runtime version, derived from a genuine 2.1.4
-    database and proven against a real settled run (`opencodeNativeSessionResume.real.test.ts`). An
+    (`opencodePersistenceContract.ts`, #3908 AC4): exactly the tables and columns each admitted
+    runtime's own migrations create for the session's runtime version, derived from genuine 2.1.4
+    and 2.0.10 databases and proven against real settled runs
+    (`opencodeNativeSessionResume.real.test.ts`, with `KEIKO_OPENCODE_REAL_VERSION` selecting the
+    admitted producer). The still-published 2.0.10 runtime lacks only the two newer project columns
+    `time_active` and `time_archived`; its own schema is admitted without relaxing any state audit
+    or allowing a different runtime version to resume the session. An
     added table or column (even an empty one), a view, a trigger, a missing one, or a version with no
     contract is refused as `schema-unknown` with the audit check `schema-drift`, so a producer
     upgrade cannot carry unexamined persisted state forward. A new runtime version needs its own
