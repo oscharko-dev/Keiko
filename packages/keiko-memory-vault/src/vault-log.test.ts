@@ -420,3 +420,144 @@ describe("initial write refusal log producer", () => {
     expect(activityLogLossCounters()["port-unwired"]).toBe(unwired + 1);
   });
 });
+
+describe("physical write refusal and capture evidence", () => {
+  it("retains canonical physical invalidity without changing initial refusal fields", () => {
+    const events: MemoryVaultLogTransport[] = [];
+    vaultLog.emitMemoryWriteRejected(
+      { write: (event) => events.push(event) },
+      "update-batch",
+      { correlationId: "physical-validation-request" },
+      "physical-admission",
+    );
+    expect(
+      expectActivityLogProof(
+        "memory-vault.write.rejected.initial-admission",
+        formatActivityLogProofLine(events[0] ?? {}),
+      ),
+    ).toMatchObject({
+      stage: "physical-admission",
+      reason: "invalid-record",
+      method: "update-batch",
+      admitted: false,
+      rejectionCount: 1,
+      errorKind: "validation-failed",
+    });
+  });
+
+  it("uses the evidence provider's receiver and admits a legitimate empty cause chain", () => {
+    const events: MemoryVaultLogTransport[] = [];
+    const failure = new TypeError("private-capture-log-canary");
+    const sink: MemoryVaultLogSink = {
+      write: (event) => events.push(event),
+      errorEvidence(error: unknown): vaultLog.MemoryVaultErrorEvidence {
+        expect(this).toBe(sink);
+        expect(error).toBe(failure);
+        return { frames: ["packages/keiko-memory-vault/src/serialize.ts:10:2"], causeChain: [] };
+      },
+    };
+    vaultLog.emitMemoryWriteCaptureFailed(
+      sink,
+      "insert",
+      {
+        correlationId: "physical-capture-request",
+        parentCorrelationId: "physical-capture-parent",
+      },
+      failure,
+    );
+    expect(
+      expectActivityLogProof(
+        "memory-vault.write.capture-failed.physical-admission",
+        formatActivityLogProofLine(events[0] ?? {}),
+      ),
+    ).toMatchObject({
+      correlationId: "physical-capture-request",
+      parentCorrelationId: "physical-capture-parent",
+      method: "insert",
+      stage: "physical-admission",
+      reason: "capture-unavailable",
+      admitted: false,
+      rejectionCount: 1,
+      errorKind: "internal",
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(JSON.stringify(events)).not.toContain("private-capture-log-canary");
+  });
+
+  it.each([
+    "absent",
+    "throws",
+    "getter",
+    "fields-getter",
+    "empty",
+    "foreign",
+    "invalid-causes",
+  ] as const)("retains partial capture evidence when the provider is %s", (mode) => {
+    const events: MemoryVaultLogTransport[] = [];
+    const sink: MemoryVaultLogSink = { write: (event) => events.push(event) };
+    if (mode !== "absent")
+      Object.defineProperty(sink, "errorEvidence", {
+        get: () => {
+          if (mode === "getter") throw new TypeError("private-provider-canary");
+          return (): vaultLog.MemoryVaultErrorEvidence => {
+            if (mode === "throws") throw new TypeError("private-provider-canary");
+            if (mode === "fields-getter")
+              return {
+                get frames(): readonly string[] {
+                  throw new TypeError("private-provider-canary");
+                },
+                causeChain: [],
+              };
+            return {
+              frames:
+                mode === "empty"
+                  ? []
+                  : mode === "foreign"
+                    ? ["raw-private-stack"]
+                    : ["packages/keiko-memory-vault/src/serialize.ts:10:2"],
+              causeChain: mode === "invalid-causes" ? ["raw private cause text"] : [],
+            };
+          };
+        },
+      });
+    const before = activityLogLossCounters();
+    vaultLog.emitMemoryWriteCaptureFailed(sink, "graph", undefined, new TypeError("fixture"));
+    expect(
+      expectActivityLogProof(
+        "memory-vault.write.capture-failed.physical-admission",
+        formatActivityLogProofLine(events[0] ?? {}),
+      ),
+    ).toMatchObject({
+      correlationId: "unknown-correlation-id",
+      completeness: "partial",
+      loss: "none",
+    });
+    expect(activityLogLossCounters()).toEqual(before);
+    expect(JSON.stringify(events)).not.toContain("private-provider-canary");
+    expect(JSON.stringify(events)).not.toContain("raw-private-stack");
+    expect(JSON.stringify(events)).not.toContain("raw private cause text");
+  });
+
+  it("counts a failed capture emission once through the existing sink fallback", () => {
+    const events: MemoryVaultLogTransport[] = [];
+    const before = activityLogLossCounters()["port-sink-failed"];
+    vaultLog.emitMemoryWriteCaptureFailed(
+      {
+        write: (event) => {
+          if (event.op === "memory-vault.write.capture-failed")
+            throw new TypeError("fixture transport");
+          events.push(event);
+        },
+      },
+      "update",
+      { correlationId: "capture-loss-request" },
+      new TypeError("fixture"),
+    );
+    expect(activityLogLossCounters()["port-sink-failed"]).toBe(before + 1);
+    expect(events.map((event) => event.op)).toEqual(["memory-vault.log.sink-failed"]);
+    const unwired = activityLogLossCounters()["port-unwired"];
+    vaultLog.emitMemoryWriteCaptureFailed(undefined, "insert", undefined, new TypeError("fixture"));
+    expect(activityLogLossCounters()["port-unwired"]).toBe(unwired + 1);
+  });
+});

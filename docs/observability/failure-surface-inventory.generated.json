@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "8ed752f1c4396867d9edbc55238f09696fad437b147de74f126e36bc489d8f94"
+    "catalogDigest": "2f1d59c6fa6dcef3679817665eab8b77c941f44df6037c896bacb078d741e8d8"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,10 +55,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 542,
-    "proofCount": 554,
-    "resolvedProofCount": 554,
-    "failureClassCount": 349,
+    "operationCount": 543,
+    "proofCount": 555,
+    "resolvedProofCount": 555,
+    "failureClassCount": 350,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -470,6 +470,7 @@
         "memory-vault.store.encryption-migrated",
         "memory-vault.store.opened",
         "memory-vault.store.quarantined",
+        "memory-vault.write.capture-failed",
         "memory-vault.write.rejected",
         "memory.capture.novelty-gate",
         "memory.embedding.invalidated",
@@ -716,6 +717,7 @@
     }
   ],
   "failureClassScenarios": {
+    "memory-write-capture": ["memory-knowledge.dependency-failure"],
     "memory-write-validation": ["memory-knowledge.rejection"],
     "knowledge-manual-summary-validation": ["memory-knowledge.rejection"],
     "chat-draft-persistence": ["bff.dependency-failure"],
@@ -2169,6 +2171,9 @@
     ],
     "memory-vault.store.opened.key-source": ["packages/keiko-memory-vault/src/vault.test.ts"],
     "memory-vault.store.quarantined.recovery": ["packages/keiko-memory-vault/src/db.test.ts"],
+    "memory-vault.write.capture-failed.physical-admission": [
+      "packages/keiko-memory-vault/src/vault-log.test.ts"
+    ],
     "memory-vault.write.rejected.initial-admission": [
       "packages/keiko-memory-vault/src/vault-log.test.ts",
       "packages/keiko-memory-vault/src/vault.test.ts"

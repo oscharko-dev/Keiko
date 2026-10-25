@@ -1,7 +1,7 @@
 // Prepared SQL for the memories table. Every parameter binds positionally; no template
 // concatenation with caller data so SQL injection is structurally impossible at this layer.
-// The validator gate sits in vault.ts, BEFORE these functions are called, so this module assumes
-// inputs are already shape-valid and only owes the SQL.
+// The vault performs initial admission and redaction. The physical writer then captures and
+// canonically admits the exact owned record used for SQL, return values and success events.
 
 import type { DatabaseSync } from "node:sqlite";
 import type {
@@ -14,12 +14,18 @@ import type {
   WorkflowDefinitionId,
   WorkspaceId,
 } from "@oscharko-dev/keiko-contracts/memory";
-import { memoryRecordToRow, rowToMemoryRecord, type MemoryRow } from "./serialize.js";
+import {
+  prepareMemoryRow,
+  rowToMemoryRecord,
+  type MemoryRow,
+  type MemoryRowWrite,
+} from "./serialize.js";
 import { scopeCoordinateOf, scopeKindOf } from "./scope-key.js";
 import type { ListMemoriesOptions, MemoryMetadata } from "./types.js";
 import type { MemoryContentCipher } from "./cipher.js";
 import { MemoryStorageError } from "./errors.js";
 import { cachedPrepare } from "./statements.js";
+import type { MemoryPhysicalWriteAdmission } from "./vault-log.js";
 
 const INSERT_SQL = `
 INSERT INTO memories (
@@ -91,11 +97,7 @@ UPDATE memories SET
 WHERE id = ?
 `;
 
-function bindValues(
-  record: MemoryRecord,
-  cipher: MemoryContentCipher,
-): readonly (string | number | null)[] {
-  const r = memoryRecordToRow(record, cipher);
+function bindValues(r: MemoryRowWrite): readonly (string | number | null)[] {
   return [
     r.id,
     r.schema_version,
@@ -133,8 +135,11 @@ export function insertMemoryRow(
   db: DatabaseSync,
   record: MemoryRecord,
   cipher: MemoryContentCipher,
-): void {
-  cachedPrepare(db, INSERT_SQL).run(...bindValues(record, cipher));
+  admission?: MemoryPhysicalWriteAdmission,
+): MemoryRecord {
+  const prepared = prepareMemoryRow(record, cipher, admission);
+  cachedPrepare(db, INSERT_SQL).run(...bindValues(prepared.row));
+  return prepared.record;
 }
 
 function decodeMemoryRow(row: MemoryRow, cipher: MemoryContentCipher): MemoryRecord {
@@ -161,8 +166,10 @@ export function updateMemoryRow(
   db: DatabaseSync,
   record: MemoryRecord,
   cipher: MemoryContentCipher,
-): void {
-  const r = memoryRecordToRow(record, cipher);
+  admission?: MemoryPhysicalWriteAdmission,
+): MemoryRecord {
+  const prepared = prepareMemoryRow(record, cipher, admission);
+  const r = prepared.row;
   const info = cachedPrepare(db, UPDATE_SQL).run(
     r.type,
     r.body,
@@ -193,6 +200,7 @@ export function updateMemoryRow(
   if (info.changes === 0) {
     throw new MemoryStorageError("not-found", "Memory not found.");
   }
+  return prepared.record;
 }
 
 export function deleteMemoryRow(db: DatabaseSync, id: MemoryId): boolean {

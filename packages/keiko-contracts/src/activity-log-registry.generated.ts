@@ -3,13 +3,13 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "8ed752f1c4396867d9edbc55238f09696fad437b147de74f126e36bc489d8f94" as const;
+  "2f1d59c6fa6dcef3679817665eab8b77c941f44df6037c896bacb078d741e8d8" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 349,
-  completeClassCount: 349,
+  supportedClassCount: 350,
+  completeClassCount: 350,
   completeness: "complete",
   classes: [
     {
@@ -31195,6 +31195,99 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       completeness: "complete",
     },
     {
+      failureClass: "memory-write-capture",
+      requirementContract: "memory-write-capture",
+      productSurfaces: ["keiko-memory-vault"],
+      lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["memory-vault.write.capture-failed"],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "memory-vault.write.capture-failed",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
+      operations: [
+        {
+          op: "memory-vault.write.capture-failed",
+          owner: "keiko-memory-vault",
+          category: "memory",
+          lifecycle: "failure",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "admitted",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "causeChain",
+              type: "string-array",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
+              name: "frames",
+              type: "string-array",
+              dataClass: "safe-platform-class",
+              required: false,
+            },
+            {
+              name: "method",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "reason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "rejectionCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "stage",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "error-kind",
+            "loss-state",
+            "safe-platform-class",
+          ],
+          frameCauseEvidence: {
+            frames: true,
+            causeChain: true,
+          },
+          proofIds: ["memory-vault.write.capture-failed.physical-admission"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
       failureClass: "memory-write-validation",
       requirementContract: "memory-write-validation",
       productSurfaces: ["keiko-memory-vault"],
@@ -42178,6 +42271,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "memory-vault.store.encryption-migrated": "memory-knowledge",
     "memory-vault.store.opened": "memory-knowledge",
     "memory-vault.store.quarantined": "memory-knowledge",
+    "memory-vault.write.capture-failed": "memory-knowledge",
     "memory-vault.write.rejected": "memory-knowledge",
     "memory.audit.state-cache.seeded": "lifecycle-crash",
     "memory.capture.novelty-gate": "memory-knowledge",

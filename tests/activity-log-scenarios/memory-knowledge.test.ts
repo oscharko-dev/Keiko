@@ -777,6 +777,229 @@ describe("Activity Log scenario: memory-knowledge", () => {
       vault.close();
     }
   });
+
+  it("reconstructs physical canonical refusal separately from caller admission", async () => {
+    const startedAtMs = Date.now();
+    const vault = createMemoryVault({
+      memoryDir: join(realpathSync(stateDir), "physical-invalid-vault"),
+      vaultKey: Buffer.alloc(32, 7),
+      logSink: processServerLogSinkFor("bootstrap-memory"),
+      redactString: (value) => (value === "physical-empty" ? "" : value),
+    });
+    const healthy = { ...refusedMemoryRecord(), tags: [] };
+    try {
+      vault.insertMemory(healthy, { correlationId: "physical-healthy-request" });
+      const invocations = [
+        { correlationId: "physical-request-one" },
+        { correlationId: "physical-request-two" },
+        { correlationId: "physical-background-run", parentCorrelationId: "physical-request-one" },
+      ];
+      invocations.forEach((context, index) => {
+        expect(() =>
+          index === 1
+            ? vault.updateMemory(
+                healthy.id,
+                { body: "physical-empty" },
+                healthy.updatedAt + 1,
+                context,
+              )
+            : vault.insertMemory(
+                { ...healthy, id: `physical-${String(index)}` as MemoryId, body: "physical-empty" },
+                context,
+              ),
+        ).toThrow(MemoryStorageValidationError);
+      });
+      const trace = await expectActivityLogScenario("memory-knowledge.rejection", {
+        stateDir,
+        startedAtMs,
+        expectedOps: ["memory-vault.write.rejected"],
+      });
+      expect(trace.failureClasses).toContain("memory-write-validation");
+      for (const { correlationId } of invocations) {
+        const selection = await resolveSupportSelection({ correlationId, filter: {} }, stateDir);
+        const query = executeSupportQuery(
+          stateDir,
+          selection,
+          { ...DEFAULT_SUPPORT_QUERY_LIMITS, contextMs: 0, maxContextEvents: 0 },
+          { trigger: "query" },
+        ).result;
+        expect(query.metrics.contextEventCount).toBe(0);
+        expect(query.diagnosticSufficiency).toMatchObject({ status: "complete", reasons: [] });
+      }
+      const raw = readPersistedActivityLog(stateDir);
+      const lines = persistedActivityLogLines(raw, "memory-vault.write.rejected");
+      expect(lines).toHaveLength(3);
+      lines.forEach((line) => {
+        expect(
+          expectActivityLogProof("memory-vault.write.rejected.initial-admission", line),
+        ).toMatchObject({
+          stage: "physical-admission",
+          reason: "invalid-record",
+          admitted: false,
+          rejectionCount: 1,
+        });
+      });
+      expect(lines.some((line) => line.includes("physical-healthy-request"))).toBe(false);
+      expect(raw).not.toContain("private-memory-refusal-canary");
+    } finally {
+      vault.close();
+    }
+  });
+
+  it("retains canonical physical refusal with unknown context as degraded evidence", async () => {
+    const vault = createMemoryVault({
+      memoryDir: join(realpathSync(stateDir), "physical-unknown-vault"),
+      vaultKey: Buffer.alloc(32, 7),
+      logSink: processServerLogSinkFor("bootstrap-memory"),
+      redactString: (value) => (value === "physical-empty" ? "" : value),
+    });
+    try {
+      expect(() =>
+        vault.insertMemory({ ...refusedMemoryRecord(), tags: [], body: "physical-empty" }),
+      ).toThrow(MemoryStorageValidationError);
+      await proveUnknownMemoryWriteCorrelation(stateDir);
+      const raw = readPersistedActivityLog(stateDir);
+      const [line] = persistedActivityLogLines(raw, "memory-vault.write.rejected");
+      expect(
+        expectActivityLogProof("memory-vault.write.rejected.initial-admission", line ?? ""),
+      ).toMatchObject({
+        correlationId: ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+        stage: "physical-admission",
+        reason: "invalid-record",
+        admitted: false,
+        rejectionCount: 1,
+      });
+      expect(raw).not.toContain("private-memory-refusal-canary");
+    } finally {
+      vault.close();
+    }
+  });
+
+  it("reconstructs real physical INSERT and UPDATE capture failures with process evidence", async () => {
+    const startedAtMs = Date.now();
+    for (const method of ["insert", "update"] as const) {
+      const own = technicalMemoryCaptureFixture(
+        stateDir,
+        method,
+        processServerLogSinkFor("bootstrap-memory"),
+      );
+      try {
+        if (method === "update")
+          own.vault.insertMemory(own.record, { correlationId: "capture-healthy-request" });
+        own.arm();
+        expect(() =>
+          method === "insert"
+            ? own.vault.insertMemory(own.record, { correlationId: "physical-capture-one" })
+            : own.vault.updateMemory(
+                own.record.id,
+                { validity: own.record.validity },
+                own.record.updatedAt + 1,
+                {
+                  correlationId: "physical-capture-two",
+                  parentCorrelationId: "physical-capture-one",
+                },
+              ),
+        ).toThrow(TypeError);
+      } finally {
+        own.vault.close();
+      }
+    }
+    const trace = await expectActivityLogScenario("memory-knowledge.dependency-failure", {
+      stateDir,
+      startedAtMs,
+      expectedOps: ["memory-vault.write.capture-failed"],
+    });
+    expect(trace.failureClasses).toContain("memory-write-capture");
+    for (const correlationId of ["physical-capture-one", "physical-capture-two"]) {
+      const selection = await resolveSupportSelection({ correlationId, filter: {} }, stateDir);
+      const query = executeSupportQuery(
+        stateDir,
+        selection,
+        { ...DEFAULT_SUPPORT_QUERY_LIMITS, contextMs: 0, maxContextEvents: 0 },
+        { trigger: "query" },
+      ).result;
+      expect(query.metrics.contextEventCount).toBe(0);
+      expect(query.diagnosticSufficiency).toMatchObject({ status: "complete", reasons: [] });
+    }
+    const raw = readPersistedActivityLog(stateDir);
+    const lines = persistedActivityLogLines(raw, "memory-vault.write.capture-failed");
+    expect(lines).toHaveLength(2);
+    lines.forEach((line) => {
+      expect(
+        expectActivityLogProof("memory-vault.write.capture-failed.physical-admission", line),
+      ).toMatchObject({
+        stage: "physical-admission",
+        reason: "capture-unavailable",
+        admitted: false,
+        rejectionCount: 1,
+        errorKind: "internal",
+        completeness: "complete",
+        loss: "none",
+      });
+    });
+    expect(raw).not.toContain("private-physical-capture-canary");
+  });
+
+  it.each(["absent", "throws", "getter", "unknown"] as const)(
+    "retains honest degraded physical capture evidence with %s capability/context",
+    async (mode) => {
+      const sink = physicalCaptureScenarioSink(mode);
+      const own = technicalMemoryCaptureFixture(stateDir, "degraded", sink);
+      const correlationId = mode === "unknown" ? undefined : "degraded-physical-capture";
+      try {
+        own.arm();
+        expect(() => own.vault.insertMemory(own.record, { correlationId })).toThrow(TypeError);
+        await provePhysicalCaptureDegraded(
+          stateDir,
+          correlationId ?? ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+          mode === "unknown" ? ["correlation-unknown"] : ["evidence-partial"],
+        );
+        const raw = readPersistedActivityLog(stateDir);
+        const [line] = persistedActivityLogLines(raw, "memory-vault.write.capture-failed");
+        expect(
+          expectActivityLogProof(
+            "memory-vault.write.capture-failed.physical-admission",
+            line ?? "",
+          ),
+        ).toMatchObject({
+          completeness: mode === "unknown" ? "complete" : "partial",
+          loss: "none",
+        });
+        expect(raw).not.toContain("private-physical-capture-canary");
+        expect(raw).not.toContain("private-evidence-canary");
+      } finally {
+        own.vault.close();
+      }
+    },
+  );
+
+  it("retains selective physical capture transport loss through the existing ledger and fallback", async () => {
+    const before = activityLogLossCounters()["port-sink-failed"];
+    const own = technicalMemoryCaptureFixture(stateDir, "capture-loss", {
+      write: (event) => {
+        if (event.op === "memory-vault.write.capture-failed")
+          throw new TypeError("private-capture-loss-canary");
+        processServerLogSink().write(event);
+      },
+    });
+    try {
+      own.arm();
+      expect(() =>
+        own.vault.insertMemory(own.record, { correlationId: "physical-capture-lost" }),
+      ).toThrow(TypeError);
+      expect(activityLogLossCounters()["port-sink-failed"]).toBe(before + 1);
+      expect(persistActivityLogLossSummary("heartbeat")).toBe("persisted");
+      checkActivityLogReadiness({ stateDir });
+      await proveMemoryWriteTransportLoss(stateDir);
+      const raw = readPersistedActivityLog(stateDir);
+      expect(persistedActivityLogLines(raw, "memory-vault.write.capture-failed")).toHaveLength(0);
+      expect(persistedActivityLogLines(raw, "memory-vault.log.sink-failed")).toHaveLength(1);
+      expect(raw).not.toContain("private-capture-loss-canary");
+      expect(raw).not.toContain("private-physical-capture-canary");
+    } finally {
+      own.vault.close();
+    }
+  });
 });
 
 function refusedMemoryRecord(): MemoryRecord {
@@ -885,6 +1108,123 @@ async function proveUnknownMemoryWriteCorrelation(stateDir: string): Promise<voi
         failureClass: "memory-write-validation",
         status: "degraded",
         reasons: ["correlation-unknown"],
+      }),
+    ]),
+  );
+}
+
+type MemoryScenarioLogSink = NonNullable<
+  NonNullable<Parameters<typeof createMemoryVault>[0]>["logSink"]
+>;
+
+function technicalMemoryCaptureFixture(
+  stateDir: string,
+  suffix: string,
+  logSink: MemoryScenarioLogSink | undefined,
+): {
+  readonly vault: ReturnType<typeof createMemoryVault>;
+  readonly record: MemoryRecord;
+  readonly arm: () => void;
+} {
+  const validity = { validFrom: 100 };
+  const record: MemoryRecord = { ...refusedMemoryRecord(), tags: [], validity };
+  let armed = false;
+  const vault = createMemoryVault({
+    memoryDir: join(realpathSync(stateDir), `physical-${suffix}`),
+    vaultKey: Buffer.alloc(32, 7),
+    ...(logSink === undefined ? {} : { logSink }),
+    redactString: (value) => {
+      if (armed)
+        Object.defineProperty(validity, "validUntil", {
+          configurable: true,
+          get: (): never => {
+            throw new TypeError("private-physical-capture-canary");
+          },
+        });
+      return value;
+    },
+  });
+  return {
+    vault,
+    record,
+    arm: (): void => {
+      armed = true;
+    },
+  };
+}
+
+function physicalCaptureScenarioSink(
+  mode: "absent" | "throws" | "getter" | "unknown",
+): MemoryScenarioLogSink {
+  if (mode === "unknown") return processServerLogSinkFor("bootstrap-memory");
+  const sink: MemoryScenarioLogSink = {
+    write: (event): void => {
+      processServerLogSink().write(event);
+    },
+  };
+  if (mode !== "absent")
+    Object.defineProperty(sink, "errorEvidence", {
+      get: () => {
+        if (mode === "getter") throw new TypeError("private-evidence-canary");
+        return (): never => {
+          throw new TypeError("private-evidence-canary");
+        };
+      },
+    });
+  return sink;
+}
+
+async function provePhysicalCaptureDegraded(
+  stateDir: string,
+  correlationId: string,
+  reasons: readonly ("correlation-unknown" | "evidence-partial")[],
+): Promise<void> {
+  const [line] = persistedActivityLogLines(
+    readPersistedActivityLog(stateDir),
+    "memory-vault.write.capture-failed",
+  );
+  const failure = expectActivityLogProof(
+    "memory-vault.write.capture-failed.physical-admission",
+    line ?? "",
+  );
+  const frames: readonly unknown[] = Array.isArray(failure.frames) ? failure.frames : [];
+  const creation = recordRegisteredFailureIncident(stateDir, {
+    op: "memory-vault.write.capture-failed",
+    errorKind: "internal",
+    correlationId,
+    frames,
+  });
+  if (creation === undefined || creation.status === "rejected" || creation.record === undefined)
+    throw new TypeError("Expected physical capture incident");
+  const selection = await resolveSupportSelection(
+    { incidentId: creation.incidentId, filter: {} },
+    stateDir,
+  );
+  const query = executeSupportQuery(
+    stateDir,
+    selection,
+    { ...DEFAULT_SUPPORT_QUERY_LIMITS, contextMs: 0, maxContextEvents: 0 },
+    { trigger: "query" },
+  ).result;
+  expect(query.metrics.contextEventCount).toBe(0);
+  const incident = supportIncidentPrivateProjection(
+    resolveSupportIncident(
+      creation.record,
+      supportIncidentSegmentFiles(stateDir, creation.record),
+      stateDir,
+    ),
+  );
+  const report = buildSupportReport(incident, query);
+  const analyzed = analyzeSupportReport(serializeSupportReport(report));
+  expect(report.evidence.recordCount).toBe(query.events.length);
+  expect(analyzed.analysis.evidence.classification).toBe("supported");
+  expect(analyzed.selection).toMatchObject({ status: "degraded", reasons });
+  expect(analyzed.analysis.sufficiency.classes).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        failureClass: "memory-write-capture",
+        status: "degraded",
+        reasons,
       }),
     ]),
   );

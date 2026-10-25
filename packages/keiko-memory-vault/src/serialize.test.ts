@@ -6,12 +6,17 @@ import type {
   UserId,
   WorkspaceId,
 } from "@oscharko-dev/keiko-contracts/memory";
+import {
+  MEMORY_TAGS_MAX_COUNT,
+  MEMORY_STRUCTURED_PAYLOAD_MAX_ENTRIES,
+} from "@oscharko-dev/keiko-contracts/memory";
 import { randomBytes } from "node:crypto";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createMemoryVault } from "./vault.js";
+import { insertMemoryRow, updateMemoryRow } from "./memories.js";
 import { MEMORY_DB_FILENAME } from "./paths.js";
 import { MemoryStorageError } from "./errors.js";
 import { memoryRecordToRow, rowToMemoryRecord, type MemoryRow } from "./serialize.js";
@@ -306,4 +311,271 @@ describe("stored Memory contract admission (#3918)", () => {
       rmSync(memoryDir, { recursive: true, force: true });
     }
   });
+});
+
+describe("physical Memory write snapshot (#3918)", () => {
+  it("refuses an empty post-redaction body before invoking encryption", () => {
+    let sealed = 0;
+    const countingCipher = {
+      ...cipher,
+      sealString(text: string): string {
+        sealed += 1;
+        return cipher.sealString(text);
+      },
+    };
+    expect(() => memoryRecordToRow({ ...baseRecord(), body: "" }, countingCipher)).toThrow(
+      expect.objectContaining({ code: "invalid-input" }),
+    );
+    expect(sealed).toBe(0);
+  });
+
+  it("captures scope exactly once before deriving its two SQL columns", () => {
+    let reads = 0;
+    const record = baseRecord();
+    Object.defineProperty(record, "scope", {
+      get: () => {
+        reads += 1;
+        return reads === 1 ? { kind: "user", userId: "u-1" } : { kind: "global" };
+      },
+    });
+    const row = memoryRecordToRow(record, cipher);
+    expect(reads).toBe(1);
+    expect(row.scope_kind).toBe("user");
+    expect(row.scope_coordinate).toBe("u-1");
+  });
+
+  it.each(["own", "inherited"])("does not execute %s payload toJSON", (placement) => {
+    let calls = 0;
+    const payload = { kind: "string-list", items: ["safe"] } as const;
+    const foreign = {
+      toJSON: (): object => {
+        calls += 1;
+        return { kind: "invalid" };
+      },
+    };
+    if (placement === "own") Object.defineProperty(payload, "toJSON", { value: foreign.toJSON });
+    else Object.setPrototypeOf(payload, foreign);
+    const row = memoryRecordToRow({ ...baseRecord(), payload }, cipher);
+    expect(calls).toBe(0);
+    expect(rowToMemoryRecord(row, cipher).payload).toEqual({
+      kind: "string-list",
+      items: ["safe"],
+    });
+  });
+
+  it("does not execute array toJSON on tags or key-value entries", () => {
+    let calls = 0;
+    const tags = ["safe"];
+    const entries = [{ key: "safe", value: "value" }];
+    const changed = (): readonly string[] => {
+      calls += 1;
+      return ["injected"];
+    };
+    Object.defineProperty(tags, "toJSON", { value: changed });
+    Object.defineProperty(entries, "toJSON", { value: changed });
+    const record: MemoryRecord = { ...baseRecord(), tags, payload: { kind: "key-value", entries } };
+    const back = rowToMemoryRecord(memoryRecordToRow(record, cipher), cipher);
+    expect(back.tags).toEqual(["safe"]);
+    expect(back.payload).toEqual({ kind: "key-value", entries: [{ key: "safe", value: "value" }] });
+    expect(calls).toBe(0);
+  });
+
+  it("does not invoke an entry's toJSON hook", () => {
+    let calls = 0;
+    const entry = {
+      key: "safe",
+      value: "value",
+      toJSON: (): object => {
+        calls += 1;
+        return { key: "injected", value: "injected" };
+      },
+    };
+    const payload = { kind: "key-value", entries: [entry] } as const;
+    const back = rowToMemoryRecord(memoryRecordToRow({ ...baseRecord(), payload }, cipher), cipher);
+    expect(back.payload).toEqual({ kind: "key-value", entries: [{ key: "safe", value: "value" }] });
+    expect(calls).toBe(0);
+  });
+
+  it("refuses negative validity and incomplete optional metadata before sealing", () => {
+    for (const record of [
+      { ...baseRecord(), validity: { validFrom: 1, validUntil: -1 } },
+      {
+        ...baseRecord(),
+        provenance: { ...baseRecord().provenance, modelIdentity: { provider: "ok", modelId: "" } },
+      },
+      { ...baseRecord(), retentionHint: { policyKey: "" } },
+    ]) {
+      expect(() => memoryRecordToRow(record, cipher)).toThrow(
+        expect.objectContaining({ code: "invalid-input" }),
+      );
+    }
+  });
+
+  it("uses the canonical tag and payload entry bounds without truncating", () => {
+    expect(() =>
+      memoryRecordToRow(
+        { ...baseRecord(), tags: Array.from({ length: MEMORY_TAGS_MAX_COUNT + 1 }, () => "safe") },
+        cipher,
+      ),
+    ).toThrow(expect.objectContaining({ code: "invalid-input" }));
+    expect(() =>
+      memoryRecordToRow(
+        {
+          ...baseRecord(),
+          payload: {
+            kind: "string-list",
+            items: Array.from({ length: MEMORY_STRUCTURED_PAYLOAD_MAX_ENTRIES + 1 }, () => "safe"),
+          },
+        },
+        cipher,
+      ),
+    ).toThrow(expect.objectContaining({ code: "invalid-input" }));
+  });
+
+  it("returns the same immutable admitted record used by INSERT and UPDATE", () => {
+    const memoryDir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-memory-snapshot-"));
+    const vault = createMemoryVault({ memoryDir, cipher, redactString: (text) => text });
+    const database = new DatabaseSync(join(memoryDir, MEMORY_DB_FILENAME));
+    const record = baseRecord();
+    try {
+      const inserted = insertMemoryRow(database, record, cipher);
+      expect(inserted).toEqual(record);
+      expect(Object.isFrozen(inserted)).toBe(true);
+      expect(Object.isFrozen(inserted.provenance)).toBe(true);
+      expect(Object.isFrozen(inserted.tags)).toBe(true);
+      const updated = updateMemoryRow(database, { ...record, body: "updated" }, cipher);
+      expect(updated.body).toBe("updated");
+      expect(Object.isFrozen(updated)).toBe(true);
+      expect(vault.getMemory(record.id)).toEqual(updated);
+      Reflect.set(record.validity, "validUntil", -1);
+      expect(vault.getMemory(record.id)).toEqual(updated);
+    } finally {
+      database.close();
+      vault.close();
+      rmSync(memoryDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("captured row values survive later foreign callbacks", () => {
+  it("binds captured validity and metadata before an actual cipher callback mutates input", () => {
+    const record = baseRecord();
+    const validity = { ...record.validity, validUntil: record.createdAt + 10 };
+    const withMetadata = {
+      ...record,
+      validity,
+      retentionHint: { policyKey: "keep", retainUntil: record.createdAt + 20 },
+      provenance: {
+        ...record.provenance,
+        modelIdentity: { provider: "local", modelId: "fixture" },
+      },
+    };
+    const mutatingCipher = {
+      ...cipher,
+      sealString(text: string): string {
+        validity.validUntil = -1;
+        withMetadata.retentionHint.policyKey = "changed";
+        withMetadata.provenance.modelIdentity.modelId = "changed";
+        return cipher.sealString(text);
+      },
+    };
+    const row = memoryRecordToRow(withMetadata, mutatingCipher);
+    expect(row.valid_until).toBe(record.createdAt + 10);
+    expect(row.retention_policy_key).toBe("keep");
+    expect(row.model_id).toBe("fixture");
+  });
+
+  it("admits the canonical array boundaries without dropping an element", () => {
+    const tags = Array.from(
+      { length: MEMORY_TAGS_MAX_COUNT },
+      (_, index) => `tag-${String(index)}`,
+    );
+    const items = Array.from({ length: MEMORY_STRUCTURED_PAYLOAD_MAX_ENTRIES }, () => "safe");
+    const row = memoryRecordToRow(
+      { ...baseRecord(), tags, payload: { kind: "string-list", items } },
+      cipher,
+    );
+    const back = rowToMemoryRecord(row, cipher);
+    expect(back.tags).toEqual(tags);
+    expect(back.payload).toEqual({ kind: "string-list", items });
+  });
+});
+
+describe("physical admission excludes later cipher and SQL failures", () => {
+  it("preserves the cipher exception and never labels cipher or SQL failure a physical refusal", () => {
+    const dir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-physical-error-"));
+    const vault = createMemoryVault({ memoryDir: dir, cipher, redactString: (value) => value });
+    const database = new DatabaseSync(join(dir, MEMORY_DB_FILENAME));
+    const lines: object[] = [];
+    const admission = {
+      sink: {
+        write: (event: object): void => {
+          lines.push(event);
+        },
+      },
+      method: "insert" as const,
+      context: { correlationId: "technical-error-request" },
+    };
+    const failure = new TypeError("fixture cipher failure");
+    const throwingCipher = {
+      ...cipher,
+      sealString: (): never => {
+        throw failure;
+      },
+    };
+    try {
+      let received: unknown;
+      try {
+        insertMemoryRow(database, baseRecord(), throwingCipher, admission);
+      } catch (error) {
+        received = error;
+      }
+      expect(received).toBe(failure);
+      expect(lines).toEqual([]);
+      insertMemoryRow(database, baseRecord(), cipher, admission);
+      expect(() => insertMemoryRow(database, baseRecord(), cipher, admission)).toThrow();
+      expect(() =>
+        updateMemoryRow(database, { ...baseRecord(), id: "missing" as MemoryId }, cipher, {
+          ...admission,
+          method: "update",
+        }),
+      ).toThrow(expect.objectContaining({ code: "not-found" }));
+      expect(lines).toEqual([]);
+      expect(database.prepare("SELECT COUNT(*) AS count FROM memories").get()).toMatchObject({
+        count: 1,
+      });
+    } finally {
+      database.close();
+      vault.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+it("reads each captured body and metadata value once without consulting record toJSON", () => {
+  const record = baseRecord();
+  let bodyReads = 0;
+  let confidenceReads = 0;
+  Object.defineProperty(record, "body", {
+    get: (): string => {
+      bodyReads += 1;
+      return bodyReads === 1 ? "captured body" : "later body";
+    },
+  });
+  Object.defineProperty(record.provenance, "confidence", {
+    get: (): number => {
+      confidenceReads += 1;
+      return confidenceReads === 1 ? 0.75 : -1;
+    },
+  });
+  Object.defineProperty(record, "toJSON", {
+    get: (): never => {
+      throw new TypeError("Foreign record serializer must not run");
+    },
+  });
+  const row = memoryRecordToRow(record, cipher);
+  expect(bodyReads).toBe(1);
+  expect(confidenceReads).toBe(1);
+  expect(cipher.openString(row.body)).toBe("captured body");
+  expect(row.confidence).toBe(0.75);
 });

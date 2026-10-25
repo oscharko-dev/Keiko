@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { gateMemoryRecord } from "./validate.js";
+import { createMemoryContentCipher } from "./cipher.js";
 import { DatabaseSync } from "node:sqlite";
 import { randomBytes } from "node:crypto";
 import {
@@ -1601,3 +1603,450 @@ it.each(["update-batch", "graph"] as const)(
     }
   },
 );
+
+describe("post-redaction physical memory write admission", () => {
+  it("uses the actual record gate to establish valid input and invalid empty-body output", () => {
+    const record = makeMemory({ id: "post-redaction-contract" as MemoryId });
+    expect(gateMemoryRecord(record)).toBe(record);
+    expect(() => gateMemoryRecord({ ...record, body: "" })).toThrow(MemoryStorageValidationError);
+  });
+
+  it("refuses invalid redaction output before INSERT without a row or success event", () => {
+    const dir = freshDir();
+    const record = makeMemory({ id: "post-redaction-insert" as MemoryId });
+    const events: MemoryEvent[] = [];
+    const vault = createMemoryVault({
+      memoryDir: dir,
+      vaultKey: TEST_VAULT_KEY,
+      redactString: (text) => (text === record.body ? "" : text),
+      onMemoryEvent: (event) => events.push(event),
+    });
+    let physical: DatabaseSync | undefined;
+    try {
+      physical = new DatabaseSync(join(dir, MEMORY_DB_FILENAME));
+      const rows = physical.prepare("SELECT * FROM memories ORDER BY id");
+      const before = rows.all();
+      let failure: unknown;
+      try {
+        vault.insertMemory(record);
+      } catch (error) {
+        failure = error;
+      }
+      expect(rows.all()).toEqual(before);
+      expect(failure).toBeInstanceOf(MemoryStorageValidationError);
+      expect(events).toEqual([]);
+    } finally {
+      physical?.close();
+      vault.close();
+    }
+    const reopened = openVault(dir);
+    try {
+      expect(reopened.getMemory(record.id)).toBeUndefined();
+    } finally {
+      reopened.close();
+    }
+  });
+
+  it("refuses invalid redaction output before UPDATE and preserves exact stored row bytes", () => {
+    const dir = freshDir();
+    const record = makeMemory({ id: "post-redaction-update" as MemoryId });
+    const body = "replacement body";
+    const events: MemoryEvent[] = [];
+    const vault = createMemoryVault({
+      memoryDir: dir,
+      vaultKey: TEST_VAULT_KEY,
+      redactString: (text) => (text === body ? "" : text),
+      onMemoryEvent: (event) => events.push(event),
+    });
+    let physical: DatabaseSync | undefined;
+    try {
+      vault.insertMemory(record);
+      events.length = 0;
+      physical = new DatabaseSync(join(dir, MEMORY_DB_FILENAME));
+      const rows = physical.prepare("SELECT * FROM memories ORDER BY id");
+      const before = rows.all();
+      let failure: unknown;
+      try {
+        vault.updateMemory(record.id, { body }, record.updatedAt + 1);
+      } catch (error) {
+        failure = error;
+      }
+      expect(rows.all()).toEqual(before);
+      expect(failure).toBeInstanceOf(MemoryStorageValidationError);
+      expect(events).toEqual([]);
+      expect(vault.getMemory(record.id)).toEqual(record);
+    } finally {
+      physical?.close();
+      vault.close();
+    }
+    const reopened = openVault(dir);
+    try {
+      expect(reopened.getMemory(record.id)).toEqual(record);
+    } finally {
+      reopened.close();
+    }
+  });
+
+  it("persists healthy redacted INSERT and UPDATE through the same real cipher and reopen", () => {
+    const dir = freshDir();
+    const record = makeMemory({
+      id: "post-redaction-healthy" as MemoryId,
+      body: "before private-fragment",
+    });
+    const events: MemoryEvent[] = [];
+    const vault = createMemoryVault({
+      memoryDir: dir,
+      vaultKey: TEST_VAULT_KEY,
+      redactString: (text) => text.replace("private-fragment", "[REDACTED]"),
+      onMemoryEvent: (event) => events.push(event),
+    });
+    let expected: MemoryRecord;
+    try {
+      const inserted = vault.insertMemory(record);
+      expect(inserted.body).toBe("before [REDACTED]");
+      expect(gateMemoryRecord(inserted)).toBe(inserted);
+      expect(vault.getMemory(record.id)).toEqual(inserted);
+      expected = vault.updateMemory(
+        record.id,
+        { body: "after private-fragment" },
+        record.updatedAt + 1,
+      );
+      expect(expected.body).toBe("after [REDACTED]");
+      expect(gateMemoryRecord(expected)).toBe(expected);
+      expect(vault.getMemory(record.id)).toEqual(expected);
+      expect(events.map((event) => event.kind)).toEqual(["memory:inserted", "memory:updated"]);
+    } finally {
+      vault.close();
+    }
+    const reopened = openVault(dir);
+    try {
+      expect(reopened.getMemory(record.id)).toEqual(expected);
+    } finally {
+      reopened.close();
+    }
+  });
+});
+
+describe("post-validation mutation at the physical memory write boundary", () => {
+  it.each(["insert", "update"])(
+    "refuses mutated validity before %s reaches SQLite",
+    (operation) => {
+      const dir = freshDir();
+      const original = makeMemory({ id: "post-validation-mutation" as MemoryId });
+      const validity = { ...original.validity };
+      const record = { ...original, validity };
+      const events: MemoryEvent[] = [];
+      let invalidating = false;
+      const vault = createMemoryVault({
+        memoryDir: dir,
+        vaultKey: TEST_VAULT_KEY,
+        redactString: (text) => {
+          if (invalidating) Reflect.set(validity, "validUntil", -1);
+          return text;
+        },
+        onMemoryEvent: (event) => events.push(event),
+      });
+      let physical: DatabaseSync | undefined;
+      let expected: MemoryRecord | undefined;
+      try {
+        if (operation === "update") vault.insertMemory(record);
+        expected = vault.getMemory(record.id);
+        events.length = 0;
+        physical = new DatabaseSync(join(dir, MEMORY_DB_FILENAME));
+        const rows = physical.prepare("SELECT * FROM memories ORDER BY id");
+        const before = rows.all();
+        invalidating = true;
+        let failure: unknown;
+        try {
+          if (operation === "insert") vault.insertMemory(record);
+          else
+            vault.updateMemory(
+              record.id,
+              { body: "replacement body", validity },
+              record.updatedAt + 1,
+            );
+        } catch (error) {
+          failure = error;
+        }
+        expect(rows.all()).toEqual(before);
+        expect(failure).toBeInstanceOf(MemoryStorageValidationError);
+        expect(events).toEqual([]);
+      } finally {
+        physical?.close();
+        vault.close();
+      }
+      const reopened = openVault(dir);
+      try {
+        expect(reopened.getMemory(record.id)).toEqual(expected);
+      } finally {
+        reopened.close();
+      }
+    },
+  );
+});
+
+function physicalMemoryRows(dir: string): readonly unknown[] {
+  const database = new DatabaseSync(join(dir, MEMORY_DB_FILENAME));
+  try {
+    return database.prepare("SELECT * FROM memories ORDER BY id").all();
+  } finally {
+    database.close();
+  }
+}
+
+describe("owned physical snapshot is the vault result and event", () => {
+  it("shares the immutable INSERT and UPDATE record with the actual success hook", () => {
+    const dir = freshDir();
+    const events: MemoryEvent[] = [];
+    const validity = { validFrom: 1_700_000_000_000, validUntil: 1_800_000_000_000 };
+    const record = makeMemory({ id: "same-snapshot" as MemoryId, validity });
+    const vault = createMemoryVault({
+      memoryDir: dir,
+      vaultKey: TEST_VAULT_KEY,
+      redactString: (value) => value,
+      onMemoryEvent: (event) => events.push(event),
+    });
+    try {
+      const inserted = vault.insertMemory(record);
+      const first = events[0];
+      expect(first?.kind).toBe("memory:inserted");
+      if (first?.kind !== "memory:inserted") throw new TypeError("Expected inserted event");
+      expect(first.record).toBe(inserted);
+      expect(Reflect.set(inserted.validity, "validUntil", -1)).toBe(false);
+      validity.validUntil = -1;
+      expect(inserted.validity.validUntil).toBe(1_800_000_000_000);
+      const updated = vault.updateMemory(
+        record.id,
+        { body: "updated snapshot" },
+        record.updatedAt + 1,
+      );
+      const second = events[1];
+      if (second?.kind !== "memory:updated") throw new TypeError("Expected updated event");
+      expect(second.record).toBe(updated);
+      expect(Object.isFrozen(updated)).toBe(true);
+      expect(physicalMemoryRows(dir)).toEqual([
+        expect.objectContaining({
+          id: updated.id,
+          valid_until: updated.validity.validUntil,
+          updated_at: updated.updatedAt,
+        }),
+      ]);
+      expect(vault.getMemory(record.id)).toEqual(updated);
+    } finally {
+      vault.close();
+    }
+  });
+
+  it.each(["batch", "graph"] as const)(
+    "uses each %s admitted result and rolls back a later physical refusal",
+    (method) => {
+      const dir = freshDir();
+      const events: MemoryEvent[] = [];
+      const vault = createMemoryVault({
+        memoryDir: dir,
+        vaultKey: TEST_VAULT_KEY,
+        redactString: (value) => (value === "reject-after-redaction" ? "" : value),
+        onMemoryEvent: (event) => events.push(event),
+      });
+      try {
+        const seeds = ["first", "second"].map((id) => makeMemory({ id: id as MemoryId }));
+        seeds.forEach((record) => vault.insertMemory(record));
+        events.length = 0;
+        const updates = seeds.map((record) => ({
+          id: record.id,
+          patch: { body: "healthy update" },
+          nowMs: record.updatedAt + 1,
+        }));
+        const result =
+          method === "batch"
+            ? vault.updateMemories(updates)
+            : vault.applyGraphMutation({ updates, edges: [] }).memories;
+        expect(result).toHaveLength(2);
+        result.forEach((record, index) => {
+          const event = events[index];
+          if (event?.kind !== "memory:updated") throw new TypeError("Expected committed update");
+          expect(event.record).toBe(record);
+          expect(Object.isFrozen(record.validity)).toBe(true);
+        });
+        const before = physicalMemoryRows(dir);
+        events.length = 0;
+        const refused = updates.map((update, index) => ({
+          ...update,
+          patch: { body: index === 1 ? "reject-after-redaction" : "must roll back" },
+          nowMs: update.nowMs + 1,
+        }));
+        expect(() =>
+          method === "batch"
+            ? vault.updateMemories(refused)
+            : vault.applyGraphMutation({ updates: refused, edges: [] }),
+        ).toThrow(MemoryStorageValidationError);
+        expect(physicalMemoryRows(dir)).toEqual(before);
+        expect(events).toEqual([]);
+      } finally {
+        vault.close();
+      }
+    },
+  );
+
+  it("preserves a throwing postcommit hook's error and committed snapshot", () => {
+    const dir = freshDir();
+    const failure = new TypeError("fixture postcommit hook");
+    const record = makeMemory({ id: "committed-hook" as MemoryId });
+    const vault = createMemoryVault({
+      memoryDir: dir,
+      vaultKey: TEST_VAULT_KEY,
+      onMemoryEvent: (event) => {
+        if (event.kind === "memory:inserted") {
+          expect(Reflect.set(event.record, "body", "changed")).toBe(false);
+          throw failure;
+        }
+      },
+    });
+    try {
+      expect(thrownPhysicalWrite(() => vault.insertMemory(record))).toBe(failure);
+      expect(vault.getMemory(record.id)).toEqual(record);
+    } finally {
+      vault.close();
+    }
+  });
+});
+
+function captureThrowingValidity(validity: object, error: unknown): void {
+  Object.defineProperty(validity, "validUntil", {
+    configurable: true,
+    get: (): never => {
+      throw error;
+    },
+  });
+}
+
+describe("physical admission error and technical error separation", () => {
+  it.each(["insert", "update"] as const)(
+    "preserves the original %s capture error despite a failed log transport",
+    (method) => {
+      const dir = freshDir();
+      const failure = new TypeError("private-capture-canary");
+      const validity = { validFrom: 1_700_000_000_000 };
+      const record = makeMemory({ id: "capture-error" as MemoryId, validity });
+      let armed = false;
+      const events: MemoryEvent[] = [];
+      const lines: MemoryVaultLogTransport[] = [];
+      const vault = createMemoryVault({
+        memoryDir: dir,
+        vaultKey: TEST_VAULT_KEY,
+        redactString: (value) => {
+          if (armed) captureThrowingValidity(validity, failure);
+          return value;
+        },
+        logSink: {
+          write: (event) => {
+            if (event.op === "memory-vault.write.capture-failed")
+              throw new TypeError("transport fixture");
+            lines.push(event);
+          },
+        },
+        onMemoryEvent: (event) => events.push(event),
+      });
+      try {
+        if (method === "update") vault.insertMemory(record);
+        const before = physicalMemoryRows(dir);
+        events.length = 0;
+        armed = true;
+        expect(
+          thrownPhysicalWrite(() =>
+            method === "insert"
+              ? vault.insertMemory(record)
+              : vault.updateMemory(record.id, { validity }, record.updatedAt + 1),
+          ),
+        ).toBe(failure);
+        expect(physicalMemoryRows(dir)).toEqual(before);
+        expect(events).toEqual([]);
+        expect(lines.filter((event) => event.op === "memory-vault.write.rejected")).toEqual([]);
+        expect(lines.filter((event) => event.op === "memory-vault.log.sink-failed")).toHaveLength(
+          1,
+        );
+      } finally {
+        vault.close();
+      }
+    },
+  );
+});
+
+function thrownPhysicalWrite(action: () => unknown): unknown {
+  try {
+    action();
+  } catch (error) {
+    return error;
+  }
+  return undefined;
+}
+
+it("uses the public INSERT and UPDATE captured metadata even when the cipher changes retained inputs", () => {
+  const dir = freshDir();
+  const baseCipher = createMemoryContentCipher(TEST_VAULT_KEY);
+  const validity = { validFrom: 1_700_000_000_000, validUntil: 1_800_000_000_000 };
+  const modelIdentity = { provider: "local", modelId: "admitted-model" };
+  const retentionHint = { policyKey: "admitted-policy", retainUntil: 1_900_000_000_000 };
+  const scope = { kind: "user" as const, userId: "admitted-user" as UserId };
+  const record = makeMemory({
+    id: "cipher-retained-input" as MemoryId,
+    validity,
+    scope,
+    retentionHint,
+    provenance: { ...makeMemory({ id: "template" as MemoryId }).provenance, modelIdentity },
+  });
+  const events: MemoryEvent[] = [];
+  let armed = false;
+  const cipher = {
+    ...baseCipher,
+    sealString(text: string): string {
+      if (armed) {
+        validity.validUntil = -1;
+        modelIdentity.modelId = "later-model";
+        retentionHint.policyKey = "later-policy";
+        scope.userId = "later-user" as UserId;
+      }
+      return baseCipher.sealString(text);
+    },
+  };
+  const vault = createMemoryVault({
+    memoryDir: dir,
+    cipher,
+    redactString: (text) => text,
+    onMemoryEvent: (event) => events.push(event),
+  });
+  try {
+    armed = true;
+    const inserted = vault.insertMemory(record);
+    validity.validUntil = 1_800_000_000_000;
+    modelIdentity.modelId = "admitted-model";
+    retentionHint.policyKey = "admitted-policy";
+    const updated = vault.updateMemory(
+      inserted.id,
+      { validity, retentionHint, provenance: { ...inserted.provenance, modelIdentity } },
+      inserted.updatedAt + 1,
+    );
+    [inserted, updated].forEach((admitted, index) => {
+      const event = events[index];
+      if (event?.kind !== "memory:inserted" && event?.kind !== "memory:updated")
+        throw new TypeError("Expected captured memory event");
+      expect(event.record).toBe(admitted);
+      expect(admitted.validity.validUntil).toBe(1_800_000_000_000);
+      expect(admitted.provenance.modelIdentity?.modelId).toBe("admitted-model");
+      expect(admitted.retentionHint?.policyKey).toBe("admitted-policy");
+    });
+    expect(physicalMemoryRows(dir)).toEqual([
+      expect.objectContaining({
+        id: updated.id,
+        scope_kind: "user",
+        scope_coordinate: "admitted-user",
+        valid_until: 1_800_000_000_000,
+        model_id: "admitted-model",
+        retention_policy_key: "admitted-policy",
+        updated_at: updated.updatedAt,
+      }),
+    ]);
+  } finally {
+    vault.close();
+  }
+});

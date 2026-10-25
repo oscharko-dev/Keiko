@@ -5,7 +5,16 @@ import { createBufferedServerLogSink } from "../../../tests/support/buffered-ser
 // whichever logger is installed AT WRITE TIME, and its level predicate must answer from that same
 // logger rather than from a value frozen at import.
 
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import type { MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
+import { createMemoryVault } from "@oscharko-dev/keiko-memory-vault";
+import {
+  expectRegisteredActivityLogLine,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 import {
   activityLogEvent,
   activityLogEventRegistration,
@@ -206,5 +215,110 @@ it("supplies the canonical body-free failure reducers through process sinks", ()
       causeChain: ["RangeError"],
     });
     expect(JSON.stringify(evidence)).not.toMatch(/private-/u);
+  }
+});
+
+function processMemoryCaptureRecord(validity: { validFrom: number }): MemoryRecord {
+  return {
+    id: "process-memory-capture" as MemoryId,
+    schemaVersion: "1",
+    scope: { kind: "global" },
+    type: "preference",
+    body: "private-memory-provider-canary",
+    status: "accepted",
+    pinned: false,
+    tags: [],
+    provenance: {
+      sourceKind: "explicit-user-instruction",
+      capturedAt: 100,
+      confidence: 0.9,
+      sensitivity: "public",
+    },
+    validity,
+    createdAt: 100,
+    updatedAt: 100,
+  };
+}
+
+function processMemoryCaptureFixture(
+  memoryDir: string,
+  error: TypeError,
+): {
+  readonly vault: ReturnType<typeof createMemoryVault>;
+  readonly record: MemoryRecord;
+  readonly arm: () => void;
+} {
+  const validity = { validFrom: 100 };
+  let armed = false;
+  const vault = createMemoryVault({
+    memoryDir,
+    vaultKey: Buffer.alloc(32, 7),
+    logSink: processServerLogSinkFor("bootstrap-memory"),
+    redactString: (value) => {
+      if (armed)
+        Object.defineProperty(validity, "validUntil", {
+          configurable: true,
+          get: (): never => {
+            throw error;
+          },
+        });
+      return value;
+    },
+  });
+  return {
+    vault,
+    record: processMemoryCaptureRecord(validity),
+    arm: (): void => {
+      armed = true;
+    },
+  };
+}
+
+it("supplies real process evidence to the Memory physical capture producer", () => {
+  const sink = createBufferedServerLogSink();
+  setServerLogger(createServerLogger({ sink, level: "debug" }));
+  const error = new TypeError("private-memory-provider-canary");
+  error.stack =
+    "TypeError: private-memory-provider-canary\n at capture (/private/install/packages/keiko-memory-vault/dist/serialize.js:80:4)";
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-memory-process-evidence-"));
+  let vault: ReturnType<typeof createMemoryVault> | undefined;
+  try {
+    const fixture = processMemoryCaptureFixture(dir, error);
+    vault = fixture.vault;
+    fixture.arm();
+    let caught: unknown;
+    try {
+      vault.insertMemory(fixture.record, { correlationId: "memory-provider-request" });
+    } catch (cause) {
+      caught = cause;
+    }
+    expect(caught).toBe(error);
+    const captureEvents = sink.events.filter(
+      (event) => event.op === "memory-vault.write.capture-failed",
+    );
+    expect(captureEvents).toHaveLength(1);
+    expect(captureEvents[0]).toMatchObject({
+      op: "memory-vault.write.capture-failed",
+      correlationId: "memory-provider-request",
+      extra: {
+        frames: ["packages/keiko-memory-vault/dist/serialize.js:80:4"],
+        completeness: "complete",
+        loss: "none",
+      },
+    });
+    expect(
+      expectRegisteredActivityLogLine(
+        "memory-vault.write.capture-failed",
+        formatActivityLogProofLine(captureEvents[0] ?? {}),
+      ),
+    ).toMatchObject({
+      correlationId: "memory-provider-request",
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(JSON.stringify(sink.events)).not.toContain("private-memory-provider-canary");
+  } finally {
+    vault?.close();
+    rmSync(dir, { recursive: true, force: true });
   }
 });

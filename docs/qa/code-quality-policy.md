@@ -1678,8 +1678,18 @@ fields distinguish initial invalid-record refusal from a foreign observational e
 transport failure remains explicit loss. Existing healthy, rollback and identity pins remain in the
 whole owners. Generated registries and failure inventory must be regenerated and checked together.
 
-Initial-admission evidence does not prove the physical post-redaction SQL boundary. The four
-actual 400 physical failures remain open until the separate admitted-snapshot repair passes its
-unchanged row/no-success/reopen controls and proves that SQL, return values and success events use
-the same admitted values. Source proposal, proof authorship and a scope allowance are not runtime
-qualification or whole-gate clearance.
+The physical post-redaction boundary captures owned fixed-schema values and validates the actual
+captured projection before encoding, encryption or SQL. SQL, returned records and success events
+share that admitted snapshot. The whole current vault proof retains the four actual400 regression
+additions and unchanged row/no-success/reopen controls; serializer, batch/graph rollback, hook,
+audit-consumer and cipher/SQL separation proofs own the rest of the invariant.
+
+`memory-vault.write.rejected` distinguishes caller-admission from physical-admission canonical
+invalidity. Technical capture failures use the separate existing-port
+`memory-vault.write.capture-failed` and exact `memory-write-capture` class. The real process evidence
+capability is optional: unavailable evidence is explicitly partial with loss none when retained;
+unknown correlation remains degraded, and transport loss follows the existing ledger and fallback.
+Whole registered writer/query/report/analyzer proofs retain zero optional context and require honest
+complete/degraded/loss outcomes. The five generated outputs require canonical regeneration and a
+rebuild. Source proposal, proof authorship and a scope allowance are not runtime qualification or
+whole-gate clearance; actual Original/SAME and all applicable gates remain required.

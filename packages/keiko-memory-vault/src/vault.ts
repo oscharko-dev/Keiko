@@ -710,9 +710,13 @@ function updateMemoryInPlace(
   }
   const merged = mergePatch(existing, update.patch, update.nowMs);
   const ready = preparedForWrite(merged, opts);
-  updateMemoryRow(db, ready, opts.cipher);
+  const admitted = updateMemoryRow(db, ready, opts.cipher, {
+    sink: opts.logSink,
+    method: opts.writeMethod,
+    context: opts.writeContext,
+  });
   return {
-    record: ready,
+    record: admitted,
     previous: { id: existing.id, status: existing.status, pinned: existing.pinned },
   };
 }
@@ -856,9 +860,13 @@ function insertMemoryWithEvents(
 ): MemoryRecord {
   return withSidecarHardening(opts, () => {
     const ready = preparedForWrite(record, opts);
-    insertMemoryRow(db, ready, opts.cipher);
-    opts.emit({ kind: "memory:inserted", record: ready });
-    return ready;
+    const admitted = insertMemoryRow(db, ready, opts.cipher, {
+      sink: opts.logSink,
+      method: opts.writeMethod,
+      context: opts.writeContext,
+    });
+    opts.emit({ kind: "memory:inserted", record: admitted });
+    return admitted;
   });
 }
 
