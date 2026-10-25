@@ -12,6 +12,7 @@ import {
   RuntimeDescendantTracker,
   sweepProvesEnd,
   type ProcessIdentity,
+  type ProcessSnapshot,
 } from "./darwinRuntimeDescendants.js";
 import {
   SandboxMembershipUnavailableError,
@@ -27,24 +28,64 @@ function row(pid: number, state = "S", started = DURING): ProcessIdentity {
   return { pid, ppid: 1, state, started };
 }
 
+// macOS hands out PIDs in sequence and wraps from its last PID to 100.
+const LAST_PID = 99_998;
+const FIRST_WRAPPED_PID = 100;
+
 interface Host {
   readonly rows: ProcessIdentity[];
   readonly members: Set<number>;
   readonly signals: { readonly pid: number; readonly signal: "stop" | "kill" }[];
-  readonly list: Mock<() => Promise<readonly ProcessIdentity[]>>;
+  readonly list: Mock<() => Promise<ProcessSnapshot>>;
+  /** The last PID handed out. */
+  counter: number;
   /** Runs when the member is asked, between the listing it was given and its answer. */
   onAnswer?: (() => void) | undefined;
 }
 
+/** The next PID, as the kernel hands it out to a new process. */
+function spawn(table: Host): number {
+  table.counter = table.counter >= LAST_PID ? FIRST_WRAPPED_PID : table.counter + 1;
+  return table.counter;
+}
+
+/** A listing of `rows`, taken between the PIDs of a process started before it and one after. */
+function snapshot(table: Host, rows: readonly ProcessIdentity[]): ProcessSnapshot {
+  const firstPid = spawn(table);
+  return { rows: rows.map((entry) => ({ ...entry })), firstPid, lastPid: spawn(table) };
+}
+
 // A process table and the kernel's answer for one sandbox instance: `members` are the PIDs its
 // member may signal, and a signal from inside reaches only those, as the Seatbelt rule enforces.
-function host(rows: ProcessIdentity[], members: readonly number[]): Host {
-  return {
+function host(rows: ProcessIdentity[], members: readonly number[], counter = 10_000): Host {
+  const table: Host = {
     rows,
     members: new Set(members),
     signals: [],
-    list: vi.fn(() => Promise.resolve(rows.map((entry) => ({ ...entry })))),
+    counter,
+    list: vi.fn(() => Promise.resolve(snapshot(table, table.rows))),
   };
+  return table;
+}
+
+/** A process exits: the kernel reparents its children to launchd. */
+function exit(table: Host, pid: number): void {
+  table.rows.splice(
+    table.rows.findIndex((entry) => entry.pid === pid),
+    1,
+  );
+  table.members.delete(pid);
+  for (const [index, entry] of table.rows.entries()) {
+    if (entry.ppid === pid) table.rows[index] = { ...entry, ppid: 1 };
+  }
+}
+
+/** A member forks a running child, which is a member too. */
+function fork(table: Host, parent: number): number {
+  const pid = spawn(table);
+  table.rows.push({ pid, ppid: parent, state: "S", started: DURING });
+  table.members.add(pid);
+  return pid;
 }
 
 function kernel(table: Host, keep: (pid: number) => boolean = () => false): SandboxMembership {
@@ -74,6 +115,7 @@ function tracker(
   table: Host,
   membership: SandboxMembership | undefined,
   events: ServerLogEvent[] = [],
+  clock?: () => number,
 ): RuntimeDescendantTracker {
   return new RuntimeDescendantTracker({
     runId: RUN_ID,
@@ -82,7 +124,15 @@ function tracker(
     ...(membership === undefined ? {} : { membership }),
     startedAtMs: STARTED_AT_MS,
     settleMs: 1,
+    ...(clock === undefined ? {} : { clock }),
   });
+}
+
+/** Runs each step once, at the next answers the member gives. */
+function answers(table: Host, steps: (() => void)[]): void {
+  table.onAnswer = (): void => {
+    steps.shift()?.();
+  };
 }
 
 function line(event: ServerLogEvent | undefined): Readonly<Record<string, unknown>> {
@@ -173,6 +223,76 @@ describe("macOS runtime descendants (#3899 AC2, #3901 AC3)", () => {
     expect(table.rows).toEqual([]);
   });
 
+  // PR #4064 review, finding 4371860462: a running member forks and exits before the answer, and a
+  // process outside the sandbox gets its PID within the same `lstart` second. Its child then forks
+  // and exits before the confirming answer too. The reused PID must never pass for the member.
+  it.each([
+    // macOS hands out PIDs in sequence, so reaching the member's PID again means wrapping round.
+    { allocator: "a counter that wrapped", counter: 99_990, member: 120, skipTo: 119 },
+    // A counter that handed the PID out between the listings, however it got there.
+    { allocator: "a counter that passed the PID", counter: 60, member: 70, skipTo: 69 },
+  ])("never takes a PID reused within one second for the member, with $allocator", async (spec) => {
+    const table = host([row(spec.member)], [spec.member], spec.counter);
+    let child = 0;
+    let grandchild = 0;
+    answers(table, [
+      (): void => {
+        child = fork(table, spec.member);
+        exit(table, spec.member);
+        table.counter = spec.skipTo;
+        table.rows.push(row(spawn(table)));
+      },
+      (): void => {
+        grandchild = fork(table, child);
+        exit(table, child);
+      },
+    ]);
+    const sweep = await tracker(table, kernel(table)).sweep();
+
+    expect(table.rows.some((entry) => entry.pid === spec.member)).toBe(true);
+    expect(sweep).toMatchObject({ outcome: "reaped", survivorCount: 0, signalledCount: 1 });
+    expect(sweep.roundCount).toBeGreaterThan(1);
+    expect(table.signals).toContainEqual({ pid: grandchild, signal: "kill" });
+    expect(table.rows.map((entry) => entry.pid)).toEqual([spec.member]);
+  });
+
+  // The same schedule beside a frozen member, from a listing whose counter does not show the reuse:
+  // the second answer names the child, which the first did not, so the round proves nothing and the
+  // child is frozen before anything is killed.
+  it("confirms a frozen run with one more answer and freezes a member only it names", async () => {
+    const table = host([row(20, "T"), row(70)], [20, 70]);
+    let child = 0;
+    answers(table, [
+      (): void => {
+        child = fork(table, 70);
+        exit(table, 70);
+        table.rows.push(row(70));
+      },
+    ]);
+    const sweep = await tracker(table, kernel(table)).sweep();
+
+    expect(sweep).toMatchObject({ outcome: "reaped", survivorCount: 0, signalledCount: 2 });
+    expect(sweep.roundCount).toBeGreaterThan(1);
+    expect(table.signals.map((entry) => `${entry.signal}:${String(entry.pid)}`)).toEqual([
+      "stop:20",
+      `stop:${String(child)}`,
+      "kill:20",
+      `kill:${String(child)}`,
+    ]);
+    expect(table.rows.map((entry) => entry.pid)).toEqual([70]);
+  });
+
+  // A round slow enough for the counter to go all the way round could look unwrapped.
+  it("proves nothing from a round that took longer than a PID turn could", async () => {
+    const table = host([], []);
+    let now = 0;
+    const clock = (): number => (now += 501);
+    const sweep = await tracker(table, kernel(table), [], clock).sweep();
+
+    expect(sweep).toMatchObject({ outcome: "unproven", roundCount: 20 });
+    expect(sweepProvesEnd(sweep)).toBe(false);
+  });
+
   // PR #4064 review, finding 4371619380: without the member, a host signal to a recorded PID could
   // reach a process that reused it. Nothing is signalled, and the end stays unproven.
   it("signals nothing and proves nothing without the member's answer", async () => {
@@ -210,7 +330,7 @@ describe("macOS runtime descendants (#3899 AC2, #3901 AC3)", () => {
     let next = 1_000;
     const table = host([], []);
     // A process of the host's that ends between every two listings of a round.
-    table.list.mockImplementation(() => Promise.resolve([row((next += 1))]));
+    table.list.mockImplementation(() => Promise.resolve(snapshot(table, [row((next += 1))])));
     const sweep = await tracker(table, kernel(table)).sweep();
 
     expect(sweep).toMatchObject({ outcome: "unproven", roundCount: 20, signalledCount: 0 });
@@ -222,7 +342,7 @@ describe("macOS runtime descendants (#3899 AC2, #3901 AC3)", () => {
     let next = 3_000;
     const table = host([], []);
     table.list.mockImplementation(() =>
-      Promise.resolve([row(60), { ...row((next += 1)), ppid: 60 }]),
+      Promise.resolve(snapshot(table, [row(60), { ...row((next += 1)), ppid: 60 }])),
     );
 
     await expect(tracker(table, kernel(table)).sweep()).resolves.toMatchObject({
@@ -237,7 +357,7 @@ describe("macOS runtime descendants (#3899 AC2, #3901 AC3)", () => {
       const table = host([row(70, "T")], [70]);
       // 70 is a frozen member; 71 has gone. A running child of either vanishes in every round.
       table.list.mockImplementation(() =>
-        Promise.resolve([...table.rows, { ...row((next += 1)), ppid: parent }]),
+        Promise.resolve(snapshot(table, [...table.rows, { ...row((next += 1)), ppid: parent }])),
       );
       await expect(tracker(table, kernel(table)).sweep(), String(parent)).resolves.toMatchObject({
         outcome: "unproven",
@@ -248,7 +368,9 @@ describe("macOS runtime descendants (#3899 AC2, #3901 AC3)", () => {
   it("does not count a process that ran before the run as a possible member", async () => {
     let next = 2_000;
     const table = host([], []);
-    table.list.mockImplementation(() => Promise.resolve([row((next += 1), "S", BEFORE)]));
+    table.list.mockImplementation(() =>
+      Promise.resolve(snapshot(table, [row((next += 1), "S", BEFORE)])),
+    );
 
     await expect(tracker(table, kernel(table)).sweep()).resolves.toMatchObject({
       outcome: "clean",

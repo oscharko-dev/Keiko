@@ -20,7 +20,12 @@ import {
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
 
-import { RuntimeDescendantTracker, type ProcessIdentity } from "./darwinRuntimeDescendants.js";
+import {
+  RuntimeDescendantTracker,
+  type ProcessIdentity,
+  type ProcessListing,
+  type ProcessSnapshot,
+} from "./darwinRuntimeDescendants.js";
 import type { SandboxMembership } from "./darwinSandboxMembership.js";
 import {
   createDevLaneRuntimeProcessBackend as createProductionDevLaneRuntimeProcessBackend,
@@ -606,6 +611,8 @@ describe("dev-lane runtime process backend", () => {
       const fixture = stageFixture();
       const child = fakeChild(4711);
       const signals: string[] = [];
+      // The PID counter: each listing is taken between the PIDs of two processes it starts.
+      let counter = 9_000;
       const backend = createDevLaneRuntimeProcessBackend({
         identity: IDENTITY,
         gatewayConfinement: gatewayConfinement(),
@@ -639,8 +646,12 @@ describe("dev-lane runtime process backend", () => {
           return new RuntimeDescendantTracker({
             ...options,
             ...(membership === undefined ? {} : { membership }),
-            list: (): Promise<readonly ProcessIdentity[]> =>
-              Promise.resolve(rows.map((row) => ({ ...row }))),
+            list: (): Promise<ProcessSnapshot> =>
+              Promise.resolve({
+                rows: rows.map((row) => ({ ...row })),
+                firstPid: (counter += 1),
+                lastPid: (counter += 1),
+              }),
             settleMs: 1,
           });
         },
@@ -1080,13 +1091,13 @@ describe("dev-lane runtime process backend", () => {
           return new RuntimeDescendantTracker({
             ...options,
             // The genuine listing, taken now and delivered after the member forked and exited.
-            list: async (): Promise<readonly ProcessIdentity[]> => {
-              const rows = await options.list();
+            list: async (): Promise<ProcessSnapshot> => {
+              const listing = await options.list();
               if (!delayed) {
                 delayed = true;
                 await new Promise((resolve) => setTimeout(resolve, 1_500));
               }
-              return rows;
+              return listing;
             },
           });
         },
@@ -1103,6 +1114,44 @@ describe("dev-lane runtime process backend", () => {
       }
     },
     40_000,
+  );
+
+  // PR #4064 review (4371860462), on the real kernel: the sweep takes a PID present at one listing
+  // for the same process at the next only because macOS hands out PIDs in sequence and each listing
+  // records the counter around it. A process started between two listings gets a PID the counter
+  // passed in between, and processes started one after another get PIDs in that order.
+  it.skipIf(process.platform !== "darwin")(
+    "lists between the PIDs of processes started around it, which macOS hands out in sequence",
+    async () => {
+      const fixture = stageFixture();
+      let list: ProcessListing | undefined;
+      const backend = createDevLaneRuntimeProcessBackend({
+        identity: IDENTITY,
+        gatewayConfinement: nativeConfinement(fixture),
+        runtimeRoot: fixture.runtimeRoot,
+        trackDescendants: (options) => {
+          list = options.list;
+          return new RuntimeDescendantTracker(options);
+        },
+      });
+      const tree = backend.spawnOwnedTree(launchRequest(fixture), SANDBOX);
+      await expect(backend.waitForCompleteTreeExit(tree, 10_000)).resolves.toBe(true);
+      if (list === undefined) throw new TypeError("process-listing-not-captured");
+      // macOS hands out 100 to 99,998 and then wraps to 100; distances are taken along that cycle.
+      const forward = (from: number, to: number): number => (to - from + 99_899) % 99_899;
+      const before = await list();
+      const between = spawnSync("/usr/bin/true").pid;
+      const after = await list();
+      const sequence = Array.from({ length: 16 }, () => spawnSync("/usr/bin/true").pid);
+      const pids = [before.firstPid, before.lastPid, between, after.firstPid, after.lastPid];
+      pids.push(...sequence);
+      const steps = pids.slice(1).map((pid, index) => forward(pids[index] ?? pid, pid));
+
+      expect(before.rows.some((row) => row.pid === process.pid)).toBe(true);
+      expect(steps.every((step) => step > 0)).toBe(true);
+      expect(steps.reduce((sum, step) => sum + step, 0)).toBeLessThan(99_899);
+    },
+    20_000,
   );
 });
 

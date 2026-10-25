@@ -152,9 +152,19 @@ and no process that was running then and could have been a member has gone by th
 running process forks, so no member can have appeared since. A gone process could not have been a
 member when it started before the run, or when its parent is alive at the second listing and no
 member: macOS reparents an orphan only to launchd, so that parent started it, and the child of a
-process outside the sandbox is outside it too. Otherwise the member stops (SIGSTOP) every member it
-named and the next round asks again; once proven, it kills the frozen members and a final answer
-must name none. Zombies have already ended and are not asked about. Only `clean` and `reaped`
+process outside the sandbox is outside it too. A process still listed with the same PID and start
+time counts as the same process only if its PID cannot have been handed out again in between:
+`lstart` resolves seconds, so a PID reused within one second looks unchanged (PR #4064 review). macOS
+hands out PIDs in sequence from 100 to 99,998 and then wraps, so each listing records the counter as
+the PID of a process started just before it reads the table and of one started just after. A PID or
+parent PID the counter passed between the two listings is never taken for the same process; a
+counter that wrapped proves nothing in that round, and neither does a round that took longer than
+500 ms, since a counter that went once all the way round would look unwrapped. A full turn hands out
+99,899 PIDs; 16 to 64 processes forking and reaping as fast as they could on a 16-core Apple silicon
+host handed out at most 19,000 a second, so a turn needs more than five seconds, ten times the bound.
+One more answer, about the second listing, confirms a round proven frozen: a member that answer names
+and the first did not was missed. Otherwise the member stops (SIGSTOP) every member it named and the
+next round asks again; once proven, it kills the frozen members and a final answer must name none. Zombies have already ended and are not asked about. Only `clean` and `reaped`
 settle the tree. A member that outlives every kill (`survivors`), a listing the sweep cannot take
 (`listing-failed`), a member that no longer answers (`membership-unavailable`), a run whose profile
 has no shell for a member (`unproven`, the gateway profile) and a run that is not proven frozen

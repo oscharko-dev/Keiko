@@ -22,13 +22,26 @@ import {
 // therefore first freezes the run: each round lists, asks, and lists again. It proves the end only
 // when every member the answer names was already stopped at the first listing, and no process that
 // was running then and could have been a member has gone by the second: only a running process
-// forks, so no member can have appeared since. Otherwise the member stops what it found and the next round
-// asks again. Once proven, the member kills the frozen members and a final answer must name none.
+// forks, so no member can have appeared since. One more answer, about the second listing, confirms
+// it: a member that answer names and the first did not was missed. Otherwise the member stops what
+// it found and the next round asks again. Once proven, the member kills the frozen members and a
+// final answer must name none.
 // Without the member's answer nothing is signalled and nothing is proven (`unproven`,
 // `membership-unavailable`): a host signal could reach a reused PID. A run that keeps re-forking
 // faster than a round, or a host whose processes keep ending in every round, stays `unproven`
 // after the bounded rounds; that is never reported as a clean end. The process listing is the
 // backend's capability (devLaneRuntimeProcessBackend.ts).
+//
+// A process that is still listed with the same PID and start time is the same process only if its
+// PID cannot have been handed out again in between: `lstart` resolves seconds, so a PID reused
+// within one second looks unchanged (PR #4064 review). macOS hands out PIDs in sequence, so a PID in
+// use at the first listing is handed out again only once the counter reaches it again. Each listing
+// therefore records the counter: the PID of a process started just before it reads the table and of
+// one started just after. A PID the counter passed between the two listings is never taken for the
+// same process, and a counter that wrapped proves nothing in that round. A counter that went once
+// all the way round would look unwrapped, so a round that took longer than ROUND_WINDOW_MS proves
+// nothing either: a full turn hands out 99,899 PIDs, and a saturated 16-core Apple silicon host
+// handed out at most 19,000 a second (ADR-0140 D3), so it cannot complete one within the bound.
 
 /** One process: its parent, its state and the start time that tells it apart from a PID reuse. */
 export interface ProcessIdentity {
@@ -39,7 +52,14 @@ export interface ProcessIdentity {
   readonly started: string;
 }
 
-export type ProcessListing = () => Promise<readonly ProcessIdentity[]>;
+/** One listing, and the PID counter just before it read the table and just after. */
+export interface ProcessSnapshot {
+  readonly rows: readonly ProcessIdentity[];
+  readonly firstPid: number;
+  readonly lastPid: number;
+}
+
+export type ProcessListing = () => Promise<ProcessSnapshot>;
 
 export type DescendantSweepOutcome =
   "clean" | "reaped" | "survivors" | "unproven" | "listing-failed" | "membership-unavailable";
@@ -67,11 +87,15 @@ export interface DescendantTrackerOptions {
   /** When the run's service was started; every member started after it. */
   readonly startedAtMs: number;
   readonly settleMs?: number | undefined;
+  /** Monotonic milliseconds; bounds how long a round may take to prove anything. */
+  readonly clock?: (() => number) | undefined;
 }
 
 const SETTLE_MS = 50;
 const LAUNCHD_PID = 1;
 const FREEZE_ROUNDS = 20;
+// Ten times below the shortest time a saturated host needed for a full PID turn (ADR-0140 D3).
+const ROUND_WINDOW_MS = 500;
 const END_CHECKS = 10;
 // `lstart` has one-second resolution, and the service starts a moment before it is recorded.
 const START_RESOLUTION_MS = 2_000;
@@ -216,13 +240,22 @@ export class RuntimeDescendantTracker {
   }
 
   private async freezeAndEnd(membership: SandboxMembership): Promise<DescendantSweep> {
+    const clock = this.options.clock ?? ((): number => performance.now());
     for (let round = 1; round <= FREEZE_ROUNDS; round += 1) {
       this.counters.rounds = round;
+      const startedAt = clock();
       const before = await this.options.list();
-      const members = await this.members(membership, before);
+      const members = await this.members(membership, before.rows);
       const after = await this.options.list();
-      if (this.frozen(before, members, after)) return this.end(membership, members);
-      await membership.signal(members, "stop");
+      const timely = clock() - startedAt <= ROUND_WINDOW_MS;
+      // A run proven frozen is confirmed by one more answer, about the second listing: a member it
+      // names that the first answer did not was missed, and is frozen in the next round instead.
+      const missed =
+        timely && this.frozen(before, members, after)
+          ? await this.missed(membership, members, after.rows)
+          : undefined;
+      if (missed?.length === 0) return this.end(membership, members);
+      await membership.signal([...members, ...(missed ?? [])], "stop");
       await delay(this.options.settleMs ?? SETTLE_MS);
     }
     return this.result("unproven", 0);
@@ -240,6 +273,16 @@ export class RuntimeDescendantTracker {
     return members;
   }
 
+  /** The members of the second listing that the answer about the first did not name. */
+  private async missed(
+    membership: SandboxMembership,
+    members: readonly number[],
+    rows: readonly ProcessIdentity[],
+  ): Promise<readonly number[]> {
+    const named = new Set(members);
+    return (await this.members(membership, rows)).filter((pid) => !named.has(pid));
+  }
+
   /**
    * Every member alive at `before` was stopped then: none the answer names was running, and no
    * process that was running at `before` and has gone by `after` can have been a member that forked
@@ -248,23 +291,27 @@ export class RuntimeDescendantTracker {
    * so that parent started it, and a child of a process outside the sandbox is outside it too.
    */
   private frozen(
-    before: readonly ProcessIdentity[],
+    before: ProcessSnapshot,
     members: readonly number[],
-    after: readonly ProcessIdentity[],
+    after: ProcessSnapshot,
   ): boolean {
+    // The PIDs handed out from just before the first listing to just after the second; a counter
+    // that wrapped between them leaves nothing provable this round.
+    if (after.lastPid <= before.firstPid) return false;
+    const reissued = (pid: number): boolean => pid > before.firstPid && pid <= after.lastPid;
     const memberSet = new Set(members);
-    const still = new Set(after.map(identity));
+    const still = new Set(after.rows.map(identity));
     const foreignParents = new Set(
-      after.filter((row) => !memberSet.has(row.pid)).map((row) => row.pid),
+      after.rows.filter((row) => !memberSet.has(row.pid)).map((row) => row.pid),
     );
     const notBefore = this.options.startedAtMs - START_RESOLUTION_MS;
-    return before.every((row) => {
+    return before.rows.every((row) => {
       if (stopped(row) || ended(row)) return true;
       if (memberSet.has(row.pid)) return false;
-      if (still.has(identity(row))) return true;
+      if (!reissued(row.pid) && still.has(identity(row))) return true;
       const started = Date.parse(row.started);
       if (Number.isFinite(started) && started < notBefore) return true;
-      return row.ppid !== LAUNCHD_PID && foreignParents.has(row.ppid);
+      return row.ppid !== LAUNCHD_PID && !reissued(row.ppid) && foreignParents.has(row.ppid);
     });
   }
 
@@ -278,7 +325,7 @@ export class RuntimeDescendantTracker {
       for (const pid of left) this.counters.signalled.add(pid);
       await membership.signal(left, "kill");
       await delay(this.options.settleMs ?? SETTLE_MS);
-      left = await this.members(membership, await this.options.list());
+      left = await this.members(membership, (await this.options.list()).rows);
     }
     if (left.length > 0) return this.result("survivors", left.length);
     return this.result(this.counters.signalled.size > 0 ? "reaped" : "clean", 0);

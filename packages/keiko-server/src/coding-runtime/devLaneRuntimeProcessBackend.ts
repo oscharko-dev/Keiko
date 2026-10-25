@@ -30,7 +30,7 @@ import {
   sweepProvesEnd,
   type DescendantSweep,
   type DescendantTrackerOptions,
-  type ProcessIdentity,
+  type ProcessSnapshot,
 } from "./darwinRuntimeDescendants.js";
 import {
   createSandboxMembership,
@@ -175,17 +175,26 @@ export function createDevLaneRuntimeProcessBackend(
 
 const execFileAsync = promisify(execFile);
 const PS_PATH = "/bin/ps";
+const TRUE_PATH = "/usr/bin/true";
 const PS_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 
 /** This user's processes, locale-independent (macOS `ps`); the run's descendants are among them. */
-async function listDarwinProcesses(): Promise<readonly ProcessIdentity[]> {
+async function listDarwinProcesses(): Promise<ProcessSnapshot> {
   const uid = String(process.getuid?.() ?? -1);
-  const { stdout } = await execFileAsync(
-    PS_PATH,
-    ["-x", "-U", uid, "-o", "pid=,ppid=,stat=,lstart="],
-    { encoding: "utf8", env: { LC_ALL: "C" }, maxBuffer: PS_MAX_BUFFER_BYTES },
-  );
-  return parseProcessListing(stdout);
+  // The PID counter just before the table is read (the listing's own PID) and just after it.
+  const listing = execFileAsync(PS_PATH, ["-x", "-U", uid, "-o", "pid=,ppid=,stat=,lstart="], {
+    encoding: "utf8",
+    env: { LC_ALL: "C" },
+    maxBuffer: PS_MAX_BUFFER_BYTES,
+  });
+  const firstPid = listing.child.pid;
+  const { stdout } = await listing;
+  const counter = execFileAsync(TRUE_PATH, [], { encoding: "utf8", env: {} });
+  const lastPid = counter.child.pid;
+  await counter;
+  if (firstPid === undefined || lastPid === undefined)
+    throw new TypeError("darwin-process-counter-unobserved");
+  return { rows: parseProcessListing(stdout), firstPid, lastPid };
 }
 
 class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
