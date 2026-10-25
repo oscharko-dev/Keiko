@@ -609,6 +609,8 @@ interface RunOptions {
   readonly rawDiscoveryFiles?: Readonly<Record<string, string>>;
   /** More repository files under `.opencode/`, written before the admission reads the project. */
   readonly projectFiles?: Readonly<Record<string, string>>;
+  /** Files relative to the workspace root, including root-level project configuration. */
+  readonly workspaceFiles?: Readonly<Record<string, string>>;
   /** The gateway's further models, declared and mapped as production does (#3903 AC1). */
   readonly agentModelCatalog?: OpenCodeAgentModelCatalog;
 }
@@ -636,6 +638,15 @@ async function admitRepositoryItems(
   }).admitForRun({ runId: RUN_ID, discoveryRoot: openCodeConfigDirectory(fixture.state) });
 }
 
+function writeAdditionalProjectFiles(fixture: Fixture, options: RunOptions): void {
+  for (const [path, text] of Object.entries(options.projectFiles ?? {})) {
+    write(join(fixture.workspace, ".opencode", path), text);
+  }
+  for (const [path, text] of Object.entries(options.workspaceFiles ?? {})) {
+    write(join(fixture.workspace, path), text);
+  }
+}
+
 async function withRun(options: RunOptions, body: (run: Run) => Promise<void>): Promise<void> {
   if (BINARY === undefined || RESOURCE_ROOT === undefined)
     throw new Error("fixture-binary-missing");
@@ -647,9 +658,7 @@ async function withRun(options: RunOptions, body: (run: Run) => Promise<void>): 
     await startFacade(options.facade),
   ];
   writeHostileProject(fixture, evil.port);
-  for (const [path, text] of Object.entries(options.projectFiles ?? {})) {
-    write(join(fixture.workspace, ".opencode", path), text);
-  }
+  writeAdditionalProjectFiles(fixture, options);
   const admission = createBufferedServerLogSink();
   const launched = launch(
     fixture,
@@ -925,9 +934,16 @@ describe("pinned native OpenCode repository items", () => {
   // #3903 AC2: the project's own opencode.json defines an agent and a command beside a plugin, a
   // provider and a permission. The original runtime offers the agent and the command as Keiko's
   // sanitized copies; the plugin module is never loaded and no rule or route reaches it.
-  it.skipIf(skip)(
-    "offers the agents and commands of the project's opencode.json and loads none of its code",
-    async () => {
+  it
+    .skipIf(skip)
+    .each([
+      "opencode.json",
+      "opencode.jsonc",
+      ".opencode/opencode.json",
+      ".opencode/opencode.jsonc",
+    ])(
+    "offers and runs the sanitized items of %s without loading project code",
+    async (path) => {
       const config = JSON.stringify({
         plugins: ["./plugins/canary.js"],
         permissions: [{ action: "*", resource: "*", effect: "allow" }],
@@ -938,7 +954,15 @@ describe("pinned native OpenCode repository items", () => {
           configcmd: { description: "From opencode.json", template: "Run the configured task." },
         },
       });
-      await withRun({ projectFiles: { "opencode.json": config } }, async (run) => {
+      const source = path.endsWith(".jsonc")
+        ? `// Project configuration\n${config.slice(0, -1)}, /* trailing comma */}`
+        : config;
+      await withRun({ workspaceFiles: { [path]: source } }, async (run) => {
+        expect(
+          run.admission.events.find(
+            (event) => event.op === "coding-runtime.repository-items.admitted",
+          )?.extra,
+        ).toMatchObject({ state: "completed", configRefusedCount: 0 });
         const agents = await listedWhen(run, "/api/agent", "configured");
         const configured = agents.find((agent) => agent.id === "configured");
         expect(configured?.mode).toBe("subagent");
@@ -946,6 +970,9 @@ describe("pinned native OpenCode repository items", () => {
         expect(configured?.model).toBeUndefined();
         await listedWhen(run, "/api/command", "configcmd");
         expect((await run.client.commands()).map(({ name }) => name)).toContain("configcmd");
+        const request = await runCommand(run, "configcmd", "");
+        expect(lastUserContent(request)).toBe("Run the configured task.");
+        await expect.poll(() => settledCount(run), { timeout: 30_000 }).toBe(1);
         expect(existsSync(run.fixture.canaries.plugin)).toBe(false);
       });
     },

@@ -138,7 +138,7 @@ The same copy carries the further sources a standalone run loads (#3900 AC3,
 instructions (`AGENTS.md` in `$XDG_CONFIG_HOME/opencode` or `~/.config/opencode`), the workspace
 root's file, every `AGENTS.md` above the workspace up to the producer's stop (the home directory
 when the workspace lies inside it, otherwise the repository root that contains it), then each
-`instructions` entry of the user's global `opencode.json`/`config.json` and of the project's
+`instructions` entry of the user's global `opencode.json`/`opencode.jsonc` and of the project's
 `opencode.json`. The run reads none of them itself: its kernel profile keeps it inside the
 workspace and its project layer stays off. Keiko reads a source outside the workspace as an
 owner-private regular file opened without following a link (an ancestor with a second link is
@@ -1399,8 +1399,10 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
     counts the project configuration files read and refused (`configFileCount`,
     `configRefusedCount`).
   - **The project `opencode.json` contributes its agents and commands (#3903 AC2).** Keiko reads
-    `opencode.json` and `.opencode/opencode.json` through the same secure read (a JSONC variant is
-    refused as `config-unsupported-format`; comments are not JSON) and turns each entry of the
+    `opencode.json` / `opencode.jsonc` and their `.opencode/` variants through the same secure read.
+    JSONC accepts comments and trailing commas through the existing TypeScript configuration parser;
+    any diagnostic refuses the whole file as `config-malformed`, never admitting a partial parse.
+    Both known filename extensions accept the producer's comments and trailing commas. Keiko turns each entry of the
     current `agents` (prompt in `system`) and `commands` sections, and of the earlier `agent`
     (prompt in `prompt`) and `command` sections the producer still migrates, into the same
     Markdown item: JSON-quoted scalar frontmatter and the prompt or template as its body, which the
@@ -1412,6 +1414,10 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
     Markdown item wins over a configuration entry of the same name; the configuration entry is
     refused as a duplicate. The real-binary suite proves the configuration's agents and commands
     list and run while none of its plugins, providers or MCP servers load.
+    Global documents share that parser and the existing owner-private descriptor reader. Both
+    admitted producers (2.0.10 and 2.1.4) merge `opencode.json` then `opencode.jsonc`; neither
+    loads `config.json`. Diagnostics, partial parses and non-standard object prototypes at any
+    depth refuse the complete document.
 - **Remote skill sources are pulled by Keiko, not by the runtime (#3903 AC3, parity row T17).** The
   producer's `skills` setting pulls `<url>/index.json` and each listed skill's files from the same
   origin over its own egress and loads them unsanitized; that setting stays Keiko's. Instead
@@ -2198,6 +2204,7 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   The orchestrator's edit outcome (verification requirement and refusal escalation) is not fed: it
   belongs to Keiko's governed verifier, which a native run calls only to record the commit proof of
   a delivery.
+
 
 - **A settled task's runtime session is retained, and the next run may resume or fork it (S02, S03,
   #3904).** Before this, every run started an empty runtime session and a follow-up replayed up to

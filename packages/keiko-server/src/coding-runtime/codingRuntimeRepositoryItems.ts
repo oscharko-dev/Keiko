@@ -15,11 +15,7 @@ import {
   type RepositoryItemKind,
   type RepositoryItemRefusalReason,
 } from "./codingRuntimeRepositoryItemSanitizer.js";
-import {
-  PROJECT_CONFIG_FILES,
-  PROJECT_CONFIG_UNSUPPORTED_FILES,
-  projectConfigItems,
-} from "./codingRuntimeRepositoryConfig.js";
+import { PROJECT_CONFIG_FILES, projectConfigItems } from "./codingRuntimeRepositoryConfig.js";
 import {
   exactWorkspaceRead,
   type SecureWorkspaceNativeFileIO,
@@ -130,8 +126,8 @@ const CODING_RUNTIME_REPOSITORY_ITEMS_OPERATION = defineActivityLogOperation({
     skillRefusedCount: COUNT,
     // Directories the helper could neither list nor prove absent (a link, a file, an unusable root).
     directoryFailureCount: COUNT,
-    // #3903 AC2: the project's own opencode.json files read, and those refused whole (malformed,
-    // JSONC or unreadable).
+    // #3903 AC2: the project's own configuration files read, and those refused whole because
+    // they are malformed or unreadable.
     configFileCount: COUNT,
     configRefusedCount: COUNT,
     // Frontmatter keys dropped from the admitted copies: those that would have registered authority,
@@ -352,18 +348,13 @@ async function scanWorkspace(
 }
 
 /**
- * The agents and commands of the project's own opencode.json (#3903 AC2), as Markdown items. A
- * file the producer would read in a format Keiko does not parse (JSONC) is refused whole; so is a
- * malformed or unreadable one.
+ * The agents and commands of the project's own JSON/JSONC configuration (#3903 AC2), as Markdown
+ * items. Malformed or unreadable files are refused whole.
  */
 async function projectConfigCandidates(
   scan: Scan,
 ): Promise<Readonly<Record<"agent" | "command", readonly Candidate[]>>> {
   const found: Record<"agent" | "command", Candidate[]> = { agent: [], command: [] };
-  for (const path of PROJECT_CONFIG_UNSUPPORTED_FILES) {
-    if ((await readConfigFile(scan, path)) !== undefined)
-      refuseConfig(scan, "config-unsupported-format");
-  }
   for (const path of PROJECT_CONFIG_FILES) {
     const text = await readConfigFile(scan, path);
     if (text !== undefined) admitConfigFile(scan, path, text, found);
@@ -378,7 +369,7 @@ function admitConfigFile(
   found: Record<"agent" | "command", Candidate[]>,
 ): void {
   scan.tally.configFiles += 1;
-  const parsed = projectConfigItems(text);
+  const parsed = projectConfigItems(text, path.endsWith(".jsonc") ? "jsonc" : "json");
   if (!parsed.ok) {
     refuseConfig(scan, parsed.reason);
     return;

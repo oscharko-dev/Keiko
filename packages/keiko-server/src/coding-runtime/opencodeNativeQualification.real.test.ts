@@ -2283,9 +2283,9 @@ describe("pinned native OpenCode repository instructions (C03, #3900 AC3)", () =
   // #3900 AC3 (auditor 6395392347): the global, ancestor and configured sources a standalone run
   // loads reach the original runtime's model call, each named, in the producer's own order, with
   // credentials masked; a repository-named path outside the workspace stays out.
-  it.skipIf(skip)(
-    "loads the user's global, the ancestor and the configured instructions Keiko copies",
-    async () => {
+  it.skipIf(skip).each(["opencode.json", "opencode.jsonc"])(
+    "loads global %s, ancestor and configured instructions through Keiko's parser",
+    async (globalName) => {
       await withRun(
         {
           files: {
@@ -2301,6 +2301,11 @@ describe("pinned native OpenCode repository instructions (C03, #3900 AC3)", () =
             const config = globalOpenCodeConfigDirectory({}, fixture.root);
             mkdirSync(config, { recursive: true });
             writeFileSync(join(config, "AGENTS.md"), "GLOBAL-RULE\n");
+            writeFileSync(join(fixture.root, "global-style.md"), "GLOBAL-CONFIGURED-RULE\n");
+            writeFileSync(
+              join(config, globalName),
+              '// global configuration\n{"instructions":["~/global-style.md"],}',
+            );
             writeFileSync(join(fixture.root, "AGENTS.md"), "ANCESTOR-RULE\n");
             writeFileSync(join(fixture.root, "outside.md"), "OUTSIDE-CANARY\n");
             expect(await discoveringPort(fixture).materializeForRun(copyRequest(fixture))).toBe(
@@ -2311,7 +2316,14 @@ describe("pinned native OpenCode repository instructions (C03, #3900 AC3)", () =
         async (run) => {
           await scriptedTurn(run, read("src/a.ts"));
           const first = JSON.stringify(run.gateway.requests[0]?.body);
-          const order = ["GLOBAL-RULE", "ROOT-RULE", "ANCESTOR-RULE", "STYLE-RULE", "NESTED-RULE"];
+          const order = [
+            "GLOBAL-RULE",
+            "ROOT-RULE",
+            "ANCESTOR-RULE",
+            "GLOBAL-CONFIGURED-RULE",
+            "STYLE-RULE",
+            "NESTED-RULE",
+          ];
           const positions = order.map((rule) => first.indexOf(rule));
           expect(
             positions.every((position) => position >= 0),

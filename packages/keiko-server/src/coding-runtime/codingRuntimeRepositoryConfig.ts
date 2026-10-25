@@ -1,3 +1,4 @@
+import ts from "typescript";
 import {
   isRepositoryItemAuthorityKey,
   type RepositoryItemRefusalReason,
@@ -12,11 +13,13 @@ import {
  * in the run's private discovery directory. Every other key, and every key of an entry that could
  * register authority, route a model or load code, is dropped and counted. An agent whose own
  * permission or tool restrictions cannot be carried is refused rather than admitted unrestricted.
- * The JSONC variant is refused as an unsupported format: comments are not JSON.
+ * JSONC uses the existing TypeScript dependency's configuration parser; any diagnostic refuses the
+ * entire document, including a partial parse. Both filename extensions use the same diagnostically strict parser.
  */
-export const PROJECT_CONFIG_FILES = ["opencode.json", ".opencode/opencode.json"] as const;
-export const PROJECT_CONFIG_UNSUPPORTED_FILES = [
+export const PROJECT_CONFIG_FILES = [
+  "opencode.json",
   "opencode.jsonc",
+  ".opencode/opencode.json",
   ".opencode/opencode.jsonc",
 ] as const;
 
@@ -85,8 +88,11 @@ const TOP_LEVEL_AUTHORITY_KEYS: ReadonlySet<string> = new Set([
   "compatibility",
 ]);
 
-export function projectConfigItems(text: string): ProjectConfigItems {
-  const document = parsedObject(text);
+export function projectConfigItems(
+  text: string,
+  format: "json" | "jsonc" = "json",
+): ProjectConfigItems {
+  const document = parsedProjectConfigObject(text, format);
   if (document === undefined) return { ok: false, reason: "config-malformed" };
   const items: ProjectConfigItem[] = [];
   const refused: { kind: ProjectConfigItemKind; reason: RepositoryItemRefusalReason }[] = [];
@@ -115,15 +121,28 @@ export function projectConfigItems(text: string): ProjectConfigItems {
   };
 }
 
-function parsedObject(text: string): Readonly<Record<string, unknown>> | undefined {
-  try {
-    const value: unknown = JSON.parse(text.replace(/^\uFEFF/u, ""));
-    return plainObject(value);
-  } catch (error) {
-    // Only a JSON syntax error means malformed; anything else is a defect that must surface.
-    if (error instanceof SyntaxError) return undefined;
-    throw error;
+export function parsedProjectConfigObject(
+  text: string,
+  format: "json" | "jsonc" = "json",
+): Readonly<Record<string, unknown>> | undefined {
+  // Both known producer filenames accept JSONC; parse text only, with no filesystem discovery.
+  const parsed = ts.parseConfigFileTextToJson(`opencode.${format}`, text);
+  const value: unknown = parsed.config;
+  return parsed.error === undefined && onlyPlainObjects(value) ? plainObject(value) : undefined;
+}
+
+/** The compiler parser may assign __proto__; configuration can carry own JSON data only. */
+function onlyPlainObjects(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (typeof current !== "object" || current === null) continue;
+    if (!Array.isArray(current) && Object.getPrototypeOf(current) !== Object.prototype)
+      return false;
+    for (const entry of Object.values(current as Readonly<Record<string, unknown>>))
+      pending.push(entry);
   }
+  return true;
 }
 
 function plainObject(value: unknown): Readonly<Record<string, unknown>> | undefined {

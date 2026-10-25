@@ -846,7 +846,7 @@ describe("repository item admission", () => {
 
 // #3903 AC2: the project's own opencode.json is repository text. Its agents and commands become the
 // same sanitized Markdown items; plugins, providers, permissions, MCP servers, models and every
-// other key register nothing, and a malformed or JSONC file is refused whole.
+// other key register nothing, and a malformed JSON or JSONC file is refused whole.
 describe("the project's own opencode.json (#3903 AC2)", () => {
   const CONFIG = JSON.stringify({
     $schema: "https://opencode.ai/config.json",
@@ -948,11 +948,72 @@ describe("the project's own opencode.json (#3903 AC2)", () => {
     });
   });
 
-  it("refuses a malformed file and a JSONC file whole, admitting nothing from them", async () => {
+  it.each([
+    "opencode.json",
+    "opencode.jsonc",
+    ".opencode/opencode.json",
+    ".opencode/opencode.jsonc",
+  ])(
+    "admits comments and trailing commas from %s through the same authority sanitizer",
+    async (path) => {
+      const root = discoveryRoot();
+      const config = `{
+        // Repository text registers no executable effect.
+        "plugins": ["./evil-plugin.js",],
+        "providers": {"evil": {},},
+        "agents": {
+          "docs": {"description": "Writes docs", "system": "Keep https://example.test/a//b and /* literal */ text.",},
+          "guarded": {"system": "Guard.", "permission": {"edit": "deny",},},
+        },
+        /* A command remains untrusted intent. */
+        "commands": {"release": {"template": "Draft $ARGUMENTS.", "agent": "docs",},},
+      }`;
+      const { port, records } = portFor(fakeWorkspace({ [path]: config }));
+
+      await port.admitForRun({ runId: RUN_ID, discoveryRoot: root });
+
+      const files = written(root);
+      expect(Object.keys(files).sort()).toEqual(["agents/docs.md", "commands/release.md"]);
+      expect(files["agents/docs.md"]).toContain(
+        "Keep https://example.test/a//b and /* literal */ text.",
+      );
+      expect(files["commands/release.md"]).toContain("agent: docs");
+      expect(expectAdmissionLine(records).persisted).toMatchObject({
+        configFileCount: 1,
+        configRefusedCount: 0,
+        agentAdmittedCount: 1,
+        agentRefusedCount: 1,
+        commandAdmittedCount: 1,
+        strippedAuthorityKeyCount: 2,
+        refusalReasons: ["restriction-unrepresentable"],
+      });
+    },
+  );
+
+  it.each([
+    '{"commands":{"release":{"template":"Partial must not load."}},',
+    '{"commands": {"release": {"template": "Draft."}}} unexpected',
+    "{'commands': {'release': {'template': 'Draft.'}}}",
+    '{"commands": {"release": {"template": "Draft."}}, /* unfinished',
+  ])("refuses malformed JSONC without admitting a partial parse: %s", async (config) => {
+    const root = discoveryRoot();
+    const { port, records } = portFor(fakeWorkspace({ "opencode.jsonc": config }));
+
+    await port.admitForRun({ runId: RUN_ID, discoveryRoot: root });
+
+    expect(written(root)).toEqual({});
+    expect(expectAdmissionLine(records).persisted).toMatchObject({
+      configFileCount: 1,
+      configRefusedCount: 1,
+      refusalReasons: ["config-malformed"],
+    });
+  });
+
+  it("refuses malformed JSON and JSONC files whole, admitting nothing from them", async () => {
     const root = discoveryRoot();
     const workspace = fakeWorkspace({
       "opencode.json": "{ not json",
-      ".opencode/opencode.jsonc": "// comment\n{}",
+      ".opencode/opencode.jsonc": "// comment\n{ broken",
     });
     const { port, records } = portFor(workspace);
 
@@ -961,9 +1022,9 @@ describe("the project's own opencode.json (#3903 AC2)", () => {
     expect(written(root)).toEqual({});
     expect(expectAdmissionLine(records).persisted).toMatchObject({
       state: "completed",
-      configFileCount: 1,
+      configFileCount: 2,
       configRefusedCount: 2,
-      refusalReasons: ["config-malformed", "config-unsupported-format"],
+      refusalReasons: ["config-malformed"],
     });
   });
 });

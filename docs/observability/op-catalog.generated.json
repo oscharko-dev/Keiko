@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "7094e54788d3370413394265088c713468061be090192099269e551e1cb83476",
+    "catalogDigest": "4f605010a99142a4481d5470ebe7ec9d76413cc27717f5467f96ef21dd6a9ef3",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -10906,9 +10906,9 @@
         "failureClasses": ["coding-runtime-repository-items"],
         "proofIds": ["coding-runtime.repository-items.admitted.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeRepositoryItems.ts:110",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeRepositoryItems.ts:106",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingRuntimeRepositoryItems.ts:729"
+          "packages/keiko-server/src/coding-runtime/codingRuntimeRepositoryItems.ts:720"
         ]
       },
       {
@@ -100962,7 +100962,7 @@
     {
       "op": "coding-runtime.repository-items.admitted",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeRepositoryItems.ts:113",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeRepositoryItems.ts:109",
       "package": "keiko-server"
     },
     {

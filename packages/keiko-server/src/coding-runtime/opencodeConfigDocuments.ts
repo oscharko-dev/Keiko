@@ -1,18 +1,20 @@
-import { lstatSync } from "node:fs";
 import { join } from "node:path";
 
 import { OwnerPrivateFileRefused, readOwnerPrivateFile } from "../ownerPrivateStateFile.js";
-import { PROJECT_CONFIG_FILES } from "./codingRuntimeRepositoryConfig.js";
+import {
+  PROJECT_CONFIG_FILES,
+  parsedProjectConfigObject,
+} from "./codingRuntimeRepositoryConfig.js";
 import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
 
 /**
  * The OpenCode configuration documents a standalone run merges below its inline content: the
- * user's global `opencode.json`/`config.json` and the project's `opencode.json` (#3900 AC3/AC4).
+ * user's global `opencode.json`/`opencode.jsonc` and the project's `opencode.json` (#3900 AC3/AC4).
  * The native run loads neither itself -- its configuration directory is private and its project
  * layer stays off -- so Keiko reads them here, the global one as an owner-private regular file
  * opened without following a link, the project one through the run's own secure workspace read,
- * and admits from them only the settings it re-validates (`instructions`, `formatter`). The JSONC
- * variants are refused: comments are not JSON.
+ * and admits from them only the settings it re-validates (`instructions`, `formatter`). Project and global JSONC
+ * uses the same strict configuration parser as repository-item admission.
  */
 export const CONFIG_DOCUMENT_REFUSALS = [
   "not-regular-file",
@@ -32,25 +34,14 @@ export interface ConfigDocuments {
 }
 
 const DOCUMENT_MAX_BYTES = 262_144;
-const GLOBAL_CONFIG_FILES = ["config.json", "opencode.json"] as const;
-const UNSUPPORTED_GLOBAL_CONFIG_FILES = ["opencode.jsonc"] as const;
-
-function plainObject(value: unknown): Readonly<Record<string, unknown>> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Readonly<Record<string, unknown>>)
-    : undefined;
-}
+const GLOBAL_CONFIG_FILES = ["opencode.json", "opencode.jsonc"] as const;
 
 /** One configuration document's top-level object, or why it is none. */
 export function parsedConfigDocument(
   text: string,
+  format: "json" | "jsonc" = "json",
 ): Readonly<Record<string, unknown>> | "config-malformed" {
-  try {
-    return plainObject(JSON.parse(text.replace(/^\uFEFF/u, ""))) ?? "config-malformed";
-  } catch (error) {
-    if (error instanceof SyntaxError) return "config-malformed";
-    throw error;
-  }
+  return parsedProjectConfigObject(text, format) ?? "config-malformed";
 }
 
 function strictText(bytes: Buffer): string | undefined {
@@ -79,15 +70,11 @@ export function readGlobalConfigDocuments(directory: string): {
   readonly refused: readonly ConfigDocumentRefusal[];
 } {
   const refused: ConfigDocumentRefusal[] = [];
-  for (const name of UNSUPPORTED_GLOBAL_CONFIG_FILES) {
-    if (lstatSync(join(directory, name), { throwIfNoEntry: false }) !== undefined)
-      refused.push("unsupported-format");
-  }
   const documents: Readonly<Record<string, unknown>>[] = [];
   for (const name of GLOBAL_CONFIG_FILES) {
     const text = globalDocumentText(join(directory, name), refused);
     if (text === undefined) continue;
-    const document = parsedConfigDocument(text);
+    const document = parsedConfigDocument(text, name.endsWith(".jsonc") ? "jsonc" : "json");
     if (document === "config-malformed") refused.push(document);
     else documents.push(document);
   }
@@ -110,7 +97,10 @@ export async function readProjectConfigDocuments(
       ...(signal === undefined ? {} : { signal }),
     });
     if (!result.ok) continue;
-    const document = parsedConfigDocument(result.text);
+    const document = parsedConfigDocument(
+      result.text,
+      relativePath.endsWith(".jsonc") ? "jsonc" : "json",
+    );
     if (document === "config-malformed") refused.push(document);
     else documents.push(document);
   }

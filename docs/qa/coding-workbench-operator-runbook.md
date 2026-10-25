@@ -209,14 +209,17 @@ is read through the secure read helper while the run's own workspace is the acti
 frontmatter is validated against a closed allowlist and rendered anew (`model`, permissions, tools,
 MCP and plugin keys never survive), and the copy is written before the runtime starts. The
 `agents`/`agent` and `commands`/`command` sections of the project's `opencode.json` (or
-`.opencode/opencode.json`) become the same items; its other keys (providers, model, permissions,
-plugins, MCP, ...) are dropped, an agent entry with `permission`, `permissions` or `tools` is
-refused rather than admitted unrestricted, and `opencode.jsonc` is refused. Plugins, nested
+`.opencode/opencode.json`) and their `.jsonc` variants become the same items. JSONC supports
+comments and trailing commas; malformed files are refused whole. Other keys (providers, model,
+permissions, plugins, MCP, ...) are dropped, and an agent entry with `permission`, `permissions`
+or `tools` is refused rather than admitted unrestricted. Plugins, nested
 discovery and `.claude/` stay unloaded, except a skill's `.claude/skills/<name>/SKILL.md`, which is
 admitted like the other skill directories. A command whose template contains a shell-substitution
 block is refused. Limits: 16
 agents, 32 commands and 16 skills of at most 32 KiB each; names lowercase with hyphens and not a
 built-in (`build`, `plan`, `general`, `explore`, `init`, `review`, `opencode`, `report`, ...).
+
+Global JSONC shares the project configuration parser and the existing owner-private descriptor reader. Both admitted producers (2.0.10 and 2.1.4) merge `opencode.json` followed by `opencode.jsonc`; neither loads `config.json`. Malformed JSONC is refused as a whole. Objects with parser-created non-standard prototypes are refused at every depth.
 
 It is on by default. An operator sets `KEIKO_CODING_REPOSITORY_ITEMS_ENABLED=false` before starting
 the server to disable it; any value other than `true` disables it. Each native run records one
