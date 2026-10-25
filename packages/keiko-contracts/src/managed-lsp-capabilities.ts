@@ -1,3 +1,8 @@
+import {
+  hasOnlyKeys,
+  isOneOf as isStringMember,
+  isRecord,
+} from "./contract-validation-primitives.js";
 // Managed-LSP candidate, negotiation, and semantic-token contracts (Issue #2271, Epic #2094,
 // ADR-0132). Static candidates never imply reachability: only a versioned negotiated snapshot may
 // advertise an operation, and dynamic unregistration removes it fail closed.
@@ -165,19 +170,6 @@ export type ManagedLspCapabilityParseResult<T> =
   | { readonly ok: false; readonly errors: readonly string[] };
 
 type UnknownRecord = Readonly<Record<string, unknown>>;
-
-function isStringMember<T extends string>(value: unknown, values: readonly T[]): value is T {
-  const allowed: readonly string[] = values;
-  return typeof value === "string" && allowed.includes(value);
-}
-
-function isRecord(value: unknown): value is UnknownRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function hasOnlyKeys(value: UnknownRecord, allowed: readonly string[]): boolean {
-  return Object.keys(value).every((key) => allowed.includes(key));
-}
 
 function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;

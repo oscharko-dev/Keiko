@@ -1,3 +1,4 @@
+import { hasOnlyKeys, isOneOf as memberOf, isRecord } from "./contract-validation-primitives.js";
 // Managed multi-language activation contracts (Issue #2271, Epic #2094, ADR-0132). This strict
 // contracts leaf owns only closed state, precedence, and content-free status vocabulary. Runtime
 // process supervision remains owned by ADR-0069 and keiko-server.
@@ -134,19 +135,6 @@ export type ManagedLspActivationParseResult<T> =
   | { readonly ok: false; readonly errors: readonly string[] };
 
 type UnknownRecord = Readonly<Record<string, unknown>>;
-
-function isRecord(value: unknown): value is UnknownRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function hasOnlyKeys(value: UnknownRecord, allowed: readonly string[]): boolean {
-  return Object.keys(value).every((key) => allowed.includes(key));
-}
-
-function memberOf<T extends string>(value: unknown, values: readonly T[]): value is T {
-  const vocabulary: readonly string[] = values;
-  return typeof value === "string" && vocabulary.includes(value);
-}
 
 function isRevision(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;

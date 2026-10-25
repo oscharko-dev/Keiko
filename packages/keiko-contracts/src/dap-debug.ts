@@ -1,3 +1,4 @@
+import { hasOnlyKeys, isOneOf as memberOf, isRecord } from "./contract-validation-primitives.js";
 // Browser-facing governed DAP contracts (Issue #2345, Epic #2096, ADR-0136 D8-D11).
 // This leaf owns strict wire vocabulary, hostile-input parsing, and bounded live projections.
 // It owns no process lifecycle, launch resolution, route authority, persistence, or evidence.
@@ -398,19 +399,6 @@ const CONTROL_ACTIONS: readonly DebugSessionControlAction[] = [
   "stepOut",
   "stop",
 ];
-
-function isRecord(value: unknown): value is UnknownRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function hasOnlyKeys(value: UnknownRecord, allowed: readonly string[]): boolean {
-  return Object.keys(value).every((key) => allowed.includes(key));
-}
-
-function memberOf<T extends string>(value: unknown, values: readonly T[]): value is T {
-  const vocabulary: readonly string[] = values;
-  return typeof value === "string" && vocabulary.includes(value);
-}
 
 function isNonnegativeSafeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;

@@ -717,3 +717,77 @@ describe("Managed LSP runtime configuration public parser (#3918)", () => {
       });
   });
 });
+
+for (const surface of ["source", "public"] as const) {
+  it(`${surface}: preserves protocol key enumeration before closed-field refusal`, async () => {
+    const module =
+      surface === "source"
+        ? await import("./managed-lsp-runtime.js")
+        : await import("@oscharko-dev/keiko-contracts/runtime/managed-lsp-runtime");
+    const trace: string[] = [];
+    const value = new Proxy(
+      {},
+      {
+        ownKeys(): string[] {
+          trace.push("ownKeys");
+          return ["unexpected", "schemaVersion"];
+        },
+        getOwnPropertyDescriptor(_target, key): PropertyDescriptor {
+          trace.push(`descriptor:${String(key)}`);
+          return { configurable: true, enumerable: true, value: undefined, writable: true };
+        },
+        get(_target, key): never {
+          trace.push(`get:${String(key)}`);
+          throw new TypeError("Protocol field inspection after key enumeration");
+        },
+      },
+    );
+    expect(module.parseManagedLspRuntimeConfiguration(value)).toEqual({
+      ok: false,
+      errors: ["payload could not be inspected: TypeError"],
+    });
+    expect(trace).toEqual([
+      "ownKeys",
+      "descriptor:unexpected",
+      "descriptor:schemaVersion",
+      "get:schemaVersion",
+    ]);
+  });
+
+  it(`${surface}: retains ignored symbol and non-enumerable protocol metadata`, async () => {
+    const module =
+      surface === "source"
+        ? await import("./managed-lsp-runtime.js")
+        : await import("@oscharko-dev/keiko-contracts/runtime/managed-lsp-runtime");
+    const value = pythonConfiguration();
+    let reads = 0;
+    const inspect = (): never => {
+      reads += 1;
+      throw new TypeError("Ignored metadata was read");
+    };
+    Object.defineProperty(value, "ignoredMetadata", { enumerable: false, get: inspect });
+    Object.defineProperty(value, Symbol("ignoredMetadata"), { enumerable: true, get: inspect });
+    expect(module.parseManagedLspRuntimeConfiguration(value).ok).toBe(true);
+    expect(reads).toBe(0);
+  });
+
+  it(`${surface}: rejects a non-string protocol vocabulary member without coercion`, async () => {
+    const module =
+      surface === "source"
+        ? await import("./managed-lsp-runtime.js")
+        : await import("@oscharko-dev/keiko-contracts/runtime/managed-lsp-runtime");
+    let coercions = 0;
+    const foreign = {
+      toString: (): never => {
+        coercions += 1;
+        throw new TypeError("Protocol enum coercion");
+      },
+    };
+    const value = { ...pythonConfiguration(), activation: foreign };
+    expect(module.parseManagedLspRuntimeConfiguration(value)).toEqual({
+      ok: false,
+      errors: ["runtime configuration is invalid or contains unknown fields"],
+    });
+    expect(coercions).toBe(0);
+  });
+}

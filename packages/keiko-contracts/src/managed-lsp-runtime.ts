@@ -1,3 +1,8 @@
+import {
+  hasOnlyKeys,
+  isOneOf as isStringMember,
+  isRecord,
+} from "./contract-validation-primitives.js";
 // Bounded managed-LSP workspace runtime configuration (Issue #2271, Epic #2094, ADR-0132).
 // Executables and arguments are deliberately absent: persisted settings can reference only an
 // opaque operator-approved runtime and contained workspace-relative configuration files.
@@ -241,19 +246,6 @@ export type ManagedLspRuntimeParseResult =
   | { readonly ok: false; readonly errors: readonly string[] };
 
 type UnknownRecord = Readonly<Record<string, unknown>>;
-
-function isStringMember<T extends string>(value: unknown, values: readonly T[]): value is T {
-  const allowed: readonly string[] = values;
-  return typeof value === "string" && allowed.includes(value);
-}
-
-function isRecord(value: unknown): value is UnknownRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function hasOnlyKeys(value: UnknownRecord, allowed: readonly string[]): boolean {
-  return Object.keys(value).every((key) => allowed.includes(key));
-}
 
 function isRevision(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
