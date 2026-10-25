@@ -184,6 +184,8 @@ export interface RetainedSessionStore {
     readonly binding: RetainedSessionBinding;
     readonly directory: string;
     readonly destinationDatabase: string;
+    /** A fork may refuse the asking run's binding without destroying its source task's entry. */
+    readonly purpose?: "fork";
   }): CheckoutResult;
   remove(taskId: string): void;
   /** Removes expired, invalid, orphaned and over-quota entries and any interrupted staging. */
@@ -279,6 +281,12 @@ class Store {
       manifest === undefined
         ? ("integrity-failed" as const)
         : this.bindingRefusal(manifest, input.binding);
+    if (
+      input.purpose === "fork" &&
+      (refusal === "workspace-changed" || refusal === "version-changed")
+    ) {
+      return { ok: false, reason: refusal, removed: false };
+    }
     if (manifest === undefined || refusal !== undefined) {
       return this.refuse(input.binding.taskId, refusal ?? "integrity-failed");
     }

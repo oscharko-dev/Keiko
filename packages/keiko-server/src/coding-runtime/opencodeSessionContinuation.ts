@@ -127,6 +127,7 @@ export function seedContinuation(
       binding: bindingOf(context, location, taskId),
       directory: location.workspaceRoot,
       destinationDatabase: runtimeDatabasePath(location.runRoot),
+      ...(intent.kind === "fork" ? { purpose: "fork" as const } : {}),
     });
   } catch (error) {
     // A filesystem or database failure of the copy: the run starts fresh and the line carries it.

@@ -344,6 +344,49 @@ describe("seeding a run's database from a task's retained entry", () => {
   });
 });
 
+it.each(["workspace-changed", "version-changed"] as const)(
+  "a fork refused for %s leaves the source's valid native history resumable",
+  (reason) => {
+    const root = tempRoot();
+    const store = createRetainedSessionStore({ root: join(root, "retained") });
+    const sourceRoot = join(root, "source");
+    mkdirSync(join(sourceRoot, "state"), { recursive: true });
+    realisticDatabase(join(sourceRoot, "state", "opencode.db"));
+    const source = harness({ store });
+    retainSettledRun(
+      source.context,
+      {
+        runId: RUN,
+        runRoot: sourceRoot,
+        workspaceRoot: WORKSPACE,
+        sessionId: SESSION,
+      },
+      "succeeded",
+    );
+    const fork = harness({ store });
+    const changedContext = {
+      ...fork.context,
+      ...(reason === "workspace-changed"
+        ? { workspaceId: "another-workspace" }
+        : { runtimeVersion: "2.0.10" }),
+    };
+    fork.service.declare(RUN, {
+      kind: "fork",
+      sourceTaskId: TASK,
+      boundary: { kind: "end" },
+    });
+    const destination = join(root, "refused-fork");
+    mkdirSync(join(destination, "state"), { recursive: true });
+    expect(seedContinuation(changedContext, location(destination))).toBeUndefined();
+    expect(fork.outcomes).toEqual([{ kind: "fresh", reason }]);
+    const restored = join(root, "source-resumed");
+    mkdirSync(join(restored, "state"), { recursive: true });
+    const resume = harness({ store });
+    resume.service.declare(RUN, { kind: "resume", taskId: TASK });
+    expect(seedContinuation(resume.context, location(restored))?.sessionId).toBe(SESSION);
+  },
+);
+
 /**
  * A database with the runtime's persistence contract (`opencodePersistenceContract.ts`), holding
  * the one session `SESSION` in `WORKSPACE`.

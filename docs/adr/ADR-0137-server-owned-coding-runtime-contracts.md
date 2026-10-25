@@ -2024,7 +2024,10 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
     source's user turns, with the runtime's own count required to agree, never by a client-supplied
     runtime id), makes the fork the run's session and removes the copied source session with
     `session.remove`. The fork runs in the same workspace under fresh authority, and the source's
-    retained entry and Coding History are left untouched.
+    retained entry and Coding History are left untouched. A fork refused because the requesting
+    run has another workspace or runtime version likewise leaves its source entry intact; it does
+    not copy that entry to the refused destination. Integrity and expiry refusals keep the existing
+    cleanup rules.
   - **Fallback.** Every refusal starts a fresh runtime with the Coding History context, today's
     behaviour, and says why with a closed reason on the Activity Log: `disabled`,
     `not-native-profile`, `not-succeeded`, `no-session`, `no-task`, `no-retained-state`, `expired`,
