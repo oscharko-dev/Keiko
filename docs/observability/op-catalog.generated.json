@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "a7e12d8c12fa8f8abd54bddd4e3bcebf40b9b344399e3f410d8ae7a21933c305",
+    "catalogDigest": "d16fb624f9eadadf78a0af49647022ab42555873421681820cb9ad1a0989deb7",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -7005,7 +7005,7 @@
         "proofIds": ["coding-runtime.descendants.swept.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.ts:55",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.ts:185"]
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.ts:194"]
       },
       {
         "contractKind": "activity-log-operation",

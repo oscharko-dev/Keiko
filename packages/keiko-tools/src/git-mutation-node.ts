@@ -63,6 +63,7 @@ import {
   stageExactFiles,
   gitStageAttributesSupported,
   unstageExactFiles,
+  type GitStageEffectContext,
 } from "./git-stage-node.js";
 import { gitCommitMessageDigest } from "./git-index-identity.js";
 
@@ -296,17 +297,7 @@ async function execStage(
     )
       return failureFromExit(0, 0);
     if (ctx.signal.aborted || ctx.beforeIndexUpdate?.() === false) return failureFromExit(0, 0);
-    const succeeded = await stageExactFiles(
-      {
-        workspaceRoot: ctx.runDeps.workspace.root,
-        fs: workspaceFsOf(ctx.runDeps),
-        check: () => verifiedFactsMatch(ctx, request),
-        authorized: () => !ctx.signal.aborted && ctx.beforeIndexUpdate?.() !== false,
-        run: (argv, stdin, indexPath) =>
-          runOne(indexPath === undefined ? ctx : withIndexPath(ctx, indexPath), argv, stdin),
-      },
-      request,
-    );
+    const succeeded = await stageExactFiles(verifiedIndexEffect(ctx, request), request);
     return succeeded ? executionResult("succeeded", 0) : failureFromExit(0, 0);
   } catch (error) {
     return failureFromThrow(error, 0, 0);
@@ -316,29 +307,36 @@ async function execStage(
 // #3902 AC2 (PR #4064 review): an unstaging reviewed against a head, base and staged tree changes the
 // index only while all three still hold, checked inside the same index transaction as staging and
 // again, together with the run's authority, just before the reviewed index replaces the live one.
+// A thrown failure (a Git read, the index lock, an authority lapse at the swap) propagates to the
+// orchestrator's adapter boundary, which reports the step as failed; the index stays as it was.
 async function execUnstage(
   ctx: RunContext,
   request: GitUnstageExecRequest,
 ): Promise<GitDeliveryExecutionResult> {
   if (request.verified === undefined) return execPlan(ctx, () => buildUnstageArgv(request));
-  try {
-    if (!(await verifiedFactsMatch(ctx, request))) return failureFromExit(0, 0);
-    if (ctx.signal.aborted || ctx.beforeIndexUpdate?.() === false) return failureFromExit(0, 0);
-    const succeeded = await unstageExactFiles(
-      {
-        workspaceRoot: ctx.runDeps.workspace.root,
-        fs: workspaceFsOf(ctx.runDeps),
-        check: () => verifiedFactsMatch(ctx, request),
-        authorized: () => !ctx.signal.aborted && ctx.beforeIndexUpdate?.() !== false,
-        run: (argv, stdin, indexPath) =>
-          runOne(indexPath === undefined ? ctx : withIndexPath(ctx, indexPath), argv, stdin),
-      },
-      buildUnstageArgv(request),
-    );
-    return succeeded ? executionResult("succeeded", 0) : failureFromExit(0, 0);
-  } catch (error) {
-    return failureFromThrow(error, 0, 0);
-  }
+  if (!(await verifiedFactsMatch(ctx, request))) return failureFromExit(0, 0);
+  if (ctx.signal.aborted || ctx.beforeIndexUpdate?.() === false) return failureFromExit(0, 0);
+  const succeeded = await unstageExactFiles(
+    verifiedIndexEffect(ctx, request),
+    buildUnstageArgv(request),
+  );
+  return succeeded ? executionResult("succeeded", 0) : failureFromExit(0, 0);
+}
+
+// The index effect of a verified staging or unstaging: the reviewed facts, the run's authority, and
+// Git runs that may target the transaction's private index copy.
+function verifiedIndexEffect(
+  ctx: RunContext,
+  request: Pick<GitCommitExecRequest, "verified">,
+): GitStageEffectContext {
+  return {
+    workspaceRoot: ctx.runDeps.workspace.root,
+    fs: workspaceFsOf(ctx.runDeps),
+    check: () => verifiedFactsMatch(ctx, request),
+    authorized: () => !ctx.signal.aborted && ctx.beforeIndexUpdate?.() !== false,
+    run: (argv, stdin, indexPath) =>
+      runOne(indexPath === undefined ? ctx : withIndexPath(ctx, indexPath), argv, stdin),
+  };
 }
 
 function withIndexPath(ctx: RunContext, indexPath: string): RunContext {

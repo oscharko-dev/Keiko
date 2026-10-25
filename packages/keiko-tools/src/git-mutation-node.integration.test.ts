@@ -292,8 +292,10 @@ describe("node git mutation adapter — verified unstage", () => {
       now: () => Date.now(),
       beforeIndexUpdate: () => (calls += 1) < 3,
     });
-    const unstaged = await lapsing.unstage({ pathspecs: ["b.txt"], verified });
-    expect(unstaged.outcome).toBe("failed");
+    // The lapse is a thrown failure; the orchestrator's adapter boundary reports it as failed.
+    await expect(lapsing.unstage({ pathspecs: ["b.txt"], verified })).rejects.toThrow(
+      "git-unstage-authority-denied",
+    );
     expect(git(["diff", "--cached", "--name-only"]).trim()).toBe("b.txt");
   });
 });

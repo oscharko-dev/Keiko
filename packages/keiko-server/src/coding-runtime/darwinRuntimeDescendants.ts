@@ -113,6 +113,13 @@ export function sweepProvesEnd(sweep: DescendantSweep): boolean {
 interface SweepCounters {
   rounds: number;
   checks: number;
+  /** The failure that ended the proof; the sweep's line carries its frames and cause chain. */
+  failure?: unknown;
+}
+
+// The first failure that ended the proof is the one the sweep's line reports.
+function recordSweepFailure(counters: SweepCounters, error: unknown): void {
+  counters.failure ??= error;
 }
 
 export class RuntimeDescendantTracker {
@@ -143,7 +150,8 @@ export class RuntimeDescendantTracker {
       return await this.endAll(membership);
     } catch (error) {
       // A member that no longer answers proves nothing; the line carries the failure's evidence.
-      return this.result("membership-unavailable", error);
+      recordSweepFailure(this.counters, error);
+      return this.result("membership-unavailable");
     }
   }
 
@@ -164,7 +172,8 @@ export class RuntimeDescendantTracker {
     return membership.occupied();
   }
 
-  private result(outcome: DescendantSweepOutcome, error?: unknown): DescendantSweep {
+  private result(outcome: DescendantSweepOutcome): DescendantSweep {
+    const error = this.counters.failure;
     return {
       outcome,
       roundCount: this.counters.rounds,
