@@ -473,3 +473,157 @@ describe.each([
     expect(reads).toEqual(["root", "editorSessionId", "document"]);
   });
 });
+
+describe.each([
+  ["source", parseEditorInlineCompletionRequest],
+  ["public", publicOwner.parseEditorInlineCompletionRequest],
+] as const)("#3918 captured request identity through %s", (_surface, parse) => {
+  it("keeps changing inherited session reads, capture order and nested references", () => {
+    const input = baseRequest();
+    const body = input.document;
+    const reads: string[] = [];
+    let sessions = 0;
+    Object.defineProperty(input, "root", {
+      get(): string {
+        reads.push("root");
+        return "/repo";
+      },
+    });
+    Object.defineProperty(input, "document", {
+      get(): unknown {
+        reads.push("document");
+        return body;
+      },
+    });
+    const inherited = {};
+    Object.defineProperty(inherited, "editorSessionId", {
+      get(this: object): string {
+        expect(this).toBe(input);
+        sessions += 1;
+        reads.push(`session:${sessions.toString()}`);
+        return sessions === 3 ? "captured-session" : "checked-session";
+      },
+    });
+    Object.setPrototypeOf(input, inherited);
+    const parsed = parse(input);
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(parsed.value.root).toBe("/repo");
+      expect(parsed.value.editorSessionId).toBe("captured-session");
+      expect(parsed.value.document).toBe(body);
+      expect(Object.keys(parsed.value).slice(0, 4)).toEqual([
+        "schemaVersion",
+        "root",
+        "editorSessionId",
+        "document",
+      ]);
+    }
+    expect(reads).toEqual([
+      "root",
+      "session:1",
+      "document",
+      "root",
+      "session:2",
+      "session:3",
+      "document",
+    ]);
+  });
+
+  it("distinguishes absent, guard-refused and captured own undefined sessions", () => {
+    const absent = baseRequest();
+    let absentReads = 0;
+    Object.defineProperty(absent, "editorSessionId", {
+      get(): undefined {
+        absentReads += 1;
+        return undefined;
+      },
+    });
+    const omitted = parse(absent);
+    expect(omitted.ok).toBe(true);
+    if (omitted.ok) expect(Object.hasOwn(omitted.value, "editorSessionId")).toBe(false);
+    expect(absentReads).toBe(2);
+    for (const mode of ["guard-refused", "captured-undefined"] as const) {
+      const input = baseRequest();
+      let reads = 0;
+      Object.defineProperty(input, "editorSessionId", {
+        get(): unknown {
+          reads += 1;
+          if (reads === 1) return "initial-session";
+          if (reads === 2) return mode === "guard-refused" ? "" : "checked-session";
+          return undefined;
+        },
+      });
+      const parsed = parse(input);
+      expect(parsed.ok).toBe(true);
+      if (parsed.ok) {
+        expect(Object.hasOwn(parsed.value, "editorSessionId")).toBe(mode === "captured-undefined");
+        expect(parsed.value.editorSessionId).toBeUndefined();
+      }
+      expect(reads).toBe(mode === "guard-refused" ? 2 : 3);
+    }
+  });
+
+  it("refuses a malformed third session observation through the existing final predicate", () => {
+    const input = baseRequest();
+    let reads = 0;
+    Object.defineProperty(input, "editorSessionId", {
+      get(): unknown {
+        reads += 1;
+        return reads === 3 ? 17 : "checked-session";
+      },
+    });
+    expect(parse(input)).toEqual({
+      ok: false,
+      errors: [
+        `editorSessionId must be a non-empty string of at most ${EDITOR_AGENT_SESSION_ID_MAX_BYTES.toString()} UTF-8 bytes when provided`,
+      ],
+    });
+    expect(reads).toBe(3);
+  });
+
+  it("preserves opaque capture faults and continues capture after an invalid second root", () => {
+    for (const fault of ["root-second", "session-third"] as const) {
+      const input = baseRequest();
+      const body = input.document;
+      const failure = new TypeError("opaque identity capture");
+      const reads: string[] = [];
+      let roots = 0;
+      let sessions = 0;
+      Object.defineProperty(input, "root", {
+        get(): unknown {
+          roots += 1;
+          reads.push(`root:${roots.toString()}`);
+          if (roots === 1) return "/repo";
+          if (fault === "root-second") throw failure;
+          return undefined;
+        },
+      });
+      Object.defineProperty(input, "editorSessionId", {
+        get(): string {
+          sessions += 1;
+          reads.push(`session:${sessions.toString()}`);
+          if (sessions === 3) throw failure;
+          return "checked-session";
+        },
+      });
+      Object.defineProperty(input, "document", {
+        get(): unknown {
+          reads.push("document");
+          return body;
+        },
+      });
+      let observed: unknown;
+      try {
+        parse(input);
+      } catch (error) {
+        observed = error;
+      }
+      expect(observed).toBe(failure);
+      expect(reads).toEqual(
+        fault === "root-second"
+          ? ["root:1", "session:1", "document", "root:2"]
+          : ["root:1", "session:1", "document", "root:2", "session:2", "session:3"],
+      );
+    }
+  });
+});

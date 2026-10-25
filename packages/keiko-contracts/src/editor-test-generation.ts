@@ -31,6 +31,7 @@
 // from the sibling editor contracts so the test-generation tier shares one stable provenance model with
 // the completion and inline-completion gateways.
 
+import { captureEditorRequestIdentity } from "./editor-request-validation.js";
 import {
   isLanguageDocumentOverlay,
   isLanguagePosition,
@@ -419,7 +420,7 @@ interface CapturedEditorTestGenerationWireRequest {
   readonly root: unknown;
   readonly target: unknown;
   readonly contextBudgetBytes: unknown;
-  readonly editorSessionId?: string;
+  readonly editorSessionId?: unknown;
   readonly context?: ReturnType<typeof buildContextSelectors>;
 }
 
@@ -429,10 +430,7 @@ function captureCompleteTestGenerationRequest(
 ): CapturedEditorTestGenerationWireRequest {
   return {
     schemaVersion: EDITOR_TEST_GENERATION_SCHEMA_VERSION,
-    root: value.root,
-    ...(isBoundedEditorSessionId(value.editorSessionId)
-      ? { editorSessionId: value.editorSessionId }
-      : {}),
+    ...captureEditorRequestIdentity(value),
     target: value.target,
     contextBudgetBytes: value.contextBudgetBytes,
     ...(context !== undefined && Object.keys(context).length > 0 ? { context } : {}),

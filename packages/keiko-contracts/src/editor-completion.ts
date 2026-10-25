@@ -19,7 +19,10 @@
 // stable icon set across deterministic and model-assisted items.
 
 import { isOneOf } from "./contract-validation-primitives.js";
-import { collectEditorDocumentRequestErrors } from "./editor-request-validation.js";
+import {
+  captureEditorRequestIdentity,
+  collectEditorDocumentRequestErrors,
+} from "./editor-request-validation.js";
 import {
   isLanguageDocumentOverlay,
   isLanguagePosition,
@@ -226,7 +229,7 @@ interface CapturedEditorCompletionWireRequest {
   readonly position: unknown;
   readonly triggerKind: unknown;
   readonly contextBudgetBytes: unknown;
-  readonly editorSessionId?: string;
+  readonly editorSessionId?: unknown;
   readonly context?: ReturnType<typeof buildContextSelectors>;
   readonly triggerCharacter?: string;
   readonly maxCostClass?: CostClass;
@@ -238,10 +241,7 @@ function captureCompleteCompletionRequest(
 ): CapturedEditorCompletionWireRequest {
   return {
     schemaVersion: EDITOR_COMPLETION_SCHEMA_VERSION,
-    root: value.root,
-    ...(isBoundedEditorSessionId(value.editorSessionId)
-      ? { editorSessionId: value.editorSessionId }
-      : {}),
+    ...captureEditorRequestIdentity(value),
     document: value.document,
     position: value.position,
     triggerKind: value.triggerKind,
