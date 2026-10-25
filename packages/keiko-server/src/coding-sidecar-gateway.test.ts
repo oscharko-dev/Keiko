@@ -315,12 +315,12 @@ function authenticatedContext(body: unknown, origin?: string): RouteContext {
   };
 }
 
-// Captured from the real OpenCode 2.0.10 model request (schemas only, no request content).
-// These bytes are independent of Keiko's tool-catalog implementation.
+// Captured from the real OpenCode 2.1.4 model request in the direct profile (schemas only, no
+// request content). These bytes are independent of Keiko's tool-catalog implementation.
 const PINNED_MODEL_VISIBLE_TOOLS = JSON.parse(
   readFileSync(
     new URL(
-      "./coding-runtime/opencodeToolSchemas.opencode-2.0.10-advertised.fixture.json",
+      "./coding-runtime/opencodeToolSchemas.opencode-2.1.4-direct-advertised.fixture.json",
       import.meta.url,
     ),
     "utf8",
@@ -1064,7 +1064,7 @@ describe("coding-sidecar gateway", () => {
     expect(properties.proposalId?.pattern).toBe(proposalIdPattern());
   });
 
-  it("accepts exactly the captured OpenCode 2.0.10 visible schemas by canonical digest", async () => {
+  it("accepts exactly the captured OpenCode 2.1.4 direct-profile schemas by canonical digest", async () => {
     expect(
       PINNED_MODEL_VISIBLE_TOOLS.map((tool) => [tool.name, schemaDigest(tool.parameters)]),
     ).toEqual([
@@ -1077,9 +1077,11 @@ describe("coding-sidecar gateway", () => {
       ["keiko_ci_status", "0c55bc6340d0d7f1622c529153d24ccae35be81da319b5369c49385aa3aba58e"],
       ["keiko_git_commit", "21f595f8c387e9f705c4146ee99d3d0acbb5d69b460834ae114b400c0372a6bf"],
       ["keiko_git_diff", "0d3a0f35cca521a4883ce70ad847f2585425483ae0d9c58d8ff6cea14119c079"],
-      ["keiko_git_execute", "fa0e9a6590a7012c266a77fe380c587fcc96f6e7fef39037f8596267d478d60f"],
+      // #3902 AC2: `unstage` joined the redeemable kinds and the proposal-id prefixes.
+      ["keiko_git_execute", "e4f2a410a7b4af87cc0f81faa436eab0e109dbcf33ae050c45cccb64e4dc127a"],
       ["keiko_git_push", "d746974fa9afd5e951f76f9af38954b0ad7f436f2120dc974da65e5ee39f856f"],
-      ["keiko_git_stage", "6c0ce52bf8a41e07edd650c8f2cb37ebf89706a88ed4112e7166e43eef6860ba"],
+      // #3902 AC2: staging carries the explicit `unstage` choice.
+      ["keiko_git_stage", "f8a74e3d1d15960a9252ea9471a03e55ab92f544e8d2c4286ff645e428f9328a"],
       ["keiko_git_status", "d746974fa9afd5e951f76f9af38954b0ad7f436f2120dc974da65e5ee39f856f"],
       ["keiko_pull_request", "3a1a2638bddc571a74a54ff53556219b1ead22034797cd62f683b2abd7ab8ef1"],
       [

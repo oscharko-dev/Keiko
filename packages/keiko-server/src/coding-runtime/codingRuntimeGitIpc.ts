@@ -11,9 +11,23 @@ export type RuntimeGitRequest = CodingToolRequestIdentity & { readonly action: "
         readonly scope: "working-tree" | "index";
         readonly paths: readonly string[];
       }
-    | { readonly operation: "stage"; readonly phase: "propose"; readonly paths: readonly string[] }
-    | { readonly operation: "stage"; readonly phase: "execute"; readonly proposalId: string }
+    | {
+        readonly operation: RuntimeGitIndexOperation;
+        readonly phase: "propose";
+        readonly paths: readonly string[];
+      }
+    | {
+        readonly operation: RuntimeGitIndexOperation;
+        readonly phase: "execute";
+        readonly proposalId: string;
+      }
   );
+/** The proposals that change the index: staging and, its inverse, unstaging (#3902 AC2). */
+export type RuntimeGitIndexOperation = "stage" | "unstage";
+const PROPOSAL_ID: Readonly<Record<RuntimeGitIndexOperation, RegExp>> = {
+  stage: /^stage-\d{1,39}$/u,
+  unstage: /^unstage-\d{1,39}$/u,
+};
 const BASE_KEYS = ["action", "actionId", "idempotencyKey", "operation"];
 function exact(value: Record<string, unknown>, extra: readonly string[]): boolean {
   const keys = [...BASE_KEYS, ...extra];
@@ -51,22 +65,24 @@ function parseValidatedRuntimeGitRequest(
   if (value.operation === "status")
     return exact(value, []) ? { ...base, operation: "status" } : undefined;
   if (value.operation === "diff") return diffRequest(value, base);
-  if (value.operation !== "stage") return undefined;
+  if (value.operation !== "stage" && value.operation !== "unstage") return undefined;
+  const operation = value.operation;
   if (value.phase === "propose" && exact(value, ["phase", "paths"]) && runtimeGitPaths(value.paths))
-    return { ...base, operation: "stage", phase: "propose", paths: value.paths };
-  return stageExecution(value, base);
+    return { ...base, operation, phase: "propose", paths: value.paths };
+  return indexExecution(value, base, operation);
 }
-function stageExecution(
+function indexExecution(
   value: Record<string, unknown>,
   base: CodingToolRequestIdentity & { readonly action: "git" },
+  operation: RuntimeGitIndexOperation,
 ): RuntimeGitRequest | undefined {
   if (
     value.phase === "execute" &&
     exact(value, ["phase", "proposalId"]) &&
     typeof value.proposalId === "string" &&
-    /^stage-\d{1,39}$/u.test(value.proposalId)
+    PROPOSAL_ID[operation].test(value.proposalId)
   )
-    return { ...base, operation: "stage", phase: "execute", proposalId: value.proposalId };
+    return { ...base, operation, phase: "execute", proposalId: value.proposalId };
   return undefined;
 }
 function diffRequest(

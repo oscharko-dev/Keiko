@@ -1781,14 +1781,21 @@ function toolSource(
     "    const request = { action: wireAction, actionId: identity, idempotencyKey: identity, ...literalFields };",
     "    for (const name of argumentNames) request[name] = args[name];",
     '    if (action === "verification" && request.targetPath === "") delete request.targetPath;',
+    // #3902 AC2: keiko_git_stage proposes unstaging with `unstage: true`; the wire carries the
+    // operation, never the flag -- codingToolIpc.ts's exact-key parsers would reject it.
+    '    if (action === "git-stage") {',
+    '      if (args.unstage === true) request.operation = "unstage";',
+    "      delete request.unstage;",
+    "    }",
     // git-execute is the one action whose wire shape depends on a model-supplied argument
-    // (`kind`): redeeming a stage proposal posts `{action:"git",operation:"stage",...}` while
-    // redeeming a commit/push/pull-request proposal posts `{action:"delivery",intent:kind,...}`.
+    // (`kind`): redeeming a stage or unstage proposal posts `{action:"git",operation:kind,...}`
+    // while redeeming a commit/push/pull-request proposal posts `{action:"delivery",intent:kind,...}`.
     // `kind` itself is never a wire field -- codingToolIpc.ts's exact-key parsers would reject it.
     '    if (action === "git-execute") {',
-    '      request.action = args.kind === "stage" ? "git" : "delivery";',
+    '      const index = args.kind === "stage" || args.kind === "unstage";',
+    '      request.action = index ? "git" : "delivery";',
     '      request.phase = "execute";',
-    '      if (args.kind === "stage") request.operation = "stage";',
+    "      if (index) request.operation = args.kind;",
     "      else request.intent = args.kind;",
     "      delete request.kind;",
     "    }",

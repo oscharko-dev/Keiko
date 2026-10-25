@@ -129,6 +129,8 @@ export function requestRuntimeStageApproval(
 ): void {
   const proposal = service?.review(proposalId);
   if (proposal === undefined) return;
+  // The operator approves what the proposal does: staging, or giving staged changes back (#3902 AC2).
+  const unstage = proposal.command.kind === "unstage";
   const event: CodingWorkbenchRuntimeEvent = {
     schemaVersion: "1",
     eventId: `event-${proposalId}`,
@@ -139,8 +141,8 @@ export function requestRuntimeStageApproval(
       requestId: proposalId,
       kind: "workspace-write",
       actionClass: "workspace-write",
-      reasonCode: "stage-approval-required",
-      actionKind: "git-stage",
+      reasonCode: unstage ? "unstage-approval-required" : "stage-approval-required",
+      actionKind: unstage ? "git-unstage" : "git-stage",
       scopeLabel: "workspace-scope",
       risk: "medium",
       policyReason: "approval-required",

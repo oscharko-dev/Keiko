@@ -773,6 +773,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.approval.risk.critical": "Kritisch",
   "codingWorkbench.approval.actionKind.file-edit": "Dateibearbeitung",
   "codingWorkbench.approval.actionKind.git-stage": "Änderungen vormerken",
+  "codingWorkbench.approval.actionKind.git-unstage": "Vormerkung zurücknehmen",
   "codingWorkbench.approval.actionKind.verification-command": "Verifikationsbefehl",
   "codingWorkbench.approval.actionKind.ci-observe": "CI-Statusabfrage",
   "codingWorkbench.approval.actionKind.connector-read": "Connector-Lesezugriff",

@@ -61,7 +61,11 @@ import {
 } from "./opencodeNativeMcp.js";
 import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import { createOpenCodeV2HistoryProjection } from "./opencodeV2History.js";
-import { createOpenCodeNativeToolAdvertisement } from "./opencodeToolSchemas.js";
+import {
+  createOpenCodeNativeToolAdvertisement,
+  hasExactOpenCodeVisibleToolContract,
+  type OpenCodeToolProfile,
+} from "./opencodeToolSchemas.js";
 import {
   admitNativeSessionLocation,
   createNativeTreeStatusPort,
@@ -349,6 +353,8 @@ interface LaunchOptions {
   readonly externalReadRoots?: ((fixture: Fixture) => string) | undefined;
   /** Provisions the workspace beyond plain text files (a project's installed packages). */
   readonly prepare?: ((fixture: Fixture) => void | Promise<void>) | undefined;
+  /** The tool profile the run is launched with; production's macOS profile unless a test names one. */
+  readonly toolProfile?: OpenCodeToolProfile | undefined;
 }
 
 const PRODUCTION_LAUNCH: LaunchOptions = {
@@ -428,7 +434,9 @@ function materializePrivateConfiguration(
     JSON.stringify(alias === undefined ? document : withModelAlias(document, alias)),
     { mode: 0o600 },
   );
-  for (const [name, source] of Object.entries(createGeneratedOpenCodeV2Plugins("native")))
+  for (const [name, source] of Object.entries(
+    createGeneratedOpenCodeV2Plugins(options.toolProfile ?? "native"),
+  ))
     writeFileSync(join(configRoot, "plugins", `${name}.ts`), source, { mode: 0o600 });
   for (const [name, source] of Object.entries(options.plugins))
     writeFileSync(
@@ -443,6 +451,26 @@ interface Launched {
   readonly password: string;
 }
 
+// The server-owned binding is what the production launch passes in the environment; the direct
+// profile keeps its whole configuration in the private file instead.
+function boundConfigurationEnv(
+  env: Readonly<Record<string, string | undefined>>,
+  options: LaunchOptions,
+): Readonly<Record<string, string>> {
+  const content = env.OPENCODE_CONFIG_CONTENT;
+  if (content === undefined) {
+    if (options.toolProfile !== "direct") throw new Error("fixture-config-content-missing");
+    return {};
+  }
+  const bound = JSON.parse(content) as Record<string, unknown>;
+  const alias = options.modelAlias;
+  return {
+    OPENCODE_CONFIG_CONTENT: JSON.stringify(
+      alias === undefined ? bound : withModelAlias(bound, alias),
+    ),
+  };
+}
+
 function launch(
   fixture: Fixture,
   binary: string,
@@ -455,7 +483,7 @@ function launch(
   const profile = buildOpenCodeLaunchProfile({
     executable: binary,
     stateRoot: fixture.state,
-    toolProfile: "native",
+    toolProfile: options.toolProfile ?? "native",
     contextGeometry: {
       contextWindowTokens: 32_768,
       maxInputTokens: 24_000,
@@ -466,10 +494,6 @@ function launch(
   });
   if (!profile.ok) throw new Error("fixture-profile-invalid");
   materializePrivateConfiguration(fixture, options, profile.config);
-  // The server-owned binding is what the production launch passes in the environment.
-  const content = profile.env.OPENCODE_CONFIG_CONTENT;
-  if (content === undefined) throw new Error("fixture-config-content-missing");
-  const bound = JSON.parse(content) as Record<string, unknown>;
   const git = resolveDarwinGitExecutable();
   const gatewayUrl = `http://127.0.0.1:${String(ports.gateway)}/v1`;
   const policy = createRuntimeGatewayConfinement({
@@ -500,16 +524,13 @@ function launch(
   const command = buildRuntimeGatewaySeatbeltCommand(policy, binary, profile.args, git.path);
   const password = profile.env.OPENCODE_SERVER_PASSWORD;
   if (password === undefined) throw new Error("fixture-password-missing");
-  const alias = options.modelAlias;
   return {
     password,
     child: spawn(command.command, [...command.args], {
       cwd: fixture.workspace,
       env: {
         ...profile.env,
-        OPENCODE_CONFIG_CONTENT: JSON.stringify(
-          alias === undefined ? bound : withModelAlias(bound, alias),
-        ),
+        ...boundConfigurationEnv(profile.env, options),
         PATH: [dirname(git.path), options.toolchainPath, "/usr/bin", "/bin"]
           .filter((entry) => entry !== undefined)
           .join(":"),
@@ -644,6 +665,22 @@ async function withRun(
     // The runtime may still be flushing its state when the child exits; retry the removal.
     rmSync(fixture.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
+}
+
+/** The tool definitions of the run's first provider request that carried any. */
+function advertisedDefinitions(gateway: Stub): readonly {
+  readonly name: string;
+  readonly parameters: Readonly<Record<string, unknown>>;
+}[] {
+  for (const request of gateway.requests) {
+    const tools = object(request.body)?.tools;
+    if (!Array.isArray(tools) || tools.length === 0) continue;
+    return tools.map((tool: unknown) => {
+      const definition = object(object(tool)?.function) ?? {};
+      return { name: String(definition.name), parameters: object(definition.parameters) ?? {} };
+    });
+  }
+  return [];
 }
 
 /** The tool names the runtime advertised to the model in its first request of the run. */
@@ -1473,6 +1510,35 @@ describe("pinned native OpenCode plan tool (T19)", () => {
         expect(advertised).toEqual(JSON.parse(readFileSync(fixture, "utf8")));
         const offer = createOpenCodeNativeToolAdvertisement(tools, Date.now(), 60_000);
         expect(isGatewayNativeToolAdvertisement(offer)).toBe(true);
+      });
+    },
+    120_000,
+  );
+
+  // The direct profile (production's Linux and Windows profile) shows the model Keiko's governed
+  // tools in place of OpenCode's own. The gateway admits exactly the projection of Keiko's catalog,
+  // so the committed fixture is what the pinned producer itself serializes for that catalog: a
+  // projection that drifts from the producer's bytes fails here rather than at a customer's first
+  // turn. `KEIKO_WRITE_OPENCODE_TOOL_SCHEMAS=1` rewrites the fixture.
+  it.skipIf(skip)(
+    "advertises exactly the committed 2.1.4 direct-profile tool schemas, and the gateway admits them",
+    async () => {
+      await withRun({ toolProfile: "direct" }, async (run) => {
+        await run.client.prompt(run.sessionId, "Answer without calling a tool.");
+        await expect
+          .poll(() => advertisedDefinitions(run.gateway).length, { timeout: 60_000 })
+          .toBeGreaterThan(0);
+        const advertised = advertisedDefinitions(run.gateway)
+          .map(({ name, parameters }) => ({ name, parameters }))
+          .sort((left, right) => left.name.localeCompare(right.name));
+        const fixture = new URL(
+          "./opencodeToolSchemas.opencode-2.1.4-direct-advertised.fixture.json",
+          import.meta.url,
+        );
+        if (process.env.KEIKO_WRITE_OPENCODE_TOOL_SCHEMAS === "1")
+          writeFileSync(fixture, `${JSON.stringify(advertised, null, 2)}\n`);
+        expect(advertised).toEqual(JSON.parse(readFileSync(fixture, "utf8")));
+        expect(hasExactOpenCodeVisibleToolContract(advertised)).toBe(true);
       });
     },
     120_000,

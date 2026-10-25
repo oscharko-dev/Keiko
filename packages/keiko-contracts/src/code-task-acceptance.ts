@@ -673,7 +673,7 @@ export interface CodeTaskQualificationApprovalRequestObservationV1 {
 }
 
 export type CodeTaskQualificationProposalActionKind =
-  "git-stage" | "commit" | "push" | "pull-request";
+  "git-stage" | "git-unstage" | "commit" | "push" | "pull-request";
 
 export interface CodeTaskQualificationApprovedProposalObservationV1 {
   readonly actionKind: CodeTaskQualificationProposalActionKind;
@@ -925,6 +925,7 @@ const QUALIFICATION_EFFECT_TOOL_KEYS = [
 ] as const;
 const QUALIFICATION_PROPOSAL_ACTION_KINDS = [
   "git-stage",
+  "git-unstage",
   "commit",
   "push",
   "pull-request",

@@ -1086,6 +1086,8 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       return { ok: false, failureCode: "approval-activation-failed", retryable: false };
     const methods = {
       "git-stage": this.deps.codingToolApprovals?.issueStage,
+      // An unstage proposal is held and redeemed by id like a stage proposal (#3902 AC2).
+      "git-unstage": this.deps.codingToolApprovals?.issueStage,
       commit: this.deps.codingToolApprovals?.issueCommit,
       push: this.deps.codingToolApprovals?.issueDelivery,
       "pull-request": this.deps.codingToolApprovals?.issueDelivery,
@@ -3913,6 +3915,7 @@ function isOwnedGitApproval(
   return (
     request.actionKind === "commit" ||
     request.actionKind === "git-stage" ||
+    request.actionKind === "git-unstage" ||
     (request.requestId.startsWith("delivery-") &&
       (request.actionKind === "push" || request.actionKind === "pull-request"))
   );

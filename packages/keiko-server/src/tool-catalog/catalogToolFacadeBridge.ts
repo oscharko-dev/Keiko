@@ -291,12 +291,16 @@ function gitCatalogAction(
       toolId: "keiko.ci.status",
       arguments: { forceFresh: request.forceFresh ?? false },
     };
-  if (request.operation !== "stage") return undefined;
+  if (request.operation !== "stage" && request.operation !== "unstage") return undefined;
+  // Unstaging is staging's inverse under the same proposal and redemption (#3902 AC2).
   return request.phase === "propose"
-    ? { toolId: "keiko.git.stage", arguments: { paths: [...request.paths] } }
+    ? {
+        toolId: "keiko.git.stage",
+        arguments: { paths: [...request.paths], unstage: request.operation === "unstage" },
+      }
     : {
         toolId: "keiko.git.execute",
-        arguments: { kind: "stage", proposalId: request.proposalId },
+        arguments: { kind: request.operation, proposalId: request.proposalId },
       };
 }
 

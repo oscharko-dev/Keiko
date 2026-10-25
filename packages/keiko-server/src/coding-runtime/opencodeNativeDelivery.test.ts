@@ -192,7 +192,7 @@ function toolOf(loaded: Loaded, name: string): GeneratedTool {
 const ARGUMENTS: Readonly<Record<string, Record<string, unknown>>> = {
   keiko_git_status: {},
   keiko_git_diff: { scope: "working-tree", paths: ["src/a.ts"] },
-  keiko_git_stage: { paths: ["src/a.ts"] },
+  keiko_git_stage: { paths: ["src/a.ts"], unstage: false },
   keiko_verification: { verifierId: "typecheck", targetPath: "" },
   keiko_git_commit: { message: "feat: add a" },
   keiko_git_push: {},
@@ -313,6 +313,7 @@ describe("the generated native plugins", () => {
     ["keiko_git_status", {}, "git"],
     ["keiko_git_diff", ARGUMENTS.keiko_git_diff, "git"],
     ["keiko_git_stage", ARGUMENTS.keiko_git_stage, "git"],
+    ["keiko_git_stage", { paths: ["src/a.ts"], unstage: true }, "git"],
     ["keiko_ci_status", ARGUMENTS.keiko_ci_status, "git"],
     ["keiko_verification", ARGUMENTS.keiko_verification, "verification"],
     ["keiko_git_commit", ARGUMENTS.keiko_git_commit, "delivery"],
@@ -320,6 +321,7 @@ describe("the generated native plugins", () => {
     ["keiko_pull_request", ARGUMENTS.keiko_pull_request, "delivery"],
     ["keiko_git_execute", ARGUMENTS.keiko_git_execute, "delivery"],
     ["keiko_git_execute", { kind: "stage", proposalId: mintProposalId("stage") }, "git"],
+    ["keiko_git_execute", { kind: "unstage", proposalId: mintProposalId("unstage") }, "git"],
     ["keiko_git_execute", { kind: "push", proposalId: mintProposalId("delivery") }, "delivery"],
   ] as const)(
     "send %s as a request the facade's own parser accepts (%s -> %s)",
@@ -334,6 +336,28 @@ describe("the generated native plugins", () => {
       expect(body?.idempotencyKey).toBe(body?.actionId);
     },
   );
+
+  // #3902 AC2: unstaging is keiko_git_stage with `unstage: true`; the wire names the operation and
+  // never carries the flag, which the facade's exact-key parser would refuse.
+  it("propose staging and unstaging and redeem both with the wire fields the facade expects", async () => {
+    const native = await load("native", "autonomous-delivery");
+    await toolOf(native, "keiko_git_stage").execute(
+      { paths: ["src/a.ts"], unstage: false },
+      CONTEXT,
+    );
+    await toolOf(native, "keiko_git_stage").execute(
+      { paths: ["src/a.ts"], unstage: true },
+      CONTEXT,
+    );
+    const proposalId = mintProposalId("unstage");
+    await toolOf(native, "keiko_git_execute").execute({ kind: "unstage", proposalId }, CONTEXT);
+    expect(native.fetches.map((call) => call.body)).toMatchObject([
+      { action: "git", operation: "stage", phase: "propose", paths: ["src/a.ts"] },
+      { action: "git", operation: "unstage", phase: "propose", paths: ["src/a.ts"] },
+      { action: "git", operation: "unstage", phase: "execute", proposalId },
+    ]);
+    for (const call of native.fetches) expect(call.body).not.toHaveProperty("unstage");
+  });
 
   it("propose a commit and redeem it with the literal wire fields the facade expects", async () => {
     const native = await load("native", "autonomous-delivery");

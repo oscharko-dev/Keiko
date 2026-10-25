@@ -917,6 +917,11 @@ describe("OpenCode runtime adapter readiness", () => {
     expect(bundle.toolSources.keiko_git_status).toContain('"operation":"status"');
     expect(bundle.toolSources.keiko_git_diff).toContain('"operation":"diff"');
     expect(bundle.toolSources.keiko_git_stage).toContain('"operation":"stage","phase":"propose"');
+    // #3902 AC2: `unstage: true` turns the stage proposal into an unstage proposal on the wire.
+    expect(bundle.toolSources.keiko_git_stage).toContain(
+      'if (args.unstage === true) request.operation = "unstage";',
+    );
+    expect(bundle.toolSources.keiko_git_stage).toContain("delete request.unstage;");
     expect(bundle.toolSources.keiko_git_commit).toContain('const wireAction = "delivery";');
     expect(bundle.toolSources.keiko_git_commit).toContain('"intent":"commit","phase":"propose"');
     expect(bundle.toolSources.keiko_git_push).toContain('"intent":"push","phase":"propose"');
@@ -942,7 +947,8 @@ describe("OpenCode runtime adapter readiness", () => {
     // model-supplied `kind` at call time, never a fixed literal.
     const execute = bundle.toolSources.keiko_git_execute;
     if (execute === undefined) throw new TypeError("keiko_git_execute source missing");
-    expect(execute).toContain('args.kind === "stage" ? "git" : "delivery"');
+    expect(execute).toContain('const index = args.kind === "stage" || args.kind === "unstage";');
+    expect(execute).toContain('request.action = index ? "git" : "delivery";');
     expect(execute).toContain("delete request.kind;");
     expect(JSON.stringify(harness.materialized)).toContain("{env:");
     expect(
@@ -2119,7 +2125,7 @@ describe("keiko_repository_search generated tool dispatch", () => {
 
 // The generated plugin client outlives the server-side bound of each tool, read from the tool's own
 // catalog descriptor rather than a list restated here: the verification tool is settled at the
-// contract-derived verification budget, the four proposal tools at their wait for the operator's
+// contract-derived verification budget, the proposal tools at their wait for the operator's
 // approval, every other tool at the sandbox default (PR #3452, F44).
 function catalogBudgetMs(alias: string): number {
   const entry = opencodeRegistrationSet().entries.find((candidate) => candidate.alias === alias);

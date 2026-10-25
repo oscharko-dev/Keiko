@@ -94,10 +94,13 @@ interface RealAdvertisedTool {
   readonly parameters: Readonly<Record<string, unknown>>;
 }
 
-/** Live V2 capture: the real OpenCode 2.0.10 binary's actual `tools` advertisement. */
+/**
+ * Live capture: the pinned OpenCode 2.1.4 binary's actual direct-profile `tools` advertisement,
+ * recorded by opencodeNativeQualification.real.test.ts.
+ */
 function realAdvertisementFixture(): readonly RealAdvertisedTool[] {
   const path = new URL(
-    "./opencodeToolSchemas.opencode-2.0.10-advertised.fixture.json",
+    "./opencodeToolSchemas.opencode-2.1.4-direct-advertised.fixture.json",
     import.meta.url,
   );
   const parsed = JSON.parse(readFileSync(path, "utf8")) as readonly {
@@ -299,7 +302,7 @@ describe("OpenCode visible tool contract", () => {
     });
   });
 
-  it("accepts the exact projected surface including the eight new Git/CI tools and #3414's repository search", () => {
+  it("accepts the exact projected surface including the Git/CI tools and #3414's repository search", () => {
     expect(hasExactOpenCodeVisibleToolContract(projectedTools())).toBe(true);
     expect(OPENCODE_MODEL_VISIBLE_TOOLS).toHaveLength(18);
   });
@@ -312,13 +315,14 @@ describe("OpenCode visible tool contract", () => {
     expect(paths.maxItems).toBe(50);
   });
 
-  it("requires kind and proposalId for keiko_git_execute, bounding proposalId to the three server-issued prefixes", () => {
+  it("requires kind and proposalId for keiko_git_execute, bounding proposalId to the four server-issued prefixes", () => {
     const execute = OPENCODE_MODEL_VISIBLE_TOOLS.find((tool) => tool.name === "keiko_git_execute");
     const pattern = execute?.parameters.properties.proposalId.pattern;
     if (pattern === undefined) throw new TypeError("Expected keiko_git_execute proposalId schema.");
     expect(execute?.parameters.required).toEqual(["kind", "proposalId"]);
     expect(execute?.parameters.properties.kind.enum).toEqual([
       "stage",
+      "unstage",
       "commit",
       "push",
       "pull-request",
@@ -327,15 +331,23 @@ describe("OpenCode visible tool contract", () => {
     // hand-typed, so this equality catches the two sources drifting apart.
     expect(pattern).toBe(proposalIdPattern());
     const accepted = new RegExp(pattern, "u");
-    // stage-* (runtimeGitService.ts), delivery-* (draftDeliveryFacts.ts, push/pull-request), and
-    // commit-* (verifiedCommitService.ts's VerifiedCommitService.propose()) are the three shapes
-    // the server actually mints; a real minted commit proposal id must be redeemable through this
+    // stage-* and unstage-* (runtimeGitService.ts), delivery-* (draftDeliveryFacts.ts,
+    // push/pull-request), and commit-* (verifiedCommitService.ts's VerifiedCommitService.propose())
+    // are the four shapes the server actually mints; a real minted commit proposal id must be redeemable through this
     // tool (regression: the pattern previously omitted "commit", making #3386's commit-redemption
     // path unreachable through the model-visible schema even though "commit" is a valid `kind`).
     expect(accepted.test(mintProposalId("stage"))).toBe(true);
+    expect(accepted.test(mintProposalId("unstage"))).toBe(true);
     expect(accepted.test(mintProposalId("delivery"))).toBe(true);
     expect(accepted.test(mintProposalId("commit"))).toBe(true);
     expect(accepted.test("other-1")).toBe(false);
+  });
+
+  // #3902 AC2: unstaging is an explicit choice on every stage proposal, never an omitted default.
+  it("requires paths and the unstage choice for keiko_git_stage", () => {
+    const stage = OPENCODE_MODEL_VISIBLE_TOOLS.find((tool) => tool.name === "keiko_git_stage");
+    expect(stage?.parameters.required).toEqual(["paths", "unstage"]);
+    expect(stage?.parameters.properties.unstage.type).toBe("boolean");
   });
 
   it("requires forceFresh as a boolean for keiko_ci_status", () => {
@@ -404,7 +416,7 @@ describe("createOpenCodeGatewayToolCatalogAdvertisement", () => {
   // #3386/#3387/#3388 Git/CI tools under their canonical identities" test pins that registration),
   // so this stays one exact-equality invariant rather than a two-source partition: every
   // model-visible tool is either a catalog-projected tool or the native question extension.
-  it("names all eighteen OpenCode 2.0.10 model-visible tools", () => {
+  it("names all eighteen OpenCode model-visible tools", () => {
     const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(
       0,
       undefined,
@@ -710,9 +722,10 @@ describe("deriveGatewayCatalogReadiness", () => {
   });
 });
 
-// Captured directly from a real OpenCode 2.0.10 provider call. The gateway must accept its
-// closed top-level schemas while rejecting altered tools, including the two empty-parameter tools.
-describe("OpenCode 2.0.10 real advertisement fidelity", () => {
+// Captured directly from a real OpenCode 2.1.4 provider call in the direct profile. The gateway
+// must accept its closed top-level schemas while rejecting altered tools, including the two
+// empty-parameter tools.
+describe("OpenCode 2.1.4 real advertisement fidelity", () => {
   it("accepts the unchanged live-captured tools with the current verification projection", () => {
     expect(hasExactOpenCodeVisibleToolContract(realAdvertisementFixture())).toBe(true);
   });

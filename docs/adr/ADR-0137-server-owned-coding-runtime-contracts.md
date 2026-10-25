@@ -1815,7 +1815,13 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   generated `keiko.native-delivery` plugin (`keiko_native_delivery.ts`): `keiko_git_status`,
   `keiko_git_diff`, `keiko_git_stage`, `keiko_git_commit`, `keiko_git_push`,
   `keiko_pull_request`, `keiko_git_execute`, `keiko_ci_status` and `keiko_verification`
-  (`opencodeNativeDeliveryTools.ts` holds the list once). `keiko_verification` is a member only
+  (`opencodeNativeDeliveryTools.ts` holds the list once). The managed worktree's Git directory is
+  read-only to the run, so its own Git reads status, diff, log, show and blame but cannot write the
+  index; `keiko_git_stage` with `unstage: true` gives staged paths back to the worktree through
+  the same proposal, approval and redemption as staging (`unstage-<n>`, redeemed as
+  `keiko_git_execute` kind `unstage`, bound to the head, base and staged-tree digest; the worktree
+  keeps its bytes) (#3902 AC2). It is an option of the stage tool rather than a tool of its own, so
+  the catalog's tool count and its performance case inventory stay unchanged. `keiko_verification` is a member only
   because a commit proposal requires the commit proof, which `VerifiedCommitService` records solely
   from that tool's verification; without it no native commit could ever be proposed. The plugin is
   the mapped profiles' own generated tool source filtered to those names, so a native call is the

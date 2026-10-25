@@ -163,13 +163,13 @@
       "properties": {
         "kind": {
           "type": "string",
-          "enum": ["stage", "commit", "push", "pull-request"]
+          "enum": ["stage", "unstage", "commit", "push", "pull-request"]
         },
         "proposalId": {
           "type": "string",
           "minLength": 1,
           "maxLength": 64,
-          "pattern": "^(?:stage|delivery|commit)-[0-9]{1,39}$",
+          "pattern": "^(?:stage|unstage|delivery|commit)-[0-9]{1,39}$",
           "description": "The proposalId returned by the matching propose-phase tool call."
         }
       },
@@ -200,10 +200,14 @@
             "minLength": 1,
             "maxLength": 512
           },
-          "description": "Workspace-relative paths to propose staging."
+          "description": "Workspace-relative paths to propose staging, or unstaging."
+        },
+        "unstage": {
+          "type": "boolean",
+          "description": "false proposes staging the paths; true proposes giving their staged changes back to the worktree, which keeps its bytes (only paths keiko_git_status lists as staged)."
         }
       },
-      "required": ["paths"],
+      "required": ["paths", "unstage"],
       "additionalProperties": false
     }
   },

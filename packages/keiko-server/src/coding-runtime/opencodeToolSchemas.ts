@@ -396,10 +396,17 @@ const GIT_STAGE_SCHEMA = {
       minItems: 1,
       maxItems: CODING_RUNTIME_GIT_MAX_PATHS,
       items: { type: "string", minLength: 1, maxLength: 512 },
-      description: "Workspace-relative paths to propose staging.",
+      description: "Workspace-relative paths to propose staging, or unstaging.",
+    },
+    // #3902 AC2: unstaging is staging's inverse under the same proposal and approval.
+    unstage: {
+      type: "boolean",
+      description:
+        "false proposes staging the paths; true proposes giving their staged changes back to the " +
+        "worktree, which keeps its bytes (only paths keiko_git_status lists as staged).",
     },
   },
-  required: ["paths"],
+  required: ["paths", "unstage"],
 } as const;
 
 const GIT_COMMIT_SCHEMA = {
@@ -445,14 +452,14 @@ const GIT_CI_STATUS_SCHEMA = {
 // the Workbench approval channel admits a proposal, the model redeems it by kind + proposalId
 // rather than each proposal type growing its own execute-phase tool.
 // The proposalId pattern below is derived from gitDelivery/proposalId.ts's PROPOSAL_ID_PREFIXES,
-// the single source of truth for the three prefixes the server actually mints for these four
-// redeemable kinds: "stage" (runtimeGitService.ts), "commit" (verifiedCommitService.ts's
+// the single source of truth for the prefixes the server actually mints for these five
+// redeemable kinds: "stage" and "unstage" (runtimeGitService.ts), "commit" (verifiedCommitService.ts's
 // VerifiedCommitService.propose()), and "push"/"pull-request" (both minted via
-// draftDeliveryId("delivery") in draftDeliveryFacts.ts) -- three prefixes for four kinds, not two.
+// draftDeliveryId("delivery") in draftDeliveryFacts.ts) -- four prefixes for five kinds.
 const GIT_EXECUTE_SCHEMA = {
   type: "object",
   properties: {
-    kind: { type: "string", enum: ["stage", "commit", "push", "pull-request"] },
+    kind: { type: "string", enum: ["stage", "unstage", "commit", "push", "pull-request"] },
     proposalId: {
       type: "string",
       minLength: 1,
@@ -562,7 +569,10 @@ export const OPENCODE_TOOL_SOURCE_DEFINITIONS = [
   {
     name: "keiko_git_stage",
     action: "git-stage",
-    arguments: { paths: GIT_STAGE_SCHEMA.properties.paths },
+    arguments: {
+      paths: GIT_STAGE_SCHEMA.properties.paths,
+      unstage: GIT_STAGE_SCHEMA.properties.unstage,
+    },
   },
   {
     name: "keiko_git_commit",

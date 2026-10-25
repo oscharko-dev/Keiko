@@ -1,6 +1,7 @@
 import type {
   CodingRuntimeGitResult,
   CodingRuntimeGitStage,
+  CodingRuntimeGitUnstage,
   CodingWorkbenchMode,
   CodingWorkbenchRuntimePendingApprovalReview,
   GitDeliveryApprovalRequirement,
@@ -15,7 +16,7 @@ import {
   readGitStageSupport,
   readGitRawWorktreeSnapshot,
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
-import type { GitStageCommand } from "@oscharko-dev/keiko-tools";
+import type { GitStageCommand, GitUnstageCommand } from "@oscharko-dev/keiko-tools";
 import { readVerifiedCommitFacts } from "./verifiedCommitFacts.js";
 import { mintProposalId } from "./proposalId.js";
 import type {
@@ -35,6 +36,7 @@ import {
 } from "./execution.js";
 import {
   admitStageSelection,
+  admitUnstageSelection,
   reviewStageSelection,
   runtimeGitDiff,
   runtimeGitStatus,
@@ -128,7 +130,15 @@ const RUNTIME_GIT_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["approval", "status", "diff", "stage-propose", "stage-execute"],
+      values: [
+        "approval",
+        "status",
+        "diff",
+        "stage-propose",
+        "stage-execute",
+        "unstage-propose",
+        "unstage-execute",
+      ],
     },
     runId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
     state: RUNTIME_GIT_STATE_FIELD,
@@ -151,7 +161,16 @@ const RUNTIME_GIT_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-type RuntimeGitPhase = "approval" | "status" | "diff" | "stage-propose" | "stage-execute";
+type RuntimeGitPhase =
+  | "approval"
+  | "status"
+  | "diff"
+  | "stage-propose"
+  | "stage-execute"
+  | "unstage-propose"
+  | "unstage-execute";
+/** A proposal's result: staging, or its inverse unstaging (#3902 AC2), on one lifecycle. */
+type IndexProposalResult = CodingRuntimeGitStage | CodingRuntimeGitUnstage;
 interface RuntimeGitActivityFields {
   readonly state:
     | CodingRuntimeGitStage["status"]
@@ -197,7 +216,7 @@ export interface RuntimeGitProposal {
   readonly runId: string;
   readonly expiresAtMs: number;
   readonly context: VerifiedCommitRunContext;
-  readonly command: GitStageCommand;
+  readonly command: GitStageCommand | GitUnstageCommand;
   readonly review: CodingWorkbenchRuntimePendingApprovalReview;
   readonly binding: GitDeliveryApprovalBinding;
 }
@@ -251,6 +270,38 @@ function buildStageProposal(
     worktreeDigest,
     verified: { ...facts, branchName: context.headRef, baseRef: context.baseRef },
   };
+  return assembleProposal(context, facts, command, review, nowMs, proposalId);
+}
+
+// An unstage proposal binds the same head, base and staged tree as a stage proposal: redeemed only
+// while the index it reviewed is the index it changes (#3902 AC2). The worktree is not its subject.
+function buildUnstageProposal(
+  context: VerifiedCommitRunContext,
+  facts: import("./verifiedCommitTypes.js").VerifiedCommitFacts,
+  paths: readonly string[],
+  review: StageSelectionReview,
+  nowMs: number,
+  proposalId: string,
+): RuntimeGitProposal {
+  return assembleProposal(
+    context,
+    facts,
+    { kind: "unstage", pathspecs: [...paths] },
+    review,
+    nowMs,
+    proposalId,
+  );
+}
+
+function assembleProposal(
+  context: VerifiedCommitRunContext,
+  facts: import("./verifiedCommitTypes.js").VerifiedCommitFacts,
+  command: GitStageCommand | GitUnstageCommand,
+  review: StageSelectionReview,
+  nowMs: number,
+  proposalId: string,
+): RuntimeGitProposal {
+  const paths = command.pathspecs;
   const binding: GitDeliveryApprovalBinding = {
     projectId: context.workspace.root,
     operation: "local-mutation",
@@ -284,7 +335,7 @@ function buildStageProposal(
 
 function resultEvidence(result: RuntimeGitOutcome): RuntimeGitActivityFields {
   if (result.kind === "refused") return { state: "refused", reason: result.reason };
-  if (result.kind === "stage")
+  if (result.kind === "stage" || result.kind === "unstage")
     return {
       state: result.status,
       reason: result.reason,
@@ -372,7 +423,9 @@ export class RuntimeGitService {
   ): Promise<RuntimeGitOutcome> {
     const request = snapshotRuntimeGitRequest(input);
     const phase: RuntimeGitPhase =
-      request.operation === "stage" ? `stage-${request.phase}` : request.operation;
+      request.operation === "stage" || request.operation === "unstage"
+        ? `${request.operation}-${request.phase}`
+        : request.operation;
     const context = this.guardedContext(guard, signal, phase);
     if (context === undefined) return REFUSED_AUTHORITY;
     try {
@@ -484,9 +537,11 @@ export class RuntimeGitService {
           request.paths,
         ),
       };
-    return request.phase === "propose"
+    if (request.phase === "execute")
+      return this.redeem(context, request.operation, request.proposalId, guard.stageApproval);
+    return request.operation === "stage"
       ? this.propose(context, request.paths)
-      : this.stage(context, request.proposalId, guard.stageApproval);
+      : this.proposeUnstage(context, request.paths);
   }
   private pruneExpired(): void {
     for (const [id, proposal] of this.proposals) {
@@ -502,7 +557,7 @@ export class RuntimeGitService {
   private async propose(
     context: VerifiedCommitRunContext,
     paths: readonly string[],
-  ): Promise<CodingRuntimeGitStage> {
+  ): Promise<IndexProposalResult> {
     this.pruneExpired();
     const proposalId = mintProposalId("stage");
     const refuse = (
@@ -544,20 +599,48 @@ export class RuntimeGitService {
       ? this.result(proposal, "approval-required", "approval-required")
       : this.result(proposal, "ready", "none");
   }
-  private async stage(
+  // #3902 AC2: unstaging gives a staged change back to the worktree. Admission is Git's own change
+  // list (only staged, unconflicted paths); the review counts the staged lines it gives back.
+  private async proposeUnstage(
     context: VerifiedCommitRunContext,
+    paths: readonly string[],
+  ): Promise<CodingRuntimeGitUnstage> {
+    this.pruneExpired();
+    const proposalId = mintProposalId("unstage");
+    const refuse = (reason: CodingRuntimeGitUnstage["reason"]): CodingRuntimeGitUnstage => ({
+      kind: "unstage",
+      proposalId,
+      status: "blocked",
+      reason,
+      pathCount: paths.length,
+    });
+    if (this.proposals.size >= MAX_OPEN_PROPOSALS) return refuse("proposal-limit");
+    const execution = this.options.execution ?? {};
+    const facts = await readVerifiedCommitFacts(context, execution);
+    const selection = await admitUnstageSelection(context, execution, paths);
+    if (selection === undefined) return refuse("selection-unreviewed");
+    const review = await reviewStageSelection(context, execution, selection, "staged");
+    const proposal = buildUnstageProposal(context, facts, paths, review, this.now(), proposalId);
+    this.proposals.set(proposalId, proposal);
+    const result =
+      this.options.mode() === "governed-assist"
+        ? this.result(proposal, "approval-required", "approval-required")
+        : this.result(proposal, "ready", "none");
+    return { ...result, kind: "unstage" };
+  }
+  private async redeem(
+    context: VerifiedCommitRunContext,
+    kind: "stage" | "unstage",
     id: string,
     lease: object | undefined,
   ): Promise<RuntimeGitOutcome> {
     const proposal = this.review(id);
     if (proposal === undefined) return { kind: "refused", reason: this.redemptionRefusal(id) };
+    if (proposal.command.kind !== kind) return { kind: "refused", reason: "proposal-unknown" };
     const consumed = this.consumeLease(lease);
-    if (
-      (lease !== undefined || this.options.mode() === "governed-assist") &&
-      consumed?.proposal !== proposal
-    )
+    if (!this.approvedFor(proposal, lease, consumed))
       return this.result(proposal, "blocked", "approval-invalid");
-    if (!(await this.stageCurrent(context, proposal)))
+    if (!(await this.indexCurrent(context, proposal)))
       return this.result(proposal, "drift", "candidate-drift");
     this.proposals.delete(id);
     this.options.invalidateVerification();
@@ -565,10 +648,20 @@ export class RuntimeGitService {
     // be redeemable twice), so a throwing effect carries it out with itself for the failure result
     // instead of being looked up in a map it has already left (CodeRabbit review, 2026-09-10).
     try {
-      return await this.mutateStage(context, proposal, consumed?.claim ?? { required: false });
+      return await this.mutateIndex(context, proposal, consumed?.claim ?? { required: false });
     } catch (error) {
       throw new StageEffectFailure(proposal, error);
     }
+  }
+  // A presented lease, and every redemption under Ask for approval, must carry this proposal's own
+  // approval.
+  private approvedFor(
+    proposal: RuntimeGitProposal,
+    lease: object | undefined,
+    consumed: { readonly proposal: RuntimeGitProposal } | undefined,
+  ): boolean {
+    if (lease === undefined && this.options.mode() !== "governed-assist") return true;
+    return consumed?.proposal === proposal;
   }
   // `review()` rejects an id it never held, one already redeemed or expired, and one whose run,
   // envelope or authority no longer match. Only the last is the model's authority; the rest are a
@@ -587,9 +680,23 @@ export class RuntimeGitService {
     this.leases.delete(lease);
     return consumed;
   }
-  private async stageCurrent(
+  // A stage proposal also binds the worktree bytes it stages; an unstage proposal only the index.
+  private async indexCurrent(
     context: VerifiedCommitRunContext,
     proposal: RuntimeGitProposal,
+  ): Promise<boolean> {
+    if (proposal.command.kind === "stage")
+      return this.stageCurrent(context, { ...proposal, command: proposal.command });
+    const current = await readVerifiedCommitFacts(context, this.options.execution ?? {});
+    return (
+      current.headSha === proposal.binding.headSha &&
+      current.baseSha === proposal.binding.baseSha &&
+      current.stagedTreeDigest === proposal.binding.stagedTreeDigest
+    );
+  }
+  private async stageCurrent(
+    context: VerifiedCommitRunContext,
+    proposal: RuntimeGitProposal & { readonly command: GitStageCommand },
   ): Promise<boolean> {
     const current = await readVerifiedCommitFacts(context, this.options.execution ?? {});
     const digest = await readGitStageCandidate(
@@ -605,11 +712,14 @@ export class RuntimeGitService {
       digest === proposal.command.worktreeDigest
     );
   }
-  private async mutateStage(
+  private async mutateIndex(
     context: VerifiedCommitRunContext,
     proposal: RuntimeGitProposal,
     claim: GitDeliveryApprovalRequirement,
-  ): Promise<CodingRuntimeGitStage> {
+  ): Promise<IndexProposalResult> {
+    // Unsaved editor bytes matter to what staging records, never to what unstaging gives back.
+    const buffersSettled = (): boolean =>
+      proposal.command.kind === "unstage" || context.buffersClean();
     const outcome = await executeGovernedMutation(
       proposal.command,
       claim,
@@ -618,7 +728,7 @@ export class RuntimeGitService {
       {
         ...this.options.execution,
         signal: context.signal,
-        beforeIndexUpdate: () => context.stillAuthorized() && context.buffersClean(),
+        beforeIndexUpdate: () => context.stillAuthorized() && buffersSettled(),
         snapshotReader: () =>
           readGitRawWorktreeSnapshot(runtimeGitReadDeps(context, this.options.execution ?? {})),
       },
@@ -637,9 +747,9 @@ export class RuntimeGitService {
     proposal: RuntimeGitProposal,
     status: CodingRuntimeGitStage["status"],
     reason: CodingRuntimeGitStage["reason"],
-  ): CodingRuntimeGitStage {
+  ): IndexProposalResult {
     return {
-      kind: "stage",
+      kind: proposal.command.kind,
       proposalId: proposal.proposalId,
       status,
       reason,

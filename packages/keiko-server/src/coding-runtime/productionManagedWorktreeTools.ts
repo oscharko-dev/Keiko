@@ -943,7 +943,10 @@ function requestStageReview(
   input: ProductionManagedWorktreeToolInput,
   result: import("@oscharko-dev/keiko-contracts").CodingRuntimeGitResult,
 ): void {
-  if (result.kind === "stage" && result.status === "approval-required")
+  if (
+    (result.kind === "stage" || result.kind === "unstage") &&
+    result.status === "approval-required"
+  )
     input.requestStageApproval?.(result.proposalId);
 }
 
@@ -954,8 +957,13 @@ async function releaseStageProposal(
 ): Promise<
   import("@oscharko-dev/keiko-contracts").CodingRuntimeGitResult | "declined" | undefined
 > {
-  if (result.kind !== "stage" || result.status !== "approval-required") return result;
+  if (
+    (result.kind !== "stage" && result.kind !== "unstage") ||
+    result.status !== "approval-required"
+  )
+    return result;
   requestStageReview(input, result);
+  const actionKind = result.kind === "stage" ? "git-stage" : "git-unstage";
   const service = input.runtimeGitService;
   if (service === undefined) return undefined;
   const outcome = await waitForRuntimeProposalApproval(
@@ -963,10 +971,10 @@ async function releaseStageProposal(
     result.proposalId,
     signal,
     (error) => {
-      recordProposalApprovalResolutionFailure(input, "git-stage", result.proposalId, error);
+      recordProposalApprovalResolutionFailure(input, actionKind, result.proposalId, error);
     },
   );
-  recordProposalApprovalWait(input, "git-stage", result.proposalId, outcome);
+  recordProposalApprovalWait(input, actionKind, result.proposalId, outcome);
   if (outcome === "denied") return "declined";
   return outcome === "approved" ? { ...result, status: "ready", reason: "none" } : undefined;
 }
@@ -1158,7 +1166,7 @@ function recordPolicyAuthorizedProposal(
 
 function recordProposalApprovalWait(
   input: ProductionManagedWorktreeToolInput,
-  actionKind: "git-stage" | "commit" | "push" | "pull-request",
+  actionKind: "git-stage" | "git-unstage" | "commit" | "push" | "pull-request",
   proposalId: string,
   outcome: ProposalApprovalWaitOutcome,
 ): void {
@@ -1190,7 +1198,7 @@ function recordProposalApprovalWait(
 
 export function recordProposalApprovalResolutionFailure(
   input: Pick<ProductionManagedWorktreeToolInput, "activityLog" | "authorityRef" | "diagnostics">,
-  actionKind: "git-stage" | "commit" | "push" | "pull-request",
+  actionKind: "git-stage" | "git-unstage" | "commit" | "push" | "pull-request",
   proposalId: string,
   error: unknown,
 ): void {

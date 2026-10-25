@@ -800,10 +800,19 @@ const STAGE_BLOCKED_GUIDANCE: Readonly<Record<string, string>> = {
     "Too many stage proposals are open. Redeem the ones you need with keiko_git_execute or let them expire before proposing again.",
 };
 
+// An unstage proposal is refused for its own reasons (#3902 AC2).
+const UNSTAGE_BLOCKED_GUIDANCE: Readonly<Record<string, string>> = {
+  "selection-unreviewed":
+    "At least one requested path has no staged change Git lists for this worktree: it is unstaged only, unchanged, absent, a directory, in conflict, or hidden behind a truncated change list. Read keiko_git_status and request exactly the file paths it lists as staged and not conflicted.",
+  "proposal-limit":
+    "Too many stage and unstage proposals are open. Redeem the ones you need with keiko_git_execute or let them expire before proposing again.",
+};
+
 function stageGuidance(result: CodingRuntimeGitResult): { readonly guidance?: string } {
+  const table = result.kind === "unstage" ? UNSTAGE_BLOCKED_GUIDANCE : STAGE_BLOCKED_GUIDANCE;
   const guidance =
-    result.kind === "stage" && result.status === "blocked"
-      ? STAGE_BLOCKED_GUIDANCE[result.reason]
+    (result.kind === "stage" || result.kind === "unstage") && result.status === "blocked"
+      ? table[result.reason]
       : undefined;
   return guidance === undefined ? {} : { guidance };
 }

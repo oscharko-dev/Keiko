@@ -164,9 +164,12 @@ All points are [R] unless tagged.
   ([operator-plugins][operator-plugins]).
 - **Delivery tools.** The generated plugin `keiko.native-delivery` registers Keiko's Git delivery
   tools and nothing else with the producer: the mapped profile's own tool source for
-  `keiko_git_status`, `keiko_git_diff`, `keiko_git_stage`, `keiko_git_commit`, `keiko_git_push`,
-  `keiko_pull_request`, `keiko_git_execute` and `keiko_ci_status`, plus `keiko_verification`, which
-  a commit proposal needs for its commit proof ([delivery-tools][delivery-tools]). They reach the
+  `keiko_git_status`, `keiko_git_diff`, `keiko_git_stage`, `keiko_git_commit`,
+  `keiko_git_push`, `keiko_pull_request`, `keiko_git_execute` and `keiko_ci_status`, plus
+  `keiko_verification`, which a commit proposal needs for its commit proof
+  ([delivery-tools][delivery-tools]). `keiko_git_stage` with `unstage: true` gives staged paths
+  back to the worktree through the same proposal and approval as staging, because the managed
+  worktree's index is read-only to the producer's own shell (#3902 AC2). They reach the
   same tool facade with the same capability, bounds and approvals as a mapped call; the producer
   evaluates no permission for them, so the policy hook adds no second approval.
 - **Live authority.** After the policy (and any human decision) allows an effect, the native-effect
@@ -223,8 +226,9 @@ All points are [R] unless tagged.
   keeps the run's bound revision; a deleted one refuses the dispatch (`skill-unavailable`). The
   body never leaves Keiko's dispatch path for a log: `coding-sidecar.gateway.skill-attached`
   records the revision, digest and sizes ([gateway][gateway]).
-- **Mapped profile (Linux, Windows).** The default direct profile advertises 18 tools: native
-  `question` plus 17 `keiko_*` tools ([advertised fixture][tools-fixture]). The Model Gateway
+- **Mapped profile (Linux, Windows).** The default direct profile advertises 19 tools: native
+  `question` plus 18 `keiko_*` tools ([advertised fixture][tools-fixture], captured from the
+  pinned 2.1.4 binary by `opencodeNativeQualification.real.test.ts`). The Model Gateway
   refuses a request that declares a different tool set (`tool-contract-drift`,
   [gateway][gateway]); on the native profile it forwards the runtime's own bounded advertisement as
   data (at most 128 admissible names, 64 KiB per schema, 512 KiB in all, [native-tools][native-tools]).
@@ -1480,7 +1484,7 @@ names are the stable facts. The opt-in real-binary suites run with `KEIKO_OPENCO
 [schemas]: ../../packages/keiko-server/src/coding-runtime/opencodeToolSchemas.ts
 [seatbelt-root]: ../../packages/keiko-sandbox/src/seatbelt-execution-root.ts
 [skill-catalog]: ../../packages/keiko-server/src/coding-runtime/skillCatalog.ts
-[tools-fixture]: ../../packages/keiko-server/src/coding-runtime/opencodeToolSchemas.opencode-2.0.10-advertised.fixture.json
+[tools-fixture]: ../../packages/keiko-server/src/coding-runtime/opencodeToolSchemas.opencode-2.1.4-direct-advertised.fixture.json
 [v2-client]: ../../packages/keiko-server/src/coding-runtime/opencodeV2HttpClient.ts
 [verify-detect]: ../../packages/keiko-verification/src/detect.ts
 [versions]: ../../packages/keiko-server/src/coding-runtime/opencodeRuntimeVersions.ts

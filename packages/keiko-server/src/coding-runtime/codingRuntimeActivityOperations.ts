@@ -27,6 +27,7 @@ export const CODING_RUNTIME_TOOL_RESULT_OPERATION = defineActivityLogOperation({
         "skill-discover",
         "child-agent",
         "git-stage",
+        "git-unstage",
         "commit",
         "push",
         "pull-request",

@@ -26,8 +26,9 @@ export function StageReviewDiagnostic({
   readonly fileCount: number;
 }): null {
   useEffect(() => {
-    if (kind !== "git-stage") return;
-    reportClientDiagnostic(`[keiko] git stage review ${status}: files ${String(fileCount)}`);
+    if (kind !== "git-stage" && kind !== "git-unstage") return;
+    const action = kind === "git-stage" ? "stage" : "unstage";
+    reportClientDiagnostic(`[keiko] git ${action} review ${status}: files ${String(fileCount)}`);
   }, [kind, status, fileCount]);
   return null;
 }
@@ -46,6 +47,7 @@ export function approvalReviewRequestId(
   switch (request?.actionKind) {
     case "file-edit":
     case "git-stage":
+    case "git-unstage":
     case "commit":
     case "push":
     case "pull-request":

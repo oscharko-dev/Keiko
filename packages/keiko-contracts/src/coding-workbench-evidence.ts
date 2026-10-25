@@ -93,8 +93,10 @@ export const APPROVED_EVIDENCE_SEGMENTS = new Set<string>([
   "decision",
   "script",
   "trust",
-  // Runtime Git stage labels carry only a closed operation name and decimal proposal id.
+  // Runtime Git stage and unstage labels carry only a closed operation name and decimal proposal
+  // id (#3902 AC2: `git-unstage`, `unstage-<n>`).
   "stage",
+  "unstage",
   "git",
   "accepted",
   "artifact",

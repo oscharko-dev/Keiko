@@ -593,9 +593,10 @@ function gitStageSpec(): OpenCodeToolSpec {
     canonicalId: "keiko.git.stage",
     alias: "keiko_git_stage",
     description:
-      "Create a non-mutating proposal to stage one or more workspace-relative paths. This call " +
-      "does not mutate the Git index. Execute staging before rerunning verification for commit " +
-      "proof." +
+      "Create a non-mutating proposal to stage one or more workspace-relative paths, or with " +
+      "unstage: true to give their staged changes back to the worktree, which keeps its bytes " +
+      "(request only paths keiko_git_status lists as staged). This call does not mutate the Git " +
+      "index. Execute staging before rerunning verification for commit proof." +
       PROPOSAL_EXECUTION_GUIDANCE,
     inputSchema: managedObjectSchema(
       {
@@ -605,8 +606,10 @@ function gitStageSpec(): OpenCodeToolSpec {
           maxItems: CODING_RUNTIME_GIT_MAX_PATHS,
           items: { type: "string", minLength: 1, maxLength: 512 },
         },
+        // #3902 AC2: unstaging is staging's inverse under the same proposal and approval.
+        unstage: { type: "boolean" },
       },
-      ["paths"],
+      ["paths", "unstage"],
     ),
     effects: ["workspace-write"],
     idempotency: "server-key-required",
@@ -674,14 +677,15 @@ function gitExecuteSpec(): OpenCodeToolSpec {
     canonicalId: "keiko.git.execute",
     alias: "keiko_git_execute",
     description:
-      "Execute a stage, commit, push or pull-request proposal using its matching kind and returned " +
+      "Execute a stage, unstage, commit, push or pull-request proposal using its matching kind and " +
+      "returned " +
       'proposalId when its status is ready or approvalDisposition: "ready" is present. The fresh ' +
       "disposition means approval has already been granted even if an immutable receipt still " +
       "says approval-required. Stage execution mutates the Git index and must complete before commit-grade " +
       "verification; proposal tools alone perform no Git mutation.",
     inputSchema: managedObjectSchema(
       {
-        kind: { type: "string", enum: ["stage", "commit", "push", "pull-request"] },
+        kind: { type: "string", enum: ["stage", "unstage", "commit", "push", "pull-request"] },
         proposalId: { type: "string", minLength: 1, maxLength: 64 },
       },
       ["kind", "proposalId"],

@@ -87,7 +87,8 @@ export interface ScriptState {
     | "research"
     | "lifecycle"
     | "lifecycle-continue"
-    | "probe";
+    | "probe"
+    | "index";
   calls: number;
   readonly old: string;
   readonly next: string;
@@ -808,11 +809,60 @@ function lifecycleResponse(script: ScriptState, transcript: string): NormalizedR
     : normal();
 }
 
-/** The modes that drive the runtime's own processes (#3899 AC2, #3901 AC3/AC4). */
+/** The modes that drive the runtime's own processes (#3899 AC2, #3901 AC3/AC4, #3902 AC2). */
 function processResponse(script: ScriptState, transcript: string): NormalizedResponse | undefined {
   if (script.mode === "lifecycle" || script.mode === "lifecycle-continue")
     return lifecycleResponse(script, transcript);
+  if (script.mode === "index") return indexResponse(transcript);
   return script.mode === "probe" ? probeResponse(script, transcript) : undefined;
+}
+
+/** The file an index journey changes, stages and gives back to the worktree. */
+export const FUNCTIONAL_INDEX_PATH = "src/example.ts";
+/** Printed by the agent's shell while the change is staged and once it is not. */
+export const FUNCTIONAL_INDEX_STAGED_MARKER = "index.staged=";
+export const FUNCTIONAL_INDEX_AFTER_MARKER = "index.after=";
+
+// The last proposal id of `prefix` the runtime returned to the model (`stage-<n>`, `unstage-<n>`),
+// read from a `proposalId` field only: a tool-call id such as `tool-keiko_git_stage-2` is not one.
+function lastProposalId(transcript: string, prefix: "stage" | "unstage"): string | undefined {
+  const ids = [...transcript.matchAll(/proposalId\\*":\\*"((?:un)?stage-\d{1,39})/gu)]
+    .map((match) => match[1])
+    .filter((id) => id?.startsWith(`${prefix}-`) === true);
+  return ids.at(-1);
+}
+
+// #3902 AC2: the original runtime changes a file with its own shell, stages it through Keiko's
+// proposal and redemption, reads the index with its own Git, gives the staged change back to the
+// worktree through `keiko_git_stage` with `unstage: true` and reads the index again. Each step answers the previous
+// tool result, as a model does.
+function indexResponse(transcript: string): NormalizedResponse {
+  if (transcript.includes(TITLE_GENERATION_PREFIX)) return normal();
+  const readIndex = (marker: string): NormalizedResponse =>
+    tool("shell", {
+      command: `printf '${marker}%s\\n' "$(git diff --cached --name-only | tr '\\n' ',')"`,
+    });
+  const steps: readonly (() => NormalizedResponse)[] = [
+    (): NormalizedResponse =>
+      tool("shell", { command: `printf 'staged by the agent\\n' >> ${FUNCTIONAL_INDEX_PATH}` }),
+    (): NormalizedResponse =>
+      tool("keiko_git_stage", { paths: [FUNCTIONAL_INDEX_PATH], unstage: false }),
+    (): NormalizedResponse =>
+      tool("keiko_git_execute", {
+        kind: "stage",
+        proposalId: lastProposalId(transcript, "stage") ?? "stage-0",
+      }),
+    (): NormalizedResponse => readIndex(FUNCTIONAL_INDEX_STAGED_MARKER),
+    (): NormalizedResponse =>
+      tool("keiko_git_stage", { paths: [FUNCTIONAL_INDEX_PATH], unstage: true }),
+    (): NormalizedResponse =>
+      tool("keiko_git_execute", {
+        kind: "unstage",
+        proposalId: lastProposalId(transcript, "unstage") ?? "unstage-0",
+      }),
+    (): NormalizedResponse => readIndex(FUNCTIONAL_INDEX_AFTER_MARKER),
+  ];
+  return steps[toolReplyCount(transcript)]?.() ?? normal();
 }
 
 // #3901 AC4: one shell command observes the boundary from inside the run; its output returns to
@@ -963,6 +1013,8 @@ function tool(
     | "keiko_skill_discover"
     | "keiko_skill"
     | "keiko_child_agent"
+    | "keiko_git_stage"
+    | "keiko_git_execute"
     | "question"
     | "shell",
   args: Record<string, unknown>,

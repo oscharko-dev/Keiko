@@ -2738,6 +2738,7 @@ const ACTION_KIND_MESSAGE_KEYS: Record<
 > = {
   "file-edit": "codingWorkbench.approval.actionKind.file-edit",
   "git-stage": "codingWorkbench.approval.actionKind.git-stage",
+  "git-unstage": "codingWorkbench.approval.actionKind.git-unstage",
   "verification-command": "codingWorkbench.approval.actionKind.verification-command",
   "ci-observe": "codingWorkbench.approval.actionKind.ci-observe",
   "connector-read": "codingWorkbench.approval.actionKind.connector-read",

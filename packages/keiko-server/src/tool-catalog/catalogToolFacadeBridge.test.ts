@@ -41,6 +41,7 @@ import { defaultServerDiagnosticSink } from "../diagnostics-log.js";
 import { type ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
   openCodeCatalogAliasFor,
+  openCodeCatalogSettlementBudgetMs,
   createCanonicalOpenCodeHandlerCoverage,
   createCanonicalCatalogFacadeBridge,
   type CanonicalCatalogContext,
@@ -834,6 +835,37 @@ describe("inactive Code Mode handler coverage", () => {
   });
 });
 
+// #3902 AC2: an unstage proposal waits for the operator's approval like a stage proposal, so the
+// tool bridge's deadline must come from the same catalog budget, not the 35 s default.
+it("gives an unstage proposal and its redemption the catalog budget of staging", () => {
+  const unstage = openCodeCatalogSettlementBudgetMs({
+    ...identity,
+    action: "git",
+    operation: "unstage",
+    phase: "propose",
+    paths: ["a.ts"],
+  });
+  expect(unstage).toBeDefined();
+  expect(unstage).toBe(
+    openCodeCatalogSettlementBudgetMs({
+      ...identity,
+      action: "git",
+      operation: "stage",
+      phase: "propose",
+      paths: ["a.ts"],
+    }),
+  );
+  expect(
+    openCodeCatalogSettlementBudgetMs({
+      ...identity,
+      action: "git",
+      operation: "unstage",
+      phase: "execute",
+      proposalId: "unstage-1",
+    }),
+  ).toBeDefined();
+});
+
 it("derives mapped aliases from the existing canonical request producer", () => {
   expect(openCodeCatalogAliasFor(discoverRequest)).toBe("keiko_workspace_discover");
   expect(
@@ -843,6 +875,25 @@ it("derives mapped aliases from the existing canonical request producer", () => 
       operation: "stage",
       phase: "execute",
       proposalId: "proposal",
+    }),
+  ).toBe("keiko_git_execute");
+  // #3902 AC2: an unstage proposal is keiko_git_stage with `unstage: true`, redeemed by kind.
+  expect(
+    openCodeCatalogAliasFor({
+      ...identity,
+      action: "git",
+      operation: "unstage",
+      phase: "propose",
+      paths: ["a.ts"],
+    }),
+  ).toBe("keiko_git_stage");
+  expect(
+    openCodeCatalogAliasFor({
+      ...identity,
+      action: "git",
+      operation: "unstage",
+      phase: "execute",
+      proposalId: "unstage-1",
     }),
   ).toBe("keiko_git_execute");
   expect(new Set(COVERED.map(openCodeCatalogAliasFor)).size).toBe(COVERED.length);

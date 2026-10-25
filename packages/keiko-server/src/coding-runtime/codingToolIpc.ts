@@ -258,7 +258,9 @@ export function codingToolRequiredActionClasses(
   if (request.operation === "ci")
     return Object.freeze(["workspace-read", "connector-access", "network-egress"]);
   const effect =
-    request.operation === "write" || request.operation === "stage"
+    request.operation === "write" ||
+    request.operation === "stage" ||
+    request.operation === "unstage"
       ? "workspace-write"
       : "workspace-read";
   return Object.freeze([effect]);

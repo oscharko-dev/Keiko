@@ -147,6 +147,7 @@ export const CODING_WORKBENCH_PERMISSION_REQUEST_KINDS: readonly CodingWorkbench
 export type CodingWorkbenchSupervisedActionKind =
   | "file-edit"
   | "git-stage"
+  | "git-unstage"
   | "verification-command"
   | "ci-observe"
   | "connector-read"
@@ -163,6 +164,7 @@ export const CODING_WORKBENCH_SUPERVISED_ACTION_KINDS: readonly CodingWorkbenchS
   Object.freeze([
     "file-edit",
     "git-stage",
+    "git-unstage",
     "verification-command",
     "ci-observe",
     "connector-read",
@@ -916,7 +918,8 @@ export function isCodingWorkbenchActionAllowedForMode(
 export function permissionKindForSupervisedCodingAction(
   actionKind: CodingWorkbenchSupervisedActionKind,
 ): CodingWorkbenchPermissionRequestKind {
-  if (actionKind === "file-edit" || actionKind === "git-stage") return "workspace-write";
+  if (actionKind === "file-edit" || actionKind === "git-stage" || actionKind === "git-unstage")
+    return "workspace-write";
   // ci-observe and connector-read carry the same bounded, non-mutating, single-command risk as
   // verification-command (3941816393) -- unlike research they must NOT map to "network-egress":
   // that kind couples the Workbench prompt to the research destination review channel
@@ -944,6 +947,7 @@ export function supervisedCodingActionRequiresApproval(
   return (
     actionKind !== "file-edit" &&
     actionKind !== "git-stage" &&
+    actionKind !== "git-unstage" &&
     actionKind !== "verification-command"
   );
 }

@@ -6149,6 +6149,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         values: [
           "file-edit",
           "git-stage",
+          "git-unstage",
           "verification-command",
           "ci-observe",
           "connector-read",
@@ -12698,6 +12699,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "skill-discover",
           "child-agent",
           "git-stage",
+          "git-unstage",
           "commit",
           "push",
           "pull-request",
@@ -24969,7 +24971,15 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["approval", "status", "diff", "stage-propose", "stage-execute"],
+        values: [
+          "approval",
+          "status",
+          "diff",
+          "stage-propose",
+          "stage-execute",
+          "unstage-propose",
+          "unstage-execute",
+        ],
       },
       runId: {
         type: "string",

@@ -74,7 +74,9 @@ function attemptKind(request: CodingToolActionRequest): CiRepairAttemptKind | un
   if (request.action === "edit" || request.action === "command") return "workspace-edit";
   if (request.action === "verification") return "verification";
   if (request.action === "delivery" && request.intent === "commit") return "commit";
-  return request.action === "git" && request.operation === "stage" && request.phase === "execute"
+  return request.action === "git" &&
+    (request.operation === "stage" || request.operation === "unstage") &&
+    request.phase === "execute"
     ? "workspace-edit"
     : undefined;
 }

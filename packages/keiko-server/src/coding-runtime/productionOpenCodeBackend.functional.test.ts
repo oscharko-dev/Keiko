@@ -71,6 +71,9 @@ import {
   productionDiscoveryBffDeps,
   FUNCTIONAL_ACTIVITY_ASSISTANT_PREFIX,
   FUNCTIONAL_ACTIVITY_TRUNCATED_TAIL,
+  FUNCTIONAL_INDEX_AFTER_MARKER,
+  FUNCTIONAL_INDEX_PATH,
+  FUNCTIONAL_INDEX_STAGED_MARKER,
   FUNCTIONAL_LIFECYCLE_BACKGROUND_COMMAND,
   FUNCTIONAL_LIFECYCLE_DETACHED_COMMAND,
   FUNCTIONAL_LIFECYCLE_FOREGROUND_COMMAND,
@@ -1543,3 +1546,82 @@ function probeFacts(transcripts: readonly string[]): Readonly<Record<string, str
   }
   return facts;
 }
+
+// #3902 AC2: Git as the original runtime uses it in the managed task worktree. It reads with its
+// own Git; the worktree's Git directory is read-only to it, so the index changes only through
+// Keiko's proposals and their redemption, unstaging included.
+const GIT_READ_PROBE_SCRIPT = `#!/bin/sh
+run() { name="$1"; shift; if "$@" >/dev/null 2>&1; then echo "git.$name=ok"; else echo "git.$name=refused"; fi; }
+printf 'changed\\n' >> src/example.ts
+run status git status --porcelain
+git diff --quiet -- src/example.ts >/dev/null 2>&1
+case $? in 0) echo git.diff=unchanged ;; 1) echo git.diff=changed ;; *) echo git.diff=refused ;; esac
+run log git log -1 --format=%H
+run show git show --stat HEAD
+run blame git blame -- src/example.ts
+run add git add -- src/example.ts
+run restore_staged git restore --staged -- src/example.ts
+echo git.done=1
+`;
+
+describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
+  "original OpenCode Git in the managed worktree (#3902 AC2)",
+  () => {
+    async function journey(
+      mode: "probe" | "index",
+      done: string,
+      probeCommand?: string,
+    ): Promise<{ readonly transcript: string; readonly workspace: string }> {
+      const fixture = await setupWorkspace(["bff-state", "ui-db", "task-workspaces"]);
+      writeFileSync(join(fixture.workspace, "gitprobe.sh"), GIT_READ_PROBE_SCRIPT, { mode: 0o755 });
+      fixture.script.mode = mode;
+      if (probeCommand !== undefined) fixture.script.probeCommand = probeCommand;
+      const transcripts: string[] = [];
+      const pipeline = await bootDiscoveryPipeline(fixture, (request) => {
+        transcripts.push(JSON.stringify(request.messages));
+      });
+      const runId = await startRun(pipeline, startBody(`git-${mode}`));
+      await vi.waitFor(
+        () => {
+          expect(transcripts.join("\n")).toContain(done);
+        },
+        { timeout: 120_000, interval: 200 },
+      );
+      await stopRun(pipeline.baseUrl, runId);
+      return { transcript: transcripts.join("\n"), workspace: fixture.workspace };
+    }
+
+    it("reads status, diff, log, show and blame with its own Git and cannot write the index", async () => {
+      const { transcript } = await journey("probe", "git.done=1", "sh ./gitprobe.sh 2>&1");
+      const facts = Object.fromEntries(
+        [...transcript.matchAll(/git\.([a-z_]+)=([a-z0-9]+)/gu)].map(
+          (match) => [match[1] ?? "", match[2] ?? ""] as const,
+        ),
+      );
+      expect(facts).toEqual({
+        status: "ok",
+        diff: "changed",
+        log: "ok",
+        show: "ok",
+        blame: "ok",
+        add: "refused",
+        restore_staged: "refused",
+        done: "1",
+      });
+    }, 240_000);
+
+    it("stages a change and gives it back to the worktree only through Keiko", async () => {
+      const { transcript, workspace } = await journey("index", FUNCTIONAL_INDEX_AFTER_MARKER);
+      // The agent's own Git saw the change staged after the stage redemption, and not after the
+      // unstage redemption; both redemptions succeeded.
+      expect(transcript).toContain(`${FUNCTIONAL_INDEX_STAGED_MARKER}${FUNCTIONAL_INDEX_PATH},`);
+      expect(transcript).toMatch(new RegExp(`${FUNCTIONAL_INDEX_AFTER_MARKER}(?:\\\\)+n`, "u"));
+      expect(transcript).toMatch(/(?<![a-z])stage-\d+\\*",\\*"status\\*":\\*"succeeded/u);
+      expect(transcript).toMatch(/unstage-\d+\\*",\\*"status\\*":\\*"succeeded/u);
+      // The worktree keeps the bytes; only the index gave them back.
+      expect(git(workspace, ["diff", "--cached", "--name-only"])).toBe("");
+      expect(git(workspace, ["diff", "--name-only"])).toBe(FUNCTIONAL_INDEX_PATH);
+      expect(readFile(join(workspace, FUNCTIONAL_INDEX_PATH))).toContain("staged by the agent");
+    }, 240_000);
+  },
+);

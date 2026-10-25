@@ -433,33 +433,29 @@ function finishAdmission(
 function finishStageAdmission(
   input: FinishAdmissionInput,
 ): ReturnType<CodingToolAuthorityPort["admit"]> | undefined {
-  const {
-    request,
-    trusted,
-    approvalProofVerifier,
-    authority,
-    context,
-    capability,
-    binding,
-    approvalMatched,
-  } = input;
-  if (
-    request.action === "git" &&
-    request.operation === "stage" &&
-    request.phase === "execute" &&
-    approvalMatched
-  ) {
-    const lease =
-      trusted.runId === undefined
-        ? undefined
-        : approvalProofVerifier?.consumeStage?.(trusted.runId, request.proposalId);
-    if (lease === undefined) return { ok: false, reason: "action-not-authorized" };
-    const admitted = guarded(authority, context, capability, request, binding, true);
-    return admitted.ok
-      ? { ...admitted, mutationGuard: { ...admitted.mutationGuard, stageApproval: lease } }
-      : admitted;
-  }
-  return undefined;
+  const { request, approvalMatched } = input;
+  if (!approvalMatched || request.action !== "git") return undefined;
+  // Staging and unstaging both change the index under the one stage approval kind (#3902 AC2).
+  if (request.operation !== "stage" && request.operation !== "unstage") return undefined;
+  if (request.phase !== "execute") return undefined;
+  return admitIndexRedemption(input, request.proposalId);
+}
+
+function admitIndexRedemption(
+  input: FinishAdmissionInput,
+  proposalId: string,
+): ReturnType<CodingToolAuthorityPort["admit"]> {
+  const { request, trusted, approvalProofVerifier, authority, context, capability, binding } =
+    input;
+  const lease =
+    trusted.runId === undefined
+      ? undefined
+      : approvalProofVerifier?.consumeStage?.(trusted.runId, proposalId);
+  if (lease === undefined) return { ok: false, reason: "action-not-authorized" };
+  const admitted = guarded(authority, context, capability, request, binding, true);
+  return admitted.ok
+    ? { ...admitted, mutationGuard: { ...admitted.mutationGuard, stageApproval: lease } }
+    : admitted;
 }
 
 function resolveDelegation(
@@ -828,7 +824,11 @@ function actionClassesAllowed(
   request: CodingToolActionRequest,
   approved: boolean,
 ): boolean {
-  if (request.action === "git" && request.operation === "stage" && approved)
+  if (
+    request.action === "git" &&
+    (request.operation === "stage" || request.operation === "unstage") &&
+    approved
+  )
     return hasClasses(envelope.authority.actionClasses, ["workspace-read"]);
   // Propose/reconcile plan a delivery without performing one yet, so they need only
   // workspace-read -- but a matched per-action approval on the EXECUTE phase is not a substitute
@@ -970,7 +970,10 @@ function runtimeGitPolicyAllowed(
     );
   if (request.operation === "read" || request.operation === "write")
     return gitPolicyAllowed(envelope, request.operation, approved);
-  if (request.operation === "stage" && request.phase === "execute")
+  if (
+    (request.operation === "stage" || request.operation === "unstage") &&
+    request.phase === "execute"
+  )
     return workspaceMediumRiskAllowed(envelope, approved);
   return true;
 }
@@ -1051,7 +1054,11 @@ function matchedStageApproval(
   request: CodingToolActionRequest,
   verifier: CodingToolApprovalProofVerifier | undefined,
 ): boolean | undefined {
-  if (request.action === "git" && request.operation === "stage" && request.phase === "execute")
+  if (
+    request.action === "git" &&
+    (request.operation === "stage" || request.operation === "unstage") &&
+    request.phase === "execute"
+  )
     return (
       context.runId !== undefined &&
       verifier?.matchesStage?.(context.runId, request.proposalId) === true

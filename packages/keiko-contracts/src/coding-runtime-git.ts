@@ -51,8 +51,19 @@ export interface CodingRuntimeGitStage {
   readonly reason: (typeof STAGE_STATUS_REASONS)[keyof typeof STAGE_STATUS_REASONS][number];
   readonly pathCount: number;
 }
+/**
+ * An unstage proposal's result (#3902 AC2): the same lifecycle as a stage proposal, for paths whose
+ * staged change the index gives back to the worktree. Its id carries its own prefix.
+ */
+export interface CodingRuntimeGitUnstage {
+  readonly kind: "unstage";
+  readonly proposalId: string;
+  readonly status: CodingRuntimeGitStage["status"];
+  readonly reason: CodingRuntimeGitStage["reason"];
+  readonly pathCount: number;
+}
 export type CodingRuntimeGitResult =
-  CodingRuntimeGitStatus | CodingRuntimeGitDiff | CodingRuntimeGitStage;
+  CodingRuntimeGitStatus | CodingRuntimeGitDiff | CodingRuntimeGitStage | CodingRuntimeGitUnstage;
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -114,11 +125,15 @@ function status(value: Record<string, unknown>): boolean {
     changes(value.changes)
   );
 }
-function stage(value: Record<string, unknown>): boolean {
+const PROPOSAL_ID: Readonly<Record<"stage" | "unstage", RegExp>> = {
+  stage: /^stage-\d{1,39}$/u,
+  unstage: /^unstage-\d{1,39}$/u,
+};
+function proposal(value: Record<string, unknown>, kind: "stage" | "unstage"): boolean {
   return (
     keys(value, ["kind", "proposalId", "status", "reason", "pathCount"]) &&
     typeof value.proposalId === "string" &&
-    /^stage-\d{1,39}$/u.test(value.proposalId) &&
+    PROPOSAL_ID[kind].test(value.proposalId) &&
     stageStatusReason(value.status, value.reason) &&
     typeof value.pathCount === "number" &&
     Number.isSafeInteger(value.pathCount) &&
@@ -140,7 +155,7 @@ export function isCodingRuntimeGitResult(value: unknown): value is CodingRuntime
     )
       return false;
     if (value.kind === "status") return status(value);
-    if (value.kind === "stage") return stage(value);
+    if (value.kind === "stage" || value.kind === "unstage") return proposal(value, value.kind);
     return (
       value.kind === "diff" &&
       keys(value, ["kind", "diff"]) &&
