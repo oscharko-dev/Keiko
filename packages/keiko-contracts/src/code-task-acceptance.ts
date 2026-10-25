@@ -1216,6 +1216,22 @@ function qualificationRequiredChecksFieldsAreValid(
   return valid;
 }
 
+function qualificationNumericFieldsAreValid(
+  errors: string[],
+  value: Record<string, unknown>,
+  fields: readonly string[],
+  path: string,
+): boolean {
+  let valid = true;
+  for (const field of fields) {
+    const amount = ownField(value, field);
+    if (typeof amount !== "number" || !Number.isSafeInteger(amount) || amount < 0) {
+      valid = addValidationError(errors, `${path}.${field} must be a non-negative safe integer`);
+    }
+  }
+  return valid;
+}
+
 function qualificationAuthorityObservationFieldsAreValid(
   errors: string[],
   value: unknown,
@@ -1225,12 +1241,9 @@ function qualificationAuthorityObservationFieldsAreValid(
   if (!isRecord(value)) return addValidationError(errors, `${path} must be an object`);
   valid =
     validateCodeTaskOwnKeys(errors, value, QUALIFICATION_AUTHORITY_OBSERVATION_KEYS, path) && valid;
-  for (const field of QUALIFICATION_AUTHORITY_COUNT_KEYS) {
-    const count = ownField(value, field);
-    if (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0) {
-      valid = addValidationError(errors, `${path}.${field} must be a non-negative safe integer`);
-    }
-  }
+  valid =
+    qualificationNumericFieldsAreValid(errors, value, QUALIFICATION_AUTHORITY_COUNT_KEYS, path) &&
+    valid;
   for (const field of ["requestedMode", "effectiveMode"] as const) {
     if (!isOneOf(ownField(value, field), QUALIFICATION_MODES)) {
       valid = addValidationError(errors, `${path}.${field} is invalid`);
@@ -1634,12 +1647,8 @@ function qualificationFlowSpendFieldsAreValid(
   let valid = true;
   if (!isRecord(value)) return addValidationError(errors, `${path} must be an object`);
   valid = validateCodeTaskOwnKeys(errors, value, QUALIFICATION_FLOW_SPEND_KEYS, path) && valid;
-  for (const field of QUALIFICATION_FLOW_SPEND_KEYS) {
-    const amount = ownField(value, field);
-    if (typeof amount !== "number" || !Number.isSafeInteger(amount) || amount < 0) {
-      valid = addValidationError(errors, `${path}.${field} must be a non-negative safe integer`);
-    }
-  }
+  valid =
+    qualificationNumericFieldsAreValid(errors, value, QUALIFICATION_FLOW_SPEND_KEYS, path) && valid;
   valid = qualificationFlowSpendBalanceFieldsAreValid(errors, value, path) && valid;
   return valid;
 }

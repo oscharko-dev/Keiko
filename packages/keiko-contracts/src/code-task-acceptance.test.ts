@@ -2897,3 +2897,253 @@ describe("own-field compatibility delegate observations", () => {
     });
   }
 });
+
+const NUMERIC_AUTHORITY_FIELDS = [
+  "approvalRequestCount",
+  "toolInvocationCount",
+  "effectStartedCount",
+  "completedToolCount",
+  "deniedToolCount",
+  "failedToolCount",
+  "otherToolCount",
+] as const;
+
+const NUMERIC_AUTHORITY_OBSERVATIONS = [
+  "approvalRequestCount",
+  "toolInvocationCount",
+  "effectStartedCount",
+  "completedToolCount",
+  "deniedToolCount",
+  "failedToolCount",
+  "otherToolCount",
+  "approvalRequestCount",
+  "effectStartedCount",
+  "toolInvocationCount",
+  "completedToolCount",
+  "deniedToolCount",
+  "failedToolCount",
+  "otherToolCount",
+  "approvalRequestCount",
+  "effectStartedCount",
+  "completedToolCount",
+  "toolInvocationCount",
+  "effectStartedCount",
+] as const;
+
+const NUMERIC_SPEND_FIELDS = [
+  "budgetNanoUsd",
+  "chargedDeltaNanoUsd",
+  "cumulativeChargedNanoUsd",
+  "remainingNanoUsd",
+] as const;
+
+const NUMERIC_SPEND_OBSERVATIONS = [
+  "budgetNanoUsd",
+  "chargedDeltaNanoUsd",
+  "cumulativeChargedNanoUsd",
+  "remainingNanoUsd",
+  "budgetNanoUsd",
+  "cumulativeChargedNanoUsd",
+  "remainingNanoUsd",
+] as const;
+
+describe("qualification numeric-field observation preservation", () => {
+  for (const surface of ["source", "public"]) {
+    const validate =
+      surface === "source" ? validateCodeTaskQualificationFlowArtifact : publicQualificationFlow;
+
+    it(`${surface} collects authority key errors before every malformed numeric member`, () => {
+      const flow = validQualificationFlow();
+      expect(
+        validate({
+          ...flow,
+          authorityObservation: {
+            ...flow.authorityObservation,
+            deniedToolCount: "invalid",
+            otherToolCount: false,
+            fixtureExtra: true,
+          },
+        }),
+      ).toEqual({
+        ok: false,
+        errors: [
+          "flowArtifact.authorityObservation.fixtureExtra is not allowed",
+          "flowArtifact.authorityObservation.deniedToolCount must be a non-negative safe integer",
+          "flowArtifact.authorityObservation.otherToolCount must be a non-negative safe integer",
+        ],
+      });
+    });
+
+    it(`${surface} collects spend key errors before every malformed numeric member`, () => {
+      const flow = validQualificationFlow();
+      expect(
+        validate({
+          ...flow,
+          spend: {
+            ...flow.spend,
+            budgetNanoUsd: "invalid",
+            chargedDeltaNanoUsd: -1,
+            cumulativeChargedNanoUsd: 0.5,
+            remainingNanoUsd: false,
+            fixtureExtra: true,
+          },
+        }),
+      ).toEqual({
+        ok: false,
+        errors: [
+          "flowArtifact.spend.fixtureExtra is not allowed",
+          "flowArtifact.spend.budgetNanoUsd must be a non-negative safe integer",
+          "flowArtifact.spend.chargedDeltaNanoUsd must be a non-negative safe integer",
+          "flowArtifact.spend.cumulativeChargedNanoUsd must be a non-negative safe integer",
+          "flowArtifact.spend.remainingNanoUsd must be a non-negative safe integer",
+        ],
+      });
+    });
+
+    it(`${surface} continues authority reads after refusal and propagates the middle getter error`, () => {
+      const flow = validQualificationFlow();
+      const failure = new TypeError("opaque authority count inspection");
+      const trace: string[] = [];
+      const authorityObservation = {
+        ...flow.authorityObservation,
+        get approvalRequestCount(): string {
+          trace.push("approvalRequestCount");
+          return "invalid";
+        },
+        get toolInvocationCount(): number {
+          trace.push("toolInvocationCount");
+          return 4;
+        },
+        get effectStartedCount(): never {
+          trace.push("effectStartedCount");
+          throw failure;
+        },
+        get completedToolCount(): never {
+          throw new TypeError("later count must remain unread");
+        },
+      };
+      let observed: unknown;
+      try {
+        validate({ ...flow, authorityObservation });
+      } catch (error) {
+        observed = error;
+      }
+      expect(observed).toBe(failure);
+      expect(trace).toEqual(["approvalRequestCount", "toolInvocationCount", "effectStartedCount"]);
+    });
+
+    it(`${surface} continues spend reads after refusal and propagates the middle getter error`, () => {
+      const flow = validQualificationFlow();
+      const failure = new TypeError("opaque spend amount inspection");
+      const trace: string[] = [];
+      const spend = {
+        ...flow.spend,
+        get budgetNanoUsd(): string {
+          trace.push("budgetNanoUsd");
+          return "invalid";
+        },
+        get chargedDeltaNanoUsd(): number {
+          trace.push("chargedDeltaNanoUsd");
+          return flow.spend.chargedDeltaNanoUsd;
+        },
+        get cumulativeChargedNanoUsd(): never {
+          trace.push("cumulativeChargedNanoUsd");
+          throw failure;
+        },
+        get remainingNanoUsd(): never {
+          throw new TypeError("later spend must remain unread");
+        },
+      };
+      let observed: unknown;
+      try {
+        validate({ ...flow, spend });
+      } catch (error) {
+        observed = error;
+      }
+      expect(observed).toBe(failure);
+      expect(trace).toEqual(["budgetNanoUsd", "chargedDeltaNanoUsd", "cumulativeChargedNanoUsd"]);
+    });
+
+    it(`${surface} retains healthy authority identity and all later accounting reads`, () => {
+      const flow = validQualificationFlow();
+      const trace: string[] = [];
+      const authorityObservation = { ...flow.authorityObservation };
+      for (const field of NUMERIC_AUTHORITY_FIELDS) {
+        const count = authorityObservation[field];
+        Object.defineProperty(authorityObservation, field, {
+          enumerable: true,
+          get: (): number => {
+            trace.push(field);
+            return count;
+          },
+        });
+      }
+      const input = { ...flow, authorityObservation };
+      const result = validate(input);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new TypeError("healthy numeric authority fixture refused");
+      expect(result.value).toBe(input);
+      expect(result.value.authorityObservation).toBe(authorityObservation);
+      expect(trace).toEqual(NUMERIC_AUTHORITY_OBSERVATIONS);
+    });
+
+    it(`${surface} retains healthy spend identity and later ordered balance reads`, () => {
+      const flow = validQualificationFlow();
+      const trace: string[] = [];
+      const spend = { ...flow.spend };
+      for (const field of NUMERIC_SPEND_FIELDS) {
+        const amount = spend[field];
+        Object.defineProperty(spend, field, {
+          enumerable: true,
+          get: (): number => {
+            trace.push(field);
+            return amount;
+          },
+        });
+      }
+      const input = { ...flow, spend };
+      const result = validate(input);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new TypeError("healthy numeric spend fixture refused");
+      expect(result.value).toBe(input);
+      expect(result.value.spend).toBe(spend);
+      expect(trace).toEqual(NUMERIC_SPEND_OBSERVATIONS);
+    });
+
+    it(`${surface} still checks authority accounting after numeric refusal`, () => {
+      const flow = validQualificationFlow();
+      expect(
+        validate({
+          ...flow,
+          authorityObservation: { ...flow.authorityObservation, approvalRequestCount: "invalid" },
+        }),
+      ).toEqual({
+        ok: false,
+        errors: [
+          "flowArtifact.authorityObservation.approvalRequestCount must be a non-negative safe integer",
+          "flowArtifact.authorityObservation.approvalRequests must account for approvalRequestCount",
+        ],
+      });
+    });
+
+    it(`${surface} still checks spend balance after numeric refusal`, () => {
+      const flow = validQualificationFlow();
+      expect(
+        validate({
+          ...flow,
+          spend: {
+            ...flow.spend,
+            chargedDeltaNanoUsd: "invalid",
+            remainingNanoUsd: flow.spend.remainingNanoUsd + 1,
+          },
+        }),
+      ).toEqual({
+        ok: false,
+        errors: [
+          "flowArtifact.spend.chargedDeltaNanoUsd must be a non-negative safe integer",
+          "flowArtifact.spend cumulative charge plus remaining amount must equal budget",
+        ],
+      });
+    });
+  }
+});
