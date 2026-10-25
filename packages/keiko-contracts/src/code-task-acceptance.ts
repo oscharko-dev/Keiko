@@ -1,7 +1,6 @@
 import {
   hasInheritedEnumerableProperty as recordHasInheritedEnumerableProperty,
   isCodeTaskRecord as isRecord,
-  ownField as readCodeTaskOwnField,
   validateCodeTaskTaggedFact,
   validateCodeTaskOwnKeys,
 } from "./code-task-record-validation.js";
@@ -301,9 +300,8 @@ export function hasInheritedEnumerableProperty(record: Record<string, unknown>):
 // there is no descriptor shape left to exploit. Returns unknown, matching how a fresh property read
 // off Record<string, unknown> already behaved before this change -- callers narrow it exactly as
 // they narrowed `value.someField` before.
-// Compatibility delegate: retain this public signature and the raw own-field observation contract.
 export function ownField(record: Record<string, unknown>, key: string): unknown {
-  return readCodeTaskOwnField(record, key);
+  return Object.hasOwn(record, key) ? record[key] : undefined;
 }
 
 function knownFactFieldsAreValid(

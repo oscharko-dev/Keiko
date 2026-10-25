@@ -38,12 +38,6 @@ export function hasInheritedEnumerableProperty(record: Record<string, unknown>):
   return false;
 }
 
-// Own-field reads never resolve inherited values, regardless of descriptor shape or pollution.
-// The public acceptance function preserves its signature as a delegate to this implementation.
-export function ownField(record: Record<string, unknown>, key: string): unknown {
-  return Object.hasOwn(record, key) ? record[key] : undefined;
-}
-
 function addValidationError(errors: string[], message: string): false {
   errors.push(message);
   return false;
@@ -66,7 +60,7 @@ export function validateCodeTaskTaggedFact(
       `${path} must not resolve any field through its prototype chain`,
     );
   }
-  const outcome = ownField(value, "outcome");
+  const outcome = Object.hasOwn(value, "outcome") ? value.outcome : undefined;
   if (outcome === "known") return validateKnown(value);
   if (outcome === "unknown" || outcome === "unavailable" || outcome === "absent") {
     // KfQ 3789542365: this used to return early on an own "value" field, so unknownKeys never ran

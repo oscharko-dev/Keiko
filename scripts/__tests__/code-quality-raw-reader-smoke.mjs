@@ -38,6 +38,23 @@ function actualRawReaderAssertions() {
   return names.map((testName) => ({ path: ACTUAL_RAW_READER_PROOF, testName }));
 }
 
+function assertActualRawReaderPublicSelection(record) {
+  const specifier = "@oscharko-dev/keiko-contracts/runtime/code-task-acceptance";
+  for (const [role, exportName] of [
+    ["input", "ownField"],
+    ["transform", "ownField"],
+    ["output", "validateCodeTaskAcceptanceContribution"],
+    ["consumer", "rawReaderAcceptanceWitness"],
+  ]) {
+    assert.equal(record[role].consumerPath, ACTUAL_RAW_READER_PROOF);
+    assert.equal(record[role].specifier, specifier);
+    assert.equal(record[role].exportName, exportName);
+  }
+  assert.equal(record.input.parameterIndex, 0);
+  assert.equal(record.consumer.kind, "public-api-proof");
+  assert.equal(record.consumer.owner, "@oscharko-dev/keiko-contracts");
+}
+
 async function actualRawReaderSubject() {
   const { fileURLToPath } = await import("node:url");
   const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -48,6 +65,7 @@ async function actualRawReaderSubject() {
   assert.equal(matches.length, 1);
   const [record] = matches;
   assert.equal(record.kind, "raw-own-property-reader");
+  assertActualRawReaderPublicSelection(record);
   assert.deepEqual(record.rules, [ACTUAL_RAW_READER_RULE]);
   assert.deepEqual(record.proofAssertions, actualRawReaderAssertions());
   const policy = current;
@@ -66,8 +84,38 @@ async function actualRawReaderSubject() {
   return { root, current, policy, record, subject, file };
 }
 
-async function actualRawReaderCensus(own) {
+function actualRawReaderCanonicalSlot(own, pending) {
+  const reader = pending.assessments.find((entry) => entry.id === own.record.id);
+  assert.equal(reader?.structural, "ready");
+  assert.equal(reader.semantic, "pending");
+  assert.equal(reader.consumerBinding.readerWitness.bound, true);
+  assert.equal(reader.roles.input.identities.length, 1);
+  assert.deepEqual(reader.roles.input.identities, reader.roles.transform.identities);
+  const [identity] = reader.roles.input.identities;
+  assert.equal(identity.owner, "@oscharko-dev/keiko-contracts");
+  assert.deepEqual(identity.entry, {
+    specifier: own.record.input.specifier,
+    exportName: "ownField",
+  });
+  assert.equal(identity.producer.path, ACTUAL_RAW_READER_SOURCE);
+  assert.equal(identity.producer.kind, "FunctionDeclaration");
+  assert.equal(reader.roles.input.signatures.length, 1);
+  assert.equal(reader.roles.input.signatures[0].parameters.length, 2);
+  assert.equal(reader.roles.input.signatures[0].result.kind, "unknown");
+  assert.equal(reader.slots.length, 1);
+  const [slot] = reader.slots;
+  assert.equal(slot.path, ACTUAL_RAW_READER_SOURCE);
+  assert.equal(slot.rule, ACTUAL_RAW_READER_RULE);
+  assert.equal(slot.kind, "return");
+  assert.equal(slot.type.kind, "unknown");
+  assert.ok(slot.start >= identity.producer.start && slot.end <= identity.producer.end);
+  return slot;
+}
+
+async function actualRawReaderCensus(own, pending) {
   const { runNativePolicy } = await import("../lib/code-quality-runner.mjs");
+  const slot = actualRawReaderCanonicalSlot(own, pending);
+  assert.equal(own.file.path, slot.path);
   const scan = runNativePolicy(own.root, [own.file]);
   assert.equal(scan.visited, 1);
   const returns = scan.diagnostics.filter((finding) => finding.rule === ACTUAL_RAW_READER_RULE);
@@ -75,8 +123,8 @@ async function actualRawReaderCensus(own) {
   assert.deepEqual(returns[0], {
     path: ACTUAL_RAW_READER_SOURCE,
     rule: ACTUAL_RAW_READER_RULE,
-    line: 274,
-    column: 73,
+    line: slot.line,
+    column: slot.column,
   });
   return scan;
 }
@@ -124,7 +172,8 @@ async function assertActualRawReaderQualified(own, scan, qualified, adapt) {
     scan.diagnostics.filter((finding) => finding.rule !== ACTUAL_RAW_READER_RULE),
   );
   const fresh = { ...own, subject: await collectPolicySubject(own.root) };
-  const after = await actualRawReaderCensus(fresh);
+  const again = assessPolicyResponsibilities(fresh.subject, rawReaderStaticPolicy(own));
+  const after = await actualRawReaderCensus(fresh, again);
   assert.equal(after.configSha256, scan.configSha256);
   assert.deepEqual(after.diagnostics, scan.diagnostics);
   assert.deepEqual(fresh.subject.inventory, own.subject.inventory);
@@ -132,7 +181,6 @@ async function assertActualRawReaderQualified(own, scan, qualified, adapt) {
     readFileSync(join(own.root, "scripts/code-quality-policy.json"), "utf8"),
   );
   assert.deepEqual(reread, own.current);
-  const again = assessPolicyResponsibilities(fresh.subject, rawReaderStaticPolicy(own));
   assertActualRawReaderPending(fresh, after, again, adapt);
 }
 
@@ -150,8 +198,8 @@ test(
     const { adaptResponsibilityDiagnostics, qualifyPolicyResponsibilities } =
       await import("../lib/code-quality-responsibilities.mjs");
     const own = await actualRawReaderSubject();
-    const scan = await actualRawReaderCensus(own);
     const pending = assessPolicyResponsibilities(own.subject, rawReaderStaticPolicy(own));
+    const scan = await actualRawReaderCensus(own, pending);
     assertActualRawReaderPending(own, scan, pending, adaptResponsibilityDiagnostics);
     const qualified = await qualifyPolicyResponsibilities(own.subject, rawReaderStaticPolicy(own));
     await assertActualRawReaderQualified(own, scan, qualified, adaptResponsibilityDiagnostics);
