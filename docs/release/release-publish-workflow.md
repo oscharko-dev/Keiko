@@ -272,8 +272,9 @@ those runtimes change.
 
 The product publisher is root-only. It does not publish
 `@oscharko-dev/keiko-coding-runtime-darwin-arm64` or `-darwin-x64`, and the portable asset build
-does not publish them either. Keep the root manifest and lockfile on the existing public runtime
-versions until both replacement packages have been published and verified.
+does not publish them either. They have their own publisher, `coding-runtime-publish.yml`, below.
+Keep the root manifest and lockfile on the existing public runtime versions until both replacement
+packages have been published and verified.
 
 Use `scripts/build-coding-runtime-npm-package.mjs` to build the approved payload, native helper and
 the pinned ripgrep (#3897, #4064) into an empty absolute package directory. The build provisions the
@@ -315,14 +316,43 @@ Publication order is explicit:
 1. Qualify the private native candidates with the staged product, including a bounded read beyond
    64 KiB, the existing `init` → project start script → authenticated browser journey, cold model
    discovery and reload. Keep the approved 1.1.3 helper compatibility path.
-2. An authorized release owner publishes both exact native tarballs through the existing governed
-   npm credential path. Verify each public version and download's integrity against its receipt.
-   Native-package publishing credentials or Trusted Publisher bindings must cover those package
-   names; the root package's binding alone does not establish that authorization.
+2. Publish both exact native tarballs through npm Trusted Publishing (#3898 AC8), as described in
+   "Publishing the npm coding-runtime packages" below. The root package's binding does not cover
+   these package names; each has its own binding to `coding-runtime-publish.yml`.
 3. Only then change both optional dependency pins and `package-lock.json` together. Run the
    assembled npm and Yarn installation qualification against the resulting product and native
    artifacts, then publish the corrected product under a new unpublished version through the
    existing release workflow. A published product version cannot be replaced.
+
+### Publishing the npm coding-runtime packages
+
+`.github/workflows/coding-runtime-publish.yml` publishes the runtime packages the way `release.yml`
+publishes the product: through npm Trusted Publishing with provenance, without a registry token. It
+publishes only reviewed bytes.
+
+1. Pin the release. A reviewed change adds the version to
+   `docs/release/coding-runtime-npm-packages.json`: for each target, the package name, the tarball
+   name, its size, SHA-256 and npm integrity, all from the `--pack` receipt. Only a change merged to
+   `dev` extends this file.
+2. Attach the bytes. Create the GitHub prerelease `coding-runtime-<version>` (never marked latest)
+   and upload both tarballs and their receipts, each receipt renamed to `<tarball>.receipt.json`.
+   The prerelease is a transport only and grants no trust.
+3. Bind each package to the workflow once. The package owner runs, logged in to npm:
+
+   ```sh
+   npm trust github @oscharko-dev/keiko-coding-runtime-darwin-arm64 --file coding-runtime-publish.yml --repo oscharko-dev/Keiko --env npm-runtime-publish --allow-publish
+   npm trust github @oscharko-dev/keiko-coding-runtime-darwin-x64 --file coding-runtime-publish.yml --repo oscharko-dev/Keiko --env npm-runtime-publish --allow-publish
+   ```
+
+   The `npm-runtime-publish` environment admits `dev` only and holds no secret.
+
+4. Run the workflow. An owner in `KEIKO_RELEASE_OWNER_GITHUB_LOGINS` runs "Coding runtime packages"
+   on `dev` with the version. `scripts/publish-coding-runtime-npm-packages.mjs` refuses to run
+   without OIDC. It checks each downloaded tarball against its pin, extracts it, and verifies it
+   again with the builder's `--verify` against the approvals compiled into that commit; nothing is
+   published unless every target passes. It accepts a version npm already holds only with the
+   pinned integrity, so a re-run is idempotent and a foreign upload fails. After publishing, it
+   waits until npm serves the pinned integrity.
 
 A runtime package published before the ripgrep amendment carries no `rg`: it stays active, search
 reports `missing` on `coding-runtime.ripgrep.resolved`, and a clean npm installation only gains

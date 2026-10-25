@@ -69,3 +69,6 @@ rules:
       # later reads that lockfile. The version is pinned exactly (not @latest), which is the
       # practical mitigation for this specific operation (see the inline comment there).
       - release.yml:204
+      # The runtime-package publisher (#3898 AC8) uses the same exact npm for the same reason: OIDC
+      # trusted publishing needs it, and it changes the binary that later reads the lockfile.
+      - coding-runtime-publish.yml:61
