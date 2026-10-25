@@ -13,7 +13,7 @@
 // shape is content-free by construction: enums, counts, identifiers, hashes, and durations — no
 // field can hold an issue/page body, comment text, raw JQL, token, or URL.
 
-import { isRecord } from "./contract-validation-primitives.js";
+import { isOneOf, isRecord } from "./contract-validation-primitives.js";
 import {
   codingWorkbenchPolicyEffectFor,
   decideCodingWorkbenchActionForMode,
@@ -1305,11 +1305,6 @@ export interface AtlassianConnectorPodSource {
 }
 
 // ─── Enum guards ───────────────────────────────────────────────────────────────
-function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value is T {
-  const values: readonly string[] = allowed;
-  return typeof value === "string" && values.includes(value);
-}
-
 export function isAtlassianConnectorProvider(value: unknown): value is AtlassianConnectorProvider {
   return isOneOf(value, ATLASSIAN_CONNECTOR_PROVIDERS);
 }

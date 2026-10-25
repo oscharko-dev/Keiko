@@ -1,3 +1,4 @@
+import { isOneOf } from "./contract-validation-primitives.js";
 import { deepFreeze } from "./deep-freeze.js";
 import type { VerificationKind } from "./verification.js";
 import type { GatewayVerificationState } from "./gateway-verification.js";
@@ -759,11 +760,6 @@ export interface CodingWorkbenchValidationFail {
 
 export type CodingWorkbenchValidationResult<T> =
   CodingWorkbenchValidationOk<T> | CodingWorkbenchValidationFail;
-
-function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value is T {
-  const values: readonly string[] = allowed;
-  return typeof value === "string" && values.includes(value);
-}
 
 export function isCodingWorkbenchMode(value: unknown): value is CodingWorkbenchMode {
   return isOneOf(value, CODING_WORKBENCH_MODES);
