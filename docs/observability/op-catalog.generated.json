@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "6ac4c89f3ab0020c61ee3ae5374443393cedb73e2b10fb84f7e1a91b7a2345a2",
+    "catalogDigest": "179a84b72844aa680eb515e795ea700312a5a97dc5aed95681d705abdc147d54",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -12698,7 +12698,7 @@
           "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1967",
           "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2058",
           "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2186",
-          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2326"
+          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2341"
         ]
       },
       {
@@ -14719,7 +14719,7 @@
         "proofIds": ["editor.verification.dependencies.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/editor/verificationRunner.ts:196",
-        "emitterSites": ["packages/keiko-server/src/editor/verificationRunner.ts:820"]
+        "emitterSites": ["packages/keiko-server/src/editor/verificationRunner.ts:829"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -15048,9 +15048,9 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/editor/verificationRunner.ts:89",
         "emitterSites": [
-          "packages/keiko-server/src/editor/verificationRunner.ts:797",
-          "packages/keiko-server/src/editor/verificationRunner.ts:862",
-          "packages/keiko-server/src/editor/verificationRunner.ts:892"
+          "packages/keiko-server/src/editor/verificationRunner.ts:806",
+          "packages/keiko-server/src/editor/verificationRunner.ts:871",
+          "packages/keiko-server/src/editor/verificationRunner.ts:901"
         ]
       },
       {
@@ -98168,7 +98168,7 @@
     {
       "op": "coding-runtime.accepted-initialization",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2780",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2795",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -98873,7 +98873,7 @@
     {
       "op": "coding-runtime.verification",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2376",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2391",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -99177,21 +99177,21 @@
     },
     {
       "op": "editor.verification.execute",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/verificationRunner.ts:1007",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "editor.verification.execute",
       "category": "process",
       "site": "packages/keiko-server/src/editor/verificationRunner.ts:92",
       "package": "keiko-server"
     },
     {
-      "op": "editor.verification.execute",
-      "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/verificationRunner.ts:998",
-      "sourceKind": "diagnostic-operation",
-      "package": "keiko-server"
-    },
-    {
       "op": "editor.verification.subscriber",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/verificationRunner.ts:1204",
+      "site": "packages/keiko-server/src/editor/verificationRunner.ts:1213",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -101025,7 +101025,7 @@
     {
       "op": "verification.dependency-bootstrap",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/verificationExecution.ts:222",
+      "site": "packages/keiko-server/src/editor/verificationExecution.ts:225",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -101039,7 +101039,7 @@
     {
       "op": "verification.targeted-project",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/verificationExecution.ts:239",
+      "site": "packages/keiko-server/src/editor/verificationExecution.ts:242",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

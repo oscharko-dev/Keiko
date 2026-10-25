@@ -2534,7 +2534,7 @@ function publishNativeVerification(
   const failedCount = result.passed ? 0 : 1;
   const event: CodingWorkbenchRuntimeEvent = {
     schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
-    eventId: `event-native-verification-${String(sequence)}`,
+    eventId: `event-runtime-verification-${String(sequence)}`,
     runId: input.authorityRef.runId,
     occurredAt: new Date().toISOString(),
     kind: "verification-summarized",
