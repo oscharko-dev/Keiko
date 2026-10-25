@@ -192,6 +192,24 @@ function addValidationError(errors: string[], message: string): false {
   return false;
 }
 
+function acceptanceMembersAreValid(
+  errors: string[],
+  entries: readonly unknown[],
+  path: string,
+  validateMember: (member: unknown, index: number) => boolean,
+): boolean {
+  const length = entries.length;
+  let valid = true;
+  for (let index = 0; index < length; index += 1) {
+    if (!(index in entries)) {
+      return addValidationError(errors, `${path}[${String(index)}] must be an object`);
+    }
+    const member: unknown = entries[index];
+    valid = validateMember(member, index) && valid;
+  }
+  return valid;
+}
+
 function isPositiveInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
@@ -492,15 +510,10 @@ function contributionSalvageFieldsAreValid(
   const salvage = ownField(value, "salvage");
   if (Array.isArray(salvage)) {
     const entries: readonly unknown[] = salvage;
-    const length = entries.length;
-    for (let index = 0; index < length; index += 1) {
-      if (!(index in entries)) {
-        valid = addValidationError(errors, `salvage[${String(index)}] must be an object`);
-        break;
-      }
-      const row: unknown = entries[index];
-      valid = salvageFieldsAreValid(errors, row, `salvage[${String(index)}]`) && valid;
-    }
+    valid =
+      acceptanceMembersAreValid(errors, entries, "salvage", (row, index): boolean =>
+        salvageFieldsAreValid(errors, row, `salvage[${String(index)}]`),
+      ) && valid;
   } else {
     valid = addValidationError(errors, "salvage must be an array");
   }
@@ -513,15 +526,10 @@ function contributionBodyFieldsAreValid(errors: string[], value: Record<string, 
   const scenarios = ownField(value, "scenarios");
   if (Array.isArray(scenarios)) {
     const entries: readonly unknown[] = scenarios;
-    const length = entries.length;
-    for (let index = 0; index < length; index += 1) {
-      if (!(index in entries)) {
-        valid = addValidationError(errors, `scenarios[${String(index)}] must be an object`);
-        break;
-      }
-      const scenario: unknown = entries[index];
-      valid = scenarioFieldsAreValid(errors, scenario, `scenarios[${String(index)}]`) && valid;
-    }
+    valid =
+      acceptanceMembersAreValid(errors, entries, "scenarios", (scenario, index): boolean =>
+        scenarioFieldsAreValid(errors, scenario, `scenarios[${String(index)}]`),
+      ) && valid;
   } else {
     valid = addValidationError(errors, "scenarios must be an array");
   }
@@ -1269,18 +1277,14 @@ function qualificationApprovalRequestFieldsAreValid(
     return addValidationError(errors, `${path}.approvalRequests must be an array`);
 
   const entries: readonly unknown[] = requests;
-  const length = entries.length;
-  for (let index = 0; index < length; index += 1) {
-    if (!(index in entries)) {
-      valid = addValidationError(
-        errors,
-        `${path}.approvalRequests[${String(index)}] must be an object`,
-      );
-      break;
-    }
-    const request: unknown = entries[index];
-    valid = qualificationApprovalRequestMemberFieldsAreValid(errors, request, index, path) && valid;
-  }
+  valid =
+    acceptanceMembersAreValid(
+      errors,
+      entries,
+      `${path}.approvalRequests`,
+      (request, index): boolean =>
+        qualificationApprovalRequestMemberFieldsAreValid(errors, request, index, path),
+    ) && valid;
   if (hasDuplicateObservedKeys(requests, ["actionClass", "actionKind"])) {
     valid = addValidationError(errors, `${path}.approvalRequests must group each action once`);
   }
@@ -1303,18 +1307,14 @@ function qualificationApprovedProposalFieldsAreValid(
     return addValidationError(errors, `${path}.approvedProposalActions must be an array`);
 
   const entries: readonly unknown[] = actions;
-  const length = entries.length;
-  for (let index = 0; index < length; index += 1) {
-    if (!(index in entries)) {
-      valid = addValidationError(
-        errors,
-        `${path}.approvedProposalActions[${String(index)}] must be an object`,
-      );
-      break;
-    }
-    const action: unknown = entries[index];
-    valid = qualificationApprovedProposalMemberFieldsAreValid(errors, action, index, path) && valid;
-  }
+  valid =
+    acceptanceMembersAreValid(
+      errors,
+      entries,
+      `${path}.approvedProposalActions`,
+      (action, index): boolean =>
+        qualificationApprovedProposalMemberFieldsAreValid(errors, action, index, path),
+    ) && valid;
   if (hasDuplicateObservedKeys(actions, ["actionKind"])) {
     valid = addValidationError(
       errors,
@@ -1335,18 +1335,14 @@ function qualificationEffectToolFieldsAreValid(
     return addValidationError(errors, `${path}.effectStartedTools must be an array`);
 
   const entries: readonly unknown[] = tools;
-  const length = entries.length;
-  for (let index = 0; index < length; index += 1) {
-    if (!(index in entries)) {
-      valid = addValidationError(
-        errors,
-        `${path}.effectStartedTools[${String(index)}] must be an object`,
-      );
-      break;
-    }
-    const tool: unknown = entries[index];
-    valid = qualificationEffectToolMemberFieldsAreValid(errors, tool, index, path) && valid;
-  }
+  valid =
+    acceptanceMembersAreValid(
+      errors,
+      entries,
+      `${path}.effectStartedTools`,
+      (tool, index): boolean =>
+        qualificationEffectToolMemberFieldsAreValid(errors, tool, index, path),
+    ) && valid;
   if (hasDuplicateObservedKeys(tools, ["canonicalId", "contractVersion"])) {
     valid = addValidationError(
       errors,
@@ -2108,15 +2104,10 @@ function qualificationManifestFlowsFieldsAreValid(
   const flows = ownField(value, "flows");
   if (Array.isArray(flows)) {
     const entries: readonly unknown[] = flows;
-    const length = entries.length;
-    for (let index = 0; index < length; index += 1) {
-      if (!(index in entries)) {
-        valid = addValidationError(errors, `flows[${String(index)}] must be an object`);
-        break;
-      }
-      const flow: unknown = entries[index];
-      valid = qualificationFlowFieldsAreValid(errors, flow, `flows[${String(index)}]`) && valid;
-    }
+    valid =
+      acceptanceMembersAreValid(errors, entries, "flows", (flow, index): boolean =>
+        qualificationFlowFieldsAreValid(errors, flow, `flows[${String(index)}]`),
+      ) && valid;
   } else {
     valid = addValidationError(errors, "flows must be an array");
   }
@@ -2137,17 +2128,10 @@ function qualificationManifestBodyFieldsAreValid(
   const scenarios = ownField(value, "scenarios");
   if (Array.isArray(scenarios)) {
     const entries: readonly unknown[] = scenarios;
-    const length = entries.length;
-    for (let index = 0; index < length; index += 1) {
-      if (!(index in entries)) {
-        valid = addValidationError(errors, `scenarios[${String(index)}] must be an object`);
-        break;
-      }
-      const scenario: unknown = entries[index];
-      valid =
-        qualificationScenarioFieldsAreValid(errors, scenario, `scenarios[${String(index)}]`) &&
-        valid;
-    }
+    valid =
+      acceptanceMembersAreValid(errors, entries, "scenarios", (scenario, index): boolean =>
+        qualificationScenarioFieldsAreValid(errors, scenario, `scenarios[${String(index)}]`),
+      ) && valid;
   } else {
     valid = addValidationError(errors, "scenarios must be an array");
   }

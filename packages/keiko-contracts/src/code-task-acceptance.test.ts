@@ -2395,3 +2395,229 @@ describe("acceptance evidence source provenance", () => {
     }
   });
 });
+
+const ACCEPTANCE_AUTHORITY_POST_HOLE_TRACE: readonly string[] = [
+  "members:length",
+  "members:has:0",
+  "group",
+  "group:length",
+  "group:has:0",
+  "group:has:1",
+  "group:get:1",
+  "sum",
+  "sum:length",
+  "sum:has:0",
+  "sum:has:1",
+  "sum:get:1",
+  "account",
+  "account:length",
+  "account:get:0",
+  "account:length",
+  "account:get:1",
+  "account:length",
+];
+
+describe("acceptance physical member phase preservation", () => {
+  for (const { surface, validate, validateFlow } of [
+    {
+      surface: "source",
+      validate: validateCodeTaskAcceptanceContribution,
+      validateFlow: validateCodeTaskQualificationFlowArtifact,
+    },
+    {
+      surface: "public",
+      validate: publicAcceptanceValidator,
+      validateFlow: publicQualificationFlow,
+    },
+  ]) {
+    it(`${surface} admits the captured scenario prefix when its first getter grows the array`, () => {
+      const contribution = validContribution();
+      const entries: unknown[] = [...contribution.scenarios];
+      const trace: string[] = [];
+      const scenarios = new Proxy(entries, {
+        has(target, key): boolean {
+          trace.push(`has:${String(key)}`);
+          return Reflect.has(target, key);
+        },
+        get(target, key, receiver): unknown {
+          trace.push(`get:${String(key)}`);
+          if (key === "0") target.push(null);
+          return Reflect.get(target, key, receiver);
+        },
+      });
+      const input = { ...contribution, scenarios };
+      const result = validate(input);
+      expect(result.ok && result.value === input && result.value.scenarios === scenarios).toBe(
+        true,
+      );
+      expect(entries).toHaveLength(2);
+      expect(trace).toEqual(["get:length", "has:0", "get:0"]);
+    });
+
+    it(`${surface} stops at a scenario hole while collecting later independent errors`, () => {
+      const trace: string[] = [];
+      const entries = Array<unknown>(2);
+      Object.defineProperty(entries, "1", {
+        get: (): never => {
+          throw new TypeError("later scenario must remain unread");
+        },
+      });
+      const scenarios = new Proxy(entries, {
+        has(target, key): boolean {
+          trace.push(`has:${String(key)}`);
+          return Reflect.has(target, key);
+        },
+        get(target, key, receiver): unknown {
+          trace.push(`get:${String(key)}`);
+          return Reflect.get(target, key, receiver);
+        },
+      });
+      expect(
+        validate({
+          ...validContribution(),
+          scenarios,
+          salvage: [null],
+          knownLimitations: 7,
+          cleanup: null,
+        }),
+      ).toEqual({
+        ok: false,
+        errors: [
+          "scenarios[0] must be an object",
+          "salvage[0] must be an object",
+          "knownLimitations must be an array of bounded content-free notes",
+          "cleanup must be an object",
+        ],
+      });
+      expect(trace).toEqual(["get:length", "has:0"]);
+    });
+
+    it(`${surface} continues after an invalid present scenario to the exact later getter error`, () => {
+      const contribution = validContribution();
+      const scenario = contribution.scenarios[0];
+      if (scenario === undefined) throw new TypeError("healthy scenario fixture is missing");
+      const failure = new TypeError("opaque scenario inspection");
+      const trace: string[] = [];
+      const later = {
+        ...scenario,
+        get scenarioId(): never {
+          trace.push("scenarioId");
+          throw failure;
+        },
+      };
+      const scenarios = new Proxy([null, later], {
+        has(target, key): boolean {
+          trace.push(`has:${String(key)}`);
+          return Reflect.has(target, key);
+        },
+        get(target, key, receiver): unknown {
+          trace.push(`get:${String(key)}`);
+          return Reflect.get(target, key, receiver);
+        },
+      });
+      let observed: unknown;
+      try {
+        validate({ ...contribution, scenarios });
+      } catch (error) {
+        observed = error;
+      }
+      expect(observed).toBe(failure);
+      expect(trace).toEqual(["get:length", "has:0", "get:0", "has:1", "get:1", "scenarioId"]);
+    });
+
+    it(`${surface} refuses a captured later scenario slot deleted by the first member`, () => {
+      const contribution = validContribution();
+      const scenario = contribution.scenarios[0];
+      if (scenario === undefined) throw new TypeError("healthy scenario fixture is missing");
+      const entries: unknown[] = [scenario, scenario];
+      entries[0] = {
+        ...scenario,
+        get scenarioId(): string {
+          Reflect.deleteProperty(entries, "1");
+          return scenario.scenarioId;
+        },
+      };
+      const trace: string[] = [];
+      const scenarios = new Proxy(entries, {
+        has(target, key): boolean {
+          trace.push(`has:${String(key)}`);
+          return Reflect.has(target, key);
+        },
+        get(target, key, receiver): unknown {
+          trace.push(`get:${String(key)}`);
+          return Reflect.get(target, key, receiver);
+        },
+      });
+      expect(validate({ ...contribution, scenarios })).toEqual({
+        ok: false,
+        errors: ["scenarios[1] must be an object"],
+      });
+      expect(trace).toEqual(["get:length", "has:0", "get:0", "has:1"]);
+    });
+
+    it(`${surface} retains grouping summation and authority reads after the first request hole`, () => {
+      const flow = validQualificationFlow();
+      const request = flow.authorityObservation.approvalRequests[1];
+      if (request === undefined) throw new TypeError("healthy approval request fixture is missing");
+      const entries = Array<unknown>(2);
+      entries[1] = request;
+      const trace: string[] = [];
+      let phase = "members";
+      const approvalRequests = new Proxy(entries, {
+        has(target, key): boolean {
+          trace.push(`${phase}:has:${String(key)}`);
+          return Reflect.has(target, key);
+        },
+        get(target, key, receiver): unknown {
+          if (key === "filter" || key === "reduce") {
+            phase = key === "filter" ? "group" : "sum";
+            trace.push(phase);
+          }
+          if (key === Symbol.iterator) {
+            phase = "account";
+            trace.push(phase);
+          }
+          if (key === "length") trace.push(`${phase}:length`);
+          if (key === "0" || key === "1") trace.push(`${phase}:get:${key}`);
+          return Reflect.get(target, key, receiver);
+        },
+      });
+      const result = validateFlow({
+        ...flow,
+        authorityObservation: { ...flow.authorityObservation, approvalRequests },
+      });
+      expect(result).toEqual({
+        ok: false,
+        errors: [
+          "flowArtifact.authorityObservation.approvalRequests[0] must be an object",
+          "flowArtifact.authorityObservation.approvalRequests must account for approvalRequestCount",
+        ],
+      });
+      expect(trace).toEqual(ACCEPTANCE_AUTHORITY_POST_HOLE_TRACE);
+    });
+
+    it(`${surface} refuses non-array requests before their accounting methods are inspected`, () => {
+      const flow = validQualificationFlow();
+      const approvalRequests = {
+        get filter(): never {
+          throw new TypeError("non-array grouping must remain unread");
+        },
+        get reduce(): never {
+          throw new TypeError("non-array summation must remain unread");
+        },
+        get [Symbol.iterator](): never {
+          throw new TypeError("non-array authority must remain unread");
+        },
+      };
+      const result = validateFlow({
+        ...flow,
+        authorityObservation: { ...flow.authorityObservation, approvalRequests },
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new TypeError("non-array approval requests were admitted");
+      expect(result.errors).toContain(
+        "flowArtifact.authorityObservation.approvalRequests must be an array",
+      );
+    });
+  }
+});
