@@ -1283,42 +1283,47 @@ describe("production runtime singleton manager", () => {
   });
 
   // #3904 AC3: a succeeded run held for the undo window keeps the slot until it is stopped.
-  it("holds a succeeded run in its slot until a stop cleans it up", async () => {
-    const held = fakeManager({
-      hold: vi.fn(() => Promise.resolve({ ok: true as const, status: "held" as const })),
-      result: vi.fn(() => ({
-        status: "succeeded" as const,
-        exitCode: null,
-        output: { byteCount: 0, lineCount: 0, sha256: "0".repeat(64), truncated: false },
-        error: { byteCount: 0, lineCount: 0, sha256: "0".repeat(64), truncated: false },
-      })),
-    });
-    const first = managedRecord("run-1", held);
-    const second = managedRecord("run-2", fakeManager());
-    const runs = new Map([
-      ["run-1", first],
-      ["run-2", second],
-    ]);
-    const manager = createProductionRuntimeManager(runs, fakeAuthority());
-    await manager.start(launch("run-1"));
+  it.each(["succeeded", "failed"] as const)(
+    "holds a %s run in its slot until a stop cleans it up",
+    async (outcome) => {
+      const hold = vi.fn(() => Promise.resolve({ ok: true as const, status: "held" as const }));
+      const held = fakeManager({
+        hold,
+        result: vi.fn(() => ({
+          status: outcome,
+          exitCode: null,
+          output: { byteCount: 0, lineCount: 0, sha256: "0".repeat(64), truncated: false },
+          error: { byteCount: 0, lineCount: 0, sha256: "0".repeat(64), truncated: false },
+        })),
+      });
+      const first = managedRecord("run-1", held);
+      const second = managedRecord("run-2", fakeManager());
+      const runs = new Map([
+        ["run-1", first],
+        ["run-2", second],
+      ]);
+      const manager = createProductionRuntimeManager(runs, fakeAuthority());
+      await manager.start(launch("run-1"));
 
-    await expect(manager.hold?.("run-1")).resolves.toEqual({ ok: true, status: "held" });
-    expect(first.held).toBe(true);
-    expect(first.dispose).not.toHaveBeenCalled();
-    expect(manager.result("run-1")?.status).toBe("succeeded");
-    await expect(manager.start(launch("run-2"))).resolves.toMatchObject({
-      ok: false,
-      failureCode: "runtime-run-mismatch",
-    });
+      await expect(manager.hold?.("run-1", outcome)).resolves.toEqual({ ok: true, status: "held" });
+      expect(hold).toHaveBeenCalledWith("run-1", outcome);
+      expect(first.held).toBe(true);
+      expect(first.dispose).not.toHaveBeenCalled();
+      expect(manager.result("run-1")?.status).toBe(outcome);
+      await expect(manager.start(launch("run-2"))).resolves.toMatchObject({
+        ok: false,
+        failureCode: "runtime-run-mismatch",
+      });
 
-    await expect(manager.stop("run-1", "succeeded")).resolves.toEqual({
-      ok: true,
-      status: "stopped",
-    });
-    expect(first.dispose).toHaveBeenCalledTimes(1);
-    expect(runs.has("run-1")).toBe(false);
-    await expect(manager.start(launch("run-2"))).resolves.toMatchObject({ ok: true });
-  });
+      await expect(manager.stop("run-1", "succeeded")).resolves.toEqual({
+        ok: true,
+        status: "stopped",
+      });
+      expect(first.dispose).toHaveBeenCalledTimes(1);
+      expect(runs.has("run-1")).toBe(false);
+      await expect(manager.start(launch("run-2"))).resolves.toMatchObject({ ok: true });
+    },
+  );
 
   it("cleans up a run whose runtime was stopped because it could not be held", async () => {
     const inner = fakeManager({

@@ -1891,18 +1891,20 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   tell apart from the turn's own once the turn settled; the runtime's snapshot counts it as the
   turn's. Evidence is `coding-runtime.revert.applied`, `.refused` and `.dispatch-failed`: counts
   and closed words, never a path, patch or message.
-- **A succeeded native run keeps its undo for a bounded window (#3904 AC3, owner decision
-  2026-10-24).** A run used to settle when its turn ended and to remove its private state,
+- **A healthy settled native run keeps its undo for a bounded window (#3904 AC3).** A run used to settle when its turn ended and to remove its private state,
   snapshots included, so a settled turn could not be undone, unlike standalone OpenCode. Now a
-  native run that succeeded with an undoable newest turn (`session.diff` names a file, or an undo
+  native run that succeeded or failed with an undoable newest turn (`session.diff` names a file, or an undo
   is staged) is held instead of stopped: `CodingRuntimeManager.hold` runs the same revocation
   barrier as a stop (runtime capabilities, approvals, research grants, in-flight actions) and
-  records the run's result as succeeded, but keeps the process tree until a later `stop` reaps it.
+  records the run's truthful result (succeeded or failed), but keeps the process tree until a later `stop` reaps it.
   The run settles normally (history captured, evidence settled, slot published as settled); the
   production slot stays claimed, so no run can start over a held runtime. `CodingRuntimeUndoWindow`
   closes the window when the next run starts or is retried, when the human selects another task
   workspace (that selection waits for the close on the same serial lane), after 30 minutes, or at server
-  shutdown; a run that did not settle as succeeded is released at once. While the window is open
+  shutdown. A failed model continuation can still have usable original snapshots: it keeps the
+  same bounded window without gaining productive authority or becoming successful. Cancelled runs,
+  unhealthy runtimes and turns without a usable snapshot still stop as before. This does not add
+  durable failed-run retention or interrupted-run restoration (the separate AC1 obligation). While the window is open
   the coordinator admits undo and restore of the held run, and the counts behind them, under the
   settled snapshot's revision and a one-use request id; the revision advances, the settlement time
   does not. The dispatcher admits them under the current workspace binding

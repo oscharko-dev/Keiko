@@ -462,7 +462,12 @@ function selectedResumeMode(
  */
 
 /** Run states whose undo counts the Workbench reads (B3, #3904 AC3). */
-const REVERT_READ_STATES: ReadonlySet<string> = new Set(["running", "paused", "succeeded"]);
+const REVERT_READ_STATES: ReadonlySet<string> = new Set([
+  "running",
+  "paused",
+  "succeeded",
+  "failed",
+]);
 
 export function operatorResumeAvailable(
   resumeMode: CodingWorkbenchMode | null,
@@ -1635,7 +1640,7 @@ function WorkbenchColumns({
     submittedRoot: runBoundRoot,
   });
   // Undo / Restore of the newest turn (B3): counts only, for a run that is still open or that
-  // succeeded and whose runtime the server still holds for undo (#3904 AC3); the server answers
+  // settled and whose healthy runtime the server still holds for undo (#3904 AC3); the server answers
   // no counts once that window has closed.
   const revert = useCodingWorkbenchRevert({
     runId: state.run.value?.runId,

@@ -81,6 +81,8 @@ interface GatewayStub extends Stub {
   hold: boolean;
   /** While set, the request that carries a tool result is held open: the turn stays busy. */
   holdAfterTool: boolean;
+  /** Rejects the model continuation after a real tool result; the SDK records a failed turn. */
+  failAfterTool: boolean;
   /** Tool-call turns still to script; each answers one request whose last message is the user's. */
   toolTurns: number;
   /** The tool call a scripted turn issues. */
@@ -190,6 +192,15 @@ async function startGateway(): Promise<GatewayStub> {
   const stub = await startStub((self, recorded, response) => {
     const gateway = self as GatewayStub;
     const role = lastRole(recorded.body);
+    if (gateway.failAfterTool && role === "tool") {
+      response.writeHead(400, { "Content-Type": "application/json" });
+      response.end(
+        JSON.stringify({
+          error: { message: "Synthetic rejected continuation", type: "invalid_request_error" },
+        }),
+      );
+      return;
+    }
     if ((gateway.hold && role === "user") || (gateway.holdAfterTool && role === "tool")) {
       response.writeHead(200, { "Content-Type": "text/event-stream" });
       response.write(": held\n\n");
@@ -211,6 +222,7 @@ async function startGateway(): Promise<GatewayStub> {
   return Object.assign(stub, {
     hold: false,
     holdAfterTool: false,
+    failAfterTool: false,
     toolTurns: 0,
     call: { name: "read", arguments: {} },
   });
@@ -917,6 +929,35 @@ describe("pinned native OpenCode undo semantics", () => {
         expect(state.revert).toBeUndefined();
         // Healthy control: once the file is as the turn left it, undo and restore both apply.
         writeFileSync(target, "revert fixture edited\n");
+        expect(await port.revertTurn("run", "undo")).toMatchObject({ ok: true, fileCount: 1 });
+        expect(workspaceFile(run)).toBe(ORIGINAL_CONTENT);
+        expect(await port.revertTurn("run", "restore")).toMatchObject({ ok: true, fileCount: 1 });
+        expect(workspaceFile(run)).toBe("revert fixture edited\n");
+      });
+    },
+    180_000,
+  );
+
+  it.skipIf(skip)(
+    "a failed model continuation retains usable native undo",
+    async () => {
+      await withRun(async (run) => {
+        const { port, state } = keikoRevertPort(run);
+        run.gateway.failAfterTool = true;
+        run.gateway.call = editCall("original", "edited");
+        run.gateway.toolTurns = 1;
+        await run.service.client.prompt(run.sessionId, "Edit the notes file.");
+        await expect
+          .poll(() => workspaceFile(run), { timeout: 30_000 })
+          .toBe("revert fixture edited\n");
+        await agentWrote(state);
+        await expect.poll(() => sessionIsIdle(run), { timeout: 30_000 }).toBe(true);
+        const messages = await run.service.client.messages(run.sessionId);
+        expect(
+          messages.some((m) => m.type === "assistant" && "error" in m && m.error !== undefined),
+        ).toBe(true);
+        recordOpenCodeTurnImage(state, undefined);
+        await state.turnImage;
         expect(await port.revertTurn("run", "undo")).toMatchObject({ ok: true, fileCount: 1 });
         expect(workspaceFile(run)).toBe(ORIGINAL_CONTENT);
         expect(await port.revertTurn("run", "restore")).toMatchObject({ ok: true, fileCount: 1 });

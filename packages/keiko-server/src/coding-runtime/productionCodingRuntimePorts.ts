@@ -411,7 +411,7 @@ function buildProductionRuntimeManager(
     pause: (runId) => pauseProductionRuntime(context, runId),
     resume: (runId, requestedMode) => resumeProductionRuntime(context, runId, requestedMode),
     stop: (runId, resultStatus) => stopProductionRuntime(runs, context, runId, resultStatus),
-    hold: (runId) => holdProductionRuntime(runs, context, runId),
+    hold: (runId, resultStatus) => holdProductionRuntime(runs, context, runId, resultStatus),
     takeover: (runId) => settleProductionRuntime(context, runId, "takeover"),
     reconcile: (runId) => settleProductionRuntime(context, runId, "reconcile"),
     health: () => context.slot.manager()?.health() ?? { status: "stopped" },
@@ -496,7 +496,7 @@ async function settleProductionRuntime(
 }
 
 /**
- * Holds a succeeded native run's runtime for the post-completion undo window (#3904 AC3). The slot
+ * Holds a settled healthy native run's runtime for the post-completion undo window (#3904 AC3). The slot
  * stays claimed until `stop` reaps it, so no run can start over a held runtime; a runtime that could
  * not be held was stopped instead and is cleaned up like any stopped one.
  */
@@ -504,13 +504,14 @@ async function holdProductionRuntime(
   runs: Map<string, ProductionRuntimeRunRecord>,
   context: ProductionRuntimeManagerContext,
   runId: string,
+  resultStatus: "succeeded" | "failed" = "succeeded",
 ): Promise<CodingRuntimeHoldResult> {
   const manager = context.slot.manager();
   const record = runs.get(runId);
   if (manager === undefined || record === undefined || !context.slot.matches(runId)) {
     return stoppedRun();
   }
-  const result = await (manager.hold?.(runId) ?? manager.stop(runId, "succeeded"));
+  const result = await (manager.hold?.(runId, resultStatus) ?? manager.stop(runId, resultStatus));
   if (!result.ok) return result;
   captureTerminalResult(context, manager, runId);
   if (result.status === "held") record.held = true;

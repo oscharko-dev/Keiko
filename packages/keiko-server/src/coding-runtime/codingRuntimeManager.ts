@@ -553,11 +553,11 @@ export interface CodingRuntimeManager {
   resume(runId: string, requestedMode?: CodingWorkbenchMode): CodingRuntimePauseResult;
   stop(runId: string, resultStatus?: CodingRuntimeTerminalStatus): Promise<CodingRuntimeStopResult>;
   /**
-   * Ends a run that succeeded without terminating its native runtime (#3904 AC3): every run
+   * Ends a settled healthy run without terminating its native runtime (#3904 AC3): every run
    * authority is revoked exactly as for a stop, and the process tree stays for the undo window until
    * `stop` reaps it. A runtime that cannot be held is stopped instead.
    */
-  hold?(runId: string): Promise<CodingRuntimeHoldResult>;
+  hold?(runId: string, resultStatus?: "succeeded" | "failed"): Promise<CodingRuntimeHoldResult>;
   takeover(runId: string): Promise<CodingRuntimeStopResult>;
   reconcile(runId: string): Promise<CodingRuntimeStopResult>;
   health(): CodingRuntimeHealthReport;
@@ -895,18 +895,21 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     return stopping;
   }
 
-  public async hold(runId: string): Promise<CodingRuntimeHoldResult> {
+  public async hold(
+    runId: string,
+    resultStatus: "succeeded" | "failed" = "succeeded",
+  ): Promise<CodingRuntimeHoldResult> {
     const active = this.active;
     if (active?.context.runId !== runId) {
       return { ok: false, failureCode: "runtime-run-mismatch", retryable: false };
     }
-    if (!holdable(active)) return this.stop(runId, "succeeded");
+    if (!holdable(active)) return this.stop(runId, resultStatus);
     // Quiesces the runtime's own exit, monitor, output and approval handling exactly like a stop
     // request does; the later `stop` still revokes again, reaps the tree and disposes the run.
     active.stopRequested = true;
-    active.stopResultStatus = mostSevereTerminalStatus(active.stopResultStatus, "succeeded");
+    active.stopResultStatus = mostSevereTerminalStatus(active.stopResultStatus, resultStatus);
     active.shutdownBarrierComplete = await this.runShutdownBarrier(active);
-    if (!active.shutdownBarrierComplete) return this.stop(runId, "succeeded");
+    if (!active.shutdownBarrierComplete) return this.stop(runId, resultStatus);
     this.captureResult(active, active.stopResultStatus, null);
     return { ok: true, status: "held" };
   }

@@ -1913,6 +1913,26 @@ describe("CodingRuntimeOperationCoordinator held run undo", () => {
     });
   });
 
+  it("admits a held failed turn but refuses failure without a held runtime", async () => {
+    const revert = vi.fn<Revert>(() => Promise.resolve({ ok: true, ...state }));
+    const advanceRevision = vi.fn((_current: CodingRuntimeSnapshot) => ({
+      ok: true as const,
+      snapshot: publicSnapshot(),
+    }));
+    const subject = coordinator({
+      taskDispatcher: dispatcher({ revert }),
+      current: () => undefined,
+      held: () => heldSnapshot({ state: "failed" }),
+      advanceRevision,
+    });
+    await expect(subject.submitRevert("run-1", revertBody())).resolves.toMatchObject({ ok: true });
+    expect(advanceRevision.mock.calls[0]?.[0]).toMatchObject({ state: "failed" });
+    const disposed = coordinator({ current: () => heldSnapshot({ state: "failed" }) });
+    await expect(disposed.submitRevert("run-1", revertBody())).resolves.toMatchObject({
+      ok: false,
+    });
+  });
+
   it("refuses a stale revision and a reused request id, and reverts nothing for them", async () => {
     const revert = vi.fn<Revert>(() =>
       Promise.resolve({ ok: true, fileCount: 1, additions: 1, deletions: 0 }),
@@ -1940,10 +1960,10 @@ describe("CodingRuntimeOperationCoordinator held run undo", () => {
     expect(revert).toHaveBeenCalledTimes(1);
   });
 
-  it("refuses a held run that did not succeed, and another run's id", async () => {
+  it("refuses an unsettled or cancelled held run, and another run's id", async () => {
     const revert = vi.fn<Revert>();
     const revertState = vi.fn(() => Promise.resolve(state));
-    for (const failed of ["failed", "cancelled"] as const) {
+    for (const failed of ["recovery-required", "cancelled"] as const) {
       const subject = coordinator({
         taskDispatcher: dispatcher({ revert, revertState }),
         current: () => undefined,

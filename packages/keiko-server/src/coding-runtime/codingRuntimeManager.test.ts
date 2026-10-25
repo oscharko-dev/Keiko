@@ -4578,6 +4578,23 @@ describe("coding runtime manager", () => {
       expect(harness.manager.result("run-1988")?.status).toBe("succeeded");
     });
 
+    it("keeps a healthy failed runtime undoable and never promotes its result to success", async () => {
+      const harness = heldHarness();
+      const { manager, fixture } = harness;
+      await manager.start(
+        launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      );
+      await expect(manager.hold?.("run-1988", "failed")).resolves.toEqual({
+        ok: true,
+        status: "held",
+      });
+      expect(harness.child.kills).toEqual([]);
+      expect(manager.result("run-1988")?.status).toBe("failed");
+      await manager.stop("run-1988", "succeeded");
+      expect(manager.result("run-1988")?.status).toBe("failed");
+      expect(harness.order).toContain("dispose:run-1988:failed");
+    });
+
     it("reaps, disposes as succeeded and releases only when the held runtime is stopped", async () => {
       const harness = heldHarness();
       await startHeld(harness);

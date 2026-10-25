@@ -11,7 +11,7 @@ import type { CodingRuntimeRevertState } from "./codingRuntimeRevert.js";
 
 /**
  * The post-completion undo window (#3904 AC3, owner decision 2026-10-24). A native run that
- * succeeded with an undoable newest turn keeps its original runtime process -- the session and the
+ * settled with an undoable newest turn keeps its original runtime process -- the session and the
  * runtime's own snapshot engine -- after the run settled, so the human can undo and restore that
  * turn as in standalone OpenCode. Every run authority is already revoked (`hold`): the process
  * answers only Keiko's undo and restore. The window closes when the next run starts, when the human
@@ -91,7 +91,10 @@ export interface CodingRuntimeUndoWindowDeps {
   /** What the run's newest turn changed, or the undo staged for it. */
   readonly revertState: (runId: string) => Promise<CodingRuntimeRevertState | undefined>;
   /** Ends the run's authority but keeps its runtime (`CodingRuntimeManager.hold`). */
-  readonly hold: (runId: string) => Promise<CodingRuntimeHoldResult>;
+  readonly hold: (
+    runId: string,
+    outcome: "succeeded" | "failed",
+  ) => Promise<CodingRuntimeHoldResult>;
   /** Commits an undo the human left staged; `none` when nothing was staged. */
   readonly commitStagedRevert: (runId: string) => Promise<UndoWindowStagedOutcome>;
   /** Stops the held runtime like any settled run: reap, dispose, retain. */
@@ -118,7 +121,7 @@ interface ClosedWindowFacts {
   readonly failure: unknown;
 }
 
-/** How a succeeded run's settlement ended its runtime, when it was held for undo. */
+/** How a settled run ended its runtime, when it was held for undo. */
 export interface UndoWindowHoldOutcome {
   readonly stopped: boolean;
   readonly held: boolean;
@@ -130,13 +133,16 @@ export class CodingRuntimeUndoWindow {
   public constructor(private readonly deps: CodingRuntimeUndoWindowDeps) {}
 
   /**
-   * Holds a succeeded run's runtime when its newest turn can be undone; `undefined` when it cannot,
+   * Holds a healthy settled run's runtime when its newest turn can be undone; `undefined` when it cannot,
    * and the caller stops the runtime as before. A hold that failed says so on the log.
    */
-  public async hold(runId: string): Promise<UndoWindowHoldOutcome | undefined> {
+  public async hold(
+    runId: string,
+    outcome: "succeeded" | "failed" = "succeeded",
+  ): Promise<UndoWindowHoldOutcome | undefined> {
     if (!this.deps.canHold() || !(await this.undoable(runId))) return undefined;
     try {
-      const held = await this.deps.hold(runId);
+      const held = await this.deps.hold(runId, outcome);
       return { stopped: held.ok, held: held.ok && held.status === "held" };
     } catch (error) {
       recordUndoWindowHoldFailed(this.deps.activityLog, runId, error);
@@ -180,7 +186,7 @@ export class CodingRuntimeUndoWindow {
     await this.end(window, reason);
   }
 
-  /** Stops a held runtime whose run did not settle as succeeded: no window is ever opened for it. */
+  /** Stops a held runtime whose settlement cannot open an undo window. */
   public async release(runId: string, reason: UndoWindowCloseReason): Promise<void> {
     await this.end({ runId, openedAtMs: this.deps.now(), timer: undefined }, reason);
   }

@@ -5840,7 +5840,7 @@ describe("turn revert (B3, S04)", () => {
   const NEWEST = { staged: false, fileCount: 3, additions: 12, deletions: 4 } as const;
 
   function runningState(
-    state: "running" | "paused" | "succeeded" = "running",
+    state: "running" | "paused" | "succeeded" | "failed" = "running",
   ): CodingWorkbenchRuntimeState {
     return liveState({
       run: {
@@ -5861,18 +5861,21 @@ describe("turn revert (B3, S04)", () => {
     expect(screen.queryByRole("button", { name: "Undo last turn" })).not.toBeInTheDocument();
   });
 
-  // #3904 AC3: the server may still hold a succeeded run's runtime for the undo window, so its
+  // #3904 AC3: the server may still hold a healthy settled run's runtime for the undo window, so its
   // revert channel is read; the server answers no counts once that window has closed.
-  it("reads the revert channel of a succeeded run", () => {
-    renderWorkbench(runningState("succeeded"));
+  it.each(["succeeded", "failed"] as const)(
+    "reads the revert channel of a held %s run",
+    (state) => {
+      renderWorkbench(runningState(state));
 
-    expect(revertHookMock).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: "run-1", live: true, revision: 4 }),
-    );
-    expect(screen.queryByRole("button", { name: "Undo last turn" })).not.toBeInTheDocument();
-  });
+      expect(revertHookMock).toHaveBeenCalledWith(
+        expect.objectContaining({ runId: "run-1", live: true, revision: 4 }),
+      );
+      expect(screen.queryByRole("button", { name: "Undo last turn" })).not.toBeInTheDocument();
+    },
+  );
 
-  it.each(["failed", "cancelled", "awaiting-approval"] as const)(
+  it.each(["cancelled", "awaiting-approval"] as const)(
     "tells the hook a %s run is not live, so no undo is offered for it",
     (state) => {
       renderWorkbench(

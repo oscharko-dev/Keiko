@@ -321,7 +321,7 @@ const FOLLOW_UP_STATES: ReadonlySet<CodingRuntimeSnapshot["state"]> = new Set([
   "running",
   "paused",
 ]);
-const HELD_STATES: ReadonlySet<CodingRuntimeSnapshot["state"]> = new Set(["succeeded"]);
+const HELD_STATES: ReadonlySet<CodingRuntimeSnapshot["state"]> = new Set(["succeeded", "failed"]);
 
 const REVERT_KEYS = ["requestId", "expectedRevision", "action"] as const;
 const INBOX_KEYS = ["requestId", "expectedRevision", "action", "itemId"] as const;
@@ -541,7 +541,7 @@ export class CodingRuntimeOperationCoordinator {
   ): Promise<CodingRuntimeOrchestratorResult> {
     // A held run (#3904 AC3) has no turn in flight whose outcome an undo would have to drop.
     const generation =
-      action === "undo" && operation.current.state !== "succeeded"
+      action === "undo" && !HELD_STATES.has(operation.current.state)
         ? this.reserveTaskGeneration(runId)
         : undefined;
     const result = await this.dispatchRevert(runId, operation, action, correlationId);

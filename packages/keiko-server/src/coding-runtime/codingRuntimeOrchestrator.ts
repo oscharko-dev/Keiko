@@ -1989,8 +1989,8 @@ export class CodingRuntimeOrchestrator {
         deps.manager.hold !== undefined && deps.taskDispatcher.commitRevert !== undefined,
       revertState: async (runId): Promise<CodingRuntimeRevertState | undefined> =>
         deps.taskDispatcher.revertState?.(runId),
-      hold: async (runId): Promise<CodingRuntimeHoldResult> =>
-        (await deps.manager.hold?.(runId)) ?? deps.manager.stop(runId, "succeeded"),
+      hold: async (runId, outcome): Promise<CodingRuntimeHoldResult> =>
+        (await deps.manager.hold?.(runId, outcome)) ?? deps.manager.stop(runId, outcome),
       commitStagedRevert: async (runId): Promise<"committed" | "none" | "failed"> =>
         (await deps.taskDispatcher.commitRevert?.(runId)) ?? "none",
       stop: async (runId): Promise<boolean> => (await deps.manager.stop(runId, "succeeded")).ok,
@@ -3132,20 +3132,24 @@ export class CodingRuntimeOrchestrator {
   }
 
   /**
-   * #3904 AC3 (owner decision 2026-10-24): a native run that succeeded with an undoable newest turn
-   * keeps its runtime, with its authority revoked, for the post-completion undo window; every other
+   * #3904 AC3: a healthy native run that settled with an undoable newest turn
+   * keeps its runtime, with its authority revoked and truthful outcome, for the undo window; every other
    * settlement stops the runtime as before.
    */
   private async endForSettlement(
     runId: string,
     outcome: CodingRuntimeTaskOutcome,
   ): Promise<UndoWindowHoldOutcome> {
-    const held = outcome === "succeeded" ? await this.undoWindow.hold(runId) : undefined;
+    const held =
+      outcome === "succeeded" || outcome === "failed"
+        ? await this.undoWindow.hold(runId, outcome)
+        : undefined;
     return held ?? { stopped: await this.stopForSettlement(runId, outcome), held: false };
   }
 
   private async openOrReleaseUndoWindow(runId: string): Promise<void> {
-    if (this.deps.snapshots.get(runId)?.state === "succeeded") {
+    const state = this.deps.snapshots.get(runId)?.state;
+    if (state === "succeeded" || state === "failed") {
       this.undoWindow.open(runId);
       return;
     }

@@ -8533,13 +8533,15 @@ describe("post-completion undo window", () => {
         finish = resolve;
       }),
     });
-    const hold = vi.fn(() => Promise.resolve({ ok: true as const, status: "held" as const }));
-    // A hold records the run's result as succeeded, like the stop it replaces.
+    const hold = vi.fn((_runId: string, _outcome: "succeeded" | "failed") =>
+      Promise.resolve({ ok: true as const, status: "held" as const }),
+    );
+    // A hold preserves the truthful outcome, like the stop it replaces.
     const stoppedResult = f.manager.result.getMockImplementation();
     f.manager.result.mockImplementation((runId) =>
       hold.mock.calls.length > 0
         ? {
-            status: "succeeded",
+            status: hold.mock.calls.at(-1)?.[1] ?? "succeeded",
             exitCode: null,
             output: { byteCount: 0, lineCount: 0, sha256: "a".repeat(64), truncated: false },
             error: { byteCount: 0, lineCount: 0, sha256: "b".repeat(64), truncated: false },
@@ -8585,7 +8587,7 @@ describe("post-completion undo window", () => {
     run.finish("succeeded");
     await settled(run, "succeeded");
 
-    expect(run.hold).toHaveBeenCalledWith("run-1");
+    expect(run.hold).toHaveBeenCalledWith("run-1", "succeeded");
     expect(run.f.manager.stop).not.toHaveBeenCalled();
     await vi.waitFor(() => {
       expect(windowLines(run)).toMatchObject([{ runId: "run-1", event: "opened" }]);
@@ -8692,14 +8694,37 @@ describe("post-completion undo window", () => {
     expect(windowLines(run)).toEqual([]);
   });
 
-  it("stops the runtime as before when the run did not succeed", async () => {
-    const run = heldRun();
+  it("stops a failed runtime when it offers no usable snapshot", async () => {
+    const run = heldRun(0);
     await run.f.orchestrator.start(start);
     run.finish("failed");
     await settled(run, "failed");
 
     expect(run.hold).not.toHaveBeenCalled();
     expect(run.f.manager.stop).toHaveBeenCalledWith("run-1", "failed");
+  });
+
+  it("retains usable native snapshots after failure without changing the failed outcome", async () => {
+    const run = heldRun();
+    await run.f.orchestrator.start(start);
+    run.finish("failed");
+    const revision = await settled(run, "failed");
+    expect(run.hold).toHaveBeenCalledWith("run-1", "failed");
+    expect(run.f.manager.stop).not.toHaveBeenCalled();
+    await expect(run.f.orchestrator.revertState("run-1")).resolves.toMatchObject(COUNTS);
+    const terminalAt = run.f.rows.get("run-1")?.terminalAt;
+    for (const [index, action] of ["undo", "restore"].entries()) {
+      await expect(
+        run.f.orchestrator.submitRevert("run-1", {
+          requestId: `req-failed-${action}`,
+          expectedRevision: revision + index,
+          action,
+        }),
+      ).resolves.toMatchObject({ ok: true });
+      expect(run.f.rows.get("run-1")).toMatchObject({ state: "failed", terminalAt });
+    }
+    await run.f.orchestrator.shutdown();
+    await expect(run.f.orchestrator.revertState("run-1")).resolves.toBeUndefined();
   });
 
   it("closes the window at shutdown", async () => {
