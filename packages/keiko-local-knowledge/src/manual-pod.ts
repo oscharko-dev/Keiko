@@ -56,18 +56,12 @@ import type { KnowledgeLogSink } from "./knowledge-log.js";
 // gate holds.
 const MANUAL_VIRTUAL_ROOT_PREFIX = "/keiko-html-manual";
 
-export interface CreateHtmlManualPodDeps {
+export interface HtmlManualPodDeps {
   readonly store: KnowledgeStore;
   readonly parserRegistry: ParserRegistry;
   readonly embeddingAdapter: OpenAIEmbeddingAdapter;
-  readonly embeddingModelIdentity: EmbeddingModelIdentity;
-  // Injected byte-retrieval port (in-memory fixture in tests, WorkspaceFs-backed for local
-  // manuals). A gatewayFetch-backed keiko-server fetcher for intranet manuals is NOT implemented
-  // yet, and this function has no live server route or UI trigger — see Issue #2063.
-  readonly fetcher: ManualCrawlFetcher;
   readonly capsuleId: KnowledgeCapsuleId;
   readonly sourceId: KnowledgeSourceId;
-  readonly modelUsePolicy?: KnowledgePodModelUsePolicy;
   readonly signal?: AbortSignal;
   readonly now?: () => number;
   readonly idSource?: () => string;
@@ -76,6 +70,14 @@ export interface CreateHtmlManualPodDeps {
   readonly correlationId?: string | undefined;
   readonly onCrawlEvent?: (event: ManualCrawlEvent) => void;
   readonly onIndexEvent?: (event: IndexingEvent) => void;
+}
+
+export interface CreateHtmlManualPodDeps extends HtmlManualPodDeps {
+  readonly embeddingModelIdentity: EmbeddingModelIdentity;
+  // Injected byte retrieval: fixture/local WorkspaceFs implementations or the server manual job
+  // service's gatewayFetch-backed fetcher. Domain functions never construct it (trust-9).
+  readonly fetcher: ManualCrawlFetcher;
+  readonly modelUsePolicy?: KnowledgePodModelUsePolicy;
 }
 
 export interface CreateHtmlManualPodResult {
