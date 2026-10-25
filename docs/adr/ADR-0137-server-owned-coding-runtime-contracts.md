@@ -1069,6 +1069,19 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   binding: the new workspace opens as its own task, and a session move into it stays refused until
   a governed rebinding exists. The decision line records how it ended (`worktree`: `provisioned`,
   `resumed`, `unavailable`, `workspace-changed`, `provision-failed`).
+- **Accepted external references are read-only and named before the run (#3900 AC5).** The
+  operator names directories in `KEIKO_CODING_EXTERNAL_READ_ROOTS` (absolute, separated like
+  `PATH`, at most 8). `opencodeNativeExternalRoots.ts` resolves them once per native run, all or
+  none: an entry that is not an existing directory reached without a symbolic link, a top-level or
+  home directory, one that overlaps the workspace or the private state, or one inside a denied root
+  refuses the whole set (`coding-runtime.native-external-roots.resolved`, closed reason, counts
+  only). The one resolution binds the kernel read allowlist (`externalReadRoots`; the denied roots
+  and credential names still win inside it), an `external_directory` rule per root that hands each
+  read to the policy, and the producer's own local `references` (named `external-1`, …). The
+  policy decides each read there as an `external-file` action of the run's mode (asked below Full
+  access), keeps the workspace's sensitive-path and hard-link refusals, and refuses every write. The
+  Linux mount allowlist names no external root yet, so none is admitted there; repository
+  references would leave the machine and stay refused.
 - **An unoffered native tool name is the producer's to answer.** The gateway binds a native call
   by name only and grants nothing (ADR-0175 D2). A model that names a tool the request did not
   offer (a hallucinated `bash`, say) reaches OpenCode, which answers with its own unavailable-tool

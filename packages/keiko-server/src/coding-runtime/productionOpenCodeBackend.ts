@@ -50,6 +50,10 @@ import {
 import { createCodingRuntimeRepositoryItemsPort } from "./codingRuntimeRepositoryItems.js";
 import { createCodingRuntimeRepositoryInstructionsPort } from "./codingRuntimeRepositoryInstructions.js";
 import type { NativeWorktreeProvisionPort } from "./opencodeNativeWorktree.js";
+import {
+  recordNativeExternalRootsResolved,
+  resolveNativeExternalReadRoots,
+} from "./opencodeNativeExternalRoots.js";
 import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
 import { createDevLaneRuntimeProcessBackend } from "./devLaneRuntimeProcessBackend.js";
 import { createNativeRuntimeProcessBackend } from "./nativeRuntimeProcessBackend.js";
@@ -174,6 +178,8 @@ export interface ProductionOpenCodeBackendInput {
   readonly repositoryInstructionsEnabled?: boolean | undefined;
   /** Keiko's managed task-workspace owner for an approved Code Mode `worktree_create` (#3903 AC4). */
   readonly nativeWorktrees?: NativeWorktreeProvisionPort | undefined;
+  /** The operator's raw `KEIKO_CODING_EXTERNAL_READ_ROOTS` (#3900 AC5); absent admits none. */
+  readonly externalReadRoots?: string | undefined;
   /** The operator's MCP server registry for one native run (`mcpServerRegistry.ts`). */
   readonly mcpServers?: ((correlationId: string) => readonly McpServerDefinition[]) | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
@@ -427,7 +433,11 @@ function nativeRunInputs(
   toolProfile: OpenCodeToolProfile,
 ): Pick<
   OpenCodeRuntimeCompositionInput,
-  "repositoryItems" | "repositoryInstructions" | "mcpServers" | "nativeWorktrees"
+  | "repositoryItems"
+  | "repositoryInstructions"
+  | "mcpServers"
+  | "nativeWorktrees"
+  | "externalReadRoots"
 > {
   if (toolProfile !== "native") return {};
   return {
@@ -435,7 +445,56 @@ function nativeRunInputs(
     repositoryInstructions: repositoryInstructionsFor(input, run),
     ...(input.mcpServers === undefined ? {} : { mcpServers: input.mcpServers }),
     ...(input.nativeWorktrees === undefined ? {} : { nativeWorktrees: input.nativeWorktrees }),
+    externalReadRoots: nativeExternalReadRoots(input, run),
   };
+}
+
+// One resolution per run, shared by the kernel allowlist and the composition's policy, so the two
+// can never disagree about which external references a run may read (#3900 AC5).
+const EXTERNAL_READ_ROOTS = new WeakMap<ProductionRuntimeBackendInput, readonly string[]>();
+
+function nativeExternalReadRoots(
+  input: LaunchInput,
+  run: ProductionRuntimeBackendInput,
+): readonly string[] {
+  const known = EXTERNAL_READ_ROOTS.get(run);
+  if (known !== undefined) return known;
+  const resolution = resolveNativeExternalReadRoots({
+    value: input.externalReadRoots,
+    kernelAllowlist:
+      input.portable.target === "macos-arm64" || input.portable.target === "macos-x64",
+    workspaceRoot: run.context.workspaceRoot,
+    privateStateRoot: nativePrivateStateRoot(input, run),
+    deniedRoots: nativeDeniedReadRoots(input.runtimeStateRoot),
+  });
+  recordNativeExternalRootsResolved(
+    input.activityLog ?? processServerLogSink(),
+    run.minted.authorityRef.runId,
+    resolution,
+  );
+  EXTERNAL_READ_ROOTS.set(run, resolution.roots);
+  return resolution.roots;
+}
+
+// The kernel's half of the accepted external references (#3900 AC5): absent when none is admitted
+// or the sandbox has no read allowlist that could name one (Linux mounts none yet).
+function externalReadRootsField(
+  input: LaunchInput,
+  run: ProductionRuntimeBackendInput,
+  macos: boolean,
+): { readonly externalReadRoots?: readonly string[] } {
+  if (!macos) return {};
+  const roots = nativeExternalReadRoots(input, run);
+  return roots.length === 0 ? {} : { externalReadRoots: roots };
+}
+
+function nativePrivateStateRoot(input: LaunchInput, run: ProductionRuntimeBackendInput): string {
+  return join(
+    realpathSync(input.runtimeStateRoot),
+    "coding-runtime",
+    "opencode",
+    run.minted.authorityRef.runId,
+  );
 }
 
 // A task's retained native session (#3904), bound to the run's own workspace.
@@ -1095,12 +1154,7 @@ function gatewayFilesystem(
   // Linux confines only the native profile, with a bubblewrap mount allowlist; the gateway profile
   // keeps its namespace bridge launcher there.
   if (!macos && !(native && portable.target === "linux-x64")) return {};
-  const privateStateRoot = join(
-    realpathSync(input.runtimeStateRoot),
-    "coding-runtime",
-    "opencode",
-    run.minted.authorityRef.runId,
-  );
+  const privateStateRoot = nativePrivateStateRoot(input, run);
   return {
     filesystem: {
       workspaceRoot: run.context.workspaceRoot,
@@ -1120,6 +1174,7 @@ function gatewayFilesystem(
               homedir(),
             ),
             ...nativeGitMetadataReadRoots(input, run),
+            ...externalReadRootsField(input, run, macos),
             // The policy plugin and the private configuration are read-only to the shell.
             protectedWriteRoots: [openCodeConfigDirectory(privateStateRoot)],
             // The plan agent's private notes take no link that could name a workspace file.

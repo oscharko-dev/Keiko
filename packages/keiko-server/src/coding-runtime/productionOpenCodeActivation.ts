@@ -22,6 +22,7 @@ import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { ServerDiagnosticSink } from "../diagnostics-log.js";
 import type { ServerLogSink } from "../observability/index.js";
 import { loadMcpServerRegistry } from "../mcp/mcpServerRegistry.js";
+import { KEIKO_CODING_EXTERNAL_READ_ROOTS_ENV } from "./opencodeNativeExternalRoots.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import type { CodingRuntimeEvidenceAggregator } from "./codingRuntimeEvidenceAggregator.js";
 import {
@@ -276,6 +277,8 @@ function activatedPorts(
       ...(input.activityLog ? { activityLog: input.activityLog } : {}),
       ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
       ...(input.nativeWorktrees ? { nativeWorktrees: input.nativeWorktrees } : {}),
+      // #3900 AC5: the operator's accepted external references, resolved per native run.
+      externalReadRoots: input.env[KEIKO_CODING_EXTERNAL_READ_ROOTS_ENV],
       ...(input.fetch ? { fetch: input.fetch } : {}),
       ...(input.runtimeMaxDurationMs === undefined
         ? {}

@@ -149,6 +149,36 @@ describe("OpenCode launch profile", () => {
   // denied statically except the mode-independent external-directory escape; every other action
   // is decided per call by the server-owned policy. Repository configuration is data until the
   // operator admits its executable effects (#3903), so the project layer stays switched off.
+  // #3900 AC5: an accepted external reference gets one rule that hands its reads to the policy;
+  // every other external directory stays denied by the earlier catch-all.
+  it("hands each accepted external reference to the policy and nothing else", () => {
+    const profile = buildOpenCodeLaunchProfile({
+      executable: "/managed/opencode",
+      stateRoot: "/private/run",
+      toolProfile: "native",
+      externalReadRoots: ["/Users/owner/reference/docs"],
+      ...CONTEXT_INPUT,
+      randomBytes: () => Buffer.alloc(32, 7),
+    });
+    if (!profile.ok) throw new Error("expected native launch profile");
+    const config = JSON.parse(profile.config) as {
+      readonly permissions: readonly Readonly<Record<string, string>>[];
+    };
+    expect(config.permissions).toEqual([
+      { action: "external_directory", resource: "*", effect: "deny" },
+      {
+        action: "external_directory",
+        resource: `${openCodePlanDirectory("/private/run")}/*`,
+        effect: "allow",
+      },
+      { action: "external_directory", resource: "/Users/owner/reference/docs/*", effect: "ask" },
+    ]);
+    // The producer's own local reference, named by position, never by the directory.
+    expect(JSON.parse(profile.config)).toMatchObject({
+      references: { "external-1": { path: "/Users/owner/reference/docs" } },
+    });
+  });
+
   it("emits the standalone-equivalent native configuration with the project layer off", () => {
     const profile = buildOpenCodeLaunchProfile({
       executable: "/managed/opencode",
@@ -253,10 +283,13 @@ describe("OpenCode launch profile", () => {
         "permissions",
         "policies",
         "providers",
+        "references",
         "share",
         "update",
       ]);
       for (const key of Object.keys(content)) expect(content[key]).toEqual(file[key]);
+      // #3900 AC5: no layer can name a reference; without an accepted root there is none.
+      expect(content.references).toEqual({});
       const provider = record(record(content.providers)["keiko-runtime"]);
       expect(record(provider.settings).baseURL).toBe("{env:KEIKO_MODEL_GATEWAY_URL}");
       expect(provider.headers).toEqual({

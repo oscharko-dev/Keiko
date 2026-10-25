@@ -8684,6 +8684,7 @@
       "lifecycleOperations": {
         "start": [],
         "state": [
+          "coding-runtime.native-external-roots.resolved",
           "coding-runtime.native-formatter.bound",
           "coding-runtime.native-narrowing.refused",
           "coding-runtime.native-policy.decided",
@@ -8695,6 +8696,10 @@
         "loss": []
       },
       "causalEdges": [
+        {
+          "op": "coding-runtime.native-external-roots.resolved",
+          "mode": "correlation"
+        },
         {
           "op": "coding-runtime.native-formatter.bound",
           "mode": "correlation"
@@ -8718,6 +8723,7 @@
       ],
       "lossSignals": [],
       "resourceSignals": [
+        "coding-runtime.native-external-roots.resolved",
         "coding-runtime.native-formatter.bound",
         "coding-runtime.native-narrowing.refused",
         "coding-runtime.native-policy.decided",
@@ -8726,6 +8732,54 @@
       ],
       "replayReferences": [],
       "operations": [
+        {
+          "op": "coding-runtime.native-external-roots.resolved",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "rootCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "runId",
+              "type": "string",
+              "dataClass": "opaque-id",
+              "required": true
+            },
+            {
+              "name": "state",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "loss-state",
+            "opaque-id"
+          ],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["coding-runtime.native-external-roots.resolved.emitted-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
         {
           "op": "coding-runtime.native-formatter.bound",
           "owner": "keiko-server",

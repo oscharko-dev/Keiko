@@ -59,6 +59,13 @@ export interface RuntimeGatewayFilesystem {
    */
   readonly gitMetadataReadRoots?: readonly string[] | undefined;
   /**
+   * Native profile only: directories outside the workspace and the private state that the
+   * operator explicitly accepted as read-only external references (#3900 AC5,
+   * `KEIKO_CODING_EXTERNAL_READ_ROOTS`). The process reads them, never writes them; the denied
+   * roots and the credential names stay unreadable inside them. Absent means none.
+   */
+  readonly externalReadRoots?: readonly string[] | undefined;
+  /**
    * Native profile only: absolute directories strictly inside the writable roots (the workspace or
    * the private state) that the process may read but never create, change, replace, remove or move
    * entries in, so a shell child cannot rewrite the policy plugin or the configuration the runtime

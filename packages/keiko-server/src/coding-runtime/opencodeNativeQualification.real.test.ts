@@ -36,6 +36,7 @@ import {
   openCodeRepositoryInstructionsPath,
 } from "./opencodeLaunchProfile.js";
 import { createCodingRuntimeRepositoryInstructionsPort } from "./codingRuntimeRepositoryInstructions.js";
+import { resolveNativeExternalReadRoots } from "./opencodeNativeExternalRoots.js";
 import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
 import { OPENCODE_NATIVE_TOOL_DEFINITIONS } from "./opencodeNativeTools.js";
 import {
@@ -241,6 +242,8 @@ interface Governance {
   readonly approveAsks: boolean;
   /** The MCP grants of the run's admitted registry servers (#3903). */
   readonly mcp?: OpenCodeNativeMcpGrants | undefined;
+  /** The run's accepted external references (#3900 AC5). */
+  readonly externalRoots?: readonly string[] | undefined;
 }
 
 /** Keiko's own native policy answers every ask the generated hook sends. */
@@ -257,6 +260,9 @@ async function startFacade(governance: Governance): Promise<FacadeStub> {
         request,
         nowMs: Date.now(),
         ...(governance.mcp === undefined ? {} : { mcp: governance.mcp }),
+        ...(governance.externalRoots === undefined
+          ? {}
+          : { externalRoots: governance.externalRoots }),
       });
       decisions.push({
         permission: request.permission,
@@ -327,6 +333,11 @@ interface LaunchOptions {
    * `PATH` (`nativeToolchainReadRoots`), so the agent runs the host's real executables (#3901 AC1).
    */
   readonly toolchainPath?: string | undefined;
+  /**
+   * The operator's raw `KEIKO_CODING_EXTERNAL_READ_ROOTS` for this run (#3900 AC5), resolved as
+   * production resolves it and bound to the profile, the kernel allowlist and the policy alike.
+   */
+  readonly externalReadRoots?: ((fixture: Fixture) => string) | undefined;
   /** Provisions the workspace beyond plain text files (a project's installed packages). */
   readonly prepare?: ((fixture: Fixture) => void | Promise<void>) | undefined;
 }
@@ -340,6 +351,18 @@ const PRODUCTION_LAUNCH: LaunchOptions = {
   env: {},
   plugins: {},
 };
+
+/** The run's accepted external references, resolved by the production resolver (#3900 AC5). */
+function acceptedExternalRoots(options: LaunchOptions, fixture: Fixture): readonly string[] {
+  if (options.externalReadRoots === undefined) return [];
+  return resolveNativeExternalReadRoots({
+    value: options.externalReadRoots(fixture),
+    kernelAllowlist: true,
+    workspaceRoot: fixture.workspace,
+    privateStateRoot: fixture.state,
+    deniedRoots: [],
+  }).roots;
+}
 
 function toolchainReadRoots(
   options: LaunchOptions,
@@ -419,6 +442,7 @@ function launch(
   options: LaunchOptions,
   mcp?: OpenCodeNativeMcpAdmission,
 ): Launched {
+  const external = acceptedExternalRoots(options, fixture);
   const profile = buildOpenCodeLaunchProfile({
     executable: binary,
     stateRoot: fixture.state,
@@ -429,6 +453,7 @@ function launch(
       maxOutputTokens: 4_096,
     },
     ...(mcp === undefined ? {} : { mcp: mcp.config }),
+    ...(external.length === 0 ? {} : { externalReadRoots: external }),
   });
   if (!profile.ok) throw new Error("fixture-profile-invalid");
   materializePrivateConfiguration(fixture, options, profile.config);
@@ -455,6 +480,7 @@ function launch(
       // As production opens them: the admitted local MCP servers' install prefixes (#3903) and the
       // launcher's toolchain `PATH` (#3901 AC1).
       ...toolchainReadRoots(options, fixture),
+      ...(external.length === 0 ? {} : { externalReadRoots: external }),
     },
   });
   const command = buildRuntimeGatewaySeatbeltCommand(policy, binary, profile.args, git.path);
@@ -563,6 +589,9 @@ async function withRun(
     planRoot: openCodePlanDirectory(fixture.state),
     approveAsks: options.approveAsks,
     ...(mcp === undefined ? {} : { mcp: mcp.grants }),
+    ...(options.externalReadRoots === undefined
+      ? {}
+      : { externalRoots: acceptedExternalRoots(options, fixture) }),
   });
   const launched = launch(
     fixture,
@@ -2469,5 +2498,107 @@ describe("pinned native OpenCode Code Mode session move and worktree creation (#
       );
     },
     180_000,
+  );
+});
+
+// ─── accepted external references (#3900 AC5) ──────────────────────────────────────────────────
+
+// A directory the operator accepted (`KEIKO_CODING_EXTERNAL_READ_ROOTS`) is readable through the
+// original read tool as an `external-file` action of the run's mode, never writable; its credential
+// files, a hard link in it and a symlink out of it stay unreadable, and nothing else outside the
+// workspace opens.
+describe("pinned native OpenCode accepted external references (C08, #3900 AC5)", () => {
+  const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
+
+  function reference(fixture: Fixture): string {
+    return join(fixture.root, "reference", "docs");
+  }
+
+  function prepareReference(fixture: Fixture): void {
+    const root = reference(fixture);
+    mkdirSync(root, { recursive: true });
+    writeFileSync(join(root, "guide.md"), "EXTERNAL-GUIDE-CANARY\n");
+    writeFileSync(join(root, ".env"), "TOKEN=EXTERNAL-CREDENTIAL-CANARY\n");
+    writeFileSync(join(fixture.root, "secret.txt"), "OUTSIDE-REFERENCE-CANARY\n");
+    symlinkSync(join(fixture.root, "secret.txt"), join(root, "escape.txt"));
+    linkSync(join(fixture.root, "secret.txt"), join(root, "aliased.txt"));
+  }
+
+  it.skipIf(skip)(
+    "reads an accepted reference in Full access and nothing it must not read or write",
+    async () => {
+      await withRun(
+        {
+          mode: "autonomous-delivery",
+          prepare: prepareReference,
+          externalReadRoots: reference,
+        },
+        async (run) => {
+          const root = reference(run.fixture);
+          expect(await scriptedTurn(run, read(join(root, "guide.md")))).toContain(
+            "EXTERNAL-GUIDE-CANARY",
+          );
+          // The producer's own reference feature names it, in its listing and to the model.
+          const listed = JSON.stringify(await run.raw("/api/reference"));
+          expect(listed).toContain("external-1");
+          expect(listed).toContain(root);
+          const told = JSON.stringify(run.gateway.requests[0]?.body);
+          expect(told).toContain("external-1");
+          expect(told).toContain(root);
+          expect(run.facade.decisions).toContainEqual(
+            expect.objectContaining({ permission: "external_directory", effect: "allow" }),
+          );
+          for (const name of [".env", "escape.txt", "aliased.txt"]) {
+            const result = await scriptedTurn(run, read(join(root, name)));
+            expect(result, name).not.toContain("CANARY");
+          }
+          run.facade.decisions.length = 0;
+          await scriptedTurn(run, {
+            name: "write",
+            arguments: { path: join(root, "new.md"), content: "written\n" },
+          });
+          expect(existsSync(join(root, "new.md"))).toBe(false);
+          // The write reached the policy and was refused there, not lost to a malformed call.
+          expect(run.facade.decisions.some((decision) => decision.effect === "deny")).toBe(true);
+          expect(await scriptedTurn(run, read(join(run.fixture.root, "secret.txt")))).not.toContain(
+            "OUTSIDE-REFERENCE-CANARY",
+          );
+        },
+      );
+    },
+    240_000,
+  );
+
+  it.skipIf(skip)(
+    "asks before an external read in Supervised workspace, and a refusal reads nothing",
+    async () => {
+      await withRun(
+        {
+          mode: "supervised-coding",
+          approveAsks: false,
+          prepare: prepareReference,
+          externalReadRoots: reference,
+        },
+        async (run) => {
+          const result = await scriptedTurn(run, read(join(reference(run.fixture), "guide.md")));
+          expect(result).not.toContain("EXTERNAL-GUIDE-CANARY");
+          expect(run.facade.decisions).toContainEqual(
+            expect.objectContaining({ permission: "external_directory", effect: "ask" }),
+          );
+        },
+      );
+    },
+    240_000,
+  );
+
+  it.skipIf(skip)(
+    "control: without an accepted reference the same read stays outside the workspace",
+    async () => {
+      await withRun({ mode: "autonomous-delivery", prepare: prepareReference }, async (run) => {
+        const result = await scriptedTurn(run, read(join(reference(run.fixture), "guide.md")));
+        expect(result).not.toContain("EXTERNAL-GUIDE-CANARY");
+      });
+    },
+    240_000,
   );
 });

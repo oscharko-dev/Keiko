@@ -97,6 +97,7 @@ const NATIVE_DENIED_READ_ROOTS_MAX = 64;
 const NATIVE_PROTECTED_WRITE_ROOTS_MAX = 64;
 const NATIVE_LINK_FREE_WRITE_ROOTS_MAX = 8;
 const NATIVE_GIT_METADATA_READ_ROOTS_MAX = 4;
+const NATIVE_EXTERNAL_READ_ROOTS_MAX = 8;
 
 const GATEWAY_FILESYSTEM_KEYS = new Set([
   "workspaceRoot",
@@ -108,6 +109,7 @@ const OPTIONAL_GATEWAY_FILESYSTEM_KEYS = new Set([
   "deniedReadRoots",
   "toolchainReadRoots",
   "gitMetadataReadRoots",
+  "externalReadRoots",
   "protectedWriteRoots",
   "linkFreeWriteRoots",
 ]);
@@ -181,8 +183,30 @@ function validOptionalRoots(value: Record<string, unknown>): boolean {
       (root) => root.split("/").length > 2,
     ) &&
     validGitMetadataReadRoots(value) &&
+    validExternalReadRoots(value) &&
     validProtectedWriteRoots(value) &&
     validLinkFreeWriteRoots(value)
+  );
+}
+
+/**
+ * An accepted external reference (#3900 AC5) is read-only and lies outside the workspace and the
+ * private state, never above either, and never a top-level directory such as `/Users`.
+ */
+function validExternalReadRoots(value: Record<string, unknown>): boolean {
+  if (value.externalReadRoots === undefined) return true;
+  const own = [value.workspaceRoot, value.privateStateRoot];
+  return (
+    value.workspaceAccess === "read-write" &&
+    validRootList(
+      value.externalReadRoots,
+      NATIVE_EXTERNAL_READ_ROOTS_MAX,
+      (root) =>
+        root.split("/").length > 3 &&
+        own.every(
+          (path) => typeof path === "string" && outsideRoot(root, path) && outsideRoot(path, root),
+        ),
+    )
   );
 }
 
@@ -280,6 +304,9 @@ function nativeReadRoots(closed: RuntimeGatewayFilesystem): readonly string[] {
   return [
     ...NATIVE_SYSTEM_READ_ROOTS,
     ...(closed.toolchainReadRoots ?? []),
+    // Accepted external references are read-only like a toolchain root: the denied roots and the
+    // credential names that follow still win inside them (#3900 AC5).
+    ...(closed.externalReadRoots ?? []),
     closed.runtimeReadRoot,
   ];
 }

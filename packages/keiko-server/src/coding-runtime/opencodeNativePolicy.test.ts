@@ -996,3 +996,94 @@ describe("MCP tools under the operator's registry (#3903)", () => {
     expect(JSON.stringify(records[0])).not.toContain("docs");
   });
 });
+
+// #3900 AC5: a directory the operator accepted as an external reference is read-only; each read is
+// an `external-file` action of the run's mode, and the workspace's sensitive-path and hard-link
+// refusals hold inside it.
+describe("accepted external references (#3900 AC5)", () => {
+  function external(): {
+    readonly root: string;
+    readonly reference: string;
+    readonly workspace: string;
+  } {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-native-external-")));
+    const reference = join(root, "reference", "docs");
+    const workspace = join(root, "workspace");
+    mkdirSync(reference, { recursive: true });
+    mkdirSync(workspace, { recursive: true });
+    writeFileSync(join(reference, "guide.md"), "guide\n");
+    writeFileSync(join(reference, ".env"), "TOKEN=x\n");
+    writeFileSync(join(root, "outside.txt"), "outside\n");
+    linkSync(join(root, "outside.txt"), join(reference, "linked.txt"));
+    return { root, reference, workspace };
+  }
+
+  function effect(
+    paths: { readonly reference: string; readonly workspace: string },
+    mode: string,
+    permission: string,
+    resources: readonly string[],
+    overrides: Partial<OpenCodeNativePolicyRequest> = {},
+    externalRoots: readonly string[] = [paths.reference],
+  ): string {
+    const decision = decideOpenCodeNativePolicy({
+      mode,
+      workspaceRoot: paths.workspace,
+      externalRoots,
+      request: request(permission, resources, overrides),
+      nowMs: NOW,
+    });
+    return decision.effect === "deny" ? `deny:${decision.reason}` : decision.effect;
+  }
+
+  it("asks before an external read below Full access and allows it in Full access", () => {
+    const paths = external();
+    try {
+      const guide = join(paths.reference, "guide.md");
+      for (const [mode, expected] of [
+        ["governed-assist", "ask"],
+        ["supervised-coding", "ask"],
+        ["autonomous-delivery", "allow"],
+      ] as const) {
+        expect(effect(paths, mode, "external_directory", [`${paths.reference}/*`]), mode).toBe(
+          expected,
+        );
+        expect(effect(paths, mode, "read", [guide]), mode).toBe(expected);
+        expect(effect(paths, mode, "grep", ["needle"], { searchPath: paths.reference }), mode).toBe(
+          expected,
+        );
+      }
+    } finally {
+      rmSync(paths.root, { recursive: true, force: true });
+    }
+  });
+
+  it("never writes there, and refuses its credential files, hard links and every other directory", () => {
+    const paths = external();
+    try {
+      for (const mode of ["governed-assist", "supervised-coding", "autonomous-delivery"]) {
+        expect(effect(paths, mode, "edit", [join(paths.reference, "guide.md")])).toBe(
+          "deny:workspace-escape",
+        );
+        expect(effect(paths, mode, "read", [join(paths.reference, ".env")])).toBe(
+          "deny:sensitive-path",
+        );
+        expect(effect(paths, mode, "read", [join(paths.reference, "linked.txt")])).toBe(
+          "deny:linked-file",
+        );
+        expect(effect(paths, mode, "read", [join(paths.root, "outside.txt")])).toBe(
+          "deny:workspace-escape",
+        );
+        expect(effect(paths, mode, "external_directory", [`${paths.root}/*`])).toBe(
+          "deny:workspace-escape",
+        );
+        // Without an accepted reference the same read is outside the workspace.
+        expect(effect(paths, mode, "read", [join(paths.reference, "guide.md")], {}, [])).toBe(
+          "deny:workspace-escape",
+        );
+      }
+    } finally {
+      rmSync(paths.root, { recursive: true, force: true });
+    }
+  });
+});

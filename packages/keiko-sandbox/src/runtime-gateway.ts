@@ -123,6 +123,9 @@ function policyDigest(policy: Omit<RuntimeGatewayConfinement, "policyDigest">): 
               ...(policy.filesystem.gitMetadataReadRoots === undefined
                 ? []
                 : ["native-git-metadata-read-roots-v1", ...policy.filesystem.gitMetadataReadRoots]),
+              ...(policy.filesystem.externalReadRoots === undefined
+                ? []
+                : ["native-external-read-roots-v1", ...policy.filesystem.externalReadRoots]),
               ...(policy.filesystem.protectedWriteRoots === undefined
                 ? []
                 : ["native-protected-write-roots-v1", ...policy.filesystem.protectedWriteRoots]),

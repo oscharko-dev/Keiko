@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "aaacdbe92dd6b57d9f5154d146b07b8ab414f730ac0ff4520667b5f81195cc82",
+    "catalogDigest": "6fda8463331f820e84498c3b27a6fbda162548ed739e943c8949674578514c14",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -6215,7 +6215,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:398",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1257"
+          "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1265"
         ]
       },
       {
@@ -6881,9 +6881,9 @@
         "failureClasses": ["coding-runtime-context-usage"],
         "proofIds": ["coding-runtime.context-usage.observed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:102",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:106",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:1265"
+          "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:1320"
         ]
       },
       {
@@ -7177,9 +7177,9 @@
         "failureClasses": ["coding-runtime-dev-lane"],
         "proofIds": ["coding-runtime.dev-lane.activated.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:60",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:61",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:382"
+          "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:385"
         ]
       },
       {
@@ -7229,9 +7229,9 @@
         "failureClasses": ["coding-runtime-dev-lane"],
         "proofIds": ["coding-runtime.dev-lane.refused.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:107",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:108",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:401"
+          "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:404"
         ]
       },
       {
@@ -8345,6 +8345,67 @@
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
+        "op": "coding-runtime.native-external-roots.resolved",
+        "category": "process",
+        "owner": "keiko-server",
+        "emitter": "coding-runtime.opencodeNativeExternalRoots.recordNativeExternalRootsResolved",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "runId": {
+            "type": "string",
+            "dataClass": "opaque-id",
+            "required": true,
+            "maxLength": 128
+          },
+          "state": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["absent", "admitted", "refused", "unsupported-platform"]
+          },
+          "rootCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "reason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "not-absolute",
+              "not-directory",
+              "symlinked",
+              "too-broad",
+              "overlaps-run",
+              "denied-root",
+              "too-many"
+            ]
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["coding-runtime-native-policy"],
+        "proofIds": ["coding-runtime.native-external-roots.resolved.emitted-line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeNativeExternalRoots.ts:106",
+        "emitterSites": [
+          "packages/keiko-server/src/coding-runtime/opencodeNativeExternalRoots.ts:144"
+        ]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
         "op": "coding-runtime.native-formatter.bound",
         "category": "process",
         "owner": "keiko-server",
@@ -8392,7 +8453,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:320",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1844"
+          "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1855"
         ]
       },
       {
@@ -8440,7 +8501,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:290",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:907"
+          "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:915"
         ]
       },
       {
@@ -8593,8 +8654,8 @@
         "failureClasses": ["coding-runtime-native-policy"],
         "proofIds": ["coding-runtime.native-policy.decided.emitted-line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1296",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1494"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1357",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1555"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -8818,9 +8879,9 @@
         "failureClasses": ["coding-runtime-native-policy"],
         "proofIds": ["coding-runtime.native-step.changed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:3705",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:3718",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:3746"
+          "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:3759"
         ]
       },
       {
@@ -9257,7 +9318,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:350",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1867"
+          "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1878"
         ]
       },
       {
@@ -12034,7 +12095,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:257",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:2186"
+          "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:2197"
         ]
       },
       {
@@ -42996,6 +43057,7 @@
         "requiredLifecycleOperations": {
           "start": [],
           "state": [
+            "coding-runtime.native-external-roots.resolved",
             "coding-runtime.native-formatter.bound",
             "coding-runtime.native-narrowing.refused",
             "coding-runtime.native-policy.decided",
@@ -43007,6 +43069,7 @@
           "loss": []
         },
         "requiredCausalOperations": [
+          "coding-runtime.native-external-roots.resolved",
           "coding-runtime.native-formatter.bound",
           "coding-runtime.native-narrowing.refused",
           "coding-runtime.native-policy.decided",
@@ -43015,6 +43078,7 @@
         ],
         "requiredLossOperations": [],
         "requiredProofOperations": [
+          "coding-runtime.native-external-roots.resolved",
           "coding-runtime.native-formatter.bound",
           "coding-runtime.native-narrowing.refused",
           "coding-runtime.native-policy.decided",
@@ -43023,6 +43087,7 @@
         ],
         "requiredReplayProofIds": [],
         "requiredResourceOperations": [
+          "coding-runtime.native-external-roots.resolved",
           "coding-runtime.native-formatter.bound",
           "coding-runtime.native-narrowing.refused",
           "coding-runtime.native-policy.decided",
@@ -59277,6 +59342,7 @@
           "lifecycleOperations": {
             "start": [],
             "state": [
+              "coding-runtime.native-external-roots.resolved",
               "coding-runtime.native-formatter.bound",
               "coding-runtime.native-narrowing.refused",
               "coding-runtime.native-policy.decided",
@@ -59288,6 +59354,10 @@
             "loss": []
           },
           "causalEdges": [
+            {
+              "op": "coding-runtime.native-external-roots.resolved",
+              "mode": "correlation"
+            },
             {
               "op": "coding-runtime.native-formatter.bound",
               "mode": "correlation"
@@ -59311,6 +59381,7 @@
           ],
           "lossSignals": [],
           "resourceSignals": [
+            "coding-runtime.native-external-roots.resolved",
             "coding-runtime.native-formatter.bound",
             "coding-runtime.native-narrowing.refused",
             "coding-runtime.native-policy.decided",
@@ -59319,6 +59390,54 @@
           ],
           "replayReferences": [],
           "operations": [
+            {
+              "op": "coding-runtime.native-external-roots.resolved",
+              "owner": "keiko-server",
+              "category": "process",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "reason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "rootCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "runId",
+                  "type": "string",
+                  "dataClass": "opaque-id",
+                  "required": true
+                },
+                {
+                  "name": "state",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": [
+                "closed-enum",
+                "completeness-state",
+                "count",
+                "loss-state",
+                "opaque-id"
+              ],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["coding-runtime.native-external-roots.resolved.emitted-line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
             {
               "op": "coding-runtime.native-formatter.bound",
               "owner": "keiko-server",
@@ -98271,7 +98390,7 @@
     {
       "op": "coding-runtime.context-usage.observed",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:105",
+      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:109",
       "package": "keiko-server"
     },
     {
@@ -98289,13 +98408,13 @@
     {
       "op": "coding-runtime.dev-lane.activated",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:63",
+      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:64",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.dev-lane.refused",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:110",
+      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:111",
       "package": "keiko-server"
     },
     {
@@ -98378,7 +98497,7 @@
     {
       "op": "coding-runtime.handshake",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:2741",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:2752",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -98391,7 +98510,7 @@
     {
       "op": "coding-runtime.history",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:2474",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:2485",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -98445,6 +98564,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "coding-runtime.native-external-roots.resolved",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeNativeExternalRoots.ts:109",
+      "package": "keiko-server"
+    },
+    {
       "op": "coding-runtime.native-formatter.bound",
       "category": "process",
       "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:323",
@@ -98459,7 +98584,7 @@
     {
       "op": "coding-runtime.native-policy.decided",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1299",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1360",
       "package": "keiko-server"
     },
     {
@@ -98483,7 +98608,7 @@
     {
       "op": "coding-runtime.native-step.changed",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:3708",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:3721",
       "package": "keiko-server"
     },
     {
@@ -98495,14 +98620,14 @@
     {
       "op": "coding-runtime.opencode-composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1316",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1324",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.opencode-composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1613",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1621",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -98827,35 +98952,35 @@
     {
       "op": "coding-runtime.tool-bridge",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:3477",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:3490",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.tool-bridge",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:3820",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:3833",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.tool-bridge",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:4238",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:4251",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.tool-bridge",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:4300",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:4313",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.tool-bridge",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:4365",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:4378",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -101352,6 +101477,7 @@
     "coding-runtime.initial-turn.stop-failed",
     "coding-runtime.lifecycle",
     "coding-runtime.mentions.listed",
+    "coding-runtime.native-external-roots.resolved",
     "coding-runtime.native-formatter.bound",
     "coding-runtime.native-narrowing.refused",
     "coding-runtime.native-policy.decided",

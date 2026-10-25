@@ -148,22 +148,41 @@ text gets the same one repair (`reason=empty-answer-repair`, a second empty answ
 
 ## Repository working instructions
 
-A run's initial turn carries the task workspace's own `AGENTS.md` (workspace root only, exact name,
-no symlink) as bounded, labelled, untrusted context beside the project memory: the window
-`keiko_workspace_read` would answer for the first 800 lines, cut at a line boundary to 16,384 bytes
-and to the turn's remaining prompt budget, with one explicit truncation line when cut, read through
-the same secure read helper only while the run's own workspace is the active one (a workspace
-switch while the run starts records `refused`, `workspace-unavailable`), and nonce-framed so it
-grants no authority, cannot close its frame early, and cannot be forged by an issue body or memory
-(ADR-0137 D1). It is on by default; an operator sets
-`KEIKO_CODING_REPOSITORY_INSTRUCTIONS_ENABLED=false` before starting the server to disable it, and
-any other explicit value fails closed at composition. The existing
-`coding-runtime.repository-instructions.context` activity event records the outcome per run
-(`attached`, `truncated`, `absent`, `disabled`, `refused`) with the attached byte and line counts,
-the file's total counts when cut, and the whole-file digest the read tool reports, never the
-content. The helper's content ceiling of 65,536 bytes is pinned in its wire protocol and native
-binary: a larger `AGENTS.md` is refused as `too-large` (at `warn`, the run proceeds) until the
-helper protocol gains a bounded window, so keep the file under 64 KiB for it to reach the model.
+A run reads the task workspace's own `AGENTS.md` (workspace root only, exact name, no symlink)
+through the secure read helper only while the run's own workspace is the active one (a workspace
+switch while the run starts records `refused`, `workspace-unavailable`). The text first passes the
+canonical model-safe projection of workspace text, so credentials in the file never reach the model
+(a file that projection cannot handle is `refused`, `redaction-unavailable`). It is then bounded to
+the first 800 lines and 16,384 bytes, with one explicit truncation line when cut, and labelled as
+repository-authored and untrusted: it grants no authority (ADR-0137 D1).
+
+- **Native profile.** The bounded copy is written to the run's private configuration as the pinned
+  2.1.4 producer's global instruction file, which its own instruction plugin loads and watches.
+  Keiko refreshes the copy before every turn, so an edit, a file `init` creates and a removal reach
+  the next model call. The producer's `read` still loads nested `AGENTS.md` files.
+- **Mapped profiles.** The bounded text rides in the first message, nonce-framed so it cannot close
+  its frame early or be forged by an issue body or memory.
+
+It is on by default; an operator sets `KEIKO_CODING_REPOSITORY_INSTRUCTIONS_ENABLED=false` before
+starting the server to disable it, and any other explicit value fails closed at composition. The
+`coding-runtime.repository-instructions.context` activity event records each read (`attached`,
+`truncated`, `absent`, `disabled`, `refused`) with byte and line counts and the file's own digest,
+never the content. Files above the helper's 1 MiB content ceiling are refused as `too-large` (at
+`warn`, the run proceeds).
+
+## Accepted external references
+
+A native run on macOS can read directories outside its workspace only when the operator accepted
+them before starting the server: `KEIKO_CODING_EXTERNAL_READ_ROOTS` names absolute directories,
+separated like `PATH`, at most 8 (ADR-0137, #3900 AC5). They are read-only. The whole set is
+admitted or none of it: an entry that is not an existing directory reached without a symbolic link,
+a top-level or home directory, one that overlaps the workspace or Keiko's private state, or one
+inside a credential store refuses all of them. `coding-runtime.native-external-roots.resolved`
+records the outcome per run with a closed reason and counts, never a path. The producer lists each
+accepted root as a local reference (`external-1`, …) and tells the model; each read there is an
+external-file action of the run's mode (asked in Ask for approval and Supervised workspace, allowed
+in Full access), and credential files, hard links and writes stay refused. On Linux no external
+root is admitted yet (`unsupported-platform`).
 
 ## Repository agents, commands and skills
 

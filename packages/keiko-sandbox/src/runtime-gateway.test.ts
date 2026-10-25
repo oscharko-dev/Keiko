@@ -166,6 +166,18 @@ describe("long-lived gateway network confinement", () => {
         filesystem: { ...filesystem, toolchainReadRoots: ["/opt/other"] },
       }),
     ).toBe(false);
+    // #3900 AC5: an accepted external root is bound into the digest the same way.
+    const withExternal = createRuntimeGatewayConfinement({
+      ...native,
+      filesystem: { ...filesystem, externalReadRoots: ["/Users/owner/reference/docs"] },
+    });
+    expect(withExternal.policyDigest).not.toBe(plain.policyDigest);
+    expect(
+      isRuntimeGatewayConfinement({
+        ...withExternal,
+        filesystem: { ...filesystem, externalReadRoots: ["/Users/owner/reference/other"] },
+      }),
+    ).toBe(false);
   });
 
   it("binds the protected write roots into the policy digest and refuses roots outside the writable ones", () => {

@@ -480,6 +480,11 @@ export interface OpenCodeRuntimeCompositionInput {
    */
   readonly nativeWorktrees?: NativeWorktreeProvisionPort | undefined;
   /**
+   * Native profile only: the run's accepted external references (#3900 AC5), the roots its kernel
+   * allowlist reads; the launch profile hands them to the policy, which decides each read.
+   */
+  readonly externalReadRoots?: readonly string[] | undefined;
+  /**
    * The operator's MCP server registry, read once per native run at launch (#3903,
    * `mcpServerRegistry.ts`); absent admits no MCP server.
    */
@@ -809,6 +814,9 @@ export function createOpenCodeRuntimeComposition(
       resolveWorkspaceRootAccess: input.resolveWorkspaceRootAccess,
       activityLog: input.activityLog ?? processServerLogSink(),
       ...(input.nativeWorktrees === undefined ? {} : { nativeWorktrees: input.nativeWorktrees }),
+      ...(input.externalReadRoots === undefined
+        ? {}
+        : { externalReadRoots: input.externalReadRoots }),
     },
     input.toolBridge,
     input.toolFacadeOrigin,
@@ -1694,6 +1702,9 @@ function runLaunchProfile(
     toolProfile: input.toolProfile,
     mode: request.env.KEIKO_CODING_MODE,
     ...(mcp === undefined ? {} : { mcp: mcp.config }),
+    ...(input.toolProfile === "native" && input.externalReadRoots !== undefined
+      ? { externalReadRoots: input.externalReadRoots }
+      : {}),
   });
   if (!profile.ok) throw new Error("profile-invalid");
   return { profile, mcp: mcp?.grants };
@@ -2944,6 +2955,7 @@ interface ToolBridgeExecutionDeps {
   readonly diagnostics: ServerDiagnosticSink | undefined;
   readonly renderedResults?: RenderedResultLog | undefined;
   readonly nativeWorktrees?: NativeWorktreeProvisionPort | undefined;
+  readonly externalReadRoots?: readonly string[] | undefined;
 }
 
 /** Where a delivered tool result's model-facing rendering is recorded (#3873). */
@@ -3395,6 +3407,7 @@ async function handleNativePolicyRequest(
     request,
     nowMs: Date.now(),
     ...(run.mcp === undefined ? {} : { mcp: run.mcp }),
+    ...(deps.externalReadRoots === undefined ? {} : { externalRoots: deps.externalReadRoots }),
   });
   const decision = admittedSessionMove(run, request, decided);
   const settled = await settleNativePolicyOutcome(run, decision, request, signal, deps, {

@@ -494,6 +494,56 @@ describe("buildGatewaySeatbeltCommand child process policy (#3390 live run)", ()
   });
 });
 
+// #3900 AC5: an operator-accepted external reference is a read-only root; the denied roots and the
+// credential names stay unreadable inside it, and it can never open a top-level directory or
+// overlap the workspace or the private state.
+describe("native accepted external read roots (#3900 AC5)", () => {
+  const gateway: NetworkGatewayPolicy = { mode: "gateway", host: "127.0.0.1", port: 1983 };
+  const filesystem = {
+    workspaceRoot: "/accepted/workspace",
+    workspaceAccess: "read-write" as const,
+    privateStateRoot: "/private/state",
+    runtimeReadRoot: "/immutable/runtime",
+    deniedReadRoots: ["/Users/owner/.ssh"],
+  };
+  const profileWith = (externalReadRoots: readonly string[]): string =>
+    buildGatewaySeatbeltCommand(
+      gateway,
+      "/trusted/opencode",
+      [],
+      "/git",
+      { ...filesystem, externalReadRoots },
+      "keiko-native",
+    ).args[1] ?? "";
+
+  it("reads an accepted root, never writes it, and keeps the denials after it", () => {
+    const profile = profileWith(["/Users/owner/reference/docs"]);
+    const allowed = profile.indexOf('(subpath "/Users/owner/reference/docs")');
+    expect(allowed).toBeGreaterThan(-1);
+    expect(profile.slice(0, allowed)).toContain("(allow file-read*");
+    const writes = profile.match(/\(allow file-write\*[^)]*(?:\([^)]*\)[^)]*)*\)/gu) ?? [];
+    expect(writes.join("")).not.toContain("/Users/owner/reference/docs");
+    expect(
+      profile.indexOf('(deny file-read* file-write* (subpath "/Users/owner/.ssh"))'),
+    ).toBeGreaterThan(allowed);
+  });
+
+  it("refuses a top-level, relative, overlapping or excess root", () => {
+    for (const externalReadRoots of [
+      ["/Users"],
+      ["/Users/owner"],
+      ["relative/root"],
+      ["/accepted/workspace/sub"],
+      ["/accepted"],
+      ["/private/state/x/y"],
+      Array.from({ length: 9 }, (_, index) => `/Users/owner/ref/r${String(index)}`),
+    ])
+      expect(() => profileWith(externalReadRoots), externalReadRoots.join()).toThrow(
+        "native-seatbelt-filesystem-invalid",
+      );
+  });
+});
+
 describe("native Git metadata read roots (#3897 review)", () => {
   const gateway: NetworkGatewayPolicy = { mode: "gateway", host: "127.0.0.1", port: 1983 };
   const filesystem = {

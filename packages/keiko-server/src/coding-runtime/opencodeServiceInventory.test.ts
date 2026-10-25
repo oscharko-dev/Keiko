@@ -539,6 +539,7 @@ function composedNativeSettings(): readonly string[] {
     "/state",
     "enabled",
     mcp,
+    ["/Users/owner/reference/docs"],
   );
   return [...new Set(declaredSettings(config, new Set(CONFIGURATION_PATHS)))].sort();
 }

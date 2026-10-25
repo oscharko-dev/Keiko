@@ -1603,6 +1603,8 @@ describe("ripgrep on the OpenCode launch", () => {
     readonly processEnv: NodeJS.ProcessEnv | undefined;
     readonly allowlist: readonly string[];
     readonly toolchainReadRoots: readonly string[] | undefined;
+    readonly externalReadRoots: readonly string[] | undefined;
+    readonly composedExternalReadRoots: readonly string[] | undefined;
     readonly events: readonly ServerLogEvent[];
   }
 
@@ -1613,6 +1615,7 @@ describe("ripgrep on the OpenCode launch", () => {
       readonly native: boolean;
       readonly processEnv?: NodeJS.ProcessEnv | undefined;
       readonly key: "darwin-arm64" | "linux-x64" | "win32-x64";
+      readonly externalReadRoots?: string | undefined;
     },
   ): Launch {
     const events: ServerLogEvent[] = [];
@@ -1627,20 +1630,37 @@ describe("ripgrep on the OpenCode launch", () => {
       ripgrepManifest: manifestFor(options.key),
       activityLog: { write: (event) => events.push(event) },
       ...(options.processEnv === undefined ? {} : { processEnv: options.processEnv }),
+      ...acceptedRoots(options.externalReadRoots),
     }).createRun(runInput(root));
     // A test may launch twice; the spies accumulate, and the latest call is this launch's.
     const confinement = (gatewayFactory.mock.calls.at(-1) ?? nativeFactory.mock.calls.at(-1))?.[0]
       .gatewayConfinement;
+    const composed = compose.mock.calls.at(-1)?.[0];
     return {
-      processEnv: compose.mock.calls.at(-1)?.[0].processEnv,
+      processEnv: composed?.processEnv,
       allowlist: run.launch.inheritedEnvAllowlist,
-      toolchainReadRoots: confinement?.filesystem?.toolchainReadRoots,
+      ...launchedRoots(confinement?.filesystem, composed?.externalReadRoots),
       events,
+    };
+  }
+
+  function launchedRoots(
+    filesystem: RuntimeGatewayFilesystem | undefined,
+    composedExternalReadRoots: readonly string[] | undefined,
+  ): Pick<Launch, "toolchainReadRoots" | "externalReadRoots" | "composedExternalReadRoots"> {
+    return {
+      toolchainReadRoots: filesystem?.toolchainReadRoots,
+      externalReadRoots: filesystem?.externalReadRoots,
+      composedExternalReadRoots,
     };
   }
 
   function tmpRoot(): string {
     return realpathSync(mkdtempSync(join(tmpdir(), "keiko-ripgrep-launch-")));
+  }
+
+  function acceptedRoots(value: string | undefined): { readonly externalReadRoots?: string } {
+    return value === undefined ? {} : { externalReadRoots: value };
   }
 
   it("puts only the verified directory in front of the native child PATH and opens exactly it", () => {
@@ -1665,6 +1685,7 @@ describe("ripgrep on the OpenCode launch", () => {
       // The launch also records where the workspace's Git metadata lives (#3897 review).
       expect(result.events.map((event) => event.op)).toEqual([
         "coding-runtime.ripgrep.resolved",
+        "coding-runtime.native-external-roots.resolved",
         "coding-runtime.git-metadata.resolved",
       ]);
       expect(result.events[0]).toMatchObject({
@@ -1800,6 +1821,43 @@ describe("ripgrep on the OpenCode launch", () => {
     }
   });
 
+  // #3900 AC5: one resolution per run binds the kernel allowlist and the composition's policy
+  // alike, and is recorded once; without the operator's setting neither names a root.
+  it("binds the operator's accepted external roots to the kernel and the composition once", () => {
+    const root = tmpRoot();
+    const outside = realpathSync(mkdtempSync(join(tmpdir(), "keiko-external-reference-")));
+    vi.stubEnv("PATH", `/usr/bin${delimiter}/bin`);
+    try {
+      stage(join(root, "npm-package", "runtime", "native", "rg"));
+      const reference = join(outside, "reference", "docs");
+      mkdirSync(reference, { recursive: true });
+      const accepted = launch(root, npmLaneMacRuntime(root), {
+        native: true,
+        processEnv: CONTENT_ENV,
+        key: "darwin-arm64",
+        externalReadRoots: reference,
+      });
+      expect(accepted.externalReadRoots).toEqual([reference]);
+      expect(accepted.composedExternalReadRoots).toEqual([reference]);
+      expect(
+        accepted.events.filter(
+          (event) => event.op === "coding-runtime.native-external-roots.resolved",
+        ),
+      ).toMatchObject([{ extra: { state: "admitted", rootCount: 1 } }]);
+      const none = launch(root, npmLaneMacRuntime(root), {
+        native: true,
+        processEnv: CONTENT_ENV,
+        key: "darwin-arm64",
+      });
+      expect(none.externalReadRoots).toBeUndefined();
+      expect(none.composedExternalReadRoots).toEqual([]);
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(root, { force: true, recursive: true });
+      rmSync(outside, { force: true, recursive: true });
+    }
+  });
+
   // The clean npm installation (#4064): no override, no ripgrep on the launcher's PATH. The runtime
   // package installed next to Keiko carries the executable, and the launch finds it normally.
   it("verifies the ripgrep an npm runtime package ships and opens exactly its directory", () => {
@@ -1821,6 +1879,7 @@ describe("ripgrep on the OpenCode launch", () => {
       // The launch also records where the workspace's Git metadata lives (#3897 review).
       expect(result.events.map((event) => event.op)).toEqual([
         "coding-runtime.ripgrep.resolved",
+        "coding-runtime.native-external-roots.resolved",
         "coding-runtime.git-metadata.resolved",
       ]);
       expect(result.events[0]).toMatchObject({

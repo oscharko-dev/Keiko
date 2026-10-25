@@ -715,6 +715,12 @@ export interface OpenCodeNativePolicyInput {
    * admitted like workspace paths; absent, only the workspace is admitted.
    */
   readonly planRoot?: string | undefined;
+  /**
+   * The operator's accepted external references for this run (#3900 AC5,
+   * `opencodeNativeExternalRoots.ts`), the same roots the kernel allowlist reads. Absent, nothing
+   * outside the workspace and the plan directory is admitted.
+   */
+  readonly externalRoots?: readonly string[] | undefined;
   readonly request: OpenCodeNativePolicyRequest;
   readonly nowMs: number;
   /**
@@ -737,14 +743,10 @@ export function decideOpenCodeNativePolicy(
   if (!isCodingWorkbenchMode(input.mode))
     return deny("mode-denied", "Keiko refused this action: the run's autonomy mode is unknown.");
   const classification =
-    classifyMcpAction(request, input.mcp) ??
-    classifyNativeAction(request, {
-      workspaceRoot: input.workspaceRoot,
-      planRoot: input.planRoot,
-    });
+    classifyMcpAction(request, input.mcp) ?? classifyNativeAction(request, admittedRootsOf(input));
   if ("reason" in classification) return deny(classification.reason, classification.message);
   // Reads and planning are allowed in every mode (ADR-0124 D1); only effects consult the matrix.
-  if (classification.actionClass === "workspace-read") return { effect: "allow", classification };
+  if (alwaysAllowedRead(classification)) return { effect: "allow", classification };
   // Below Full access the sandbox has no route beyond this machine, and customer networks are often
   // firewalled anyway: refuse at once with a clear reason instead of an approval the kernel would
   // then block (#3897), so the agent continues with local files and tools.
@@ -775,6 +777,22 @@ export function decideOpenCodeNativePolicy(
   };
 }
 
+function admittedRootsOf(input: OpenCodeNativePolicyInput): AdmittedRoots {
+  return {
+    workspaceRoot: input.workspaceRoot,
+    planRoot: input.planRoot,
+    externalRoots: input.externalRoots ?? [],
+  };
+}
+
+// Reads and planning in the workspace are allowed in every mode (ADR-0124 D1); a read of an
+// accepted external reference is an `external-file` action the mode decides (#3900 AC5).
+function alwaysAllowedRead(classification: OpenCodeNativeActionClassification): boolean {
+  return (
+    classification.actionClass === "workspace-read" && classification.scope !== "external-file"
+  );
+}
+
 type Classified =
   | OpenCodeNativeActionClassification
   | { readonly reason: OpenCodeNativePolicyDenyReason; readonly message: string };
@@ -782,6 +800,7 @@ type Classified =
 interface AdmittedRoots {
   readonly workspaceRoot: string;
   readonly planRoot?: string | undefined;
+  readonly externalRoots?: readonly string[] | undefined;
 }
 
 function classifyNativeAction(
@@ -941,6 +960,11 @@ const READ: OpenCodeNativeActionClassification = Object.freeze({
   risk: "low",
   label: "native-read",
 });
+/** A read in an accepted external reference: decided by the mode's `external-file` row. */
+const EXTERNAL_READ: OpenCodeNativeActionClassification = Object.freeze({
+  ...READ,
+  scope: "external-file",
+});
 const EDIT: OpenCodeNativeActionClassification = Object.freeze({
   actionClass: "workspace-write",
   kind: "workspace-write",
@@ -1049,13 +1073,18 @@ function classifyPathAction(
   roots: AdmittedRoots,
 ): Classified | undefined {
   const { permission, resources } = request;
-  if (permission === "external_directory") return externalDirectory(resources, roots.planRoot);
+  if (permission === "external_directory") return externalDirectory(resources, roots);
   // A glob/grep resource is a search pattern (`/api/users`, `*.pem`), not a path: only the searched
   // directory is a path, and the kernel boundary keeps credential files unreadable regardless.
-  if (SEARCH_ACTIONS.has(permission))
-    return guardedPaths(request.searchPath === undefined ? [] : [request.searchPath], roots, READ);
+  if (SEARCH_ACTIONS.has(permission)) {
+    const searched = request.searchPath === undefined ? [] : [request.searchPath];
+    return externalRead(searched, roots) ?? guardedPaths(searched, roots, READ);
+  }
   if (READ_ACTIONS.has(permission))
-    return guardedPaths(resources, roots, READ, permission === "read" || permission === "list");
+    return (
+      externalRead(resources, roots) ??
+      guardedPaths(resources, roots, READ, permission === "read" || permission === "list")
+    );
   // The plan agent's notes live in the run's private plan directory, not in the workspace: writing
   // them is planning, allowed in every mode like a read (standalone OpenCode does not ask either).
   if (EDIT_ACTIONS.has(permission))
@@ -1112,23 +1141,55 @@ function admittedRelative(resource: string, roots: AdmittedRoots): string | unde
 }
 
 /**
- * OpenCode checks a directory outside the workspace before reading or editing in it. Only the
- * run's plan directory is admitted; every other external directory stays a hard denial.
+ * OpenCode checks a directory outside the workspace before reading or editing in it. The run's plan
+ * directory is admitted like the workspace, an accepted external reference as an external read
+ * (#3900 AC5); every other external directory stays a hard denial.
  */
-function externalDirectory(resources: readonly string[], planRoot: string | undefined): Classified {
-  const insidePlan =
-    planRoot !== undefined &&
-    resources.length > 0 &&
-    resources.every((resource) => {
-      const directory = resource.trim().replace(/\/\*$/u, "");
-      return isAbsolute(directory) && workspaceRelative(directory, planRoot) !== undefined;
-    });
-  return insidePlan
-    ? READ
-    : {
-        reason: "workspace-escape",
-        message: "Keiko refused this action: files outside the task workspace are not accessible.",
+function externalDirectory(resources: readonly string[], roots: AdmittedRoots): Classified {
+  const directories = resources.map((resource) => resource.trim().replace(/\/\*$/u, ""));
+  const within = (root: string | undefined): boolean =>
+    root !== undefined &&
+    directories.length > 0 &&
+    directories.every(
+      (directory) => isAbsolute(directory) && workspaceRelative(directory, root) !== undefined,
+    );
+  if (within(roots.planRoot)) return READ;
+  if ((roots.externalRoots ?? []).some((root) => within(root))) return EXTERNAL_READ;
+  return {
+    reason: "workspace-escape",
+    message: "Keiko refused this action: files outside the task workspace are not accessible.",
+  };
+}
+
+/**
+ * A read or search inside one accepted external reference (#3900 AC5): an `external-file` read the
+ * run's mode decides, with the same sensitive-path and hard-link refusals as inside the workspace.
+ * `undefined` when a path is not inside one, so the workspace rules decide it.
+ */
+function externalRead(paths: readonly string[], roots: AdmittedRoots): Classified | undefined {
+  const root = (roots.externalRoots ?? []).find(
+    (candidate) =>
+      paths.length > 0 &&
+      paths.every(
+        (path) => isAbsolute(path.trim()) && workspaceRelative(path, candidate) !== undefined,
+      ),
+  );
+  if (root === undefined) return undefined;
+  for (const path of paths) {
+    const contained = workspaceRelative(path, root) ?? "";
+    if (contained.length > 0 && isDenied(contained))
+      return {
+        reason: "sensitive-path",
+        message: "Keiko refused this action: the path is a protected sensitive file.",
       };
+    if (linkedInWorkspace(path, root, false))
+      return {
+        reason: "linked-file",
+        message:
+          "Keiko refused this action: the file is a hard link that can name a file outside the accepted reference.",
+      };
+  }
+  return EXTERNAL_READ;
 }
 
 /** Workspace-relative POSIX path, or undefined when the resource points outside the workspace. */

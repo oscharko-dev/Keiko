@@ -975,20 +975,14 @@ export const OPENCODE_CONFIGURATION_DISPOSITIONS = flatten<OpenCodeConfiguration
     ],
   ),
   refused("keiko-owns-authority", 3903, ["C05"], ["plugins", "plugins.options", "plugins.package"]),
-  refused(
-    "keiko-owns-workspace-binding",
-    3902,
+  // #3900 AC5: Keiko writes the operator's accepted external roots as local references; a
+  // repository reference (and its branch) would leave the machine, and no layer hides one.
+  keikoSet(
     ["C08"],
-    [
-      "references",
-      "references.*",
-      "references.*.branch",
-      "references.*.description",
-      "references.*.hidden",
-      "references.*.path",
-    ],
+    ["references", "references.*", "references.*.description", "references.*.path"],
   ),
-  refused("leaves-machine", 3902, ["C08"], ["references.*.repository"]),
+  refused("keiko-owns-configuration", 3900, ["C08"], ["references.*.hidden"]),
+  refused("leaves-machine", 3902, ["C08"], ["references.*.branch", "references.*.repository"]),
   refused("keiko-owns-configuration", 3899, ["S09"], ["tool_output.max_lines"]),
   refused(
     "keiko-owns-configuration",

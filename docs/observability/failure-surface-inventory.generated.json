@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "aaacdbe92dd6b57d9f5154d146b07b8ab414f730ac0ff4520667b5f81195cc82"
+    "catalogDigest": "6fda8463331f820e84498c3b27a6fbda162548ed739e943c8949674578514c14"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -59,9 +59,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 578,
-    "proofCount": 591,
-    "resolvedProofCount": 591,
+    "operationCount": 579,
+    "proofCount": 592,
+    "resolvedProofCount": 592,
     "failureClassCount": 361,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -338,6 +338,7 @@
         "coding-runtime.initial-turn.dispatch-failed",
         "coding-runtime.initial-turn.stop-failed",
         "coding-runtime.mentions.listed",
+        "coding-runtime.native-external-roots.resolved",
         "coding-runtime.native-formatter.bound",
         "coding-runtime.native-narrowing.refused",
         "coding-runtime.native-policy.decided",
@@ -1473,6 +1474,9 @@
     ],
     "coding-runtime.mentions.listed.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeCommands.test.ts"
+    ],
+    "coding-runtime.native-external-roots.resolved.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/opencodeNativeExternalRoots.test.ts"
     ],
     "coding-runtime.native-formatter.bound.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts"

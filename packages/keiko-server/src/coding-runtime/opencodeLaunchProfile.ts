@@ -105,6 +105,12 @@ export interface OpenCodeLaunchProfileInput {
    * configuration layer can add a server.
    */
   readonly mcp?: { readonly servers: Readonly<Record<string, unknown>> } | undefined;
+  /**
+   * The native run's accepted external references (#3900 AC5, `opencodeNativeExternalRoots.ts`):
+   * each gets an `external_directory` rule that hands the decision to the policy hook. Absent or
+   * empty, every directory outside the workspace and the plan directory stays denied.
+   */
+  readonly externalReadRoots?: readonly string[] | undefined;
 }
 
 /** The optional tools #3414-AC9 requires to be absent, never merely denied, when unready. */
@@ -193,6 +199,7 @@ export function buildOpenCodeLaunchProfile(
     input.stateRoot,
     formatter,
     input.mcp,
+    input.externalReadRoots,
   );
   return {
     ok: true,
@@ -409,10 +416,17 @@ export function createFixedOpenCodeV2Config(
   stateRoot?: string,
   formatter: OpenCodeNativeFormatterDisposition = "disabled-unknown-mode",
   mcp: { readonly servers: Readonly<Record<string, unknown>> } = NO_MCP_SERVERS,
+  externalReadRoots: readonly string[] = [],
 ): Readonly<Record<string, unknown>> {
   openCodeVisibleToolNames(profile);
   if (profile === "native")
-    return createNativeOpenCodeV2Config(contextGeometry, stateRoot, formatter, mcp);
+    return createNativeOpenCodeV2Config(
+      contextGeometry,
+      stateRoot,
+      formatter,
+      mcp,
+      externalReadRoots,
+    );
   const unavailable = unavailableOptionalTools ?? new Set<OpenCodeOptionalToolName>();
   const reserved = Math.min(
     OPENCODE_COMPACTION_MAX_RESERVED_TOKENS,
@@ -471,6 +485,7 @@ function createNativeOpenCodeV2Config(
   stateRoot: string | undefined,
   formatter: OpenCodeNativeFormatterDisposition,
   mcp: { readonly servers: Readonly<Record<string, unknown>> },
+  externalReadRoots: readonly string[],
 ): Readonly<Record<string, unknown>> {
   const reserved = Math.min(
     OPENCODE_COMPACTION_MAX_RESERVED_TOKENS,
@@ -502,23 +517,59 @@ function createNativeOpenCodeV2Config(
     experimental: { todo: true },
     // The operator's admitted MCP servers, and nothing else (#3903, `opencodeNativeMcp.ts`).
     mcp,
+    // The operator's accepted external references, as the producer's own local references
+    // (#3900 AC5); no repository reference, which would leave the machine.
+    references: openCodeNativeReferences(externalReadRoots),
     // No configured source: the one instruction file is Keiko's bounded copy of the workspace's
     // AGENTS.md in the producer's own global slot (`openCodeRepositoryInstructionsPath`, #3900 AC3).
     instructions: [],
-    permissions: [
-      { action: "external_directory", resource: "*", effect: "deny" },
-      // Last match wins: the plan agent's own plan directory is the one admitted external path.
-      ...(stateRoot === undefined
-        ? []
-        : [
-            {
-              action: "external_directory",
-              resource: `${openCodePlanDirectory(stateRoot)}/*`,
-              effect: "allow",
-            },
-          ]),
-    ],
+    permissions: nativePermissionRules(stateRoot, externalReadRoots),
   };
+}
+
+/**
+ * The mode-independent permission floor of the native document: every external directory denied,
+ * except the run's own plan directory (last match wins) and each accepted external reference,
+ * whose reads the policy decides (#3900 AC5).
+ */
+function nativePermissionRules(
+  stateRoot: string | undefined,
+  externalReadRoots: readonly string[],
+): readonly Readonly<Record<string, string>>[] {
+  return [
+    { action: "external_directory", resource: "*", effect: "deny" },
+    // Last match wins: the plan agent's own plan directory is the one admitted external path.
+    ...(stateRoot === undefined
+      ? []
+      : [
+          {
+            action: "external_directory",
+            resource: `${openCodePlanDirectory(stateRoot)}/*`,
+            effect: "allow",
+          },
+        ]),
+    // An accepted external reference (#3900 AC5) is the policy's to decide, read by read.
+    ...externalReadRoots.map((root) => ({
+      action: "external_directory",
+      resource: `${root}/*`,
+      effect: "ask",
+    })),
+  ];
+}
+
+/**
+ * The producer's `references` for the accepted external roots: one local reference each, named by
+ * its position (`external-1`, …) so a directory name never becomes configuration text.
+ */
+function openCodeNativeReferences(
+  externalReadRoots: readonly string[],
+): Readonly<Record<string, { readonly path: string; readonly description: string }>> {
+  return Object.fromEntries(
+    externalReadRoots.map((path, index) => [
+      `external-${String(index + 1)}`,
+      { path, description: "Read-only external reference the operator accepted for this run." },
+    ]),
+  );
 }
 
 /**
@@ -528,7 +579,8 @@ function createNativeOpenCodeV2Config(
  * for a mode that must not run it; see `openCodeNativeFormatterDisposition`), and the MCP servers
  * (an MCP server is a process or a remote endpoint, so only the operator's registry names one;
  * see `opencodeNativeMcp.ts`), and the configured instruction sources (none: the one instruction
- * file is Keiko's bounded copy of the workspace's AGENTS.md). The pinned runtime
+ * file is Keiko's bounded copy of the workspace's AGENTS.md), and the references (only the
+ * operator's accepted external roots, #3900 AC5). The pinned runtime
  * merges `OPENCODE_CONFIG_CONTENT` after the private file and after every discovered project
  * document, so this subset is the last word if a project layer is ever admitted (#3903). Only
  * `{env:…}` placeholders appear in it; the gateway address and capability stay in the child
@@ -540,6 +592,7 @@ const OPENCODE_NATIVE_SERVER_OWNED_KEYS = [
   "formatter",
   "mcp",
   "instructions",
+  "references",
   "model",
   "default_agent",
   "providers",

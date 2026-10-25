@@ -2687,6 +2687,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredLifecycleOperations: {
       start: [],
       state: [
+        "coding-runtime.native-external-roots.resolved",
         "coding-runtime.native-formatter.bound",
         "coding-runtime.native-narrowing.refused",
         "coding-runtime.native-policy.decided",
@@ -2698,6 +2699,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       loss: [],
     },
     requiredCausalOperations: [
+      "coding-runtime.native-external-roots.resolved",
       "coding-runtime.native-formatter.bound",
       "coding-runtime.native-narrowing.refused",
       "coding-runtime.native-policy.decided",
@@ -2706,6 +2708,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     ],
     requiredLossOperations: [],
     requiredProofOperations: [
+      "coding-runtime.native-external-roots.resolved",
       "coding-runtime.native-formatter.bound",
       "coding-runtime.native-narrowing.refused",
       "coding-runtime.native-policy.decided",
@@ -2714,6 +2717,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     ],
     requiredReplayProofIds: [],
     requiredResourceOperations: [
+      "coding-runtime.native-external-roots.resolved",
       "coding-runtime.native-formatter.bound",
       "coding-runtime.native-narrowing.refused",
       "coding-runtime.native-policy.decided",
