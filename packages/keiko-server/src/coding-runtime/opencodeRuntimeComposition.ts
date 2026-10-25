@@ -183,10 +183,14 @@ import {
   openCodeNativeMcpAdmission,
   type OpenCodeNativeMcpAdmission,
 } from "./opencodeNativeMcp.js";
-import { OPENCODE_NATIVE_POLICY_ACTION } from "./opencodeNativePolicyPlugin.js";
+import {
+  OPENCODE_CODE_MODE_SESSION_MOVE,
+  OPENCODE_NATIVE_POLICY_ACTION,
+} from "./opencodeNativePolicyPlugin.js";
 import { awaitOpenCodeNativePlugins } from "./opencodeNativePluginReadiness.js";
 import { createNativeQuestionPort, type NativeQuestionPort } from "./opencodeNativeQuestions.js";
 import {
+  admitNativeSessionLocation,
   classifyNativeSession,
   createNativeTreeStatusPort,
   interruptNativeTree,
@@ -721,6 +725,8 @@ interface PreparedRun {
   sessionId?: string | undefined;
   /** Native child sessions (subagents) proven to descend from the run's session (#3897). */
   childSessionIds?: Set<string> | undefined;
+  /** The directories the run's sessions were admitted to move to (#3903 AC4). */
+  sessionLocations?: Set<string> | undefined;
   /** What the last question list line counted (`opencodeNativeQuestions.ts`; a line per change). */
   questionList?: { signature?: string | undefined } | undefined;
   /**
@@ -3368,7 +3374,7 @@ async function handleNativePolicyRequest(
   if (run?.ready !== true || sessionRelation === undefined) {
     return { status: 403, body: "", rejection: "approval-unavailable" };
   }
-  const decision = decideOpenCodeNativePolicy({
+  const decided = decideOpenCodeNativePolicy({
     mode: run.mode,
     workspaceRoot: run.workspaceRoot,
     planRoot: openCodePlanDirectory(run.runRoot),
@@ -3376,6 +3382,7 @@ async function handleNativePolicyRequest(
     nowMs: Date.now(),
     ...(run.mcp === undefined ? {} : { mcp: run.mcp }),
   });
+  const decision = admittedSessionMove(run, request, decided);
   const settled = await settleNativePolicyOutcome(run, decision, request, signal, deps, {
     approvals,
     sessionRelation,
@@ -3738,11 +3745,41 @@ async function nativeSessionRelation(
 
 /** The run's session tree, sharing the run's admission cache of proven children. */
 function nativeSessionTree(
-  run: Pick<PreparedRun, "workspaceRoot" | "childSessionIds">,
+  run: Pick<PreparedRun, "workspaceRoot" | "childSessionIds" | "sessionLocations">,
   sessionId: string,
 ): NativeSessionTreeRun {
   run.childSessionIds ??= new Set();
-  return { sessionId, workspaceRoot: run.workspaceRoot, children: run.childSessionIds };
+  run.sessionLocations ??= new Set();
+  return {
+    sessionId,
+    workspaceRoot: run.workspaceRoot,
+    children: run.childSessionIds,
+    locations: run.sessionLocations,
+  };
+}
+
+// An allowed session move widens the run's tree to its directory before the move happens, so the
+// session's later children and jobs stay the run's (#3903 AC4); a tree at its bound refuses it.
+function admittedSessionMove(
+  run: PreparedRun,
+  request: OpenCodeNativePolicyRequest,
+  decision: OpenCodeNativePolicyDecision,
+): OpenCodeNativePolicyDecision {
+  const directory = request.resources[0];
+  if (decision.effect !== "allow" || request.permission !== OPENCODE_CODE_MODE_SESSION_MOVE)
+    return decision;
+  if (
+    directory !== undefined &&
+    run.sessionId !== undefined &&
+    admitNativeSessionLocation(nativeSessionTree(run, run.sessionId), directory)
+  )
+    return decision;
+  return {
+    effect: "deny",
+    reason: "unsupported-action",
+    message:
+      "Keiko refused this action: the run already follows its bound of working directories. Keep working in one of them.",
+  };
 }
 
 export { nativeSessionDescendsFromRun } from "./opencodeNativeSessionTree.js";

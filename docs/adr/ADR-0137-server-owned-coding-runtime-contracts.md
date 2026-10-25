@@ -1040,6 +1040,21 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   large to review), is the ask's resource and is never logged. `fetch` is a Code Mode primitive that
   neither hook sees inside an admitted program: the kernel egress rule governs it (loopback below
   Full access).
+- **A Code Mode session move stays inside the task workspace (#3903 AC4).** The policy plugin sends
+  `opencode_session_move`'s `directory` and the session it names to the policy. The run's own
+  session may move to an existing directory inside the task workspace, named by its absolute,
+  normalized path with no symbolic link on the way; that is navigation inside the workspace, so it
+  is a read in every mode. The run's session tree records the directory before the move happens
+  (at most 8), so the child sessions and background jobs the moved session starts are still the
+  run's: the runtime lists a job under its session's directory, and the tree's stop reaches it
+  there. Another session, a place outside the workspace, a symbolic link, a file, a missing or a
+  relative directory are refused (`unsupported-action`, `workspace-escape`) and move nothing. The
+  Files root, the Authority Envelope and the task binding stay the task workspace. A moved session
+  is not retained for a later continuation: the retention audit finds its directory changed
+  (`session-mismatch`), so the follow-up starts a fresh session.
+  `opencode_worktree_create` stays refused: a worktree outside the task workspace would leave the
+  workspace binding (ADR-0088, ADR-0089), and the managed task-workspace owner admits only a
+  human-initiated provision while a live run's binding cannot change.
 - **An unoffered native tool name is the producer's to answer.** The gateway binds a native call
   by name only and grants nothing (ADR-0175 D2). A model that names a tool the request did not
   offer (a hallucinated `bash`, say) reaches OpenCode, which answers with its own unavailable-tool

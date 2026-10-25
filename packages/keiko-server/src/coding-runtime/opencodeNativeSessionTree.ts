@@ -20,6 +20,8 @@ import type { OpenCodeV2HttpClient } from "./opencodeV2HttpClient.js";
  */
 export const NATIVE_CHILD_SESSION_MAX = 64;
 export const NATIVE_SESSION_ANCESTRY_MAX_DEPTH = 8;
+/** How many directories inside the workspace a run's sessions may move to (#3903 AC4). */
+export const NATIVE_SESSION_LOCATION_MAX = 8;
 const SESSION_ID = /^ses_[A-Za-z0-9_-]{1,251}$/u;
 // A fan-out settles on the second inactive read: the runtime ends a child and starts the parent's
 // notification turn in one step, and a single read can fall between the two.
@@ -76,6 +78,18 @@ export interface NativeSessionTreeRun {
   readonly sessionId: string;
   readonly workspaceRoot: string;
   readonly children: Set<string>;
+  /**
+   * The directories inside the workspace that the run's sessions moved to through Code Mode's
+   * admitted `session_move` (#3903 AC4), the run's record shared by reference. The workspace root
+   * is always a location of the tree; without this set no move is admitted.
+   */
+  readonly locations?: Set<string> | undefined;
+}
+
+/** A background shell job of the run and the directory the runtime lists it under. */
+export interface NativeShellJob {
+  readonly id: string;
+  readonly directory: string;
 }
 
 /**
@@ -85,7 +99,7 @@ export interface NativeSessionTreeRun {
 export interface NativeTreeActivity {
   readonly primaryActive: boolean;
   readonly activeChildren: readonly string[];
-  readonly activeShells: readonly string[];
+  readonly activeShells: readonly NativeShellJob[];
   readonly ownedChildCount: number;
 }
 
@@ -95,12 +109,13 @@ export function nativeSessionDescendsFromRun(
   sessionID: string,
   primaryId: string,
   workspaceRoot: string,
+  moved?: ReadonlySet<string>,
 ): boolean {
   const byId = new Map(sessions.map((session) => [session.id, session] as const));
   let current = sessionID;
   for (let depth = 0; depth < NATIVE_SESSION_ANCESTRY_MAX_DEPTH; depth += 1) {
     const session = byId.get(current);
-    if (session === undefined || !nativeSessionInWorkspace(session, workspaceRoot)) return false;
+    if (session === undefined || !nativeSessionLocated(session, workspaceRoot, moved)) return false;
     const parent = session.parentID;
     if (typeof parent !== "string" || parent.length === 0 || parent === current) return false;
     if (parent === primaryId) return true;
@@ -109,13 +124,40 @@ export function nativeSessionDescendsFromRun(
   return false;
 }
 
-function nativeSessionInWorkspace(session: SessionRecord, workspaceRoot: string): boolean {
+// At the workspace root, or at a directory a session of the run was admitted to move to.
+function nativeSessionLocated(
+  session: SessionRecord,
+  workspaceRoot: string,
+  moved: ReadonlySet<string> | undefined,
+): boolean {
   const location = session.location;
   const directory =
     typeof location === "object" && location !== null
       ? (location as Readonly<Record<string, unknown>>).directory
       : undefined;
-  return typeof directory === "string" && resolve(directory) === resolve(workspaceRoot);
+  if (typeof directory !== "string") return false;
+  const located = resolve(directory);
+  return located === resolve(workspaceRoot) || moved?.has(located) === true;
+}
+
+/**
+ * Records the directory an admitted own-session move names, before the move happens, so the tree
+ * follows the session: the children it opens and the jobs it starts there stay the run's. False when
+ * the tree has no record of moves or already holds its bound of directories and this one is new;
+ * the move is then refused rather than lost track of.
+ */
+export function admitNativeSessionLocation(run: NativeSessionTreeRun, directory: string): boolean {
+  const location = resolve(directory);
+  if (location === resolve(run.workspaceRoot) || run.locations?.has(location) === true) return true;
+  if (run.locations === undefined || run.locations.size >= NATIVE_SESSION_LOCATION_MAX)
+    return false;
+  run.locations.add(location);
+  return true;
+}
+
+/** The directories the runtime lists the run's jobs under: the workspace root, then every move. */
+function treeLocations(run: NativeSessionTreeRun): readonly string[] {
+  return [run.workspaceRoot, ...(run.locations ?? [])];
 }
 
 /**
@@ -144,7 +186,15 @@ export async function admitNativeChildren(
       owned.push(candidate);
       continue;
     }
-    if (!nativeSessionDescendsFromRun(sessions, candidate, run.sessionId, run.workspaceRoot))
+    if (
+      !nativeSessionDescendsFromRun(
+        sessions,
+        candidate,
+        run.sessionId,
+        run.workspaceRoot,
+        run.locations,
+      )
+    )
       continue;
     if (run.children.size < NATIVE_CHILD_SESSION_MAX) run.children.add(candidate);
     owned.push(candidate);
@@ -177,17 +227,30 @@ export async function nativeTreeActivity(
   const active = await client.active(signal);
   const others = Object.keys(active).filter((id) => id !== run.sessionId && SESSION_ID.test(id));
   const activeChildren = await admitNativeChildren(client, run, others, signal);
-  const shells = await client.shells(run.workspaceRoot, signal);
   return {
     primaryActive: Object.hasOwn(active, run.sessionId),
     activeChildren,
-    // The run's runtime hosts this run alone; a job a session of another tree started is not the
-    // run's, and a job the runtime names no session for is held as the run's.
-    activeShells: shells
-      .filter((shell) => shell.sessionId === undefined || ownedSession(run, shell.sessionId))
-      .map((shell) => shell.id),
+    activeShells: await treeShells(client, run, signal),
     ownedChildCount: run.children.size,
   };
+}
+
+// The run's jobs in every directory its sessions are located at, each job once. The run's runtime
+// hosts this run alone; a job a session of another tree started is not the run's, and a job the
+// runtime names no session for is held as the run's.
+async function treeShells(
+  client: Pick<NativeSessionTreeClient, "shells">,
+  run: NativeSessionTreeRun,
+  signal: AbortSignal | undefined,
+): Promise<readonly NativeShellJob[]> {
+  const jobs = new Map<string, NativeShellJob>();
+  for (const directory of treeLocations(run)) {
+    for (const shell of await client.shells(directory, signal)) {
+      const owned = shell.sessionId === undefined || ownedSession(run, shell.sessionId);
+      if (owned && !jobs.has(shell.id)) jobs.set(shell.id, { id: shell.id, directory });
+    }
+  }
+  return [...jobs.values()];
 }
 
 function ownedSession(run: NativeSessionTreeRun, sessionId: string): boolean {
@@ -290,9 +353,9 @@ async function fanOutStep(
   await Promise.all(pending.map((child) => client.interrupt(child, signal)));
   for (const child of pending) fanOut.interrupted.add(child);
   // A background job outlives an interrupt of its session; stopping the turn stops it too.
-  const jobs = activity.activeShells.filter((id) => !fanOut.stopped.has(id));
-  await Promise.all(jobs.map((id) => client.removeShell(id, run.workspaceRoot, signal)));
-  for (const id of jobs) fanOut.stopped.add(id);
+  const jobs = activity.activeShells.filter((job) => !fanOut.stopped.has(job.id));
+  await Promise.all(jobs.map((job) => client.removeShell(job.id, job.directory, signal)));
+  for (const job of jobs) fanOut.stopped.add(job.id);
   if (activity.primaryActive && fanOut.primaryIdleSeen) {
     await client.interrupt(run.sessionId, signal);
     fanOut.primaryIdleSeen = false;

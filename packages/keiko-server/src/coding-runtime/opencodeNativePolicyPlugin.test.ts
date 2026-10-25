@@ -279,6 +279,27 @@ describe("generated native policy plugin Code Mode governance (#3897)", () => {
     expect(allowed.requests).toHaveLength(1);
   });
 
+  // #3903 AC4: a move is decided by the directory it names and the session it moves.
+  it("sends a session move's directory and target session, and nothing else for a worktree", async () => {
+    const harness = await pluginHarness("supervised-coding", { effect: "allow" });
+    await harness.toolBefore({
+      ...nested("opencode_session_move"),
+      input: { directory: "/workspace/src" },
+    });
+    await harness.toolBefore({
+      ...nested("opencode_session_move"),
+      input: { directory: "/workspace", sessionID: "ses_other" },
+    });
+    await harness.toolBefore({ ...nested("opencode_session_move"), input: { directory: 7 } });
+    await harness.toolBefore({ ...nested("opencode_worktree_create"), input: { name: "/x" } });
+    expect(harness.requests).toMatchObject([
+      { resources: ["/workspace/src"], targetSessionID: null },
+      { resources: ["/workspace"], targetSessionID: "ses_other" },
+      { resources: [], targetSessionID: null },
+      { permission: "opencode_worktree_create", resources: [], targetSessionID: null },
+    ]);
+  });
+
   // #3897 review: the producer asserts no permission for a Code Mode program, so without this the
   // mode policy never gated model-authored JavaScript (its `fetch` reaches loopback services) even in
   // Ask for approval. The program is decided like a command, before it starts.

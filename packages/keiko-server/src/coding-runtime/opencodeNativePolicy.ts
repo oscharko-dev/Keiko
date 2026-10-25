@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { lstatSync, type Stats } from "node:fs";
+import { lstatSync, realpathSync, statSync, type Stats } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import type {
@@ -26,6 +26,7 @@ import type { SidecarPermissionEvent } from "./codingSidecarEventParser.js";
 import type { CodingToolNativeCharge } from "./codingToolFacadePorts.js";
 import { OPENCODE_NATIVE_DELIVERY_REFUSAL_MESSAGE } from "./opencodeNativeDeliveryTools.js";
 import {
+  OPENCODE_CODE_MODE_SESSION_MOVE,
   OPENCODE_NATIVE_POLICY_ACTION,
   OPENCODE_NATIVE_POLICY_MAX_RESOURCES,
   OPENCODE_NATIVE_POLICY_MAX_RESOURCE_CHARS,
@@ -58,6 +59,11 @@ export interface OpenCodeNativePolicyRequest {
    * which it does exactly when the edit cannot apply (no match, or an ambiguous one).
    */
   readonly patchBytes?: number | undefined;
+  /**
+   * The session a Code Mode `session_move` names (#3903 AC4); absent when it moves the calling
+   * session. Only the calling session may be moved.
+   */
+  readonly targetSessionID?: string | undefined;
 }
 
 export type OpenCodeNativePolicyDenyReason =
@@ -102,10 +108,11 @@ type NativeActionLabel =
 
 const SEARCH_ACTIONS = new Set(["glob", "grep"]);
 /**
- * Code Mode management tools that would move the session or create worktrees outside Keiko's
- * workspace binding (ADR-0088/0089); the policy plugin routes them here through its tool hook.
+ * The Code Mode management tool that would create a worktree outside Keiko's workspace binding
+ * (ADR-0088/0089); the policy plugin routes it here through its tool hook. A session move is
+ * decided on its own (`classifySessionMove`).
  */
-const CODE_MODE_KEIKO_OWNED = new Set(["opencode_session_move", "opencode_worktree_create"]);
+const CODE_MODE_KEIKO_OWNED = new Set(["opencode_worktree_create"]);
 const READ_ACTIONS = new Set([
   "read",
   "list",
@@ -135,6 +142,8 @@ const PERMISSION_LOG_VALUES = [
   "execute",
   "external_directory",
   "doom_loop",
+  "opencode_session_move",
+  "opencode_worktree_create",
 ] as const;
 type PermissionLogValue = (typeof PERMISSION_LOG_VALUES)[number] | "other";
 // An MCP tool is logged by its class alone: its server and tool names are the operator's words.
@@ -600,8 +609,21 @@ export function parseOpenCodeNativePolicyRequest(
   const identity = parseIdentity(record);
   const bounded = boundedResources(record.resources);
   const optional = parseOptionalFields(record);
-  if (identity === undefined || bounded === undefined || optional === undefined) return undefined;
-  return { ...identity, resources: bounded, ...optional };
+  const target = parseTargetSession(record.targetSessionID);
+  if (identity === undefined || bounded === undefined || optional === undefined || target === null)
+    return undefined;
+  return {
+    ...identity,
+    resources: bounded,
+    ...optional,
+    ...(target === undefined ? {} : { targetSessionID: target }),
+  };
+}
+
+/** `undefined` when absent, `null` when malformed (not a session id). */
+function parseTargetSession(value: unknown): string | undefined | null {
+  if (value === undefined || value === null) return undefined;
+  return typeof value === "string" && SESSION_ID.test(value) ? value : null;
 }
 
 /** The optional request fields; `undefined` when any present one is malformed. */
@@ -769,6 +791,8 @@ function classifyNativeAction(
   roots: AdmittedRoots,
 ): Classified {
   const { permission, resources } = request;
+  if (permission === OPENCODE_CODE_MODE_SESSION_MOVE)
+    return classifySessionMove(request, roots.workspaceRoot);
   if (CODE_MODE_KEIKO_OWNED.has(permission))
     return {
       reason: "unsupported-action",
@@ -785,6 +809,66 @@ function classifyNativeAction(
   if (EGRESS_ACTIONS.has(permission)) return EGRESS;
   if (permission === "shell") return classifyShell(resources);
   return EXECUTE;
+}
+
+/**
+ * Code Mode's `session_move` (#3903 AC4): the run's own session may change its working directory to
+ * an existing directory inside the task workspace, named by its absolute, normalized path with no
+ * symbolic link on the way. That is navigation inside the workspace, so it is a read in every mode;
+ * the run's session tree then follows the session (`admitNativeSessionLocation`). Moving another
+ * session, or to any other place, stays refused.
+ */
+function classifySessionMove(
+  request: OpenCodeNativePolicyRequest,
+  workspaceRoot: string,
+): Classified {
+  const target = request.targetSessionID ?? request.sessionID;
+  if (target !== request.sessionID)
+    return {
+      reason: "unsupported-action",
+      message: "Keiko refused this action: a session may move only its own working directory.",
+    };
+  const [directory, ...rest] = request.resources;
+  if (directory === undefined || rest.length > 0 || resolve(directory) !== directory)
+    return {
+      reason: "unsupported-action",
+      message:
+        "Keiko refused this action: name one directory inside the task workspace by its absolute path.",
+    };
+  const guarded = guardedPaths([directory], { workspaceRoot }, READ);
+  if ("reason" in guarded) return guarded;
+  return openCodeNativeSessionMoveDirectory(directory, workspaceRoot) === undefined
+    ? {
+        reason: "workspace-escape",
+        message:
+          "Keiko refused this action: the target is not an existing directory inside the task workspace.",
+      }
+    : guarded;
+}
+
+/**
+ * `directory` when it is an existing directory inside the workspace that no symbolic link reaches:
+ * its physical path is the workspace's physical path plus the same relative path.
+ */
+function openCodeNativeSessionMoveDirectory(
+  directory: string,
+  workspaceRoot: string,
+): string | undefined {
+  const contained = workspaceRelative(directory, workspaceRoot);
+  if (contained === undefined || !isAbsolute(directory)) return undefined;
+  const physical = physicalPathIfPresent(directory);
+  if (physical === undefined || !statSync(physical).isDirectory()) return undefined;
+  return physical === join(realpathSync(workspaceRoot), contained) ? directory : undefined;
+}
+
+function physicalPathIfPresent(path: string): string | undefined {
+  try {
+    return realpathSync(path);
+  } catch (error) {
+    const { code } = error as NodeJS.ErrnoException;
+    if (code === "ENOENT" || code === "ENOTDIR") return undefined;
+    throw error;
+  }
 }
 
 const MCP_RESOURCE_ACTIONS = new Set(["opencode_list_mcp_resources", "opencode_read_mcp_resource"]);
@@ -1226,6 +1310,8 @@ export const CODING_RUNTIME_NATIVE_POLICY_DECIDED_OPERATION = defineActivityLogO
         "execute",
         "external_directory",
         "doom_loop",
+        "opencode_session_move",
+        "opencode_worktree_create",
         "mcp",
         "other",
       ],

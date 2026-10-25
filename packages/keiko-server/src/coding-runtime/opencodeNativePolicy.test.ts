@@ -448,15 +448,145 @@ describe("native authority evidence (#3897 review)", () => {
   });
 });
 
-describe("Code Mode management tools owned by Keiko (#3897)", () => {
-  it("refuses session moves and worktree creation in every mode with an explanation", () => {
-    for (const mode of ["governed-assist", "supervised-coding", "autonomous-delivery"]) {
-      for (const tool of ["opencode_session_move", "opencode_worktree_create"]) {
-        const decision = decide(mode, tool, []);
-        expect(decision.effect, `${mode} ${tool}`).toBe("deny");
-        expect(decision.effect === "deny" ? decision.message : "").toMatch(/managed by Keiko/u);
-      }
+describe("Code Mode management tools (#3897, #3903 AC4)", () => {
+  const MODES = ["governed-assist", "supervised-coding", "autonomous-delivery"] as const;
+  const OWN = "ses_native0000000000001";
+
+  it("refuses worktree creation in every mode with an explanation", () => {
+    for (const mode of MODES) {
+      const decision = decide(mode, "opencode_worktree_create", []);
+      expect(decision.effect, mode).toBe("deny");
+      expect(decision.effect === "deny" ? decision.message : "").toMatch(/managed by Keiko/u);
     }
+  });
+
+  // A real workspace: a move is decided against the directory the session would land in.
+  function moveFixture(): { readonly root: string; readonly workspace: string } {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-session-move-")));
+    const workspace = join(root, "workspace");
+    mkdirSync(join(workspace, "src", "deep"), { recursive: true });
+    mkdirSync(join(root, "outside"));
+    symlinkSync(join(root, "outside"), join(workspace, "escape"));
+    writeFileSync(join(workspace, "file.txt"), "x");
+    return { root, workspace };
+  }
+
+  function moveEffect(
+    workspace: string,
+    mode: string,
+    resources: readonly string[],
+    overrides: Partial<OpenCodeNativePolicyRequest> = {},
+  ): string {
+    const decision = decideOpenCodeNativePolicy({
+      mode,
+      workspaceRoot: workspace,
+      request: request("opencode_session_move", resources, overrides),
+      nowMs: NOW,
+    });
+    return decision.effect === "deny" ? `deny:${decision.reason}` : decision.effect;
+  }
+
+  it("lets the run's own session move to a directory inside the workspace, in every mode", () => {
+    const { root, workspace } = moveFixture();
+    try {
+      for (const mode of MODES) {
+        expect(moveEffect(workspace, mode, [join(workspace, "src")]), mode).toBe("allow");
+        expect(
+          moveEffect(workspace, mode, [join(workspace, "src", "deep")], { targetSessionID: OWN }),
+        ).toBe("allow");
+        // Back to the root is a move inside the workspace too.
+        expect(moveEffect(workspace, mode, [workspace])).toBe("allow");
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses another session, another place, a link, a file and a missing directory", () => {
+    const { root, workspace } = moveFixture();
+    const src = join(workspace, "src");
+    try {
+      const cases: readonly [readonly string[], Partial<OpenCodeNativePolicyRequest>, string][] = [
+        [[src], { targetSessionID: "ses_other0000000000001" }, "deny:unsupported-action"],
+        [[join(root, "outside")], {}, "deny:workspace-escape"],
+        [[join(workspace, "escape")], {}, "deny:workspace-escape"],
+        [[join(workspace, "file.txt")], {}, "deny:workspace-escape"],
+        [[join(workspace, "gone")], {}, "deny:workspace-escape"],
+        [["src"], {}, "deny:unsupported-action"],
+        [[`${src}/../src`], {}, "deny:unsupported-action"],
+        [[`${src}/`], {}, "deny:unsupported-action"],
+        [[], {}, "deny:unsupported-action"],
+        [[src, workspace], {}, "deny:unsupported-action"],
+      ];
+      for (const mode of MODES)
+        for (const [resources, overrides, expected] of cases)
+          expect(
+            moveEffect(workspace, mode, resources, overrides),
+            `${mode} ${resources.join()}`,
+          ).toBe(expected);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("records a move's decision under its own closed action name, never the directory", () => {
+    const { root, workspace } = moveFixture();
+    try {
+      const records: ServerLogEvent[] = [];
+      const sink: ServerLogSink = { write: (event) => void records.push(event) };
+      for (const [resources, outcome] of [
+        [[join(workspace, "src")], "allowed"],
+        [[join(root, "outside")], "workspace-escape"],
+      ] as const) {
+        const moved = request("opencode_session_move", resources);
+        recordOpenCodeNativePolicyDecision(sink, "run-native-1", {
+          mode: "autonomous-delivery",
+          request: moved,
+          decision: decideOpenCodeNativePolicy({
+            mode: "autonomous-delivery",
+            workspaceRoot: workspace,
+            request: moved,
+            nowMs: NOW,
+          }),
+          outcome,
+        });
+      }
+      const [allowed, refused] = records.map((record) =>
+        expectActivityLogProof(
+          "coding-runtime.native-policy.decided.emitted-line",
+          formatActivityLogProofLine(record),
+        ),
+      );
+      expect(allowed).toMatchObject({ permission: "opencode_session_move", effect: "allow" });
+      expect(refused).toMatchObject({
+        permission: "opencode_session_move",
+        effect: "deny",
+        outcome: "workspace-escape",
+      });
+      expect(JSON.stringify(records)).not.toContain(root);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("parses the session a move names and refuses a malformed one", () => {
+    const body = {
+      action: "native-policy",
+      runId: "run-1",
+      sessionID: OWN,
+      permission: "opencode_session_move",
+      resources: ["/workspace/src"],
+    };
+    expect(parseOpenCodeNativePolicyRequest({ ...body, targetSessionID: null })).not.toHaveProperty(
+      "targetSessionID",
+    );
+    expect(parseOpenCodeNativePolicyRequest({ ...body, targetSessionID: OWN })).toMatchObject({
+      targetSessionID: OWN,
+    });
+    for (const malformed of [42, "", "not-a-session", { id: OWN }])
+      expect(
+        parseOpenCodeNativePolicyRequest({ ...body, targetSessionID: malformed }),
+      ).toBeUndefined();
   });
 });
 

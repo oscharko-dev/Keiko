@@ -24,6 +24,13 @@ export const OPENCODE_CODE_MODE_GOVERNED_TOOLS = Object.freeze([
   "opencode_worktree_create",
 ] as const);
 
+/**
+ * The one governed management tool that names its effect (#3903 AC4): it moves a session, the
+ * current one when `sessionID` is omitted, to `directory`. The hook sends both, so the policy can
+ * admit the run's own session moving inside the task workspace.
+ */
+export const OPENCODE_CODE_MODE_SESSION_MOVE = "opencode_session_move";
+
 /** Secrets and Keiko bindings never reach a shell the native agent starts. */
 export const OPENCODE_NATIVE_SHELL_ENV_DENYLIST = Object.freeze([
   "OPENCODE_SERVER_PASSWORD",
@@ -74,6 +81,7 @@ function pluginConstantsSource(): readonly string[] {
     "const runId = process.env.KEIKO_CODING_RUN_ID;",
     "const fullAccess = process.env.KEIKO_CODING_MODE === 'autonomous-delivery';",
     ...patchBytesSource(),
+    ...managementSource(),
     "function searchPath(event) {",
     '  const path = event.metadata && typeof event.metadata === "object" ? event.metadata.path : undefined;',
     '  return typeof path === "string" && path.length > 0 && path.length <= MAX_RESOURCE_CHARS ? path : undefined;',
@@ -106,6 +114,21 @@ function pluginConstantsSource(): readonly string[] {
   ];
 }
 
+function managementSource(): readonly string[] {
+  return [
+    "// A session move is reviewed by the directory it names and the session it moves (absent: the",
+    "// calling one); the other governed management tool names no path.",
+    "function managementResources(tool, input) {",
+    `  if (tool !== ${JSON.stringify(OPENCODE_CODE_MODE_SESSION_MOVE)} || !input || typeof input !== "object") return [];`,
+    '  return typeof input.directory === "string" ? [input.directory] : [];',
+    "}",
+    "function managementTarget(tool, input) {",
+    `  if (tool !== ${JSON.stringify(OPENCODE_CODE_MODE_SESSION_MOVE)} || !input || typeof input !== "object") return null;`,
+    "  return input.sessionID === undefined ? null : input.sessionID;",
+    "}",
+  ];
+}
+
 function patchBytesSource(): readonly string[] {
   return [
     "const ENCODER = new TextEncoder();",
@@ -131,7 +154,7 @@ function policyEvaluationSource(): readonly string[] {
     "  const resources = boundedResources(event.resources);",
     '  if (resources === null) return { effect: "deny", message: OVERSIZED_MESSAGE };',
     "  try {",
-    '    const body = JSON.stringify({ action: ACTION, runId, sessionID: event.sessionID, agent: typeof event.agent === "string" ? event.agent : null, permission: String(event.action), resources, source: source(event.source), searchPath: searchPath(event), patchBytes: patchBytes(event), configured: event.effect });',
+    '    const body = JSON.stringify({ action: ACTION, runId, sessionID: event.sessionID, agent: typeof event.agent === "string" ? event.agent : null, permission: String(event.action), resources, source: source(event.source), searchPath: searchPath(event), patchBytes: patchBytes(event), targetSessionID: event.targetSessionID ?? null, configured: event.effect });',
     '    const response = await fetch(endpoint, { method: "POST", redirect: "manual", signal: AbortSignal.timeout(WAIT_MS), headers: { Authorization: "Bearer " + capability, "Content-Type": "application/json" }, body });',
     '    if (!response.ok || response.type === "opaqueredirect") return refusal;',
     "    const text = await response.text();",
@@ -171,8 +194,8 @@ function pluginBodySource(): readonly string[] {
     "    // decides them here; a refusal blocks the call with the policy's message.",
     '    await ctx.tool.hook("execute.before", async (event) => {',
     '      if (event.tool !== "execute" && !CODE_MODE_GOVERNED.has(event.tool)) return;',
-    '      const resources = event.tool === "execute" ? programResources(event.input) : [];',
-    '      const decision = await evaluate({ sessionID: event.sessionID, agent: event.agent, action: event.tool, resources, effect: "ask", source: { type: "tool", messageID: event.messageID, id: event.id } });',
+    '      const resources = event.tool === "execute" ? programResources(event.input) : managementResources(event.tool, event.input);',
+    '      const decision = await evaluate({ sessionID: event.sessionID, agent: event.agent, action: event.tool, resources, targetSessionID: managementTarget(event.tool, event.input), effect: "ask", source: { type: "tool", messageID: event.messageID, id: event.id } });',
     '      if (decision.effect !== "allow") throw new Error(decision.message ?? DENY_MESSAGE);',
     "    });",
     "  },",

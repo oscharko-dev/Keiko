@@ -8,7 +8,9 @@ import { createBufferedServerLogSink } from "../../../../tests/support/buffered-
 import {
   NATIVE_CHILD_SESSION_MAX,
   NATIVE_SESSION_ANCESTRY_MAX_DEPTH,
+  NATIVE_SESSION_LOCATION_MAX,
   admitNativeChildren,
+  admitNativeSessionLocation,
   classifyNativeSession,
   createNativeTreeStatusPort,
   interruptNativeTree,
@@ -40,9 +42,14 @@ interface FakeRuntime {
   active: (readonly string[])[];
   failSessions: boolean;
   onInterrupt: (id: string) => void;
-  /** The background shell jobs the runtime lists as running (#3901 AC3). */
-  shells: { id: string; sessionId?: string }[];
+  /**
+   * The background shell jobs the runtime lists as running (#3901 AC3), each under the directory
+   * its session was located at (the workspace root when absent).
+   */
+  shells: { id: string; sessionId?: string; directory?: string }[];
   readonly removed: string[];
+  /** The directory each removal named. */
+  readonly removedAt: string[];
 }
 
 function fakeRuntime(sessions: readonly SessionRecord[], active: readonly string[]): FakeRuntime {
@@ -55,10 +62,20 @@ function fakeRuntime(sessions: readonly SessionRecord[], active: readonly string
     onInterrupt: () => undefined,
     shells: [],
     removed: [],
+    removedAt: [],
     client: {
-      shells: () => Promise.resolve(runtime.shells.map((shell) => ({ ...shell }))),
-      removeShell: (id) => {
+      shells: (directory) =>
+        Promise.resolve(
+          runtime.shells
+            .filter((shell) => (shell.directory ?? WORKSPACE) === directory)
+            .map(({ id, sessionId }) => ({
+              id,
+              ...(sessionId === undefined ? {} : { sessionId }),
+            })),
+        ),
+      removeShell: (id, directory) => {
         runtime.removed.push(id);
+        runtime.removedAt.push(directory);
         runtime.shells = runtime.shells.filter((shell) => shell.id !== id);
         return Promise.resolve();
       },
@@ -273,7 +290,12 @@ describe("the run's background shell jobs", () => {
 
     await expect(
       nativeTreeActivity(runtime.client, tree(["ses_child"]), undefined),
-    ).resolves.toMatchObject({ activeShells: ["sh_child", "sh_unnamed"] });
+    ).resolves.toMatchObject({
+      activeShells: [
+        { id: "sh_child", directory: WORKSPACE },
+        { id: "sh_unnamed", directory: WORKSPACE },
+      ],
+    });
     runtime.shells = [{ id: "sh_other", sessionId: "ses_other" }];
     await expect(nativeTreeActivity(runtime.client, tree(), undefined)).resolves.toMatchObject({
       activeShells: [],
@@ -496,5 +518,65 @@ describe("interrupting the run's native session tree", () => {
     await expect(interruptNativeTree(runtime.client, tree(), options())).rejects.toThrow(
       "interrupt-refused",
     );
+  });
+});
+
+// #3903 AC4: Code Mode's admitted `session_move` takes a session of the run to another directory
+// inside the workspace; the tree follows it there, so its children and jobs stay the run's.
+describe("the run's native session tree after a move inside the workspace", () => {
+  const MOVED = `${WORKSPACE}/src`;
+
+  function movedTree(children: readonly string[] = []): NativeSessionTreeRun {
+    return { ...tree(children), locations: new Set<string>() };
+  }
+
+  it("records a moved directory once, up to its bound, and never without a record", () => {
+    const run = movedTree();
+    expect(admitNativeSessionLocation(run, MOVED)).toBe(true);
+    expect(admitNativeSessionLocation(run, `${MOVED}/`)).toBe(true);
+    expect(admitNativeSessionLocation(run, WORKSPACE)).toBe(true);
+    expect([...(run.locations ?? [])]).toEqual([MOVED]);
+    for (let index = 1; index < NATIVE_SESSION_LOCATION_MAX; index += 1)
+      expect(admitNativeSessionLocation(run, `${WORKSPACE}/d${String(index)}`)).toBe(true);
+    expect(admitNativeSessionLocation(run, `${WORKSPACE}/one-more`)).toBe(false);
+    expect(admitNativeSessionLocation(run, MOVED)).toBe(true);
+    expect(admitNativeSessionLocation(tree(), MOVED)).toBe(false);
+  });
+
+  it("owns a child opened at the moved directory only once the move was admitted", async () => {
+    const sessions = [session("ses_moved_child", PRIMARY, MOVED)];
+    expect(nativeSessionDescendsFromRun(sessions, "ses_moved_child", PRIMARY, WORKSPACE)).toBe(
+      false,
+    );
+    const run = movedTree();
+    admitNativeSessionLocation(run, MOVED);
+    await expect(
+      classifyNativeSession(fakeRuntime(sessions, []).client, run, "ses_moved_child", undefined),
+    ).resolves.toBe("child");
+  });
+
+  it("finds the run's jobs at the moved directory and stops each one where it is listed", async () => {
+    const runtime = fakeRuntime([], []);
+    runtime.shells = [
+      { id: "sh_root", sessionId: PRIMARY },
+      { id: "sh_moved", sessionId: PRIMARY, directory: MOVED },
+    ];
+    // Without the record the job at the moved directory is invisible to the run.
+    await expect(nativeTreeActivity(runtime.client, tree(), undefined)).resolves.toMatchObject({
+      activeShells: [{ id: "sh_root", directory: WORKSPACE }],
+    });
+    const run = movedTree();
+    admitNativeSessionLocation(run, MOVED);
+
+    const outcome = await interruptNativeTree(runtime.client, run, {
+      signal: new AbortController().signal,
+      pause: instantPause,
+      runId: "run-tree",
+      activityLog: undefined,
+    });
+
+    expect(outcome).toEqual({ interruptedChildren: 0, stoppedShells: 2, settled: true });
+    expect(runtime.removed).toEqual(["sh_root", "sh_moved"]);
+    expect(runtime.removedAt).toEqual([WORKSPACE, MOVED]);
   });
 });

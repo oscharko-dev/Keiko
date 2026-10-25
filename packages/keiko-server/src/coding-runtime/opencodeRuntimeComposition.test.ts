@@ -95,6 +95,7 @@ import {
 } from "./secureWorkspaceTextReadProcess.js";
 import type { SecureWorkspaceNativeFileIO } from "./secureWorkspaceTextRead.js";
 import type { CodingRuntimeRepositoryItemsPort } from "./codingRuntimeRepositoryItems.js";
+import { NATIVE_SESSION_LOCATION_MAX } from "./opencodeNativeSessionTree.js";
 import { createProductionAcceptedInitializationAuthority } from "./productionCodingRuntimeResolver.js";
 import {
   catalogRuntimeFixture,
@@ -3323,6 +3324,51 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
       expect(admitted?.invocation).toBeUndefined();
     } finally {
       await fixture.stop();
+    }
+  });
+
+  // #3903 AC4: the run's own session may move inside the workspace; the tree records each directory,
+  // and once it holds its bound, a move to yet another one is refused rather than lost track of.
+  it("admits the run's own session move inside the workspace up to the tree's bound", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-bridge-move-")));
+    const workspaceRoot = join(root, "workspace");
+    for (let index = 0; index <= NATIVE_SESSION_LOCATION_MAX; index += 1)
+      mkdirSync(join(workspaceRoot, `d${String(index)}`), { recursive: true });
+    const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+      mode: "governed-assist",
+      workspaceRoot,
+    });
+    const move = (
+      name: string,
+      targetSessionID?: string,
+    ): ReturnType<typeof fixture.runtime.toolBridge.handle> =>
+      fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: JSON.stringify({
+          action: "native-policy",
+          runId: FIXTURE_RUN_ID,
+          sessionID: "ses_tool",
+          permission: "opencode_session_move",
+          resources: [join(workspaceRoot, name)],
+          configured: "ask",
+          ...(targetSessionID === undefined ? {} : { targetSessionID }),
+        }),
+      });
+    try {
+      for (let index = 0; index < NATIVE_SESSION_LOCATION_MAX; index += 1)
+        await expect(move(`d${String(index)}`)).resolves.toMatchObject({
+          status: 200,
+          body: '{"effect":"allow"}',
+        });
+      // A directory the tree already follows stays admitted; one more is refused.
+      await expect(move("d0")).resolves.toMatchObject({ body: '{"effect":"allow"}' });
+      const refused = await move(`d${String(NATIVE_SESSION_LOCATION_MAX)}`);
+      expect(refused.body).toContain("bound of working directories");
+      expect((await move("d0", "ses_other")).body).toContain("only its own working directory");
+    } finally {
+      await fixture.stop();
+      rmSync(root, { recursive: true, force: true });
     }
   });
 

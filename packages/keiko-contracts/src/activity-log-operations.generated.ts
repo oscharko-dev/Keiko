@@ -8108,6 +8108,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "execute",
           "external_directory",
           "doom_loop",
+          "opencode_session_move",
+          "opencode_worktree_create",
           "mcp",
           "other",
         ],

@@ -53,6 +53,7 @@ import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import { createOpenCodeV2HistoryProjection } from "./opencodeV2History.js";
 import { createOpenCodeNativeToolAdvertisement } from "./opencodeToolSchemas.js";
 import {
+  admitNativeSessionLocation,
   createNativeTreeStatusPort,
   interruptNativeTree,
   type NativeSessionTreeRun,
@@ -2263,5 +2264,128 @@ describe("pinned native OpenCode MCP servers from the operator's registry (C04, 
       );
     },
     120_000,
+  );
+});
+
+// ─── Code Mode session move (#3903 AC4) ────────────────────────────────────────────────────────
+
+// Code Mode's `session_move` with Keiko's policy present: the run's own session may move inside the
+// task workspace, and the run's tree follows it there, so a background job the moved session starts
+// is still the run's and stops with its turn. Every other target is refused and moves nothing.
+describe("pinned native OpenCode Code Mode session move (#3903 AC4)", () => {
+  const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
+  const move = (input: Readonly<Record<string, unknown>>): ScriptedCall => ({
+    name: "execute",
+    arguments: { code: `return await tools.opencode.session_move(${JSON.stringify(input)});` },
+  });
+  const files = { "src/a.ts": "export const a = 1;\n" };
+
+  async function directoryOf(run: Run, sessionId = run.sessionId): Promise<unknown> {
+    const session = (await run.client.sessions()).find((entry) => entry.id === sessionId);
+    return object(object(session)?.location)?.directory;
+  }
+
+  const pause = (signal: AbortSignal): Promise<boolean> =>
+    new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        resolve(!signal.aborted);
+      }, 200);
+      signal.addEventListener("abort", () => {
+        clearTimeout(timer);
+        resolve(false);
+      });
+    });
+
+  it.skipIf(skip)(
+    "moves the run's own session inside the workspace, and the tree stops the job it starts there",
+    async () => {
+      await withProcessMarker(async (marker) => {
+        await withRun({ mode: "autonomous-delivery", files }, async (run) => {
+          const src = join(run.fixture.workspace, "src");
+          await scriptedTurn(run, move({ directory: src }));
+          expect(run.facade.decisions).toContainEqual(
+            expect.objectContaining({
+              permission: "opencode_session_move",
+              resources: [src],
+              effect: "allow",
+            }),
+          );
+          await settledIdle(run);
+          await expect.poll(() => directoryOf(run), { timeout: 10_000 }).toBe(src);
+          // What the composition does with that allow (`admittedSessionMove`).
+          const tree: NativeSessionTreeRun = {
+            sessionId: run.sessionId,
+            workspaceRoot: run.fixture.workspace,
+            children: new Set(),
+            locations: new Set(),
+          };
+          expect(admitNativeSessionLocation(tree, src)).toBe(true);
+          // A relative path now resolves in the session's new directory.
+          expect(await scriptedTurn(run, read("a.ts"))).toContain("export const a = 1;");
+          await scriptedTurn(run, shell(idleCommand(120, marker), { background: true }));
+          await settledIdle(run);
+          // The runtime lists the job under the moved directory alone: without the tree following
+          // the move, the run would not find it.
+          await expect(run.client.shells(run.fixture.workspace)).resolves.toEqual([]);
+          await expect(run.client.shells(src)).resolves.toHaveLength(1);
+
+          const outcome = await interruptNativeTree(run.client, tree, {
+            signal: AbortSignal.timeout(20_000),
+            pause,
+            runId: RUN_ID,
+            activityLog: undefined,
+          });
+
+          expect(outcome).toMatchObject({ stoppedShells: 1, settled: true });
+          await expect(run.client.shells(src)).resolves.toEqual([]);
+          await expect.poll(() => processesCarrying(marker).length, { timeout: 10_000 }).toBe(0);
+        });
+      });
+    },
+    180_000,
+  );
+
+  it.skipIf(skip)(
+    "refuses another session, a place outside, a link, a missing or relative directory, and moves nothing",
+    async () => {
+      await withRun(
+        {
+          mode: "autonomous-delivery",
+          files,
+          prepare: (fixture): void => {
+            mkdirSync(join(fixture.root, "outside"));
+            symlinkSync(join(fixture.root, "outside"), join(fixture.workspace, "escape"));
+          },
+        },
+        async (run) => {
+          const src = join(run.fixture.workspace, "src");
+          const other = await run.client.createSession(run.fixture.workspace);
+          if (typeof other.id !== "string") throw new TypeError("fixture-session-invalid");
+          const refusals: readonly [Readonly<Record<string, unknown>>, string][] = [
+            [{ sessionID: other.id, directory: src }, "unsupported-action"],
+            [{ directory: join(run.fixture.root, "outside") }, "workspace-escape"],
+            [{ directory: join(run.fixture.workspace, "escape") }, "workspace-escape"],
+            [{ directory: join(run.fixture.workspace, "gone") }, "workspace-escape"],
+            [{ directory: "src" }, "unsupported-action"],
+          ];
+          for (const [input, reason] of refusals) {
+            run.facade.decisions.length = 0;
+            const result = await scriptedTurn(run, move(input));
+            expect(result, JSON.stringify(input)).toContain("Keiko refused this action");
+            expect(run.facade.decisions).toContainEqual(
+              expect.objectContaining({
+                permission: "opencode_session_move",
+                effect: "deny",
+                reason,
+              }),
+            );
+            await settledIdle(run);
+          }
+          expect(await directoryOf(run)).toBe(run.fixture.workspace);
+          expect(await directoryOf(run, other.id)).toBe(run.fixture.workspace);
+        },
+      );
+    },
+    180_000,
   );
 });
