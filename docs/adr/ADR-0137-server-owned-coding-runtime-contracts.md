@@ -1831,8 +1831,13 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   index; `keiko_git_stage` with `unstage: true` gives staged paths back to the worktree through
   the same proposal, approval and redemption as staging (`unstage-<n>`, redeemed as
   `keiko_git_execute` kind `unstage`, bound to the head, base and staged-tree digest; the worktree
-  keeps its bytes) (#3902 AC2). It is an option of the stage tool rather than a tool of its own, so
-  the catalog's tool count and its performance case inventory stay unchanged. `keiko_verification` is a member only
+  keeps its bytes) (#3902 AC2). The proposal carries those three facts to the index effect, which
+  checks them, together with the branch, inside the same index transaction as staging and again
+  just before the reviewed index replaces the live one, with the run's authority at the swap; a
+  change that lands after the review or an approval is never accepted as the effect's new snapshot
+  (PR #4064 review). It is an option of the stage tool rather than a tool of its own, so the
+  catalog's tool count and its performance case inventory stay unchanged. `keiko_verification` is
+  a member only
   because a commit proposal requires the commit proof, which `VerifiedCommitService` records solely
   from that tool's verification; without it no native commit could ever be proposed. The plugin is
   the mapped profiles' own generated tool source filtered to those names, so a native call is the

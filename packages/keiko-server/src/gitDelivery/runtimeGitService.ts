@@ -273,8 +273,10 @@ function buildStageProposal(
   return assembleProposal(context, facts, command, review, nowMs, proposalId);
 }
 
-// An unstage proposal binds the same head, base and staged tree as a stage proposal: redeemed only
-// while the index it reviewed is the index it changes (#3902 AC2). The worktree is not its subject.
+// An unstage proposal binds the same head, base and staged tree as a stage proposal, and carries
+// them to the index effect, which checks them inside its index transaction and again at the swap:
+// redeemed only while the index it reviewed is the index it changes, also after an approval (#3902
+// AC2, PR #4064 review). The worktree is not its subject.
 function buildUnstageProposal(
   context: VerifiedCommitRunContext,
   facts: import("./verifiedCommitTypes.js").VerifiedCommitFacts,
@@ -283,14 +285,12 @@ function buildUnstageProposal(
   nowMs: number,
   proposalId: string,
 ): RuntimeGitProposal {
-  return assembleProposal(
-    context,
-    facts,
-    { kind: "unstage", pathspecs: [...paths] },
-    review,
-    nowMs,
-    proposalId,
-  );
+  const command: GitUnstageCommand = {
+    kind: "unstage",
+    pathspecs: [...paths],
+    verified: { ...facts, branchName: context.headRef, baseRef: context.baseRef },
+  };
+  return assembleProposal(context, facts, command, review, nowMs, proposalId);
 }
 
 function assembleProposal(

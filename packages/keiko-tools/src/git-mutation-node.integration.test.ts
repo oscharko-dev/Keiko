@@ -25,7 +25,11 @@ import type {
 import { GIT_DELIVERY_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { createNodeGitMutationAdapter } from "./git-mutation-node.js";
-import type { GitLocalMutationAdapter } from "./git-mutation-adapter.js";
+import type {
+  GitLocalMutationAdapter,
+  GitVerifiedCommitPrecondition,
+} from "./git-mutation-adapter.js";
+import { readGitIndexTreeDigest } from "./git-worktree-snapshot-node.js";
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
 import { createInMemoryGitMutationJournal, runGitMutation } from "./git-mutation-orchestrator.js";
 
@@ -187,6 +191,110 @@ describe("node git mutation adapter — successful local mutations", () => {
     expect(staged.outcome).toBe("succeeded");
     expect(git(["diff", "--cached", "--name-only"]).trim()).toBe(":(top)*");
     expect(git(["status", "--short"])).toContain("?? another.txt");
+  });
+});
+
+// #3902 AC2 (PR #4064 review 4372101954): an unstaging reviewed against a head, a base and a staged
+// tree changes the index only while all three still hold. The adapter checks them at the mutation
+// boundary, inside the index transaction and again just before the swap, so a change that lands
+// after the proposal was reviewed or approved is never accepted as the effect's new snapshot.
+describe("node git mutation adapter — verified unstage", () => {
+  // `work` on top of `base`, with b.txt staged on it: the state an unstage proposal reviews.
+  async function reviewedState(): Promise<GitVerifiedCommitPrecondition> {
+    writeFileSync(join(root, "a.txt"), "hello\n", "utf8");
+    git(["add", "a.txt"]);
+    git(["commit", "-qm", "base"]);
+    git(["branch", "base"]);
+    git(["checkout", "-qb", "work"]);
+    writeFileSync(join(root, "b.txt"), "world\n", "utf8");
+    git(["add", "b.txt"]);
+    const headSha = git(["rev-parse", "HEAD"]).trim();
+    return {
+      headSha,
+      stagedTreeDigest: await readGitIndexTreeDigest({
+        workspace: info,
+        processEnv: { PATH: process.env.PATH ?? "" },
+      }),
+      branchName: "work",
+      baseRef: "base",
+      baseSha: headSha,
+    };
+  }
+
+  const DRIFTS: Readonly<Record<string, () => void>> = {
+    index: () => {
+      writeFileSync(join(root, "c.txt"), "another\n", "utf8");
+      git(["add", "c.txt"]);
+    },
+    head: () => {
+      git(["commit", "-qm", "moved", "--allow-empty", "--no-gpg-sign"]);
+    },
+    base: () => {
+      git([
+        "update-ref",
+        "refs/heads/base",
+        git(["commit-tree", "-p", "base", "-m", "x", "base^{tree}"]).trim(),
+      ]);
+    },
+  };
+
+  it("gives the reviewed staged change back to the worktree while the review still holds", async () => {
+    const verified = await reviewedState();
+    const unstaged = await adapter().unstage({ pathspecs: ["b.txt"], verified });
+    expect(unstaged.outcome).toBe("succeeded");
+    expect(git(["diff", "--cached", "--name-only"]).trim()).toBe("");
+    expect(git(["status", "--short"])).toContain("?? b.txt");
+  });
+
+  it.each(Object.keys(DRIFTS))(
+    "changes nothing when the %s moved after the review",
+    async (drift) => {
+      const verified = await reviewedState();
+      DRIFTS[drift]?.();
+      const index = git(["ls-files", "--stage"]);
+      const unstaged = await adapter().unstage({ pathspecs: ["b.txt"], verified });
+      expect(unstaged.outcome).toBe("failed");
+      expect(git(["ls-files", "--stage"])).toBe(index);
+    },
+  );
+
+  // The change lands while the effect runs: after its first check, before the index transaction.
+  it.each(Object.keys(DRIFTS))(
+    "changes nothing when the %s moves while the effect runs",
+    async (drift) => {
+      const verified = await reviewedState();
+      let index: string | undefined;
+      const racing = createNodeGitMutationAdapter({
+        workspace: info,
+        processEnv: { PATH: process.env.PATH ?? "" },
+        now: () => Date.now(),
+        beforeIndexUpdate: () => {
+          if (index === undefined) {
+            DRIFTS[drift]?.();
+            index = git(["ls-files", "--stage"]);
+          }
+          return true;
+        },
+      });
+      const unstaged = await racing.unstage({ pathspecs: ["b.txt"], verified });
+      expect(index).toBeDefined();
+      expect(unstaged.outcome).toBe("failed");
+      expect(git(["ls-files", "--stage"])).toBe(index);
+    },
+  );
+
+  it("refuses at the swap when the run's authority lapsed during the effect", async () => {
+    const verified = await reviewedState();
+    let calls = 0;
+    const lapsing = createNodeGitMutationAdapter({
+      workspace: info,
+      processEnv: { PATH: process.env.PATH ?? "" },
+      now: () => Date.now(),
+      beforeIndexUpdate: () => (calls += 1) < 3,
+    });
+    const unstaged = await lapsing.unstage({ pathspecs: ["b.txt"], verified });
+    expect(unstaged.outcome).toBe("failed");
+    expect(git(["diff", "--cached", "--name-only"]).trim()).toBe("b.txt");
   });
 });
 
