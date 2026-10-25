@@ -588,6 +588,38 @@ describe("production managed worktree tools", () => {
     );
     expect(settle).toHaveBeenCalledOnce();
   });
+  // PR #4064 review (6390703192): the verifier's container backend on macOS installed Linux
+  // bindings into the tree the native runtime's shell uses. A native run's verification names the
+  // host platform, so the bootstrap refuses an install for another one; a mapped run names none.
+  it.each([
+    ["native", { os: process.platform, cpu: process.arch }],
+    [undefined, undefined],
+  ] as const)(
+    "hands a %s run's host platform to the verifier's bootstrap",
+    async (profile, host) => {
+      const inputs: VerificationRunInput[] = [];
+      const facade = verificationFacade({
+        records: [],
+        ...(profile === undefined ? {} : { toolProfile: profile }),
+        runToReport: (input) => {
+          inputs.push(input);
+          return Promise.resolve(verificationReport("passed"));
+        },
+      });
+      await facade.execute({
+        capability: "runtime-capability",
+        body: JSON.stringify({
+          action: "verification",
+          verifierId: "test",
+          actionId: "host-platform",
+          idempotencyKey: "host-platform",
+        }),
+      });
+      expect(inputs).toHaveLength(1);
+      expect(inputs[0]?.sharedHostPlatform).toEqual(host);
+    },
+  );
+
   it("routes reads through the secure workspace port and rechecks live authority", async () => {
     let live = true;
     const readText = vi.fn(() => Promise.resolve({ ok: true as const, text: "private source" }));
@@ -4326,9 +4358,11 @@ function verificationFacade(options: {
   ) => void;
   readonly failureOutput?: readonly VerificationStepOutput[];
   readonly workspaceRoot?: string;
+  readonly toolProfile?: ProductionManagedWorktreeToolInput["toolProfile"];
   readonly records: ServerDiagnosticRecord[];
 }): ReturnType<typeof createProductionManagedWorktreeToolFacade> {
   return createProductionManagedWorktreeToolFacade({
+    toolProfile: options.toolProfile,
     verificationRevision: options.verificationRevision,
     verificationBlocked: options.verificationBlocked,
     verificationAdmitted: options.verificationAdmitted,

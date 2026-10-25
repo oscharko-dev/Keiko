@@ -2304,13 +2304,28 @@ function verificationRunInput(
 ): VerificationRunInput {
   const correlationId = verificationCorrelationId(input);
   recordVerificationTarget(input, request, kind);
+  const sharedHostPlatform = input.toolProfile === "native" ? nativeHostPlatform() : undefined;
   return {
     projectId: input.workspaceRoot,
     kinds: [kind],
     requestId: request.actionId,
     ...(request.targetPath === undefined ? {} : { targetPath: request.targetPath }),
     ...(correlationId === undefined ? {} : { correlationId }),
+    ...(sharedHostPlatform === undefined ? {} : { sharedHostPlatform }),
   };
+}
+
+/**
+ * The native runtime's shell runs on this host and uses the workspace's installed dependencies, so
+ * the governed verifier must not replace them with another platform's (its container backend on
+ * macOS is Linux): the bootstrap then refuses that install instead (`install-target-foreign`).
+ */
+function nativeHostPlatform(): VerificationRunInput["sharedHostPlatform"] {
+  const os = process.platform;
+  const cpu = process.arch;
+  return (os === "darwin" || os === "linux" || os === "win32") && (cpu === "arm64" || cpu === "x64")
+    ? { os, cpu }
+    : undefined;
 }
 
 function recordVerificationTarget(

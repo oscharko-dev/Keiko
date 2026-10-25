@@ -606,6 +606,16 @@ apply to the host. A package that needs a disabled install script remains unsupp
 npm 11.16.0 control qualifies one Linux native binding and one exact-file Vitest test, not generic
 native-build or complete OpenCode parity.
 
+The installed tree is shared with whatever else runs in the workspace. The native coding runtime's
+shell runs on the host, while this verifier's execution-root backend on macOS is a Linux container,
+so an install for the measured Linux target replaced the host's native bindings and broke every
+later native npm or Vitest command (PR #4064 review). A native run's verification therefore names
+the host platform (`sharedHostPlatform`), and the bootstrap refuses an install whose measured
+target has another operating system or CPU (`install-target-foreign`) before npm writes the tree.
+The refusal tells the model to run the project's own checks in the native shell, which the native
+policy reads as verification evidence (#3901). A run without a host-native consumer installs for
+its measured target as before.
+
 Host network makes every source npm would contact part of that boundary (PR #3452 review: CWE-918,
 CWE-494). Before npm runs, the bootstrap checks every source it would be handed. Each specifier in
 `dependencies`, `devDependencies`, `optionalDependencies` and `peerDependencies`, in the root
