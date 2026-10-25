@@ -2081,6 +2081,19 @@ export class CodingRuntimeOrchestrator {
     return this.current() !== undefined;
   }
 
+  /**
+   * Admits a task-workspace selection: the settled run's undo window ends first, on the serial lane
+   * like the next run's start (r4368730403), because its held runtime would otherwise keep the slot
+   * and refuse every switch. A staged undo is committed as at any close. A running run or an
+   * unacknowledged recovery still blocks the selection.
+   */
+  admitWorkspaceSelection(): Promise<boolean> {
+    return this.serial(async () => {
+      await this.undoWindow.close("workspace-selected");
+      return !this.blocksWorkspaceSelection();
+    });
+  }
+
   blocksWorkspaceSelection(): boolean {
     const current = this.current();
     if (this.deps.manager.health().status !== "stopped") return true;

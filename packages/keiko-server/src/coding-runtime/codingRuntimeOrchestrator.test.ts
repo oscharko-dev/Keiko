@@ -8625,6 +8625,39 @@ describe("post-completion undo window", () => {
     expect(run.revert).toHaveBeenCalledOnce();
   });
 
+  // r4368730403: the held runtime is not stopped, so a task-workspace selection was refused with
+  // LOCK_CONTENTION until the next run started; the selection now ends the window first.
+  it("admits a workspace selection by ending the held window, while a live run still blocks it", async () => {
+    const run = heldRun();
+    run.f.manager.health.mockImplementation(() =>
+      run.f.manager.stop.mock.calls.length > 0
+        ? { status: "stopped" }
+        : { status: "ready", activeRunId: "run-1" },
+    );
+    await run.f.orchestrator.start(start);
+
+    await expect(run.f.orchestrator.admitWorkspaceSelection()).resolves.toBe(false);
+    expect(run.f.manager.stop).not.toHaveBeenCalled();
+    run.finish("succeeded");
+    await settled(run, "succeeded");
+    await vi.waitFor(() => {
+      expect(windowLines(run)).toMatchObject([{ event: "opened" }]);
+    });
+    expect(run.f.orchestrator.blocksWorkspaceSelection()).toBe(true);
+
+    await expect(run.f.orchestrator.admitWorkspaceSelection()).resolves.toBe(true);
+    expect(run.commitRevert).toHaveBeenCalledWith("run-1");
+    expect(run.f.manager.stop).toHaveBeenCalledWith("run-1", "succeeded");
+    expect(windowLines(run).at(-1)).toMatchObject({
+      event: "closed",
+      reason: "workspace-selected",
+      stopped: true,
+    });
+    expect(run.f.orchestrator.blocksWorkspaceSelection()).toBe(false);
+    // The prior run's undo ended with its runtime: nothing it holds can touch the next workspace.
+    await expect(run.f.orchestrator.revertState("run-1")).resolves.toBeUndefined();
+  });
+
   it("closes the window before the next run starts: commits a staged undo, then stops the held runtime", async () => {
     const run = heldRun();
     await run.f.orchestrator.start(start);

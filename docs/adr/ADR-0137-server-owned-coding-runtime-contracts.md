@@ -1867,7 +1867,8 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   records the run's result as succeeded, but keeps the process tree until a later `stop` reaps it.
   The run settles normally (history captured, evidence settled, slot published as settled); the
   production slot stays claimed, so no run can start over a held runtime. `CodingRuntimeUndoWindow`
-  closes the window when the next run starts or is retried, after 30 minutes, or at server
+  closes the window when the next run starts or is retried, when the human selects another task
+  workspace (that selection waits for the close on the same serial lane), after 30 minutes, or at server
   shutdown; a run that did not settle as succeeded is released at once. While the window is open
   the coordinator admits undo and restore of the held run, and the counts behind them, under the
   settled snapshot's revision and a one-use request id; the revision advances, the settlement time
@@ -1877,7 +1878,7 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   `session.revert.commit` (the run is settled and its history captured by then, so no live
   projection depends on the rewound messages), then the runtime is stopped and its session retained
   like any settled run. Evidence is `coding-runtime.undo-window` (`opened`, `closed` with
-  `next-run`, `expired`, `shutdown` or `not-succeeded`, the staged-undo outcome and whether the stop
+  `next-run`, `workspace-selected`, `expired`, `shutdown` or `not-succeeded`, the staged-undo outcome and whether the stop
   succeeded) beside the existing `coding-runtime.revert.*` lines (`commit` for the final commit).
   The original executable proves the undo, restore and closing commit of a settled turn and that
   the committed session passes the retention audit (`opencodeNativeRevert.real.test.ts`).

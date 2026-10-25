@@ -14,14 +14,15 @@ import type { CodingRuntimeRevertState } from "./codingRuntimeRevert.js";
  * succeeded with an undoable newest turn keeps its original runtime process -- the session and the
  * runtime's own snapshot engine -- after the run settled, so the human can undo and restore that
  * turn as in standalone OpenCode. Every run authority is already revoked (`hold`): the process
- * answers only Keiko's undo and restore. The window closes when the next run starts, when its time
- * bound passes, or at shutdown; a staged undo is then committed, so the retained session matches
+ * answers only Keiko's undo and restore. The window closes when the next run starts, when the human
+ * selects another task workspace, when its time bound passes, or at shutdown; a staged undo is then committed, so the retained session matches
  * the workspace, and the process is stopped like any settled run.
  */
 export const CODING_RUNTIME_UNDO_WINDOW_MS = 30 * 60 * 1_000;
 
 export const UNDO_WINDOW_CLOSE_REASONS = [
   "next-run",
+  "workspace-selected",
   "expired",
   "shutdown",
   "not-succeeded",

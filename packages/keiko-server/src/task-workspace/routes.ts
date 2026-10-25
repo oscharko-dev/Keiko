@@ -433,9 +433,7 @@ export async function handleSetActiveTaskWorkspace(
       }
       // requestedBy is persisted as the active-pointer setBy — reject control/zero-width/bidi chars.
       assertSafeFieldValue(requestedBy, "requestedBy");
-      if (deps.codingRuntimeOrchestrator?.blocksWorkspaceSelection()) {
-        throw new TaskWorkspaceError("LOCK_CONTENTION", "A coding run is still active.");
-      }
+      await admitWorkspaceSelection(deps);
       const result = await guard.setActive({
         workspaceId,
         requestedBy,
@@ -448,6 +446,17 @@ export async function handleSetActiveTaskWorkspace(
       };
     },
   );
+}
+
+/**
+ * A selection ends a settled run's held undo window first (r4368730403); a run that is still live
+ * keeps the workspace bound and the selection is refused.
+ */
+async function admitWorkspaceSelection(deps: UiHandlerDeps): Promise<void> {
+  const orchestrator = deps.codingRuntimeOrchestrator;
+  if (orchestrator !== undefined && !(await orchestrator.admitWorkspaceSelection())) {
+    throw new TaskWorkspaceError("LOCK_CONTENTION", "A coding run is still active.");
+  }
 }
 
 // The Workbench's Local choice binds the registered checkout itself. Git's ordinary safety checks
@@ -468,9 +477,7 @@ export async function handleSelectLocalCheckout(
       correlationId: ctx.correlationId,
     },
     async () => {
-      if (deps.codingRuntimeOrchestrator?.blocksWorkspaceSelection()) {
-        throw new TaskWorkspaceError("LOCK_CONTENTION", "A coding run is still active.");
-      }
+      await admitWorkspaceSelection(deps);
       const body = await readJsonObject(ctx.req);
       const root = requireSafeField(body.root, "root");
       const branch = requireSafeField(body.branch, "branch");

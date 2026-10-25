@@ -11954,7 +11954,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: false,
-        values: ["next-run", "expired", "shutdown", "not-succeeded"],
+        values: ["next-run", "workspace-selected", "expired", "shutdown", "not-succeeded"],
       },
       stagedRevert: {
         type: "string",

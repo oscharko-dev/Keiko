@@ -507,6 +507,7 @@ async function localRouteFixture(hasLiveRun = vi.fn(() => false)): Promise<Local
     workspaceLifecycle: { ...lifecycle, selectLocal },
     codingRuntimeOrchestrator: {
       blocksWorkspaceSelection: hasLiveRun,
+      admitWorkspaceSelection: vi.fn(() => Promise.resolve(!hasLiveRun())),
       hasLiveRun: vi.fn(() => true),
     } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"],
   });
