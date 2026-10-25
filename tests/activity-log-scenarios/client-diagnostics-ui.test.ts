@@ -43,7 +43,10 @@ import {
   recordUserReportedIncident,
 } from "@oscharko-dev/keiko-server";
 import { listSupportIncidents } from "@oscharko-dev/keiko-activity-log";
-import { createClientOnlySupportReport } from "@oscharko-dev/keiko-activity-log/reader";
+import {
+  analyzeLogText,
+  createClientOnlySupportReport,
+} from "@oscharko-dev/keiko-activity-log/reader";
 
 import {
   handleClientDiagnosticIngest,
@@ -686,6 +689,119 @@ async function driveShellRecoveryLoadRefusal(
   }
 }
 
+interface ErrorClassificationFixture {
+  readonly clientErrorEvidence: (error: unknown) => {
+    readonly errorClass: string;
+    readonly frames: readonly string[];
+    readonly causeChain: readonly string[];
+  };
+}
+interface ErrorDiagnosticFixture extends ClientDiagnosticsFixture {
+  readonly reportClientDiagnostic: (
+    message: string,
+    meta: {
+      readonly correlationId: string;
+      readonly kind: "other";
+      readonly errorKind: "unavailable";
+      readonly errorEvidence: ReturnType<ErrorClassificationFixture["clientErrorEvidence"]>;
+    },
+  ) => void;
+}
+
+async function loadErrorClassificationFixture(): Promise<{
+  evidence: ErrorClassificationFixture;
+  diagnostics: ErrorDiagnosticFixture;
+  transport: DiagnosticTransportFixture;
+}> {
+  const evidence = await vi.importActual<ErrorClassificationFixture>(
+    "../../packages/keiko-ui/src/lib/client-error-evidence.js",
+  );
+  const diagnostics = await vi.importActual<ErrorDiagnosticFixture>(
+    "../../packages/keiko-ui/src/lib/client-diagnostics.js",
+  );
+  const transport = await vi.importActual<DiagnosticTransportFixture>(
+    "../../packages/keiko-ui/src/lib/install-client-diagnostics.js",
+  );
+  diagnostics.resetClientDiagnosticWriter();
+  transport.resetClientDiagnosticPostStateForTests();
+  resetGitDiagnosticFixture = (): void => {
+    diagnostics.resetClientDiagnosticWriter();
+    transport.resetClientDiagnosticPostStateForTests();
+  };
+  diagnostics.setClientDiagnosticWriter(transport.fanOutClientDiagnostic);
+  return { evidence, diagnostics, transport };
+}
+
+function changingClassError(): { readonly error: Error; readonly reads: () => number } {
+  const error = new Error("private-classification-message");
+  // V8 must not lazily format a stack and consume the name observation under test.
+  error.stack = "";
+  let reads = 0;
+  Object.defineProperty(error, "name", {
+    get(): string {
+      reads += 1;
+      return reads === 1 ? "TypeError" : "private-second-name-canary";
+    },
+  });
+  return { error, reads: (): number => reads };
+}
+
+function unreadableClassErrors(): readonly unknown[] {
+  const error = new Error("private-classification-message");
+  error.stack = "";
+  Object.defineProperty(error, "name", {
+    get(): never {
+      throw new Error("private-name-inspection");
+    },
+  });
+  const prototype = new Proxy(
+    {},
+    {
+      getPrototypeOf(): never {
+        throw new Error("private-prototype-inspection");
+      },
+    },
+  );
+  return [error, prototype];
+}
+
+async function driveErrorClassificationReports(
+  context: (body: string) => RouteContext,
+): Promise<readonly string[]> {
+  const { evidence, diagnostics } = await loadErrorClassificationFixture();
+  const bodies: string[] = [];
+  const deliveries: Promise<Response>[] = [];
+  vi.spyOn(console, "warn").mockImplementation((): void => undefined);
+  vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    if (input !== "/api/diagnostics/client" || typeof init?.body !== "string")
+      throw new TypeError("expected actual browser diagnostic transport");
+    bodies.push(init.body);
+    const delivery = handleClientDiagnosticIngest(context(init.body)).then(
+      (result): Response => new Response(null, { status: result.status }),
+    );
+    deliveries.push(delivery);
+    return delivery;
+  });
+  const changing = changingClassError();
+  const healthy = new TypeError("private-classification-message");
+  healthy.stack = "";
+  for (const [index, error] of [changing.error, healthy, ...unreadableClassErrors()].entries()) {
+    const previous = deliveries.length;
+    diagnostics.reportClientDiagnostic("Browser dependency unavailable.", {
+      correlationId: `client-classification-scenario-${String(index)}`,
+      kind: "other",
+      errorKind: "unavailable",
+      errorEvidence: evidence.clientErrorEvidence(error),
+    });
+    expect(deliveries).toHaveLength(previous + 1);
+    const delivery = deliveries.at(-1);
+    if (delivery === undefined) throw new TypeError("actual diagnostic delivery required");
+    expect((await delivery).status).toBe(204);
+  }
+  expect(changing.reads()).toBe(1);
+  return bodies;
+}
+
 const CLIENT_TS = "2026-09-18T10:00:00.000Z";
 
 function parsedLine(line: string | undefined): Record<string, unknown> {
@@ -780,6 +896,45 @@ describe("Activity Log scenario: client-diagnostics", () => {
         ),
       ]),
     );
+  });
+
+  it("reconstructs actual read-once browser error classes and preserved inspection loss", async () => {
+    const startedAtMs = Date.now();
+    const bodies = await driveErrorClassificationReports(context);
+    expect(bodies).toHaveLength(4);
+    const log = readPersistedActivityLog(stateDir);
+    const lines = persistedActivityLogLines(log, "client.diagnostic");
+    expect(lines).toHaveLength(4);
+    for (const [index, line] of lines.entries())
+      expect(parsedLine(line)).toMatchObject({
+        correlationId: `client-classification-scenario-${String(index)}`,
+        errorClass: index < 2 ? "TypeError" : "Error",
+        errorKind: "unavailable",
+        completeness: "complete",
+        loss: "none",
+      });
+    for (const index of [0, 1])
+      expect(parsedLine(lines[index]).clientErrorsSuppressed).toBeUndefined();
+    for (const index of [2, 3])
+      expect(parsedLine(lines[index]).clientErrorsSuppressed).toBeGreaterThan(0);
+    expect(activityLogLossCounters()["client-error-suppressed"]).toBeGreaterThan(0);
+    const trace = await expectActivityLogScenario("client-diagnostics.dependency-failure", {
+      stateDir,
+      startedAtMs,
+      expectedOps: ["client.diagnostic"],
+    });
+    expect(trace.failureClasses).toContain("client-diagnostic");
+    const analysis = analyzeLogText(log);
+    for (const privateValue of [
+      "private-classification-message",
+      "private-second-name-canary",
+      "private-name-inspection",
+      "private-prototype-inspection",
+    ]) {
+      expect(log).not.toContain(privateValue);
+      expect(JSON.stringify(bodies)).not.toContain(privateValue);
+      expect(JSON.stringify(analysis)).not.toContain(privateValue);
+    }
   });
 
   // Fault injection: the browser reports its EventSource transport closing unexpectedly (readyState
