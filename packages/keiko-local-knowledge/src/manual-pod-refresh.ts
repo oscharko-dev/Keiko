@@ -32,19 +32,18 @@ import {
   htmlManualReachableFilesScope,
   validateHtmlManualSource,
 } from "@oscharko-dev/keiko-contracts/runtime/html-manual-source";
-import type { OpenAIEmbeddingAdapter } from "@oscharko-dev/keiko-model-gateway";
 
 import { getCapsule } from "./capsule-lifecycle.js";
 import {
   crawlManual,
   createManualPageWorkspaceFs,
-  type ManualCrawlEvent,
   type ManualCrawlFetcher,
   type ManualCrawlResult,
 } from "./crawl/index.js";
 import { KnowledgeStoreError } from "./errors.js";
 import { runIndexingJob, type IndexingEvent, type IndexingResult } from "./indexing/index.js";
 import { buildKnowledgePodSummary } from "./knowledge-pods.js";
+import type { HtmlManualPodDeps } from "./manual-pod.js";
 import {
   computeManualPageFingerprint,
   readManualPageFingerprints,
@@ -62,31 +61,12 @@ import {
   updateHtmlManualRefreshState,
   type HtmlManualSourceMetadata,
 } from "./manual-source-metadata.js";
-import type { AuditEventSink } from "./privacy/index.js";
-import type { ParserRegistry } from "./parsers/index.js";
 import { listCapsuleSources, updateSourceScopeInCapsule } from "./source-lifecycle.js";
-import type { KnowledgeStore } from "./store.js";
-import type { KnowledgeLogSink } from "./knowledge-log.js";
 
-export interface RefreshHtmlManualPodDeps {
-  readonly store: KnowledgeStore;
-  readonly parserRegistry: ParserRegistry;
-  readonly embeddingAdapter: OpenAIEmbeddingAdapter;
-  // Injected byte-retrieval port (WorkspaceFs-backed for local manuals). A gatewayFetch-backed
-  // keiko-server fetcher for intranet manuals is NOT implemented yet, and this function has no
-  // live server route or UI trigger — see Issue #2063. The refresh never constructs a fetcher
-  // itself (trust-9).
+export interface RefreshHtmlManualPodDeps extends HtmlManualPodDeps {
+  // The fetcher is supplied by fixture/local or gateway-backed server composition. Refresh never
+  // constructs it or widens the persisted approved crawl scope (trust-9).
   readonly fetcher: ManualCrawlFetcher;
-  readonly capsuleId: KnowledgeCapsuleId;
-  readonly sourceId: KnowledgeSourceId;
-  readonly signal?: AbortSignal;
-  readonly now?: () => number;
-  readonly idSource?: () => string;
-  readonly auditSink?: AuditEventSink;
-  readonly logSink?: KnowledgeLogSink | undefined;
-  readonly correlationId?: string | undefined;
-  readonly onCrawlEvent?: (event: ManualCrawlEvent) => void;
-  readonly onIndexEvent?: (event: IndexingEvent) => void;
 }
 
 export interface RefreshHtmlManualPodResult {
