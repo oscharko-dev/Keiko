@@ -477,12 +477,12 @@ export async function handleSelectLocalCheckout(
       correlationId: ctx.correlationId,
     },
     async () => {
-      await admitWorkspaceSelection(deps);
       const body = await readJsonObject(ctx.req);
       const root = requireSafeField(body.root, "root");
       const branch = requireSafeField(body.branch, "branch");
       const requestedBy = requireSafeField(body.requestedBy, "requestedBy");
       const resolved = await resolveRoot(deps.store, root, deps.redactor);
+      await admitWorkspaceSelection(deps);
       // Body parsing and root resolution yield to other requests. Recheck immediately before the
       // synchronous checkout mutation so a run started meanwhile cannot lose its bound branch.
       if (deps.codingRuntimeOrchestrator?.blocksWorkspaceSelection()) {
