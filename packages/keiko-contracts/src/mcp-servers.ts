@@ -7,8 +7,10 @@
 // The grammar is closed. A server name is a short lowercase word (no `_`, so the runtime's
 // `<server>_<tool>` action name splits unambiguously); a local server is an absolute executable
 // with literal arguments; a remote server is an `https` URL; every tool the server may expose is
-// named with its declared risk. Credentials are not part of this registry: an environment value is
-// a literal the operator writes, and nothing here reads Keiko's own environment.
+// named with its declared risk. No credential is part of this registry: an environment value is a
+// literal the operator writes, and a remote server's credential header names only the
+// `KEIKO_MCP_SECRET_*` variable of Keiko's own environment that holds it (#3903 AC3), which Keiko
+// adds to the requests it relays and never hands to a runtime.
 
 export const MCP_SERVER_REGISTRY_SCHEMA_VERSION = 1;
 export const MCP_SERVER_MAX = 16;
@@ -21,6 +23,35 @@ const MCP_TEXT_MAX = 1024;
 const MCP_ENVIRONMENT_MAX = 16;
 const MCP_OAUTH_CLIENT_ID = /^[\x21-\x7E]{1,256}$/u;
 const MCP_OAUTH_SCOPE = /^[\x21\x23-\x5B\x5D-\x7E]+(?: [\x21\x23-\x5B\x5D-\x7E]+)*$/u;
+/** The only variables of Keiko's environment a registry entry may name: set aside for MCP. */
+export const MCP_SECRET_ENVIRONMENT_PREFIX = "KEIKO_MCP_SECRET_";
+const MCP_SECRET_ENVIRONMENT_NAME = /^KEIKO_MCP_SECRET_[A-Z0-9_]{1,96}$/u;
+const MCP_HEADER_NAME = /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/u;
+const MCP_HEADER_PREFIX = /^[\x20-\x7E]{1,32}$/u;
+const MCP_HEADER_MAX = 8;
+// Headers the transport, the relay or the HTTP connection own: never a credential header.
+const MCP_RESERVED_HEADERS: ReadonlySet<string> = new Set([
+  "accept",
+  "connection",
+  "content-length",
+  "content-type",
+  "cookie",
+  "host",
+  "keep-alive",
+  "last-event-id",
+  "mcp-protocol-version",
+  "mcp-session-id",
+  "origin",
+  "proxy-authorization",
+  "proxy-connection",
+  "referer",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+  "x-keiko-csrf",
+  "x-keiko-mcp-relay",
+]);
 
 /** What a tool may do, as the operator declares it; the consumer maps it onto its own policy. */
 export type McpToolRisk = "read" | "write";
@@ -47,11 +78,23 @@ export interface McpRemoteOAuth {
   readonly scope?: string;
 }
 
+/**
+ * A static credential header of a remote server (#3903 AC3): the value is read from the named
+ * `KEIKO_MCP_SECRET_*` variable of Keiko's environment, after an optional literal prefix such as
+ * `Bearer `. Keiko adds it to every request it relays to the server; the runtime never holds it.
+ */
+export interface McpRemoteSecretHeader {
+  readonly secretEnv: string;
+  readonly prefix?: string;
+}
+
 export interface McpRemoteTransport {
   readonly kind: "remote";
   readonly url: string;
   /** Absent: the server is used without OAuth. */
   readonly oauth?: McpRemoteOAuth;
+  /** Credential headers by name; absent: the server needs none. Never together with `oauth`. */
+  readonly headers?: Readonly<Record<string, McpRemoteSecretHeader>>;
 }
 
 export interface McpServerDefinition {
@@ -124,20 +167,58 @@ function environmentOf(value: unknown): Readonly<Record<string, string>> | undef
   return valid ? Object.fromEntries(pairs as [string, string][]) : undefined;
 }
 
-function remoteTransport(value: Json): McpRemoteTransport | undefined {
-  if (
-    !hasOnlyKeys(value, ["kind", "url", "oauth"]) ||
-    !boundedText(value.url) ||
-    !literal(value.url)
-  )
-    return undefined;
+function remoteUrl(value: unknown): string | undefined {
+  if (!boundedText(value) || !literal(value)) return undefined;
   // Parsed without a catch: a malformed URL is a refused definition, not a failure.
-  if (!URL.canParse(value.url)) return undefined;
-  const url = new URL(value.url);
+  if (!URL.canParse(value)) return undefined;
+  const url = new URL(value);
   if (url.protocol !== "https:" || url.username !== "" || url.password !== "") return undefined;
-  if (value.oauth === undefined) return { kind: "remote", url: url.href };
+  return url.href;
+}
+
+function remoteTransport(value: Json): McpRemoteTransport | undefined {
+  if (!hasOnlyKeys(value, ["kind", "url", "oauth", "headers"])) return undefined;
+  const url = remoteUrl(value.url);
+  if (url === undefined) return undefined;
+  // A relayed server is reached at Keiko's address, which no OAuth resource binding can name.
+  if (value.oauth !== undefined && value.headers !== undefined) return undefined;
+  if (value.headers !== undefined) {
+    const headers = secretHeadersOf(value.headers);
+    return headers === undefined ? undefined : { kind: "remote", url, headers };
+  }
+  if (value.oauth === undefined) return { kind: "remote", url };
   const oauth = oauthOf(value.oauth);
-  return oauth === undefined ? undefined : { kind: "remote", url: url.href, oauth };
+  return oauth === undefined ? undefined : { kind: "remote", url, oauth };
+}
+
+function secretHeaderOf(name: string, value: unknown): McpRemoteSecretHeader | undefined {
+  const header = record(value);
+  if (header === undefined || !hasOnlyKeys(header, ["secretEnv", "prefix"])) return undefined;
+  if (!MCP_HEADER_NAME.test(name) || MCP_RESERVED_HEADERS.has(name.toLowerCase())) return undefined;
+  const { secretEnv, prefix } = header;
+  if (typeof secretEnv !== "string" || !MCP_SECRET_ENVIRONMENT_NAME.test(secretEnv))
+    return undefined;
+  if (!optionalMatch(prefix, MCP_HEADER_PREFIX)) return undefined;
+  return { secretEnv, ...(prefix === undefined ? {} : { prefix: prefix as string }) };
+}
+
+function secretHeadersOf(
+  value: unknown,
+): Readonly<Record<string, McpRemoteSecretHeader>> | undefined {
+  const headers = record(value);
+  if (headers === undefined) return undefined;
+  const entries = Object.entries(headers);
+  if (entries.length === 0 || entries.length > MCP_HEADER_MAX) return undefined;
+  // HTTP header names are case-insensitive: two spellings of one name cannot both be sent.
+  if (new Set(entries.map(([name]) => name.toLowerCase())).size !== entries.length)
+    return undefined;
+  const admitted: Record<string, McpRemoteSecretHeader> = {};
+  for (const [name, entry] of entries) {
+    const header = secretHeaderOf(name, entry);
+    if (header === undefined) return undefined;
+    admitted[name] = header;
+  }
+  return admitted;
 }
 
 function oauthOf(value: unknown): McpRemoteOAuth | undefined {

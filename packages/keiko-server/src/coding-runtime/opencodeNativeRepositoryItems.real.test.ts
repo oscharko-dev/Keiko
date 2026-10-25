@@ -51,6 +51,13 @@ import {
 import { createOpenCodeMcpAuthorizationRunPort } from "./opencodeNativeMcpAuthorization.js";
 import { harvestMcpCredentials, seedMcpCredentials } from "./opencodeNativeMcpCredentials.js";
 import { createMcpOAuthCredentialStore } from "../mcp/mcpOAuthCredentialStore.js";
+import {
+  createMcpCredentialRelay,
+  MCP_RELAY_PATH_PREFIX,
+  serveMcpRelayRequest,
+  type McpRelayMethod,
+} from "../mcp/mcpCredentialRelay.js";
+import { bindNativeMcpRelays } from "./opencodeNativeMcpRelay.js";
 import { createRemoteSkillsPort } from "./opencodeRemoteSkills.js";
 import { createGeneratedOpenCodeV2Plugins } from "./opencodeRuntimeAdapter.js";
 import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
@@ -1819,6 +1826,185 @@ describe("pinned native OpenCode MCP OAuth", () => {
         });
       } finally {
         await closeStub({ server: oauth.server, port: 0, requests: [] });
+      }
+    },
+    120_000,
+  );
+});
+
+const STATIC_MCP_SECRET = "fixture-static-mcp-secret";
+
+interface StaticMcpFixture {
+  readonly server: Server;
+  base: string;
+  /** For every request: whether it carried the credential, and whether a relay header leaked. */
+  readonly seen: { readonly credentialed: boolean; readonly relayHeader: boolean }[];
+}
+
+// A remote MCP server that answers only with its static bearer credential.
+async function startStaticMcpFixture(): Promise<StaticMcpFixture> {
+  const fixture: StaticMcpFixture = { server: createServer(), base: "", seen: [] };
+  fixture.server.on("request", (request: IncomingMessage, response: ServerResponse) => {
+    void readBody(request).then((body) => {
+      fixture.seen.push({
+        credentialed: request.headers.authorization === `Bearer ${STATIC_MCP_SECRET}`,
+        relayHeader: request.headers["x-keiko-mcp-relay"] !== undefined,
+      });
+      if (request.headers.authorization !== `Bearer ${STATIC_MCP_SECRET}`) {
+        response.writeHead(401).end();
+        return;
+      }
+      const message = object(body);
+      if (request.method !== "POST" || message?.id === undefined) {
+        response.writeHead(request.method === "POST" ? 202 : 405).end();
+        return;
+      }
+      const params = object(message.params);
+      const result =
+        message.method === "initialize"
+          ? {
+              protocolVersion: params?.protocolVersion,
+              capabilities: { tools: {} },
+              serverInfo: { name: "wiki", version: "1" },
+            }
+          : { tools: [{ name: "echo", inputSchema: { type: "object", properties: {} } }] };
+      json(response, 200, { jsonrpc: "2.0", id: message.id, result });
+    });
+  });
+  fixture.base = `http://127.0.0.1:${String(await listen(fixture.server))}`;
+  return fixture;
+}
+
+// Keiko's relay route as a bare loopback listener; the loopback fixture is reached with a plain
+// fetch, where production refuses loopback targets through its egress (mcpCredentialRelay.test.ts).
+async function startRelayListener(
+  relay: ReturnType<typeof createMcpCredentialRelay>,
+  activityLog: ServerLogSink,
+): Promise<{ readonly server: Server; readonly origin: string }> {
+  const server = createServer((request, response) => {
+    const relayId = (request.url ?? "").slice(MCP_RELAY_PATH_PREFIX.length);
+    void serveMcpRelayRequest(
+      request,
+      response,
+      { relayId, method: request.method as McpRelayMethod },
+      {
+        relay,
+        upstream: (url, init) =>
+          fetch(url, {
+            method: init.method,
+            headers: init.headers,
+            ...(init.body === undefined ? {} : { body: init.body }),
+            redirect: "manual",
+            signal: init.signal,
+          }),
+        activityLog,
+        correlationId: "relay-fixture",
+      },
+    );
+  });
+  return { server, origin: `http://127.0.0.1:${String(await listen(server))}` };
+}
+
+function filesContaining(root: string, needle: string): readonly string[] {
+  const found: string[] = [];
+  const walk = (directory: string): void => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) walk(path);
+      else if (entry.isFile() && readFileSync(path).includes(needle)) found.push(path);
+    }
+  };
+  walk(root);
+  return found;
+}
+
+// #3903 AC3: a remote server with a static credential, reached through Keiko's relay. The runtime
+// connects it with its own MCP client; the credential is added by Keiko and never reaches the run.
+describe("pinned native OpenCode MCP static credentials", () => {
+  const live = BINARY !== undefined && RESOURCE_ROOT !== undefined ? it : it.skip;
+
+  live(
+    "connects a credentialed server through Keiko's relay without the run ever holding the credential",
+    async () => {
+      const mcp = await startStaticMcpFixture();
+      const relay = createMcpCredentialRelay();
+      const evidence = createBufferedServerLogSink();
+      const listener = await startRelayListener(relay, evidence);
+      const servers = [
+        {
+          name: "wiki",
+          description: undefined,
+          enabled: true,
+          transport: {
+            kind: "remote" as const,
+            url: `${mcp.base}/mcp`,
+            headers: { Authorization: { secretEnv: "KEIKO_MCP_SECRET_WIKI", prefix: "Bearer " } },
+          },
+          tools: { echo: "read" as const },
+        },
+      ];
+      const relays = bindNativeMcpRelays({
+        servers,
+        mode: "autonomous-delivery",
+        runId: RUN_ID,
+        relay: {
+          relay,
+          origin: listener.origin,
+          secrets: { KEIKO_MCP_SECRET_WIKI: STATIC_MCP_SECRET },
+        },
+        activityLog: evidence,
+      });
+      const admission = openCodeNativeMcpAdmission({
+        servers,
+        mode: "autonomous-delivery",
+        home: "/unused",
+        relays,
+      });
+      expect(JSON.stringify(admission.config)).not.toContain(STATIC_MCP_SECRET);
+      try {
+        await withRun({ mcp: admission.config }, async (run) => {
+          const port = createOpenCodeMcpAuthorizationRunPort({
+            readyRun: () => ({
+              runId: RUN_ID,
+              workspaceRoot: run.fixture.workspace,
+              mcp: admission.grants,
+              mcpOAuth: admission.oauth,
+              client: run.client,
+            }),
+            activityLog: evidence,
+          });
+          await expect
+            .poll(async () => (await port.listMcpServers(RUN_ID))?.[0]?.status, {
+              timeout: 30_000,
+            })
+            .toBe("connected");
+          // Every request reached the server with Keiko's credential, none with the relay header.
+          expect(mcp.seen.length).toBeGreaterThan(0);
+          expect(mcp.seen.every((seen) => seen.credentialed && !seen.relayHeader)).toBe(true);
+          // Nothing the run wrote holds the credential.
+          expect(filesContaining(run.fixture.state, STATIC_MCP_SECRET)).toEqual([]);
+          expect(filesContaining(run.fixture.workspace, STATIC_MCP_SECRET)).toEqual([]);
+        });
+        // A released run's capability no longer reaches the server.
+        relay.releaseRun(RUN_ID);
+        const [endpoint] = [...relays.values()];
+        const after = await fetch(endpoint?.url ?? "", {
+          method: "POST",
+          headers: { "X-Keiko-Mcp-Relay": endpoint?.capability ?? "" },
+          body: "{}",
+        });
+        expect(after.status).toBe(401);
+        const lines = evidence.events.map((event) => formatActivityLogProofLine(event));
+        expect(lines.join("\n")).not.toContain(STATIC_MCP_SECRET);
+        expect(
+          evidence.events.some(
+            (event) =>
+              event.op === "coding-runtime.mcp-relay" && event.extra?.outcome === "relayed",
+          ),
+        ).toBe(true);
+      } finally {
+        await closeStub({ server: mcp.server, port: 0, requests: [] });
+        await closeStub({ server: listener.server, port: 0, requests: [] });
       }
     },
     120_000,

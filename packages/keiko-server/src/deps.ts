@@ -4,6 +4,12 @@ import {
   KEIKO_CODING_SESSION_RETENTION_ENV,
   type CodingSessionContinuity,
 } from "./coding-runtime/codingSessionContinuity.js";
+import {
+  createMcpCredentialRelay,
+  egressMcpRelayUpstream,
+  type McpCredentialRelay,
+  type McpRelayUpstream,
+} from "./mcp/mcpCredentialRelay.js";
 import { createRuntimeChangesetApplyPort } from "./editor/agentRoutes.js";
 import {
   DEFAULT_OWN_ASSESSMENT_POLICY,
@@ -830,6 +836,10 @@ export interface UiHandlerDeps {
   // instead of a second listener. `resolve()` is `undefined` whenever no run is active.
   readonly toolFacadeBridge?:
     { readonly resolve: () => CodingRuntimeToolFacadeBridge | undefined } | undefined;
+  // #3903 AC3: the MCP relay a native run's credentialed remote servers are reached through, on
+  // the SAME attested loopback port; the runtime host binds it, coding-sidecar-mcp-relay.ts serves it.
+  readonly mcpRelay?:
+    { readonly relay: McpCredentialRelay; readonly upstream: McpRelayUpstream } | undefined;
   readonly codingSidecarGatewayCancellationRegistry?:
     { readonly signalFor: (runId: string) => AbortSignal | undefined } | undefined;
   readonly codingSidecarGatewayEvidenceAggregator?:
@@ -4453,6 +4463,8 @@ interface UiHandlerDepsAssemblyArgs {
   readonly bootstrapCorrelationId: string;
   /** The one native session continuity service the runtime host and the orchestrator share. */
   readonly codingSessionContinuity: CodingSessionContinuity;
+  /** The one MCP relay the runtime host binds and the relay route serves (#3903 AC3). */
+  readonly mcpCredentialRelay?: McpCredentialRelay | undefined;
 }
 
 function codingSidecarGatewayModelSourceFields(
@@ -4827,6 +4839,19 @@ interface UiHandlerRuntimeServices {
   readonly workspaceLifecycle: WorkspaceLifecycleService | undefined;
 }
 
+// Relayed MCP requests leave through Keiko's own egress configuration (proxy and CA).
+function mcpRelayDeps(args: UiHandlerDepsAssemblyArgs): Pick<UiHandlerDeps, "mcpRelay"> {
+  if (args.mcpCredentialRelay === undefined) return {};
+  return {
+    mcpRelay: {
+      relay: args.mcpCredentialRelay,
+      upstream: egressMcpRelayUpstream(() =>
+        resolveOutboundHttpEgressConfig(undefined, args.options.env),
+      ),
+    },
+  };
+}
+
 function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   const dapRuntime = createDapRuntimeReference(args.options);
   const services = assembleUiHandlerRuntimeServices(args, dapRuntime);
@@ -4863,6 +4888,7 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     prDescriptionReadStatus: prDescriptionReceiptStatus.readStatus,
     ...(prDescriptionGeneration === undefined ? {} : { prDescriptionGeneration }),
     voiceRecapContentAttestations: createVoiceRecapContentAttestationStore(),
+    ...mcpRelayDeps(args),
     ...(args.options.gatewayReadinessFetch === undefined
       ? {}
       : { gatewayReadinessFetch: args.options.gatewayReadinessFetch }),
@@ -6033,6 +6059,7 @@ function resolveProductionRuntimePorts(
   const activation = resolveProductionOpenCodeActivation({
     historyCapture: createNativeHistoryCapture(args.bundle.uiStore, processServerLogSink()),
     sessionContinuity: args.codingSessionContinuity,
+    ...(args.mcpCredentialRelay === undefined ? {} : { mcpRelay: args.mcpCredentialRelay }),
     env: args.options.env,
     runtimeStateDir: dirname(args.resolvedUiDbPath),
     runtimeEvidence,
@@ -6412,7 +6439,7 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
   const contextProfileForModel = buildContextProfileResolver(() => runtimeConfig.current());
   reconcileNodeStoreAtStartup(options, bundle, bootstrapCorrelationId);
   const codingSessionContinuity = buildCodingSessionContinuity(options, resolvedUiDbPath, bundle);
-  const deps = assembleUiHandlerDeps({
+  return assembleUiHandlerDeps({
     options,
     resolvedUiDbPath,
     resolvedEvidenceDir,
@@ -6429,8 +6456,8 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     contextProfileForModel,
     bootstrapCorrelationId,
     codingSessionContinuity,
+    mcpCredentialRelay: createMcpCredentialRelay(),
   });
-  return deps;
 }
 
 /**

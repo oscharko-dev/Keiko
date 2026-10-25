@@ -340,6 +340,19 @@ Changes apply to the next run.
   leaves the server out unless the document names exactly that issuer, uses https endpoints and
   offers PKCE (S256); `mcp.oauth.issuer.checked` says why (`issuer-mismatch`, `insecure-endpoint`,
   `pkce-unsupported`, `registration-unavailable`, `not-found`, `unreadable`).
+- A remote server that needs a static credential (an API key or a personal access token) names
+  each header it expects and the variable of Keiko's own environment that holds the value:
+  `"transport": { "kind": "remote", "url": "https://wiki.example.com/mcp", "headers": {
+"Authorization": { "secretEnv": "KEIKO_MCP_SECRET_WIKI", "prefix": "Bearer " } } }`. Set
+  `KEIKO_MCP_SECRET_WIKI` in Keiko's environment; only variables starting with
+  `KEIKO_MCP_SECRET_` can be named, at most 8 headers, and `prefix` is optional literal text. The
+  value never reaches the run: the runtime connects to Keiko's relay on its own loopback port with a
+  capability for that run and that server, and Keiko adds the header and forwards each request to
+  exactly the registered URL through its egress (no redirect, no loopback or private target). A
+  server whose variable is unset or holds a line break is left out of the run. `headers` and
+  `oauth` cannot be combined. The Activity Log records `coding-runtime.mcp-relay` (bound with
+  relayed and refused server counts, then one line per relayed request with method, status,
+  sizes and duration), never the value, the URL or the server name.
 - To authorize, open the run's **MCP servers** section in the Workbench and choose **Authorize** on
   the server that needs it, then **Open the authorization page**: it opens in a new tab, and the
   runtime completes the sign-in on its own loopback callback. Keiko shows the page only when it

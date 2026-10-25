@@ -5268,6 +5268,7 @@ export type {
   CodingWorkbenchRuntimeMcpChannelPayload,
   McpLocalTransport,
   McpRemoteOAuth,
+  McpRemoteSecretHeader,
   McpRemoteTransport,
   McpServerDefinition,
   McpServerRegistryParse,

@@ -768,6 +768,10 @@ export const OPENCODE_CONFIGURATION_DISPOSITIONS = flatten<OpenCodeConfiguration
       "mcp.servers",
       "mcp.servers.*",
       "mcp.servers.*.command",
+      // #3903 AC3: a credentialed server's relay capability and the request guard, never its
+      // credential, which Keiko's relay adds.
+      "mcp.servers.*.headers",
+      "mcp.servers.*.headers.*",
       "mcp.servers.*.oauth",
       // #3903 AC3: the validated metadata document of the operator's expected issuer, with the
       // operator's public client id and scope from the registry.
@@ -939,8 +943,6 @@ export const OPENCODE_CONFIGURATION_DISPOSITIONS = flatten<OpenCodeConfiguration
     3903,
     ["C04"],
     [
-      "mcp.servers.*.headers",
-      "mcp.servers.*.headers.*",
       "mcp.servers.*.oauth.callback_port",
       "mcp.servers.*.oauth.client_secret",
       "mcp.servers.*.oauth.redirect_uri",

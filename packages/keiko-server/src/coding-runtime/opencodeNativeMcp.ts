@@ -2,6 +2,8 @@ import type { McpServerDefinition } from "@oscharko-dev/keiko-contracts";
 import {
   mcpToolActions,
   type McpRemoteOAuth,
+  type McpRemoteSecretHeader,
+  type McpRemoteTransport,
 } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 
 import type { McpOAuthIssuerValidation } from "../mcp/mcpOAuthIssuer.js";
@@ -23,11 +25,27 @@ import type { OpenCodeNativeMcpGrants } from "./opencodeNativePolicy.js";
  *    (`mcpOAuthIssuer.ts`), and the runtime reads exactly the validated metadata document
  *    (`oauth.auth_server_metadata_url`) instead of following the MCP server's own
  *    protected-resource metadata; the operator's public client id and scope go with it.
+ *  - A remote server with credential headers (#3903 AC3) is reached through Keiko's MCP relay
+ *    (`mcpCredentialRelay.ts`): its binding names the relay's address with a capability for this
+ *    run and this server, and Keiko adds the credential, which the run never holds. A server whose
+ *    relay could not be bound (its secret unset or invalid) is left out with its tools.
  *  - Its tools reach the model through Code Mode (the runtime's default) and every call reaches the
  *    native policy as `<server>_<tool>`, which classifies exactly the tools the registry names.
  */
 export const OPENCODE_NATIVE_MCP_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
 const ENV_EXECUTABLE = "/usr/bin/env";
+
+/** Where a relayed server is reached: Keiko's relay address and the run's capability for it. */
+export interface OpenCodeNativeMcpRelayEndpoint {
+  readonly url: string;
+  readonly capability: string;
+}
+
+/** The headers the relay authenticates; neither carries a credential of the server. */
+export const OPENCODE_NATIVE_MCP_RELAY_HEADERS = {
+  csrf: "X-Keiko-CSRF",
+  capability: "X-Keiko-Mcp-Relay",
+} as const;
 
 /** A remote server admitted with OAuth: what its authorization and its credential are bound to. */
 export interface AdmittedMcpOAuthServer {
@@ -45,33 +63,52 @@ export interface OpenCodeNativeMcpAdmission {
   readonly oauth: ReadonlyMap<string, AdmittedMcpOAuthServer>;
 }
 
+/** The registry's remote servers a run launched in `mode` would reach through the relay. */
+export function mcpServersNeedingRelay(
+  servers: readonly McpServerDefinition[],
+  mode: string | undefined,
+): readonly (McpServerDefinition & {
+  readonly transport: McpRemoteTransport & {
+    readonly headers: Readonly<Record<string, McpRemoteSecretHeader>>;
+  };
+})[] {
+  return admittedServers(servers, mode, undefined, undefined).flatMap((server) =>
+    server.transport.kind === "remote" && server.transport.headers !== undefined
+      ? [{ ...server, transport: { ...server.transport, headers: server.transport.headers } }]
+      : [],
+  );
+}
+
 /** The registry's remote servers a run launched in `mode` would use with OAuth. */
 export function mcpServersNeedingIssuerValidation(
   servers: readonly McpServerDefinition[],
   mode: string | undefined,
 ): readonly (McpServerDefinition & { readonly transport: { readonly oauth: McpRemoteOAuth } })[] {
-  return admittedServers(servers, mode, undefined).flatMap((server) =>
+  return admittedServers(servers, mode, undefined, undefined).flatMap((server) =>
     server.transport.kind === "remote" && server.transport.oauth !== undefined
       ? [{ ...server, transport: { ...server.transport, oauth: server.transport.oauth } }]
       : [],
   );
 }
 
-// A remote server with an operator-named issuer is admitted only once that issuer validated;
-// `validations` absent is the selection of the servers to validate.
+// A remote server with an operator-named issuer is admitted only once that issuer validated, and
+// one with credential headers only once its relay is bound; absent maps select the servers to check.
 function admittedServers(
   servers: readonly McpServerDefinition[],
   mode: string | undefined,
   validations: ReadonlyMap<string, McpOAuthIssuerValidation> | undefined,
+  relays: ReadonlyMap<string, OpenCodeNativeMcpRelayEndpoint> | undefined,
 ): readonly McpServerDefinition[] {
   const fullAccess = mode === "autonomous-delivery";
   return servers.filter((server) => {
     if (!server.enabled) return false;
-    if (server.transport.kind === "local") return true;
+    const transport = server.transport;
+    if (transport.kind === "local") return true;
     if (!fullAccess) return false;
+    if (transport.headers !== undefined) return relays === undefined || relays.has(server.name);
     return (
       validations === undefined ||
-      server.transport.oauth === undefined ||
+      transport.oauth === undefined ||
       validations.get(server.name)?.ok === true
     );
   });
@@ -103,12 +140,26 @@ function remoteOAuthConfig(admitted: AdmittedMcpOAuthServer | undefined): unknow
   };
 }
 
+function relayedConfig(relay: OpenCodeNativeMcpRelayEndpoint): Readonly<Record<string, unknown>> {
+  return {
+    type: "remote",
+    url: relay.url,
+    oauth: false,
+    headers: {
+      [OPENCODE_NATIVE_MCP_RELAY_HEADERS.csrf]: "1",
+      [OPENCODE_NATIVE_MCP_RELAY_HEADERS.capability]: relay.capability,
+    },
+  };
+}
+
 function serverConfig(
   server: McpServerDefinition,
   home: string,
   admitted: AdmittedMcpOAuthServer | undefined,
+  relay: OpenCodeNativeMcpRelayEndpoint | undefined,
 ): Readonly<Record<string, unknown>> {
   const transport = server.transport;
+  if (transport.kind === "remote" && relay !== undefined) return relayedConfig(relay);
   if (transport.kind === "remote")
     return { type: "remote", url: transport.url, oauth: remoteOAuthConfig(admitted) };
   const environment = Object.entries(transport.environment).map(
@@ -134,9 +185,12 @@ export function openCodeNativeMcpAdmission(input: {
   readonly home: string;
   /** The issuer validations of the remote servers with OAuth (#3903 AC3); absent, none validated. */
   readonly validations?: ReadonlyMap<string, McpOAuthIssuerValidation> | undefined;
+  /** The relays bound for the remote servers with credential headers; absent, none is bound. */
+  readonly relays?: ReadonlyMap<string, OpenCodeNativeMcpRelayEndpoint> | undefined;
 }): OpenCodeNativeMcpAdmission {
   const validations = input.validations ?? new Map<string, McpOAuthIssuerValidation>();
-  const admitted = admittedServers(input.servers, input.mode, validations);
+  const relays = input.relays ?? new Map<string, OpenCodeNativeMcpRelayEndpoint>();
+  const admitted = admittedServers(input.servers, input.mode, validations, relays);
   const oauth = new Map(
     admitted.flatMap((server) => {
       const entry = oauthServer(server, validations);
@@ -148,7 +202,7 @@ export function openCodeNativeMcpAdmission(input: {
       servers: Object.fromEntries(
         admitted.map((server) => [
           server.name,
-          serverConfig(server, input.home, oauth.get(server.name)),
+          serverConfig(server, input.home, oauth.get(server.name), relays.get(server.name)),
         ]),
       ),
     },

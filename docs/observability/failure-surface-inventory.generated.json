@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "43e9df7a5eacc51a76eac7b1b2ff292668d1dd776ed4dcc611e76fa6bbb6d0b3"
+    "catalogDigest": "6c58763d3e8e69533c719c874c5b3b16fac69cb4d7085f240a7df7cba523d6f5"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -59,10 +59,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 586,
-    "proofCount": 599,
-    "resolvedProofCount": 599,
-    "failureClassCount": 367,
+    "operationCount": 587,
+    "proofCount": 600,
+    "resolvedProofCount": 600,
+    "failureClassCount": 368,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -341,6 +341,7 @@
         "coding-runtime.linked-files.resolved",
         "coding-runtime.mcp-authorization",
         "coding-runtime.mcp-credentials",
+        "coding-runtime.mcp-relay",
         "coding-runtime.mentions.listed",
         "coding-runtime.native-external-roots.resolved",
         "coding-runtime.native-formatter.bound",
@@ -842,6 +843,7 @@
     "mcp-registry": ["tools-workflows.dependency-failure"],
     "coding-runtime-remote-skills": ["tools-workflows.dependency-failure"],
     "coding-runtime-mcp-credentials": ["tools-workflows.dependency-failure"],
+    "coding-runtime-mcp-relay": ["tools-workflows.dependency-failure"],
     "coding-runtime-mcp-authorization": ["tools-workflows.dependency-failure"],
     "mcp-oauth-issuer": ["tools-workflows.dependency-failure"],
     "coding-runtime-question-authority": ["tools-workflows.dependency-failure"],
@@ -1496,6 +1498,10 @@
     ],
     "coding-runtime.mcp-credentials.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeNativeMcpCredentials.test.ts"
+    ],
+    "coding-runtime.mcp-relay.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/opencodeNativeMcpRelay.test.ts",
+      "packages/keiko-server/src/mcp/mcpCredentialRelay.test.ts"
     ],
     "coding-runtime.mentions.listed.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeCommands.test.ts"

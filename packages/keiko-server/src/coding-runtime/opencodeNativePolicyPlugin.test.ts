@@ -238,6 +238,8 @@ describe("generated native policy plugin forwarding and precedence (#3897 audit)
       PATH: "/usr/bin",
       KEIKO_TOOL_FACADE_CAPABILITY: "secret",
       OPENCODE_SERVER_PASSWORD: "secret",
+      // #3903 AC3: the server-owned binding carries every relayed MCP server's capability.
+      OPENCODE_CONFIG_CONTENT: '{"mcp":{"servers":{}}}',
       npm_config_offline: "true",
     });
     const supervised = await pluginHarness("supervised-coding");

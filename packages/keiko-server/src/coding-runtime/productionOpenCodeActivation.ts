@@ -164,6 +164,8 @@ export interface ProductionOpenCodeActivationInput {
   readonly historyCapture?: ProductionOpenCodeBackendInput["historyCapture"];
   /** The server's native session continuity service (S02/S03, #3904); absent keeps fresh sessions. */
   readonly sessionContinuity?: ProductionOpenCodeBackendInput["sessionContinuity"];
+  /** The server's MCP relay for credentialed remote servers (#3903 AC3); absent admits none. */
+  readonly mcpRelay?: ProductionOpenCodeBackendInput["mcpRelay"];
   readonly env: NodeJS.ProcessEnv;
   /** Host identity injection for deterministic tests; production omits both. */
   readonly platform?: NodeJS.Platform | undefined;
@@ -297,6 +299,7 @@ function optionalBackendInputs(
       ? {}
       : { gatewayCodingModelIds: input.gatewayCodingModelIds }),
     ...(input.activityLog ? { activityLog: input.activityLog } : {}),
+    ...(input.mcpRelay ? { mcpRelay: input.mcpRelay } : {}),
     ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
     ...(input.nativeWorktrees ? { nativeWorktrees: input.nativeWorktrees } : {}),
     ...(input.fetch ? { fetch: input.fetch } : {}),

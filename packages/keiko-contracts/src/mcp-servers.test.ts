@@ -30,6 +30,12 @@ function withOAuth(oauth: Readonly<Record<string, unknown>>): unknown {
   return { ...REMOTE, transport: { ...REMOTE.transport, oauth } };
 }
 
+function withHeaders(headers: unknown, extra: Readonly<Record<string, unknown>> = {}): unknown {
+  return { ...REMOTE, transport: { ...REMOTE.transport, ...extra, headers } };
+}
+
+const TOKEN_HEADER = { secretEnv: "KEIKO_MCP_SECRET_TRACKER", prefix: "Bearer " };
+
 function registry(...servers: unknown[]): unknown {
   return { schemaVersion: 1, servers };
 }
@@ -60,6 +66,62 @@ describe("the MCP server registry (#3903)", () => {
       url: "https://tracker.example.test/mcp",
       oauth: { issuer: ISSUER },
     });
+  });
+
+  // #3903 AC3: a static credential is named, never written: Keiko's own variable holds it.
+  it("admits a remote server's credential headers as references to Keiko's MCP secrets", () => {
+    const headers = {
+      Authorization: TOKEN_HEADER,
+      "X-Api-Key": { secretEnv: "KEIKO_MCP_SECRET_K" },
+    };
+    const [server] = (
+      parseMcpServerRegistry(registry(withHeaders(headers))) as {
+        readonly servers: readonly McpServerDefinition[];
+      }
+    ).servers;
+    expect(server?.transport).toEqual({
+      kind: "remote",
+      url: "https://tracker.example.test/mcp",
+      headers,
+    });
+  });
+
+  it.each([
+    ["a literal header value", { Authorization: { value: "Bearer abc" } }],
+    ["a literal string header", { Authorization: "Bearer abc" }],
+    ["a variable outside Keiko's MCP secrets", { Authorization: { secretEnv: "HOME" } }],
+    [
+      "Keiko's own provider key",
+      { Authorization: { secretEnv: "KEIKO_PROVIDER_CREDENTIALS_KEY" } },
+    ],
+    ["a lowercase secret variable", { Authorization: { secretEnv: "KEIKO_MCP_SECRET_token" } }],
+    ["a transport header", { "Mcp-Session-Id": TOKEN_HEADER }],
+    ["the relay's own header", { "X-Keiko-Mcp-Relay": TOKEN_HEADER }],
+    ["a host header", { Host: TOKEN_HEADER }],
+    ["a header name with a space", { "X Api": TOKEN_HEADER }],
+    ["one header in two spellings", { Authorization: TOKEN_HEADER, authorization: TOKEN_HEADER }],
+    ["a prefix with a line break", { Authorization: { ...TOKEN_HEADER, prefix: "Bearer\r\n" } }],
+    ["a prefix placeholder", { Authorization: { ...TOKEN_HEADER, prefix: "{env:HOME}" } }],
+    ["an unknown header field", { Authorization: { ...TOKEN_HEADER, value: "x" } }],
+    [
+      "more than eight headers",
+      Object.fromEntries(
+        Array.from({ length: 9 }, (_, index) => [`X-H${String(index)}`, TOKEN_HEADER]),
+      ),
+    ],
+  ])("refuses a remote server with %s", (_label, headers) => {
+    expect(parseMcpServerRegistry(registry(withHeaders(headers)))).toEqual({
+      ok: false,
+      reason: "server-invalid",
+    });
+  });
+
+  it("refuses credential headers together with OAuth: the relay is not the OAuth resource", () => {
+    expect(
+      parseMcpServerRegistry(
+        registry(withHeaders({ Authorization: TOKEN_HEADER }, { oauth: { issuer: ISSUER } })),
+      ),
+    ).toEqual({ ok: false, reason: "server-invalid" });
   });
 
   it("admits a local and a remote server with their declared tools", () => {

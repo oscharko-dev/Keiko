@@ -70,6 +70,7 @@ import { exactWorkspaceRead, type SecureWorkspaceTextReadPort } from "./secureWo
 import { createDevLaneRuntimeProcessBackend } from "./devLaneRuntimeProcessBackend.js";
 import { createNativeRuntimeProcessBackend } from "./nativeRuntimeProcessBackend.js";
 import type { McpOAuthCredentialStore } from "../mcp/mcpOAuthCredentialStore.js";
+import type { McpCredentialRelay } from "../mcp/mcpCredentialRelay.js";
 import type { RemoteSkillsPort } from "./opencodeRemoteSkills.js";
 import {
   createOpenCodeRuntimeComposition,
@@ -215,6 +216,11 @@ export interface ProductionOpenCodeBackendInput {
   readonly mcpOAuthIssuer?: McpOAuthIssuerPort | undefined;
   /** Keeps an admitted MCP server's OAuth credential between native runs (#3903 AC3). */
   readonly mcpCredentials?: McpOAuthCredentialStore | undefined;
+  /**
+   * Keiko's MCP relay (#3903 AC3): a remote server with credential headers is reached through it
+   * at the gateway's origin, with the credentials read from `processEnv`.
+   */
+  readonly mcpRelay?: McpCredentialRelay | undefined;
   /** Pulls the operator's remote skill sources for a Full access native run (#3903 AC3). */
   readonly remoteSkills?: RemoteSkillsPort | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
@@ -460,6 +466,18 @@ function withMcpExecutableDirectories(
   return [...(path === undefined ? [] : [path]), ...directories].join(delimiter);
 }
 
+// The relay answers on the gateway's own attested origin, which the native sandbox already admits.
+function mcpRelayFor(input: LaunchInput): Pick<OpenCodeRuntimeCompositionInput, "mcpRelay"> {
+  if (input.mcpRelay === undefined) return {};
+  return {
+    mcpRelay: {
+      relay: input.mcpRelay,
+      origin: new URL(input.gatewayUrl).origin,
+      secrets: input.processEnv ?? {},
+    },
+  };
+}
+
 // What only a native run reads from the repository and the operator: its Markdown items (#3903)
 // and its MCP servers (C04).
 function nativeRunInputs(
@@ -474,6 +492,7 @@ function nativeRunInputs(
   | "mcpServers"
   | "mcpOAuthIssuer"
   | "mcpCredentials"
+  | "mcpRelay"
   | "remoteSkills"
   | "nativeWorktrees"
   | "externalReadRoots"
@@ -492,6 +511,7 @@ function nativeRunInputs(
     ...(input.mcpServers === undefined ? {} : { mcpServers: input.mcpServers }),
     ...(input.mcpOAuthIssuer === undefined ? {} : { mcpOAuthIssuer: input.mcpOAuthIssuer }),
     ...(input.mcpCredentials === undefined ? {} : { mcpCredentials: input.mcpCredentials }),
+    ...mcpRelayFor(input),
     ...(input.remoteSkills === undefined ? {} : { remoteSkills: input.remoteSkills }),
     ...(input.nativeWorktrees === undefined ? {} : { nativeWorktrees: input.nativeWorktrees }),
     externalReadRoots: nativeExternalReadRoots(input, run),

@@ -131,6 +131,7 @@ import {
   handleCodingSidecarGatewayChatCompletions,
   handleCodingSidecarGatewayProfile,
 } from "./coding-sidecar-gateway.js";
+import { handleCodingSidecarMcpRelay } from "./coding-sidecar-mcp-relay.js";
 import { handleCodingSidecarToolFacade } from "./coding-sidecar-tool-facade.js";
 import {
   handleCodingCodexSubscriptionProfile,
@@ -575,6 +576,22 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/coding-sidecar/tool",
     handler: handleCodingSidecarToolFacade,
+  },
+  // #3903 AC3: the MCP Streamable HTTP transport of a relayed remote server, per method.
+  {
+    method: "GET",
+    pattern: "/api/coding-sidecar/mcp/:relayId",
+    handler: handleCodingSidecarMcpRelay,
+  },
+  {
+    method: "POST",
+    pattern: "/api/coding-sidecar/mcp/:relayId",
+    handler: handleCodingSidecarMcpRelay,
+  },
+  {
+    method: "DELETE",
+    pattern: "/api/coding-sidecar/mcp/:relayId",
+    handler: handleCodingSidecarMcpRelay,
   },
   {
     method: "GET",

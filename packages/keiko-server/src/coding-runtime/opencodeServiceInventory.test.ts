@@ -531,10 +531,26 @@ function composedNativeSettings(): readonly string[] {
       oauth: { issuer: "https://login.example.test", clientId: "keiko", scope: "issues.read" },
     },
   };
+  // #3903 AC3: a remote server with a static credential, reached through Keiko's relay.
+  const credentialedServer: McpServerDefinition = {
+    ...REMOTE_SERVER,
+    name: "wiki",
+    transport: {
+      kind: "remote",
+      url: "https://wiki.example.test/mcp",
+      headers: { Authorization: { secretEnv: "KEIKO_MCP_SECRET_WIKI", prefix: "Bearer " } },
+    },
+  };
   const mcp = openCodeNativeMcpAdmission({
-    servers: [LOCAL_SERVER, REMOTE_SERVER, oauthServer],
+    servers: [LOCAL_SERVER, REMOTE_SERVER, oauthServer, credentialedServer],
     mode: "autonomous-delivery",
     home: "/state/home",
+    relays: new Map([
+      [
+        "wiki",
+        { url: "http://127.0.0.1:1983/api/coding-sidecar/mcp/relay", capability: "capability" },
+      ],
+    ]),
     validations: new Map([
       [
         "issues",

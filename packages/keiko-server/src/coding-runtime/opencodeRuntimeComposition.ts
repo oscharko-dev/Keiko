@@ -193,7 +193,9 @@ import {
   openCodeNativeMcpAdmission,
   type AdmittedMcpOAuthServer,
   type OpenCodeNativeMcpAdmission,
+  type OpenCodeNativeMcpRelayEndpoint,
 } from "./opencodeNativeMcp.js";
+import { bindNativeMcpRelays, type OpenCodeMcpRelayInput } from "./opencodeNativeMcpRelay.js";
 import type { McpOAuthIssuerValidation } from "../mcp/mcpOAuthIssuer.js";
 import type { McpOAuthCredentialStore } from "../mcp/mcpOAuthCredentialStore.js";
 import { harvestMcpCredentials, seedMcpCredentials } from "./opencodeNativeMcpCredentials.js";
@@ -557,6 +559,12 @@ export interface OpenCodeRuntimeCompositionInput {
    * `mcpOAuthCredentialStore.ts`); absent, every run authorizes anew.
    */
   readonly mcpCredentials?: McpOAuthCredentialStore | undefined;
+  /**
+   * Keiko's MCP relay (#3903 AC3, `opencodeNativeMcpRelay.ts`): a remote server with credential
+   * headers is reached through it, and the run never holds the credential; absent, such a server
+   * is not admitted.
+   */
+  readonly mcpRelay?: OpenCodeMcpRelayInput | undefined;
   readonly portable: VerifiedPortableInput;
   readonly stateBaseRoot: string;
   readonly contextGeometry: OpenCodeContextGeometry;
@@ -1680,6 +1688,8 @@ async function disposeRun(
     const drained = bridge.close(signal);
     input.safeActivity?.clear();
     input.gatewayReadiness.clear(runId);
+    // The run's relayed MCP exchanges end with it, before its runtime is reaped.
+    input.mcpRelay?.relay.releaseRun(runId);
     if (!(await drained)) return false;
     if (run === undefined) return true;
     if (!currentDisposal(runs, run, signal)) return false;
@@ -1800,13 +1810,13 @@ async function materializePrepare(
   createPrivateState(runRoot);
   const continuation = seedRun(input, request, runRoot);
   await bridge.start();
-  const validations = await mcpIssuerValidations(input, request);
+  const mcpChecks = await nativeMcpChecks(input, request);
   const documents =
     input.toolProfile === "native"
       ? await input.configDocuments?.({ runId: request.runId, signal: request.signal })
       : undefined;
   const agentModels = nativeAgentModels(input, documents);
-  const { profile, mcp } = runLaunchProfile(input, request, runRoot, validations, {
+  const { profile, mcp } = runLaunchProfile(input, request, runRoot, mcpChecks, {
     documents,
     agentModels,
   });
@@ -1845,7 +1855,7 @@ function runLaunchProfile(
   input: OpenCodeRuntimeCompositionInput,
   request: OpenCodeLifecyclePrepareRequest,
   runRoot: string,
-  validations: ReadonlyMap<string, McpOAuthIssuerValidation>,
+  mcpChecks: NativeMcpChecks,
   configured: {
     readonly documents: readonly Readonly<Record<string, unknown>>[] | undefined;
     readonly agentModels: OpenCodeAgentModelBinding | undefined;
@@ -1854,7 +1864,7 @@ function runLaunchProfile(
   readonly profile: Extract<OpenCodeLaunchProfileResult, { readonly ok: true }>;
   readonly mcp: OpenCodeNativeMcpAdmission | undefined;
 } {
-  const mcp = nativeMcpAdmission(input, request, runRoot, validations);
+  const mcp = nativeMcpAdmission(input, request, runRoot, mcpChecks);
   const profile = buildOpenCodeLaunchProfile({
     executable: request.executablePath,
     stateRoot: runRoot,
@@ -1872,19 +1882,51 @@ function runLaunchProfile(
   return { profile, mcp };
 }
 
+/** What a native run's MCP servers were checked against before the launch (#3903 AC3). */
+interface NativeMcpChecks {
+  readonly validations: ReadonlyMap<string, McpOAuthIssuerValidation>;
+  readonly relays: ReadonlyMap<string, OpenCodeNativeMcpRelayEndpoint>;
+}
+
 /** A native run's MCP servers from the operator's registry; none for a mapped profile. */
 function nativeMcpAdmission(
   input: OpenCodeRuntimeCompositionInput,
   request: OpenCodeLifecyclePrepareRequest,
   runRoot: string,
-  validations: ReadonlyMap<string, McpOAuthIssuerValidation>,
+  checks: NativeMcpChecks,
 ): OpenCodeNativeMcpAdmission | undefined {
   if (input.toolProfile !== "native" || input.mcpServers === undefined) return undefined;
   return openCodeNativeMcpAdmission({
     servers: input.mcpServers(request.runId),
     mode: request.env.KEIKO_CODING_MODE,
     home: join(runRoot, "home"),
-    validations,
+    validations: checks.validations,
+    relays: checks.relays,
+  });
+}
+
+async function nativeMcpChecks(
+  input: OpenCodeRuntimeCompositionInput,
+  request: OpenCodeLifecyclePrepareRequest,
+): Promise<NativeMcpChecks> {
+  return {
+    validations: await mcpIssuerValidations(input, request),
+    relays: nativeMcpRelays(input, request),
+  };
+}
+
+/** The relays a native run's servers with credential headers are reached through. */
+function nativeMcpRelays(
+  input: OpenCodeRuntimeCompositionInput,
+  request: OpenCodeLifecyclePrepareRequest,
+): ReadonlyMap<string, OpenCodeNativeMcpRelayEndpoint> {
+  if (input.toolProfile !== "native" || input.mcpServers === undefined) return new Map();
+  return bindNativeMcpRelays({
+    servers: input.mcpServers(request.runId),
+    mode: request.env.KEIKO_CODING_MODE,
+    runId: request.runId,
+    relay: input.mcpRelay,
+    activityLog: input.activityLog,
   });
 }
 

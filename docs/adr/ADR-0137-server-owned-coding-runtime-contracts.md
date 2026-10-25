@@ -1147,8 +1147,29 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   admitted servers are reads of those servers. Every other MCP action stays unsupported. Evidence:
   `mcp.registry.loaded` (consumer, state, counts, a digest of the admitted definitions, the closed
   reason) and `coding-runtime.native-policy.decided` with `permission: mcp`; no server, tool, path
-  or URL enters the log. Open: static credentials (headers, client secrets) for MCP servers, a
-  registry editor and the first consumer outside Coding.
+  or URL enters the log. Open: a confidential OAuth client's secret, a registry editor and the
+  first consumer outside Coding.
+- **A remote MCP server's static credential stays in Keiko, behind its relay (#3903 AC3).** A remote
+  registry entry may carry `headers: { "<Name>": { secretEnv, prefix? } }` (at most 8, never with
+  `oauth`): each value is read from the named `KEIKO_MCP_SECRET_*` variable of Keiko's own
+  environment, so no credential is written in the registry and no other variable can be named;
+  transport, connection, cookie and Keiko headers are refused. The run never holds the value: its
+  binding addresses `/api/coding-sidecar/mcp/:relayId` on the same attested loopback origin as the
+  Model Gateway, with `oauth: false` and two headers the runtime sends on every request,
+  `X-Keiko-CSRF` (so the route keeps the ordinary CSRF guard, no exemption) and
+  `X-Keiko-Mcp-Relay`, a capability minted for that run and that server (`mcpCredentialRelay.ts`,
+  stored as a hash, compared in constant time, at most 256 bindings). The relay refuses a browser
+  origin or a wrong capability before any request leaves, adds the credential headers and forwards
+  the MCP Streamable HTTP request (GET, POST, DELETE; only `accept`, `content-type`,
+  `mcp-session-id`, `mcp-protocol-version` and `last-event-id` pass, 4 MiB request, 32 MiB
+  response) to exactly the registered URL through Keiko's egress (no redirect followed, loopback
+  and private targets refused); a redirect answers 502. A run's disposal releases its bindings and
+  ends every exchange it holds. The server-owned binding (`OPENCODE_CONFIG_CONTENT`) joins the
+  shell environment denylist, so an agent's shell cannot read a capability. A server whose secret
+  is unset or holds a line break is left out with its tools. Evidence: `coding-runtime.mcp-relay`
+  (bind: relayed and refused server counts with the first closed reason; request: method, status,
+  request/response bytes, duration, outcome `relayed`/`cancelled`/`refused`/`failed` with a closed
+  reason and frames on failure); never a credential, capability, URL or server name.
 - **A remote MCP server authorizes through the runtime's own OAuth, bound to the operator's expected
   issuer (#3903 AC3).** A remote registry entry may carry `oauth: { issuer, clientId?, scope? }`:
   the issuer identifier the operator expects (RFC 8414 §2, https, no query or fragment, compared as

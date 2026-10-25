@@ -6,6 +6,7 @@ import { buildOpenCodeLaunchProfile } from "./opencodeLaunchProfile.js";
 import {
   OPENCODE_NATIVE_MCP_PATH,
   mcpServersNeedingIssuerValidation,
+  mcpServersNeedingRelay,
   openCodeNativeMcpAdmission,
 } from "./opencodeNativeMcp.js";
 
@@ -142,6 +143,51 @@ describe("the MCP servers a native run admits (#3903)", () => {
     expect(admission.config).toEqual({ servers: {} });
     expect(admission.grants.actions.size).toBe(0);
     expect(admission.oauth.size).toBe(0);
+  });
+
+  // #3903 AC3: a credentialed server is reached through Keiko's relay; the run never holds the secret.
+  it("binds a credentialed remote server to its relay, with no credential in the binding", () => {
+    const credentialed: McpServerDefinition = {
+      ...REMOTE,
+      name: "wiki",
+      transport: {
+        kind: "remote",
+        url: "https://wiki.example.test/mcp",
+        headers: { Authorization: { secretEnv: "KEIKO_MCP_SECRET_WIKI", prefix: "Bearer " } },
+      },
+    };
+    const relay = {
+      url: "http://127.0.0.1:1983/api/coding-sidecar/mcp/relay-id",
+      capability: "relay-capability",
+    };
+    expect(mcpServersNeedingRelay([credentialed, REMOTE, LOCAL], "autonomous-delivery")).toEqual([
+      credentialed,
+    ]);
+    expect(mcpServersNeedingRelay([credentialed], "supervised-coding")).toEqual([]);
+    const relayed = openCodeNativeMcpAdmission({
+      servers: [credentialed],
+      mode: "autonomous-delivery",
+      home: HOME,
+      relays: new Map([["wiki", relay]]),
+    });
+    expect(relayed.config.servers).toEqual({
+      wiki: {
+        type: "remote",
+        url: relay.url,
+        oauth: false,
+        headers: { "X-Keiko-CSRF": "1", "X-Keiko-Mcp-Relay": "relay-capability" },
+      },
+    });
+    expect(JSON.stringify(relayed.config)).not.toContain("KEIKO_MCP_SECRET_WIKI");
+    expect(relayed.grants.servers.get("wiki")).toEqual({ remote: true });
+    // Without a bound relay (its secret unset) the server and its tools stay out.
+    const unbound = openCodeNativeMcpAdmission({
+      servers: [credentialed],
+      mode: "autonomous-delivery",
+      home: HOME,
+    });
+    expect(unbound.config.servers).toEqual({});
+    expect(unbound.grants.actions.size).toBe(0);
   });
 
   it("validates only the enabled remote servers with OAuth a Full access run would use", () => {

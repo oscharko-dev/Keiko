@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 367,
-  "completeClassCount": 367,
+  "supportedClassCount": 368,
+  "completeClassCount": 368,
   "completeness": "complete",
   "classes": [
     {
@@ -9014,6 +9014,129 @@
             "causeChain": true
           },
           "proofIds": ["coding-runtime.mcp-credentials.emitted-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "coding-runtime-mcp-relay",
+      "requirementContract": "coding-runtime-mcp-relay",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["state"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": ["coding-runtime.mcp-relay"],
+        "end": [],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "coding-runtime.mcp-relay",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["coding-runtime.mcp-relay"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "coding-runtime.mcp-relay",
+          "owner": "keiko-server",
+          "category": "security",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "action",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "causeChain",
+              "type": "string-array",
+              "dataClass": "error-kind",
+              "required": false
+            },
+            {
+              "name": "durationMs",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "frames",
+              "type": "string-array",
+              "dataClass": "opaque-id",
+              "required": false
+            },
+            {
+              "name": "method",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "refusedServerCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "relayedServerCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "requestBytes",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "responseBytes",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "status",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            }
+          ],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "error-kind",
+            "loss-state",
+            "opaque-id"
+          ],
+          "frameCauseEvidence": {
+            "frames": true,
+            "causeChain": true
+          },
+          "proofIds": ["coding-runtime.mcp-relay.emitted-line"],
           "replayReferences": [],
           "missingObligations": []
         }

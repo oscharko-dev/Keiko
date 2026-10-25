@@ -37,9 +37,13 @@ export const OPENCODE_CODE_MODE_SESSION_MOVE = "opencode_session_move";
  */
 export const OPENCODE_CODE_MODE_WORKTREE_CREATE = "opencode_worktree_create";
 
-/** Secrets and Keiko bindings never reach a shell the native agent starts. */
+/**
+ * Secrets and Keiko bindings never reach a shell the native agent starts. The server-owned binding
+ * carries each relayed MCP server's capability (#3903 AC3), so it stays out of shells too.
+ */
 export const OPENCODE_NATIVE_SHELL_ENV_DENYLIST = Object.freeze([
   "OPENCODE_SERVER_PASSWORD",
+  "OPENCODE_CONFIG_CONTENT",
   "KEIKO_MODEL_GATEWAY_URL",
   "KEIKO_MODEL_GATEWAY_CAPABILITY",
   "KEIKO_TOOL_FACADE_URL",
