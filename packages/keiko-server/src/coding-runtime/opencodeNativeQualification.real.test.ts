@@ -2171,8 +2171,10 @@ const tools = [
 ];
 createInterface({ input: process.stdin }).on("line", (line) => {
   let msg; try { msg = JSON.parse(line); } catch { return; }
-  if (msg.method === "initialize") out({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: msg.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "fixture", version: "1.0.0" } } });
+  if (msg.method === "initialize") out({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: msg.params.protocolVersion, capabilities: { tools: {}, prompts: {} }, serverInfo: { name: "fixture", version: "1.0.0" } } });
   else if (msg.method === "tools/list") out({ jsonrpc: "2.0", id: msg.id, result: { tools } });
+  else if (msg.method === "prompts/list") out({ jsonrpc: "2.0", id: msg.id, result: { prompts: [{ name: "triage", description: "Triage the workspace" }] } });
+  else if (msg.method === "prompts/get") out({ jsonrpc: "2.0", id: msg.id, result: { messages: [{ role: "user", content: { type: "text", text: "MCP-PROMPT-CANARY triage the workspace" } }] } });
   else if (msg.method === "tools/call" && msg.params.name === "wipe") { writeFileSync("WIPED", "x"); out({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: "wiped" }] } }); }
   else if (msg.method === "tools/call") out({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: "ECHO:" + msg.params.arguments.text }] } });
   else if (msg.id !== undefined) out({ jsonrpc: "2.0", id: msg.id, result: {} });
@@ -2249,6 +2251,28 @@ describe("pinned native OpenCode MCP servers from the operator's registry (C04, 
           "HOME",
           "PATH",
         ]);
+      });
+    },
+    120_000,
+  );
+
+  // C02/C04, #3903 AC3: an admitted server's prompt is one of the runtime's own commands, and it
+  // runs as a turn whose model request carries the server's prompt text.
+  it.skipIf(skip)(
+    "lists an admitted server's prompt as a command and runs it as a turn",
+    async () => {
+      await withRun(mcpLaunch("autonomous-delivery", true), async (run) => {
+        await connected(run);
+        const listed = (await run.client.commands()).map((command) => command.name);
+        const prompt = listed.find((name) => name.includes("triage"));
+        expect(prompt, listed.join(",")).toBeDefined();
+        const before = run.gateway.requests.length;
+        run.gateway.calls.push({ name: "read", arguments: { path: FIXTURE_FILE } });
+        await run.client.command(run.sessionId, prompt ?? "", "");
+        await expect
+          .poll(() => run.gateway.requests.length, { timeout: 60_000 })
+          .toBeGreaterThan(before);
+        expect(JSON.stringify(run.gateway.requests[before]?.body)).toContain("MCP-PROMPT-CANARY");
       });
     },
     120_000,
