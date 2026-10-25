@@ -7779,12 +7779,6 @@
           "analyzerProjection": "process-lifecycle",
           "safeContextFields": [
             {
-              "name": "adoptedCount",
-              "type": "integer",
-              "dataClass": "count",
-              "required": true
-            },
-            {
               "name": "causeChain",
               "type": "string-array",
               "dataClass": "error-kind",
@@ -7807,6 +7801,12 @@
               "type": "string-array",
               "dataClass": "opaque-id",
               "required": false
+            },
+            {
+              "name": "memberCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
             },
             {
               "name": "outcome",
@@ -9203,6 +9203,12 @@
               "name": "reason",
               "type": "string",
               "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "redactedCount",
+              "type": "integer",
+              "dataClass": "count",
               "required": false
             },
             {

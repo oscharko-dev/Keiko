@@ -354,10 +354,13 @@ Changes apply to the next run.
   value never reaches the run: the runtime connects to Keiko's relay on its own loopback port with a
   capability for that run and that server, and Keiko adds the header and forwards each request to
   exactly the registered URL through its egress (no redirect, no loopback or private target). A
-  server whose variable is unset or holds a line break is left out of the run. `headers` and
+  server that answers with the credential it received has it replaced by `[REDACTED]` before the
+  run reads the answer. A server whose variable is unset or holds a line break is left out of the
+  run. `headers` and
   `oauth` cannot be combined. The Activity Log records `coding-runtime.mcp-relay` (bound with
   relayed and refused server counts, then one line per relayed request with method, status,
-  sizes and duration), never the value, the URL or the server name.
+  sizes, the number of replaced credential occurrences and duration), never the value, the URL or
+  the server name.
 - To authorize, open the run's **MCP servers** section in the Workbench and choose **Authorize** on
   the server that needs it, then **Open the authorization page**: it opens in a new tab, and the
   runtime completes the sign-in on its own loopback callback. Keiko shows the page only when it

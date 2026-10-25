@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { createStreamingRedactor, redact, redactSecretLiterals } from "./redaction.js";
+import {
+  createSecretLiteralStreamRedactor,
+  createStreamingRedactor,
+  redact,
+  redactSecretLiterals,
+} from "./redaction.js";
 
 describe("configured literal redaction uses original source intervals", () => {
   it.each([false, true])(
@@ -74,5 +79,54 @@ describe("overlapping inferred source ownership", () => {
       expect(output).toBe(safe);
       if (fixture.privateValue) expect(output).not.toContain(value);
     }
+  });
+});
+
+// PR #4064 review: an MCP relay streams a server's response, and a credential the server echoes
+// can arrive split anywhere across its chunks.
+describe("createSecretLiteralStreamRedactor", () => {
+  const secret = "Bearer static-secret-canary";
+  const text = `{"text":"got ${secret}; ok"}\n`;
+
+  function streamed(chunks: readonly string[], secrets: readonly string[]): string {
+    const redactor = createSecretLiteralStreamRedactor(secrets);
+    return chunks.map((chunk) => redactor.push(chunk)).join("") + redactor.finish();
+  }
+
+  it("replaces a literal split at every position across two chunks", () => {
+    for (let cut = 0; cut <= text.length; cut += 1) {
+      expect(streamed([text.slice(0, cut), text.slice(cut)], [secret]), String(cut)).toBe(
+        '{"text":"got [REDACTED]; ok"}\n',
+      );
+    }
+  });
+
+  it("replaces a literal arriving one character per chunk, and counts it once", () => {
+    const redactor = createSecretLiteralStreamRedactor([secret, "static-secret-canary"]);
+    let published = "";
+    for (let index = 0; index < text.length; index += 1)
+      published += redactor.push(text.charAt(index));
+    expect(published + redactor.finish()).toBe('{"text":"got [REDACTED]; ok"}\n');
+    expect(redactor.redactedCount()).toBe(1);
+  });
+
+  it("holds back only what may still become a literal, and never a line break", () => {
+    const redactor = createSecretLiteralStreamRedactor([secret]);
+    expect(redactor.push("event: message\ndata: Bear")).toBe("event: message\ndata: ");
+    expect(redactor.push("ings\n\n")).toBe("Bearings\n\n");
+    expect(redactor.push("data: x\n\n")).toBe("data: x\n\n");
+    expect(redactor.finish()).toBe("");
+    expect(redactor.redactedCount()).toBe(0);
+  });
+
+  it("publishes a whole literal the held tail would otherwise cut", () => {
+    // "aba" is whole at the end, and its last "a" also begins it again.
+    expect(streamed(["xab", "a", "y"], ["aba"])).toBe("x[REDACTED]y");
+    expect(streamed(["x", "abaab", "a"], ["aba"])).toBe("x[REDACTED][REDACTED]");
+  });
+
+  it("passes everything through unchanged without literals", () => {
+    expect(streamed(["café ", "☕", ""], [])).toBe("café ☕");
+    expect(streamed(["a", "b"], [""])).toBe("ab");
   });
 });

@@ -64,6 +64,8 @@ describe("a native run's MCP relay bindings (#3903 AC3)", () => {
       runId: "run-relay",
       url: "https://wiki.example.test/mcp",
       headers: { Authorization: `Bearer ${SECRET}` },
+      // The bare credential too, so a server that echoes it is answered without it (#3903 AC3).
+      secrets: [SECRET],
     });
     expect(lines(records)).toEqual([
       expect.objectContaining({

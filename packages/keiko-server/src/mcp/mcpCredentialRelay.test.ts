@@ -120,9 +120,19 @@ const INITIALIZE = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}';
 describe("the MCP credential relay's bindings (#3903 AC3)", () => {
   it("authenticates exactly the run's capability for its relay, until the run is released", () => {
     const relay = createMcpCredentialRelay();
-    const binding = relay.bind({ runId: RUN_ID, url: "https://mcp.test/", headers: {} });
+    const binding = relay.bind({
+      runId: RUN_ID,
+      url: "https://mcp.test/",
+      headers: {},
+      secrets: [],
+    });
     if (binding === undefined) throw new Error("fixture-bind-failed");
-    const other = relay.bind({ runId: "run-other", url: "https://mcp.test/", headers: {} });
+    const other = relay.bind({
+      runId: "run-other",
+      url: "https://mcp.test/",
+      headers: {},
+      secrets: [],
+    });
     expect(relay.authenticate(binding.relayId, binding.capability)?.target.runId).toBe(RUN_ID);
     expect(relay.authenticate(binding.relayId, other?.capability)).toBeUndefined();
     expect(relay.authenticate(binding.relayId, undefined)).toBeUndefined();
@@ -137,8 +147,12 @@ describe("the MCP credential relay's bindings (#3903 AC3)", () => {
   it("refuses a further binding once it holds its maximum", () => {
     const relay = createMcpCredentialRelay();
     for (let index = 0; index < 256; index += 1)
-      expect(relay.bind({ runId: RUN_ID, url: "https://mcp.test/", headers: {} })).toBeDefined();
-    expect(relay.bind({ runId: RUN_ID, url: "https://mcp.test/", headers: {} })).toBeUndefined();
+      expect(
+        relay.bind({ runId: RUN_ID, url: "https://mcp.test/", headers: {}, secrets: [] }),
+      ).toBeDefined();
+    expect(
+      relay.bind({ runId: RUN_ID, url: "https://mcp.test/", headers: {}, secrets: [] }),
+    ).toBeUndefined();
   });
 
   it("resolves a credential header from Keiko's environment and refuses an unset or unsafe one", () => {
@@ -146,6 +160,7 @@ describe("the MCP credential relay's bindings (#3903 AC3)", () => {
     expect(resolveMcpSecretHeaders(headers, { KEIKO_MCP_SECRET_A: SECRET })).toEqual({
       ok: true,
       headers: { Authorization: `Bearer ${SECRET}` },
+      secrets: [SECRET],
     });
     expect(resolveMcpSecretHeaders(headers, {})).toEqual({
       ok: false,
@@ -176,6 +191,7 @@ describe("a relayed MCP exchange (#3903 AC3)", () => {
       runId: RUN_ID,
       url: `${upstream.base}/mcp`,
       headers: { Authorization: `Bearer ${SECRET}` },
+      secrets: [SECRET],
     });
     if (binding === undefined) throw new Error("fixture-bind-failed");
     const { sink: activityLog, records } = sink();
@@ -305,5 +321,128 @@ describe("a relayed MCP exchange (#3903 AC3)", () => {
       }),
     ).rejects.toThrow();
     expect(upstream.seen).toEqual([]);
+  });
+});
+
+// PR #4064 review (#3903 AC3): a server can answer with the credential it received, whole, split
+// across streamed chunks, or escaped inside its JSON. The runtime must never receive it in any of
+// these forms, while an ordinary result and an event stream still pass through as they are.
+describe("a credential the server reflects (#3903 AC3)", () => {
+  async function reflecting(
+    secret: string,
+    respond: (authorization: string) => Response,
+  ): Promise<{
+    readonly url: string;
+    readonly capability: string;
+    readonly records: ServerLogEvent[];
+  }> {
+    const relay = createMcpCredentialRelay();
+    const binding = relay.bind({
+      runId: RUN_ID,
+      url: "https://mcp.example.test/mcp",
+      headers: { Authorization: `Bearer ${secret}` },
+      secrets: [secret],
+    });
+    if (binding === undefined) throw new Error("fixture-bind-failed");
+    const { sink: activityLog, records } = sink();
+    const origin = await startRelay(relay, activityLog, (_url, request) =>
+      Promise.resolve(respond(request.headers.Authorization ?? "")),
+    );
+    return {
+      url: `${origin}${MCP_RELAY_PATH_PREFIX}${binding.relayId}`,
+      capability: binding.capability,
+      records,
+    };
+  }
+
+  function json(value: unknown): Response {
+    return new Response(JSON.stringify(value), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  // The body in byte slices, each delivered as its own chunk, as a slow server streams it.
+  function sliced(text: string, cuts: readonly number[]): Response {
+    const bytes = new TextEncoder().encode(text);
+    const bounds = [0, ...cuts, bytes.length];
+    let index = 0;
+    const body = new ReadableStream<Uint8Array>({
+      async pull(controller): Promise<void> {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        const start = bounds[index];
+        const end = bounds[index + 1];
+        index += 1;
+        if (start === undefined || end === undefined) controller.close();
+        else controller.enqueue(bytes.slice(start, end));
+      },
+    });
+    return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+  }
+
+  function post(url: string, capability: string): Promise<Response> {
+    return fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json", [MCP_RELAY_CAPABILITY_HEADER]: capability },
+      body: INITIALIZE,
+    });
+  }
+
+  it("replaces the credential a server echoes in its result and records how often", async () => {
+    const { url, capability, records } = await reflecting(SECRET, (authorization) =>
+      json({
+        jsonrpc: "2.0",
+        id: 1,
+        result: { content: [{ type: "text", text: `got ${authorization}; token ${SECRET}` }] },
+      }),
+    );
+    const body = await (await post(url, capability)).text();
+    expect(body).not.toContain(SECRET);
+    expect(JSON.parse(body)).toEqual({
+      jsonrpc: "2.0",
+      id: 1,
+      result: { content: [{ type: "text", text: "got [REDACTED]; token [REDACTED]" }] },
+    });
+    expect(lines(records)).toEqual([
+      expect.objectContaining({ outcome: "relayed", redactedCount: 2 }),
+    ]);
+    expect(JSON.stringify(records)).not.toContain(SECRET);
+  });
+
+  it("holds back a credential split across streamed chunks until it is whole", async () => {
+    const event = `event: message\ndata: {"text":"café, Bearer ${SECRET} and more"}\n\n`;
+    const start = new TextEncoder().encode(event.slice(0, event.indexOf("Bearer"))).length;
+    // Cuts inside "é", inside "Bearer" and twice inside the secret itself.
+    const cuts = [event.indexOf("é") + 1, start + 3, start + 10, start + 16];
+    const { url, capability } = await reflecting(SECRET, () => sliced(event, cuts));
+    const body = await (await post(url, capability)).text();
+    expect(body).toBe(`event: message\ndata: {"text":"café, [REDACTED] and more"}\n\n`);
+  });
+
+  it("replaces the escaped forms a JSON result or a URL carries", async () => {
+    const secret = 'ab/cd"ef\\gh-1234';
+    const escaped = JSON.stringify(secret).slice(1, -1);
+    const forms = [
+      secret,
+      escaped,
+      escaped.replaceAll("/", "\\/"),
+      JSON.stringify(escaped).slice(1, -1),
+      encodeURIComponent(secret),
+    ];
+    const { url, capability } = await reflecting(
+      secret,
+      () => new Response(forms.map((form) => `<${form}>`).join(" "), { status: 200 }),
+    );
+    const body = await (await post(url, capability)).text();
+    expect(body).toBe(forms.map(() => "<[REDACTED]>").join(" "));
+  });
+
+  it("passes an ordinary result through byte for byte", async () => {
+    const result = { jsonrpc: "2.0", id: 1, result: { text: "Bearer of good news: café ☕" } };
+    const { url, capability, records } = await reflecting(SECRET, () => json(result));
+    expect(await (await post(url, capability)).text()).toBe(JSON.stringify(result));
+    expect(lines(records)).toEqual([
+      expect.objectContaining({ outcome: "relayed", redactedCount: 0 }),
+    ]);
   });
 });

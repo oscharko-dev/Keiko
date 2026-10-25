@@ -1,6 +1,6 @@
 import { execFile, spawn, type StdioOptions } from "node:child_process";
 import { dirname } from "node:path";
-import { Readable, Writable } from "node:stream";
+import { Duplex, Readable, Writable } from "node:stream";
 import { promisify } from "node:util";
 import {
   copyRuntimeGatewayConfinement,
@@ -26,12 +26,17 @@ import { processServerLogSink } from "../process-log-sink.js";
 import { createCodingRuntimeLineParser } from "./codingRuntimeProcessIo.js";
 import {
   parseProcessListing,
-  parseWorkingDirectories,
   RuntimeDescendantTracker,
+  sweepProvesEnd,
   type DescendantSweep,
   type DescendantTrackerOptions,
   type ProcessIdentity,
 } from "./darwinRuntimeDescendants.js";
+import {
+  createSandboxMembership,
+  SANDBOX_MEMBER_FD,
+  sandboxMemberLaunch,
+} from "./darwinSandboxMembership.js";
 import {
   RUNTIME_CONFINEMENT_FAILED_OPERATION,
   RUNTIME_CONFINEMENT_UNAVAILABLE_OPERATION,
@@ -79,6 +84,8 @@ export interface DevLaneRuntimeChildProcess {
   /** Retained by this existing process owner solely as OpenCode's native lifetime lease. */
   readonly stdin?: Writable | undefined;
   readonly launcherDiagnostics?: Readable | undefined;
+  /** macOS: the descriptor of the run's sandbox member (darwinSandboxMembership.ts). */
+  readonly sandboxMember?: Duplex | undefined;
   /** Synchronous exit fact (Node sets exitCode/signalCode before the async exit event fires). */
   settled(): boolean;
   kill(signal: NodeJS.Signals): boolean;
@@ -94,6 +101,8 @@ export type DevLaneRuntimeSpawn = (
     readonly env: Readonly<Record<string, string>>;
     readonly detached: true;
     readonly launcherDiagnostics: boolean;
+    /** Opens descriptor 3 for the run's sandbox member (macOS native profile). */
+    readonly sandboxMember?: boolean | undefined;
     readonly shell: false;
     readonly parentLifetime?: "stdin-eof" | undefined;
   },
@@ -168,41 +177,15 @@ const execFileAsync = promisify(execFile);
 const PS_PATH = "/bin/ps";
 const PS_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 
-const LSOF_PATH = "/usr/sbin/lsof";
-
 /** This user's processes, locale-independent (macOS `ps`); the run's descendants are among them. */
 async function listDarwinProcesses(): Promise<readonly ProcessIdentity[]> {
   const uid = String(process.getuid?.() ?? -1);
-  const { stdout } = await execFileAsync(PS_PATH, ["-x", "-U", uid, "-o", "pid=,ppid=,lstart="], {
-    encoding: "utf8",
-    env: { LC_ALL: "C" },
-    maxBuffer: PS_MAX_BUFFER_BYTES,
-  });
-  return parseProcessListing(stdout);
-}
-
-// A process lsof could not inspect makes it exit 1 with the others still printed; anything else
-// (no output at all) is the listing's own failure and propagates to the sweep's evidence.
-function partialLsofOutput(error: unknown): string {
-  const stdout = (error as { readonly stdout?: unknown } | null)?.stdout;
-  if (typeof stdout === "string" && stdout.length > 0) return stdout;
-  throw error;
-}
-
-/** The working directory of each given process (macOS `lsof`); unreadable ones are absent. */
-async function darwinWorkingDirectories(
-  pids: readonly number[],
-): Promise<ReadonlyMap<number, string>> {
-  // lsof exits 1 when some of the processes cannot be inspected; what it printed still holds.
-  const output = await execFileAsync(LSOF_PATH, ["-a", "-d", "cwd", "-p", pids.join(","), "-Fpn"], {
-    encoding: "utf8",
-    env: { LC_ALL: "C" },
-    maxBuffer: PS_MAX_BUFFER_BYTES,
-  }).then(
-    (result) => result.stdout,
-    (error: unknown) => partialLsofOutput(error),
+  const { stdout } = await execFileAsync(
+    PS_PATH,
+    ["-x", "-U", uid, "-o", "pid=,ppid=,stat=,lstart="],
+    { encoding: "utf8", env: { LC_ALL: "C" }, maxBuffer: PS_MAX_BUFFER_BYTES },
   );
-  return parseWorkingDirectories(output);
+  return parseProcessListing(stdout);
 }
 
 class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
@@ -277,7 +260,7 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
       },
     );
     this.ownedTrees.add(tree);
-    this.trackDescendants(tree, request.runId, [cwd]);
+    this.trackDescendants(tree, request.runId);
     return tree;
   }
 
@@ -290,26 +273,16 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
     assertPlatformIdentity(this.platform, this.identity);
     const { executable, cwd } = resolveLaunchPaths(this.runtimeRoot, request, setLaunchPhase);
     const gitExecutable = this.attestedGit(setLaunchPhase);
-    // Routed through the shared keiko-sandbox plan/backend core (ADR-0043 D14, #2951) rather than
-    // the seatbelt-argv formula directly, so a host missing sandbox-exec fails this launch closed
-    // instead of spawning the literal, hardcoded "/usr/bin/sandbox-exec" path unconfined.
     setLaunchPhase("sandbox-plan");
-    const decision = prepareRuntimeGatewayProcessSandbox({
-      request,
-      executable,
-      cwd,
-      policy,
-      gitExecutable,
-      runtimeRoots: [this.runtimeRoot],
-      availability: this.probeAvailability(),
-      platform: this.platform,
-    });
+    const sandboxMember = this.admitsSandboxMember(policy);
+    const decision = this.plannedLaunch(request, policy, { executable, cwd }, gitExecutable);
     setLaunchPhase("process-spawn");
     const child = this.spawnRuntime(decision.command, decision.args, {
       cwd,
       env: runtimeEnvironment(request.env, gitExecutable, policy.profile),
       detached: true,
       launcherDiagnostics: linuxGatewayLauncherBackend(decision.attestation.backend),
+      sandboxMember,
       shell: false,
       ...(request.parentLifetime === undefined ? {} : { parentLifetime: request.parentLifetime }),
     });
@@ -331,16 +304,41 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
       },
     );
     this.ownedTrees.add(tree);
-    this.trackDescendants(tree, request.runId, [cwd]);
+    this.trackDescendants(tree, request.runId);
     return tree;
   }
 
+  // The native macOS profile admits a shell, so its run gets a sandbox member beside the service.
+  private admitsSandboxMember(policy: RuntimeGatewayConfinement): boolean {
+    return this.identity.platform === "darwin" && policy.profile === "keiko-native";
+  }
+
+  // Routed through the shared keiko-sandbox plan/backend core (ADR-0043 D14, #2951) rather than
+  // the seatbelt-argv formula directly, so a host missing sandbox-exec fails this launch closed
+  // instead of spawning the literal, hardcoded "/usr/bin/sandbox-exec" path unconfined.
+  private plannedLaunch(
+    request: RuntimeSupervisorLaunchRequest,
+    policy: RuntimeGatewayConfinement,
+    paths: { readonly executable: string; readonly cwd: string },
+    gitExecutable: AttestedDarwinGitExecutable | undefined,
+  ): ReturnType<typeof prepareRuntimeGatewayProcessSandbox> {
+    const launch = this.admitsSandboxMember(policy)
+      ? sandboxMemberLaunch(paths.executable, request.args)
+      : { executable: paths.executable, args: request.args };
+    return prepareRuntimeGatewayProcessSandbox({
+      request: { ...request, args: launch.args },
+      executable: launch.executable,
+      cwd: paths.cwd,
+      policy,
+      gitExecutable,
+      runtimeRoots: [this.runtimeRoot],
+      availability: this.probeAvailability(),
+      platform: this.platform,
+    });
+  }
+
   // macOS only: Linux's namespace launcher owns its own tree, and its exit is the proof it gives.
-  private trackDescendants(
-    tree: DevLaneTree,
-    runId: string,
-    workspaceRoots: readonly string[],
-  ): void {
+  private trackDescendants(tree: DevLaneTree, runId: string): void {
     const rootPid = tree.child.pid;
     if (
       this.identity.platform !== "darwin" ||
@@ -348,13 +346,13 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
       this.createDescendantTracker === undefined
     )
       return;
+    const member = tree.child.sandboxMember;
     const tracker = this.createDescendantTracker({
       rootPid,
       runId,
       activityLog: this.activityLog,
       list: listDarwinProcesses,
-      workspaceRoots,
-      directoriesOf: darwinWorkingDirectories,
+      ...(member === undefined ? {} : { membership: createSandboxMembership(member) }),
     });
     tree.descendants = tracker;
     tracker.start();
@@ -481,10 +479,11 @@ function sweepWithin(
   });
 }
 
-// A process the sweep could not end, or a listing it could not take, leaves the tree unproven.
+// Only a sweep that proves the run's execution ended settles the tree; anything else leaves it
+// unproven (`runtime-reap-unproven`), never a false stop.
 function descendantsEnded(sweep: DescendantSweep | "untracked" | undefined): boolean {
   if (sweep === "untracked") return true;
-  return sweep !== undefined && sweep.outcome !== "listing-failed" && sweep.survivorCount === 0;
+  return sweep !== undefined && sweepProvesEnd(sweep);
 }
 
 function resolveLaunchPaths(
@@ -799,17 +798,12 @@ function spawnDevLaneChild(
   });
   if (child.stdout === null || child.stderr === null)
     throw new TypeError("dev-lane-runtime-pipes-unavailable");
-  const launcherDiagnostics = options.launcherDiagnostics
-    ? child.stdio[LINUX_GATEWAY_DIAGNOSTIC_FD]
-    : undefined;
-  if (options.launcherDiagnostics && !(launcherDiagnostics instanceof Readable))
-    throw new TypeError("linux-gateway-diagnostics-unavailable");
   return {
     pid: child.pid,
     stdout: child.stdout,
     stderr: child.stderr,
     ...(child.stdin instanceof Writable ? { stdin: child.stdin } : {}),
-    ...(launcherDiagnostics instanceof Readable ? { launcherDiagnostics } : {}),
+    ...extraDescriptors(child.stdio, options),
     settled: (): boolean => child.exitCode !== null || child.signalCode !== null,
     kill: (signal): boolean => child.kill(signal),
     onExit: (listener): void => {
@@ -821,9 +815,29 @@ function spawnDevLaneChild(
   };
 }
 
+// Descriptor 3 carries the Linux launcher's diagnostics or the macOS run's sandbox member.
+function extraDescriptors(
+  stdio: readonly unknown[],
+  options: Parameters<DevLaneRuntimeSpawn>[2],
+): Pick<DevLaneRuntimeChildProcess, "launcherDiagnostics" | "sandboxMember"> {
+  if (options.launcherDiagnostics) {
+    const launcherDiagnostics = stdio[LINUX_GATEWAY_DIAGNOSTIC_FD];
+    if (!(launcherDiagnostics instanceof Readable))
+      throw new TypeError("linux-gateway-diagnostics-unavailable");
+    return { launcherDiagnostics };
+  }
+  if (options.sandboxMember !== true) return {};
+  const sandboxMember = stdio[SANDBOX_MEMBER_FD];
+  if (!(sandboxMember instanceof Duplex))
+    throw new TypeError("sandbox-member-descriptor-unavailable");
+  return { sandboxMember };
+}
+
 function devLaneStdio(options: Parameters<DevLaneRuntimeSpawn>[2]): StdioOptions {
   const stdin = options.parentLifetime === "stdin-eof" ? "pipe" : "ignore";
-  return options.launcherDiagnostics ? [stdin, "pipe", "pipe", "pipe"] : [stdin, "pipe", "pipe"];
+  return options.launcherDiagnostics || options.sandboxMember === true
+    ? [stdin, "pipe", "pipe", "pipe"]
+    : [stdin, "pipe", "pipe"];
 }
 
 /** Negative-pid kill targets the whole POSIX process group led by the spawned child. */

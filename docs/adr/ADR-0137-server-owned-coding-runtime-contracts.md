@@ -1179,13 +1179,21 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   the MCP Streamable HTTP request (GET, POST, DELETE; only `accept`, `content-type`,
   `mcp-session-id`, `mcp-protocol-version` and `last-event-id` pass, 4 MiB request, 32 MiB
   response) to exactly the registered URL through Keiko's egress (no redirect followed, loopback
-  and private targets refused); a redirect answers 502. A run's disposal releases its bindings and
-  ends every exchange it holds. The server-owned binding (`OPENCODE_CONFIG_CONTENT`) joins the
+  and private targets refused); a redirect answers 502. A server can answer with the credential it
+  received, so the response is not passed through unread: the relay replaces every occurrence of
+  each header value and each bare credential, as sent, JSON-escaped (once, with `\/`, and again
+  inside a JSON text) or percent-encoded, before the run reads it. Only those exact literals are
+  replaced, never a heuristic shape, through `createSecretLiteralStreamRedactor` beside
+  `redactSecretLiterals` in `keiko-security`; text that may still complete a literal across the
+  next chunk waits for it (at most the longest literal less one character), so an event stream
+  still flows event by event. A run's disposal releases its bindings and ends every exchange it
+  holds. The server-owned binding (`OPENCODE_CONFIG_CONTENT`) joins the
   shell environment denylist, so an agent's shell cannot read a capability. A server whose secret
   is unset or holds a line break is left out with its tools. Evidence: `coding-runtime.mcp-relay`
   (bind: relayed and refused server counts with the first closed reason; request: method, status,
-  request/response bytes, duration, outcome `relayed`/`cancelled`/`refused`/`failed` with a closed
-  reason and frames on failure); never a credential, capability, URL or server name.
+  request/response bytes, the count of replaced credential occurrences (`redactedCount`), duration,
+  outcome `relayed`/`cancelled`/`refused`/`failed` with a closed reason and frames on failure);
+  never a credential, capability, URL or server name.
 - **A remote MCP server authorizes through the runtime's own OAuth, bound to the operator's expected
   issuer (#3903 AC3).** A remote registry entry may carry `oauth: { issuer, clientId?, scope? }`:
   the issuer identifier the operator expects (RFC 8414 §2, https, no query or fragment, compared as

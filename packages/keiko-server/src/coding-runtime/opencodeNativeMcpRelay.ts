@@ -35,7 +35,12 @@ function bindOne(
 ): OpenCodeNativeMcpRelayEndpoint | BindRefusal {
   const resolved = resolveMcpSecretHeaders(server.transport.headers, relay.secrets);
   if (!resolved.ok) return resolved.reason;
-  const binding = relay.relay.bind({ runId, url: server.transport.url, headers: resolved.headers });
+  const binding = relay.relay.bind({
+    runId,
+    url: server.transport.url,
+    headers: resolved.headers,
+    secrets: resolved.secrets,
+  });
   if (binding === undefined) return "relay-unavailable";
   return {
     url: `${relay.origin}${MCP_RELAY_PATH_PREFIX}${binding.relayId}`,

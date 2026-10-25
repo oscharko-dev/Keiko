@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { causeChain, keikoStackFrames, type ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import { createSecretLiteralStreamRedactor } from "@oscharko-dev/keiko-security";
 import type { McpRemoteSecretHeader } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 import {
   activityLogEvent,
@@ -19,7 +20,8 @@ import {
  * one server. The relay authenticates that capability, adds the credential headers and forwards the
  * request to exactly the registered URL through Keiko's egress (no redirect, loopback and private
  * targets refused). A leaked capability reaches only that server for that run's lifetime, through
- * Keiko; the credential itself cannot leave Keiko through the run.
+ * Keiko; the credential itself cannot leave Keiko through the run. A server that answers with the
+ * credential it received has it replaced in the response before the run reads it.
  */
 export const MCP_RELAY_ROUTE = "/api/coding-sidecar/mcp/:relayId";
 export const MCP_RELAY_PATH_PREFIX = "/api/coding-sidecar/mcp/";
@@ -45,6 +47,8 @@ export interface McpRelayTarget {
   readonly url: string;
   /** The resolved credential headers; held only by the relay, never written to a run. */
   readonly headers: Readonly<Record<string, string>>;
+  /** The credential values behind those headers, without their prefixes; held only by the relay. */
+  readonly secrets: readonly string[];
 }
 
 export interface McpRelayBinding {
@@ -84,7 +88,11 @@ class InMemoryMcpCredentialRelay implements McpCredentialRelay {
     const capability = randomBytes(32).toString("base64url");
     this.bindings.set(relayId, {
       capabilityHash: capabilityHash(capability),
-      target: Object.freeze({ ...target, headers: Object.freeze({ ...target.headers }) }),
+      target: Object.freeze({
+        ...target,
+        headers: Object.freeze({ ...target.headers }),
+        secrets: Object.freeze([...target.secrets]),
+      }),
       controller: new AbortController(),
     });
     return { relayId, capability };
@@ -115,7 +123,11 @@ export function createMcpCredentialRelay(): McpCredentialRelay {
 }
 
 export type McpSecretHeaderResolution =
-  | { readonly ok: true; readonly headers: Readonly<Record<string, string>> }
+  | {
+      readonly ok: true;
+      readonly headers: Readonly<Record<string, string>>;
+      readonly secrets: readonly string[];
+    }
   | { readonly ok: false; readonly reason: "secret-unavailable" | "secret-invalid" };
 
 /** The credential headers of one server from Keiko's environment, or why they cannot be had. */
@@ -124,6 +136,7 @@ export function resolveMcpSecretHeaders(
   env: Readonly<Record<string, string | undefined>>,
 ): McpSecretHeaderResolution {
   const resolved: Record<string, string> = {};
+  const secrets: string[] = [];
   for (const [name, header] of Object.entries(headers)) {
     const secret = env[header.secretEnv];
     if (secret === undefined || secret.length === 0)
@@ -131,8 +144,9 @@ export function resolveMcpSecretHeaders(
     const value = `${header.prefix ?? ""}${secret}`;
     if (!SECRET_VALUE.test(value)) return { ok: false, reason: "secret-invalid" };
     resolved[name] = value;
+    secrets.push(secret);
   }
-  return { ok: true, headers: resolved };
+  return { ok: true, headers: resolved, secrets };
 }
 
 // ─── the exchange ──────────────────────────────────────────────────────────────────────────────
@@ -177,6 +191,8 @@ const MCP_RELAY_OPERATION = defineActivityLogOperation({
     refusedServerCount: { type: "integer", dataClass: "count", required: false },
     requestBytes: { type: "integer", dataClass: "count", required: false },
     responseBytes: { type: "integer", dataClass: "count", required: false },
+    // Credential occurrences the relay replaced in the server's response before the run read it.
+    redactedCount: { type: "integer", dataClass: "count", required: false },
     durationMs: { type: "integer", dataClass: "count", required: false },
     frames: {
       type: "string-array",
@@ -212,6 +228,7 @@ export interface McpRelayLine {
   readonly refusedServerCount?: number | undefined;
   readonly requestBytes?: number | undefined;
   readonly responseBytes?: number | undefined;
+  readonly redactedCount?: number | undefined;
   readonly durationMs?: number | undefined;
   readonly error?: unknown;
 }
@@ -226,6 +243,7 @@ function optionalFields(line: McpRelayLine): Readonly<Record<string, number | st
     "refusedServerCount",
     "requestBytes",
     "responseBytes",
+    "redactedCount",
     "durationMs",
   ] as const) {
     const value = line[key];
@@ -345,17 +363,51 @@ function responseHeaders(upstream: Response): Readonly<Record<string, string>> {
   return headers;
 }
 
-// Streams the upstream body with backpressure and stops at the response bound.
-async function pipeResponse(upstream: Response, response: ServerResponse): Promise<number> {
-  let size = 0;
-  if (upstream.body === null) return size;
+// A server that reflects a credential answers with it as sent, or escaped inside the JSON of an MCP
+// result (once, or again in a JSON text it carries) or in a URL. Each form is a literal the run may
+// not receive, for the header value and for the bare credential.
+function credentialLiterals(target: McpRelayTarget): readonly string[] {
+  const forms = [...Object.values(target.headers), ...target.secrets].flatMap((value) => {
+    const escaped = JSON.stringify(value).slice(1, -1);
+    return [
+      value,
+      escaped,
+      escaped.replaceAll("/", String.raw`\/`),
+      JSON.stringify(escaped).slice(1, -1),
+      encodeURIComponent(value),
+    ];
+  });
+  return [...new Set(forms)];
+}
+
+async function writeChunk(response: ServerResponse, text: string): Promise<void> {
+  if (text === "" || response.write(text)) return;
+  await new Promise<void>((resolve) => response.once("drain", resolve));
+}
+
+/**
+ * Streams the upstream body with backpressure, stops at the response bound and replaces every
+ * credential literal, one split across chunks included. MCP's Streamable HTTP transport is UTF-8
+ * JSON or event-stream text, decoded and re-encoded unchanged; an event ends with a line break,
+ * which no credential contains, so a whole event is never held back. Returns the upstream byte
+ * count and the number of replaced occurrences.
+ */
+async function pipeResponse(
+  upstream: Response,
+  response: ServerResponse,
+  target: McpRelayTarget,
+): Promise<{ readonly bytes: number; readonly redacted: number }> {
+  let bytes = 0;
+  if (upstream.body === null) return { bytes, redacted: 0 };
+  const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
+  const redactor = createSecretLiteralStreamRedactor(credentialLiterals(target));
   for await (const chunk of upstream.body as unknown as AsyncIterable<Uint8Array>) {
-    size += chunk.byteLength;
-    if (size > MCP_RELAY_RESPONSE_MAX_BYTES) throw new RelayRefusal(502, "response-too-large");
-    if (!response.write(chunk))
-      await new Promise<void>((resolve) => response.once("drain", resolve));
+    bytes += chunk.byteLength;
+    if (bytes > MCP_RELAY_RESPONSE_MAX_BYTES) throw new RelayRefusal(502, "response-too-large");
+    await writeChunk(response, redactor.push(decoder.decode(chunk, { stream: true })));
   }
-  return size;
+  await writeChunk(response, redactor.push(decoder.decode()) + redactor.finish());
+  return { bytes, redacted: redactor.redactedCount() };
 }
 
 function refuse(response: ServerResponse, status: number): void {
@@ -384,6 +436,7 @@ interface ExchangeState {
   correlationId: string;
   requestBytes: number;
   responseBytes: number;
+  redactedCount: number;
   status?: number;
   signal?: AbortSignal;
 }
@@ -410,7 +463,9 @@ async function exchange(
   }
   state.status = upstream.status;
   response.writeHead(upstream.status, responseHeaders(upstream));
-  state.responseBytes = await pipeResponse(upstream, response);
+  const piped = await pipeResponse(upstream, response, admission.target);
+  state.responseBytes = piped.bytes;
+  state.redactedCount = piped.redacted;
   response.end();
 }
 
@@ -468,6 +523,7 @@ export async function serveMcpRelayRequest(
     correlationId: options.correlationId,
     requestBytes: 0,
     responseBytes: 0,
+    redactedCount: 0,
   };
   const recordSettled = (settled: Pick<McpRelayLine, "outcome" | "reason" | "error">): void => {
     recordMcpRelay(options.activityLog, state.correlationId, {
@@ -477,6 +533,7 @@ export async function serveMcpRelayRequest(
       ...(state.status === undefined ? {} : { status: state.status }),
       requestBytes: state.requestBytes,
       responseBytes: state.responseBytes,
+      redactedCount: state.redactedCount,
       durationMs: Math.max(0, now() - startedAt),
     });
   };

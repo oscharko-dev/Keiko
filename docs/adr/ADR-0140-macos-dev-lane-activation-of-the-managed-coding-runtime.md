@@ -132,19 +132,31 @@ evidence).
 
 The original service starts each shell child in its own process group, so the group signal ends
 only the service; on a graceful stop the service ends its own children, but a crashed service
-cannot (#3899 AC2). The macOS backend therefore records the service's descendants by PID and start
-time twice a second while it runs, and once it has exited ends every recorded process that is
-still the same process, together with its descendants (SIGTERM, then SIGKILL, in bounded rounds).
-A command can also detach a process itself (`cmd &`, `nohup`); launchd adopts it at once, so it is
-never below the service, and neither the service nor the group signal ends it (#3901 AC3). The
-sweep therefore also ends a process of the same user whose parent is launchd, that started while
-the service ran and whose working directory is inside the run's workspace, with its descendants.
-A recorded process that survives every round, or a process listing the sweep cannot take, leaves
-the tree unended, so the manager reports `runtime-reap-unproven` instead of a stopped runtime.
-`coding-runtime.descendants.swept` records the outcome and the tracked, signalled, adopted and
-surviving counts. This is cleanup, not proof: a child forked after the last sample and orphaned
-before the sweep, or a detached process that left the workspace, is not seen; only the Endpoint
-Security monitor of ADR-0163 D4 observes every fork.
+cannot (#3899 AC2). A command can also detach a process itself (`cmd &`, `nohup`, `setsid`);
+launchd adopts it at once, so it is never below the service, and neither the service nor the group
+signal ends it (#3901 AC3). Which processes belong to a run is therefore answered by the kernel,
+never inferred from a parent link, a working directory or a start time (PR #4064 review): every
+process a run starts inherits the run's Seatbelt instance through fork and exec, however it later
+detaches or changes its session, directory or environment, and the native profile lets a process
+signal only members of its own instance (`(target same-sandbox)`; another instance of the identical
+profile is refused). The native launch starts a sandbox member beside the service
+(`darwinSandboxMembership.ts`): a shell of builtins only, on descriptor 3, in a process group of its
+own, which the service never holds. Once the service has exited, Keiko lists this user's live
+processes outside the sandbox, the member answers which of them it may signal, and the sweep ends
+those, through the member (SIGTERM, then SIGKILL, in bounded rounds), until a listing holds no
+member. The member forks nothing, and only members start members, so that listing proves the run's
+execution has ended; a process of anyone else is never signalled, even if it reuses a PID, because
+the kernel refuses the member's signal to it. Zombies have already ended and are not asked about.
+Only `clean` and `reaped` settle the tree. A member that survives every round (`survivors`), a
+listing the sweep cannot take (`listing-failed`), a member that no longer answers
+(`membership-unavailable`) and a run whose profile has no shell for a member (`unproven`, the
+gateway profile) leave the tree unended, so the manager reports `runtime-reap-unproven` instead of a
+stopped runtime; without an answer, the descendants recorded by PID and start time while the
+service ran are still ended, but that is cleanup, not proof. `coding-runtime.descendants.swept`
+records the outcome and the tracked, member, signalled and surviving counts. A process cannot leave
+its Seatbelt instance, so no Endpoint Security monitor (ADR-0163 D4) is needed for this proof; a
+member killed by the run's own commands turns the run's next sweep into `membership-unavailable`,
+never into a false stop.
 
 ### D4 — Honest, content-free unavailability reasons
 

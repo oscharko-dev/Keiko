@@ -151,27 +151,102 @@ export const NATIVE_OPENSSL_ENV_NAMES: readonly string[] = Object.freeze([
 ]);
 
 // Node's own OpenSSL and FIPS switches; any other option keeps NODE_OPTIONS out of the run.
-const OPENSSL_NODE_OPTION = /^--(?:openssl-[a-z-]+(?:=\S+)?|enable-fips|force-fips)$/u;
-const OPENSSL_CONFIG_OPTION = /^--openssl-config=(\S+)$/u;
+const OPENSSL_NODE_FLAGS: ReadonlySet<string> = new Set([
+  "--openssl-legacy-provider",
+  "--openssl-shared-config",
+  "--enable-fips",
+  "--force-fips",
+]);
+const OPENSSL_CONFIG_OPTION = "--openssl-config";
+
+interface NodeOptionScan {
+  readonly tokens: string[];
+  quoted: boolean;
+  current: string | undefined;
+}
+
+function endNodeOption(scan: NodeOptionScan): void {
+  if (scan.current !== undefined) scan.tokens.push(scan.current);
+  scan.current = undefined;
+}
+
+// One character of NODE_OPTIONS; the index of the next one, or -1 for an escape Node refuses.
+function scanNodeOptionCharacter(scan: NodeOptionScan, value: string, index: number): number {
+  const character = value.charAt(index);
+  if (character === "\\" && scan.quoted) {
+    if (index + 1 === value.length) return -1;
+    scan.current = (scan.current ?? "") + value.charAt(index + 1);
+    return index + 2;
+  }
+  if (character === " " && !scan.quoted) endNodeOption(scan);
+  else if (character === '"') scan.quoted = !scan.quoted;
+  else scan.current = (scan.current ?? "") + character;
+  return index + 1;
+}
+
+/**
+ * NODE_OPTIONS split as Node splits it (`ParseNodeOptionsEnvVar`, src/node_options.cc): a space
+ * outside double quotes ends an option, a double quote opens or closes a quoted run, and inside one
+ * a backslash takes the next character literally. Node refuses an unterminated quote or a trailing
+ * escape, and so does this: undefined.
+ */
+function nodeOptionTokens(value: string): readonly string[] | undefined {
+  const scan: NodeOptionScan = { tokens: [], quoted: false, current: undefined };
+  for (let index = 0; index < value.length;) {
+    index = scanNodeOptionCharacter(scan, value, index);
+    if (index === -1) return undefined;
+  }
+  if (scan.quoted) return undefined;
+  endNodeOption(scan);
+  return scan.tokens;
+}
+
+/** An option's name, with Node's equivalence of `_` and `-`, and its inline `=` value. */
+function nodeOptionParts(token: string): { readonly name: string; readonly value?: string } {
+  const separator = token.indexOf("=");
+  const name = (separator === -1 ? token : token.slice(0, separator)).replaceAll("_", "-");
+  return separator === -1 ? { name } : { name, value: token.slice(separator + 1) };
+}
+
+// The OpenSSL option at `index`: the configuration file it names, if any, and the index after it.
+// `--openssl-config` takes its file inline (`=file`) or as the next option, as Node does.
+function openSslNodeOption(
+  tokens: readonly string[],
+  index: number,
+): { readonly file?: string; readonly next: number } | undefined {
+  const option = nodeOptionParts(tokens[index] ?? "");
+  if (OPENSSL_NODE_FLAGS.has(option.name) && option.value === undefined) return { next: index + 1 };
+  if (option.name !== OPENSSL_CONFIG_OPTION) return undefined;
+  const file = option.value ?? tokens[index + 1];
+  if (file === undefined || file === "") return undefined;
+  return { file, next: option.value === undefined ? index + 2 : index + 1 };
+}
+
+/**
+ * The configuration files NODE_OPTIONS names when it consists of nothing but Node's OpenSSL and
+ * FIPS switches; undefined when it holds anything else or does not parse.
+ */
+function openSslNodeConfigurations(value: string | undefined): readonly string[] | undefined {
+  const tokens = value === undefined ? undefined : nodeOptionTokens(value);
+  if (tokens === undefined || tokens.length === 0) return undefined;
+  const files: string[] = [];
+  for (let index = 0; index < tokens.length;) {
+    const option = openSslNodeOption(tokens, index);
+    if (option === undefined) return undefined;
+    if (option.file !== undefined) files.push(option.file);
+    index = option.next;
+  }
+  return files;
+}
 
 /** NODE_OPTIONS that consists of nothing but Node's OpenSSL and FIPS switches. */
 export function nativeOpenSslNodeOptions(value: string | undefined): boolean {
-  const options =
-    value
-      ?.trim()
-      .split(/\s+/u)
-      .filter((option) => option !== "") ?? [];
-  return options.length > 0 && options.every((option) => OPENSSL_NODE_OPTION.test(option));
+  return openSslNodeConfigurations(value) !== undefined;
 }
 
 function openSslLocations(env: Readonly<Record<string, string | undefined>>): readonly string[] {
   const configuration = env.OPENSSL_CONF;
-  const nodeConfiguration = nativeOpenSslNodeOptions(env.NODE_OPTIONS)
-    ? (env.NODE_OPTIONS ?? "")
-        .trim()
-        .split(/\s+/u)
-        .flatMap((option) => OPENSSL_CONFIG_OPTION.exec(option)?.[1] ?? [])
-    : [];
+  const nodeConfiguration = openSslNodeConfigurations(env.NODE_OPTIONS) ?? [];
   const files = [...(configuration === undefined ? [] : [configuration]), ...nodeConfiguration];
   const directories = [env.OPENSSL_CONF_INCLUDE, env.OPENSSL_MODULES].flatMap((value) =>
     value === undefined ? [] : [value],

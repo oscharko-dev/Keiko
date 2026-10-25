@@ -1,4 +1,5 @@
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
@@ -20,6 +21,7 @@ import {
 } from "../../../../tests/support/activity-log-proof.js";
 
 import { RuntimeDescendantTracker, type ProcessIdentity } from "./darwinRuntimeDescendants.js";
+import type { SandboxMembership } from "./darwinSandboxMembership.js";
 import {
   createDevLaneRuntimeProcessBackend as createProductionDevLaneRuntimeProcessBackend,
   type DevLaneRuntimeChildProcess,
@@ -150,6 +152,36 @@ function gatewayConfinement(): ReturnType<typeof createRuntimeGatewayConfinement
     runtimeArtifactDigest: "b".repeat(64),
     modelProfileDigest: "c".repeat(64),
   });
+}
+
+// The production macOS profile: the native workspace policy, whose run gets a sandbox member.
+function nativeConfinement(fixture: Fixture): ReturnType<typeof createRuntimeGatewayConfinement> {
+  const privateStateRoot = join(dirname(fixture.cwd), "state");
+  mkdirSync(privateStateRoot, { recursive: true, mode: 0o700 });
+  return createRuntimeGatewayConfinement({
+    gatewayUrl: "http://127.0.0.1:1983/api/coding-sidecar/gateway",
+    runId: "run-2475",
+    treeBindingId: "f".repeat(64),
+    envelopeDigest: "a".repeat(64),
+    runtimeArtifactDigest: "b".repeat(64),
+    modelProfileDigest: "c".repeat(64),
+    profile: "keiko-native",
+    filesystem: {
+      workspaceRoot: fixture.cwd,
+      workspaceAccess: "read-write",
+      privateStateRoot,
+      runtimeReadRoot: fixture.runtimeRoot,
+    },
+  });
+}
+
+/** The live processes whose command line carries `marker`, read from outside any sandbox. */
+function processesCarrying(marker: string): readonly number[] {
+  const listing = spawnSync("/bin/ps", ["-axo", "pid=,command="], { encoding: "utf8" });
+  return listing.stdout
+    .split("\n")
+    .filter((line) => line.includes(marker))
+    .map((line) => Number.parseInt(line.trim(), 10));
 }
 
 function launchRequest(fixture: Fixture, executable?: string): RuntimeSupervisorLaunchRequest {
@@ -564,6 +596,7 @@ describe("dev-lane runtime process backend", () => {
     function descendantBackend(
       rows: ProcessIdentity[],
       keep: (pid: number) => boolean,
+      members: ReadonlySet<number> | "no-member",
     ): {
       readonly backend: RuntimeProcessBackend;
       readonly child: FakeChild;
@@ -579,21 +612,36 @@ describe("dev-lane runtime process backend", () => {
         runtimeRoot: fixture.runtimeRoot,
         spawnRuntime: () => child,
         killProcessGroup: () => undefined,
-        trackDescendants: (options) =>
-          new RuntimeDescendantTracker({
+        trackDescendants: (options) => {
+          const end = (pid: number): void => {
+            signals.push(pid);
+            if (!keep(pid))
+              rows.splice(
+                rows.findIndex((row) => row.pid === pid),
+                1,
+              );
+          };
+          // The kernel's answer for the run's sandbox, as its member gives it.
+          const membership: SandboxMembership | undefined =
+            members === "no-member"
+              ? undefined
+              : {
+                  members: (pids) => Promise.resolve(pids.filter((pid) => members.has(pid))),
+                  signal: (pids): Promise<void> => {
+                    for (const pid of pids) end(pid);
+                    return Promise.resolve();
+                  },
+                  close: (): void => undefined,
+                };
+          return new RuntimeDescendantTracker({
             ...options,
+            ...(membership === undefined ? {} : { membership }),
             list: (): Promise<readonly ProcessIdentity[]> => Promise.resolve([...rows]),
-            signal: (pid): void => {
-              signals.push(pid);
-              if (!keep(pid))
-                rows.splice(
-                  rows.findIndex((row) => row.pid === pid),
-                  1,
-                );
-            },
+            signal: end,
             sampleIntervalMs: 2,
             settleMs: 1,
-          }),
+          });
+        },
       });
       return { backend, child, signals, fixture };
     }
@@ -601,33 +649,41 @@ describe("dev-lane runtime process backend", () => {
     async function crash(
       rows: ProcessIdentity[],
       keep: (pid: number) => boolean,
+      members: ReadonlySet<number> | "no-member" = new Set([4800]),
     ): Promise<{ readonly complete: boolean; readonly signals: readonly number[] }> {
-      const { backend, child, signals, fixture } = descendantBackend(rows, keep);
+      const { backend, child, signals, fixture } = descendantBackend(rows, keep, members);
       const tree = backend.spawnOwnedTree(launchRequest(fixture), SANDBOX);
       // Let the record sample the running service's child once.
       await new Promise((resolve) => setTimeout(resolve, 30));
-      rows.splice(0, rows.length, { pid: 4800, ppid: 1, started: "T1" });
+      rows.splice(0, rows.length, { pid: 4800, ppid: 1, state: "S", started: "T1" });
       const wait = backend.waitForCompleteTreeExit(tree, 5_000);
       child.settle(null);
       return { complete: await wait, signals };
     }
 
-    it("ends the recorded child of a crashed service before the tree counts as ended", async () => {
-      const rows = [
-        { pid: 4711, ppid: 1, started: "T0" },
-        { pid: 4800, ppid: 4711, started: "T1" },
-      ];
-      await expect(crash(rows, () => false)).resolves.toEqual({ complete: true, signals: [4800] });
+    const serviceRows = (): ProcessIdentity[] => [
+      { pid: 4711, ppid: 1, state: "S", started: "T0" },
+      { pid: 4800, ppid: 4711, state: "S", started: "T1" },
+    ];
+
+    it("ends the members of a crashed service's sandbox before the tree counts as ended", async () => {
+      await expect(crash(serviceRows(), () => false)).resolves.toEqual({
+        complete: true,
+        signals: [4800],
+      });
     });
 
-    it("keeps the tree unproven while a recorded child survives every round", async () => {
-      const rows = [
-        { pid: 4711, ppid: 1, started: "T0" },
-        { pid: 4800, ppid: 4711, started: "T1" },
-      ];
-      const result = await crash(rows, () => true);
+    it("keeps the tree unproven while a member survives every round", async () => {
+      const result = await crash(serviceRows(), () => true);
       expect(result.complete).toBe(false);
       expect(new Set(result.signals)).toEqual(new Set([4800]));
+    });
+
+    // A run whose profile has no member still has its recorded descendants ended, but nothing
+    // proves that no other process of it survived: never a clean stop.
+    it("keeps a tree without a sandbox member unproven", async () => {
+      const result = await crash(serviceRows(), () => false, "no-member");
+      expect(result).toEqual({ complete: false, signals: [4800] });
     });
 
     it("never records a Linux tree, whose namespace launcher owns its own descendants", () => {
@@ -957,13 +1013,52 @@ describe("dev-lane runtime process backend", () => {
     const fixture = stageFixture();
     const backend = createDevLaneRuntimeProcessBackend({
       identity: IDENTITY,
-      gatewayConfinement: gatewayConfinement(),
+      gatewayConfinement: nativeConfinement(fixture),
       runtimeRoot: fixture.runtimeRoot,
     });
     const tree = backend.spawnOwnedTree(launchRequest(fixture), SANDBOX);
     await expect(backend.waitForCompleteTreeExit(tree, 10_000)).resolves.toBe(true);
     await expect(backend.reconcileTreeExit(tree)).resolves.toBe(true);
   });
+
+  // PR #4064 review (#3899 AC2, #3901 AC3), on the real kernel: a process the run detached with
+  // `setsid`, outside its workspace, before any sample, is still the run's and is ended; a process
+  // started in the workspace from outside the run is never signalled.
+  it.skipIf(process.platform !== "darwin")(
+    "ends a detached process of the run and never one started beside it",
+    async () => {
+      const fixture = stageFixture();
+      const marker = `3901.${String(process.pid)}`;
+      writeFileSync(
+        fixture.executable,
+        `#!/bin/sh\n/usr/bin/perl -e 'use POSIX; if (fork() == 0) { POSIX::setsid(); chdir "/"; exec "/bin/sleep", "${marker}1" } sleep 1'\nexit 0\n`,
+      );
+      const foreign = spawn("/bin/sleep", [`${marker}2`], {
+        cwd: fixture.cwd,
+        detached: true,
+        stdio: "ignore",
+      });
+      foreign.unref();
+      try {
+        const sink = createBufferedServerLogSink();
+        const backend = createDevLaneRuntimeProcessBackend({
+          identity: IDENTITY,
+          gatewayConfinement: nativeConfinement(fixture),
+          runtimeRoot: fixture.runtimeRoot,
+          activityLog: sink,
+        });
+        const tree = backend.spawnOwnedTree(launchRequest(fixture), SANDBOX);
+        await expect(backend.waitForCompleteTreeExit(tree, 15_000)).resolves.toBe(true);
+        expect(processesCarrying(`${marker}1`)).toEqual([]);
+        expect(processesCarrying(`${marker}2`)).toEqual([foreign.pid]);
+        const swept = sink.events.find((event) => event.op === "coding-runtime.descendants.swept");
+        expect(swept?.extra).toMatchObject({ outcome: "reaped", memberCount: 1, survivorCount: 0 });
+      } finally {
+        foreign.kill("SIGKILL");
+      }
+    },
+    30_000,
+  );
 });
 
 // LIVE OS-level proof through the production backend (#2951). runtime-gateway.test.ts proves the

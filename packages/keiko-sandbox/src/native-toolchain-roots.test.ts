@@ -261,4 +261,46 @@ describe("nativeOpenSslReadRoots", () => {
     expect(nativeOpenSslNodeOptions("")).toBe(false);
     expect(nativeOpenSslNodeOptions(undefined)).toBe(false);
   });
+
+  // PR #4064 review: Node splits NODE_OPTIONS with its own grammar, so a quoted configuration path
+  // with spaces is one option, and a split on whitespace dropped the operator's configuration.
+  it("reads NODE_OPTIONS with Node's quoting, so a configuration path may contain spaces", () => {
+    const root = tree();
+    const directory = join(root, "config with spaces");
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(join(directory, "openssl.cnf"), "");
+    const file = join(directory, "openssl.cnf");
+    const home = join(root, "home");
+    for (const value of [
+      `--openssl-config="${file}" --openssl-shared-config`,
+      `--openssl-config "${file}"`,
+      `"--openssl-config=${file}"`,
+      `--openssl_config="${file}"`,
+    ]) {
+      expect(nativeOpenSslNodeOptions(value), value).toBe(true);
+      expect(nativeOpenSslReadRoots({ NODE_OPTIONS: value }, home), value).toEqual([directory]);
+    }
+  });
+
+  it("takes a backslash inside quotes literally and refuses what Node refuses", () => {
+    expect(nativeOpenSslNodeOptions('--openssl-config="/etc/ssl/a \\"b\\".cnf"')).toBe(true);
+    // An unterminated quote and a trailing escape stop Node from starting.
+    expect(nativeOpenSslNodeOptions('--openssl-config="/etc/ssl/a.cnf')).toBe(false);
+    expect(nativeOpenSslNodeOptions('--openssl-config="/etc/ssl/a.cnf\\')).toBe(false);
+    // Only a space separates options; anything else stays inside one, unknown, option.
+    expect(nativeOpenSslNodeOptions("--openssl-shared-config\t--enable-fips")).toBe(false);
+  });
+
+  it("refuses a foreign switch however it is quoted, and a flag given a value", () => {
+    expect(nativeOpenSslNodeOptions('"--openssl-shared-config --max-old-space-size=64"')).toBe(
+      false,
+    );
+    expect(nativeOpenSslNodeOptions('--openssl-config="/etc/ssl/a.cnf" --require x.js')).toBe(
+      false,
+    );
+    expect(nativeOpenSslNodeOptions("--openssl-config")).toBe(false);
+    expect(nativeOpenSslNodeOptions('--openssl-config=""')).toBe(false);
+    expect(nativeOpenSslNodeOptions("--enable-fips=1")).toBe(false);
+    expect(nativeOpenSslNodeOptions('""')).toBe(false);
+  });
 });

@@ -1,4 +1,5 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -1095,15 +1096,30 @@ describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
       expect(realpathSync(processDirectory(detached.pid))).toBe(
         realpathSync(run.fixture.workspace),
       );
-      await stopRun(run.pipeline.baseUrl, run.runId);
-      // Physical execution is settled before Stop answers: nothing is left to wait for (#3901 AC3).
-      expectNothingLeft(run.service);
-      expect(run.pipeline.orchestrator.getSnapshot(run.runId)?.state).toBe("cancelled");
-      await vi.waitFor(() => {
-        expect(sweepLines(run.log, run.runId)).toEqual([
-          expect.objectContaining({ outcome: "reaped", survivorCount: 0, adoptedCount: 1 }),
-        ]);
+      // PR #4064 review: a process started in the run's workspace from outside the run, after the
+      // service, is the human's; it shares the detached process's parent, directory and start
+      // window, and the Stop never touches it.
+      const foreign = spawn("/bin/sleep", ["3899.9"], {
+        cwd: run.fixture.workspace,
+        detached: true,
+        stdio: "ignore",
       });
+      foreign.unref();
+      try {
+        await stopRun(run.pipeline.baseUrl, run.runId);
+        // Physical execution is settled before Stop answers: nothing is left to wait for (#3901 AC3).
+        expectNothingLeft(run.service);
+        expect(run.pipeline.orchestrator.getSnapshot(run.runId)?.state).toBe("cancelled");
+        await vi.waitFor(() => {
+          expect(sweepLines(run.log, run.runId)).toEqual([
+            expect.objectContaining({ outcome: "reaped", survivorCount: 0 }),
+          ]);
+        });
+        expect(sweepLines(run.log, run.runId)[0]?.memberCount).toBeGreaterThanOrEqual(1);
+        expect(() => process.kill(foreign.pid ?? 0, 0)).not.toThrow();
+      } finally {
+        foreign.kill("SIGKILL");
+      }
     }, 180_000);
 
     it("ends the children of a crashed service and continues the task in a new service", async () => {
@@ -1111,18 +1127,18 @@ describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
       const run = await startLifecycleRun("lifecycle-crash", (request) => {
         transcripts.push(JSON.stringify(request.messages));
       });
-      // A crash while the command runs. The record samples twice a second, so a child forked in the
-      // last interval before a crash is outside its reach; only an Endpoint Security monitor sees
-      // every fork (ADR-0163 D4).
-      await new Promise((resolve) => setTimeout(resolve, 1_200));
+      // A crash while the command runs, at once: no sample of the running service is needed, the
+      // run's sandbox member answers which processes are the run's (PR #4064 review).
       process.kill(run.service.pid, "SIGKILL");
       await expectServiceTreeReaped(run.service);
       // The line follows the sweep's final listing, after the processes are gone.
       await vi.waitFor(() => {
         expect(sweepLines(run.log, run.runId)).toEqual([
-          { outcome: "reaped", signalledCount: 3, survivorCount: 0, adoptedCount: 1 },
+          expect.objectContaining({ outcome: "reaped", survivorCount: 0 }),
         ]);
       });
+      // The background job, the busy foreground child and the detached process at least.
+      expect(sweepLines(run.log, run.runId)[0]?.memberCount).toBeGreaterThanOrEqual(3);
       await vi.waitFor(
         () => {
           expect(run.pipeline.orchestrator.getSnapshot(run.runId)?.state).not.toBe("running");
@@ -1270,7 +1286,7 @@ function sweepLines(
             outcome: event.extra?.outcome,
             signalledCount: event.extra?.signalledCount,
             survivorCount: event.extra?.survivorCount,
-            adoptedCount: event.extra?.adoptedCount,
+            memberCount: event.extra?.memberCount,
           },
         ]
       : [],
@@ -1408,6 +1424,7 @@ echo "probe.secrets=$(env | grep -c -E '^(OPENCODE_SERVER_PASSWORD|KEIKO_MODEL_G
 echo "probe.openssl_conf=\${OPENSSL_CONF:-unset}"
 if [ -n "\${OPENSSL_CONF:-}" ] && cat "$OPENSSL_CONF" >/dev/null 2>&1; then echo probe.openssl_read=ok; else echo probe.openssl_read=denied; fi
 echo "probe.node_options=\${NODE_OPTIONS:-unset}"
+echo "probe.node_options_sha=$(node -p 'require("node:crypto").createHash("sha256").update(process.env.NODE_OPTIONS ?? "").digest("hex")' 2>/dev/null || echo failed)"
 if node -e 'require("node:crypto").createHash("sha256")' >/dev/null 2>&1; then echo probe.node=ok; else echo probe.node=failed; fi
 echo probe.done=1
 `;
@@ -1429,9 +1446,27 @@ describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
         openssl_conf: probe.opensslConf,
         openssl_read: "ok",
         node_options: "--openssl-shared-config",
+        node_options_sha: sha256("--openssl-shared-config"),
         node: "ok",
       });
       expect(probe.transcript).not.toContain("DOTENV_CANARY_3901");
+    }, 180_000);
+
+    // PR #4064 review: Node reads NODE_OPTIONS with its own quoting, so an operator's configuration
+    // under a directory with spaces is one option; a whitespace split dropped it from the run. Node
+    // refuses to start on a configuration file it cannot read, so `node=ok` proves the read.
+    it("keeps a quoted OpenSSL configuration path with spaces, as Node reads it", async () => {
+      let nodeOptions = "";
+      const probe = await probeBoundary((opensslConf) => {
+        nodeOptions = `--openssl-config="${opensslConf}" --openssl-shared-config`;
+        return { NODE_OPTIONS: nodeOptions };
+      }, "operator openssl");
+      expect(probe.opensslConf).toContain(" ");
+      expect(probe.facts).toMatchObject({
+        node_options_sha: sha256(nodeOptions),
+        openssl_conf: "unset",
+        node: "ok",
+      });
     }, 180_000);
 
     it("keeps NODE_OPTIONS that carry anything besides OpenSSL and FIPS switches out of the run", async () => {
@@ -1455,11 +1490,12 @@ interface BoundaryProbe {
 
 async function probeBoundary(
   operatorEnv: (opensslConf: string) => Readonly<Record<string, string>>,
+  opensslDirectory = "openssl",
 ): Promise<BoundaryProbe> {
   const fixture = await setupWorkspace(["bff-state", "ui-db", "task-workspaces"]);
   writeFileSync(join(fixture.workspace, ".env"), "API_KEY=DOTENV_CANARY_3901\n");
   writeFileSync(join(fixture.workspace, "probe.sh"), PROBE_SCRIPT, { mode: 0o755 });
-  const openssl = join(fixture.root, "openssl");
+  const openssl = join(fixture.root, opensslDirectory);
   mkdirSync(openssl, { recursive: true });
   const opensslConf = join(openssl, "openssl.cnf");
   writeFileSync(opensslConf, "openssl_conf = openssl_init\n[openssl_init]\n");
@@ -1483,6 +1519,10 @@ async function probeBoundary(
   );
   await stopRun(pipeline.baseUrl, runId);
   return { facts: probeFacts(transcripts), transcript: transcripts.join("\n"), opensslConf };
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
 }
 
 function probeFacts(transcripts: readonly string[]): Readonly<Record<string, string>> {

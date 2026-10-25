@@ -6642,9 +6642,21 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["clean", "reaped", "survivors", "listing-failed"],
+        values: [
+          "clean",
+          "reaped",
+          "survivors",
+          "listing-failed",
+          "membership-unavailable",
+          "unproven",
+        ],
       },
       trackedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      memberCount: {
         type: "integer",
         dataClass: "count",
         required: true,
@@ -6665,11 +6677,6 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
       },
       refusedSignalCount: {
-        type: "integer",
-        dataClass: "count",
-        required: true,
-      },
-      adoptedCount: {
         type: "integer",
         dataClass: "count",
         required: true,
@@ -6703,7 +6710,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     diagnosticWhen: [
       {
         field: "outcome",
-        values: ["survivors", "listing-failed"],
+        values: ["survivors", "listing-failed", "membership-unavailable", "unproven"],
       },
     ],
   },
@@ -8370,6 +8377,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
       responseBytes: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      redactedCount: {
         type: "integer",
         dataClass: "count",
         required: false,
