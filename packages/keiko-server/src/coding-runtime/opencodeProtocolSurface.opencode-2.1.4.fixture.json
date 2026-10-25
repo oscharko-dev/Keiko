@@ -2673,6 +2673,477 @@
           }
         }
       }
+    },
+    "/api/mcp": {
+      "get": {
+        "parameters": [
+          {
+            "name": "location",
+            "in": "query",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "directory": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "required": false,
+            "style": "deepObject",
+            "explode": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "location": {
+                      "$ref": "#/components/schemas/Location.PublicRef"
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Mcp.Server"
+                      }
+                    }
+                  },
+                  "required": ["location", "data"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocationNotFoundErrorEncoded"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/integration/{integrationID}/connect/oauth": {
+      "post": {
+        "parameters": [
+          {
+            "name": "integrationID",
+            "in": "path",
+            "schema": {
+              "$ref": "#/components/schemas/Integration.ID"
+            },
+            "required": true
+          },
+          {
+            "name": "location",
+            "in": "query",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "directory": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "required": false,
+            "style": "deepObject",
+            "explode": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "location": {
+                      "$ref": "#/components/schemas/Location.PublicRef"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Integration.AttemptEncoded"
+                    }
+                  },
+                  "required": ["location", "data"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocationNotFoundErrorEncoded"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "methodID": {
+                    "$ref": "#/components/schemas/Integration.MethodID"
+                  },
+                  "answer": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/Form.Answer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "label": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": ["methodID"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
+    "/api/integration/{integrationID}/connect/oauth/{attemptID}": {
+      "get": {
+        "parameters": [
+          {
+            "name": "integrationID",
+            "in": "path",
+            "schema": {
+              "$ref": "#/components/schemas/Integration.ID"
+            },
+            "required": true
+          },
+          {
+            "name": "attemptID",
+            "in": "path",
+            "schema": {
+              "$ref": "#/components/schemas/Integration.AttemptID"
+            },
+            "required": true
+          },
+          {
+            "name": "location",
+            "in": "query",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "directory": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "required": false,
+            "style": "deepObject",
+            "explode": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "location": {
+                      "$ref": "#/components/schemas/Location.PublicRef"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Integration.AttemptStatus"
+                    }
+                  },
+                  "required": ["location", "data"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/IntegrationNotFoundErrorEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/IntegrationAttemptNotFoundErrorEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/LocationNotFoundErrorEncoded"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "parameters": [
+          {
+            "name": "integrationID",
+            "in": "path",
+            "schema": {
+              "$ref": "#/components/schemas/Integration.ID"
+            },
+            "required": true
+          },
+          {
+            "name": "attemptID",
+            "in": "path",
+            "schema": {
+              "$ref": "#/components/schemas/Integration.AttemptID"
+            },
+            "required": true
+          },
+          {
+            "name": "location",
+            "in": "query",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "directory": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "required": false,
+            "style": "deepObject",
+            "explode": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "204": {},
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocationNotFoundErrorEncoded"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/credential": {
+      "post": {
+        "parameters": [],
+        "security": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Credential.Entry"
+                    }
+                  },
+                  "required": ["data"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConflictErrorEncoded"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Credential.CreateInput"
+              }
+            }
+          },
+          "required": true
+        }
+      }
     }
   },
   "components": {
@@ -3628,6 +4099,350 @@
         "type": "string",
         "pattern": "^sh_"
       },
+      "Mcp.Server": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Mcp.Status.Connected"
+              },
+              {
+                "$ref": "#/components/schemas/Mcp.Status.Pending"
+              },
+              {
+                "$ref": "#/components/schemas/Mcp.Status.Disabled"
+              },
+              {
+                "$ref": "#/components/schemas/Mcp.Status.Failed"
+              },
+              {
+                "$ref": "#/components/schemas/Mcp.Status.NeedsAuth"
+              }
+            ]
+          },
+          "integrationID": {
+            "$ref": "#/components/schemas/Integration.ID"
+          }
+        },
+        "required": ["name", "status"],
+        "additionalProperties": false
+      },
+      "Integration.ID": {
+        "type": "string"
+      },
+      "Integration.AttemptEncoded": {
+        "type": "object",
+        "properties": {
+          "attemptID": {
+            "$ref": "#/components/schemas/Integration.AttemptID"
+          },
+          "url": {
+            "type": "string"
+          },
+          "instructions": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": ["auto", "code"]
+          },
+          "time": {
+            "type": "object",
+            "properties": {
+              "created": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "string",
+                    "enum": ["Infinity", "-Infinity", "NaN"]
+                  }
+                ]
+              },
+              "expires": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "string",
+                    "enum": ["Infinity", "-Infinity", "NaN"]
+                  }
+                ]
+              }
+            },
+            "required": ["created", "expires"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["attemptID", "url", "instructions", "mode", "time"],
+        "additionalProperties": false
+      },
+      "Integration.MethodID": {
+        "type": "string"
+      },
+      "Form.Answer": {
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/components/schemas/Form.Value"
+        }
+      },
+      "Integration.AttemptID": {
+        "type": "string"
+      },
+      "Integration.AttemptStatus": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": ["pending"]
+              },
+              "time": {
+                "type": "object",
+                "properties": {
+                  "created": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "string",
+                        "enum": ["Infinity", "-Infinity", "NaN"]
+                      }
+                    ]
+                  },
+                  "expires": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "string",
+                        "enum": ["Infinity", "-Infinity", "NaN"]
+                      }
+                    ]
+                  }
+                },
+                "required": ["created", "expires"],
+                "additionalProperties": false
+              }
+            },
+            "required": ["status", "time"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": ["complete"]
+              },
+              "time": {
+                "type": "object",
+                "properties": {
+                  "created": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "string",
+                        "enum": ["Infinity", "-Infinity", "NaN"]
+                      }
+                    ]
+                  },
+                  "expires": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "string",
+                        "enum": ["Infinity", "-Infinity", "NaN"]
+                      }
+                    ]
+                  }
+                },
+                "required": ["created", "expires"],
+                "additionalProperties": false
+              }
+            },
+            "required": ["status", "time"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": ["failed"]
+              },
+              "message": {
+                "type": "string"
+              },
+              "time": {
+                "type": "object",
+                "properties": {
+                  "created": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "string",
+                        "enum": ["Infinity", "-Infinity", "NaN"]
+                      }
+                    ]
+                  },
+                  "expires": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "string",
+                        "enum": ["Infinity", "-Infinity", "NaN"]
+                      }
+                    ]
+                  }
+                },
+                "required": ["created", "expires"],
+                "additionalProperties": false
+              }
+            },
+            "required": ["status", "message", "time"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": ["expired"]
+              },
+              "time": {
+                "type": "object",
+                "properties": {
+                  "created": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "string",
+                        "enum": ["Infinity", "-Infinity", "NaN"]
+                      }
+                    ]
+                  },
+                  "expires": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "string",
+                        "enum": ["Infinity", "-Infinity", "NaN"]
+                      }
+                    ]
+                  }
+                },
+                "required": ["created", "expires"],
+                "additionalProperties": false
+              }
+            },
+            "required": ["status", "time"],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "IntegrationNotFoundErrorEncoded": {
+        "type": "object",
+        "properties": {
+          "_tag": {
+            "type": "string",
+            "enum": ["IntegrationNotFoundError"]
+          },
+          "integrationID": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": ["_tag", "integrationID", "message"],
+        "additionalProperties": false
+      },
+      "IntegrationAttemptNotFoundErrorEncoded": {
+        "type": "object",
+        "properties": {
+          "_tag": {
+            "type": "string",
+            "enum": ["IntegrationAttemptNotFoundError"]
+          },
+          "integrationID": {
+            "type": "string"
+          },
+          "attemptID": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": ["_tag", "integrationID", "attemptID", "message"],
+        "additionalProperties": false
+      },
+      "Credential.Entry": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Credential.ID"
+          },
+          "integrationID": {
+            "$ref": "#/components/schemas/Integration.ID"
+          },
+          "label": {
+            "type": "string"
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "value": {
+            "$ref": "#/components/schemas/Credential.Value"
+          }
+        },
+        "required": ["id", "integrationID", "label", "active", "value"],
+        "additionalProperties": false
+      },
+      "Credential.CreateInput": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Credential.ID"
+          },
+          "integrationID": {
+            "$ref": "#/components/schemas/Integration.ID"
+          },
+          "label": {
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/components/schemas/Credential.Value"
+          },
+          "activate": {
+            "type": "boolean"
+          }
+        },
+        "required": ["integrationID", "value"],
+        "additionalProperties": false
+      },
       "Session.ForkBoundary": {
         "anyOf": [
           {
@@ -3952,12 +4767,6 @@
           "$ref": "#/components/schemas/Form.Field"
         }
       },
-      "Form.Answer": {
-        "type": "object",
-        "additionalProperties": {
-          "$ref": "#/components/schemas/Form.Value"
-        }
-      },
       "Provider.Request": {
         "type": "object",
         "properties": {
@@ -4081,6 +4890,110 @@
         },
         "required": ["id", "sessionID", "time", "type", "delivery", "payload"],
         "additionalProperties": false
+      },
+      "Mcp.Status.Connected": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": ["connected"]
+          }
+        },
+        "required": ["status"],
+        "additionalProperties": false
+      },
+      "Mcp.Status.Pending": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": ["pending"]
+          }
+        },
+        "required": ["status"],
+        "additionalProperties": false
+      },
+      "Mcp.Status.Disabled": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": ["disabled"]
+          }
+        },
+        "required": ["status"],
+        "additionalProperties": false
+      },
+      "Mcp.Status.Failed": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": ["failed"]
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": ["status", "error"],
+        "additionalProperties": false
+      },
+      "Mcp.Status.NeedsAuth": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": ["needs_auth"]
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": ["status", "error"],
+        "additionalProperties": false
+      },
+      "Form.Value": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "enum": ["Infinity", "-Infinity", "NaN"]
+              }
+            ]
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "Credential.ID": {
+        "type": "string"
+      },
+      "Credential.Value": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/Credential.OAuth"
+          },
+          {
+            "$ref": "#/components/schemas/Credential.Key"
+          },
+          {
+            "$ref": "#/components/schemas/Credential.External"
+          }
+        ]
       },
       "Permission.Effect": {
         "type": "string",
@@ -4632,33 +5545,6 @@
           }
         ]
       },
-      "Form.Value": {
-        "anyOf": [
-          {
-            "type": "string"
-          },
-          {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "string",
-                "enum": ["Infinity", "-Infinity", "NaN"]
-              }
-            ]
-          },
-          {
-            "type": "boolean"
-          },
-          {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
-        ]
-      },
       "Provider.Settings": {
         "type": "object",
         "properties": {
@@ -4744,6 +5630,67 @@
           }
         },
         "required": ["projectID", "location"],
+        "additionalProperties": false
+      },
+      "Credential.OAuth": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["oauth"]
+          },
+          "methodID": {
+            "$ref": "#/components/schemas/Integration.MethodID"
+          },
+          "refresh": {
+            "type": "string"
+          },
+          "access": {
+            "type": "string"
+          },
+          "expires": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "metadata": {
+            "type": "object"
+          }
+        },
+        "required": ["type", "methodID", "refresh", "access", "expires"],
+        "additionalProperties": false
+      },
+      "Credential.Key": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["key"]
+          },
+          "key": {
+            "type": "string"
+          },
+          "metadata": {
+            "type": "object"
+          }
+        },
+        "required": ["type", "key"],
+        "additionalProperties": false
+      },
+      "Credential.External": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["external"]
+          },
+          "methodID": {
+            "$ref": "#/components/schemas/Integration.MethodID"
+          },
+          "metadata": {
+            "type": "object"
+          }
+        },
+        "required": ["type", "methodID"],
         "additionalProperties": false
       },
       "Session.Message.Assistant.Text": {

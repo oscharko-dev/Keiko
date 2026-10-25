@@ -521,10 +521,30 @@ function declaredSettings(value: unknown, declared: ReadonlySet<string>, prefix 
 
 /** Every setting the native profile composes, at its widest: images, Full access and both MCP kinds. */
 function composedNativeSettings(): readonly string[] {
+  // #3903 AC3: a remote server with a validated issuer, with the operator's client and scope.
+  const oauthServer: McpServerDefinition = {
+    ...REMOTE_SERVER,
+    name: "issues",
+    transport: {
+      kind: "remote",
+      url: "https://issues.example.test/mcp",
+      oauth: { issuer: "https://login.example.test", clientId: "keiko", scope: "issues.read" },
+    },
+  };
   const mcp = openCodeNativeMcpAdmission({
-    servers: [LOCAL_SERVER, REMOTE_SERVER],
+    servers: [LOCAL_SERVER, REMOTE_SERVER, oauthServer],
     mode: "autonomous-delivery",
     home: "/state/home",
+    validations: new Map([
+      [
+        "issues",
+        {
+          ok: true,
+          metadataUrl: "https://login.example.test/.well-known/oauth-authorization-server",
+          authorizationEndpoint: "https://login.example.test/authorize",
+        },
+      ],
+    ]),
   }).config;
   const geometry = {
     contextWindowTokens: 32_768,

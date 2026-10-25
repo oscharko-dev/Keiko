@@ -1,7 +1,12 @@
 import type {
+  CodingWorkbenchMcpAuthorizationStart,
+  CodingWorkbenchMcpAuthorizationState,
+  CodingWorkbenchMcpServer,
   CodingWorkbenchRuntimeEvent,
   CodingWorkbenchRuntimeQuestionsResponse,
 } from "@oscharko-dev/keiko-contracts";
+import { parseCodingWorkbenchMcpAuthorizationRequest } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
+import type { OpenCodeMcpAuthorizationRunPort } from "./opencodeNativeMcpAuthorization.js";
 import { CODING_WORKBENCH_TASK_INTENT_MAX_CHARS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import {
   isCodingWorkbenchAgent,
@@ -679,6 +684,53 @@ export class CodingRuntimeOperationCoordinator {
       return Promise.resolve(undefined);
     }
     return this.deps.taskDispatcher.commands?.(runId, correlationId) ?? Promise.resolve(undefined);
+  }
+
+  /**
+   * A live run's MCP servers and the human's OAuth authorization of one (#3903 AC3). Nothing here
+   * consumes a revision or a request id: a listing reads, and an attempt changes only the runtime's
+   * own integration state; the server, its validated issuer and the URL are the run port's to check.
+   */
+  public listMcpServers(
+    runId: string,
+    correlationId?: string,
+  ): Promise<readonly CodingWorkbenchMcpServer[] | undefined> {
+    const port = this.liveMcpAuthorization(runId);
+    return port?.listMcpServers(runId, correlationId) ?? Promise.resolve(undefined);
+  }
+
+  public startMcpAuthorization(
+    runId: string,
+    body: unknown,
+    correlationId?: string,
+  ): Promise<CodingWorkbenchMcpAuthorizationStart> {
+    const port = this.liveMcpAuthorization(runId);
+    const request = parseCodingWorkbenchMcpAuthorizationRequest(body, false);
+    if (port === undefined || request === undefined)
+      return Promise.resolve({ outcome: "refused", reason: "unavailable" });
+    return port.startMcpAuthorization(runId, request.server, correlationId);
+  }
+
+  public mcpAuthorizationStatus(
+    runId: string,
+    body: unknown,
+    cancel: boolean,
+    correlationId?: string,
+  ): Promise<CodingWorkbenchMcpAuthorizationState> {
+    const port = this.liveMcpAuthorization(runId);
+    const request = parseCodingWorkbenchMcpAuthorizationRequest(body, true);
+    if (port === undefined || request?.attemptId === undefined)
+      return Promise.resolve("unavailable");
+    const { server, attemptId } = request;
+    return cancel
+      ? port.cancelMcpAuthorization(runId, server, attemptId, correlationId)
+      : port.mcpAuthorizationStatus(runId, server, attemptId, correlationId);
+  }
+
+  private liveMcpAuthorization(runId: string): OpenCodeMcpAuthorizationRunPort | undefined {
+    const current = this.deps.current();
+    if (current?.runId !== runId || !FOLLOW_UP_STATES.has(current.state)) return undefined;
+    return this.deps.taskDispatcher.mcpAuthorization;
   }
 
   /**

@@ -9,7 +9,7 @@ export const OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM =
   "keiko-opencode-protocol-surface-v2" as const;
 /** The current pin's structural digest; per-version values live in `opencodeRuntimeVersions.ts`. */
 export const OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256 =
-  "4aecad34bc371f218d25084ef92a758ff9981470463fe79ca35b772efe752ef5";
+  "b9e03ab8df20bee7616fd796897c74fe2ca9f77d4fe8177d3391afa66c49e48a";
 
 /**
  * The admitted operations as `METHOD path`. The complete service inventory
@@ -49,6 +49,13 @@ export const OPENCODE_V2_APPROVED_ENDPOINTS = [
   // #3901 AC3: the run's background shell jobs keep it alive and are stopped with it.
   "GET /api/shell",
   "DELETE /api/shell/{id}",
+  // #3903 AC3: an admitted MCP server's status, the runtime's own OAuth authorization of it, and
+  // the seeding of the credential Keiko keeps between runs. Keiko never lists or reads credentials.
+  "GET /api/mcp",
+  "POST /api/integration/{integrationID}/connect/oauth",
+  "GET /api/integration/{integrationID}/connect/oauth/{attemptID}",
+  "DELETE /api/integration/{integrationID}/connect/oauth/{attemptID}",
+  "POST /api/credential",
 ] as const;
 
 export interface OpenCodeProtocolSurfaceProjection {

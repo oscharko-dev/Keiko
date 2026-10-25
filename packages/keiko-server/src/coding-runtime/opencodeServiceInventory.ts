@@ -601,15 +601,14 @@ export const OPENCODE_SERVICE_DISPOSITIONS = flatten<
       "integration.get",
       "integration.connect.key",
       "integration.connect.external",
-      "integration.oauth.connect",
-      "integration.oauth.status",
-      "integration.oauth.cancel",
+      // `integration.oauth.connect`, `.status` and `.cancel` are admitted (#3903 AC3) for an
+      // admitted MCP server's own OAuth; `complete` would take a code pasted outside that flow.
       "integration.oauth.complete",
       "integration.command.connect",
       "integration.command.status",
       "integration.command.cancel",
+      // `credential.create` is admitted (#3903 AC3): Keiko seeds the MCP credential it keeps.
       "credential.list",
-      "credential.create",
       "credential.update",
       "credential.remove",
       "credential.activate",
@@ -630,8 +629,8 @@ export const OPENCODE_SERVICE_DISPOSITIONS = flatten<
     "not-yet-implemented",
     3903,
     ["C04"],
+    // `mcp.list` is admitted (#3903 AC3): an admitted server's status and its integration.
     [
-      "mcp.list",
       "experimental.mcp.add",
       "experimental.mcp.remove",
       "experimental.mcp.connect",
@@ -770,6 +769,11 @@ export const OPENCODE_CONFIGURATION_DISPOSITIONS = flatten<OpenCodeConfiguration
       "mcp.servers.*",
       "mcp.servers.*.command",
       "mcp.servers.*.oauth",
+      // #3903 AC3: the validated metadata document of the operator's expected issuer, with the
+      // operator's public client id and scope from the registry.
+      "mcp.servers.*.oauth.auth_server_metadata_url",
+      "mcp.servers.*.oauth.client_id",
+      "mcp.servers.*.oauth.scope",
       "mcp.servers.*.type",
       "mcp.servers.*.url",
     ],
@@ -937,12 +941,9 @@ export const OPENCODE_CONFIGURATION_DISPOSITIONS = flatten<OpenCodeConfiguration
     [
       "mcp.servers.*.headers",
       "mcp.servers.*.headers.*",
-      "mcp.servers.*.oauth.auth_server_metadata_url",
       "mcp.servers.*.oauth.callback_port",
-      "mcp.servers.*.oauth.client_id",
       "mcp.servers.*.oauth.client_secret",
       "mcp.servers.*.oauth.redirect_uri",
-      "mcp.servers.*.oauth.scope",
     ],
   ),
   refused(

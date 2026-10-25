@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 362,
-  "completeClassCount": 362,
+  "supportedClassCount": 365,
+  "completeClassCount": 365,
   "completeness": "complete",
   "classes": [
     {
@@ -8669,6 +8669,205 @@
             "causeChain": false
           },
           "proofIds": ["coding-runtime.run.issue-context-attached.emitted-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "coding-runtime-mcp-authorization",
+      "requirementContract": "coding-runtime-mcp-authorization",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["state"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": ["coding-runtime.mcp-authorization"],
+        "end": [],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "coding-runtime.mcp-authorization",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["coding-runtime.mcp-authorization"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "coding-runtime.mcp-authorization",
+          "owner": "keiko-server",
+          "category": "security",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "action",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "causeChain",
+              "type": "string-array",
+              "dataClass": "error-kind",
+              "required": false
+            },
+            {
+              "name": "frames",
+              "type": "string-array",
+              "dataClass": "opaque-id",
+              "required": false
+            },
+            {
+              "name": "needsAuthorizationCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "runId",
+              "type": "string",
+              "dataClass": "opaque-id",
+              "required": true
+            },
+            {
+              "name": "serverCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "serverSha256",
+              "type": "string",
+              "dataClass": "digest",
+              "required": false
+            },
+            {
+              "name": "urlRefusal",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            }
+          ],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "digest",
+            "error-kind",
+            "loss-state",
+            "opaque-id"
+          ],
+          "frameCauseEvidence": {
+            "frames": true,
+            "causeChain": true
+          },
+          "proofIds": ["coding-runtime.mcp-authorization.emitted-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "coding-runtime-mcp-credentials",
+      "requirementContract": "coding-runtime-mcp-credentials",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["state"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": ["coding-runtime.mcp-credentials"],
+        "end": [],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "coding-runtime.mcp-credentials",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["coding-runtime.mcp-credentials"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "coding-runtime.mcp-credentials",
+          "owner": "keiko-server",
+          "category": "security",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "action",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "causeChain",
+              "type": "string-array",
+              "dataClass": "error-kind",
+              "required": false
+            },
+            {
+              "name": "count",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "droppedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "frames",
+              "type": "string-array",
+              "dataClass": "opaque-id",
+              "required": false
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "runId",
+              "type": "string",
+              "dataClass": "opaque-id",
+              "required": true
+            }
+          ],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "error-kind",
+            "loss-state",
+            "opaque-id"
+          ],
+          "frameCauseEvidence": {
+            "frames": true,
+            "causeChain": true
+          },
+          "proofIds": ["coding-runtime.mcp-credentials.emitted-line"],
           "replayReferences": [],
           "missingObligations": []
         }
@@ -32855,6 +33054,100 @@
             "causeChain": false
           },
           "proofIds": ["skills.workflow.attached.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "mcp-oauth-issuer",
+      "requirementContract": "mcp-oauth-issuer",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["state"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": ["mcp.oauth.issuer.checked"],
+        "end": [],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "mcp.oauth.issuer.checked",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["mcp.oauth.issuer.checked"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "mcp.oauth.issuer.checked",
+          "owner": "keiko-server",
+          "category": "security",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "candidate",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "causeChain",
+              "type": "string-array",
+              "dataClass": "error-kind",
+              "required": false
+            },
+            {
+              "name": "durationMs",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "frames",
+              "type": "string-array",
+              "dataClass": "opaque-id",
+              "required": false
+            },
+            {
+              "name": "httpStatus",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "serverSha256",
+              "type": "string",
+              "dataClass": "digest",
+              "required": true
+            }
+          ],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "digest",
+            "error-kind",
+            "loss-state",
+            "opaque-id"
+          ],
+          "frameCauseEvidence": {
+            "frames": true,
+            "causeChain": true
+          },
+          "proofIds": ["mcp.oauth.issuer.checked.emitted-line"],
           "replayReferences": [],
           "missingObligations": []
         }

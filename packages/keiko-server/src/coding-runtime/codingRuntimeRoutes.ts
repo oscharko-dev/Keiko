@@ -8,6 +8,7 @@ import type {
   CodingWorkbenchModelRefusalReason,
   CodingWorkbenchRuntimeApprovalReviewChannelPayload,
   CodingWorkbenchRuntimeFailureCode,
+  CodingWorkbenchRuntimeMcpChannelPayload,
   CodingWorkbenchRuntimeQuestionsChannelPayload,
   CodingWorkbenchRuntimeReadiness,
   CodingWorkbenchRuntimeResearchChannelPayload,
@@ -28,6 +29,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import { unpairedCodingWorkbenchRuntimeApprovalReviewChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-approval-review";
 import { unpairedCodingWorkbenchRuntimeQuestionsChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions";
+import { unpairedCodingWorkbenchRuntimeMcpChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 import { unpairedCodingWorkbenchRuntimeSkillsChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-skill-discovery";
 import { unpairedCodingWorkbenchRuntimeResearchChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-research";
 import {
@@ -74,6 +76,7 @@ const RUNTIME_MUTATION_OPERATIONS = [
   "inbox",
   "answer",
   "reject",
+  "mcp-authorization",
 ] as const;
 
 type RuntimeMutationOperationName = (typeof RUNTIME_MUTATION_OPERATIONS)[number];
@@ -819,6 +822,85 @@ export async function handleCodingRuntimeCommands(
   return { status: 200, body: payload };
 }
 
+/**
+ * A live native run's MCP servers (#3903 AC3): each admitted server's name, a closed status and
+ * whether it authorizes through OAuth. The runtime's error text never leaves the server. Reading
+ * consumes no revision and no request id; an unpaired caller receives the one constant payload
+ * before any run resolution, so this read is never an existence oracle (ADR-0141 D6).
+ */
+export async function handleCodingRuntimeMcpServers(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const read = runChannelRead(ctx, deps, unpairedCodingWorkbenchRuntimeMcpChannelPayload);
+  if (isRouteResult(read)) return read;
+  const servers = await read.orchestrator.listMcpServers(read.runId, ctx.correlationId);
+  const payload: CodingWorkbenchRuntimeMcpChannelPayload = {
+    session: "active",
+    ...(servers === undefined ? {} : { servers }),
+  };
+  return { status: 200, body: payload };
+}
+
+/**
+ * The human's OAuth authorization of one MCP server of a live native run (#3903 AC3): start the
+ * runtime's own attempt and receive its validated authorization URL, then read or cancel that
+ * attempt. Each is a paired-session action on the run's own runtime; the run port admits only a
+ * server with a validated issuer and only a URL that addresses that issuer's endpoint.
+ */
+export function handleCodingRuntimeMcpAuthorization(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  return mcpAuthorizationRoute(ctx, deps, (orchestrator, runId, body) =>
+    orchestrator.startMcpAuthorization(runId, body, ctx.correlationId),
+  );
+}
+
+export function handleCodingRuntimeMcpAuthorizationStatus(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  return mcpAuthorizationRoute(ctx, deps, async (orchestrator, runId, body) => ({
+    state: await orchestrator.mcpAuthorizationStatus(runId, body, false, ctx.correlationId),
+  }));
+}
+
+export function handleCodingRuntimeMcpAuthorizationCancel(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  return mcpAuthorizationRoute(ctx, deps, async (orchestrator, runId, body) => ({
+    state: await orchestrator.mcpAuthorizationStatus(runId, body, true, ctx.correlationId),
+  }));
+}
+
+// The paired-session gate and the run's existence, as every runtime mutation; the orchestrator
+// reads the body, so a malformed one is refused with the same closed answer as an unknown server.
+async function mcpAuthorizationRoute(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  act: (orchestrator: CodingRuntimeOrchestrator, runId: string, body: unknown) => Promise<unknown>,
+): Promise<RouteResult> {
+  const runId = ctx.params.runId;
+  const denied = requireMutationAuthority(ctx, deps, runId);
+  if (denied !== undefined) {
+    logMutationRefusal(deps, ctx, "mcp-authorization", undefined, "authority-resolution-failed");
+    return denied;
+  }
+  const required = requireRuntime(deps, ctx.correlationId);
+  if (isRouteResult(required)) return required;
+  if (runId === undefined || !required.orchestrator.getSnapshot(runId))
+    return notFound(ctx.correlationId);
+  return withBody(
+    async () => ({
+      status: 200,
+      body: await act(required.orchestrator, runId, await readBody(ctx.req)),
+    }),
+    ctx.correlationId,
+  );
+}
+
 // Required-question surface. Question text is browser-rendered untrusted content: it never enters
 // snapshots, diagnostics, evidence, or persistence. The answer/reject operations bind to the
 // server-owned revision through the same serialized coordinator as every other mutation.
@@ -1158,6 +1240,26 @@ export const CODING_RUNTIME_ROUTE_GROUP: readonly RouteDefinition[] = [
     method: "GET",
     pattern: "/api/coding-workbench/runtime/runs/:runId/commands",
     handler: handleCodingRuntimeCommands,
+  },
+  {
+    method: "GET",
+    pattern: "/api/coding-workbench/runtime/runs/:runId/mcp",
+    handler: handleCodingRuntimeMcpServers,
+  },
+  {
+    method: "POST",
+    pattern: "/api/coding-workbench/runtime/runs/:runId/mcp/authorization",
+    handler: handleCodingRuntimeMcpAuthorization,
+  },
+  {
+    method: "POST",
+    pattern: "/api/coding-workbench/runtime/runs/:runId/mcp/authorization/status",
+    handler: handleCodingRuntimeMcpAuthorizationStatus,
+  },
+  {
+    method: "POST",
+    pattern: "/api/coding-workbench/runtime/runs/:runId/mcp/authorization/cancel",
+    handler: handleCodingRuntimeMcpAuthorizationCancel,
   },
   {
     method: "POST",

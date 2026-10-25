@@ -5256,7 +5256,16 @@ export type {
 } from "./git-journey-validation.js";
 
 export type {
+  CodingWorkbenchMcpAuthorizationRefusal,
+  CodingWorkbenchMcpAuthorizationRequest,
+  CodingWorkbenchMcpAuthorizationStart,
+  CodingWorkbenchMcpAuthorizationState,
+  CodingWorkbenchMcpAuthorizationStatus,
+  CodingWorkbenchMcpServer,
+  CodingWorkbenchMcpServerStatus,
+  CodingWorkbenchRuntimeMcpChannelPayload,
   McpLocalTransport,
+  McpRemoteOAuth,
   McpRemoteTransport,
   McpServerDefinition,
   McpServerRegistryParse,

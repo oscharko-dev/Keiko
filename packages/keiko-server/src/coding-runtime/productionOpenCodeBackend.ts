@@ -62,8 +62,10 @@ import {
 import { exactWorkspaceRead, type SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
 import { createDevLaneRuntimeProcessBackend } from "./devLaneRuntimeProcessBackend.js";
 import { createNativeRuntimeProcessBackend } from "./nativeRuntimeProcessBackend.js";
+import type { McpOAuthCredentialStore } from "../mcp/mcpOAuthCredentialStore.js";
 import {
   createOpenCodeRuntimeComposition,
+  type McpOAuthIssuerPort,
   type OpenCodeRuntimeCompositionInput,
 } from "./opencodeRuntimeComposition.js";
 import { createOpenCodeRuntimeQuestionPort } from "./productionCodingRuntimeQuestionPort.js";
@@ -189,6 +191,10 @@ export interface ProductionOpenCodeBackendInput {
   readonly externalReadRoots?: string | undefined;
   /** The operator's MCP server registry for one native run (`mcpServerRegistry.ts`). */
   readonly mcpServers?: ((correlationId: string) => readonly McpServerDefinition[]) | undefined;
+  /** Validates a remote MCP server's expected OAuth issuer before a native launch (#3903 AC3). */
+  readonly mcpOAuthIssuer?: McpOAuthIssuerPort | undefined;
+  /** Keeps an admitted MCP server's OAuth credential between native runs (#3903 AC3). */
+  readonly mcpCredentials?: McpOAuthCredentialStore | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly activityLog?: ServerLogSink | undefined;
   readonly historyCapture?: CodingRuntimeHistory["captureNative"] | undefined;
@@ -444,6 +450,8 @@ function nativeRunInputs(
   | "operatorPlugins"
   | "repositoryInstructions"
   | "mcpServers"
+  | "mcpOAuthIssuer"
+  | "mcpCredentials"
   | "nativeWorktrees"
   | "externalReadRoots"
 > {
@@ -455,6 +463,8 @@ function nativeRunInputs(
       : { operatorPlugins: operatorPluginsFor(input, run, input.operatorPluginRegistry) }),
     repositoryInstructions: repositoryInstructionsFor(input, run),
     ...(input.mcpServers === undefined ? {} : { mcpServers: input.mcpServers }),
+    ...(input.mcpOAuthIssuer === undefined ? {} : { mcpOAuthIssuer: input.mcpOAuthIssuer }),
+    ...(input.mcpCredentials === undefined ? {} : { mcpCredentials: input.mcpCredentials }),
     ...(input.nativeWorktrees === undefined ? {} : { nativeWorktrees: input.nativeWorktrees }),
     externalReadRoots: nativeExternalReadRoots(input, run),
   };

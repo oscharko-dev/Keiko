@@ -23,6 +23,13 @@ import type { ServerDiagnosticSink } from "../diagnostics-log.js";
 import type { ServerLogSink } from "../observability/index.js";
 import { loadMcpServerRegistry } from "../mcp/mcpServerRegistry.js";
 import { loadOperatorPluginRegistry } from "./opencodeOperatorPlugins.js";
+import { validateMcpOAuthIssuer } from "../mcp/mcpOAuthIssuer.js";
+import {
+  createMcpOAuthCredentialStore,
+  type McpOAuthCredentialStore,
+} from "../mcp/mcpOAuthCredentialStore.js";
+import type { McpOAuthIssuerPort } from "./opencodeRuntimeComposition.js";
+import { resolveOutboundHttpEgressConfig } from "@oscharko-dev/keiko-model-gateway";
 import { KEIKO_CODING_EXTERNAL_READ_ROOTS_ENV } from "./opencodeNativeExternalRoots.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import type { CodingRuntimeEvidenceAggregator } from "./codingRuntimeEvidenceAggregator.js";
@@ -239,6 +246,28 @@ function repositoryOptions(env: NodeJS.ProcessEnv): {
   };
 }
 
+// #3903 AC3: a remote server's expected OAuth issuer is validated before each native launch,
+// through Keiko's own egress configuration (proxy and CA) with loopback targets refused; its
+// credential is kept in Keiko's vault, which opens on first use, never at activation.
+function mcpOAuthPorts(input: ProductionOpenCodeActivationInput): {
+  readonly mcpOAuthIssuer: McpOAuthIssuerPort;
+  readonly mcpCredentials: McpOAuthCredentialStore;
+} {
+  return {
+    mcpOAuthIssuer: (server, oauth, correlationId, signal) =>
+      validateMcpOAuthIssuer(server, oauth, {
+        egress: resolveOutboundHttpEgressConfig(undefined, input.env),
+        activityLog: input.activityLog ?? processServerLogSink(),
+        correlationId,
+        signal,
+      }),
+    mcpCredentials: createMcpOAuthCredentialStore({
+      stateDir: input.runtimeStateDir,
+      env: input.env,
+    }),
+  };
+}
+
 function activatedPorts(
   input: ProductionOpenCodeActivationInput,
   portable: ResolvedPortableOpenCodeRuntime,
@@ -258,6 +287,7 @@ function activatedPorts(
       ...repositoryOptions(input.env),
       // #3903 AC2: the operator's digest-pinned plugins, read at each native run's prepare.
       operatorPluginRegistry: () => loadOperatorPluginRegistry(input.runtimeStateDir),
+      ...mcpOAuthPorts(input),
       // #3903 (C04): the operator's MCP server registry, read once for each native run at its
       // launch; the run's sandbox and its runtime binding see the same load.
       mcpServers: memoizedPerRun(

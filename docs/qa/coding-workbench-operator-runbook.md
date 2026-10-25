@@ -286,6 +286,26 @@ Changes apply to the next run.
 - A local server's command starts with an absolute executable; arguments and variables are
   literal. `{env:…}` and `{file:…}` placeholders are refused, and no secret belongs in this file.
 - A remote server (`"kind": "remote"`, an `https` URL) is used only in Full access.
+- A remote server that needs OAuth names the authorization server it expects:
+  `"transport": { "kind": "remote", "url": "https://issues.example.com/mcp", "oauth": { "issuer":
+"https://login.example.com", "clientId": "keiko", "scope": "issues.read" } }`. `issuer` is
+  required and must be exactly the issuer identifier the authorization server publishes (https, no
+  query or fragment, no trailing slash added); `clientId` and `scope` are optional (without a
+  client id the runtime registers a client dynamically). Never put a client secret or a token in
+  the file. Before each run Keiko reads that issuer's metadata (RFC 8414, then OpenID Connect) and
+  leaves the server out unless the document names exactly that issuer, uses https endpoints and
+  offers PKCE (S256); `mcp.oauth.issuer.checked` says why (`issuer-mismatch`, `insecure-endpoint`,
+  `pkce-unsupported`, `registration-unavailable`, `not-found`, `unreadable`).
+- To authorize, open the run's **MCP servers** section in the Workbench and choose **Authorize** on
+  the server that needs it, then **Open the authorization page**: it opens in a new tab, and the
+  runtime completes the sign-in on its own loopback callback. Keiko shows the page only when it
+  belongs to the expected issuer; otherwise the attempt is withdrawn and the section says so.
+  The credential is kept, sealed, in Keiko's state directory (`credentials/`, key from
+  `KEIKO_MCP_OAUTH_CREDENTIALS_KEY`, the macOS keychain or a key file) and used by later runs
+  without asking again. Changing the server's URL, issuer or client id in the registry requires a
+  new authorization. The Activity Log records `coding-runtime.mcp-authorization` (started,
+  status, refused with a closed reason) and `coding-runtime.mcp-credentials` (seeded, kept,
+  removed), with counts only.
 - Every tool the model may call is named with `read` or `write`. A tool the file does not name is
   refused. Ask for approval asks before an MCP tool; Supervised workspace allows `read` tools and
   asks before `write` tools; Full access allows both.

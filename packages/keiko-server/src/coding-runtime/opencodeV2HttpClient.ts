@@ -226,6 +226,29 @@ export interface OpenCodeV2Shell {
   readonly sessionId?: string | undefined;
 }
 
+/**
+ * An MCP server of the runtime's `mcp.list` answer (#3903 AC3): its name, a closed status and the
+ * integration that holds its credential. The runtime's own error text is never read.
+ */
+export interface OpenCodeV2McpServer {
+  readonly name: string;
+  readonly status: OpenCodeV2McpStatus;
+  readonly integrationId?: string | undefined;
+}
+
+export type OpenCodeV2McpStatus = "connected" | "needs-auth" | "failed" | "disabled" | "pending";
+
+/** The runtime's own OAuth attempt for an MCP integration (`Integration.Attempt`). */
+export interface OpenCodeV2OAuthAttempt {
+  readonly attemptId: string;
+  readonly url: string;
+  /** `auto`: the runtime's loopback callback completes the attempt. */
+  readonly mode: "auto" | "code";
+  readonly expiresAtMs: number;
+}
+
+export type OpenCodeV2OAuthAttemptStatus = "pending" | "complete" | "failed" | "expired";
+
 export interface OpenCodeV2FileDiff {
   readonly file: string;
   readonly status: "added" | "deleted" | "modified";
@@ -381,6 +404,44 @@ export interface OpenCodeV2HttpClient {
   shells(directory: string, signal?: AbortSignal): Promise<readonly OpenCodeV2Shell[]>;
   /** Stops and removes one shell command (`DELETE /api/shell/{id}`, `shell.remove`). */
   removeShell(id: string, directory: string, signal?: AbortSignal): Promise<void>;
+  /** The MCP servers the runtime holds for the workspace (`GET /api/mcp`, `mcp.list`). */
+  mcpServers(directory: string, signal?: AbortSignal): Promise<readonly OpenCodeV2McpServer[]>;
+  /**
+   * Starts the runtime's own OAuth authorization of one MCP integration
+   * (`POST /api/integration/{integrationID}/connect/oauth`, `integration.oauth.connect`): it
+   * registers a client if needed, prepares PKCE and listens on its loopback callback.
+   */
+  connectMcpOAuth(
+    integrationId: string,
+    directory: string,
+    signal?: AbortSignal,
+  ): Promise<OpenCodeV2OAuthAttempt>;
+  /** The attempt's state (`GET .../connect/oauth/{attemptID}`, `integration.oauth.status`). */
+  mcpOAuthStatus(
+    integrationId: string,
+    attemptId: string,
+    directory: string,
+    signal?: AbortSignal,
+  ): Promise<OpenCodeV2OAuthAttemptStatus>;
+  /** Abandons the attempt (`DELETE .../connect/oauth/{attemptID}`, `integration.oauth.cancel`). */
+  cancelMcpOAuth(
+    integrationId: string,
+    attemptId: string,
+    directory: string,
+    signal?: AbortSignal,
+  ): Promise<void>;
+  /**
+   * Hands the runtime an MCP credential Keiko kept from an earlier run (`POST /api/credential`,
+   * `credential.create`). Keiko never lists or reads the runtime's credentials through its API.
+   */
+  createMcpCredential(
+    credential: {
+      readonly integrationId: string;
+      readonly label: string;
+      readonly value: Readonly<Record<string, unknown>>;
+    },
+    signal?: AbortSignal,
+  ): Promise<void>;
   permissions(signal?: AbortSignal): Promise<readonly Readonly<Record<string, unknown>>[]>;
   /** The producer's plugins and their load state (`GET /api/plugin`, operation `plugin.list`). */
   plugins(signal?: AbortSignal): Promise<readonly Readonly<Record<string, unknown>>[]>;
@@ -899,6 +960,83 @@ function runningShells(entries: readonly Readonly<Record<string, unknown>>[]): O
   });
 }
 
+const INTEGRATION_ID = /^mcp_[0-9a-f]{16}$/u;
+const ATTEMPT_ID = /^con_[A-Za-z0-9]{1,64}$/u;
+const MCP_SERVER_NAME = /^[a-z][a-z0-9]{0,30}$/u;
+const MCP_STATUSES: Readonly<Record<string, OpenCodeV2McpStatus>> = {
+  connected: "connected",
+  needs_auth: "needs-auth",
+  needs_client_registration: "needs-auth",
+  failed: "failed",
+  disabled: "disabled",
+  pending: "pending",
+};
+const OAUTH_ATTEMPT_STATUSES: ReadonlySet<string> = new Set([
+  "pending",
+  "complete",
+  "failed",
+  "expired",
+]);
+
+function safeIntegrationId(value: string): string {
+  if (!INTEGRATION_ID.test(value)) throw new Error("opencode-v2-integration-invalid");
+  return value;
+}
+
+function safeAttemptId(value: string): string {
+  if (!ATTEMPT_ID.test(value)) throw new Error("opencode-v2-attempt-invalid");
+  return value;
+}
+
+/** The well-named servers of a `mcp.list` answer; an unknown status reads as `failed`. */
+function mcpServerEntries(
+  entries: readonly Readonly<Record<string, unknown>>[],
+): OpenCodeV2McpServer[] {
+  return entries.flatMap((entry) => {
+    if (typeof entry.name !== "string" || !MCP_SERVER_NAME.test(entry.name)) return [];
+    const reported = record(entry.status)?.status;
+    const status = (typeof reported === "string" ? MCP_STATUSES[reported] : undefined) ?? "failed";
+    const integrationId =
+      typeof entry.integrationID === "string" && INTEGRATION_ID.test(entry.integrationID)
+        ? entry.integrationID
+        : undefined;
+    return [
+      { name: entry.name, status, ...(integrationId === undefined ? {} : { integrationId }) },
+    ];
+  });
+}
+
+function oauthAttempt(value: Readonly<Record<string, unknown>>): OpenCodeV2OAuthAttempt {
+  const { attemptID, url, mode } = value;
+  const expires = record(value.time)?.expires;
+  if (
+    typeof attemptID !== "string" ||
+    !ATTEMPT_ID.test(attemptID) ||
+    typeof url !== "string" ||
+    url.length > 8_192 ||
+    (mode !== "auto" && mode !== "code") ||
+    typeof expires !== "number" ||
+    !Number.isSafeInteger(expires)
+  )
+    throw new Error("opencode-v2-envelope-invalid");
+  return { attemptId: attemptID, url, mode, expiresAtMs: expires };
+}
+
+function oauthAttemptStatus(
+  value: Readonly<Record<string, unknown>>,
+): OpenCodeV2OAuthAttemptStatus {
+  const status = value.status;
+  if (typeof status !== "string" || !OAUTH_ATTEMPT_STATUSES.has(status))
+    throw new Error("opencode-v2-envelope-invalid");
+  return status as OpenCodeV2OAuthAttemptStatus;
+}
+
+function oauthAttemptPath(integrationId: string, attemptId: string, directory: string): string {
+  return `/api/integration/${safeIntegrationId(integrationId)}/connect/oauth/${safeAttemptId(
+    attemptId,
+  )}?${locationQuery(directory)}`;
+}
+
 function safeFormId(value: string): string {
   if (!/^frm_[A-Za-z0-9_-]{1,251}$/u.test(value)) throw new Error("opencode-v2-form-invalid");
   return value;
@@ -1226,6 +1364,54 @@ export function createOpenCodeV2HttpClient(
         "DELETE",
         `/api/shell/${safeShellId(id)}?${locationQuery(directory)}`,
         undefined,
+        signal,
+      );
+    },
+    mcpServers: async (directory, signal) =>
+      mcpServerEntries(
+        arrayEnvelope(
+          await request("GET", `/api/mcp?${locationQuery(directory)}`, undefined, signal),
+        ),
+      ),
+    connectMcpOAuth: async (integrationId, directory, signal) =>
+      oauthAttempt(
+        objectEnvelope(
+          await request(
+            "POST",
+            `/api/integration/${safeIntegrationId(integrationId)}/connect/oauth?${locationQuery(directory)}`,
+            { methodID: integrationId },
+            signal,
+          ),
+        ),
+      ),
+    mcpOAuthStatus: async (integrationId, attemptId, directory, signal) =>
+      oauthAttemptStatus(
+        objectEnvelope(
+          await request(
+            "GET",
+            oauthAttemptPath(integrationId, attemptId, directory),
+            undefined,
+            signal,
+          ),
+        ),
+      ),
+    cancelMcpOAuth: async (integrationId, attemptId, directory, signal): Promise<void> => {
+      await request(
+        "DELETE",
+        oauthAttemptPath(integrationId, attemptId, directory),
+        undefined,
+        signal,
+      );
+    },
+    createMcpCredential: async (credential, signal): Promise<void> => {
+      await request(
+        "POST",
+        "/api/credential",
+        {
+          integrationID: safeIntegrationId(credential.integrationId),
+          label: credential.label,
+          value: credential.value,
+        },
         signal,
       );
     },

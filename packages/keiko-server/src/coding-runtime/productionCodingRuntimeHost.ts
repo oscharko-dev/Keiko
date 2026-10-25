@@ -1,3 +1,4 @@
+import type { OpenCodeMcpAuthorizationRunPort } from "./opencodeNativeMcpAuthorization.js";
 import type { CodingWorkbenchAgent } from "@oscharko-dev/keiko-contracts";
 import type {
   CodingWorkbenchCommand,
@@ -132,6 +133,11 @@ export interface CodingRuntimeTaskDispatcher {
   readonly mentions?:
     | ((runId: string, correlationId?: string) => Promise<CodingRuntimeMentionables | undefined>)
     | undefined;
+  /**
+   * A live native run's MCP servers and the human's OAuth authorization of one (#3903 AC3). Each
+   * call names its run; one that offers none answers `undefined` or `unavailable`. Never rejects.
+   */
+  readonly mcpAuthorization?: OpenCodeMcpAuthorizationRunPort | undefined;
   /**
    * Undoes the run's newest turn or restores an undo (B3, S04). Absent for a runtime without
    * snapshots, which then refuses the operation as the request's own fault. Never rejects.

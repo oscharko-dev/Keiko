@@ -170,6 +170,7 @@ import {
   type CodingWorkbenchRunWorkspaceBinding,
 } from "./useCodingWorkbenchRunWorkspace";
 import { ApprovedSkillsDisclosure } from "./CodingWorkbenchApprovedSkills";
+import { CodingWorkbenchMcpServers } from "./CodingWorkbenchMcpServers";
 import { ResearchGrantChip } from "./CodingWorkbenchResearchGrant";
 import { CodingWorkbenchTrustAffordance } from "./CodingWorkbenchTrustAffordance";
 import { requestGatewayModelCatalogRefresh } from "../shared/gatewaySetupBus";
@@ -1866,6 +1867,10 @@ function WorkbenchColumns({
               status={skills.status}
               skills={skills.skills ?? undefined}
               retry={skills.retry}
+            />
+            <CodingWorkbenchMcpServers
+              runId={state.run.value?.runId}
+              revision={state.run.value?.revision}
             />
             <Timeline
               active={runIsActive}

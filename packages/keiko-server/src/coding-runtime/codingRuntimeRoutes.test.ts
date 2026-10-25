@@ -338,6 +338,10 @@ describe("coding runtime routes", () => {
         "POST /api/coding-workbench/runtime/runs/:runId/revert",
         "GET /api/coding-workbench/runtime/runs/:runId/revert",
         "GET /api/coding-workbench/runtime/runs/:runId/commands",
+        "GET /api/coding-workbench/runtime/runs/:runId/mcp",
+        "POST /api/coding-workbench/runtime/runs/:runId/mcp/authorization",
+        "POST /api/coding-workbench/runtime/runs/:runId/mcp/authorization/status",
+        "POST /api/coding-workbench/runtime/runs/:runId/mcp/authorization/cancel",
         "POST /api/coding-workbench/runtime/runs/:runId/inbox",
         "GET /api/coding-workbench/runtime/runs/:runId/inbox",
         "POST /api/coding-workbench/runtime/runs/:runId/research/revoke",
@@ -2160,6 +2164,14 @@ function spyingRuntime(channel: UiHandlerDeps["codingAppSessionChannel"]): Spyin
     listMentions: () => {
       invoked.push("listMentions");
       return Promise.resolve(undefined);
+    },
+    startMcpAuthorization: () => {
+      invoked.push("startMcpAuthorization");
+      return Promise.resolve({ outcome: "refused", reason: "unavailable" });
+    },
+    mcpAuthorizationStatus: () => {
+      invoked.push("mcpAuthorizationStatus");
+      return Promise.resolve("unavailable");
     },
     submitInboxAction: settle("submitInboxAction"),
     listInbox: () => {

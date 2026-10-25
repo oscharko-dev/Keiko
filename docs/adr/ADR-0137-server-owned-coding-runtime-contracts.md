@@ -1116,7 +1116,8 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   starts through `/usr/bin/env -i` with a fixed `PATH`, the run's private `HOME` and its own
   variables only. It runs inside the run's sandbox; its executable's install prefix is opened for
   reading under the same toolchain rule as the launcher's `PATH`, and the supervisor's resource
-  coalition reaps it with the tree. A remote server is written only for Full access, with OAuth off.
+  coalition reaps it with the tree. A remote server is written only for Full access; without an
+  operator-named issuer its OAuth stays off.
   The runtime exposes MCP tools through Code Mode, and every nested call reaches the policy as
   `<server>_<tool>`: a named local `read` tool is a vetted command (Ask for approval asks,
   Supervised workspace and Full access allow), a named local `write` tool a risky command (Full
@@ -1124,8 +1125,42 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   admitted servers are reads of those servers. Every other MCP action stays unsupported. Evidence:
   `mcp.registry.loaded` (consumer, state, counts, a digest of the admitted definitions, the closed
   reason) and `coding-runtime.native-policy.decided` with `permission: mcp`; no server, tool, path
-  or URL enters the log. Open: credentials for MCP servers, MCP prompts as commands, OAuth, a
+  or URL enters the log. Open: static credentials (headers, client secrets) for MCP servers, a
   registry editor and the first consumer outside Coding.
+- **A remote MCP server authorizes through the runtime's own OAuth, bound to the operator's expected
+  issuer (#3903 AC3).** A remote registry entry may carry `oauth: { issuer, clientId?, scope? }`:
+  the issuer identifier the operator expects (RFC 8414 §2, https, no query or fragment, compared as
+  written) and an optional public client. No client secret or token belongs in the registry. Before
+  each native launch Keiko reads that issuer's metadata from the RFC 8414 and OpenID Connect
+  well-known locations through its own egress configuration, without redirects and with loopback
+  and private targets refused (`mcpOAuthIssuer.ts`), and admits the server only when the document
+  names exactly that issuer, its endpoints are https, PKCE S256 is offered and a client can be had
+  (the operator's id, or dynamic registration). Each location read is one
+  `mcp.oauth.issuer.checked` line. The binding then sets `oauth.auth_server_metadata_url` to the
+  validated location (with `client_id` and `scope` from the registry), so the runtime never follows
+  the MCP server's protected-resource metadata to another authorization server; a server whose
+  issuer did not validate is left out with its tools. The authorization itself is the runtime's:
+  `integration.oauth.connect` registers a client if needed, prepares PKCE and listens on its own
+  loopback callback. Keiko starts it only for an admitted server of a live native run, at the
+  human's request in the Workbench, and hands out the authorization URL only when it addresses the
+  validated authorization endpoint with the code flow, an S256 challenge, a state, the server as the
+  RFC 8707 resource, a `127.0.0.1` callback and the operator's client (`mcpOAuthAuthorizationUrl.ts`);
+  any other attempt is cancelled at once (`url-refused`). The human opens the page in a new tab; the
+  runtime's callback completes the attempt (`coding-runtime.mcp-authorization`). A completed
+  credential is kept in Keiko's AES-256-GCM vault under the state directory
+  (`mcpOAuthCredentialStore.ts`, keyed through `KEIKO_MCP_OAUTH_CREDENTIALS_KEY`, the keychain or a
+  keyfile, opened on first use), bound to the server's name, URL, issuer and client, and only when
+  the runtime recorded exactly that server URL and issuer for it. A later native run is seeded with
+  it once it is ready (`credential.create`; the runtime connects without a prompt), and when a run
+  ends its reaped runtime's credentials are kept again (a refresh may have rotated them) and removed
+  from its database before retention, so a retained session never carries a token and the
+  retention audit's `credential-present` refusal stays a hard guard (`coding-runtime.mcp-credentials`).
+  Keiko never lists or reads credentials through the runtime's API. The staged 2.1.4 executable
+  proves it under the real native Seatbelt wrapper (`opencodeNativeRepositoryItems.real.test.ts`):
+  the server lists as needing authorization, the validated page completes through the runtime's
+  callback and the server connects, the sealed credential seeds the next run without a second
+  authorization, the reaped database holds no credential afterwards, and a page for another
+  endpoint is withheld.
 - **The plan tool is on (#3897, parity row T19, owner decision of 2026-10-24).** The pinned 2.1.4
   producer registers its plan tool `todowrite` only under `experimental.todo` (off by default in
   standalone), so a native run used to show no plan card. `createNativeOpenCodeV2Config` sets the

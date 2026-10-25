@@ -5,6 +5,7 @@ import {
   mcpToolAction,
   mcpToolActions,
   parseMcpServerRegistry,
+  type McpServerDefinition,
 } from "./mcp-servers.js";
 
 const LOCAL = {
@@ -23,11 +24,44 @@ const REMOTE = {
   tools: { find: "read" },
 };
 
+const ISSUER = "https://login.example.test/tenant";
+
+function withOAuth(oauth: Readonly<Record<string, unknown>>): unknown {
+  return { ...REMOTE, transport: { ...REMOTE.transport, oauth } };
+}
+
 function registry(...servers: unknown[]): unknown {
   return { schemaVersion: 1, servers };
 }
 
 describe("the MCP server registry (#3903)", () => {
+  it("admits a remote server's expected issuer, public client and scope exactly as written", () => {
+    const oauth = {
+      issuer: ISSUER,
+      clientId: "keiko-workbench",
+      scope: "tracker.read tracker.write",
+    };
+    expect(parseMcpServerRegistry(registry(withOAuth(oauth)))).toEqual({
+      ok: true,
+      servers: [
+        expect.objectContaining({
+          transport: { kind: "remote", url: "https://tracker.example.test/mcp", oauth },
+        }) as unknown,
+      ],
+    });
+    // An issuer is compared as written (RFC 8414 §3.3), so no trailing slash is added to it.
+    const [server] = (
+      parseMcpServerRegistry(registry(withOAuth({ issuer: ISSUER }))) as {
+        readonly servers: readonly McpServerDefinition[];
+      }
+    ).servers;
+    expect(server?.transport).toEqual({
+      kind: "remote",
+      url: "https://tracker.example.test/mcp",
+      oauth: { issuer: ISSUER },
+    });
+  });
+
   it("admits a local and a remote server with their declared tools", () => {
     const parsed = parseMcpServerRegistry(registry(LOCAL, REMOTE));
     expect(parsed).toEqual({
@@ -132,6 +166,16 @@ describe("the MCP server registry (#3903)", () => {
       { ...REMOTE, transport: { kind: "remote", url: "https://tracker.test/{env:PATH}" } },
     ],
     ["headers on a remote server", { ...REMOTE, transport: { ...REMOTE.transport, headers: {} } }],
+    ["an http issuer", withOAuth({ issuer: "http://login.example.test" })],
+    ["an issuer with a query", withOAuth({ issuer: "https://login.example.test/?tenant=a" })],
+    ["an issuer with a fragment", withOAuth({ issuer: "https://login.example.test/#a" })],
+    ["an issuer with credentials", withOAuth({ issuer: "https://u:p@login.example.test" })],
+    ["a placeholder in the issuer", withOAuth({ issuer: "https://login.test/{env:HOME}" })],
+    ["a client secret", withOAuth({ issuer: ISSUER, clientSecret: "s" })],
+    ["a client id with a space", withOAuth({ issuer: ISSUER, clientId: "a b" })],
+    ["a client id placeholder", withOAuth({ issuer: ISSUER, clientId: "{env:CLIENT}" })],
+    ["a scope with a quote", withOAuth({ issuer: ISSUER, scope: 'read "all"' })],
+    ["OAuth without an issuer", withOAuth({ clientId: "keiko" })],
     ["an unknown transport", { ...LOCAL, transport: { kind: "sse", url: "https://x.test" } }],
   ])("refuses a server with %s", (_label, server) => {
     expect(parseMcpServerRegistry(registry(server))).toEqual({

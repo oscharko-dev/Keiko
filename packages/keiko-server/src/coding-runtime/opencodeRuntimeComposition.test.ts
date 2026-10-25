@@ -36,7 +36,10 @@ import {
 import { retainedSessionKey, type RetainedSessionStore } from "./opencodeSessionRetention.js";
 import { EditorAgentAuthorityRegistry } from "../editor/agentAuthorityRegistry.js";
 import { createInMemoryRuntimeCapabilityStore } from "./runtimeCapabilityStore.js";
-import type { CodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts";
+import type {
+  CodingWorkbenchRuntimeEvent,
+  McpServerDefinition,
+} from "@oscharko-dev/keiko-contracts";
 import { EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS } from "@oscharko-dev/keiko-contracts/runtime/tools";
@@ -96,6 +99,17 @@ import {
 import type { SecureWorkspaceNativeFileIO } from "./secureWorkspaceTextRead.js";
 import type { CodingRuntimeRepositoryItemsPort } from "./codingRuntimeRepositoryItems.js";
 import type { OperatorPluginsPort } from "./opencodeOperatorPlugins.js";
+import type { McpOAuthIssuerPort } from "./opencodeRuntimeComposition.js";
+
+const ISSUER = "https://login.example.test";
+const METADATA_URL = `${ISSUER}/.well-known/oauth-authorization-server`;
+const OAUTH_SERVER: McpServerDefinition = {
+  name: "issues",
+  description: undefined,
+  enabled: true,
+  transport: { kind: "remote", url: "https://issues.example.test/mcp", oauth: { issuer: ISSUER } },
+  tools: { find: "read" },
+};
 import { NATIVE_SESSION_LOCATION_MAX } from "./opencodeNativeSessionTree.js";
 import type { NativeWorktreeProvisionPort } from "./opencodeNativeWorktree.js";
 import { createProductionAcceptedInitializationAuthority } from "./productionCodingRuntimeResolver.js";
@@ -687,6 +701,9 @@ interface StartBridgeControl {
   readonly repositoryItems?: CodingRuntimeRepositoryItemsPort;
   /** The operator plugin admission the composition is handed (#3903 AC2). */
   readonly operatorPlugins?: OperatorPluginsPort;
+  /** The operator's MCP registry and the issuer validation of its OAuth servers (#3903 AC3). */
+  readonly mcpServers?: () => readonly McpServerDefinition[];
+  readonly mcpOAuthIssuer?: McpOAuthIssuerPort;
   /** The native AGENTS.md copy the composition is handed (#3900 AC3). */
   readonly repositoryInstructions?: InstructionsCopyPort;
   /** The managed owner for an approved Code Mode `worktree_create` (#3903 AC4). */
@@ -1004,6 +1021,16 @@ function optionalRepositoryItems(control: StartBridgeControl | undefined): {
   readonly repositoryItems?: CodingRuntimeRepositoryItemsPort;
 } {
   return control?.repositoryItems === undefined ? {} : { repositoryItems: control.repositoryItems };
+}
+
+function optionalMcp(control: StartBridgeControl | undefined): {
+  readonly mcpServers?: () => readonly McpServerDefinition[];
+  readonly mcpOAuthIssuer?: McpOAuthIssuerPort;
+} {
+  return {
+    ...(control?.mcpServers === undefined ? {} : { mcpServers: control.mcpServers }),
+    ...(control?.mcpOAuthIssuer === undefined ? {} : { mcpOAuthIssuer: control.mcpOAuthIssuer }),
+  };
 }
 
 function optionalOperatorPlugins(control: StartBridgeControl | undefined): {
@@ -1446,6 +1473,7 @@ async function startBridgeFixture(
     ...optionalActivityLog(control),
     ...optionalRepositoryItems(control),
     ...optionalOperatorPlugins(control),
+    ...optionalMcp(control),
     ...optionalRepositoryInstructions(control),
     ...optionalNativeWorktrees(control),
     ...optionalToolResultCorrelation(control),
@@ -1673,7 +1701,7 @@ describe("unmounted OpenCode runtime composition", () => {
   // eslint-disable-next-line complexity -- this audit fixture keeps lifecycle evidence co-located.
   it("prepares secret-safe state before spawn, proves the private runtime, and disposes only after reap", async () => {
     expect(OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256).toBe(
-      "4aecad34bc371f218d25084ef92a758ff9981470463fe79ca35b772efe752ef5",
+      "b9e03ab8df20bee7616fd796897c74fe2ca9f77d4fe8177d3391afa66c49e48a",
     );
     const root = tempDir("keiko-opencode-composition-");
     const workspaceRoot = join(root, "workspace");
@@ -3938,6 +3966,44 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
           true,
         );
         expect(order).toEqual(["admit", "spawn"]);
+      } finally {
+        await fixture.stop();
+      }
+    },
+  );
+
+  // #3903 AC3: a remote server with an operator-named issuer is validated before the launch and
+  // bound to the validated metadata document; one whose issuer did not validate is left out.
+  it.each([
+    [true, { ok: true, metadataUrl: METADATA_URL, authorizationEndpoint: `${ISSUER}/authorize` }],
+    [false, { ok: false, reason: "issuer-mismatch" }],
+  ] as const)(
+    "validates the issuer of a remote MCP server before the launch (admitted %s)",
+    async (admitted, validation) => {
+      const calls: unknown[][] = [];
+      const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+        mode: "autonomous-delivery",
+        readToolProfile: () => "native",
+        mcpServers: () => [OAUTH_SERVER],
+        mcpOAuthIssuer: (...call) => {
+          calls.push(call.slice(0, 3));
+          return Promise.resolve(validation);
+        },
+      });
+      try {
+        expect(calls).toEqual([["issues", { issuer: ISSUER }, FIXTURE_RUN_ID]]);
+        const binding = JSON.parse(fixture.preparation.env.OPENCODE_CONFIG_CONTENT ?? "null") as {
+          readonly mcp?: { readonly servers?: Readonly<Record<string, unknown>> };
+        };
+        expect(binding.mcp?.servers?.issues).toEqual(
+          admitted
+            ? {
+                type: "remote",
+                url: "https://issues.example.test/mcp",
+                oauth: { auth_server_metadata_url: METADATA_URL },
+              }
+            : undefined,
+        );
       } finally {
         await fixture.stop();
       }

@@ -23,6 +23,7 @@ import type {
   McpServerDefinition,
   VerificationKind,
 } from "@oscharko-dev/keiko-contracts";
+import type { McpRemoteOAuth } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 import {
   encodeSecureWorkspaceNativeResponse,
   encodeSecureWorkspaceNativeDirectory,
@@ -112,6 +113,7 @@ import {
 import {
   bindContinuedSession,
   retainSettledRun,
+  runtimeDatabasePath,
   seedContinuation,
   withoutBaseline,
   type RunContinuation,
@@ -180,9 +182,18 @@ import {
   type OpenCodeNativeMcpGrants,
 } from "./opencodeNativePolicy.js";
 import {
+  mcpServersNeedingIssuerValidation,
   openCodeNativeMcpAdmission,
+  type AdmittedMcpOAuthServer,
   type OpenCodeNativeMcpAdmission,
 } from "./opencodeNativeMcp.js";
+import type { McpOAuthIssuerValidation } from "../mcp/mcpOAuthIssuer.js";
+import type { McpOAuthCredentialStore } from "../mcp/mcpOAuthCredentialStore.js";
+import { harvestMcpCredentials, seedMcpCredentials } from "./opencodeNativeMcpCredentials.js";
+import {
+  createOpenCodeMcpAuthorizationRunPort,
+  type OpenCodeMcpAuthorizationRunPort,
+} from "./opencodeNativeMcpAuthorization.js";
 import {
   OPENCODE_CODE_MODE_SESSION_MOVE,
   OPENCODE_CODE_MODE_WORKTREE_CREATE,
@@ -448,6 +459,14 @@ interface VerifiedPortableInput {
 /** Terminal states for a tool action's safe-activity settlement (#2386). */
 type OpenCodeToolSettlementState = "succeeded" | "failed" | "denied" | "cancelled";
 
+/** Validates one remote MCP server's expected issuer; never rejects (`mcpOAuthIssuer.ts`). */
+export type McpOAuthIssuerPort = (
+  server: string,
+  oauth: McpRemoteOAuth,
+  correlationId: string,
+  signal: AbortSignal | undefined,
+) => Promise<McpOAuthIssuerValidation>;
+
 export interface OpenCodeRuntimeCompositionInput {
   /** Captured server-only observation profile. Absent retains the direct native history contract. */
   readonly toolProfile?: OpenCodeToolProfile | undefined;
@@ -495,6 +514,16 @@ export interface OpenCodeRuntimeCompositionInput {
    * `mcpServerRegistry.ts`); absent admits no MCP server.
    */
   readonly mcpServers?: ((correlationId: string) => readonly McpServerDefinition[]) | undefined;
+  /**
+   * Validates a remote MCP server's operator-named OAuth issuer before a native launch (#3903 AC3,
+   * `mcpOAuthIssuer.ts`); absent, no server with OAuth is admitted.
+   */
+  readonly mcpOAuthIssuer?: McpOAuthIssuerPort | undefined;
+  /**
+   * Keeps an admitted MCP server's OAuth credential between native runs (#3903 AC3,
+   * `mcpOAuthCredentialStore.ts`); absent, every run authorizes anew.
+   */
+  readonly mcpCredentials?: McpOAuthCredentialStore | undefined;
   readonly portable: VerifiedPortableInput;
   readonly stateBaseRoot: string;
   readonly contextGeometry: OpenCodeContextGeometry;
@@ -681,6 +710,11 @@ export interface OpenCodeRunPort {
    * turn that runs as a command is submitted through `submitTask` with the command in its inputs.
    */
   readonly listCommands?: OpenCodeCommandsRunPort["listCommands"] | undefined;
+  /**
+   * A native run's MCP servers and the human's authorization of one that uses OAuth (#3903 AC3,
+   * `opencodeNativeMcpAuthorization.ts`). Absent for the mapped profiles.
+   */
+  readonly mcpAuthorization?: OpenCodeMcpAuthorizationRunPort | undefined;
   /** The run's subagents and skills for the `@` and `$` menus (S15, #3906). */
   readonly listMentions?: OpenCodeCommandsRunPort["listMentions"] | undefined;
   readonly admitCommand?: OpenCodeCommandsRunPort["admitCommand"] | undefined;
@@ -738,6 +772,8 @@ interface PreparedRun {
   readonly launchMode: string | undefined;
   /** The MCP tools and servers this run's binding admitted (`opencodeNativeMcp.ts`). */
   mcp?: OpenCodeNativeMcpGrants | undefined;
+  /** The admitted servers that authorize through OAuth, with their validated issuer (#3903 AC3). */
+  mcpOAuth?: ReadonlyMap<string, AdmittedMcpOAuthServer> | undefined;
   readonly password: string;
   readonly configDigest: string;
   readonly verification: PortableSidecarRuntimeVerification;
@@ -841,6 +877,8 @@ export function createOpenCodeRuntimeComposition(
     runPort: createRunPort(runs, input.diagnostics, input.activityLog, approvals, {
       selectableAgents: openCodeSelectableAgents(toolProfile),
       snapshots: toolProfile === "native",
+      mcpAuthorization: toolProfile === "native",
+      mcpCredentials: input.mcpCredentials,
       promptInputs: openCodePromptInputs(toolProfile),
       refreshInstructions: (run) =>
         refreshRepositoryInstructions(input, run.runId, run.runRoot, undefined),
@@ -935,9 +973,34 @@ interface RunPortProfile {
   readonly selectableAgents: readonly CodingWorkbenchAgent[];
   /** Native runs record turn images for undo. */
   readonly snapshots: boolean;
+  /** Native runs offer their MCP servers' OAuth authorization (#3903 AC3). */
+  readonly mcpAuthorization: boolean;
+  /** Where an authorized MCP server's credential is kept between runs. */
+  readonly mcpCredentials: McpOAuthCredentialStore | undefined;
   readonly promptInputs: OpenCodePromptInputsRunPort["promptInputs"];
   /** Refreshes a native run's AGENTS.md copy before a turn (#3900 AC3); true when it changed. */
   readonly refreshInstructions: (run: ReadyRun) => Promise<boolean>;
+}
+
+// #3903 AC3: a native run's MCP authorization; a completed one keeps its credential at once.
+function nativeMcpAuthorization(
+  readyRun: ReadyRunLookup,
+  activityLog: ServerLogSink | undefined,
+  profile: RunPortProfile,
+): Pick<OpenCodeRunPort, "mcpAuthorization"> {
+  if (!profile.mcpAuthorization) return {};
+  return {
+    mcpAuthorization: createOpenCodeMcpAuthorizationRunPort({
+      readyRun,
+      activityLog,
+      onAuthorized: (authorized): void => {
+        const run = readyRun(authorized.runId);
+        if (run === undefined) return;
+        const database = runtimeDatabasePath(run.runRoot);
+        harvestMcpCredentials(run, database, profile.mcpCredentials, activityLog, false);
+      },
+    }),
+  };
 }
 
 function createRunPort(
@@ -968,6 +1031,7 @@ function createRunPort(
     ),
     selectableAgents,
     ...createOpenCodeCommandsRunPort({ readyRun, capabilities: promptInputs, activityLog }),
+    ...nativeMcpAuthorization(readyRun, activityLog, profile),
     ...deliveryPorts,
     abortTask,
     ...(snapshots
@@ -1561,6 +1625,7 @@ async function disposeRun(
     if (!currentDisposal(runs, run, signal)) return false;
     await run.runtimeAdapter?.close();
     if (!currentDisposal(runs, run, signal)) return false;
+    keepMcpCredentials(input, run);
     retainOnDispose(input, run, settlement);
     rmSync(run.runRoot, { recursive: true, force: true });
     runs.delete(runId);
@@ -1569,6 +1634,13 @@ async function disposeRun(
     recordCompositionDisposalFailure(input.diagnostics, runId, "run-dispose", error);
     return false;
   }
+}
+
+// The reaped runtime's MCP credentials are kept and removed before its database is retained.
+function keepMcpCredentials(input: OpenCodeRuntimeCompositionInput, run: PreparedRun): void {
+  if ((run.mcpOAuth?.size ?? 0) === 0) return;
+  const database = runtimeDatabasePath(run.runRoot);
+  harvestMcpCredentials(run, database, input.mcpCredentials, input.activityLog, true);
 }
 
 /**
@@ -1668,7 +1740,8 @@ async function materializePrepare(
   createPrivateState(runRoot);
   const continuation = seedRun(input, request, runRoot);
   await bridge.start();
-  const { profile, mcp } = runLaunchProfile(input, request, runRoot);
+  const validations = await mcpIssuerValidations(input, request);
+  const { profile, mcp } = runLaunchProfile(input, request, runRoot, validations);
   const config = profile.config;
   materialize(runRoot, config, createGeneratedOpenCodeV2Plugins(input.toolProfile));
   await admitRepositoryItems(input, request, runRoot);
@@ -1697,11 +1770,12 @@ function runLaunchProfile(
   input: OpenCodeRuntimeCompositionInput,
   request: OpenCodeLifecyclePrepareRequest,
   runRoot: string,
+  validations: ReadonlyMap<string, McpOAuthIssuerValidation>,
 ): {
   readonly profile: Extract<OpenCodeLaunchProfileResult, { readonly ok: true }>;
-  readonly mcp: OpenCodeNativeMcpGrants | undefined;
+  readonly mcp: OpenCodeNativeMcpAdmission | undefined;
 } {
-  const mcp = nativeMcpAdmission(input, request, runRoot);
+  const mcp = nativeMcpAdmission(input, request, runRoot, validations);
   const profile = buildOpenCodeLaunchProfile({
     executable: request.executablePath,
     stateRoot: runRoot,
@@ -1714,7 +1788,7 @@ function runLaunchProfile(
       : {}),
   });
   if (!profile.ok) throw new Error("profile-invalid");
-  return { profile, mcp: mcp?.grants };
+  return { profile, mcp };
 }
 
 /** A native run's MCP servers from the operator's registry; none for a mapped profile. */
@@ -1722,13 +1796,43 @@ function nativeMcpAdmission(
   input: OpenCodeRuntimeCompositionInput,
   request: OpenCodeLifecyclePrepareRequest,
   runRoot: string,
+  validations: ReadonlyMap<string, McpOAuthIssuerValidation>,
 ): OpenCodeNativeMcpAdmission | undefined {
   if (input.toolProfile !== "native" || input.mcpServers === undefined) return undefined;
   return openCodeNativeMcpAdmission({
     servers: input.mcpServers(request.runId),
     mode: request.env.KEIKO_CODING_MODE,
     home: join(runRoot, "home"),
+    validations,
   });
+}
+
+/**
+ * The issuer of every remote server the run would use with OAuth, validated before the launch
+ * (#3903 AC3). The checks run concurrently and each records its own lines; a server whose issuer
+ * did not validate, or that no validator could check, is left out of the binding.
+ */
+async function mcpIssuerValidations(
+  input: OpenCodeRuntimeCompositionInput,
+  request: OpenCodeLifecyclePrepareRequest,
+): Promise<ReadonlyMap<string, McpOAuthIssuerValidation>> {
+  if (input.toolProfile !== "native" || input.mcpServers === undefined) return new Map();
+  const validate = input.mcpOAuthIssuer;
+  const servers = mcpServersNeedingIssuerValidation(
+    input.mcpServers(request.runId),
+    request.env.KEIKO_CODING_MODE,
+  );
+  if (validate === undefined || servers.length === 0) return new Map();
+  const checked = await Promise.all(
+    servers.map(
+      async (server) =>
+        [
+          server.name,
+          await validate(server.name, server.transport.oauth, request.runId, request.signal),
+        ] as const,
+    ),
+  );
+  return new Map(checked);
 }
 
 /** JVMs on Darwin ignore TMPDIR for their OS-derived default. Keep their temp files inside the
@@ -1920,7 +2024,7 @@ function persistPreparedRun(
   configDigest: string,
   extras: {
     readonly continuation?: RunContinuation | undefined;
-    readonly mcp?: OpenCodeNativeMcpGrants | undefined;
+    readonly mcp?: OpenCodeNativeMcpAdmission | undefined;
     readonly media?: PromptMediaInputs | undefined;
   } = {},
 ): void {
@@ -1935,7 +2039,10 @@ function persistPreparedRun(
     request.env.KEIKO_CODING_MODE,
   );
   if (continuation !== undefined) run.continuation = continuation;
-  if (mcp !== undefined) run.mcp = mcp;
+  if (mcp !== undefined) {
+    run.mcp = mcp.grants;
+    run.mcpOAuth = mcp.oauth;
+  }
   if (media !== undefined) run.media = media;
   runs.set(request.runId, run);
 }
@@ -2131,6 +2238,9 @@ async function handshake(
       await adapter.close();
       return { ok: false, reason: "preparation-missing" };
     }
+    // #3903 AC3: a kept MCP credential reaches the attested runtime before its first turn.
+    if (input.mcpCredentials !== undefined)
+      await seedMcpCredentials(run, client, input.mcpCredentials, input.activityLog);
     run.runtimeAdapter = adapter;
     run.client = client;
     run.sessionId = result.sessionId;

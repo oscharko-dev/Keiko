@@ -19,6 +19,8 @@ const MCP_ENVIRONMENT_NAME = /^[A-Z][A-Z0-9_]{0,63}$/u;
 const MCP_ARGUMENT_MAX = 32;
 const MCP_TEXT_MAX = 1024;
 const MCP_ENVIRONMENT_MAX = 16;
+const MCP_OAUTH_CLIENT_ID = /^[\x21-\x7E]{1,256}$/u;
+const MCP_OAUTH_SCOPE = /^[\x21\x23-\x5B\x5D-\x7E]+(?: [\x21\x23-\x5B\x5D-\x7E]+)*$/u;
 
 /** What a tool may do, as the operator declares it; the consumer maps it onto its own policy. */
 export type McpToolRisk = "read" | "write";
@@ -31,9 +33,25 @@ export interface McpLocalTransport {
   readonly environment: Readonly<Record<string, string>>;
 }
 
+/**
+ * OAuth for a remote server (#3903 AC3). The operator names the authorization server's issuer
+ * identifier it expects (RFC 8414 §2: an https URL without query or fragment, compared exactly as
+ * written); a consumer admits the server only once that issuer's own metadata names the same
+ * issuer. The client is public: an id the operator registered, or none for dynamic registration.
+ * No client secret or token belongs in this registry.
+ */
+export interface McpRemoteOAuth {
+  readonly issuer: string;
+  readonly clientId?: string;
+  /** Space-separated scope tokens (RFC 6749 §3.3). */
+  readonly scope?: string;
+}
+
 export interface McpRemoteTransport {
   readonly kind: "remote";
   readonly url: string;
+  /** Absent: the server is used without OAuth. */
+  readonly oauth?: McpRemoteOAuth;
 }
 
 export interface McpServerDefinition {
@@ -107,13 +125,52 @@ function environmentOf(value: unknown): Readonly<Record<string, string>> | undef
 }
 
 function remoteTransport(value: Json): McpRemoteTransport | undefined {
-  if (!hasOnlyKeys(value, ["kind", "url"]) || !boundedText(value.url) || !literal(value.url))
+  if (
+    !hasOnlyKeys(value, ["kind", "url", "oauth"]) ||
+    !boundedText(value.url) ||
+    !literal(value.url)
+  )
     return undefined;
   // Parsed without a catch: a malformed URL is a refused definition, not a failure.
   if (!URL.canParse(value.url)) return undefined;
   const url = new URL(value.url);
   if (url.protocol !== "https:" || url.username !== "" || url.password !== "") return undefined;
-  return { kind: "remote", url: url.href };
+  if (value.oauth === undefined) return { kind: "remote", url: url.href };
+  const oauth = oauthOf(value.oauth);
+  return oauth === undefined ? undefined : { kind: "remote", url: url.href, oauth };
+}
+
+function oauthOf(value: unknown): McpRemoteOAuth | undefined {
+  const oauth = record(value);
+  if (oauth === undefined || !hasOnlyKeys(oauth, ["issuer", "clientId", "scope"])) return undefined;
+  const { issuer, clientId, scope } = oauth;
+  if (typeof issuer !== "string" || !issuerIdentifier(issuer)) return undefined;
+  if (!optionalMatch(clientId, MCP_OAUTH_CLIENT_ID) || !optionalMatch(scope, MCP_OAUTH_SCOPE))
+    return undefined;
+  return {
+    issuer,
+    ...(clientId === undefined ? {} : { clientId: clientId as string }),
+    ...(scope === undefined ? {} : { scope: scope as string }),
+  };
+}
+
+// Absent, or a bounded literal of the grammar.
+function optionalMatch(value: unknown, grammar: RegExp): boolean {
+  if (value === undefined) return true;
+  return (
+    typeof value === "string" &&
+    value.length <= MCP_TEXT_MAX &&
+    grammar.test(value) &&
+    literal(value)
+  );
+}
+
+// RFC 8414 §2: an https URL with no query and no fragment, kept exactly as written.
+function issuerIdentifier(value: string): boolean {
+  if (!boundedText(value) || !literal(value) || /[?#\s]/u.test(value) || !URL.canParse(value))
+    return false;
+  const url = new URL(value);
+  return url.protocol === "https:" && url.username === "" && url.password === "";
 }
 
 function transportOf(value: unknown): McpLocalTransport | McpRemoteTransport | undefined {
@@ -209,4 +266,189 @@ export function mcpToolActions(
     }
   }
   return actions;
+}
+
+// ---- The Coding Workbench's view of a run's MCP servers (#3903 AC3) ----------------------------
+//
+// A live native run lists the servers its binding admitted, each with a closed status, and lets the
+// human authorize one that uses OAuth: Keiko starts the runtime's own authorization, shows the URL
+// only once it addresses the validated endpoint of the operator's expected issuer, and reports the
+// attempt's state. The runtime's error text never reaches the browser.
+
+export const CODING_WORKBENCH_MCP_SERVER_STATUSES = [
+  "connected",
+  "needs-authorization",
+  "failed",
+  "disabled",
+  "pending",
+] as const;
+export type CodingWorkbenchMcpServerStatus = (typeof CODING_WORKBENCH_MCP_SERVER_STATUSES)[number];
+
+export interface CodingWorkbenchMcpServer {
+  readonly name: string;
+  readonly status: CodingWorkbenchMcpServerStatus;
+  readonly authorization: "oauth" | "none";
+}
+
+/** `GET /runs/:runId/mcp`: absent `servers` when the run offers none; unpaired, the one constant. */
+export interface CodingWorkbenchRuntimeMcpChannelPayload {
+  readonly session: "active" | "unpaired";
+  readonly servers?: readonly CodingWorkbenchMcpServer[] | undefined;
+}
+
+export function unpairedCodingWorkbenchRuntimeMcpChannelPayload(): CodingWorkbenchRuntimeMcpChannelPayload {
+  return { session: "unpaired" };
+}
+
+export const CODING_WORKBENCH_MCP_AUTHORIZATION_REFUSALS = [
+  "unavailable",
+  "not-oauth",
+  "connected",
+  "url-refused",
+  "failed",
+] as const;
+export type CodingWorkbenchMcpAuthorizationRefusal =
+  (typeof CODING_WORKBENCH_MCP_AUTHORIZATION_REFUSALS)[number];
+
+/** `POST /runs/:runId/mcp/authorization` answer. */
+export type CodingWorkbenchMcpAuthorizationStart =
+  | {
+      readonly outcome: "started";
+      readonly attemptId: string;
+      /** The validated authorization URL the human opens in their browser. */
+      readonly authorizationUrl: string;
+      readonly expiresAtMs: number;
+    }
+  | { readonly outcome: "refused"; readonly reason: CodingWorkbenchMcpAuthorizationRefusal };
+
+export const CODING_WORKBENCH_MCP_AUTHORIZATION_STATES = [
+  "pending",
+  "complete",
+  "failed",
+  "expired",
+  "cancelled",
+  "unavailable",
+] as const;
+export type CodingWorkbenchMcpAuthorizationState =
+  (typeof CODING_WORKBENCH_MCP_AUTHORIZATION_STATES)[number];
+
+/** `POST /runs/:runId/mcp/authorization/status` and `/cancel` answer. */
+export interface CodingWorkbenchMcpAuthorizationStatus {
+  readonly state: CodingWorkbenchMcpAuthorizationState;
+}
+
+/** The request of every authorization route: the server, and for status and cancel its attempt. */
+export interface CodingWorkbenchMcpAuthorizationRequest {
+  readonly server: string;
+  readonly attemptId?: string | undefined;
+}
+
+const MCP_ATTEMPT_ID = /^con_[A-Za-z0-9]{1,64}$/u;
+const MCP_AUTHORIZATION_URL_MAX = 8_192;
+
+export function isMcpServerName(value: unknown): value is string {
+  return typeof value === "string" && MCP_SERVER_NAME.test(value);
+}
+
+export function isMcpAuthorizationAttemptId(value: unknown): value is string {
+  return typeof value === "string" && MCP_ATTEMPT_ID.test(value);
+}
+
+function isOneOfValues<T extends string>(value: unknown, values: readonly T[]): value is T {
+  return typeof value === "string" && (values as readonly string[]).includes(value);
+}
+
+function workbenchServer(value: unknown): CodingWorkbenchMcpServer | undefined {
+  const entry = record(value);
+  if (entry === undefined || !hasOnlyKeys(entry, ["name", "status", "authorization"]))
+    return undefined;
+  const { name, status, authorization } = entry;
+  if (!isMcpServerName(name) || !isOneOfValues(status, CODING_WORKBENCH_MCP_SERVER_STATUSES))
+    return undefined;
+  if (authorization !== "oauth" && authorization !== "none") return undefined;
+  return { name, status, authorization };
+}
+
+/** The channel payload, or undefined when it is not exactly one: the browser trusts nothing else. */
+export function parseCodingWorkbenchRuntimeMcpChannelPayload(
+  value: unknown,
+): CodingWorkbenchRuntimeMcpChannelPayload | undefined {
+  const payload = record(value);
+  if (payload === undefined || !hasOnlyKeys(payload, ["session", "servers"])) return undefined;
+  if (payload.session === "unpaired")
+    return payload.servers === undefined ? { session: "unpaired" } : undefined;
+  if (payload.session !== "active") return undefined;
+  if (payload.servers === undefined) return { session: "active" };
+  const servers = workbenchServers(payload.servers);
+  return servers === undefined ? undefined : { session: "active", servers };
+}
+
+// A bounded list of well-formed servers with distinct names, or undefined.
+function workbenchServers(value: unknown): readonly CodingWorkbenchMcpServer[] | undefined {
+  if (!Array.isArray(value) || value.length > MCP_SERVER_MAX) return undefined;
+  const servers: CodingWorkbenchMcpServer[] = [];
+  for (const entry of value as readonly unknown[]) {
+    const server = workbenchServer(entry);
+    if (server === undefined || servers.some(({ name }) => name === server.name)) return undefined;
+    servers.push(server);
+  }
+  return servers;
+}
+
+export function parseCodingWorkbenchMcpAuthorizationStart(
+  value: unknown,
+): CodingWorkbenchMcpAuthorizationStart | undefined {
+  const answer = record(value);
+  if (answer?.outcome === "refused")
+    return hasOnlyKeys(answer, ["outcome", "reason"]) &&
+      isOneOfValues(answer.reason, CODING_WORKBENCH_MCP_AUTHORIZATION_REFUSALS)
+      ? { outcome: "refused", reason: answer.reason }
+      : undefined;
+  return answer?.outcome === "started" ? startedAuthorization(answer) : undefined;
+}
+
+function startedAuthorization(answer: Json): CodingWorkbenchMcpAuthorizationStart | undefined {
+  if (!hasOnlyKeys(answer, ["outcome", "attemptId", "authorizationUrl", "expiresAtMs"]))
+    return undefined;
+  const { attemptId, authorizationUrl, expiresAtMs } = answer;
+  const valid =
+    isMcpAuthorizationAttemptId(attemptId) &&
+    httpsAuthorizationUrl(authorizationUrl) &&
+    typeof expiresAtMs === "number" &&
+    Number.isSafeInteger(expiresAtMs);
+  return valid ? { outcome: "started", attemptId, authorizationUrl, expiresAtMs } : undefined;
+}
+
+function httpsAuthorizationUrl(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length <= MCP_AUTHORIZATION_URL_MAX &&
+    URL.canParse(value) &&
+    new URL(value).protocol === "https:"
+  );
+}
+
+export function parseCodingWorkbenchMcpAuthorizationStatus(
+  value: unknown,
+): CodingWorkbenchMcpAuthorizationStatus | undefined {
+  const answer = record(value);
+  return answer !== undefined &&
+    hasOnlyKeys(answer, ["state"]) &&
+    isOneOfValues(answer.state, CODING_WORKBENCH_MCP_AUTHORIZATION_STATES)
+    ? { state: answer.state }
+    : undefined;
+}
+
+/** The server's reading of a route body; undefined refuses the request as malformed. */
+export function parseCodingWorkbenchMcpAuthorizationRequest(
+  value: unknown,
+  requireAttempt: boolean,
+): CodingWorkbenchMcpAuthorizationRequest | undefined {
+  const body = record(value);
+  if (body === undefined || !hasOnlyKeys(body, ["server", "attemptId"])) return undefined;
+  if (!isMcpServerName(body.server)) return undefined;
+  if (body.attemptId === undefined) return requireAttempt ? undefined : { server: body.server };
+  return isMcpAuthorizationAttemptId(body.attemptId)
+    ? { server: body.server, attemptId: body.attemptId }
+    : undefined;
 }

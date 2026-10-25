@@ -7,6 +7,9 @@ import type {
   CodingWorkbenchAgent,
   CodingWorkbenchAuxiliaryStatus,
   CodingWorkbenchIssueBinding,
+  CodingWorkbenchMcpAuthorizationStart,
+  CodingWorkbenchMcpAuthorizationState,
+  CodingWorkbenchMcpServer,
   CodingWorkbenchMode,
   CodingWorkbenchModelRefusalReason,
   CodingWorkbenchOperatorDecision,
@@ -2155,6 +2158,31 @@ export class CodingRuntimeOrchestrator {
     correlationId?: string,
   ): Promise<CodingRuntimeMentionables | undefined> {
     return this.operations.listMentions(runId, correlationId);
+  }
+
+  /** A live run's MCP servers; see `CodingRuntimeOperationCoordinator` (#3903 AC3). */
+  listMcpServers(
+    runId: string,
+    correlationId?: string,
+  ): Promise<readonly CodingWorkbenchMcpServer[] | undefined> {
+    return this.operations.listMcpServers(runId, correlationId);
+  }
+
+  startMcpAuthorization(
+    runId: string,
+    body: unknown,
+    correlationId?: string,
+  ): Promise<CodingWorkbenchMcpAuthorizationStart> {
+    return this.operations.startMcpAuthorization(runId, body, correlationId);
+  }
+
+  mcpAuthorizationStatus(
+    runId: string,
+    body: unknown,
+    cancel: boolean,
+    correlationId?: string,
+  ): Promise<CodingWorkbenchMcpAuthorizationState> {
+    return this.operations.mcpAuthorizationStatus(runId, body, cancel, correlationId);
   }
 
   /** The slash commands the run's runtime lists right now; see `CodingRuntimeOperationCoordinator`. */

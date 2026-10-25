@@ -1,6 +1,9 @@
 "use client";
 
 import type {
+  CodingWorkbenchMcpAuthorizationStart,
+  CodingWorkbenchMcpAuthorizationStatus,
+  CodingWorkbenchRuntimeMcpChannelPayload,
   CodingWorkbenchMode,
   CodingWorkbenchIssueBindingFailure,
   CodingWorkbenchModelRefusalReason,
@@ -44,6 +47,11 @@ import {
   isWorkbenchDescriptionDraftReview,
   type WorkbenchDescriptionDraftReview,
 } from "@oscharko-dev/keiko-contracts/runtime/workbench-description-status";
+import {
+  parseCodingWorkbenchMcpAuthorizationStart,
+  parseCodingWorkbenchMcpAuthorizationStatus,
+  parseCodingWorkbenchRuntimeMcpChannelPayload,
+} from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 import { ApiError } from "./api";
 import { bffFetchJson, bffRequestErrorKind, newClientCorrelationId } from "./http";
 import { repairLocalCodingAppSessionWithEvidence } from "./coding-app-session-client";
@@ -110,6 +118,15 @@ function validated<T>(
 ): T {
   const result = validator(value);
   if (result.ok) return result.value;
+  throw new ApiError(
+    "CONTRACT_VALIDATION_FAILED",
+    `BFF response for ${path} failed contract validation.`,
+    502,
+  );
+}
+
+function parsedOrRefused<T>(path: string, value: T | undefined): T {
+  if (value !== undefined) return value;
   throw new ApiError(
     "CONTRACT_VALIDATION_FAILED",
     `BFF response for ${path} failed contract validation.`,
@@ -457,6 +474,60 @@ export function fetchCodingWorkbenchRuntimeCommands(
     runPath(runId, "/commands"),
     { cache: "no-store", ...(init?.signal ? { signal: init.signal } : {}) },
     { validator: commandsChannelValidator },
+  );
+}
+
+/**
+ * Lists a live native run's MCP servers over the authenticated app-session channel (#3903 AC3):
+ * each admitted server's name, a closed status and whether it authorizes through OAuth. Absent
+ * `servers` means the run offers none; an unpaired window receives `{ session: "unpaired" }`.
+ */
+export function fetchCodingWorkbenchRuntimeMcp(
+  runId: string,
+  init?: { readonly signal?: AbortSignal | undefined },
+): Promise<CodingWorkbenchRuntimeMcpChannelPayload> {
+  return bffFetchJson(
+    runPath(runId, "/mcp"),
+    { cache: "no-store", ...(init?.signal ? { signal: init.signal } : {}) },
+    {
+      validator: (path, value) =>
+        parsedOrRefused(path, parseCodingWorkbenchRuntimeMcpChannelPayload(value)),
+    },
+  );
+}
+
+/**
+ * Starts the runtime's own OAuth authorization of one MCP server. The server answers with an
+ * authorization URL only once it addresses the validated endpoint of the operator's expected issuer;
+ * the human opens it in their browser and the runtime's loopback callback completes the attempt.
+ */
+export function startCodingWorkbenchMcpAuthorization(
+  runId: string,
+  server: string,
+): Promise<CodingWorkbenchMcpAuthorizationStart> {
+  return bffFetchJson(
+    runPath(runId, "/mcp/authorization"),
+    { method: "POST", cache: "no-store", body: JSON.stringify({ server }) },
+    {
+      validator: (path, value) =>
+        parsedOrRefused(path, parseCodingWorkbenchMcpAuthorizationStart(value)),
+    },
+  );
+}
+
+/** Reads, or with `cancel` abandons, an authorization attempt started for `server`. */
+export function readCodingWorkbenchMcpAuthorization(
+  runId: string,
+  request: { readonly server: string; readonly attemptId: string },
+  cancel = false,
+): Promise<CodingWorkbenchMcpAuthorizationStatus> {
+  return bffFetchJson(
+    runPath(runId, cancel ? "/mcp/authorization/cancel" : "/mcp/authorization/status"),
+    { method: "POST", cache: "no-store", body: JSON.stringify(request) },
+    {
+      validator: (path, value) =>
+        parsedOrRefused(path, parseCodingWorkbenchMcpAuthorizationStatus(value)),
+    },
   );
 }
 

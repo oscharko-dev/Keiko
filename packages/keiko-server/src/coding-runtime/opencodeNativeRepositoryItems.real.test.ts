@@ -1,5 +1,6 @@
 import { spawn, spawnSync, type ChildProcessByStdio } from "node:child_process";
 import { createHash } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 import {
   existsSync,
   lstatSync,
@@ -33,6 +34,13 @@ import {
   parseOperatorPluginRegistry,
 } from "./opencodeOperatorPlugins.js";
 import { buildOpenCodeLaunchProfile, openCodeConfigDirectory } from "./opencodeLaunchProfile.js";
+import {
+  openCodeNativeMcpAdmission,
+  type OpenCodeNativeMcpAdmission,
+} from "./opencodeNativeMcp.js";
+import { createOpenCodeMcpAuthorizationRunPort } from "./opencodeNativeMcpAuthorization.js";
+import { harvestMcpCredentials, seedMcpCredentials } from "./opencodeNativeMcpCredentials.js";
+import { createMcpOAuthCredentialStore } from "../mcp/mcpOAuthCredentialStore.js";
 import { createGeneratedOpenCodeV2Plugins } from "./opencodeRuntimeAdapter.js";
 import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import {
@@ -444,11 +452,13 @@ function launch(
   binary: string,
   runtimeRoot: string,
   ports: Ports,
+  mcp?: OpenCodeNativeMcpAdmission["config"],
 ): { readonly profile: ReturnType<typeof buildOpenCodeLaunchProfile>; start: () => Launched } {
   const profile = buildOpenCodeLaunchProfile({
     executable: binary,
     stateRoot: fixture.state,
     toolProfile: "native",
+    ...(mcp === undefined ? {} : { mcp }),
     contextGeometry: {
       contextWindowTokens: 32_768,
       maxInputTokens: 24_000,
@@ -547,6 +557,8 @@ interface Run {
   readonly sessionId: string;
   readonly events: string[];
   readonly admission: ReturnType<typeof createBufferedServerLogSink>;
+  /** Stops the runtime now, as a run's disposal reaps it before its database is retained. */
+  readonly stop: () => Promise<void>;
   /** A GET of a listing route for the fixture workspace: the rows of its `data`. */
   listing(path: string): Promise<readonly Record<string, unknown>[]>;
 }
@@ -565,6 +577,8 @@ interface OperatorPluginsOption {
 }
 
 interface RunOptions {
+  /** The run's MCP binding, as `openCodeNativeMcpAdmission` composes it (#3903 AC3). */
+  readonly mcp?: OpenCodeNativeMcpAdmission["config"];
   /** The operator's registered plugins, admitted the way the composition admits them (#3903 AC2). */
   readonly operatorPlugins?: OperatorPluginsOption;
   /** The native policy's decision; absent allows every evaluated permission. */
@@ -590,10 +604,13 @@ async function withRun(options: RunOptions, body: (run: Run) => Promise<void>): 
     write(join(fixture.workspace, ".opencode", path), text);
   }
   const admission = createBufferedServerLogSink();
-  const launched = launch(fixture, realpathSync(BINARY), realpathSync(RESOURCE_ROOT), {
-    gateway: gateway.port,
-    facade: facade.port,
-  });
+  const launched = launch(
+    fixture,
+    realpathSync(BINARY),
+    realpathSync(RESOURCE_ROOT),
+    { gateway: gateway.port, facade: facade.port },
+    options.mcp,
+  );
   await createCodingRuntimeRepositoryItemsPort({
     enabled: true,
     source: fixtureReadPort(fixture.workspace),
@@ -644,6 +661,7 @@ async function withRun(options: RunOptions, body: (run: Run) => Promise<void>): 
       events,
       admission,
       listing,
+      stop: () => stopChild(started.child),
     });
   } finally {
     stream.abort();
@@ -1384,6 +1402,289 @@ describe("pinned native OpenCode operator plugins", () => {
           ).toBe("failed");
         },
       );
+    },
+    120_000,
+  );
+});
+
+interface OAuthFixtureServer {
+  readonly server: Server;
+  base: string;
+  /** `METHOD path` of every request, in order; never a token. */
+  readonly seen: string[];
+}
+
+const OAUTH_ACCESS_TOKEN = "fixture-access-token";
+
+/** An authorization server and the MCP server it protects, on one loopback listener. */
+async function startOAuthFixture(): Promise<OAuthFixtureServer> {
+  const fixture: OAuthFixtureServer = { server: createServer(), base: "", seen: [] };
+  fixture.server.on("request", (request: IncomingMessage, response: ServerResponse) => {
+    void readBody(request).then((body) => {
+      const url = new URL(request.url ?? "/", fixture.base);
+      fixture.seen.push(`${request.method ?? ""} ${url.pathname}`);
+      answerOAuth(fixture, request, url, body, response);
+    });
+  });
+  fixture.base = `http://127.0.0.1:${String(await listen(fixture.server))}`;
+  return fixture;
+}
+
+function json(response: ServerResponse, status: number, value: unknown): void {
+  response.writeHead(status, { "Content-Type": "application/json" }).end(JSON.stringify(value));
+}
+
+function answerOAuth(
+  fixture: OAuthFixtureServer,
+  request: IncomingMessage,
+  url: URL,
+  body: unknown,
+  response: ServerResponse,
+): void {
+  const base = fixture.base;
+  if (url.pathname === "/.well-known/oauth-authorization-server") {
+    json(response, 200, {
+      issuer: base,
+      authorization_endpoint: `${base}/authorize`,
+      token_endpoint: `${base}/token`,
+      registration_endpoint: `${base}/register`,
+      code_challenge_methods_supported: ["S256"],
+      response_types_supported: ["code"],
+    });
+    return;
+  }
+  if (url.pathname === "/register") {
+    json(response, 201, {
+      client_id: "fixture-client",
+      redirect_uris: object(body)?.redirect_uris,
+      token_endpoint_auth_method: "none",
+    });
+    return;
+  }
+  if (url.pathname === "/authorize") {
+    const callback = new URL(url.searchParams.get("redirect_uri") ?? "http://127.0.0.1/");
+    callback.searchParams.set("code", "fixture-code");
+    callback.searchParams.set("state", url.searchParams.get("state") ?? "");
+    response.writeHead(302, { Location: callback.href }).end();
+    return;
+  }
+  if (url.pathname === "/token") {
+    json(response, 200, {
+      access_token: OAUTH_ACCESS_TOKEN,
+      token_type: "Bearer",
+      expires_in: 3600,
+      refresh_token: "fixture-refresh-token",
+    });
+    return;
+  }
+  answerMcp(request, body, response);
+}
+
+// The protected MCP server: a bearer token, then initialize and one tool.
+function answerMcp(request: IncomingMessage, body: unknown, response: ServerResponse): void {
+  if (request.headers.authorization !== `Bearer ${OAUTH_ACCESS_TOKEN}`) {
+    response.writeHead(401).end();
+    return;
+  }
+  const message = object(body);
+  if (request.method !== "POST" || message?.id === undefined) {
+    response.writeHead(request.method === "POST" ? 202 : 405).end();
+    return;
+  }
+  const params = object(message.params);
+  const result =
+    message.method === "initialize"
+      ? {
+          protocolVersion: params?.protocolVersion,
+          capabilities: { tools: {} },
+          serverInfo: { name: "fixture", version: "1" },
+        }
+      : { tools: [{ name: "echo", inputSchema: { type: "object", properties: {} } }] };
+  json(response, 200, { jsonrpc: "2.0", id: message.id, result });
+}
+
+function oauthAdmission(
+  fixture: OAuthFixtureServer,
+  authorizationPath = "/authorize",
+): OpenCodeNativeMcpAdmission {
+  return openCodeNativeMcpAdmission({
+    servers: [
+      {
+        name: "issues",
+        description: undefined,
+        enabled: true,
+        transport: { kind: "remote", url: `${fixture.base}/mcp`, oauth: { issuer: fixture.base } },
+        tools: { echo: "read" },
+      },
+    ],
+    mode: "autonomous-delivery",
+    home: "/unused",
+    // The issuer validation itself refuses a loopback issuer (`mcpOAuthIssuer.test.ts`); this
+    // fixture hands the composition the validation result it would have produced.
+    validations: new Map([
+      [
+        "issues",
+        {
+          ok: true,
+          metadataUrl: `${fixture.base}/.well-known/oauth-authorization-server`,
+          authorizationEndpoint: `${fixture.base}${authorizationPath}`,
+        },
+      ],
+    ]),
+  });
+}
+
+function credentialCount(state: string): number {
+  const handle = new DatabaseSync(join(state, "state", "opencode.db"), { readOnly: true });
+  try {
+    const row = handle.prepare("SELECT COUNT(*) AS n FROM credential").get() as { n: number };
+    return row.n;
+  } finally {
+    handle.close();
+  }
+}
+
+// #3903 AC3: the runtime's own OAuth of an admitted MCP server, governed by Keiko: the attempt is
+// started through Keiko's port, its page is handed out only when it addresses the validated
+// endpoint, the credential is sealed in Keiko's vault, seeded into the next run, and removed from a
+// reaped runtime's database before retention. The original executable decides every step.
+describe("pinned native OpenCode MCP OAuth", () => {
+  const live = BINARY !== undefined && RESOURCE_ROOT !== undefined ? it : it.skip;
+
+  live(
+    "authorizes through the runtime's own flow, keeps the credential sealed and seeds the next run",
+    async () => {
+      const oauth = await startOAuthFixture();
+      const stateDir = realpathSync(mkdtempSync(join(tmpdir(), "keiko-mcp-oauth-vault-")));
+      const store = createMcpOAuthCredentialStore({
+        stateDir,
+        env: { KEIKO_MCP_OAUTH_CREDENTIALS_KEY: Buffer.alloc(32, 7).toString("base64") },
+        keychainAccess: () => undefined,
+      });
+      const admission = oauthAdmission(oauth);
+      const evidence = createBufferedServerLogSink();
+      try {
+        await withRun({ mcp: admission.config }, async (run) => {
+          const mcpRun = {
+            runId: RUN_ID,
+            workspaceRoot: run.fixture.workspace,
+            mcp: admission.grants,
+            mcpOAuth: admission.oauth,
+            client: run.client,
+          };
+          const database = join(run.fixture.state, "state", "opencode.db");
+          const port = createOpenCodeMcpAuthorizationRunPort({
+            readyRun: () => mcpRun,
+            activityLog: evidence,
+            onAuthorized: () => {
+              harvestMcpCredentials(mcpRun, database, store, evidence, false);
+            },
+          });
+          await expect
+            .poll(async () => (await port.listMcpServers(RUN_ID))?.[0]?.status, {
+              timeout: 30_000,
+            })
+            .toBe("needs-authorization");
+          const start = await port.startMcpAuthorization(RUN_ID, "issues");
+          if (start.outcome !== "started") throw new Error(`fixture-start-${start.reason}`);
+          // The browser: the authorization server answers with the runtime's own callback.
+          const authorized = await fetch(start.authorizationUrl, { redirect: "manual" });
+          await fetch(authorized.headers.get("location") ?? "");
+          await expect
+            .poll(() => port.mcpAuthorizationStatus(RUN_ID, "issues", start.attemptId), {
+              timeout: 20_000,
+            })
+            .toBe("complete");
+          await expect
+            .poll(async () => (await port.listMcpServers(RUN_ID))?.[0]?.status, {
+              timeout: 20_000,
+            })
+            .toBe("connected");
+          expect(
+            store.load({
+              server: "issues",
+              url: `${oauth.base}/mcp`,
+              oauth: { issuer: oauth.base },
+            }),
+          ).toBeDefined();
+          // Disposal: the reaped runtime's credential is kept and its database scrubbed.
+          await run.stop();
+          expect(credentialCount(run.fixture.state)).toBe(1);
+          harvestMcpCredentials(mcpRun, database, store, evidence, true);
+          expect(credentialCount(run.fixture.state)).toBe(0);
+        });
+        oauth.seen.length = 0;
+        await withRun({ mcp: admission.config }, async (run) => {
+          const mcpRun = {
+            runId: RUN_ID,
+            workspaceRoot: run.fixture.workspace,
+            mcp: admission.grants,
+            mcpOAuth: admission.oauth,
+            client: run.client,
+          };
+          await seedMcpCredentials(mcpRun, run.client, store, evidence);
+          const port = createOpenCodeMcpAuthorizationRunPort({
+            readyRun: () => mcpRun,
+            activityLog: evidence,
+          });
+          await expect
+            .poll(async () => (await port.listMcpServers(RUN_ID))?.[0]?.status, {
+              timeout: 30_000,
+            })
+            .toBe("connected");
+          // No second authorization: the kept credential connected the server.
+          expect(oauth.seen.filter((line) => line.endsWith("/authorize"))).toEqual([]);
+        });
+        const lines = evidence.events.map((event) => formatActivityLogProofLine(event));
+        expect(lines.join("\n")).not.toContain(OAUTH_ACCESS_TOKEN);
+        expect(lines.join("\n")).not.toContain("fixture-refresh-token");
+      } finally {
+        await closeStub({ server: oauth.server, port: 0, requests: [] });
+        rmSync(stateDir, { recursive: true, force: true });
+      }
+    },
+    180_000,
+  );
+
+  live(
+    "withholds an authorization page that does not address the validated endpoint",
+    async () => {
+      const oauth = await startOAuthFixture();
+      const admission = oauthAdmission(oauth, "/expected/authorize");
+      const evidence = createBufferedServerLogSink();
+      try {
+        await withRun({ mcp: admission.config }, async (run) => {
+          const mcpRun = {
+            runId: RUN_ID,
+            workspaceRoot: run.fixture.workspace,
+            mcp: admission.grants,
+            mcpOAuth: admission.oauth,
+            client: run.client,
+          };
+          const port = createOpenCodeMcpAuthorizationRunPort({
+            readyRun: () => mcpRun,
+            activityLog: evidence,
+          });
+          await expect
+            .poll(async () => (await port.listMcpServers(RUN_ID))?.[0]?.status, {
+              timeout: 30_000,
+            })
+            .toBe("needs-authorization");
+          expect(await port.startMcpAuthorization(RUN_ID, "issues")).toEqual({
+            outcome: "refused",
+            reason: "url-refused",
+          });
+          const refused = evidence.events.find(
+            (event) =>
+              event.op === "coding-runtime.mcp-authorization" &&
+              event.extra?.outcome === "url-refused",
+          );
+          expect(refused?.extra).toMatchObject({ urlRefusal: "endpoint-mismatch" });
+          expect(oauth.seen.filter((line) => line.endsWith("/authorize"))).toEqual([]);
+        });
+      } finally {
+        await closeStub({ server: oauth.server, port: 0, requests: [] });
+      }
     },
     120_000,
   );

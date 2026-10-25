@@ -1266,6 +1266,31 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.skills.unavailable": "Die freigegebenen Skills konnten nicht gelesen werden.",
   "codingWorkbench.skills.retry": "Erneut versuchen",
   "codingWorkbench.skills.reason.budgetExhausted": "Budget erschöpft",
+  "codingWorkbench.mcp.summary": "MCP-Server ({count})",
+  "codingWorkbench.mcp.status.connected": "Verbunden",
+  "codingWorkbench.mcp.status.needsAuthorization": "Autorisierung erforderlich",
+  "codingWorkbench.mcp.status.failed": "Nicht verbunden",
+  "codingWorkbench.mcp.status.disabled": "Deaktiviert",
+  "codingWorkbench.mcp.status.pending": "Verbindet",
+  "codingWorkbench.mcp.authorize": "Autorisieren",
+  "codingWorkbench.mcp.authorizeLabel": "MCP-Server {server} autorisieren",
+  "codingWorkbench.mcp.openAuthorization": "Autorisierungsseite öffnen",
+  "codingWorkbench.mcp.authorizing": "Warte auf die Autorisierung im Browser …",
+  "codingWorkbench.mcp.cancel": "Abbrechen",
+  "codingWorkbench.mcp.authorized": "Autorisiert. Der Server verbindet sich jetzt.",
+  "codingWorkbench.mcp.authorizationFailed":
+    "Die Autorisierung wurde nicht abgeschlossen. Versuche es erneut.",
+  "codingWorkbench.mcp.authorizationExpired":
+    "Die Autorisierung ist abgelaufen. Versuche es erneut.",
+  "codingWorkbench.mcp.refused.urlRefused":
+    "Keiko hat eine Autorisierungsseite zurückgehalten, die nicht zum erwarteten Aussteller gehört.",
+  "codingWorkbench.mcp.refused.unavailable":
+    "Der Server kann gerade nicht autorisiert werden. Versuche es gleich erneut.",
+  "codingWorkbench.mcp.refused.connected": "Der Server ist bereits verbunden.",
+  "codingWorkbench.mcp.refused.notOauth": "Dieser Server autorisiert nicht über OAuth.",
+  "codingWorkbench.mcp.refused.failed": "Die Autorisierung konnte nicht gestartet werden.",
+  "codingWorkbench.mcp.unavailable": "Die MCP-Server konnten nicht gelesen werden.",
+  "codingWorkbench.mcp.retry": "Erneut versuchen",
   "codingWorkbench.announcement.researchActive": "Internet-Recherche-Berechtigung aktiv.",
   "codingWorkbench.alert.actionFailedCode":
     "Die angeforderte Runtime-Aktion ist fehlgeschlagen ({code}). Prüfe den Live-Zustand und versuche es erneut.",

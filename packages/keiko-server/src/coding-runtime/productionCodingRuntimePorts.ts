@@ -1,3 +1,4 @@
+import type { OpenCodeMcpAuthorizationRunPort } from "./opencodeNativeMcpAuthorization.js";
 import type { CodexRuntimeControl } from "./codexRuntimeComposition.js";
 import type {
   CodingWorkbenchCommand,
@@ -216,6 +217,8 @@ export interface ProductionRuntimeTurnPort {
         correlationId?: string,
       ) => Promise<readonly CodingWorkbenchCommand[] | undefined>)
     | undefined;
+  /** A native run's MCP servers and their OAuth authorization (#3903 AC3). */
+  readonly mcpAuthorization?: OpenCodeMcpAuthorizationRunPort | undefined;
   /** The subagents and skills the run's runtime lists for the `@` and `$` menus (#3906). */
   readonly listMentions?:
     | ((runId: string, correlationId?: string) => Promise<CodingRuntimeMentionables | undefined>)
@@ -651,6 +654,9 @@ export function createOpenCodeRuntimeTurnPort(runPort: OpenCodeRunPort): Product
       ? {}
       : { listCommands: runPort.listCommands, admitCommand: runPort.admitCommand }),
     ...(runPort.listMentions === undefined ? {} : { listMentions: runPort.listMentions }),
+    ...(runPort.mcpAuthorization === undefined
+      ? {}
+      : { mcpAuthorization: runPort.mcpAuthorization }),
     abortTurn: (runId) => runPort.abortTask(runId),
     waitForTerminal: async (runId, signal): Promise<CodingRuntimeTaskOutcome> => {
       const outcome = await runPort.waitForTerminal(runId, signal);
@@ -785,6 +791,7 @@ export function createProductionRuntimeTaskDispatcher(
       runs.get(runId)?.turnPort.listCommands?.(runId, correlationId) ?? Promise.resolve(undefined),
     mentions: (runId, correlationId) =>
       runs.get(runId)?.turnPort.listMentions?.(runId, correlationId) ?? Promise.resolve(undefined),
+    mcpAuthorization: runMcpAuthorization(runs),
     revert: (request) => revertRuntimeTask(runs, request, diagnostics),
     revertState: (runId) =>
       runs.get(runId)?.turnPort.revertState?.(runId) ?? Promise.resolve(undefined),
@@ -1852,5 +1859,26 @@ function workbenchDescriptionOutcome(
     draftDigest: artifact.artifactDigest,
     artifactOutcome: artifact.outcome,
     ...(proposalId === undefined ? {} : { proposalId }),
+  };
+}
+
+/** Each MCP authorization call reaches the run it names; a run without the port offers none. */
+function runMcpAuthorization(
+  runs: ReadonlyMap<string, ProductionRuntimeRunRecord>,
+): OpenCodeMcpAuthorizationRunPort {
+  const port = (runId: string): OpenCodeMcpAuthorizationRunPort | undefined =>
+    runs.get(runId)?.turnPort.mcpAuthorization;
+  return {
+    listMcpServers: (runId, correlationId) =>
+      port(runId)?.listMcpServers(runId, correlationId) ?? Promise.resolve(undefined),
+    startMcpAuthorization: (runId, server, correlationId) =>
+      port(runId)?.startMcpAuthorization(runId, server, correlationId) ??
+      Promise.resolve({ outcome: "refused", reason: "unavailable" }),
+    mcpAuthorizationStatus: (runId, server, attemptId, correlationId) =>
+      port(runId)?.mcpAuthorizationStatus(runId, server, attemptId, correlationId) ??
+      Promise.resolve("unavailable"),
+    cancelMcpAuthorization: (runId, server, attemptId, correlationId) =>
+      port(runId)?.cancelMcpAuthorization(runId, server, attemptId, correlationId) ??
+      Promise.resolve("unavailable"),
   };
 }

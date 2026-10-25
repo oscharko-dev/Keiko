@@ -1172,6 +1172,10 @@ export function bindExplicitSkillTurns(
       ? {}
       : { listCommands: turnPort.listCommands, admitCommand: turnPort.admitCommand }),
     ...(turnPort.listMentions === undefined ? {} : { listMentions: turnPort.listMentions }),
+    // Authorizing an MCP server starts and settles no turn either.
+    ...(turnPort.mcpAuthorization === undefined
+      ? {}
+      : { mcpAuthorization: turnPort.mcpAuthorization }),
     abortTurn: async (runId): Promise<boolean> => {
       explicitSkills.clear();
       return turnPort.abortTurn(runId);
