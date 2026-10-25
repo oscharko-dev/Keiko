@@ -1,5 +1,6 @@
 import {
   isCodeTaskRecord as isRecord,
+  validateCodeTaskTaggedFact,
   validateCodeTaskOwnKeys,
 } from "./code-task-record-validation.js";
 import { validateCodeTaskParentTarget } from "./code-task-target-validation.js";
@@ -15,12 +16,7 @@ import { validateCodeTaskParentTarget } from "./code-task-target-validation.js";
 // digests, counts, bounded reason codes, and validated public domains only — never raw pages,
 // prompts, queries beyond the sanitized visible text digest, child scratch, tool bodies, or secrets.
 import type { CodeTaskFact } from "./code-task-acceptance.js";
-import {
-  hasInheritedEnumerableProperty,
-  isCodeTaskIsoInstant,
-  isCodeTaskSha256Digest,
-  ownField,
-} from "./code-task-acceptance.js";
+import { isCodeTaskIsoInstant, isCodeTaskSha256Digest, ownField } from "./code-task-acceptance.js";
 import type {
   CodeTaskGrantId,
   CodeTaskIdempotencyKey,
@@ -218,26 +214,8 @@ function factFieldsAreValid(
   path: string,
   isKnownValue: (candidate: unknown) => boolean,
 ): boolean {
-  let valid = true;
-  if (!isRecord(value)) return addValidationError(errors, `${path} must be a tagged fact object`);
-  if (hasInheritedEnumerableProperty(value)) {
-    return addValidationError(
-      errors,
-      `${path} must not resolve any field through its prototype chain`,
-    );
-  }
-  const outcome = ownField(value, "outcome");
-  if (outcome === "known") return knownFactFieldsAreValid(errors, value, path, isKnownValue);
-  if (outcome === "unknown" || outcome === "unavailable" || outcome === "absent") {
-    valid = validateCodeTaskOwnKeys(errors, value, ["outcome"], path) && valid;
-    if (Object.hasOwn(value, "value")) {
-      valid = addValidationError(errors, `${path} must not carry a value for outcome ${outcome}`);
-    }
-    return valid;
-  }
-  return addValidationError(
-    errors,
-    `${path}.outcome must be known, unknown, unavailable, or absent`,
+  return validateCodeTaskTaggedFact(errors, value, path, (record) =>
+    knownFactFieldsAreValid(errors, record, path, isKnownValue),
   );
 }
 

@@ -1,5 +1,8 @@
 import {
+  hasInheritedEnumerableProperty as recordHasInheritedEnumerableProperty,
   isCodeTaskRecord as isRecord,
+  ownField as readCodeTaskOwnField,
+  validateCodeTaskTaggedFact,
   validateCodeTaskOwnKeys,
 } from "./code-task-record-validation.js";
 // Producer-owned acceptance contribution for Epic #2384 Code-task children (#2385 owns the
@@ -282,11 +285,9 @@ function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value
 // own prototype is Object.prototype (pair it with isRecord for that) and, per the paragraph above,
 // it only catches an ENUMERABLE inherited property -- ownField is what actually closes the general
 // case; this function alone closes neither.
+// Compatibility delegate: the single implementation now lives with the private record guards.
 export function hasInheritedEnumerableProperty(record: Record<string, unknown>): boolean {
-  for (const key in record) {
-    if (!Object.hasOwn(record, key)) return true;
-  }
-  return false;
+  return recordHasInheritedEnumerableProperty(record);
 }
 
 // Codex P1 3789773829, the terminating fix: a detector inspects a property's descriptor to decide
@@ -300,8 +301,9 @@ export function hasInheritedEnumerableProperty(record: Record<string, unknown>):
 // there is no descriptor shape left to exploit. Returns unknown, matching how a fresh property read
 // off Record<string, unknown> already behaved before this change -- callers narrow it exactly as
 // they narrowed `value.someField` before.
+// Compatibility delegate: retain this public signature and the raw own-field observation contract.
 export function ownField(record: Record<string, unknown>, key: string): unknown {
-  return Object.hasOwn(record, key) ? record[key] : undefined;
+  return readCodeTaskOwnField(record, key);
 }
 
 function knownFactFieldsAreValid(
@@ -327,29 +329,8 @@ function factFieldsAreValid(
   path: string,
   isValue: (candidate: unknown) => boolean,
 ): boolean {
-  let valid = true;
-  if (!isRecord(value)) return addValidationError(errors, `${path} must be a tagged fact object`);
-  if (hasInheritedEnumerableProperty(value)) {
-    return addValidationError(
-      errors,
-      `${path} must not resolve any field through its prototype chain`,
-    );
-  }
-  const outcome = ownField(value, "outcome");
-  if (outcome === "known") return knownFactFieldsAreValid(errors, value, path, isValue);
-  if (outcome === "unknown" || outcome === "unavailable" || outcome === "absent") {
-    // KfQ 3789542365: this used to return early on an own "value" field, so unknownKeys never ran
-    // and any OTHER extra own key went unreported. Collected instead, matching the "report every
-    // violation" position already taken for onlyKnownKeys elsewhere in this PR.
-    valid = validateCodeTaskOwnKeys(errors, value, ["outcome"], path) && valid;
-    if (Object.hasOwn(value, "value")) {
-      valid = addValidationError(errors, `${path} must not carry a value for outcome ${outcome}`);
-    }
-    return valid;
-  }
-  return addValidationError(
-    errors,
-    `${path}.outcome must be known, unknown, unavailable, or absent`,
+  return validateCodeTaskTaggedFact(errors, value, path, (record) =>
+    knownFactFieldsAreValid(errors, record, path, isValue),
   );
 }
 

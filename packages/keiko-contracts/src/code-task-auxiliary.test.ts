@@ -1094,3 +1094,110 @@ it.each(["source", "public"])(
     }
   },
 );
+
+describe("auxiliary tagged-fact observation preservation", () => {
+  for (const surface of ["source", "public"]) {
+    const validate =
+      surface === "source" ? validateAuxiliaryCapabilityRequestV1 : publicAuxiliaryRequest;
+
+    it(`${surface} collects known fact key and value diagnostics in order`, () => {
+      const fact = { outcome: "known", value: "short", fixtureExtra: true };
+      Object.defineProperty(fact, Symbol("fixtureExtra"), { value: true });
+      expect(
+        validate({
+          ...researchRequest(),
+          research: { ...researchRequest().research, queryTextDigest: fact },
+        }),
+      ).toEqual({
+        ok: false,
+        errors: [
+          "researchScope.queryTextDigest.fixtureExtra is not allowed",
+          "researchScope.queryTextDigest must not carry symbol-keyed properties",
+          "researchScope.queryTextDigest.value is invalid",
+        ],
+      });
+    });
+
+    for (const outcome of ["unknown", "unavailable", "absent"]) {
+      it(`${surface} collects ${outcome} key and value-presence diagnostics without reading value`, () => {
+        const fact = {
+          outcome,
+          get value(): never {
+            throw new TypeError("value-free fact must not read its value");
+          },
+          fixtureExtra: true,
+        };
+        Object.defineProperty(fact, Symbol("fixtureExtra"), { value: true });
+        expect(
+          validate({
+            ...researchRequest(),
+            research: { ...researchRequest().research, queryTextDigest: fact },
+          }),
+        ).toEqual({
+          ok: false,
+          errors: [
+            "researchScope.queryTextDigest.value is not allowed",
+            "researchScope.queryTextDigest.fixtureExtra is not allowed",
+            "researchScope.queryTextDigest must not carry symbol-keyed properties",
+            `researchScope.queryTextDigest must not carry a value for outcome ${outcome}`,
+          ],
+        });
+      });
+    }
+
+    it(`${surface} propagates key inspection failure before known value access`, () => {
+      const failure = new TypeError("opaque tagged-fact key inspection");
+      const trace: string[] = [];
+      let inspections = 0;
+      const fact = new Proxy(
+        { outcome: "known", value: DIGEST },
+        {
+          ownKeys(target): (string | symbol)[] {
+            inspections += 1;
+            trace.push(`keys:${String(inspections)}`);
+            if (inspections === 2) throw failure;
+            return Reflect.ownKeys(target);
+          },
+          get(target, key, receiver): unknown {
+            trace.push(`get:${String(key)}`);
+            return Reflect.get(target, key, receiver);
+          },
+        },
+      );
+      let observed: unknown;
+      try {
+        validate({
+          ...researchRequest(),
+          research: { ...researchRequest().research, queryTextDigest: fact },
+        });
+      } catch (error) {
+        observed = error;
+      }
+      expect(observed).toBe(failure);
+      expect(trace).toEqual(["keys:1", "get:outcome", "keys:2"]);
+    });
+
+    it(`${surface} preserves the exact known value getter failure`, () => {
+      const failure = new TypeError("opaque known fact value inspection");
+      const trace: string[] = [];
+      const fact = {
+        outcome: "known",
+        get value(): never {
+          trace.push("value");
+          throw failure;
+        },
+      };
+      let observed: unknown;
+      try {
+        validate({
+          ...researchRequest(),
+          research: { ...researchRequest().research, queryTextDigest: fact },
+        });
+      } catch (error) {
+        observed = error;
+      }
+      expect(observed).toBe(failure);
+      expect(trace).toEqual(["value"]);
+    });
+  }
+});

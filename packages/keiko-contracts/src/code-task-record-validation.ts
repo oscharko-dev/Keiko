@@ -29,3 +29,57 @@ export function validateCodeTaskOwnKeys(
   errors.push(...unknownErrors);
   return unknownErrors.length === 0;
 }
+
+// See acceptance's retained Codex P1 rationale: enumeration is defense in depth, not admission.
+export function hasInheritedEnumerableProperty(record: Record<string, unknown>): boolean {
+  for (const key in record) {
+    if (!Object.hasOwn(record, key)) return true;
+  }
+  return false;
+}
+
+// Own-field reads never resolve inherited values, regardless of descriptor shape or pollution.
+// The public acceptance function preserves its signature as a delegate to this implementation.
+export function ownField(record: Record<string, unknown>, key: string): unknown {
+  return Object.hasOwn(record, key) ? record[key] : undefined;
+}
+
+function addValidationError(errors: string[], message: string): false {
+  errors.push(message);
+  return false;
+}
+
+// Schema owners retain their known-value policies and diagnostics through the admitted callback.
+export function validateCodeTaskTaggedFact(
+  errors: string[],
+  value: unknown,
+  path: string,
+  validateKnown: (record: Record<string, unknown>) => boolean,
+): boolean {
+  let valid = true;
+  if (!isCodeTaskRecord(value)) {
+    return addValidationError(errors, `${path} must be a tagged fact object`);
+  }
+  if (hasInheritedEnumerableProperty(value)) {
+    return addValidationError(
+      errors,
+      `${path} must not resolve any field through its prototype chain`,
+    );
+  }
+  const outcome = ownField(value, "outcome");
+  if (outcome === "known") return validateKnown(value);
+  if (outcome === "unknown" || outcome === "unavailable" || outcome === "absent") {
+    // KfQ 3789542365: this used to return early on an own "value" field, so unknownKeys never ran
+    // and any OTHER extra own key went unreported. Collected instead, matching the "report every
+    // violation" position already taken for onlyKnownKeys elsewhere in this PR.
+    valid = validateCodeTaskOwnKeys(errors, value, ["outcome"], path) && valid;
+    if (Object.hasOwn(value, "value")) {
+      valid = addValidationError(errors, `${path} must not carry a value for outcome ${outcome}`);
+    }
+    return valid;
+  }
+  return addValidationError(
+    errors,
+    `${path}.outcome must be known, unknown, unavailable, or absent`,
+  );
+}

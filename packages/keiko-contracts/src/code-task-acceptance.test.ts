@@ -2749,3 +2749,151 @@ describe("ordinary acceptance array admission preservation", () => {
     });
   }
 });
+
+describe("acceptance tagged-fact observation preservation", () => {
+  for (const surface of ["source", "public"]) {
+    const validate =
+      surface === "source" ? validateCodeTaskAcceptanceContribution : publicAcceptanceValidator;
+
+    it(`${surface} collects known fact key and value diagnostics in order`, () => {
+      const fact = { outcome: "known", value: "short", fixtureExtra: true };
+      Object.defineProperty(fact, Symbol("fixtureExtra"), { value: true });
+      expect(validate(withReceiptDigest(fact))).toEqual({
+        ok: false,
+        errors: [
+          "scenarios[0].receiptDigest.fixtureExtra is not allowed",
+          "scenarios[0].receiptDigest must not carry symbol-keyed properties",
+          "scenarios[0].receiptDigest.value is invalid for a known fact",
+        ],
+      });
+    });
+
+    for (const outcome of ["unknown", "unavailable", "absent"]) {
+      it(`${surface} collects ${outcome} key and value-presence diagnostics without reading value`, () => {
+        const fact = {
+          outcome,
+          get value(): never {
+            throw new TypeError("value-free fact must not read its value");
+          },
+          fixtureExtra: true,
+        };
+        Object.defineProperty(fact, Symbol("fixtureExtra"), { value: true });
+        expect(validate(withReceiptDigest(fact))).toEqual({
+          ok: false,
+          errors: [
+            "scenarios[0].receiptDigest.value is not allowed",
+            "scenarios[0].receiptDigest.fixtureExtra is not allowed",
+            "scenarios[0].receiptDigest must not carry symbol-keyed properties",
+            `scenarios[0].receiptDigest must not carry a value for outcome ${outcome}`,
+          ],
+        });
+      });
+    }
+
+    it(`${surface} propagates key inspection failure before known value access`, () => {
+      const failure = new TypeError("opaque tagged-fact key inspection");
+      const trace: string[] = [];
+      let inspections = 0;
+      const fact = new Proxy(
+        { outcome: "known", value: DIGEST },
+        {
+          ownKeys(target): (string | symbol)[] {
+            inspections += 1;
+            trace.push(`keys:${String(inspections)}`);
+            if (inspections === 2) throw failure;
+            return Reflect.ownKeys(target);
+          },
+          get(target, key, receiver): unknown {
+            trace.push(`get:${String(key)}`);
+            return Reflect.get(target, key, receiver);
+          },
+        },
+      );
+      let observed: unknown;
+      try {
+        validate(withReceiptDigest(fact));
+      } catch (error) {
+        observed = error;
+      }
+      expect(observed).toBe(failure);
+      expect(trace).toEqual(["keys:1", "get:outcome", "keys:2"]);
+    });
+
+    it(`${surface} preserves the exact known value getter failure`, () => {
+      const failure = new TypeError("opaque known fact value inspection");
+      const trace: string[] = [];
+      const fact = {
+        outcome: "known",
+        get value(): never {
+          trace.push("value");
+          throw failure;
+        },
+      };
+      let observed: unknown;
+      try {
+        validate(withReceiptDigest(fact));
+      } catch (error) {
+        observed = error;
+      }
+      expect(observed).toBe(failure);
+      expect(trace).toEqual(["value"]);
+    });
+  }
+});
+
+describe("own-field compatibility delegate observations", () => {
+  for (const surface of ["source", "public"]) {
+    const read = surface === "source" ? sourceOwnField : publicOwnField;
+
+    it(`${surface} checks ownership once before propagating the exact own getter failure`, () => {
+      const failure = new TypeError("opaque own-field getter");
+      const trace: string[] = [];
+      const record = new Proxy(
+        {
+          get value(): never {
+            throw failure;
+          },
+        },
+        {
+          getOwnPropertyDescriptor(target, key): PropertyDescriptor | undefined {
+            trace.push(`own:${String(key)}`);
+            return Reflect.getOwnPropertyDescriptor(target, key);
+          },
+          get(target, key, receiver): unknown {
+            trace.push(`get:${String(key)}`);
+            return Reflect.get(target, key, receiver);
+          },
+        },
+      );
+      let observed: unknown;
+      try {
+        read(record, "value");
+      } catch (error) {
+        observed = error;
+      }
+      expect(observed).toBe(failure);
+      expect(trace).toEqual(["own:value", "get:value"]);
+    });
+
+    it(`${surface} refuses an inherited getter after only its own-property check`, () => {
+      const trace: string[] = [];
+      const target: Record<string, unknown> = {};
+      Object.setPrototypeOf(target, {
+        get inherited(): never {
+          throw new TypeError("inherited getter must remain unread");
+        },
+      });
+      const record = new Proxy(target, {
+        getOwnPropertyDescriptor(value, key): PropertyDescriptor | undefined {
+          trace.push(`own:${String(key)}`);
+          return Reflect.getOwnPropertyDescriptor(value, key);
+        },
+        get(): never {
+          throw new TypeError("absent own property must not be read");
+        },
+      });
+      expect(read(record, "inherited")).toBeUndefined();
+      expect(trace).toEqual(["own:inherited"]);
+    });
+  }
+});
