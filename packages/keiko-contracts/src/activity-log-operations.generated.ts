@@ -6643,31 +6643,14 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: [
-          "clean",
-          "reaped",
-          "survivors",
-          "unproven",
-          "listing-failed",
-          "membership-unavailable",
-        ],
-      },
-      memberCount: {
-        type: "integer",
-        dataClass: "count",
-        required: true,
-      },
-      signalledCount: {
-        type: "integer",
-        dataClass: "count",
-        required: true,
-      },
-      survivorCount: {
-        type: "integer",
-        dataClass: "count",
-        required: true,
+        values: ["clean", "reaped", "survivors", "unproven", "membership-unavailable"],
       },
       roundCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      checkCount: {
         type: "integer",
         dataClass: "count",
         required: true,
@@ -6701,7 +6684,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     diagnosticWhen: [
       {
         field: "outcome",
-        values: ["survivors", "unproven", "listing-failed", "membership-unavailable"],
+        values: ["survivors", "unproven", "membership-unavailable"],
       },
     ],
   },

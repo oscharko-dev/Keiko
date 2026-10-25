@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "092a9741210975439edf359a17a59df8b186cc3e3400db1742782b41a99e50cb",
+    "catalogDigest": "a7e12d8c12fa8f8abd54bddd4e3bcebf40b9b344399e3f410d8ae7a21933c305",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -6960,31 +6960,14 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": [
-              "clean",
-              "reaped",
-              "survivors",
-              "unproven",
-              "listing-failed",
-              "membership-unavailable"
-            ]
-          },
-          "memberCount": {
-            "type": "integer",
-            "dataClass": "count",
-            "required": true
-          },
-          "signalledCount": {
-            "type": "integer",
-            "dataClass": "count",
-            "required": true
-          },
-          "survivorCount": {
-            "type": "integer",
-            "dataClass": "count",
-            "required": true
+            "values": ["clean", "reaped", "survivors", "unproven", "membership-unavailable"]
           },
           "roundCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "checkCount": {
             "type": "integer",
             "dataClass": "count",
             "required": true
@@ -7015,14 +6998,14 @@
         "diagnosticWhen": [
           {
             "field": "outcome",
-            "values": ["survivors", "unproven", "listing-failed", "membership-unavailable"]
+            "values": ["survivors", "unproven", "membership-unavailable"]
           }
         ],
         "failureClasses": ["coding-runtime-descendant-sweep"],
         "proofIds": ["coding-runtime.descendants.swept.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.ts:106",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.ts:355"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.ts:55",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.ts:185"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -31840,8 +31823,8 @@
         },
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeActivityOperations.ts:182",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:557",
-          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:629",
+          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:528",
+          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:600",
           "packages/keiko-server/src/coding-runtime/nativeRuntimeProcessBackend.ts:255"
         ]
       },
@@ -32019,7 +32002,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeActivityOperations.ts:189",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:605",
+          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:576",
           "packages/keiko-server/src/coding-runtime/nativeRuntimeProcessBackend.ts:281"
         ]
       },
@@ -59637,6 +59620,12 @@
                   "required": false
                 },
                 {
+                  "name": "checkCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
                   "name": "durationMs",
                   "type": "integer",
                   "dataClass": "duration",
@@ -59649,12 +59638,6 @@
                   "required": false
                 },
                 {
-                  "name": "memberCount",
-                  "type": "integer",
-                  "dataClass": "count",
-                  "required": true
-                },
-                {
                   "name": "outcome",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -59662,18 +59645,6 @@
                 },
                 {
                   "name": "roundCount",
-                  "type": "integer",
-                  "dataClass": "count",
-                  "required": true
-                },
-                {
-                  "name": "signalledCount",
-                  "type": "integer",
-                  "dataClass": "count",
-                  "required": true
-                },
-                {
-                  "name": "survivorCount",
                   "type": "integer",
                   "dataClass": "count",
                   "required": true
@@ -100578,7 +100549,7 @@
     {
       "op": "coding-runtime.descendants.swept",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.ts:109",
+      "site": "packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.ts:58",
       "package": "keiko-server"
     },
     {

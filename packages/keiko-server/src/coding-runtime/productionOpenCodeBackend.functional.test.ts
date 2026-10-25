@@ -1115,10 +1115,10 @@ describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
         expect(run.pipeline.orchestrator.getSnapshot(run.runId)?.state).toBe("cancelled");
         await vi.waitFor(() => {
           expect(sweepLines(run.log, run.runId)).toEqual([
-            expect.objectContaining({ outcome: "reaped", survivorCount: 0 }),
+            expect.objectContaining({ outcome: "reaped" }),
           ]);
         });
-        expect(sweepLines(run.log, run.runId)[0]?.memberCount).toBeGreaterThanOrEqual(1);
+        expect(sweepLines(run.log, run.runId)[0]?.roundCount).toBeGreaterThanOrEqual(1);
         expect(() => process.kill(foreign.pid ?? 0, 0)).not.toThrow();
       } finally {
         foreign.kill("SIGKILL");
@@ -1134,14 +1134,14 @@ describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
       // run's sandbox member answers which processes are the run's (PR #4064 review).
       process.kill(run.service.pid, "SIGKILL");
       await expectServiceTreeReaped(run.service);
-      // The line follows the sweep's final listing, after the processes are gone.
+      // The line follows the kernel's answer that no process of the run remains.
       await vi.waitFor(() => {
         expect(sweepLines(run.log, run.runId)).toEqual([
-          expect.objectContaining({ outcome: "reaped", survivorCount: 0 }),
+          expect.objectContaining({ outcome: "reaped" }),
         ]);
       });
-      // The background job, the busy foreground child and the detached process at least.
-      expect(sweepLines(run.log, run.runId)[0]?.memberCount).toBeGreaterThanOrEqual(3);
+      // The background job, the busy foreground child and the detached process remained.
+      expect(sweepLines(run.log, run.runId)[0]?.roundCount).toBeGreaterThanOrEqual(1);
       await vi.waitFor(
         () => {
           expect(run.pipeline.orchestrator.getSnapshot(run.runId)?.state).not.toBe("running");
@@ -1287,9 +1287,8 @@ function sweepLines(
       ? [
           {
             outcome: event.extra?.outcome,
-            signalledCount: event.extra?.signalledCount,
-            survivorCount: event.extra?.survivorCount,
-            memberCount: event.extra?.memberCount,
+            roundCount: event.extra?.roundCount,
+            checkCount: event.extra?.checkCount,
           },
         ]
       : [],

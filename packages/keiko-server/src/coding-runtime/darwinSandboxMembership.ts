@@ -1,41 +1,46 @@
 import type { Duplex } from "node:stream";
 
 // #3899 AC2 / #3901 AC3 (PR #4064 review): which processes belong to a macOS run is answered by the
-// kernel, never inferred from a parent link, a working directory or a start time. Every process a
-// run starts inherits the run's Seatbelt instance through fork and exec, however it later detaches,
-// changes its session, directory or environment, and the native profile lets a process signal only
-// members of its own instance (`(target same-sandbox)`, keiko-sandbox seatbelt-execution-root.ts):
-// another instance of the identical profile is refused. One member is therefore started beside the
-// service and kept apart from its work: a shell of builtins only, in a process group of its own, on
-// descriptor 3. It tests the PIDs Keiko lists (`kill -0`) and signals the ones it may. A PID it may
-// signal belongs to the run; one it may not does not, whoever its parent is. The member forks
-// nothing and stops or kills only what the kernel lets it signal; how a sweep turns its answers into
-// a proof is darwinRuntimeDescendants.ts's.
+// kernel, never inferred from a parent link, a working directory, a start time or a PID. Every
+// process a run starts inherits the run's Seatbelt instance through fork and exec, however it later
+// detaches or changes its session, directory or environment, and the native profile lets a process
+// signal only members of its own instance (`(target same-sandbox)`, keiko-sandbox
+// seatbelt-execution-root.ts): another instance of the identical profile is refused. One member is
+// therefore started beside the service and kept apart from its work, on descriptor 3, in a process
+// group of its own. It uses the kernel's broadcast signal, `kill` with PID -1, in its original
+// non-POSIX form: the kernel walks every process, delivers only to those the member may signal (the
+// processes of its instance), leaves the member itself out, and reports ESRCH when it reached none.
+// Signal 0 therefore answers whether any other process of the instance exists, and SIGKILL ends
+// them all, with no listing and no process identity to go stale. The shell's `kill` uses the POSIX
+// form, which includes the caller, so the member is a short Perl program (`/usr/bin/perl`, part of
+// macOS) that forks nothing: once it is the only process of the instance, no other can appear.
+// Without Perl the member never announces itself, and the run's end stays unproven. How a sweep
+// turns the answers into a proof is darwinRuntimeDescendants.ts's.
 
 const MEMBER_SCRIPT = [
-  "trap '' HUP INT TERM",
-  'echo "ready $$"',
-  "while read -r command pids; do",
-  '  case "$command" in',
-  '    members) out=""; for p in $pids; do [ "$p" != "$$" ] && kill -0 "$p" 2>/dev/null && out="$out $p"; done; echo "members$out" ;;',
-  '    stop) for p in $pids; do [ "$p" != "$$" ] && kill -STOP "$p" 2>/dev/null; done; echo signalled ;;',
-  '    kill) for p in $pids; do [ "$p" != "$$" ] && kill -KILL "$p" 2>/dev/null; done; echo signalled ;;',
-  "    *) exit 0 ;;",
-  "  esac",
-  "done",
+  '$SIG{$_} = "IGNORE" for qw(HUP INT TERM);',
+  "$| = 1;",
+  'print "ready $$\n";',
+  "while (defined(my $line = <STDIN>)) {",
+  "  chomp $line;",
+  // SYS_kill is 37; the third argument 0 selects the non-POSIX broadcast that leaves the caller out.
+  '  if ($line eq "check") { my $r = syscall(37, -1, 0, 0); print $r == 0 ? "occupied\n" : ($! + 0 == 3 ? "empty\n" : "failed\n"); }',
+  '  elsif ($line eq "kill") { syscall(37, -1, 9, 0); print "signalled\n"; }',
+  "  else { exit 0; }",
+  "}",
 ].join("\n");
 
 // The service keeps its PID, standard streams and process group; descriptor 3 is closed before it
 // starts. Job control gives the member its own process group, so a group signal to the service
 // never reaches it.
 const LAUNCH_SCRIPT =
-  'member="$1"; shift; set -m; /bin/sh -c "$member" keiko-sandbox-member 0<&3 1>&3 2>/dev/null & set +m; exec 3<&- "$@"';
+  'member="$1"; shift; set -m; /usr/bin/perl -e "$member" 0<&3 1>&3 2>/dev/null & set +m; exec 3<&- "$@"';
 
 export const SANDBOX_MEMBER_SHELL = "/bin/sh";
 export const SANDBOX_MEMBER_FD = 3;
 const ANSWER_TIMEOUT_MS = 5_000;
 const READY = /^ready \d+$/u;
-const MEMBERS = /^members((?: \d+)*)$/u;
+const CHECKED = /^(?:occupied|empty)$/u;
 
 /** The command that starts `executable` as the run's service with its sandbox member beside it. */
 export function sandboxMemberLaunch(
@@ -49,10 +54,10 @@ export function sandboxMemberLaunch(
 }
 
 export interface SandboxMembership {
-  /** The given PIDs that belong to the run's sandbox instance, as the kernel answers its member. */
-  members(pids: readonly number[]): Promise<readonly number[]>;
-  /** Signals the given PIDs from inside the instance; the kernel refuses every other process. */
-  signal(pids: readonly number[], signal: "stop" | "kill"): Promise<void>;
+  /** Whether any process of the run's sandbox instance besides the member exists now. */
+  occupied(): Promise<boolean>;
+  /** Sends SIGKILL to every other process of the instance; the kernel reaches no other process. */
+  killAll(): Promise<void>;
   /** Ends the member; it is not part of the run's work. */
   close(): void;
 }
@@ -84,23 +89,12 @@ class ChannelSandboxMembership implements SandboxMembership {
       });
   }
 
-  public async members(pids: readonly number[]): Promise<readonly number[]> {
-    if (pids.length === 0) return [];
-    const requested = new Set(pids);
-    const line = await this.ask(`members ${pids.join(" ")}`, MEMBERS);
-    const found = (MEMBERS.exec(line)?.[1] ?? "").split(" ").filter((entry) => entry !== "");
-    // Only an asked PID can be an answer; anything else is out of protocol.
-    const members = found.map(Number);
-    if (members.some((pid) => !requested.has(pid))) {
-      this.ended = true;
-      throw new SandboxMembershipUnavailableError("protocol");
-    }
-    return members;
+  public async occupied(): Promise<boolean> {
+    return (await this.ask("check", CHECKED)) === "occupied";
   }
 
-  public async signal(pids: readonly number[], signal: "stop" | "kill"): Promise<void> {
-    if (pids.length === 0) return;
-    await this.ask(`${signal} ${pids.join(" ")}`, /^signalled$/u);
+  public async killAll(): Promise<void> {
+    await this.ask("kill", /^signalled$/u);
   }
 
   public close(): void {

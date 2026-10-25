@@ -83,9 +83,13 @@ export function openCodeNativePluginReadiness(
   return states.every((state) => state === "active") ? "active" : "pending";
 }
 
-/** The producer loads plugins after it starts listening; this bounds the wait to 10 seconds. */
-export const OPENCODE_NATIVE_PLUGIN_READINESS_ATTEMPTS = 50;
-export const OPENCODE_NATIVE_PLUGIN_READINESS_INTERVAL_MS = 200;
+/**
+ * The producer loads plugins a few tens of milliseconds after it starts listening; this bounds the
+ * wait to 10 seconds. A loopback list is cheap, so a short interval keeps every run's start from
+ * waiting out most of a long one (#3907 AC7: a 200 ms interval cost each start about 80 ms).
+ */
+export const OPENCODE_NATIVE_PLUGIN_READINESS_ATTEMPTS = 1_000;
+export const OPENCODE_NATIVE_PLUGIN_READINESS_INTERVAL_MS = 10;
 
 /**
  * Waits until the producer reports every required generated plugin active. A failed plugin, a

@@ -20,12 +20,7 @@ import {
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
 
-import {
-  RuntimeDescendantTracker,
-  type ProcessIdentity,
-  type ProcessListing,
-  type ProcessSnapshot,
-} from "./darwinRuntimeDescendants.js";
+import { RuntimeDescendantTracker } from "./darwinRuntimeDescendants.js";
 import type { SandboxMembership } from "./darwinSandboxMembership.js";
 import {
   createDevLaneRuntimeProcessBackend as createProductionDevLaneRuntimeProcessBackend,
@@ -599,9 +594,9 @@ describe("dev-lane runtime process backend", () => {
   // crashed service's children outlive the group kill unless the recorded descendants are ended.
   describe("macOS descendants of the service", () => {
     function descendantBackend(
-      rows: ProcessIdentity[],
+      processes: Set<number>,
       keep: (pid: number) => boolean,
-      members: ReadonlySet<number> | "no-member",
+      member: boolean,
     ): {
       readonly backend: RuntimeProcessBackend;
       readonly child: FakeChild;
@@ -611,8 +606,6 @@ describe("dev-lane runtime process backend", () => {
       const fixture = stageFixture();
       const child = fakeChild(4711);
       const signals: string[] = [];
-      // The PID counter: each listing is taken between the PIDs of two processes it starts.
-      let counter = 9_000;
       const backend = createDevLaneRuntimeProcessBackend({
         identity: IDENTITY,
         gatewayConfinement: gatewayConfinement(),
@@ -620,39 +613,22 @@ describe("dev-lane runtime process backend", () => {
         spawnRuntime: () => child,
         killProcessGroup: () => undefined,
         trackDescendants: (options) => {
-          // The kernel's answer for the run's sandbox, and its member's signals: a stopped member
-          // shows `T`, a killed one leaves the table.
-          const membership: SandboxMembership | undefined =
-            members === "no-member"
-              ? undefined
-              : {
-                  members: (pids) =>
-                    Promise.resolve(
-                      pids.filter((pid) => members.has(pid) && rows.some((row) => row.pid === pid)),
-                    ),
-                  signal: (pids, signal): Promise<void> => {
-                    for (const pid of pids) {
-                      signals.push(`${signal}:${String(pid)}`);
-                      const index = rows.findIndex((row) => row.pid === pid);
-                      const current = rows[index];
-                      if (current === undefined || keep(pid)) continue;
-                      if (signal === "kill") rows.splice(index, 1);
-                      else rows[index] = { ...current, state: "T" };
-                    }
-                    return Promise.resolve();
-                  },
-                  close: (): void => undefined,
-                };
+          // The kernel's answer for the run's sandbox instance, and its member's broadcast.
+          const membership: SandboxMembership | undefined = member
+            ? {
+                occupied: () => Promise.resolve(processes.size > 0),
+                killAll: (): Promise<void> => {
+                  signals.push("kill-all");
+                  for (const pid of [...processes]) if (!keep(pid)) processes.delete(pid);
+                  return Promise.resolve();
+                },
+                close: (): void => undefined,
+              }
+            : undefined;
           return new RuntimeDescendantTracker({
             ...options,
             ...(membership === undefined ? {} : { membership }),
-            list: (): Promise<ProcessSnapshot> =>
-              Promise.resolve({
-                rows: rows.map((row) => ({ ...row })),
-                firstPid: (counter += 1),
-                lastPid: (counter += 1),
-              }),
-            settleMs: 1,
+            settleMs: 0,
           });
         },
       });
@@ -661,34 +637,34 @@ describe("dev-lane runtime process backend", () => {
 
     async function crash(
       keep: (pid: number) => boolean,
-      members: ReadonlySet<number> | "no-member" = new Set([4800]),
+      member = true,
     ): Promise<{ readonly complete: boolean; readonly signals: readonly string[] }> {
-      const rows: ProcessIdentity[] = [];
-      const { backend, child, signals, fixture } = descendantBackend(rows, keep, members);
+      const processes = new Set<number>();
+      const { backend, child, signals, fixture } = descendantBackend(processes, keep, member);
       const tree = backend.spawnOwnedTree(launchRequest(fixture), SANDBOX);
       // The service has crashed; its child lives on under launchd.
-      rows.push({ pid: 4800, ppid: 1, state: "S", started: new Date().toString() });
+      processes.add(4800);
       const wait = backend.waitForCompleteTreeExit(tree, 5_000);
       child.settle(null);
       return { complete: await wait, signals };
     }
 
-    it("ends the members of a crashed service's sandbox before the tree counts as ended", async () => {
+    it("ends the processes of a crashed service's sandbox before the tree counts as ended", async () => {
       await expect(crash(() => false)).resolves.toEqual({
         complete: true,
-        signals: ["stop:4800", "kill:4800"],
+        signals: ["kill-all"],
       });
     });
 
-    it("keeps the tree unproven while a member is never frozen and never ends", async () => {
+    it("keeps the tree unproven while a process of the run never ends", async () => {
       const result = await crash(() => true);
       expect(result.complete).toBe(false);
-      expect(result.signals.every((signal) => signal === "stop:4800")).toBe(true);
+      expect(result.signals.length).toBe(50);
     });
 
     // Without the member nothing proves the end, and no host signal may stand in for it.
     it("keeps a tree without a sandbox member unproven and signals nothing", async () => {
-      await expect(crash(() => false, "no-member")).resolves.toEqual({
+      await expect(crash(() => false, false)).resolves.toEqual({
         complete: false,
         signals: [],
       });
@@ -1060,7 +1036,7 @@ describe("dev-lane runtime process backend", () => {
         expect(processesCarrying(`${marker}1`)).toEqual([]);
         expect(processesCarrying(`${marker}2`)).toEqual([foreign.pid]);
         const swept = sink.events.find((event) => event.op === "coding-runtime.descendants.swept");
-        expect(swept?.extra).toMatchObject({ outcome: "reaped", memberCount: 1, survivorCount: 0 });
+        expect(swept?.extra).toMatchObject({ outcome: "reaped", roundCount: 1 });
       } finally {
         foreign.kill("SIGKILL");
       }
@@ -1068,17 +1044,18 @@ describe("dev-lane runtime process backend", () => {
     30_000,
   );
 
-  // PR #4064 review (4371619368), on the real kernel: the first listing is delivered late, and in
-  // between a member forks a child and exits. The child is absent from that listing and its parent
-  // is no longer a member, so the answer about it is empty; the sweep must not prove an end from it.
+  // PR #4064 review (4371619368, 4371860462), on the real kernel: a detached process of the run keeps
+  // forking a child and exiting, so its PID changes all the time, the pattern that defeated process
+  // listings. The kernel's broadcast reaches whatever process of the run exists, and the end is the
+  // kernel's answer that none does.
   it.skipIf(process.platform !== "darwin")(
-    "never proves an end from a listing a member left before the answer",
+    "ends a run whose detached process keeps forking and exiting",
     async () => {
       const fixture = stageFixture();
       const marker = `3899.${String(process.pid)}`;
       writeFileSync(
         fixture.executable,
-        `#!/bin/sh\n/usr/bin/perl -e 'use POSIX; if (fork() == 0) { POSIX::setsid(); sleep 1; if (fork() == 0) { exec "/bin/sleep", "${marker}7" } exit 0 }'\nexit 0\n`,
+        `#!/bin/sh\n/usr/bin/perl -e 'use POSIX; if (fork() == 0) { POSIX::setsid(); for (1..500) { select(undef, undef, undef, 0.02); exit 0 if fork() } exec "/bin/sleep", "${marker}7" } # ${marker}7'\nexit 0\n`,
       );
       const sink = createBufferedServerLogSink();
       const backend = createDevLaneRuntimeProcessBackend({
@@ -1086,72 +1063,19 @@ describe("dev-lane runtime process backend", () => {
         gatewayConfinement: nativeConfinement(fixture),
         runtimeRoot: fixture.runtimeRoot,
         activityLog: sink,
-        trackDescendants: (options) => {
-          let delayed = false;
-          return new RuntimeDescendantTracker({
-            ...options,
-            // The genuine listing, taken now and delivered after the member forked and exited.
-            list: async (): Promise<ProcessSnapshot> => {
-              const listing = await options.list();
-              if (!delayed) {
-                delayed = true;
-                await new Promise((resolve) => setTimeout(resolve, 1_500));
-              }
-              return listing;
-            },
-          });
-        },
       });
       try {
         const tree = backend.spawnOwnedTree(launchRequest(fixture), SANDBOX);
         await expect(backend.waitForCompleteTreeExit(tree, 20_000)).resolves.toBe(true);
         expect(processesCarrying(`${marker}7`)).toEqual([]);
         const swept = sink.events.find((event) => event.op === "coding-runtime.descendants.swept");
-        expect(swept?.extra).toMatchObject({ outcome: "reaped", survivorCount: 0 });
-        expect(Number(swept?.extra?.roundCount)).toBeGreaterThan(1);
+        expect(swept?.extra).toMatchObject({ outcome: "reaped" });
+        expect(Number(swept?.extra?.roundCount)).toBeGreaterThanOrEqual(1);
       } finally {
         for (const pid of processesCarrying(`${marker}7`)) process.kill(pid, "SIGKILL");
       }
     },
     40_000,
-  );
-
-  // PR #4064 review (4371860462), on the real kernel: the sweep takes a PID present at one listing
-  // for the same process at the next only because macOS hands out PIDs in sequence and each listing
-  // records the counter around it. A process started between two listings gets a PID the counter
-  // passed in between, and processes started one after another get PIDs in that order.
-  it.skipIf(process.platform !== "darwin")(
-    "lists between the PIDs of processes started around it, which macOS hands out in sequence",
-    async () => {
-      const fixture = stageFixture();
-      let list: ProcessListing | undefined;
-      const backend = createDevLaneRuntimeProcessBackend({
-        identity: IDENTITY,
-        gatewayConfinement: nativeConfinement(fixture),
-        runtimeRoot: fixture.runtimeRoot,
-        trackDescendants: (options) => {
-          list = options.list;
-          return new RuntimeDescendantTracker(options);
-        },
-      });
-      const tree = backend.spawnOwnedTree(launchRequest(fixture), SANDBOX);
-      await expect(backend.waitForCompleteTreeExit(tree, 10_000)).resolves.toBe(true);
-      if (list === undefined) throw new TypeError("process-listing-not-captured");
-      // macOS hands out 100 to 99,998 and then wraps to 100; distances are taken along that cycle.
-      const forward = (from: number, to: number): number => (to - from + 99_899) % 99_899;
-      const before = await list();
-      const between = spawnSync("/usr/bin/true").pid;
-      const after = await list();
-      const sequence = Array.from({ length: 16 }, () => spawnSync("/usr/bin/true").pid);
-      const pids = [before.firstPid, before.lastPid, between, after.firstPid, after.lastPid];
-      pids.push(...sequence);
-      const steps = pids.slice(1).map((pid, index) => forward(pids[index] ?? pid, pid));
-
-      expect(before.rows.some((row) => row.pid === process.pid)).toBe(true);
-      expect(steps.every((step) => step > 0)).toBe(true);
-      expect(steps.reduce((sum, step) => sum + step, 0)).toBeLessThan(99_899);
-    },
-    20_000,
   );
 });
 

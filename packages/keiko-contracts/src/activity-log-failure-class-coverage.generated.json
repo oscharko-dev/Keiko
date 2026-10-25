@@ -7785,6 +7785,12 @@
               "required": false
             },
             {
+              "name": "checkCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
               "name": "durationMs",
               "type": "integer",
               "dataClass": "duration",
@@ -7797,12 +7803,6 @@
               "required": false
             },
             {
-              "name": "memberCount",
-              "type": "integer",
-              "dataClass": "count",
-              "required": true
-            },
-            {
               "name": "outcome",
               "type": "string",
               "dataClass": "closed-enum",
@@ -7810,18 +7810,6 @@
             },
             {
               "name": "roundCount",
-              "type": "integer",
-              "dataClass": "count",
-              "required": true
-            },
-            {
-              "name": "signalledCount",
-              "type": "integer",
-              "dataClass": "count",
-              "required": true
-            },
-            {
-              "name": "survivorCount",
               "type": "integer",
               "dataClass": "count",
               "required": true

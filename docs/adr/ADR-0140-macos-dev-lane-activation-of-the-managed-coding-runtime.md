@@ -140,39 +140,28 @@ process a run starts inherits the run's Seatbelt instance through fork and exec,
 detaches or changes its session, directory or environment, and the native profile lets a process
 signal only members of its own instance (`(target same-sandbox)`; another instance of the identical
 profile is refused). The native launch starts a sandbox member beside the service
-(`darwinSandboxMembership.ts`): a shell of builtins only, on descriptor 3, in a process group of its
-own, which the service never holds. Once the service has exited, the member sends every signal:
-the kernel refuses its signal to any process of anyone else, even one that reused a PID a moment
-before, and without the member nothing is signalled at all. A listing is a snapshot, and a member
-can fork and exit between a listing and the member's answer, so an empty answer about an older
-listing proves nothing (PR #4064 review). The sweep therefore freezes the run first: each round
-lists this user's processes, asks the member which of the live ones are the run's, and lists again.
-It proves the end only when every member the answer names was already stopped at the first listing,
-and no process that was running then and could have been a member has gone by the second. Only a
-running process forks, so no member can have appeared since. A gone process could not have been a
-member when it started before the run, or when its parent is alive at the second listing and no
-member: macOS reparents an orphan only to launchd, so that parent started it, and the child of a
-process outside the sandbox is outside it too. A process still listed with the same PID and start
-time counts as the same process only if its PID cannot have been handed out again in between:
-`lstart` resolves seconds, so a PID reused within one second looks unchanged (PR #4064 review). macOS
-hands out PIDs in sequence from 100 to 99,998 and then wraps, so each listing records the counter as
-the PID of a process started just before it reads the table and of one started just after. A PID or
-parent PID the counter passed between the two listings is never taken for the same process; a
-counter that wrapped proves nothing in that round, and neither does a round that took longer than
-500 ms, since a counter that went once all the way round would look unwrapped. A full turn hands out
-99,899 PIDs; 16 to 64 processes forking and reaping as fast as they could on a 16-core Apple silicon
-host handed out at most 19,000 a second, so a turn needs more than five seconds, ten times the bound.
-One more answer, about the second listing, confirms a round proven frozen: a member that answer names
-and the first did not was missed. Otherwise the member stops (SIGSTOP) every member it named and the
-next round asks again; once proven, it kills the frozen members and a final answer must name none. Zombies have already ended and are not asked about. Only `clean` and `reaped`
-settle the tree. A member that outlives every kill (`survivors`), a listing the sweep cannot take
-(`listing-failed`), a member that no longer answers (`membership-unavailable`), a run whose profile
-has no shell for a member (`unproven`, the gateway profile) and a run that is not proven frozen
-within twenty rounds (`unproven`: one that keeps re-forking faster than a round, or a host whose
-launchd children keep ending in every round) leave the tree unended, so the manager reports
-`runtime-reap-unproven` instead of a stopped runtime. `coding-runtime.descendants.swept` records the
-outcome and the member, signalled, surviving and round counts. A process cannot leave its Seatbelt
-instance, so no Endpoint Security monitor (ADR-0163 D4) is needed for this proof; a member killed
+(`darwinSandboxMembership.ts`): a short `/usr/bin/perl` program on descriptor 3, in a process group
+of its own, which the service never holds and which forks nothing. Once the service has exited,
+the member sends every signal, and without the member nothing is signalled at all. It uses the
+kernel's broadcast signal, `kill` with PID -1, in its original non-POSIX form: the kernel walks
+every process, delivers only to those the member may signal, which are the processes of its
+instance, leaves the member itself out, and reports ESRCH when it reached none. The shell's `kill`
+uses the POSIX form, which includes the caller, which is why the member is not a shell. Signal 0
+answers whether any process of the run besides the member exists; SIGKILL ends them all. The sweep
+therefore needs no process listing and no process identity (PR #4064 review: listings go stale
+between the listing and an answer, and a PID with its one-second `lstart` can be handed out again,
+so earlier designs that froze the run from listings could not prove continuity). It asks; while a
+process remains, it broadcasts SIGKILL, waits from 2 ms doubling up to 50 ms, and asks again, so a
+process forked during one broadcast is reached by the next. When the kernel answers that none
+remains, none can appear either: only a process of the instance can start another, and the member
+forks nothing. That answer is the proof. Only `clean` (nothing remained) and `reaped` settle the
+tree. A process that outlives fifty broadcasts (`survivors`), a member that no longer answers
+(`membership-unavailable`, including a host without `/usr/bin/perl`, whose member never announces
+itself) and a run whose profile has no member (`unproven`, the gateway profile) leave the tree
+unended, so the manager reports `runtime-reap-unproven` instead of a stopped runtime.
+`coding-runtime.descendants.swept` records the outcome, the SIGKILL broadcasts (`roundCount`) and
+the kernel's answers (`checkCount`). A process cannot leave its Seatbelt instance, so no Endpoint
+Security monitor (ADR-0163 D4) is needed for this proof; a member killed
 by the run's own commands turns the run's next sweep into `membership-unavailable`, never into a
 false stop.
 
