@@ -12,6 +12,14 @@ import type {
 import { GIT_REPOSITORY_STATES, isGitWireUnavailableReason } from "./git-repository.js";
 import { isGitUpstreamSummary } from "./git-repository-summary.js";
 import type { GitUpstreamSummary } from "./git-repository-summary.js";
+import {
+  gitWireValidationVerdict,
+  isGitWireRecord as isRecord,
+  isString,
+  isGitWireBoolean as isBoolean,
+  isGitWireNonNegativeInteger as isNonNegativeInteger,
+  rejectGitEnvelopeField as rejectSyncField,
+} from "./git-wire-envelope-validation.js";
 
 export const GIT_SYNC_SCHEMA_VERSION = "1" as const;
 
@@ -120,27 +128,6 @@ const GIT_REPOSITORY_STATES_VALUES: readonly unknown[] = GIT_REPOSITORY_STATES;
 const GIT_SYNC_BLOCK_REASONS_VALUES: readonly unknown[] = GIT_SYNC_BLOCK_REASONS;
 const GIT_SYNC_OUTCOMES_VALUES: readonly unknown[] = GIT_SYNC_OUTCOMES;
 
-function isRecord(input: unknown): input is Readonly<Record<string, unknown>> {
-  return typeof input === "object" && input !== null && !Array.isArray(input);
-}
-
-function isString(input: unknown): input is string {
-  return typeof input === "string";
-}
-
-function isBoolean(input: unknown): input is boolean {
-  return typeof input === "boolean";
-}
-
-function isNonNegativeInteger(input: unknown): input is number {
-  return typeof input === "number" && Number.isInteger(input) && input >= 0;
-}
-
-function rejectSyncField(reasons: string[], reason: string): false {
-  reasons.push(reason);
-  return false;
-}
-
 export function isGitSyncOperation(v: unknown): v is GitSyncOperation {
   return v === "fetch" || v === "pull";
 }
@@ -247,8 +234,7 @@ export function parseGitSyncPreview(input: unknown): GitRepositoryParseResult<Gi
 }
 
 export function validateGitSyncPreview(input: unknown): GitRepositoryValidation {
-  const result = parseGitSyncPreview(input);
-  return result.ok ? { ok: true } : result;
+  return gitWireValidationVerdict(parseGitSyncPreview(input));
 }
 
 function validateSyncExecuteIdentity(
@@ -299,6 +285,5 @@ export function parseGitSyncExecuteResponse(
 }
 
 export function validateGitSyncExecuteResponse(input: unknown): GitRepositoryValidation {
-  const result = parseGitSyncExecuteResponse(input);
-  return result.ok ? { ok: true } : result;
+  return gitWireValidationVerdict(parseGitSyncExecuteResponse(input));
 }

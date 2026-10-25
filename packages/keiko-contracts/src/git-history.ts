@@ -9,10 +9,16 @@ import type {
   GitRepositoryParseResult,
 } from "./git-repository.js";
 import {
-  GIT_REPOSITORY_STATES,
-  isBoundedGitMessage,
-  isGitWireUnavailableReason,
-} from "./git-repository.js";
+  gitWireValidationVerdict,
+  parseGitWireResponse,
+  isGitWireRecord as isRecord,
+  isString,
+  isGitWireBoolean as isBoolean,
+  isGitWireNonNegativeInteger as isNonNegativeInteger,
+  rejectGitEnvelopeField as rejectHistoryField,
+  validateGitReadIdentity,
+  validateGitWireEnvelopeOptionals,
+} from "./git-wire-envelope-validation.js";
 
 export const GIT_HISTORY_SCHEMA_VERSION = "1" as const;
 
@@ -39,31 +45,6 @@ export interface GitHistoryResponse {
   readonly limit: number;
   readonly skip: number;
   readonly truncated: boolean;
-}
-
-function rejectHistoryField(reasons: string[], reason: string): false {
-  reasons.push(reason);
-  return false;
-}
-
-function isGitRepositoryState(input: unknown): input is GitRepositoryState {
-  return typeof input === "string" && new Set<string>(GIT_REPOSITORY_STATES).has(input);
-}
-
-function isRecord(input: unknown): input is Readonly<Record<string, unknown>> {
-  return typeof input === "object" && input !== null && !Array.isArray(input);
-}
-
-function isString(input: unknown): input is string {
-  return typeof input === "string";
-}
-
-function isBoolean(input: unknown): input is boolean {
-  return typeof input === "boolean";
-}
-
-function isNonNegativeInteger(input: unknown): input is number {
-  return typeof input === "number" && Number.isInteger(input) && input >= 0;
 }
 
 function validateRefs(input: unknown, reasons: string[], index: number): boolean {
@@ -154,37 +135,6 @@ function validateEntry(input: unknown, reasons: string[], index: number): boolea
   return validateRefs(input.refs, reasons, index) && valid;
 }
 
-function validateHistoryIdentity(
-  input: Readonly<Record<string, unknown>>,
-  reasons: string[],
-): boolean {
-  let valid = true;
-  if (input.schemaVersion !== GIT_HISTORY_SCHEMA_VERSION)
-    valid = rejectHistoryField(reasons, "schemaVersion invalid");
-  if (!isString(input.root)) valid = rejectHistoryField(reasons, "root must be a string");
-  if (!isGitRepositoryState(input.state)) {
-    valid = rejectHistoryField(reasons, "state invalid");
-  }
-  return valid;
-}
-
-function validateHistoryOptionalEnvelope(
-  input: Readonly<Record<string, unknown>>,
-  reasons: string[],
-): boolean {
-  let valid = true;
-  if (input.reason !== undefined && !isGitWireUnavailableReason(input.reason)) {
-    valid = rejectHistoryField(reasons, "reason invalid");
-  }
-  if (input.message !== undefined && !isBoundedGitMessage(input.message)) {
-    valid = rejectHistoryField(reasons, "message must be a bounded string when present");
-  }
-  if (input.repositoryRoot !== undefined && !isString(input.repositoryRoot)) {
-    valid = rejectHistoryField(reasons, "repositoryRoot must be a string when present");
-  }
-  return valid;
-}
-
 function validateHistoryFlags(
   input: Readonly<Record<string, unknown>>,
   reasons: string[],
@@ -205,8 +155,8 @@ function validateHistoryEnvelopeFields(
   input: Readonly<Record<string, unknown>>,
   reasons: string[],
 ): boolean {
-  const identity = validateHistoryIdentity(input, reasons);
-  const optional = validateHistoryOptionalEnvelope(input, reasons);
+  const identity = validateGitReadIdentity(input, reasons, GIT_HISTORY_SCHEMA_VERSION);
+  const optional = validateGitWireEnvelopeOptionals(input, reasons, true);
   return validateHistoryFlags(input, reasons) && identity && optional;
 }
 
@@ -259,12 +209,9 @@ function admitGitHistory(
 export function parseGitHistoryResponse(
   input: unknown,
 ): GitRepositoryParseResult<GitHistoryResponse> {
-  if (!isRecord(input)) return { ok: false, reasons: ["response must be an object"] };
-  const reasons: string[] = [];
-  return admitGitHistory(input, reasons) ? { ok: true, value: input } : { ok: false, reasons };
+  return parseGitWireResponse(input, admitGitHistory);
 }
 
 export function validateGitHistoryResponse(input: unknown): GitRepositoryValidation {
-  const parsed = parseGitHistoryResponse(input);
-  return parsed.ok ? { ok: true } : parsed;
+  return gitWireValidationVerdict(parseGitHistoryResponse(input));
 }

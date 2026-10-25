@@ -1,3 +1,38 @@
+import {
+  gitWireValidationVerdict,
+  parseGitWireResponse,
+  isGitWireRecord as isRecord,
+  isString,
+  isGitWireBoolean as isBoolean,
+  isGitWireNonNegativeInteger as isNonNegativeInteger,
+  rejectGitEnvelopeField as rejectGitField,
+  validateGitReadIdentity,
+  validateGitWireEnvelopeOptionals,
+} from "./git-wire-envelope-validation.js";
+import type {
+  GitRepositoryState,
+  GitUnavailableReason,
+  GitRepositoryValidation,
+  GitRepositoryParseResult,
+} from "./git-wire-envelope-validation.js";
+export {
+  GIT_REPOSITORY_STATES,
+  GIT_UNAVAILABLE_REASONS,
+  GIT_MESSAGE_MAX_CHARS,
+  isBoundedGitMessage,
+  isGitWireUnavailableReason,
+} from "./git-wire-envelope-validation.js";
+export type {
+  GitRepositoryValidationOk,
+  GitRepositoryValidationFail,
+  GitRepositoryValidation,
+  GitRepositoryParseOk,
+  GitRepositoryParseResult,
+  GitRepositoryState,
+  GitUnavailableReason,
+  GitWireUnavailableReason,
+} from "./git-wire-envelope-validation.js";
+
 // Read-only Git repository status/diff wire contract (Issue #1386, Epic #1491).
 // Pure types + validation helpers only: no filesystem, no process, no clock, no crypto.
 
@@ -57,53 +92,6 @@ export function isSafeGitRefName(value: string): boolean {
 /** A complete immutable Git object identity, never a ref, abbreviation or revision expression. */
 export function isGitObjectId(value: unknown): value is string {
   return typeof value === "string" && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(value);
-}
-
-export const GIT_REPOSITORY_STATES = ["available", "unavailable", "unsafe", "error"] as const;
-
-export type GitRepositoryState = (typeof GIT_REPOSITORY_STATES)[number];
-
-export const GIT_UNAVAILABLE_REASONS = [
-  "not-a-repository",
-  "git-missing",
-  "repository-root-outside-root",
-  "unknown",
-] as const;
-export type GitUnavailableReason = (typeof GIT_UNAVAILABLE_REASONS)[number];
-
-// The wire `reason` shape every git-*.ts response envelope declares: GitUnavailableReason widened
-// with the two failure classes only the route layer can detect (unsafe ownership, a raw git error).
-export type GitWireUnavailableReason = GitUnavailableReason | "unsafe-repository" | "git-error";
-
-const GIT_WIRE_UNAVAILABLE_REASONS: ReadonlySet<string> = new Set([
-  ...GIT_UNAVAILABLE_REASONS,
-  "unsafe-repository",
-  "git-error",
-]);
-
-// Shared by git-history.ts, git-repository-summary.ts, and git-sync.ts (KEIKO-0310): each of those
-// declares the identical `reason?: GitWireUnavailableReason` field but, until this fix, none of the
-// five validators in this file's territory checked it against the closed union at all.
-export function isGitWireUnavailableReason(value: unknown): value is GitWireUnavailableReason {
-  return typeof value === "string" && GIT_WIRE_UNAVAILABLE_REASONS.has(value);
-}
-
-// Shared bound for the free-text `message` field carried by GitHistoryResponse,
-// GitRepositoryStatusResponse, and GitRepositorySummary. The real producer (keiko-server
-// gitRoutes.ts genericUnavailable/unavailableBranchList) only ever assigns short, fixed English
-// sentences (<100 chars); this cap is generous headroom for that, not a measured maximum, so a
-// stricter validator here can never reject the current producer's output while still bounding a
-// field the audit flagged as the one most likely to carry raw, unbounded git error/stderr text.
-export const GIT_MESSAGE_MAX_CHARS = 1_024 as const;
-
-export function isBoundedGitMessage(value: unknown): boolean {
-  return (
-    value === undefined ||
-    (typeof value === "string" &&
-      value.length > 0 &&
-      value.length <= GIT_MESSAGE_MAX_CHARS &&
-      !value.includes("\u0000"))
-  );
 }
 
 export type GitStatusCode = " " | "M" | "A" | "D" | "R" | "C" | "U" | "?" | "!";
@@ -181,49 +169,6 @@ export interface GitRepositoryDiffResponse {
   readonly maxBytes: number;
 }
 
-export interface GitRepositoryValidationOk {
-  readonly ok: true;
-}
-
-export interface GitRepositoryValidationFail {
-  readonly ok: false;
-  readonly reasons: readonly string[];
-}
-
-export type GitRepositoryValidation = GitRepositoryValidationOk | GitRepositoryValidationFail;
-
-export interface GitRepositoryParseOk<T> {
-  readonly ok: true;
-  readonly value: T;
-}
-
-export type GitRepositoryParseResult<T> = GitRepositoryParseOk<T> | GitRepositoryValidationFail;
-
-function rejectGitField(reasons: string[], reason: string): false {
-  reasons.push(reason);
-  return false;
-}
-
-function isRecord(input: unknown): input is Readonly<Record<string, unknown>> {
-  return typeof input === "object" && input !== null && !Array.isArray(input);
-}
-
-function isGitRepositoryState(input: unknown): input is GitRepositoryState {
-  return typeof input === "string" && new Set<string>(GIT_REPOSITORY_STATES).has(input);
-}
-
-function isString(input: unknown): input is string {
-  return typeof input === "string";
-}
-
-function isBoolean(input: unknown): input is boolean {
-  return typeof input === "boolean";
-}
-
-function isNonNegativeInteger(input: unknown): input is number {
-  return typeof input === "number" && Number.isInteger(input) && input >= 0;
-}
-
 const TEXT_ENCODER = new TextEncoder();
 
 // The producer clamps `diff` to `maxBytes` by cutting the ENCODED byte buffer at an arbitrary
@@ -265,25 +210,6 @@ function validateChange(input: unknown, reasons: string[], index: number): input
       reasons,
       `changes[${String(index)}].oldPath must be a string when present`,
     );
-  }
-  return valid;
-}
-
-// Fields every unavailable/available envelope in this file's territory shares: a closed-union
-// `reason` and a bounded free-text `message`, both optional (KEIKO-0310).
-function validateWireEnvelopeOptionals(
-  input: Readonly<Record<string, unknown>>,
-  reasons: string[],
-): boolean {
-  let valid = true;
-  if (input.reason !== undefined && !isGitWireUnavailableReason(input.reason)) {
-    valid = rejectGitField(reasons, "reason invalid");
-  }
-  if (input.message !== undefined && !isBoundedGitMessage(input.message)) {
-    valid = rejectGitField(reasons, "message must be a bounded string when present");
-  }
-  if (input.repositoryRoot !== undefined && !isString(input.repositoryRoot)) {
-    valid = rejectGitField(reasons, "repositoryRoot must be a string when present");
   }
   return valid;
 }
@@ -366,24 +292,12 @@ function validateStatusPresentation(
   return valid;
 }
 
-function validateRepositoryEnvelopeIdentity(
-  input: Readonly<Record<string, unknown>>,
-  reasons: string[],
-): boolean {
-  let valid = true;
-  if (input.schemaVersion !== GIT_REPOSITORY_SCHEMA_VERSION)
-    valid = rejectGitField(reasons, "schemaVersion invalid");
-  if (!isString(input.root)) valid = rejectGitField(reasons, "root must be a string");
-  if (!isGitRepositoryState(input.state)) valid = rejectGitField(reasons, "state invalid");
-  return valid;
-}
-
 function admitGitStatusResponse(
   input: Readonly<Record<string, unknown>>,
   reasons: string[],
 ): input is Readonly<Record<string, unknown>> & GitRepositoryStatusResponse {
-  let valid = validateRepositoryEnvelopeIdentity(input, reasons);
-  valid = validateWireEnvelopeOptionals(input, reasons) && valid;
+  let valid = validateGitReadIdentity(input, reasons, GIT_REPOSITORY_SCHEMA_VERSION);
+  valid = validateGitWireEnvelopeOptionals(input, reasons, true) && valid;
   if (input.branch !== undefined && !isString(input.branch)) {
     valid = rejectGitField(reasons, "branch must be a string when present");
   }
@@ -395,17 +309,12 @@ function admitGitStatusResponse(
 export function parseGitRepositoryStatusResponse(
   input: unknown,
 ): GitRepositoryParseResult<GitRepositoryStatusResponse> {
-  if (!isRecord(input)) return { ok: false, reasons: ["response must be an object"] };
-  const reasons: string[] = [];
-  return admitGitStatusResponse(input, reasons)
-    ? { ok: true, value: input }
-    : { ok: false, reasons };
+  return parseGitWireResponse(input, admitGitStatusResponse);
 }
 
 // Keep the existing verdict-only API while both public paths share the same concrete admission.
 export function validateGitRepositoryStatusResponse(input: unknown): GitRepositoryValidation {
-  const parsed = parseGitRepositoryStatusResponse(input);
-  return parsed.ok ? { ok: true } : parsed;
+  return gitWireValidationVerdict(parseGitRepositoryStatusResponse(input));
 }
 
 // The producer (keiko-server gitRoutes.ts handleGitDiff) always pre-clamps `diff` to at most
@@ -443,13 +352,7 @@ function validateDiffOptionalEnvelope(
   input: Readonly<Record<string, unknown>>,
   reasons: string[],
 ): boolean {
-  let valid = true;
-  if (input.reason !== undefined && !isGitWireUnavailableReason(input.reason)) {
-    valid = rejectGitField(reasons, "reason invalid");
-  }
-  if (input.repositoryRoot !== undefined && !isString(input.repositoryRoot)) {
-    valid = rejectGitField(reasons, "repositoryRoot must be a string when present");
-  }
+  let valid = validateGitWireEnvelopeOptionals(input, reasons, false);
   if (input.path !== undefined && !isString(input.path))
     valid = rejectGitField(reasons, "path must be a string");
   return valid;
@@ -485,7 +388,7 @@ function admitGitDiffResponse(
   input: Readonly<Record<string, unknown>>,
   reasons: string[],
 ): input is Readonly<Record<string, unknown>> & GitRepositoryDiffResponse {
-  let valid = validateRepositoryEnvelopeIdentity(input, reasons);
+  let valid = validateGitReadIdentity(input, reasons, GIT_REPOSITORY_SCHEMA_VERSION);
   valid = validateDiffEnvelopeFields(input, reasons) && valid;
   return validateDiffTruncationConsistency(input, reasons) && valid;
 }
@@ -493,12 +396,9 @@ function admitGitDiffResponse(
 export function parseGitRepositoryDiffResponse(
   input: unknown,
 ): GitRepositoryParseResult<GitRepositoryDiffResponse> {
-  if (!isRecord(input)) return { ok: false, reasons: ["response must be an object"] };
-  const reasons: string[] = [];
-  return admitGitDiffResponse(input, reasons) ? { ok: true, value: input } : { ok: false, reasons };
+  return parseGitWireResponse(input, admitGitDiffResponse);
 }
 
 export function validateGitRepositoryDiffResponse(input: unknown): GitRepositoryValidation {
-  const parsed = parseGitRepositoryDiffResponse(input);
-  return parsed.ok ? { ok: true } : parsed;
+  return gitWireValidationVerdict(parseGitRepositoryDiffResponse(input));
 }

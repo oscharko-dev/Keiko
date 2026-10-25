@@ -1,4 +1,4 @@
-// Shared internal run-result field validators for the governed task-execution wire contracts
+// Shared internal task-execution field validators for the governed task-execution wire contracts
 // (KEIKO-0601). command-runner.ts and container-runtime.ts each parse an independent executor's
 // run-result shape, but the mechanical field-by-field checks for the fields both shapes share
 // (schemaVersion, runId, taskId, kind, failureReason, exitCode, durationMs, truncated, timedOut,
@@ -7,6 +7,9 @@
 // vocabulary and failure-reason vocabulary (`COMMAND_FAILURE_REASONS` and `CONTAINER_FAILURE_REASONS`
 // stay legitimately separate enums — only the checking mechanics are shared) plus an optional hook
 // for a field it validates in between `kind` and `failureReason` (container-runtime's `engine`).
+//
+// The same two executors also share physical task-catalog member and argv admission here. Their
+// executable, image, trust, engine and task-kind fields remain at each executor's own boundary.
 //
 // Leaf-package rules (ADR-0019): no imports, no IO, no clock, no randomness. Intentionally NOT
 // re-exported from index.ts — this is internal wiring between two sibling files in this package,
@@ -180,4 +183,52 @@ export function validateRunResultCore(
   const numbers = validateRunResultNumbers(value, errors);
   const text = validateRunResultFlagsAndText(value, errors);
   return identity && extra && reason && numbers && text;
+}
+
+export function validateTaskArguments(
+  value: Record<string, unknown>,
+  path: string,
+  errors: string[],
+): value is Record<string, unknown> & { readonly args: readonly string[] } {
+  const args = value.args;
+  if (!Array.isArray(args)) {
+    errors.push(`${path}.args must be an array`);
+    return false;
+  }
+  const entries: readonly unknown[] = args;
+  const length = entries.length;
+  for (let index = 0; index < length; index += 1) {
+    if (typeof entries[index] !== "string") {
+      errors.push(`${path}.args must be an array of strings`);
+      return false;
+    }
+  }
+  return true;
+}
+
+export function validateTaskCatalogMembers<Task>(
+  value: Record<string, unknown>,
+  errors: string[],
+  validateTask: (value: unknown, index: number, errors: string[]) => value is Task,
+): value is Record<string, unknown> & { readonly tasks: readonly Task[] } {
+  if (!Array.isArray(value.tasks)) {
+    errors.push("tasks must be an array");
+    return false;
+  }
+  const tasks: unknown = value.tasks;
+  if (!Array.isArray(tasks)) {
+    errors.push("tasks must be an array");
+    return false;
+  }
+  const entries: readonly unknown[] = tasks;
+  const length = entries.length;
+  let valid = true;
+  for (let index = 0; index < length; index += 1) {
+    if (!(index in entries)) {
+      errors.push(`tasks[${String(index)}] must be an object`);
+      return false;
+    }
+    if (!validateTask(entries[index], index, errors)) valid = false;
+  }
+  return valid;
 }

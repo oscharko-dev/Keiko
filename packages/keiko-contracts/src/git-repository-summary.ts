@@ -9,10 +9,16 @@ import type {
   GitRepositoryParseResult,
 } from "./git-repository.js";
 import {
-  GIT_REPOSITORY_STATES,
-  isBoundedGitMessage,
-  isGitWireUnavailableReason,
-} from "./git-repository.js";
+  gitWireValidationVerdict,
+  parseGitWireResponse,
+  isGitWireRecord as isRecord,
+  isString,
+  isGitWireBoolean as isBoolean,
+  isGitWireNonNegativeInteger as isNonNegativeInteger,
+  rejectGitEnvelopeField as rejectSummaryField,
+  validateGitReadIdentity,
+  validateGitWireEnvelopeOptionals,
+} from "./git-wire-envelope-validation.js";
 
 export const GIT_REPOSITORY_SUMMARY_SCHEMA_VERSION = "1" as const;
 
@@ -72,31 +78,6 @@ export interface GitRemotesResponse {
 }
 
 export type GitRepositorySummaryValidation = GitRepositoryValidation; // reuse ok/fail shape
-
-function rejectSummaryField(reasons: string[], reason: string): false {
-  reasons.push(reason);
-  return false;
-}
-
-function isGitRepositoryState(input: unknown): input is GitRepositoryState {
-  return typeof input === "string" && new Set<string>(GIT_REPOSITORY_STATES).has(input);
-}
-
-function isRecord(input: unknown): input is Readonly<Record<string, unknown>> {
-  return typeof input === "object" && input !== null && !Array.isArray(input);
-}
-
-function isString(input: unknown): input is string {
-  return typeof input === "string";
-}
-
-function isBoolean(input: unknown): input is boolean {
-  return typeof input === "boolean";
-}
-
-function isNonNegativeInteger(input: unknown): input is number {
-  return typeof input === "number" && Number.isInteger(input) && input >= 0;
-}
 
 // KEIKO-0904: bound a remote URL string on the wire in both length and content. Reject a URL
 // carrying embedded userinfo (username or password) so a leaked fetchUrl/pushUrl cannot cross
@@ -223,27 +204,6 @@ function isGitLastSyncMetadata(value: unknown): value is GitLastSyncMetadata {
   return value.lastFetchAtMs === undefined || isNonNegativeInteger(value.lastFetchAtMs);
 }
 
-// Fields validateGitRepositorySummary and validateGitRemotesResponse both declare (KEIKO-0310):
-// a closed-union `reason`, a bounded free-text `message` (summary only -- GitRemotesResponse has
-// no message field), and a server-private `repositoryRoot`, all optional.
-function validateWireEnvelopeOptionals(
-  input: Readonly<Record<string, unknown>>,
-  reasons: string[],
-  options: { readonly checkMessage: boolean },
-): boolean {
-  let valid = true;
-  if (input.reason !== undefined && !isGitWireUnavailableReason(input.reason)) {
-    valid = rejectSummaryField(reasons, "reason invalid");
-  }
-  if (options.checkMessage && input.message !== undefined && !isBoundedGitMessage(input.message)) {
-    valid = rejectSummaryField(reasons, "message must be a bounded string when present");
-  }
-  if (input.repositoryRoot !== undefined && !isString(input.repositoryRoot)) {
-    valid = rejectSummaryField(reasons, "repositoryRoot must be a string when present");
-  }
-  return valid;
-}
-
 function validateSummaryBranchFields(
   input: Readonly<Record<string, unknown>>,
   reasons: string[],
@@ -286,24 +246,12 @@ function validateSummaryCounters(
   return valid;
 }
 
-function validateGitReadIdentity(
-  input: Readonly<Record<string, unknown>>,
-  reasons: string[],
-): boolean {
-  let valid = true;
-  if (input.schemaVersion !== GIT_REPOSITORY_SUMMARY_SCHEMA_VERSION)
-    valid = rejectSummaryField(reasons, "schemaVersion invalid");
-  if (!isString(input.root)) valid = rejectSummaryField(reasons, "root must be a string");
-  if (!isGitRepositoryState(input.state)) valid = rejectSummaryField(reasons, "state invalid");
-  return valid;
-}
-
 function admitGitSummary(
   input: Readonly<Record<string, unknown>>,
   reasons: string[],
 ): input is Readonly<Record<string, unknown>> & GitRepositorySummary {
-  let valid = validateGitReadIdentity(input, reasons);
-  valid = validateWireEnvelopeOptionals(input, reasons, { checkMessage: true }) && valid;
+  let valid = validateGitReadIdentity(input, reasons, GIT_REPOSITORY_SUMMARY_SCHEMA_VERSION);
+  valid = validateGitWireEnvelopeOptionals(input, reasons, true) && valid;
   valid = validateSummaryBranchFields(input, reasons) && valid;
   valid = validateSummaryCounters(input, reasons) && valid;
   return validateRemotesArray(input.remotes, reasons, { allowUrls: false }) && valid;
@@ -313,8 +261,8 @@ function admitGitRemotes(
   input: Readonly<Record<string, unknown>>,
   reasons: string[],
 ): input is Readonly<Record<string, unknown>> & GitRemotesResponse {
-  let valid = validateGitReadIdentity(input, reasons);
-  valid = validateWireEnvelopeOptionals(input, reasons, { checkMessage: false }) && valid;
+  let valid = validateGitReadIdentity(input, reasons, GIT_REPOSITORY_SUMMARY_SCHEMA_VERSION);
+  valid = validateGitWireEnvelopeOptionals(input, reasons, false) && valid;
   if (!isBoolean(input.available))
     valid = rejectSummaryField(reasons, "available must be a boolean");
   if (!isBoolean(input.truncated))
@@ -325,25 +273,19 @@ function admitGitRemotes(
 export function parseGitRepositorySummary(
   input: unknown,
 ): GitRepositoryParseResult<GitRepositorySummary> {
-  if (!isRecord(input)) return { ok: false, reasons: ["response must be an object"] };
-  const reasons: string[] = [];
-  return admitGitSummary(input, reasons) ? { ok: true, value: input } : { ok: false, reasons };
+  return parseGitWireResponse(input, admitGitSummary);
 }
 
 export function parseGitRemotesResponse(
   input: unknown,
 ): GitRepositoryParseResult<GitRemotesResponse> {
-  if (!isRecord(input)) return { ok: false, reasons: ["response must be an object"] };
-  const reasons: string[] = [];
-  return admitGitRemotes(input, reasons) ? { ok: true, value: input } : { ok: false, reasons };
+  return parseGitWireResponse(input, admitGitRemotes);
 }
 
 export function validateGitRepositorySummary(input: unknown): GitRepositoryValidation {
-  const parsed = parseGitRepositorySummary(input);
-  return parsed.ok ? { ok: true } : parsed;
+  return gitWireValidationVerdict(parseGitRepositorySummary(input));
 }
 
 export function validateGitRemotesResponse(input: unknown): GitRepositoryValidation {
-  const parsed = parseGitRemotesResponse(input);
-  return parsed.ok ? { ok: true } : parsed;
+  return gitWireValidationVerdict(parseGitRemotesResponse(input));
 }

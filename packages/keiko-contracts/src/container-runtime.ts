@@ -1,8 +1,8 @@
 // Governed container engine detection + execution wire contract (Issue #1388, Epic #1491,
 // ADR-0070). This leaf module owns the wire-stable vocabulary for the container runtime pilot only.
-// It is intentionally pure: no IO, no process execution, no clock, no randomness. The ONLY in-package
-// imports are the `CommandRule` shape reused for the defense-in-depth allowlist and the two runtime
-// capability vocabularies reused (aliased, never redefined) for the engine state.
+// It is intentionally pure: no IO, no process execution, no clock, no randomness. In-package
+// helpers share task-field admission, freezing, the defense-in-depth allowlist shape and the
+// runtime capability vocabularies (aliased, never redefined) for the engine state.
 //
 // The runner never accepts free-form argv, image refs, or flags. A request names a `taskId` from a
 // server-frozen catalog; the server resolves that id to a vetted `ContainerTask` whose `image` is in
@@ -17,6 +17,8 @@ import {
   isOneOf,
   isRecord,
   validateRunResultCore,
+  validateTaskArguments,
+  validateTaskCatalogMembers,
 } from "./run-result-validation.js";
 import {
   RUNTIME_CAPABILITY_STATES,
@@ -474,27 +476,6 @@ export function validateContainerCapabilityResponse(
   return { ok: true, value };
 }
 
-function validateContainerTaskArgs(
-  value: Record<string, unknown>,
-  path: string,
-  errors: string[],
-): value is Record<string, unknown> & Pick<ContainerTask, "args"> {
-  const args = value.args;
-  if (!Array.isArray(args)) {
-    errors.push(`${path}.args must be an array`);
-    return false;
-  }
-  const entries: readonly unknown[] = args;
-  const length = entries.length;
-  for (let index = 0; index < length; index += 1) {
-    if (typeof entries[index] !== "string") {
-      errors.push(`${path}.args must be an array of strings`);
-      return false;
-    }
-  }
-  return true;
-}
-
 function containerTaskIdentityIsValid(
   value: Record<string, unknown>,
   path: string,
@@ -524,34 +505,8 @@ function validateContainerTask(
   if (!kind) errors.push(`${path}.kind is invalid`);
   const engine = isOneOf(value.engine, CONTAINER_ENGINE_IDS);
   if (!engine) errors.push(`${path}.engine is invalid`);
-  const args = validateContainerTaskArgs(value, path, errors);
+  const args = validateTaskArguments(value, path, errors);
   return identity && kind && engine && args;
-}
-
-function taskArrayIsValid(
-  value: Record<string, unknown>,
-  errors: string[],
-): value is Record<string, unknown> & Pick<ContainerTaskCatalog, "tasks"> {
-  if (!Array.isArray(value.tasks)) {
-    errors.push("tasks must be an array");
-    return false;
-  }
-  const tasks: unknown = value.tasks;
-  if (!Array.isArray(tasks)) {
-    errors.push("tasks must be an array");
-    return false;
-  }
-  const entries: readonly unknown[] = tasks;
-  const length = entries.length;
-  let valid = true;
-  for (let index = 0; index < length; index += 1) {
-    if (!(index in entries)) {
-      errors.push(`tasks[${String(index)}] must be an object`);
-      return false;
-    }
-    if (!validateContainerTask(entries[index], index, errors)) valid = false;
-  }
-  return valid;
 }
 
 function catalogFieldsAreValid(
@@ -564,7 +519,7 @@ function catalogFieldsAreValid(
   if (!project) errors.push("projectId must be a non-empty string");
   const engine = typeof value.engineAvailable === "boolean";
   if (!engine) errors.push("engineAvailable must be a boolean");
-  const tasks = taskArrayIsValid(value, errors);
+  const tasks = validateTaskCatalogMembers(value, errors, validateContainerTask);
   return schema && project && engine && tasks;
 }
 

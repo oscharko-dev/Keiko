@@ -1,7 +1,7 @@
 // Governed test/build/run command executor wire contract (Issue #1387, Epic #1491). This leaf
 // module owns the wire-stable vocabulary for the controlled command runner only. It is intentionally
 // pure: no IO, no process execution, no clock, no randomness, and no imports from sibling packages —
-// the one in-package import is the `CommandRule` shape reused for the executor allowlist.
+// in-package helpers share task-field admission, freezing and the executor allowlist shape.
 //
 // The runner never accepts free-form argv. A request names a `taskId` from a server-discovered
 // catalog; the BFF resolves that id to a vetted `CommandTask` whose `executable`+`args` are frozen.
@@ -14,6 +14,8 @@ import {
   isOneOf,
   isRecord,
   validateRunResultCore,
+  validateTaskArguments,
+  validateTaskCatalogMembers,
 } from "./run-result-validation.js";
 import type { CommandRule } from "./tools.js";
 
@@ -316,27 +318,6 @@ export function parseCommandTaskRunRequest(input: unknown): CommandTaskRunReques
   }
 }
 
-function validateTaskArgs(
-  value: Record<string, unknown>,
-  path: string,
-  errors: string[],
-): value is Record<string, unknown> & Pick<CommandTask, "args"> {
-  const args = value.args;
-  if (!Array.isArray(args)) {
-    errors.push(`${path}.args must be an array`);
-    return false;
-  }
-  const entries: readonly unknown[] = args;
-  const length = entries.length;
-  for (let index = 0; index < length; index += 1) {
-    if (typeof entries[index] !== "string") {
-      errors.push(`${path}.args must be an array of strings`);
-      return false;
-    }
-  }
-  return true;
-}
-
 function taskIdentityIsValid(
   value: Record<string, unknown>,
   path: string,
@@ -377,34 +358,8 @@ function validateTask(value: unknown, index: number, errors: string[]): value is
   errors.push(...extra);
   const identity = taskIdentityIsValid(value, path, errors);
   const trust = taskTrustIsValid(value, path, errors);
-  const args = validateTaskArgs(value, path, errors);
+  const args = validateTaskArguments(value, path, errors);
   return extra.length === 0 && identity && trust && args;
-}
-
-function taskArrayIsValid(
-  value: Record<string, unknown>,
-  errors: string[],
-): value is Record<string, unknown> & Pick<CommandTaskCatalog, "tasks"> {
-  if (!Array.isArray(value.tasks)) {
-    errors.push("tasks must be an array");
-    return false;
-  }
-  const tasks: unknown = value.tasks;
-  if (!Array.isArray(tasks)) {
-    errors.push("tasks must be an array");
-    return false;
-  }
-  const entries: readonly unknown[] = tasks;
-  const length = entries.length;
-  let valid = true;
-  for (let index = 0; index < length; index += 1) {
-    if (!(index in entries)) {
-      errors.push(`tasks[${String(index)}] must be an object`);
-      return false;
-    }
-    if (!validateTask(entries[index], index, errors)) valid = false;
-  }
-  return valid;
 }
 
 function catalogFieldsAreValid(
@@ -415,7 +370,7 @@ function catalogFieldsAreValid(
   if (!schema) errors.push("schemaVersion is invalid");
   const project = isNonEmptyString(value.projectId);
   if (!project) errors.push("projectId must be a non-empty string");
-  const tasks = taskArrayIsValid(value, errors);
+  const tasks = validateTaskCatalogMembers(value, errors, validateTask);
   return schema && project && tasks;
 }
 

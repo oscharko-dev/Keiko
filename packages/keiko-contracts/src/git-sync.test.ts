@@ -513,3 +513,33 @@ describe("validateGitSyncExecuteResponse", () => {
     if (!result.ok) expect(result.reasons).toContain(`${key} must be a string when present`);
   });
 });
+
+// Preserve both required-preview and optional-execute integer admission on ORIGINAL and SAME.
+describe("Git sync scalar integer preservation", () => {
+  for (const [surface, phase, parse, fixture] of [
+    ["source", "preview", parseGitSyncPreview, validPreview],
+    ["public", "preview", parsePublicPreview, validPreview],
+    ["source", "execute", parseGitSyncExecuteResponse, validExecute],
+    ["public", "execute", parsePublicExecute, validExecute],
+  ] as const) {
+    it(`${surface} ${phase}: retains negative zero and unsafe integers without coercion`, () => {
+      for (const count of [-0, 0, 1, 9_007_199_254_740_992]) {
+        const input = { ...fixture(), ahead: count };
+        const result = parse(input);
+        if (!result.ok) throw new TypeError("Expected the existing integer admission");
+        expect(result.value).toBe(input);
+        expect(result.value.ahead).toBe(count);
+      }
+      for (const count of [-1, 0.5, NaN, Infinity, "0", true, null]) {
+        expect(parse({ ...fixture(), ahead: count })).toEqual({
+          ok: false,
+          reasons: [
+            phase === "preview"
+              ? "ahead must be a non-negative integer"
+              : "ahead must be a non-negative integer when present",
+          ],
+        });
+      }
+    });
+  }
+});
