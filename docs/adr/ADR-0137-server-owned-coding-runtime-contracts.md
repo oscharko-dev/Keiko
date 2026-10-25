@@ -1082,6 +1082,13 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   access), keeps the workspace's sensitive-path and hard-link refusals, and refuses every write. The
   Linux mount allowlist names no external root yet, so none is admitted there; repository
   references would leave the machine and stay refused.
+- **Web search needs an admitted search integration (T15, #3903 AC3).** The pinned 2.1.4 offers
+  `websearch` at Full access and calls the operator's selected search integration. Keiko admits
+  none, and without one the original tool waits on a provider it cannot reach (measured on the
+  executable), so the policy refuses it at once in every mode (`unsupported-action`) and names the
+  alternative, `webfetch` of a known URL, which Full access allows through the policy with
+  inherited egress (real binary: a loopback page is fetched in Full access and refused at once
+  below it).
 - **An unoffered native tool name is the producer's to answer.** The gateway binds a native call
   by name only and grants nothing (ADR-0175 D2). A model that names a tool the request did not
   offer (a hallucinated `bash`, say) reaches OpenCode, which answers with its own unavailable-tool

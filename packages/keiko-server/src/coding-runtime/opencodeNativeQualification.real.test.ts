@@ -2602,3 +2602,92 @@ describe("pinned native OpenCode accepted external references (C08, #3900 AC5)",
     240_000,
   );
 });
+
+// ─── original webfetch and websearch (T14, T15, #3903 AC3) ──────────────────────────────────────
+
+// The original `webfetch` is internet use: in Full access the policy allows it with inherited egress
+// and the producer fetches; below Full access the policy refuses at once with an explanation and the
+// kernel reaches loopback only. The page here is a fixture-owned loopback listener.
+describe("pinned native OpenCode webfetch and websearch (T14, T15, #3903 AC3)", () => {
+  const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
+
+  async function withPage(body: (url: string, page: Stub) => Promise<void>): Promise<void> {
+    const page = await startStub((_self, _recorded, response) => {
+      response.writeHead(200, { "Content-Type": "text/plain" }).end("WEBFETCH-PAGE-CANARY\n");
+    });
+    try {
+      await body(`http://127.0.0.1:${String(page.port)}/notes.txt`, page);
+    } finally {
+      await closeStub(page);
+    }
+  }
+
+  it.skipIf(skip)(
+    "fetches a page in Full access through the policy, as the original tool",
+    async () => {
+      await withPage(async (url, page) => {
+        await withRun({ mode: "autonomous-delivery" }, async (run) => {
+          const result = await scriptedTurn(run, {
+            name: "webfetch",
+            arguments: { url, format: "text" },
+          });
+          expect(result).toContain("WEBFETCH-PAGE-CANARY");
+          expect(page.requests).toHaveLength(1);
+          expect(run.facade.decisions).toContainEqual(
+            expect.objectContaining({ permission: "webfetch", resources: [url], effect: "allow" }),
+          );
+        });
+      });
+    },
+    180_000,
+  );
+
+  // T15: without a search integration the original websearch would wait on a provider it cannot
+  // reach (measured); Keiko refuses it at once, and the turn goes on with the alternative named.
+  it.skipIf(skip)(
+    "refuses web search at once in Full access, naming webfetch, and the turn goes on",
+    async () => {
+      await withRun({ mode: "autonomous-delivery" }, async (run) => {
+        const result = await scriptedTurn(run, {
+          name: "websearch",
+          arguments: { query: "keiko coding workbench" },
+        });
+        expect(result).toContain("web search needs a search integration");
+        expect(result).toContain("webfetch");
+        expect(run.facade.decisions).toContainEqual(
+          expect.objectContaining({
+            permission: "websearch",
+            effect: "deny",
+            reason: "unsupported-action",
+          }),
+        );
+      });
+    },
+    180_000,
+  );
+
+  it.skipIf(skip)(
+    "refuses a page below Full access with an explanation, and nothing is fetched",
+    async () => {
+      await withPage(async (url, page) => {
+        await withRun({ mode: "supervised-coding" }, async (run) => {
+          const result = await scriptedTurn(run, {
+            name: "webfetch",
+            arguments: { url, format: "text" },
+          });
+          expect(result).not.toContain("WEBFETCH-PAGE-CANARY");
+          expect(result).toContain("only available in Full access");
+          expect(page.requests).toHaveLength(0);
+          expect(run.facade.decisions).toContainEqual(
+            expect.objectContaining({
+              permission: "webfetch",
+              effect: "deny",
+              reason: "mode-denied",
+            }),
+          );
+        });
+      });
+    },
+    180_000,
+  );
+});

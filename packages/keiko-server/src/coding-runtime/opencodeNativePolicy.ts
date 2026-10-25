@@ -121,7 +121,18 @@ const READ_ACTIONS = new Set([
   "doom_loop",
 ]);
 const EDIT_ACTIONS = new Set(["edit", "write", "patch"]);
-const EGRESS_ACTIONS = new Set(["webfetch", "websearch"]);
+const EGRESS_ACTIONS = new Set(["webfetch"]);
+/**
+ * The original `websearch` (T15) calls the operator's selected search integration. Keiko admits
+ * none, and without one the pinned 2.1.4 tool waits on a provider it cannot reach (measured with
+ * the original executable at Full access), so it is refused at once, in every mode, with the
+ * alternative the model has: `webfetch` of a known URL (Full access).
+ */
+const WEBSEARCH_UNCONFIGURED: Classified = Object.freeze({
+  reason: "unsupported-action",
+  message:
+    "Keiko refused this action: web search needs a search integration, and none is configured for this run. Fetch a known URL with webfetch instead (Full access only).",
+});
 const KNOWN_ACTIONS: ReadonlySet<string> = new Set(OPENCODE_NATIVE_PERMISSION_ACTIONS);
 /** The closed log vocabulary of evaluated actions; anything unpinned is logged as `other`. */
 const PERMISSION_LOG_VALUES = [
@@ -811,6 +822,7 @@ function classifyNativeAction(
   if (permission === OPENCODE_CODE_MODE_SESSION_MOVE)
     return classifySessionMove(request, roots.workspaceRoot);
   if (permission === OPENCODE_CODE_MODE_WORKTREE_CREATE) return classifyWorktreeCreate(request);
+  if (permission === "websearch") return WEBSEARCH_UNCONFIGURED;
   if (!KNOWN_ACTIONS.has(permission))
     return {
       reason: "unsupported-action",

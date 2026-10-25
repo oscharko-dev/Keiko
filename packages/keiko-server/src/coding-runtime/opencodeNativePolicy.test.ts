@@ -160,9 +160,6 @@ describe("native policy effects per autonomy mode", () => {
     expect(effectOf("governed-assist", "webfetch", ["https://example.com/doc"])).toBe(
       "deny:mode-denied",
     );
-    expect(effectOf("supervised-coding", "websearch", ["vitest mock timers"])).toBe(
-      "deny:mode-denied",
-    );
     expect(effectOf("autonomous-delivery", "webfetch", ["https://example.com/doc"])).toBe("allow");
     const refused = decide("supervised-coding", "webfetch", ["https://example.com/doc"]);
     expect(refused.effect === "deny" ? refused.message : "").toMatch(
@@ -172,6 +169,18 @@ describe("native policy effects per autonomy mode", () => {
     expect(allowed.effect === "allow" ? allowed.classification.actionClass : "").toBe(
       "network-egress",
     );
+  });
+
+  // T15: Keiko admits no search integration, and the original tool then waits on a provider it
+  // cannot reach; it is refused at once in every mode and points the model at webfetch.
+  it("refuses web search without a search integration in every mode, with the alternative", () => {
+    for (const mode of ["governed-assist", "supervised-coding", "autonomous-delivery"]) {
+      const decision = decide(mode, "websearch", ["vitest mock timers"]);
+      expect(decision.effect === "deny" ? decision.reason : decision.effect, mode).toBe(
+        "unsupported-action",
+      );
+      expect(decision.effect === "deny" ? decision.message : "").toMatch(/webfetch/u);
+    }
   });
 
   it("classifies every simple command of a shell line on its own (#3897 audit)", () => {
