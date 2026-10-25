@@ -64,20 +64,20 @@ unhealthy | restartRequired`.
 
 Resolution applies this precedence, stopping at the first decisive downgrade:
 
-| Order | Input | Effective result |
-| ----- | ----- | ---------------- |
-| 1 | Product does not support the language | `disabled / PRODUCT_UNSUPPORTED` |
-| 1a | Canonical state is unavailable or rejected | `disabled / STATE_UNAVAILABLE` |
-| 2 | Deployment policy denies it | `disabledByPolicy / POLICY_DENIED` |
-| 3 | Legacy environment explicitly disables it | `disabledByPolicy / LEGACY_ENV_DISABLED` |
-| 4 | No approved runtime is provisioned | `notProvisioned / NOT_PROVISIONED` |
-| 5 | Workspace activation is disabled or unset | `disabled / WORKSPACE_DISABLED` or `WORKSPACE_ACTIVATION_UNSET` |
-| 6 | Eligible but no process has started | `available / AVAILABLE` |
-| 7 | Startup/initialization is in progress | `starting / STARTING` |
-| 8 | A required capability was not negotiated or was unregistered | `degraded / NEGOTIATED_CAPABILITY_MISSING` |
-| 9 | Runtime health is unhealthy, degraded, or unknown | `unhealthy` or `degraded` with the matching health reason |
-| 10 | Healthy runtime serves an older restart-required configuration | `restartRequired / RESTART_REQUIRED` |
-| 11 | Every ceiling is satisfied for the current revision | `active / ACTIVE` |
+| Order | Input                                                          | Effective result                                                |
+| ----- | -------------------------------------------------------------- | --------------------------------------------------------------- |
+| 1     | Product does not support the language                          | `disabled / PRODUCT_UNSUPPORTED`                                |
+| 1a    | Canonical state is unavailable or rejected                     | `disabled / STATE_UNAVAILABLE`                                  |
+| 2     | Deployment policy denies it                                    | `disabledByPolicy / POLICY_DENIED`                              |
+| 3     | Legacy environment explicitly disables it                      | `disabledByPolicy / LEGACY_ENV_DISABLED`                        |
+| 4     | No approved runtime is provisioned                             | `notProvisioned / NOT_PROVISIONED`                              |
+| 5     | Workspace activation is disabled or unset                      | `disabled / WORKSPACE_DISABLED` or `WORKSPACE_ACTIVATION_UNSET` |
+| 6     | Eligible but no process has started                            | `available / AVAILABLE`                                         |
+| 7     | Startup/initialization is in progress                          | `starting / STARTING`                                           |
+| 8     | A required capability was not negotiated or was unregistered   | `degraded / NEGOTIATED_CAPABILITY_MISSING`                      |
+| 9     | Runtime health is unhealthy, degraded, or unknown              | `unhealthy` or `degraded` with the matching health reason       |
+| 10    | Healthy runtime serves an older restart-required configuration | `restartRequired / RESTART_REQUIRED`                            |
+| 11    | Every ceiling is satisfied for the current revision            | `active / ACTIVE`                                               |
 
 The legacy environment layer is deployment compatibility input, not persisted user configuration.
 An explicit legacy disable is a ceiling. Legacy enablement can make a compatibility input available
@@ -236,15 +236,23 @@ limited to 10,000 tokens. Every tuple validates non-negative deltas, positive le
 and modifier bitset. Returned/total counts must match data length and truncation exactly. Malformed,
 over-cap, stale-legend, or unknown-field payloads are rejected rather than partially interpreted.
 
+Each consuming use captures and checks its own finite physical extent. Tuple validation and count
+settlement use the same observed data reference and checked count; legend mapping and mask checks
+likewise use bounded observations. A successful parser preserves the caller's record identity and
+cannot certify that a retained getter or array will remain unchanged. Server sanitization therefore
+captures bounded plain values before decoding/mapping, and the Editor token adapter validates and
+fits the same bounded owned values it converts for Monaco. Document fitting establishes its own cap;
+no later native iterator or fresh unchecked extent may bypass an earlier admission.
+
 Initial semantic-token candidate decisions are explicit but do not advertise support:
 
-| Language | Static decision for #2280 | Live rule |
-| -------- | ------------------------- | --------- |
-| Python | Candidate for measured rollout | Negotiated + mapped + bounded only |
-| Go | Candidate for measured rollout | Negotiated + mapped + bounded only |
-| Shell | Out initially | `semanticTokensCandidate: false`, `supported: false`, no legend |
-| Java | Candidate for measured rollout | Negotiated + mapped + bounded only |
-| Rust | Candidate for measured rollout | Negotiated + mapped + bounded only |
+| Language | Static decision for #2280      | Live rule                                                       |
+| -------- | ------------------------------ | --------------------------------------------------------------- |
+| Python   | Candidate for measured rollout | Negotiated + mapped + bounded only                              |
+| Go       | Candidate for measured rollout | Negotiated + mapped + bounded only                              |
+| Shell    | Out initially                  | `semanticTokensCandidate: false`, `supported: false`, no legend |
+| Java     | Candidate for measured rollout | Negotiated + mapped + bounded only                              |
+| Rust     | Candidate for measured rollout | Negotiated + mapped + bounded only                              |
 
 Large-file policy may lower the returned-token cap or disable semantic tokens, but may never raise the
 contract cap. At least one language requires measured quality/performance evidence before enablement.
@@ -612,6 +620,10 @@ upper bound only.
   paths, internally inconsistent status, unknown fields, malformed values, hostile objects, caps,
   unsafe paths, schema skew, stale revision/ETag, semantic-token truncation/version/index/mask bounds,
   and content-free sentinel/type-level invariants.
+- Finite changing-length/getter/iterator regressions cover token-data and legend count settlement,
+  server pre-parser traversal and Editor post-fit publication, with ordinary exact-cap healthy and
+  over-cap controls. These preserve original contract-parser identity and unrelated operation-array
+  observation pins; admission is bounded at each actual use rather than treated as immutability.
 - Contract tables are frozen and changes are additive exports from `keiko-contracts`.
 - Required repository gates are those listed by Issue #2271 and root `AGENTS.md`.
 

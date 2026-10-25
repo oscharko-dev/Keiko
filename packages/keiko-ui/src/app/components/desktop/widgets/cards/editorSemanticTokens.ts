@@ -1,8 +1,13 @@
 import type {
   ManagedLspSemanticTokenData,
   ManagedLspSemanticTokenLegend,
+  ManagedLspSemanticTokenType,
+  ManagedLspSemanticTokenModifier,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  MANAGED_LSP_SEMANTIC_TOKEN_MAX_TOKENS,
+  MANAGED_LSP_SEMANTIC_TOKEN_MAX_TYPES,
+  MANAGED_LSP_SEMANTIC_TOKEN_MAX_MODIFIERS,
   managedLspSemanticTokensFitDocument,
   parseManagedLspSemanticTokenData,
   parseManagedLspSemanticTokenLegend,
@@ -72,6 +77,96 @@ interface SemanticResponseContext {
   readonly signal: AbortSignal;
 }
 
+function capturedExtent(value: readonly unknown[], maximum: number): number | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const extent = value.length;
+  return Number.isSafeInteger(extent) && extent >= 0 && extent <= maximum ? extent : undefined;
+}
+
+function ownedTokenTypes(
+  value: readonly ManagedLspSemanticTokenType[],
+): readonly ManagedLspSemanticTokenType[] | undefined {
+  const extent = capturedExtent(value, MANAGED_LSP_SEMANTIC_TOKEN_MAX_TYPES);
+  if (extent === undefined) return undefined;
+  const entries: ManagedLspSemanticTokenType[] = [];
+  for (let index = 0; index < extent; index += 1) {
+    const member = value[index];
+    if (member === undefined) return undefined;
+    entries.push(member);
+  }
+  return value.length === extent ? entries : undefined;
+}
+
+function ownedTokenModifiers(
+  value: readonly ManagedLspSemanticTokenModifier[],
+): readonly ManagedLspSemanticTokenModifier[] | undefined {
+  const extent = capturedExtent(value, MANAGED_LSP_SEMANTIC_TOKEN_MAX_MODIFIERS);
+  if (extent === undefined) return undefined;
+  const entries: ManagedLspSemanticTokenModifier[] = [];
+  for (let index = 0; index < extent; index += 1) {
+    const member = value[index];
+    if (member === undefined) return undefined;
+    entries.push(member);
+  }
+  return value.length === extent ? entries : undefined;
+}
+
+function ownedLegend(
+  legend: ManagedLspSemanticTokenLegend,
+): ManagedLspSemanticTokenLegend | undefined {
+  if (!parseManagedLspSemanticTokenLegend(legend).ok) return undefined;
+  const tokenTypes = ownedTokenTypes(legend.tokenTypes);
+  if (tokenTypes === undefined) return undefined;
+  const tokenModifiers = ownedTokenModifiers(legend.tokenModifiers);
+  if (tokenModifiers === undefined) return undefined;
+  const value = {
+    schemaVersion: legend.schemaVersion,
+    legendVersion: legend.legendVersion,
+    tokenTypes,
+    tokenModifiers,
+    returnedTypeCount: legend.returnedTypeCount,
+    totalTypeCount: legend.totalTypeCount,
+    returnedModifierCount: legend.returnedModifierCount,
+    totalModifierCount: legend.totalModifierCount,
+    truncated: legend.truncated,
+  };
+  const parsed = parseManagedLspSemanticTokenLegend(value);
+  return parsed.ok ? parsed.value : undefined;
+}
+
+function ownedTokenNumbers(value: readonly number[]): readonly number[] | undefined {
+  const extent = capturedExtent(value, MANAGED_LSP_SEMANTIC_TOKEN_MAX_TOKENS * 5);
+  if (extent === undefined || extent % 5 !== 0) return undefined;
+  const entries: number[] = [];
+  for (let index = 0; index < extent; index += 1) {
+    const member = value[index];
+    if (typeof member !== "number") return undefined;
+    entries.push(member);
+  }
+  return value.length === extent ? entries : undefined;
+}
+
+function ownedResponse(
+  response: ManagedLspSemanticTokenData,
+  legend: ManagedLspSemanticTokenLegend,
+): ManagedLspSemanticTokenData | undefined {
+  if (!parseManagedLspSemanticTokenData(response, legend).ok) return undefined;
+  const data = ownedTokenNumbers(response.data);
+  if (data === undefined) return undefined;
+  const value = {
+    schemaVersion: response.schemaVersion,
+    legendVersion: response.legendVersion,
+    documentVersion: response.documentVersion,
+    dataVersion: response.dataVersion,
+    data,
+    returnedTokenCount: response.returnedTokenCount,
+    totalTokenCount: response.totalTokenCount,
+    truncated: response.truncated,
+  };
+  const parsed = parseManagedLspSemanticTokenData(value, legend);
+  return parsed.ok ? parsed.value : undefined;
+}
+
 function lineLengths(model: SemanticModel): readonly number[] {
   return Array.from(
     { length: model.getLineCount() },
@@ -95,11 +190,48 @@ function responseIsCurrent(
   );
 }
 
+function settleSemanticResponse(
+  args: CreateEditorSemanticTokensHostArgs,
+  runtime: SemanticRuntime,
+  model: SemanticModel,
+  context: SemanticResponseContext,
+  legend: ManagedLspSemanticTokenLegend,
+): { readonly data: Uint32Array } | null {
+  if (!responseIsCurrent(args, runtime, model, context)) return null;
+  const captured = ownedResponse(context.response, legend);
+  if (
+    captured === undefined ||
+    !responseIsCurrent(args, runtime, model, { ...context, response: captured })
+  ) {
+    return null;
+  }
+  return managedLspSemanticTokensFitDocument(captured.data, lineLengths(model))
+    ? { data: Uint32Array.from(captured.data) }
+    : null;
+}
+
+function semanticTokenQuery(
+  args: CreateEditorSemanticTokensHostArgs,
+  uri: string,
+  version: number,
+  sequence: number,
+  text: string,
+): EditorSemanticTokensQuery {
+  return {
+    request: {
+      request: { requestId: args.newRequestId(), streamId: args.streamId, sequence },
+      document: { uri, language: args.language, version },
+    },
+    documentText: text,
+  };
+}
+
 async function resolveTokens(
   args: CreateEditorSemanticTokensHostArgs,
   runtime: SemanticRuntime,
   model: SemanticModel,
   token: CancellationToken,
+  legend: ManagedLspSemanticTokenLegend,
 ): Promise<{ readonly data: Uint32Array } | null> {
   const uri = model.uri.toString();
   const text = model.getValue();
@@ -117,30 +249,23 @@ async function resolveTokens(
   runtime.controllers.add(controller);
   try {
     const response = await args.resolve(
-      {
-        request: {
-          request: { requestId: args.newRequestId(), streamId: args.streamId, sequence },
-          document: { uri, language: args.language, version },
-        },
-        documentText: text,
-      },
+      semanticTokenQuery(args, uri, version, sequence, text),
       controller.signal,
     );
-    if (
-      response === null ||
-      !responseIsCurrent(args, runtime, model, {
+    if (response === null) return null;
+    return settleSemanticResponse(
+      args,
+      runtime,
+      model,
+      {
         uri,
         version,
         sequence,
         response,
         signal: controller.signal,
-      })
-    )
-      return null;
-    const parsed = parseManagedLspSemanticTokenData(response, args.legend);
-    return parsed.ok && managedLspSemanticTokensFitDocument(parsed.value.data, lineLengths(model))
-      ? { data: Uint32Array.from(parsed.value.data) }
-      : null;
+      },
+      legend,
+    );
   } catch {
     return null;
   } finally {
@@ -152,14 +277,15 @@ async function resolveTokens(
 function semanticProvider(
   args: CreateEditorSemanticTokensHostArgs,
   runtime: SemanticRuntime,
+  legend: ManagedLspSemanticTokenLegend,
 ): SemanticProvider {
   return {
     getLegend: () => ({
-      tokenTypes: [...args.legend.tokenTypes],
-      tokenModifiers: [...args.legend.tokenModifiers],
+      tokenTypes: [...legend.tokenTypes],
+      tokenModifiers: [...legend.tokenModifiers],
     }),
     provideDocumentSemanticTokens: (model, _lastResultId, token) =>
-      resolveTokens(args, runtime, model, token),
+      resolveTokens(args, runtime, model, token, legend),
     releaseDocumentSemanticTokens: (): void => undefined,
   };
 }
@@ -167,12 +293,13 @@ function semanticProvider(
 export function createEditorSemanticTokensHost(
   args: CreateEditorSemanticTokensHostArgs,
 ): SemanticHost | undefined {
-  if (!parseManagedLspSemanticTokenLegend(args.legend).ok) return undefined;
+  const legend = ownedLegend(args.legend);
+  if (legend === undefined) return undefined;
   const runtime: SemanticRuntime = { disposed: false, sequence: 0, controllers: new Set() };
   return {
     languages: [args.language],
-    legendVersion: args.legend.legendVersion,
-    provider: semanticProvider(args, runtime),
+    legendVersion: legend.legendVersion,
+    provider: semanticProvider(args, runtime, legend),
     dispose: (): void => {
       runtime.disposed = true;
       for (const controller of runtime.controllers) controller.abort();

@@ -401,3 +401,162 @@ describe.each([
     },
   );
 });
+
+import {
+  parseManagedLspSemanticTokenData as publicTokenData,
+  managedLspSemanticTokensFitDocument as publicFitDocument,
+} from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-capabilities";
+
+function finiteSemanticTokens(count: number): number[] {
+  return Array.from({ length: count * 5 }, (_, index) => {
+    if (index % 5 === 1) return index === 1 ? 0 : 2;
+    return index % 5 === 2 ? 1 : 0;
+  });
+}
+
+describe.each([
+  [
+    "source",
+    parseManagedLspSemanticTokenData,
+    parseManagedLspSemanticTokenLegend,
+    managedLspSemanticTokensFitDocument,
+  ],
+  ["public", publicTokenData, publicLegend, publicFitDocument],
+] as const)("semantic token resource admission %s", (_surface, parseData, parseLegend, fit) => {
+  it("refuses finite over-cap tuples hidden behind two small length observations", () => {
+    const parsedLegend = parseLegend(legend());
+    expect(parsedLegend.ok).toBe(true);
+    if (!parsedLegend.ok) return;
+    const backing = finiteSemanticTokens(MANAGED_LSP_SEMANTIC_TOKEN_MAX_TOKENS + 1);
+    const input = tokenData(backing);
+    let lengthReads = 0;
+    const observed = new Proxy(backing, {
+      get(target, key, receiver): unknown {
+        if (key === "length") return ++lengthReads <= 2 ? 5 : target.length;
+        const value: unknown = Reflect.get(target, key, receiver);
+        return value;
+      },
+    });
+    expect(parseData({ ...input, data: observed }, parsedLegend.value).ok).toBe(false);
+  });
+
+  it("retains exact-cap identity and rejects ordinary excessive tuples", () => {
+    const parsedLegend = parseLegend(legend());
+    expect(parsedLegend.ok).toBe(true);
+    if (!parsedLegend.ok) return;
+    const backing = finiteSemanticTokens(MANAGED_LSP_SEMANTIC_TOKEN_MAX_TOKENS);
+    const input = tokenData(backing);
+    const result = parseData(input, parsedLegend.value);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toBe(input);
+      expect(result.value.data).toBe(backing);
+    }
+    const excessive = tokenData(finiteSemanticTokens(MANAGED_LSP_SEMANTIC_TOKEN_MAX_TOKENS + 1));
+    expect(parseData(excessive, parsedLegend.value).ok).toBe(false);
+  });
+
+  it("does not settle counts using a different later data getter result", () => {
+    const parsedLegend = parseLegend(legend());
+    expect(parsedLegend.ok).toBe(true);
+    if (!parsedLegend.ok) return;
+    const one = finiteSemanticTokens(1);
+    const two = finiteSemanticTokens(2);
+    const metadata = tokenData(two);
+    let reads = 0;
+    const input = {
+      ...metadata,
+      get data(): readonly number[] {
+        return ++reads === 1 ? one : two;
+      },
+    };
+    expect(parseData(input, parsedLegend.value).ok).toBe(false);
+  });
+
+  it("does not settle legend counts using a different unvalidated array", () => {
+    let reads = 0;
+    const input = {
+      ...legend(),
+      get tokenTypes(): readonly string[] {
+        return ++reads === 1 ? ["class"] : ["class", "function"];
+      },
+    };
+    expect(parseLegend(input).ok).toBe(false);
+  });
+
+  it("does not expand tuple legend bounds during cell inspection", () => {
+    const types: ("class" | "function")[] = ["class"];
+    const parsedLegend = parseLegend({
+      ...legend(),
+      tokenTypes: types,
+      returnedTypeCount: 1,
+      totalTypeCount: 1,
+    });
+    expect(parsedLegend.ok).toBe(true);
+    if (!parsedLegend.ok) return;
+    const cells = new Proxy([0, 0, 1, 1, 0], {
+      get(target, key, receiver): unknown {
+        if (key === "0" && types.length === 1) types.push("function");
+        const value: unknown = Reflect.get(target, key, receiver);
+        return value;
+      },
+    });
+    const input = tokenData(cells);
+    expect(parseData(input, parsedLegend.value).ok).toBe(false);
+  });
+
+  it("refuses a fractional captured extent before reading tuple cells", () => {
+    const parsedLegend = parseLegend(legend());
+    expect(parsedLegend.ok).toBe(true);
+    if (!parsedLegend.ok) return;
+    let lengths = 0;
+    let cells = 0;
+    const input = tokenData();
+    const observed = new Proxy([0, 0, 4, 0, 1], {
+      get(target, key, receiver): unknown {
+        if (key === "length") return ++lengths === 2 ? 2.5 : 5;
+        if (typeof key === "string" && /^\d+$/u.test(key)) cells += 1;
+        const value: unknown = Reflect.get(target, key, receiver);
+        return value;
+      },
+    });
+    expect(parseData({ ...input, data: observed }, parsedLegend.value).ok).toBe(false);
+    expect(cells).toBe(0);
+  });
+
+  it("retains inherited tuple cells and an empty modifier legend", () => {
+    const parsedLegend = parseLegend({
+      ...legend(),
+      tokenModifiers: [],
+      returnedModifierCount: 0,
+      totalModifierCount: 0,
+    });
+    expect(parsedLegend.ok).toBe(true);
+    if (!parsedLegend.ok) return;
+    const cells = new Array<number>(5);
+    const prototype = { 0: 0, 1: 0, 2: 1, 3: 0, 4: 0 };
+    Object.setPrototypeOf(prototype, Array.prototype);
+    Object.setPrototypeOf(cells, prototype);
+    const input = tokenData(cells);
+    const result = parseData(input, parsedLegend.value);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.data).toBe(cells);
+  });
+
+  it("bounds fitting independently, including a retained array grown after parsing", () => {
+    const limit = MANAGED_LSP_SEMANTIC_TOKEN_MAX_TOKENS;
+    const exact = finiteSemanticTokens(limit);
+    expect(fit(exact, [limit * 2])).toBe(true);
+    const excessive = finiteSemanticTokens(limit + 1);
+    expect(fit(excessive, [(limit + 1) * 2])).toBe(false);
+    const parsedLegend = parseLegend(legend());
+    expect(parsedLegend.ok).toBe(true);
+    if (!parsedLegend.ok) return;
+    const retained = finiteSemanticTokens(1);
+    const parsed = parseData(tokenData(retained), parsedLegend.value);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    for (let index = 0; index < limit; index += 1) retained.push(0, 2, 1, 0, 0);
+    expect(fit(parsed.value.data, [(limit + 1) * 2])).toBe(false);
+  });
+});

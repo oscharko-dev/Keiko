@@ -48,16 +48,30 @@ function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function validRawLegendValues(value: unknown, maximum: number): value is readonly string[] {
-  return (
-    Array.isArray(value) &&
-    value.length <= maximum &&
-    value.every(
-      (item) =>
-        typeof item === "string" && item.length > 0 && item.length <= MAX_LEGEND_VALUE_CHARS,
-    ) &&
-    new Set(value).size === value.length
-  );
+function rawArrayExtent(value: readonly unknown[], maximum: number): number | undefined {
+  const initial = value.length;
+  if (!(initial <= maximum)) return undefined;
+  const extent = value.length;
+  return Number.isSafeInteger(extent) && extent >= 0 && extent <= maximum ? extent : undefined;
+}
+
+function captureRawLegendValues(value: unknown, maximum: number): readonly string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const extent = rawArrayExtent(value, maximum);
+  if (extent === undefined) return undefined;
+  const entries: string[] = [];
+  for (let index = 0; index < extent; index += 1) {
+    const member: unknown = value[index];
+    if (
+      typeof member !== "string" ||
+      member.length === 0 ||
+      member.length > MAX_LEGEND_VALUE_CHARS
+    ) {
+      return undefined;
+    }
+    entries.push(member);
+  }
+  return value.length === extent && new Set(entries).size === extent ? entries : undefined;
 }
 
 function tokenTypeIndex(value: string): number | null {
@@ -82,15 +96,18 @@ export function negotiateSemanticTokenLegend(
   if (!isRecord(provider) || provider.full === false) return undefined;
   const raw = provider.legend;
   if (!isRecord(raw)) return undefined;
-  if (!validRawLegendValues(raw.tokenTypes, MANAGED_LSP_SEMANTIC_TOKEN_MAX_TYPES)) return undefined;
-  if (!validRawLegendValues(raw.tokenModifiers, MANAGED_LSP_SEMANTIC_TOKEN_MAX_MODIFIERS)) {
-    return undefined;
-  }
+  const types = captureRawLegendValues(raw.tokenTypes, MANAGED_LSP_SEMANTIC_TOKEN_MAX_TYPES);
+  if (types === undefined) return undefined;
+  const modifiers = captureRawLegendValues(
+    raw.tokenModifiers,
+    MANAGED_LSP_SEMANTIC_TOKEN_MAX_MODIFIERS,
+  );
+  if (modifiers === undefined) return undefined;
   const legend = managedLegend();
   return {
     legend,
-    tokenTypeMap: raw.tokenTypes.map(tokenTypeIndex),
-    tokenModifierMap: raw.tokenModifiers.map(tokenModifierIndex),
+    tokenTypeMap: types.map(tokenTypeIndex),
+    tokenModifierMap: modifiers.map(tokenModifierIndex),
   };
 }
 
@@ -111,13 +128,64 @@ function managedLegend(): ManagedLspSemanticTokenLegend {
   return parsed.value;
 }
 
+function rawTokenDataExtent(input: readonly unknown[]): number | undefined {
+  const initial = input.length;
+  if (!Number.isSafeInteger(initial) || initial < 0 || initial % 5 !== 0) return undefined;
+  const extent = rawArrayExtent(input, MANAGED_LSP_SEMANTIC_TOKEN_MAX_TOKENS * 5);
+  return extent !== undefined && extent % 5 === 0 ? extent : undefined;
+}
+
 function rawData(result: unknown): readonly number[] | undefined {
-  if (!isRecord(result) || !Array.isArray(result.data)) return undefined;
-  if (result.data.length % 5 !== 0) return undefined;
-  if (result.data.length / 5 > MANAGED_LSP_SEMANTIC_TOKEN_MAX_TOKENS) return undefined;
-  return result.data.every((value) => Number.isSafeInteger(value) && value >= 0)
-    ? (result.data as readonly number[])
-    : undefined;
+  if (!isRecord(result)) return undefined;
+  const input = result.data;
+  if (!Array.isArray(input)) return undefined;
+  const extent = rawTokenDataExtent(input);
+  if (extent === undefined) return undefined;
+  const data: number[] = [];
+  for (let index = 0; index < extent; index += 1) {
+    const member: unknown = input[index];
+    if (typeof member !== "number" || !Number.isSafeInteger(member) || member < 0) return undefined;
+    data.push(member);
+  }
+  return input.length === extent ? data : undefined;
+}
+
+function captureTokenMap(
+  value: readonly (number | null)[],
+  maximum: number,
+): readonly (number | null)[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const extent = rawArrayExtent(value, maximum);
+  if (extent === undefined) return undefined;
+  const entries: (number | null)[] = [];
+  for (let index = 0; index < extent; index += 1) {
+    const member: unknown = value[index];
+    if (
+      member !== null &&
+      (typeof member !== "number" || !Number.isSafeInteger(member) || member < 0)
+    ) {
+      return undefined;
+    }
+    entries.push(member);
+  }
+  return value.length === extent ? entries : undefined;
+}
+
+function captureNegotiation(
+  negotiation: LspSemanticTokenNegotiation,
+): LspSemanticTokenNegotiation | undefined {
+  const tokenTypeMap = captureTokenMap(
+    negotiation.tokenTypeMap,
+    MANAGED_LSP_SEMANTIC_TOKEN_MAX_TYPES,
+  );
+  if (tokenTypeMap === undefined) return undefined;
+  const tokenModifierMap = captureTokenMap(
+    negotiation.tokenModifierMap,
+    MANAGED_LSP_SEMANTIC_TOKEN_MAX_MODIFIERS,
+  );
+  return tokenModifierMap === undefined
+    ? undefined
+    : { legend: negotiation.legend, tokenTypeMap, tokenModifierMap };
 }
 
 interface DecodeState {
@@ -128,13 +196,13 @@ interface DecodeState {
 
 function mappedModifierBits(
   rawBits: number,
-  negotiation: LspSemanticTokenNegotiation,
+  modifierMap: readonly (number | null)[],
 ): number | undefined {
-  if (rawBits >= 2 ** negotiation.tokenModifierMap.length) return undefined;
+  if (rawBits >= 2 ** modifierMap.length) return undefined;
   let mapped = 0;
-  for (let index = 0; index < negotiation.tokenModifierMap.length; index += 1) {
+  for (let index = 0; index < modifierMap.length; index += 1) {
     if ((rawBits & (2 ** index)) === 0) continue;
-    const managed = negotiation.tokenModifierMap[index];
+    const managed = modifierMap[index];
     if (managed !== null && managed !== undefined) mapped |= 2 ** managed;
   }
   return mapped;
@@ -155,7 +223,7 @@ function decodeTuple(
   const line = state.line + deltaLine;
   const start = deltaLine === 0 ? state.start + deltaStart : deltaStart;
   const type = negotiation.tokenTypeMap[rawType];
-  const modifiers = mappedModifierBits(rawModifiers, negotiation);
+  const modifiers = mappedModifierBits(rawModifiers, negotiation.tokenModifierMap);
   if (!validDecodedPosition(lines, state, line, start, length)) return undefined;
   const kind = mappedKind(type, modifiers);
   if (kind === undefined) return undefined;
@@ -198,17 +266,19 @@ export function sanitizeSemanticTokenResponse(
   }
   const input = rawData(result);
   if (input === undefined) return undefined;
+  const captured = captureNegotiation(negotiation);
+  if (captured === undefined) return undefined;
   const lines = documentText.split("\n");
   const state: DecodeState = { line: 0, start: 0, previousEnd: 0 };
   const data: number[] = [];
   for (let offset = 0; offset < input.length; offset += 5) {
-    const tuple = decodeTuple(input, offset, lines, negotiation, state);
+    const tuple = decodeTuple(input, offset, lines, captured, state);
     if (tuple === undefined) return undefined;
     data.push(...tuple);
   }
   const value = {
     schemaVersion: MANAGED_LSP_CAPABILITY_SCHEMA_VERSION,
-    legendVersion: negotiation.legend.legendVersion,
+    legendVersion: captured.legend.legendVersion,
     documentVersion,
     dataVersion: 1,
     data,
@@ -216,6 +286,6 @@ export function sanitizeSemanticTokenResponse(
     totalTokenCount: data.length / 5,
     truncated: false,
   };
-  const parsed = parseManagedLspSemanticTokenData(value, negotiation.legend);
+  const parsed = parseManagedLspSemanticTokenData(value, captured.legend);
   return parsed.ok ? parsed.value : undefined;
 }

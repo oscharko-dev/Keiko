@@ -197,25 +197,41 @@ function isLanguageOperation(value: unknown): value is LanguageServiceOperation 
   return typeof value === "string" && languageServiceOperationsValues.includes(value);
 }
 
+function uniquePhysicalArrayFinalExtent(
+  value: readonly unknown[],
+  extent: number,
+  members: ReadonlySet<unknown>,
+): number | undefined {
+  const finalExtent = value.length;
+  return finalExtent === extent && members.size === finalExtent ? finalExtent : undefined;
+}
+
+function uniquePhysicalArrayExtent(
+  value: unknown,
+  maximum: number,
+  guard: (entry: unknown) => boolean,
+): number | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const initiallyWithinLimit = value.length <= maximum;
+  if (!initiallyWithinLimit) return undefined;
+  const extent = value.length;
+  if (!Number.isSafeInteger(extent) || extent < 0 || extent > maximum) return undefined;
+  const members = new Set<unknown>();
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value)) return undefined;
+    const member: unknown = value[index];
+    if (!guard(member)) return undefined;
+    members.add(member);
+  }
+  return uniquePhysicalArrayFinalExtent(value, extent, members);
+}
+
 function isUniquePhysicalArray<T>(
   value: unknown,
   maximum: number,
   guard: (entry: unknown) => entry is T,
 ): value is readonly T[] {
-  if (!Array.isArray(value)) return false;
-  const initiallyWithinLimit = value.length <= maximum;
-  if (!initiallyWithinLimit) return false;
-  const extent = value.length;
-  if (!Number.isSafeInteger(extent) || extent < 0 || extent > maximum) return false;
-  const members = new Set<T>();
-  for (let index = 0; index < extent; index += 1) {
-    if (!(index in value)) return false;
-    const member: unknown = value[index];
-    if (!guard(member)) return false;
-    members.add(member);
-  }
-  const finalExtent = value.length;
-  return finalExtent === extent && members.size === finalExtent;
+  return uniquePhysicalArrayExtent(value, maximum, guard) !== undefined;
 }
 
 function isOperationArray(value: unknown): value is readonly LanguageServiceOperation[] {
@@ -373,24 +389,47 @@ function isTokenModifier(value: unknown): value is ManagedLspSemanticTokenModifi
   return typeof value === "string" && managedLspSemanticTokenModifiersValues.includes(value);
 }
 
-function honestLegendCounts(value: UnknownRecord): boolean {
-  if (!Array.isArray(value.tokenTypes)) return false;
-  if (!Array.isArray(value.tokenModifiers)) return false;
-  if (!isNonNegativeInteger(value.returnedTypeCount)) return false;
-  if (!isNonNegativeInteger(value.totalTypeCount)) return false;
-  if (!isNonNegativeInteger(value.returnedModifierCount)) return false;
-  if (!isNonNegativeInteger(value.totalModifierCount)) return false;
-  const truncated = [
-    value.totalTypeCount > value.returnedTypeCount,
-    value.totalModifierCount > value.returnedModifierCount,
-  ].some(Boolean);
+function honestLegendCounts(
+  value: UnknownRecord,
+  typeCount: number,
+  modifierCount: number,
+  truncated: boolean,
+): boolean {
+  const returnedTypeCount = value.returnedTypeCount;
+  if (!isNonNegativeInteger(returnedTypeCount)) return false;
+  const totalTypeCount = value.totalTypeCount;
+  if (!isNonNegativeInteger(totalTypeCount)) return false;
+  const returnedModifierCount = value.returnedModifierCount;
+  if (!isNonNegativeInteger(returnedModifierCount)) return false;
+  const totalModifierCount = value.totalModifierCount;
+  if (!isNonNegativeInteger(totalModifierCount)) return false;
   return [
-    value.returnedTypeCount === value.tokenTypes.length,
-    value.returnedModifierCount === value.tokenModifiers.length,
-    value.totalTypeCount >= value.returnedTypeCount,
-    value.totalModifierCount >= value.returnedModifierCount,
-    value.truncated === truncated,
+    returnedTypeCount === typeCount,
+    returnedModifierCount === modifierCount,
+    totalTypeCount >= returnedTypeCount,
+    totalModifierCount >= returnedModifierCount,
+    truncated ===
+      (totalTypeCount > returnedTypeCount || totalModifierCount > returnedModifierCount),
   ].every(Boolean);
+}
+
+function validLegendArrays(value: UnknownRecord): boolean {
+  const typeCount = uniquePhysicalArrayExtent(
+    value.tokenTypes,
+    MANAGED_LSP_SEMANTIC_TOKEN_MAX_TYPES,
+    isTokenType,
+  );
+  if (typeCount === undefined) return false;
+  const modifierCount = uniquePhysicalArrayExtent(
+    value.tokenModifiers,
+    MANAGED_LSP_SEMANTIC_TOKEN_MAX_MODIFIERS,
+    isTokenModifier,
+  );
+  if (modifierCount === undefined) return false;
+  const truncated = value.truncated;
+  return (
+    typeof truncated === "boolean" && honestLegendCounts(value, typeCount, modifierCount, truncated)
+  );
 }
 
 function validLegendUnsafe(
@@ -410,14 +449,7 @@ function validLegendUnsafe(
     ]) &&
     value.schemaVersion === MANAGED_LSP_CAPABILITY_SCHEMA_VERSION &&
     isPositiveInteger(value.legendVersion) &&
-    isUniquePhysicalArray(value.tokenTypes, MANAGED_LSP_SEMANTIC_TOKEN_MAX_TYPES, isTokenType) &&
-    isUniquePhysicalArray(
-      value.tokenModifiers,
-      MANAGED_LSP_SEMANTIC_TOKEN_MAX_MODIFIERS,
-      isTokenModifier,
-    ) &&
-    typeof value.truncated === "boolean" &&
-    honestLegendCounts(value)
+    validLegendArrays(value)
   );
 }
 
@@ -438,52 +470,89 @@ export function parseManagedLspSemanticTokenLegend(
 }
 
 function validTokenTuple(
-  data: readonly number[],
+  data: readonly unknown[],
   offset: number,
-  legend: ManagedLspSemanticTokenLegend,
+  typeCount: number,
+  maximumModifierMask: number,
 ): boolean {
   const deltaLine = data[offset];
   const deltaStart = data[offset + 1];
   const length = data[offset + 2];
   const tokenType = data[offset + 3];
   const modifiers = data[offset + 4];
-  const maximumModifierMask = 2 ** legend.tokenModifiers.length - 1;
   return (
     isNonNegativeInteger(deltaLine) &&
     isNonNegativeInteger(deltaStart) &&
     isPositiveInteger(length) &&
     isNonNegativeInteger(tokenType) &&
-    tokenType < legend.tokenTypes.length &&
+    tokenType < typeCount &&
     isNonNegativeInteger(modifiers) &&
     modifiers <= maximumModifierMask
   );
 }
 
+function tokenDataExtent(data: readonly unknown[]): number | undefined {
+  const initial = data.length;
+  if (!isNonNegativeInteger(initial) || initial % 5 !== 0) return undefined;
+  const extent = data.length;
+  return isNonNegativeInteger(extent) &&
+    extent % 5 === 0 &&
+    extent / 5 <= MANAGED_LSP_SEMANTIC_TOKEN_MAX_TOKENS
+    ? extent
+    : undefined;
+}
+
+function tokenLegendBounds(
+  legend: ManagedLspSemanticTokenLegend,
+): { readonly typeCount: number; readonly maximumModifierMask: number } | undefined {
+  const types = legend.tokenTypes;
+  const modifiers = legend.tokenModifiers;
+  if (!Array.isArray(types) || !Array.isArray(modifiers)) return undefined;
+  const typeCount = types.length;
+  const modifierCount = modifiers.length;
+  if (
+    !isNonNegativeInteger(typeCount) ||
+    typeCount > MANAGED_LSP_SEMANTIC_TOKEN_MAX_TYPES ||
+    !isNonNegativeInteger(modifierCount) ||
+    modifierCount > MANAGED_LSP_SEMANTIC_TOKEN_MAX_MODIFIERS
+  )
+    return undefined;
+  return { typeCount, maximumModifierMask: 2 ** modifierCount - 1 };
+}
+
 function validTokenDataArray(
   value: unknown,
   legend: ManagedLspSemanticTokenLegend,
-): value is readonly number[] {
-  if (!Array.isArray(value) || value.length % 5 !== 0) return false;
-  if (value.length / 5 > MANAGED_LSP_SEMANTIC_TOKEN_MAX_TOKENS) return false;
-  for (let offset = 0; offset < value.length; offset += 5) {
-    if (!validTokenTuple(value, offset, legend)) return false;
+): number | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const extent = tokenDataExtent(value);
+  if (extent === undefined) return undefined;
+  const bounds = tokenLegendBounds(legend);
+  if (bounds === undefined) return undefined;
+  for (let offset = 0; offset < extent; offset += 5) {
+    if (!validTokenTuple(value, offset, bounds.typeCount, bounds.maximumModifierMask))
+      return undefined;
   }
-  return true;
+  return value.length === extent ? extent / 5 : undefined;
 }
 
-function honestTokenCounts(value: UnknownRecord): boolean {
-  if (!Array.isArray(value.data)) return false;
-  if (
-    !isNonNegativeInteger(value.returnedTokenCount) ||
-    !isNonNegativeInteger(value.totalTokenCount)
-  ) {
-    return false;
-  }
+function honestTokenCounts(value: UnknownRecord, count: number, truncated: boolean): boolean {
+  const returnedTokenCount = value.returnedTokenCount;
+  if (!isNonNegativeInteger(returnedTokenCount)) return false;
+  const totalTokenCount = value.totalTokenCount;
+  if (!isNonNegativeInteger(totalTokenCount)) return false;
   return (
-    value.returnedTokenCount === value.data.length / 5 &&
-    value.totalTokenCount >= value.returnedTokenCount &&
-    value.truncated === value.totalTokenCount > value.returnedTokenCount
+    returnedTokenCount === count &&
+    totalTokenCount >= returnedTokenCount &&
+    truncated === totalTokenCount > returnedTokenCount
   );
+}
+
+function validTokenPayload(value: UnknownRecord, legend: ManagedLspSemanticTokenLegend): boolean {
+  const count = validTokenDataArray(value.data, legend);
+  if (count === undefined) return false;
+  const truncated = value.truncated;
+  return typeof truncated === "boolean" && honestTokenCounts(value, count, truncated);
 }
 
 function validTokenDataUnsafe(
@@ -505,9 +574,7 @@ function validTokenDataUnsafe(
     value.legendVersion === legend.legendVersion &&
     isNonNegativeInteger(value.documentVersion) &&
     isPositiveInteger(value.dataVersion) &&
-    validTokenDataArray(value.data, legend) &&
-    typeof value.truncated === "boolean" &&
-    honestTokenCounts(value)
+    validTokenPayload(value, legend)
   );
 }
 
@@ -529,14 +596,15 @@ export function parseManagedLspSemanticTokenData(
   return parseSafely(() => parseTokenDataUnsafe(value, legend));
 }
 
-export function managedLspSemanticTokensFitDocument(
+function checkedTokenPositionsFitDocument(
   data: readonly number[],
   lineLengths: readonly number[],
+  extent: number,
 ): boolean {
   let line = 0;
   let start = 0;
   let previousEnd = 0;
-  for (let offset = 0; offset < data.length; offset += 5) {
+  for (let offset = 0; offset < extent; offset += 5) {
     const deltaLine = data[offset] ?? 0;
     const deltaStart = data[offset + 1] ?? 0;
     const length = data[offset + 2] ?? 0;
@@ -559,7 +627,17 @@ export function managedLspSemanticTokensFitDocument(
     }
     previousEnd = end;
   }
-  return true;
+  return data.length === extent;
+}
+
+export function managedLspSemanticTokensFitDocument(
+  data: readonly number[],
+  lineLengths: readonly number[],
+): boolean {
+  const tokens: readonly number[] = data;
+  if (!Array.isArray(data)) return false;
+  const extent = tokenDataExtent(tokens);
+  return extent !== undefined && checkedTokenPositionsFitDocument(tokens, lineLengths, extent);
 }
 
 function safeRouteString(value: unknown, maximum: number): value is string {

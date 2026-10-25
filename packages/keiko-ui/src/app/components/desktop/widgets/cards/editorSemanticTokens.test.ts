@@ -180,3 +180,117 @@ describe("createEditorSemanticTokensHost", () => {
     expect(host(resolve, legend({ tokenTypes: ["class", "class"] }))).toBeUndefined();
   });
 });
+
+import {
+  MANAGED_LSP_SEMANTIC_TOKEN_MAX_TOKENS,
+  MANAGED_LSP_SEMANTIC_TOKEN_MAX_TYPES,
+} from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-capabilities";
+import type { ManagedLspSemanticTokenType } from "@oscharko-dev/keiko-contracts";
+
+function excessiveSemanticCells(): number[] {
+  return Array.from({ length: (MANAGED_LSP_SEMANTIC_TOKEN_MAX_TOKENS + 1) * 5 }, (_, index) =>
+    index % 5 === 2 ? 1 : 0,
+  );
+}
+
+describe("editor semantic-token bounded publication", () => {
+  it("does not use a caller data iterator after validation and fitting", async () => {
+    const values = data().data.slice();
+    const expectedLength = values.length;
+    let iterations = 0;
+    Object.defineProperty(values, Symbol.iterator, {
+      value: function* (): IterableIterator<number> {
+        iterations += 1;
+        yield* excessiveSemanticCells();
+      },
+    });
+    const semantic = host(() => Promise.resolve(data(values)));
+    try {
+      const result = await semantic?.provider.provideDocumentSemanticTokens(
+        model(),
+        null,
+        cancellationToken(),
+      );
+      expect(result !== null && result !== undefined).toBe(true);
+      expect(result?.data.length).toBe(expectedLength);
+      expect(iterations).toBe(0);
+    } finally {
+      semantic?.dispose();
+    }
+  });
+
+  it("does not convert a different late data getter result", async () => {
+    const healthy = data();
+    const excessive = excessiveSemanticCells();
+    let reads = 0;
+    const response = {
+      ...healthy,
+      get data(): readonly number[] {
+        return ++reads <= 4 ? healthy.data : excessive;
+      },
+    };
+    const semantic = host(() => Promise.resolve(response));
+    try {
+      const result = await semantic?.provider.provideDocumentSemanticTokens(
+        model(),
+        null,
+        cancellationToken(),
+      );
+      expect(result?.data.length).toBe(healthy.data.length);
+    } finally {
+      semantic?.dispose();
+    }
+  });
+
+  it("publishes a bounded owned legend instead of a retained iterator", () => {
+    const types: ManagedLspSemanticTokenType[] = ["class", "variable"];
+    let iterations = 0;
+    Object.defineProperty(types, Symbol.iterator, {
+      value: function* (): IterableIterator<ManagedLspSemanticTokenType> {
+        iterations += 1;
+        for (let index = 0; index <= MANAGED_LSP_SEMANTIC_TOKEN_MAX_TYPES; index += 1)
+          yield "class";
+      },
+    });
+    const semantic = host(() => Promise.resolve(data()), legend({ tokenTypes: types }));
+    try {
+      expect(semantic !== undefined).toBe(true);
+      expect(semantic?.provider.getLegend().tokenTypes.length).toBe(2);
+      expect(iterations).toBe(0);
+    } finally {
+      semantic?.dispose();
+    }
+  });
+
+  it("retains extra-field refusal before creating the owned conversion view", async () => {
+    const semantic = host(() => Promise.resolve({ ...data(), unknownField: true }));
+    try {
+      await expect(
+        semantic?.provider.provideDocumentSemanticTokens(model(), null, cancellationToken()),
+      ).resolves.toBeNull();
+    } finally {
+      semantic?.dispose();
+    }
+  });
+});
+
+describe("semantic-token capture currentness", () => {
+  it("drops a response disposed during its data getter inspection", async () => {
+    const healthy = data();
+    const response = {
+      ...healthy,
+      get data(): readonly number[] {
+        semantic?.dispose();
+        return healthy.data;
+      },
+    };
+    const semantic = host(() => Promise.resolve(response));
+    try {
+      await expect(
+        semantic?.provider.provideDocumentSemanticTokens(model(), null, cancellationToken()),
+      ).resolves.toBeNull();
+    } finally {
+      semantic?.dispose();
+    }
+  });
+});

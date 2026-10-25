@@ -110,3 +110,94 @@ describe("managed LSP semantic-token sanitizer", () => {
     expect(durationMs).toBeLessThan(250);
   });
 });
+
+import {
+  MANAGED_LSP_SEMANTIC_TOKEN_MAX_MODIFIERS,
+  MANAGED_LSP_SEMANTIC_TOKEN_MAX_TYPES,
+} from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-capabilities";
+
+describe("semantic-token owning resource captures", () => {
+  it("does not decode an unchecked extent after finite small raw-data observations", () => {
+    const count = MANAGED_LSP_SEMANTIC_TOKEN_MAX_TOKENS + 1;
+    const backing = Array.from({ length: count * 5 }, (_, index) => {
+      if (index % 5 === 1) return index === 1 ? 0 : 2;
+      return index % 5 === 2 ? 1 : 0;
+    });
+    let lengths = 0;
+    let reads = 0;
+    const observed = new Proxy(backing, {
+      get(target, key, receiver): unknown {
+        if (key === "length") return ++lengths <= 3 ? 5 : target.length;
+        if (typeof key === "string" && /^\d+$/u.test(key)) reads += 1;
+        const value: unknown = Reflect.get(target, key, receiver);
+        return value;
+      },
+    });
+    const result = sanitizeSemanticTokenResponse(
+      { data: observed },
+      "x ".repeat(count),
+      1,
+      negotiation(),
+    );
+    expect(result).toBeUndefined();
+    expect(reads <= MANAGED_LSP_SEMANTIC_TOKEN_MAX_TOKENS * 5).toBe(true);
+  });
+
+  it("does not invoke a raw data every override", () => {
+    const values = [0, 0, 1, 0, 0];
+    let calls = 0;
+    Object.defineProperty(values, "every", {
+      value: (): boolean => {
+        calls += 1;
+        return true;
+      },
+    });
+    const result = sanitizeSemanticTokenResponse({ data: values }, "x", 1, negotiation());
+    expect(result?.returnedTokenCount).toBe(1);
+    expect(calls).toBe(0);
+  });
+
+  it("captures a raw legend before invoking mapping and avoids its iterator", () => {
+    const types = ["class"];
+    let iterations = 0;
+    Object.defineProperty(types, Symbol.iterator, {
+      value: function* (): IterableIterator<string> {
+        iterations += 1;
+        yield "class";
+      },
+    });
+    let reads = 0;
+    const excessive = Array.from(
+      { length: MANAGED_LSP_SEMANTIC_TOKEN_MAX_TYPES + 1 },
+      (_, index) => `custom${String(index)}`,
+    );
+    const result = negotiateSemanticTokenLegend({
+      full: true,
+      legend: {
+        get tokenTypes(): readonly string[] {
+          return ++reads === 1 ? types : excessive;
+        },
+        tokenModifiers: [],
+      },
+    });
+    expect(result !== undefined).toBe(true);
+    expect((result?.tokenTypeMap.length ?? Infinity) <= MANAGED_LSP_SEMANTIC_TOKEN_MAX_TYPES).toBe(
+      true,
+    );
+    expect(iterations).toBe(0);
+  });
+
+  it("rejects an excessive caller-owned modifier mapping before decoding", () => {
+    const captured = negotiation();
+    const excessive = {
+      ...captured,
+      tokenModifierMap: Array.from(
+        { length: MANAGED_LSP_SEMANTIC_TOKEN_MAX_MODIFIERS + 1 },
+        () => null,
+      ),
+    };
+    expect(
+      sanitizeSemanticTokenResponse({ data: [0, 0, 1, 0, 0] }, "x", 1, excessive),
+    ).toBeUndefined();
+  });
+});
