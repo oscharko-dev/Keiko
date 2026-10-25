@@ -10,6 +10,8 @@ const MODES = [
     connect: "Connect browser",
     choose: "Choose coding repository",
     attention: "Workbench is not paired.",
+    skillsUnavailable: "The approved skills could not be read.",
+    mcpUnavailable: "The MCP servers could not be read.",
   },
   {
     locale: "de",
@@ -18,6 +20,8 @@ const MODES = [
     connect: "Browser verbinden",
     choose: "Coding-Repository auswählen",
     attention: "Workbench nicht gekoppelt.",
+    skillsUnavailable: "Die freigegebenen Skills konnten nicht gelesen werden.",
+    mcpUnavailable: "Die MCP-Server konnten nicht gelesen werden.",
   },
 ] as const;
 
@@ -89,7 +93,8 @@ for (const mode of MODES) {
       "data-activity-state",
       "unavailable",
     );
-    await expect(log.getByRole("note")).toHaveCount(1);
+    await expect(log.getByRole("note").filter({ hasText: mode.skillsUnavailable })).toBeVisible();
+    await expect(log.getByRole("note").filter({ hasText: mode.mcpUnavailable })).toBeVisible();
     await expect(
       log.getByText(mode.locale === "en" ? "Changes" : "Änderungen", { exact: true }),
     ).toBeAttached();
