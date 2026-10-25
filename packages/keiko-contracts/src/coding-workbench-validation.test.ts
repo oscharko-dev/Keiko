@@ -589,3 +589,115 @@ for (const surface of ["source", "public"] as const) {
     ]);
   });
 }
+
+async function envelopeEventValidator(
+  surface: "source" | "public",
+): Promise<typeof validateCodingWorkbenchRuntimeEvent> {
+  return surface === "source"
+    ? validateCodingWorkbenchRuntimeEvent
+    : (await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation"))
+        .validateCodingWorkbenchRuntimeEvent;
+}
+
+function envelopeObservedEvent(trace: string[], failure?: Error): Record<string, unknown> {
+  const value = {
+    ...requiredDigestEvent(),
+    unexpected: true,
+    artifactKind: "https://example.test/private",
+    artifactDigest: undefined,
+  };
+  Object.setPrototypeOf(value, {
+    requestedMode: "governed-assist",
+    effectiveMode: "autonomous-delivery",
+  });
+  let artifactReads = 0;
+  const observedFields = new Set([
+    "runtimeSource",
+    "requestedMode",
+    "health",
+    "artifactKind",
+    "artifactDigest",
+  ]);
+  return new Proxy(value, {
+    get(target, key, receiver): unknown {
+      if (observedFields.has(String(key))) {
+        trace.push(String(key));
+      }
+      if (key === "artifactKind" && ++artifactReads === 3 && failure !== undefined) throw failure;
+      return Reflect.get(target, key, receiver);
+    },
+  });
+}
+
+for (const surface of ["source", "public"] as const) {
+  it(`${surface}: preserves the event envelope's accepted reference`, async () => {
+    const validate = await envelopeEventValidator(surface);
+    const value = requiredDigestEvent();
+    const result = validate(value);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(value);
+  });
+
+  it(`${surface}: returns independent event failure envelopes and readonly arrays`, async () => {
+    const validate = await envelopeEventValidator(surface);
+    const first = validate(null);
+    const second = validate(null);
+    expect(first).toEqual({ ok: false, errors: ["runtime event must be an object"] });
+    expect(second).toEqual(first);
+    expect(second).not.toBe(first);
+    if (!first.ok && !second.ok) expect(second.errors).not.toBe(first.errors);
+  });
+
+  it(`${surface}: eagerly retains all event phases and duplicate evidence diagnostics`, async () => {
+    const validate = await envelopeEventValidator(surface);
+    const trace: string[] = [];
+    expect(validate(envelopeObservedEvent(trace))).toEqual({
+      ok: false,
+      errors: [
+        "event.unexpected is not allowed",
+        "event.artifactKind must be content-free evidence-safe text",
+        "event.effectiveMode must be no higher than event.requestedMode",
+        "event.artifactKind must be content-free evidence-safe text",
+        "event.artifactDigest is required",
+      ],
+    });
+    expect(trace).toEqual([
+      "runtimeSource",
+      "requestedMode",
+      "requestedMode",
+      "health",
+      "artifactKind",
+      "artifactKind",
+      "requestedMode",
+      "requestedMode",
+      "artifactKind",
+      "artifactKind",
+      "artifactDigest",
+      "artifactDigest",
+    ]);
+  });
+
+  it(`${surface}: propagates exact late event inspection after earlier phase failures`, async () => {
+    const validate = await envelopeEventValidator(surface);
+    const trace: string[] = [];
+    const failure = new TypeError("Late event envelope inspection");
+    let caught: unknown;
+    try {
+      validate(envelopeObservedEvent(trace, failure));
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBe(failure);
+    expect(trace).toEqual([
+      "runtimeSource",
+      "requestedMode",
+      "requestedMode",
+      "health",
+      "artifactKind",
+      "artifactKind",
+      "requestedMode",
+      "requestedMode",
+      "artifactKind",
+    ]);
+  });
+}

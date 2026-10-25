@@ -34,6 +34,7 @@ import {
   isOneOf,
   isRecord,
   validateStrictUtcInstant,
+  validateWithAdmission,
 } from "./coding-workbench-runtime-api-validation.js";
 // The GitHub issue reference parser is a dependency-free leaf (#3385). Its runtime surface is
 // re-exported from HERE so the server and the browser reach it through the existing
@@ -576,19 +577,18 @@ function admitCodingWorkbenchRuntimeState(
   const revision = revisionIsSafeInteger ? value.revision : undefined;
   if (!revisionIsSafeInteger || !observedIntegerIsValid(revision, 0))
     valid = [appendValidationIssues(errors, "revision must be non-negative"), valid].every(Boolean);
-  valid = [validateRuntimeUtcField(value.updatedAt, "updatedAt", errors), valid].every(Boolean);
-  valid = [validateOptionalStateFields(value, errors), valid].every(Boolean);
-  valid = [validateStateShape(value, errors), valid].every(Boolean);
-  return valid;
+  return [
+    validateRuntimeUtcField(value.updatedAt, "updatedAt", errors),
+    validateOptionalStateFields(value, errors),
+    validateStateShape(value, errors),
+    valid,
+  ].every(Boolean);
 }
 
 export function validateCodingWorkbenchRuntimeState(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeState> {
-  const errors: string[] = [];
-  return admitCodingWorkbenchRuntimeState(value, errors)
-    ? { ok: true, value }
-    : { ok: false, errors };
+  return validateWithAdmission(value, admitCodingWorkbenchRuntimeState);
 }
 
 function admitCodingWorkbenchRuntimeMintConfirmation(

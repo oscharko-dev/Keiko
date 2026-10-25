@@ -1199,3 +1199,172 @@ describe("required runtime and model source admission", () => {
     }
   });
 });
+
+async function envelopeStateValidator(
+  surface: "source" | "public",
+): Promise<typeof validateCodingWorkbenchRuntimeState> {
+  return surface === "source"
+    ? validateCodingWorkbenchRuntimeState
+    : (await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime"))
+        .validateCodingWorkbenchRuntimeState;
+}
+
+async function envelopeAuthorityValidator(
+  surface: "source" | "public",
+): Promise<
+  typeof import("./coding-workbench-validation.js").validateCodingWorkbenchAuthorityEnvelope
+> {
+  return surface === "source"
+    ? (await import("./coding-workbench-validation.js")).validateCodingWorkbenchAuthorityEnvelope
+    : (await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation"))
+        .validateCodingWorkbenchAuthorityEnvelope;
+}
+
+function envelopeIdleState(): Record<string, unknown> {
+  return { schemaVersion: "1", state: "idle", revision: 0, updatedAt: "2026-07-08T12:00:00Z" };
+}
+
+for (const surface of ["source", "public"] as const) {
+  it(`${surface}: preserves the idle-state envelope's accepted reference`, async () => {
+    const validate = await envelopeStateValidator(surface);
+    const value = envelopeIdleState();
+    const result = validate(value);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(value);
+  });
+
+  it(`${surface}: returns independent state failure envelopes and readonly arrays`, async () => {
+    const validate = await envelopeStateValidator(surface);
+    const first = validate(null);
+    const second = validate(null);
+    expect(first).toEqual({ ok: false, errors: ["runtime state must be an object"] });
+    expect(second).toEqual(first);
+    expect(second).not.toBe(first);
+    if (!first.ok && !second.ok) expect(second.errors).not.toBe(first.errors);
+  });
+
+  it(`${surface}: keeps the state's complete ordered admission errors`, async () => {
+    const validate = await envelopeStateValidator(surface);
+    expect(
+      validate({
+        ...envelopeIdleState(),
+        unexpected: true,
+        schemaVersion: "invalid",
+        state: "invalid",
+        revision: -1,
+      }),
+    ).toEqual({
+      ok: false,
+      errors: [
+        "runtimeState.unexpected is not allowed",
+        "schemaVersion is invalid",
+        "state is invalid",
+        "revision must be non-negative",
+      ],
+    });
+  });
+
+  it(`${surface}: preserves late state inspection after an earlier admission error`, async () => {
+    const validate = await envelopeStateValidator(surface);
+    const value = { ...envelopeIdleState(), schemaVersion: "invalid" };
+    const failure = new TypeError("Late state envelope inspection");
+    const trace: string[] = [];
+    Object.defineProperties(value, {
+      revision: {
+        get: (): number => {
+          trace.push("revision");
+          return 0;
+        },
+      },
+      updatedAt: {
+        get: (): never => {
+          trace.push("updatedAt");
+          throw failure;
+        },
+      },
+    });
+    let caught: unknown;
+    try {
+      validate(value);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBe(failure);
+    expect(trace).toEqual(["revision", "revision", "updatedAt"]);
+  });
+
+  it(`${surface}: preserves authority identity and all three gate observations`, async () => {
+    const validate = await envelopeAuthorityValidator(surface);
+    const value = authority();
+    const gates = value.gates;
+    const trace: string[] = [];
+    Object.defineProperty(value, "gates", {
+      get: (): readonly string[] => {
+        trace.push("gates");
+        return gates;
+      },
+    });
+    const result = validate(value);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(value);
+    expect(trace).toEqual(["gates", "gates", "gates"]);
+  });
+
+  it(`${surface}: returns independent authority failure envelopes and readonly arrays`, async () => {
+    const validate = await envelopeAuthorityValidator(surface);
+    const first = validate(null);
+    const second = validate(null);
+    expect(first).toEqual({ ok: false, errors: ["authority envelope must be an object"] });
+    expect(second).toEqual(first);
+    expect(second).not.toBe(first);
+    if (!first.ok && !second.ok) expect(second.errors).not.toBe(first.errors);
+  });
+
+  it(`${surface}: eagerly retains every authority consistency-tail refusal in order`, async () => {
+    const validate = await envelopeAuthorityValidator(surface);
+    const value = {
+      ...authority(),
+      actionClasses: ["workspace-write", "command-execution"],
+      connectorScopes: ["source-control.read"],
+      gates: ["verification-green"],
+      networkPolicy: {
+        mode: "deny-all",
+        allowLoopback: false,
+        connectorScopes: ["issue-tracker.read"],
+      },
+    };
+    expect(validate(value)).toEqual({
+      ok: false,
+      errors: [
+        "authorityEnvelope.networkPolicy.connectorScopes must be empty when mode is deny-all",
+        "authorityEnvelope.networkPolicy.connectorScopes[0] must be listed in authorityEnvelope.connectorScopes",
+        "authorityEnvelope.networkPolicy.connectorScopes must be empty when authorityEnvelope.actionClasses omits network-egress",
+        "authorityEnvelope.connectorScopes must be empty when authorityEnvelope.actionClasses omits connector-access",
+        "authorityEnvelope.gates must include human-approval when authorityEnvelope.actionClasses or connector scopes grant elevated authority",
+      ],
+    });
+  });
+
+  it(`${surface}: reaches final authority gate inspection after earlier policy refusal`, async () => {
+    const validate = await envelopeAuthorityValidator(surface);
+    const value = { ...authority(), approvalProofDigest: "invalid" };
+    const gates = value.gates;
+    const trace: string[] = [];
+    const failure = new TypeError("Late authority tail inspection");
+    Object.defineProperty(value, "gates", {
+      get: (): readonly string[] => {
+        trace.push("gates");
+        if (trace.length === 2) throw failure;
+        return gates;
+      },
+    });
+    let caught: unknown;
+    try {
+      validate(value);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBe(failure);
+    expect(trace).toEqual(["gates", "gates"]);
+  });
+}

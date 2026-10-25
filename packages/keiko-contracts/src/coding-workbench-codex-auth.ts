@@ -1,3 +1,4 @@
+import { validateWithAdmission } from "./coding-workbench-runtime-api-validation.js";
 import {
   appendValidationIssues,
   isRecord,
@@ -308,26 +309,23 @@ function admitCodingWorkbenchCodexSubscriptionProfile(
   value: unknown,
   errors: string[],
 ): value is CodingWorkbenchCodexSubscriptionProfile {
-  let valid = true;
   if (!isRecord(value)) {
     appendValidationIssues(errors, "profile must be an object");
     return false;
   }
-  valid = [validateAllowedKeys(value, CODEX_PROFILE_KEYS, "profile", errors), valid].every(Boolean);
-  valid = [validateProfileEnums(value, errors), valid].every(Boolean);
-  valid = [validateProfileSafeFields(value, errors), valid].every(Boolean);
-  valid = [validateProfileBooleans(value, errors), valid].every(Boolean);
-  valid = [validateUnapprovedProfile(value, errors), valid].every(Boolean);
-  return valid;
+  return [
+    validateAllowedKeys(value, CODEX_PROFILE_KEYS, "profile", errors),
+    validateProfileEnums(value, errors),
+    validateProfileSafeFields(value, errors),
+    validateProfileBooleans(value, errors),
+    validateUnapprovedProfile(value, errors),
+  ].every(Boolean);
 }
 
 export function validateCodingWorkbenchCodexSubscriptionProfile(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchCodexSubscriptionProfile> {
-  const errors: string[] = [];
-  return admitCodingWorkbenchCodexSubscriptionProfile(value, errors)
-    ? { ok: true, value }
-    : { ok: false, errors };
+  return validateWithAdmission(value, admitCodingWorkbenchCodexSubscriptionProfile);
 }
 
 function admitCodingWorkbenchCodexAuthSetupRequest(

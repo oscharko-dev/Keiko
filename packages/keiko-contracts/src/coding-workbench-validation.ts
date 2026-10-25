@@ -10,6 +10,7 @@ import { isCodingWorkbenchEvidenceSafeText } from "./coding-workbench-evidence.j
 import {
   isCodingWorkbenchVerificationSummary,
   validateStrictUtcInstant,
+  validateWithAdmission,
 } from "./coding-workbench-runtime-api-validation.js";
 import { isVerificationKind } from "./editor-verification.js";
 import { MODEL_REASONING_EFFORTS } from "./gateway.js";
@@ -1173,6 +1174,18 @@ function validateRuntimeEventAuxiliaryIdFields(
   return valid;
 }
 
+function validateAuthorityPolicyConsistency(
+  value: Record<string, unknown>,
+  errors: string[],
+): boolean {
+  return [
+    validateNetworkPolicyConnectorScopesConsistency(value, errors),
+    validateNetworkPolicyActionClassConsistency(value, errors),
+    validateConnectorScopeActionClassConsistency(value, errors),
+    validateHumanApprovalGateBinding(value, errors),
+  ].every(Boolean);
+}
+
 function validateAuthorityPolicyFields(value: Record<string, unknown>, errors: string[]): boolean {
   let valid = true;
   valid = [
@@ -1216,12 +1229,7 @@ function validateAuthorityPolicyFields(value: Record<string, unknown>, errors: s
     validateDigest(value.approvalProofDigest, "authorityEnvelope.approvalProofDigest", errors),
     valid,
   ].every(Boolean);
-  valid = [validateNetworkPolicyConnectorScopesConsistency(value, errors), valid].every(Boolean);
-  valid = [validateNetworkPolicyActionClassConsistency(value, errors), valid].every(Boolean);
-  valid = [validateConnectorScopeActionClassConsistency(value, errors), valid].every(Boolean);
-  valid = [validateHumanApprovalGateBinding(value, errors), valid].every(Boolean);
-
-  return valid;
+  return [validateAuthorityPolicyConsistency(value, errors), valid].every(Boolean);
 }
 
 function validateAuthorityModeFields(value: Record<string, unknown>, errors: string[]): boolean {
@@ -1343,15 +1351,14 @@ function validateNetworkPolicyConnectorScopesConsistency(
 }
 
 function validateRuntimeEventFields(value: Record<string, unknown>, errors: string[]): boolean {
-  let valid = true;
-  valid = [validateRuntimeEventAllowedKeys(value, errors), valid].every(Boolean);
-  valid = [validateRuntimeEventModeFields(value, errors), valid].every(Boolean);
-  valid = [validateRuntimeEventStatusFields(value, errors), valid].every(Boolean);
-  valid = [validateRuntimeEventEvidenceFields(value, errors), valid].every(Boolean);
-  valid = [validateRuntimeEventModeOrdering(value, errors), valid].every(Boolean);
-  valid = [validateRuntimeEventRequiredFields(value, errors), valid].every(Boolean);
-
-  return valid;
+  return [
+    validateRuntimeEventAllowedKeys(value, errors),
+    validateRuntimeEventModeFields(value, errors),
+    validateRuntimeEventStatusFields(value, errors),
+    validateRuntimeEventEvidenceFields(value, errors),
+    validateRuntimeEventModeOrdering(value, errors),
+    validateRuntimeEventRequiredFields(value, errors),
+  ].every(Boolean);
 }
 
 function validateRuntimeEventCounts(value: Record<string, unknown>, errors: string[]): boolean {
@@ -1951,25 +1958,22 @@ function admitCodingWorkbenchAuthorityEnvelope(
   value: unknown,
   errors: string[],
 ): value is CodingWorkbenchAuthorityEnvelope {
-  let valid = true;
   if (!isRecord(value)) {
     appendValidationIssues(errors, "authority envelope must be an object");
     return false;
   }
-  valid = [validateAuthorityKnownFields(value, errors), valid].every(Boolean);
-  valid = [validateAuthorityModeFields(value, errors), valid].every(Boolean);
-  valid = [validateAuthorityPolicyFields(value, errors), valid].every(Boolean);
-  valid = [validateAuthorityEffectiveMode(value, errors), valid].every(Boolean);
-  return valid;
+  return [
+    validateAuthorityKnownFields(value, errors),
+    validateAuthorityModeFields(value, errors),
+    validateAuthorityPolicyFields(value, errors),
+    validateAuthorityEffectiveMode(value, errors),
+  ].every(Boolean);
 }
 
 export function validateCodingWorkbenchAuthorityEnvelope(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchAuthorityEnvelope> {
-  const errors: string[] = [];
-  return admitCodingWorkbenchAuthorityEnvelope(value, errors)
-    ? { ok: true, value }
-    : { ok: false, errors };
+  return validateWithAdmission(value, admitCodingWorkbenchAuthorityEnvelope);
 }
 
 function admitCodingWorkbenchPermissionRequest(
@@ -2000,23 +2004,20 @@ function admitCodingWorkbenchRuntimeEvent(
   value: unknown,
   errors: string[],
 ): value is CodingWorkbenchRuntimeEvent {
-  let valid = true;
   if (!isRecord(value)) {
     appendValidationIssues(errors, "runtime event must be an object");
     return false;
   }
-  valid = [validateEventCommon(value, errors), valid].every(Boolean);
-  valid = [validateRuntimeEventFields(value, errors), valid].every(Boolean);
-  valid = [validateRuntimeEventCounts(value, errors), valid].every(Boolean);
-  valid = [validateRuntimeEventSafeText(value, errors), valid].every(Boolean);
-  return valid;
+  return [
+    validateEventCommon(value, errors),
+    validateRuntimeEventFields(value, errors),
+    validateRuntimeEventCounts(value, errors),
+    validateRuntimeEventSafeText(value, errors),
+  ].every(Boolean);
 }
 
 export function validateCodingWorkbenchRuntimeEvent(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeEvent> {
-  const errors: string[] = [];
-  return admitCodingWorkbenchRuntimeEvent(value, errors)
-    ? { ok: true, value }
-    : { ok: false, errors };
+  return validateWithAdmission(value, admitCodingWorkbenchRuntimeEvent);
 }

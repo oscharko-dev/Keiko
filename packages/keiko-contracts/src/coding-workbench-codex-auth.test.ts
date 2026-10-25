@@ -454,3 +454,81 @@ for (const surface of ["source", "public"] as const) {
     );
   });
 }
+
+for (const surface of ["source", "public"] as const) {
+  it(`${surface}: preserves the profile envelope's accepted reference`, async () => {
+    const validate = await physicalAuthListValidator(surface);
+    const value = c1bCoverageProfile();
+    const result = validate(value);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(value);
+  });
+
+  it(`${surface}: returns independent profile failure envelopes and readonly arrays`, async () => {
+    const validate = await physicalAuthListValidator(surface);
+    const first = validate(null);
+    const second = validate(null);
+    expect(first).toEqual({ ok: false, errors: ["profile must be an object"] });
+    expect(second).toEqual(first);
+    expect(second).not.toBe(first);
+    if (!first.ok && !second.ok) expect(second.errors).not.toBe(first.errors);
+  });
+
+  it(`${surface}: keeps the profile admission's complete ordered errors`, async () => {
+    const validate = await physicalAuthListValidator(surface);
+    expect(
+      validate({
+        ...c1bCoverageProfile(),
+        schemaVersion: "invalid",
+        modelSource: "invalid",
+        status: "invalid",
+        profileId: "https://example.test/private",
+      }),
+    ).toEqual({
+      ok: false,
+      errors: [
+        "schemaVersion is invalid",
+        "profile.modelSource is invalid",
+        "profile.status is invalid",
+        "profile.profileId must be content-free evidence-safe text",
+      ],
+    });
+  });
+
+  it(`${surface}: preserves late profile inspection after an earlier admission error`, async () => {
+    const validate = await physicalAuthListValidator(surface);
+    const value = { ...c1bCoverageProfile(), schemaVersion: "invalid" };
+    const failure = new TypeError("Late profile envelope inspection");
+    const trace: string[] = [];
+    let statusReads = 0;
+    Object.defineProperties(value, {
+      status: {
+        get: (): string => {
+          trace.push("status");
+          if (++statusReads === 2) throw failure;
+          return "connected";
+        },
+      },
+      profileId: {
+        get: (): string => {
+          trace.push("profileId");
+          return "codex-subscription";
+        },
+      },
+      supportsBrowserLogin: {
+        get: (): boolean => {
+          trace.push("supportsBrowserLogin");
+          return true;
+        },
+      },
+    });
+    let caught: unknown;
+    try {
+      validate(value);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBe(failure);
+    expect(trace).toEqual(["status", "profileId", "supportsBrowserLogin", "status"]);
+  });
+}

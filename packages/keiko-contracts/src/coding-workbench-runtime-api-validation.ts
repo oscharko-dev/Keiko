@@ -25,6 +25,14 @@ export function invalid<T>(error: string): CodingWorkbenchValidationResult<T> {
   return { ok: false, errors: [error] };
 }
 
+export function validateWithAdmission<Value>(
+  value: unknown,
+  admit: (value: unknown, errors: string[]) => value is Value,
+): CodingWorkbenchValidationResult<Value> {
+  const errors: string[] = [];
+  return admit(value, errors) ? { ok: true, value } : { ok: false, errors };
+}
+
 export function validateSafeId(
   value: unknown,
   path: string,
