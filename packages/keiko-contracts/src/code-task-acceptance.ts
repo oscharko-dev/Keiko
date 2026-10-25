@@ -192,6 +192,17 @@ function addValidationError(errors: string[], message: string): false {
   return false;
 }
 
+function acceptanceArrayMembersAreValid(
+  errors: string[],
+  value: unknown,
+  path: string,
+  validateMember: (member: unknown, index: number) => boolean,
+): boolean {
+  if (!Array.isArray(value)) return addValidationError(errors, `${path} must be an array`);
+  const entries: readonly unknown[] = value;
+  return acceptanceMembersAreValid(errors, entries, path, validateMember);
+}
+
 function acceptanceMembersAreValid(
   errors: string[],
   entries: readonly unknown[],
@@ -508,15 +519,10 @@ function contributionSalvageFieldsAreValid(
 ): boolean {
   let valid = true;
   const salvage = ownField(value, "salvage");
-  if (Array.isArray(salvage)) {
-    const entries: readonly unknown[] = salvage;
-    valid =
-      acceptanceMembersAreValid(errors, entries, "salvage", (row, index): boolean =>
-        salvageFieldsAreValid(errors, row, `salvage[${String(index)}]`),
-      ) && valid;
-  } else {
-    valid = addValidationError(errors, "salvage must be an array");
-  }
+  valid =
+    acceptanceArrayMembersAreValid(errors, salvage, "salvage", (row, index): boolean =>
+      salvageFieldsAreValid(errors, row, `salvage[${String(index)}]`),
+    ) && valid;
   return valid;
 }
 
@@ -524,15 +530,10 @@ function contributionBodyFieldsAreValid(errors: string[], value: Record<string, 
   let valid = true;
 
   const scenarios = ownField(value, "scenarios");
-  if (Array.isArray(scenarios)) {
-    const entries: readonly unknown[] = scenarios;
-    valid =
-      acceptanceMembersAreValid(errors, entries, "scenarios", (scenario, index): boolean =>
-        scenarioFieldsAreValid(errors, scenario, `scenarios[${String(index)}]`),
-      ) && valid;
-  } else {
-    valid = addValidationError(errors, "scenarios must be an array");
-  }
+  valid =
+    acceptanceArrayMembersAreValid(errors, scenarios, "scenarios", (scenario, index): boolean =>
+      scenarioFieldsAreValid(errors, scenario, `scenarios[${String(index)}]`),
+    ) && valid;
   valid = contributionSalvageFieldsAreValid(errors, value) && valid;
   const knownLimitations = ownField(value, "knownLimitations");
   if (!isNoteArray(knownLimitations)) {
@@ -2102,15 +2103,10 @@ function qualificationManifestFlowsFieldsAreValid(
 ): boolean {
   let valid = true;
   const flows = ownField(value, "flows");
-  if (Array.isArray(flows)) {
-    const entries: readonly unknown[] = flows;
-    valid =
-      acceptanceMembersAreValid(errors, entries, "flows", (flow, index): boolean =>
-        qualificationFlowFieldsAreValid(errors, flow, `flows[${String(index)}]`),
-      ) && valid;
-  } else {
-    valid = addValidationError(errors, "flows must be an array");
-  }
+  valid =
+    acceptanceArrayMembersAreValid(errors, flows, "flows", (flow, index): boolean =>
+      qualificationFlowFieldsAreValid(errors, flow, `flows[${String(index)}]`),
+    ) && valid;
   return valid;
 }
 
@@ -2126,15 +2122,10 @@ function qualificationManifestBodyFieldsAreValid(
     qualificationManifestSpendFieldsAreValid(errors, value),
   ].every(Boolean);
   const scenarios = ownField(value, "scenarios");
-  if (Array.isArray(scenarios)) {
-    const entries: readonly unknown[] = scenarios;
-    valid =
-      acceptanceMembersAreValid(errors, entries, "scenarios", (scenario, index): boolean =>
-        qualificationScenarioFieldsAreValid(errors, scenario, `scenarios[${String(index)}]`),
-      ) && valid;
-  } else {
-    valid = addValidationError(errors, "scenarios must be an array");
-  }
+  valid =
+    acceptanceArrayMembersAreValid(errors, scenarios, "scenarios", (scenario, index): boolean =>
+      qualificationScenarioFieldsAreValid(errors, scenario, `scenarios[${String(index)}]`),
+    ) && valid;
   valid = qualificationManifestFlowsFieldsAreValid(errors, value) && valid;
   const knownLimitations = ownField(value, "knownLimitations");
   if (!isNoteArray(knownLimitations)) {

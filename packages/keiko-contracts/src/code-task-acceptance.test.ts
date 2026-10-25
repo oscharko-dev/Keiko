@@ -2621,3 +2621,131 @@ describe("acceptance physical member phase preservation", () => {
     });
   }
 });
+
+const ORDINARY_ACCEPTANCE_ARRAY_CASES = [
+  {
+    kind: "contribution",
+    field: "salvage",
+    errors: [
+      "salvage must be an array",
+      "knownLimitations must be an array of bounded content-free notes",
+      "cleanup must be an object",
+    ],
+    trace: ["salvage", "knownLimitations", "cleanup"],
+  },
+  {
+    kind: "contribution",
+    field: "scenarios",
+    errors: [
+      "scenarios must be an array",
+      "knownLimitations must be an array of bounded content-free notes",
+      "cleanup must be an object",
+    ],
+    trace: ["scenarios", "knownLimitations", "cleanup"],
+  },
+  {
+    kind: "manifest",
+    field: "flows",
+    errors: [
+      "flows must be an array",
+      "knownLimitations must be an array of bounded content-free notes",
+    ],
+    trace: ["flows", "knownLimitations"],
+  },
+  {
+    kind: "manifest",
+    field: "scenarios",
+    errors: [
+      "scenarios must be an array",
+      "knownLimitations must be an array of bounded content-free notes",
+    ],
+    trace: ["scenarios", "knownLimitations"],
+  },
+];
+
+describe("ordinary acceptance array admission preservation", () => {
+  for (const surface of ["source", "public"]) {
+    const contributionValidator =
+      surface === "source" ? validateCodeTaskAcceptanceContribution : publicAcceptanceValidator;
+    const manifestValidator =
+      surface === "source" ? validateCodeTaskQualificationManifest : publicQualificationManifest;
+    for (const entry of ORDINARY_ACCEPTANCE_ARRAY_CASES) {
+      it(`${surface} refuses non-array ${entry.kind}.${entry.field} without inspecting it`, () => {
+        const input =
+          entry.kind === "contribution"
+            ? { ...validContribution() }
+            : { ...validQualificationManifest() };
+        const trace: string[] = [];
+        const nonArray = {
+          get length(): never {
+            throw new TypeError("non-array length must remain unread");
+          },
+          get 0(): never {
+            throw new TypeError("non-array member must remain unread");
+          },
+          get [Symbol.iterator](): never {
+            throw new TypeError("non-array iterator must remain unread");
+          },
+        };
+        Object.defineProperty(input, entry.field, {
+          enumerable: true,
+          get: (): unknown => {
+            trace.push(entry.field);
+            return nonArray;
+          },
+        });
+        Object.defineProperty(input, "knownLimitations", {
+          enumerable: true,
+          get: (): unknown => {
+            trace.push("knownLimitations");
+            return 7;
+          },
+        });
+        if (entry.kind === "contribution") {
+          Object.defineProperty(input, "cleanup", {
+            enumerable: true,
+            get: (): unknown => {
+              trace.push("cleanup");
+              return null;
+            },
+          });
+        }
+        const validate = entry.kind === "contribution" ? contributionValidator : manifestValidator;
+        expect(validate(input)).toEqual({ ok: false, errors: entry.errors });
+        expect(trace).toEqual(entry.trace);
+      });
+    }
+
+    it(`${surface} propagates the own scenario getter error before later contribution fields`, () => {
+      const failure = new TypeError("opaque acceptance field inspection");
+      const trace: string[] = [];
+      const input = {
+        ...validContribution(),
+        get scenarios(): never {
+          trace.push("scenarios");
+          throw failure;
+        },
+        get salvage(): never {
+          trace.push("salvage");
+          throw new TypeError("later salvage must remain unread");
+        },
+        get knownLimitations(): never {
+          trace.push("knownLimitations");
+          throw new TypeError("later notes must remain unread");
+        },
+        get cleanup(): never {
+          trace.push("cleanup");
+          throw new TypeError("later cleanup must remain unread");
+        },
+      };
+      let observed: unknown;
+      try {
+        contributionValidator(input);
+      } catch (error) {
+        observed = error;
+      }
+      expect(observed).toBe(failure);
+      expect(trace).toEqual(["scenarios"]);
+    });
+  }
+});
