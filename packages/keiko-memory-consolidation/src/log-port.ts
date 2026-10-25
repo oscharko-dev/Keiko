@@ -23,12 +23,12 @@
 // never reach a field on this event.
 
 import { createHash } from "node:crypto";
+import { writeActivityLogPortEvent } from "@oscharko-dev/keiko-security";
 
 import {
   activityLogEvent,
   classifyErrorKind,
   defineActivityLogOperation,
-  recordActivityLogLoss,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 export type ConsolidationLogLevel = "debug" | "info" | "warn" | "error";
@@ -126,19 +126,9 @@ export function emitConsolidationLogEvent(
   sink: ConsolidationLogSink | undefined,
   event: ConsolidationLogEvent,
 ): void {
-  if (sink === undefined) {
-    // An unwired port loses the event it was handed; the loss is counted like any other (#3532).
-    recordActivityLogLoss("port-unwired");
-    return;
-  }
-  try {
-    sink.write(event);
-  } catch (cause) {
-    // Every failure is a lost line and is counted in the process loss ledger; only the stderr
-    // notice below is limited to once per sink.
-    recordActivityLogLoss("port-sink-failed");
-    reportFailedConsolidationLogSink(sink, event.op, cause);
-  }
+  writeActivityLogPortEvent(sink, event, (failedSink, failedEvent, cause): void => {
+    reportFailedConsolidationLogSink(failedSink, failedEvent.op, cause);
+  });
 }
 
 function reportFailedConsolidationLogSink(

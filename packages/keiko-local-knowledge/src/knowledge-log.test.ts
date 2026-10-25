@@ -365,3 +365,127 @@ describe("emitKnowledgeLogEvent loss accounting", () => {
     }
   });
 });
+
+describe("#3918 synchronous port delivery observations", () => {
+  it("counts an unwired event without observing its operation", () => {
+    resetActivityLogLossCountersForTests();
+    try {
+      const event: KnowledgeLogEvent = {
+        category: "indexing",
+        get op(): never {
+          throw new TypeError("unwired event must remain unread");
+        },
+      };
+      emitKnowledgeLogEvent(undefined, event);
+      expect(activityLogLossCounters()["port-unwired"]).toBe(1);
+      expect(activityLogLossCounters()["port-sink-failed"]).toBe(0);
+    } finally {
+      resetActivityLogLossCountersForTests();
+    }
+  });
+
+  it("reads the write method once and preserves its receiver and exact event", () => {
+    resetActivityLogLossCountersForTests();
+    try {
+      let getterReads = 0;
+      let writes = 0;
+      const event: KnowledgeLogEvent = {
+        category: "indexing",
+        get op(): never {
+          throw new TypeError("healthy delivery must not inspect the event");
+        },
+      };
+      const sink: KnowledgeLogSink = {
+        get write(): (received: KnowledgeLogEvent) => void {
+          getterReads += 1;
+          expect(this).toBe(sink);
+          return function (this: KnowledgeLogSink, received: KnowledgeLogEvent): void {
+            expect(this).toBe(sink);
+            expect(received).toBe(event);
+            writes += 1;
+          };
+        },
+      };
+      emitKnowledgeLogEvent(sink, event);
+      expect(getterReads).toBe(1);
+      expect(writes).toBe(1);
+      expect(activityLogLossCounters()["port-sink-failed"]).toBe(0);
+      expect(activityLogLossCounters()["port-unwired"]).toBe(0);
+    } finally {
+      resetActivityLogLossCountersForTests();
+    }
+  });
+
+  it("counts a getter failure before operation and cause inspection", () => {
+    resetActivityLogLossCountersForTests();
+    try {
+      const trace: string[] = [];
+      const failure = new Error("opaque primary transport failure");
+      Object.defineProperty(failure, "code", {
+        get(this: Error): string {
+          expect(this).toBe(failure);
+          trace.push(`cause-code:${activityLogLossCounters()["port-sink-failed"].toString()}`);
+          return "ENOSPC";
+        },
+      });
+      const event: KnowledgeLogEvent = {
+        category: "indexing",
+        get op(): "knowledge.index.started" {
+          trace.push(`op:${activityLogLossCounters()["port-sink-failed"].toString()}`);
+          return "knowledge.index.started";
+        },
+      };
+      const notices: KnowledgeLogEvent[] = [];
+      let getterReads = 0;
+      const sink: KnowledgeLogSink = {
+        get write(): (received: KnowledgeLogEvent) => void {
+          trace.push("write-get");
+          getterReads += 1;
+          if (getterReads === 1) throw failure;
+          return (received): void => {
+            trace.push("notice-write");
+            notices.push(received);
+          };
+        },
+      };
+      emitKnowledgeLogEvent(sink, event);
+      expect(trace).toEqual(["write-get", "op:1", "cause-code:1", "write-get", "notice-write"]);
+      expect(notices.map((notice) => notice.op)).toEqual(["knowledge.log.sink-failed"]);
+      expect(activityLogLossCounters()["port-sink-failed"]).toBe(1);
+    } finally {
+      resetActivityLogLossCountersForTests();
+    }
+  });
+
+  it("preserves an operation-getter failure escaping the owning continuation", () => {
+    resetActivityLogLossCountersForTests();
+    try {
+      const failure = new TypeError("opaque failed-event operation");
+      const event: KnowledgeLogEvent = {
+        category: "indexing",
+        get op(): never {
+          expect(activityLogLossCounters()["port-sink-failed"]).toBe(1);
+          throw failure;
+        },
+      };
+      let getterReads = 0;
+      const sink: KnowledgeLogSink = {
+        get write(): (received: KnowledgeLogEvent) => void {
+          getterReads += 1;
+          throw new TypeError("primary write getter failed");
+        },
+      };
+      let observed: unknown;
+      try {
+        emitKnowledgeLogEvent(sink, event);
+      } catch (error) {
+        observed = error;
+      }
+      expect(observed).toBe(failure);
+      expect(getterReads).toBe(1);
+      expect(activityLogLossCounters()["port-sink-failed"]).toBe(1);
+    } finally {
+      resetActivityLogLossCountersForTests();
+    }
+  });
+});

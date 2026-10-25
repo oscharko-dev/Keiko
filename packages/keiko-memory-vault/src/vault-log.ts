@@ -2,16 +2,9 @@
 //
 // WHY THIS FILE EXISTS INSTEAD OF AN IMPORT
 //
-// `packages/keiko-local-knowledge/src/knowledge-log.ts` and `packages/keiko-security/src/log-port.ts`
-// already declare structurally identical seams. This file is NOT an import of either: ADR-0019
-// forbids a domain package from depending on a SIBLING domain package, and `keiko-memory-vault`
-// sits below `keiko-server` in the dependency direction, same as those two — pulling in a sibling
-// package merely because the event shape matches would invert that arrow and hand this package's
-// callers a dependency on an unrelated subsystem's failure modes. `keiko-memory-vault` therefore
-// declares its own structural port, narrowed to the categories this package can legitimately emit.
-// The server is the composition root that supplies the real implementation (`processServerLogSink`,
-// `packages/keiko-server/src/process-log-sink.ts`); every call site degrades to a no-op when
-// nothing is wired.
+// Domain event and port contracts remain local rather than importing another domain's shape.
+// The server composes the real sink. Only stateless safe delivery mechanics use the existing
+// lower-level keiko-security dependency; no domain event schema or reporter moves there.
 //
 // The event shape is deliberately a STRUCTURAL SUBSET of the server's `ServerLogEvent` (same
 // fields, same optionality), and `"memory"` is already a member of `ServerLogCategory` (added,
@@ -33,6 +26,7 @@
 // unknown>`, so `processServerLogSink()` remains a valid `MemoryVaultLogSink` with no adapter.
 
 import { createHash } from "node:crypto";
+import { writeActivityLogPortEvent } from "@oscharko-dev/keiko-security";
 
 import {
   activityLogEvent,
@@ -40,7 +34,6 @@ import {
   normalizeKeikoFrame,
   classifyErrorKind,
   defineActivityLogOperation,
-  recordActivityLogLoss,
   type RejectedActivityLogEvent,
   type ActivityLogEventEnvelope,
   type ActivityLogCompletenessState,
@@ -226,19 +219,9 @@ export function emitMemoryVaultLogEvent(
   sink: MemoryVaultLogSink | undefined,
   event: MemoryVaultLogTransport,
 ): void {
-  if (sink === undefined) {
-    // An unwired port loses the event it was handed; the loss is counted like any other (#3532).
-    recordActivityLogLoss("port-unwired");
-    return;
-  }
-  try {
-    sink.write(event);
-  } catch (cause) {
-    // Every failure is a lost line and is counted in the process loss ledger; only the stderr
-    // notice below is limited to once per sink.
-    recordActivityLogLoss("port-sink-failed");
-    reportFailedMemoryVaultLogSink(sink, event.op, cause);
-  }
+  writeActivityLogPortEvent(sink, event, (failedSink, failedEvent, cause): void => {
+    reportFailedMemoryVaultLogSink(failedSink, failedEvent.op, cause);
+  });
 }
 
 function reportFailedMemoryVaultLogSink(
