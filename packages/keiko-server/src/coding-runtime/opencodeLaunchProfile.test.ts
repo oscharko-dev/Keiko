@@ -442,6 +442,42 @@ describe("OpenCode launch profile", () => {
       }
     });
 
+    // #3903 AC1: the further gateway models are declared on the one gateway provider beside the
+    // run's alias, and the per-agent overrides are server-owned on both configuration layers.
+    it("declares the further gateway models and the per-agent overrides on both layers", () => {
+      const small = { contextWindowTokens: 16_384, maxInputTokens: 12_000, maxOutputTokens: 2_048 };
+      const profile = buildOpenCodeLaunchProfile({
+        executable: "/managed/opencode",
+        stateRoot: "/private/run",
+        toolProfile: "native",
+        ...CONTEXT_INPUT,
+        mode: "autonomous-delivery",
+        agentModels: {
+          models: { "gemma-small": small },
+          agents: { explore: { model: "keiko-runtime/gemma-small" } },
+        },
+        randomBytes: () => Buffer.alloc(32, 7),
+      });
+      if (!profile.ok) throw new Error("expected native launch profile");
+      for (const layer of [profile.config, profile.env.OPENCODE_CONFIG_CONTENT ?? "null"]) {
+        const value = JSON.parse(layer) as {
+          readonly providers: Record<string, { readonly models: Record<string, unknown> }>;
+          readonly agents?: unknown;
+          readonly model: string;
+        };
+        expect(Object.keys(value.providers)).toEqual(["keiko-runtime"]);
+        expect(Object.keys(value.providers["keiko-runtime"]?.models ?? {}).sort()).toEqual([
+          "coding",
+          "gemma-small",
+        ]);
+        expect(value.providers["keiko-runtime"]?.models["gemma-small"]).toMatchObject({
+          limit: { context: 16_384, input: 12_000, output: 2_048 },
+        });
+        expect(value.agents).toEqual({ explore: { model: "keiko-runtime/gemma-small" } });
+        expect(value.model).toBe("keiko-runtime/coding");
+      }
+    });
+
     it("fails closed to an explicit false for an absent or unrecognized mode", () => {
       for (const mode of [undefined, "", "Autonomous-Delivery", "full-access", "unknown"])
         expect(formatterFor(mode)).toEqual({

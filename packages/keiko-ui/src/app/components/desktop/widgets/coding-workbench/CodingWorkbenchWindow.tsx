@@ -1,5 +1,6 @@
 "use client";
 
+import { isCodingWorkbenchBuiltInAgent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import type { ClientModelCatalogEvidence } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 
 import { CodingWorkbenchProgress } from "./CodingWorkbenchProgress";
@@ -2117,7 +2118,10 @@ function sessionRunFacts(
   if (offeredCodingWorkbenchAgents(state).length > 1) {
     facts.push({
       label: t("codingWorkbench.info.agent"),
-      value: t(`codingWorkbench.composer.agent.${state.agent}`),
+      // A custom primary agent (#3903 AC1) is shown by its own name.
+      value: isCodingWorkbenchBuiltInAgent(state.agent)
+        ? t(`codingWorkbench.composer.agent.${state.agent}`)
+        : state.agent,
     });
   }
   if (issue !== undefined) {

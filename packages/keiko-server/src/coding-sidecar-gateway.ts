@@ -1598,10 +1598,12 @@ function isMatchingModelAlias(
   model: string | undefined,
   modelAlias: string,
   runtimeAuthenticated: boolean,
+  routedToAgentModel = false,
 ): boolean {
-  return runtimeAuthenticated
-    ? model === OPENCODE_RUNTIME_MODEL_ALIAS
-    : model === undefined || model === modelAlias;
+  // A runtime request names the run's alias, or the further gateway model its agent was routed to
+  // (#3903 AC1, `agentModelProfile`); never the run's own upstream model id.
+  if (!runtimeAuthenticated) return model === undefined || model === modelAlias;
+  return model === OPENCODE_RUNTIME_MODEL_ALIAS || (routedToAgentModel && model === modelAlias);
 }
 
 /**
@@ -2145,6 +2147,7 @@ function validationErrorForChatRequest(
   runtimeAuthenticated: boolean,
   estimatedPromptTokens: number,
   toolProfile: OpenCodeToolProfile,
+  routedToAgentModel = false,
 ): RouteResult | undefined {
   if (isRouteResult(parsed)) {
     return parsed;
@@ -2159,7 +2162,7 @@ function validationErrorForChatRequest(
   if (mediaRefusal !== undefined) return mediaRefusal;
   const invalidBudget = budgetValidationError(parsed, runMetadata, estimatedPromptTokens);
   if (invalidBudget !== undefined) return invalidBudget;
-  if (!isMatchingModelAlias(parsed.model, modelAlias, runtimeAuthenticated)) {
+  if (!isMatchingModelAlias(parsed.model, modelAlias, runtimeAuthenticated, routedToAgentModel)) {
     return {
       status: 400,
       body: errorBody("INVALID_MODEL", "Request model does not match the selected profile."),
@@ -4732,15 +4735,44 @@ function logChatRequestRejection(
 interface ValidatedChatRequest {
   readonly parsed: CodingSidecarGatewayChatCompletionRequest;
   readonly estimatedPromptTokens: number;
+  /** The profile the request runs on: the run's own, or its agent's gateway model (#3903 AC1). */
+  readonly resolved: AvailableGatewayProfile;
+}
+
+/**
+ * A native run's agent may name another model the gateway serves (#3903 AC1, owner decision
+ * 2026-10-25): the request then runs on that model's own profile -- its bounds, accounting and
+ * provider -- under the run's capability and prompt budget. A model the gateway does not serve keeps
+ * the run's profile, whose alias check then refuses the request.
+ */
+function agentModelProfile(
+  deps: UiHandlerDeps,
+  parsed: CodingSidecarGatewayChatCompletionRequest | RouteResult,
+  resolved: AvailableGatewayProfile,
+  authentication: AuthenticatedGatewayRequest,
+): AvailableGatewayProfile {
+  if (!authentication.runtimeAuthenticated || isRouteResult(parsed)) return resolved;
+  const model = parsed.model;
+  if (model === undefined || model === OPENCODE_RUNTIME_MODEL_ALIAS) return resolved;
+  if ((gatewayReadinessRegistry(deps)?.toolProfile ?? "direct") !== "native") return resolved;
+  const routed = resolveGatewayProfile(deps, model, authentication.admittedAtMs);
+  // The run's own model keeps the run's alias: its upstream id is never a runtime model name.
+  if (!isAvailableGatewayProfile(routed) || routed.result.modelAlias === resolved.result.modelAlias)
+    return resolved;
+  return routed;
 }
 
 async function readValidatedChatRequest(
   ctx: RouteContext,
   deps: UiHandlerDeps,
-  resolved: AvailableGatewayProfile,
+  runProfile: AvailableGatewayProfile,
   authentication: AuthenticatedGatewayRequest,
 ): Promise<RouteResult | ValidatedChatRequest> {
-  const parsed = await readChatCompletionRequest(ctx, resolved.result.runMetadata.maxRequestBytes);
+  const parsed = await readChatCompletionRequest(
+    ctx,
+    runProfile.result.runMetadata.maxRequestBytes,
+  );
+  const resolved = agentModelProfile(deps, parsed, runProfile, authentication);
   const estimatedPromptTokens = isRouteResult(parsed)
     ? 0
     : promptTokenEstimate(parsed, promptTokenAccounting(resolved));
@@ -4751,6 +4783,7 @@ async function readValidatedChatRequest(
     authentication.runtimeAuthenticated,
     estimatedPromptTokens,
     gatewayReadinessRegistry(deps)?.toolProfile ?? "direct",
+    resolved !== runProfile,
   );
   if (validationError !== undefined) {
     logChatRequestRejection(
@@ -4765,7 +4798,7 @@ async function readValidatedChatRequest(
     return validationError;
   }
   if (isRouteResult(parsed)) return parsed;
-  return { parsed, estimatedPromptTokens };
+  return { parsed, estimatedPromptTokens, resolved };
 }
 
 async function runHandleCodingSidecarGatewayChatCompletions(
@@ -4774,12 +4807,12 @@ async function runHandleCodingSidecarGatewayChatCompletions(
 ): Promise<RouteResult | typeof STREAMING> {
   const authentication = authenticateGatewayRequest(ctx, deps);
   if (isRouteResult(authentication)) return authentication;
-  const resolved = resolveAuthenticatedGatewayProfile(deps, authentication);
-  if (!isAvailableGatewayProfile(resolved))
-    return unavailableGatewayProfile(ctx, deps, resolved, authentication);
-  const validated = await readValidatedChatRequest(ctx, deps, resolved, authentication);
+  const runProfile = resolveAuthenticatedGatewayProfile(deps, authentication);
+  if (!isAvailableGatewayProfile(runProfile))
+    return unavailableGatewayProfile(ctx, deps, runProfile, authentication);
+  const validated = await readValidatedChatRequest(ctx, deps, runProfile, authentication);
   if (isRouteResult(validated)) return validated;
-  const { parsed, estimatedPromptTokens } = validated;
+  const { parsed, estimatedPromptTokens, resolved } = validated;
   logValidatedRequestBounds(
     ctx,
     authentication.runId,
@@ -5013,6 +5046,8 @@ function withBoundRunSkill(
     authentication.runtimeAuthenticated,
     estimatedPromptTokens,
     gatewayReadinessRegistry(deps)?.toolProfile ?? "direct",
+    // The first validation admitted a model other than the run alias only as a routed agent model.
+    validated.parsed.model !== OPENCODE_RUNTIME_MODEL_ALIAS,
   );
   if (validationError !== undefined) {
     logChatRequestRejection(ctx, deps, authentication.runId, validationError, {
@@ -5023,7 +5058,7 @@ function withBoundRunSkill(
     return validationError;
   }
   logSkillAttached(ctx, authentication.runId, bound.skill, estimatedPromptTokens);
-  return { parsed, estimatedPromptTokens, skillTurnMessageId: bound.messageId };
+  return { parsed, estimatedPromptTokens, resolved, skillTurnMessageId: bound.messageId };
 }
 
 function logSkillAttached(

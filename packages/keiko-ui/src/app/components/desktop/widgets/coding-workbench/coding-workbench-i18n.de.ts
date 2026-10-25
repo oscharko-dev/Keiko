@@ -395,6 +395,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Der Agent ändert Dateien und führt Befehle im gewählten Modus aus.",
   "codingWorkbench.composer.agent.plan.description":
     "Der Agent analysiert und erstellt einen Plan, ohne Arbeitsbereichsdateien zu ändern.",
+  "codingWorkbench.composer.agent.custom.description":
+    "Ein Primär-Agent, den dieses Repository definiert; er arbeitet im gewählten Modus.",
   "codingWorkbench.composer.projectMemory.label": "MemoriaViva",
   "codingWorkbench.composer.projectMemory.help":
     "MemoriaViva verwendet in der Coding Workbench ausschließlich das aktive Projekt-Memory.",

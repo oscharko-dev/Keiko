@@ -2,9 +2,14 @@ import {
   gatewayVerificationContradictsReadiness,
   UNVERIFIED_GATEWAY,
 } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
-import { DEFAULT_CODING_WORKBENCH_AGENT } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
+import {
+  DEFAULT_CODING_WORKBENCH_AGENT,
+  isCodingWorkbenchAgent,
+  isCodingWorkbenchBuiltInAgent,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import type {
   CodingWorkbenchAgent,
+  CodingWorkbenchBuiltInAgent,
   CodingWorkbenchCodexAuthSetupPlan,
   CodingWorkbenchCodexSubscriptionProfile,
   CodingWorkbenchMode,
@@ -127,8 +132,10 @@ export interface CodingWorkbenchMutationState {
 export interface CodingWorkbenchRuntimeState {
   readonly requestedMode: CodingWorkbenchMode;
   /**
-   * The primary agent the next turn runs under (#3897). Always one `offeredCodingWorkbenchAgents`
-   * lists: the reducer returns it to the default whenever the offer narrows.
+   * The primary agent the next turn runs under (#3897). A built-in `offeredCodingWorkbenchAgents`
+   * lists, or a custom primary agent where the server offers them (#3903 AC1): the reducer returns
+   * it to the default whenever the offer narrows, and the server confirms a custom one against the
+   * run's live listing.
    */
   readonly agent: CodingWorkbenchAgent;
   /**
@@ -136,7 +143,7 @@ export interface CodingWorkbenchRuntimeState {
    * mode change (which empties `runtime` while the next read loads) so the agent switch does not
    * disappear and reappear; never widened by the browser.
    */
-  readonly selectableAgents: readonly CodingWorkbenchAgent[];
+  readonly selectableAgents: readonly CodingWorkbenchBuiltInAgent[];
   /**
    * What the server's last readiness read said the composed runtime can do with a prompt's inputs
    * (ADR-0137 D10): send a message while a turn runs, and attach referenced workspace files. Kept
@@ -402,7 +409,7 @@ function selectMode(
  */
 export function offeredCodingWorkbenchAgents(
   state: Pick<CodingWorkbenchRuntimeState, "runtimePreference" | "selectableAgents">,
-): readonly CodingWorkbenchAgent[] {
+): readonly CodingWorkbenchBuiltInAgent[] {
   return state.runtimePreference === "managed-gateway"
     ? state.selectableAgents
     : [DEFAULT_CODING_WORKBENCH_AGENT];
@@ -421,9 +428,23 @@ export function offeredCodingWorkbenchPromptInputs(
     : NO_CODING_WORKBENCH_PROMPT_INPUTS;
 }
 
+/**
+ * Whether the browser may offer `agent` right now: a built-in the server lists, or a custom primary
+ * agent (#3903 AC1) where the server's profile runs OpenCode's own agents, the one that offers
+ * `plan`. Which custom agents exist is the run's own listing; the server confirms the one chosen.
+ */
+export function isOfferedCodingWorkbenchAgent(
+  state: Pick<CodingWorkbenchRuntimeState, "runtimePreference" | "selectableAgents">,
+  agent: CodingWorkbenchAgent,
+): boolean {
+  const offered = offeredCodingWorkbenchAgents(state);
+  if (isCodingWorkbenchBuiltInAgent(agent)) return offered.includes(agent);
+  return isCodingWorkbenchAgent(agent) && offered.includes("plan");
+}
+
 // The selection never outlives its offer: whatever narrows the offer returns it to the default.
 function withOfferedAgent(state: CodingWorkbenchRuntimeState): CodingWorkbenchRuntimeState {
-  return offeredCodingWorkbenchAgents(state).includes(state.agent)
+  return isOfferedCodingWorkbenchAgent(state, state.agent)
     ? state
     : { ...state, agent: DEFAULT_CODING_WORKBENCH_AGENT };
 }
@@ -432,7 +453,7 @@ function selectAgent(
   state: CodingWorkbenchRuntimeState,
   agent: CodingWorkbenchAgent,
 ): CodingWorkbenchRuntimeState {
-  if (state.agent === agent || !offeredCodingWorkbenchAgents(state).includes(agent)) return state;
+  if (state.agent === agent || !isOfferedCodingWorkbenchAgent(state, agent)) return state;
   return { ...state, agent };
 }
 

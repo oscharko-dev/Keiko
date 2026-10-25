@@ -1264,6 +1264,48 @@ describe("coding-sidecar gateway", () => {
     expect(chat).not.toHaveBeenCalled();
   });
 
+  // #3903 AC1 (owner decision 2026-10-25): on the native profile an agent may name another model the
+  // gateway serves; the request runs on that model's own profile. The run's upstream id and any
+  // model the gateway does not serve stay refused.
+  it("routes a native agent's own gateway model to that model and refuses every other id", async () => {
+    const chat = vi.fn((request: GatewayRequest) =>
+      Promise.resolve(assistantResponse(request.modelId)),
+    );
+    const readiness = createOpenCodeGatewayReadinessRegistry("native");
+    const config: GatewayConfig = {
+      providers: [provider(), provider({ modelId: "small-coding-model" })],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      capabilities: [capability(), capability({ id: "small-coding-model" })],
+    };
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-1" } }),
+        () => chat,
+        readiness,
+      ),
+      config,
+      gatewayConfig: freshServingHolder(config),
+    } as unknown as UiHandlerDeps;
+    const ask = (model: string): ReturnType<typeof handleCodingSidecarGatewayChatCompletions> =>
+      handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model,
+          messages: [{ role: "user", content: "explore" }],
+          tools: modelVisibleTools(),
+        }),
+        deps,
+      );
+    expect(await ask("small-coding-model")).toMatchObject({ status: 200 });
+    expect(chat).toHaveBeenCalledOnce();
+    expect(chat.mock.calls[0]?.[0].modelId).toBe("small-coding-model");
+    for (const model of ["azure-coding-model", "unserved-model"])
+      expect(await ask(model), model).toMatchObject({
+        status: 400,
+        body: { error: { code: "INVALID_MODEL" } },
+      });
+    expect(chat).toHaveBeenCalledOnce();
+  });
+
   it("observes readiness only after authenticated exact tool-contract validation", async () => {
     const readiness = createOpenCodeGatewayReadinessRegistry();
     const signal = new AbortController().signal;

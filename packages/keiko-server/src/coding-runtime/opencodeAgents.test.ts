@@ -40,3 +40,18 @@ describe("isAgentAdmitted", () => {
     expect(isAgentAdmitted(["build", "plan"], "plan")).toBe(true);
   });
 });
+
+// #3903 AC1: a custom primary agent exists only where OpenCode runs its own agents (plan offered);
+// the composition then confirms it against the run's live listing.
+describe("custom primary agents", () => {
+  it("admits a well-named custom agent only where the run offers plan", () => {
+    expect(isAgentAdmitted(["build", "plan"], "reviewer")).toBe(true);
+    expect(isAgentAdmitted(["build"], "reviewer")).toBe(false);
+    expect(isAgentAdmitted(undefined, "reviewer")).toBe(false);
+  });
+
+  it("never admits a built-in subagent, a hidden agent or another spelling of a built-in", () => {
+    for (const agent of ["general", "explore", "summary", "Plan", "BUILD", "bad name", ""])
+      expect(isAgentAdmitted(["build", "plan"], agent), agent).toBe(false);
+  });
+});

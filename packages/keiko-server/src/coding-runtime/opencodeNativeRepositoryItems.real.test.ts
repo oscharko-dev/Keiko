@@ -34,7 +34,16 @@ import {
   parseOperatorPluginRegistry,
 } from "./opencodeOperatorPlugins.js";
 import { readPluginPackage } from "./opencodeOperatorPluginPackage.js";
-import { buildOpenCodeLaunchProfile, openCodeConfigDirectory } from "./opencodeLaunchProfile.js";
+import {
+  buildOpenCodeLaunchProfile,
+  openCodeConfigDirectory,
+  type OpenCodeAgentModelsInput,
+} from "./opencodeLaunchProfile.js";
+import {
+  gatewayAgentModel,
+  openCodeAgentModelBinding,
+  type OpenCodeAgentModelCatalog,
+} from "./opencodeNativeAgentModels.js";
 import {
   openCodeNativeMcpAdmission,
   type OpenCodeNativeMcpAdmission,
@@ -455,12 +464,14 @@ function launch(
   runtimeRoot: string,
   ports: Ports,
   mcp?: OpenCodeNativeMcpAdmission["config"],
+  agentModels?: OpenCodeAgentModelsInput,
 ): { readonly profile: ReturnType<typeof buildOpenCodeLaunchProfile>; start: () => Launched } {
   const profile = buildOpenCodeLaunchProfile({
     executable: binary,
     stateRoot: fixture.state,
     toolProfile: "native",
     ...(mcp === undefined ? {} : { mcp }),
+    ...(agentModels === undefined ? {} : { agentModels }),
     contextGeometry: {
       contextWindowTokens: 32_768,
       maxInputTokens: 24_000,
@@ -591,6 +602,31 @@ interface RunOptions {
   readonly rawDiscoveryFiles?: Readonly<Record<string, string>>;
   /** More repository files under `.opencode/`, written before the admission reads the project. */
   readonly projectFiles?: Readonly<Record<string, string>>;
+  /** The gateway's further models, declared and mapped as production does (#3903 AC1). */
+  readonly agentModelCatalog?: OpenCodeAgentModelCatalog;
+}
+
+function agentModelBindingOf(
+  catalog: OpenCodeAgentModelCatalog | undefined,
+): ReturnType<typeof openCodeAgentModelBinding> | undefined {
+  return catalog === undefined ? undefined : openCodeAgentModelBinding([], catalog);
+}
+
+/** Keiko's own admission of the project's repository items, as the composition runs it. */
+async function admitRepositoryItems(
+  fixture: Fixture,
+  admission: ReturnType<typeof createBufferedServerLogSink>,
+  catalog: OpenCodeAgentModelCatalog | undefined,
+): Promise<void> {
+  await createCodingRuntimeRepositoryItemsPort({
+    enabled: true,
+    source: fixtureReadPort(fixture.workspace),
+    isRunWorkspace: () => true,
+    activityLog: admission,
+    ...(catalog === undefined
+      ? {}
+      : { agentModel: (value: string): string | undefined => gatewayAgentModel(value, catalog) }),
+  }).admitForRun({ runId: RUN_ID, discoveryRoot: openCodeConfigDirectory(fixture.state) });
 }
 
 async function withRun(options: RunOptions, body: (run: Run) => Promise<void>): Promise<void> {
@@ -614,13 +650,9 @@ async function withRun(options: RunOptions, body: (run: Run) => Promise<void>): 
     realpathSync(RESOURCE_ROOT),
     { gateway: gateway.port, facade: facade.port },
     options.mcp,
+    agentModelBindingOf(options.agentModelCatalog),
   );
-  await createCodingRuntimeRepositoryItemsPort({
-    enabled: true,
-    source: fixtureReadPort(fixture.workspace),
-    isRunWorkspace: () => true,
-    activityLog: admission,
-  }).admitForRun({ runId: RUN_ID, discoveryRoot: openCodeConfigDirectory(fixture.state) });
+  await admitRepositoryItems(fixture, admission, options.agentModelCatalog);
   if (options.operatorPlugins !== undefined)
     await admitOperatorPlugins(fixture, options.operatorPlugins, admission);
   await options.beforeLaunch?.(fixture);
@@ -1169,6 +1201,45 @@ describe("pinned native OpenCode repository items", () => {
           expect(byId.get("helper")?.model).toBeUndefined();
         },
       );
+    },
+    120_000,
+  );
+
+  // #3903 AC1: a repository's own primary agent is offered beside build and plan and the session
+  // switches to it; its own model is kept as the gateway model it names.
+  it.skipIf(skip)(
+    "offers a repository primary agent, routes its model through the gateway and switches to it",
+    async () => {
+      const options = {
+        projectFiles: {
+          "agents/curator.md":
+            "---\ndescription: Curates the change\nmode: primary\nmodel: ollama/gemma-small\n---\nCurate it.\n",
+        },
+        agentModelCatalog: {
+          runModelId: "gemma-large",
+          models: {
+            "gemma-small": {
+              contextWindowTokens: 16_384,
+              maxInputTokens: 12_000,
+              maxOutputTokens: 2_048,
+            },
+          },
+        },
+      } as const;
+      await withRun(options, async (run) => {
+        const agents = await listedWhen(run, "/api/agent", "curator");
+        const curator = agents.find((agent) => agent.id === "curator");
+        expect(curator).toMatchObject({
+          mode: "primary",
+          model: { id: "gemma-small", providerID: "keiko-runtime" },
+        });
+        expect(await run.client.primaryAgents(run.fixture.workspace)).toEqual([
+          { name: "curator", description: "Curates the change" },
+        ]);
+        await run.client.switchAgent(run.sessionId, "curator");
+        const session = (await run.listing("/api/session")).find((row) => row.id === run.sessionId);
+        expect(session?.agent).toBe("curator");
+      });
     },
     120_000,
   );

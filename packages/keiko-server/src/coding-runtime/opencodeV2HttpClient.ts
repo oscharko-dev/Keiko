@@ -1,6 +1,7 @@
 import {
   CODING_WORKBENCH_PROMPT_REFERENCES_MAX,
   isCodingWorkbenchAgent,
+  isCodingWorkbenchBuiltInAgent,
   isCodingWorkbenchCommandName,
   isCodingWorkbenchMentionName,
   isCodingWorkbenchPromptDelivery,
@@ -305,6 +306,12 @@ export interface OpenCodeV2HttpClient {
    * workspace: an entry that is primary, hidden or not well named is dropped.
    */
   agents(directory: string, signal?: AbortSignal): Promise<readonly OpenCodeV2Agent[]>;
+  /**
+   * The custom primary agents the session may switch to (`GET /api/agent`, operation `agent.list`)
+   * for the run's workspace (#3903 AC1): primary or all-mode agents that are not hidden, other than
+   * the built-in `build` and `plan`, each well named.
+   */
+  primaryAgents(directory: string, signal?: AbortSignal): Promise<readonly OpenCodeV2Agent[]>;
   /** The skills a prompt may mention (`GET /api/skill`, operation `skill.list`) for the workspace. */
   skills(directory: string, signal?: AbortSignal): Promise<readonly OpenCodeV2Skill[]>;
   /**
@@ -602,6 +609,18 @@ function agentEntries(
     const { id, mode, hidden } = entry;
     if (!isCodingWorkbenchMentionName(id) || hidden !== false) return [];
     if (mode !== "subagent" && mode !== "all") return [];
+    return [{ name: id, ...mentionDescription(entry.description) }];
+  });
+}
+
+function primaryAgentEntries(
+  entries: readonly Readonly<Record<string, unknown>>[],
+): readonly OpenCodeV2Agent[] {
+  if (entries.length > MAX_MENTIONABLES) throw new Error("opencode-v2-envelope-invalid");
+  return entries.flatMap((entry): readonly OpenCodeV2Agent[] => {
+    const { id, mode, hidden } = entry;
+    if (!isCodingWorkbenchMentionName(id) || hidden !== false) return [];
+    if (isCodingWorkbenchBuiltInAgent(id) || (mode !== "primary" && mode !== "all")) return [];
     return [{ name: id, ...mentionDescription(entry.description) }];
   });
 }
@@ -1249,6 +1268,12 @@ export function createOpenCodeV2HttpClient(
       commandEntries(arrayEnvelope(await request("GET", "/api/command", undefined, signal))),
     agents: async (directory, signal) =>
       agentEntries(
+        arrayEnvelope(
+          await request("GET", `/api/agent?${locationQuery(directory)}`, undefined, signal),
+        ),
+      ),
+    primaryAgents: async (directory, signal) =>
+      primaryAgentEntries(
         arrayEnvelope(
           await request("GET", `/api/agent?${locationQuery(directory)}`, undefined, signal),
         ),

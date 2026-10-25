@@ -513,6 +513,24 @@ describe("primary agent selection (#3897)", () => {
     ).toBe("build");
   });
 
+  // #3903 AC1: a custom primary agent is selectable only where the server offers plan.
+  it("selects a custom primary agent only where the server runs OpenCode's own agents", () => {
+    const initial = createInitialCodingWorkbenchRuntimeState();
+    expect(
+      codingWorkbenchRuntimeReducer(initial, { kind: "select-agent", agent: "reviewer" }),
+    ).toBe(initial);
+    const offered = offering(readyState());
+    const custom = codingWorkbenchRuntimeReducer(offered, {
+      kind: "select-agent",
+      agent: "reviewer",
+    });
+    expect(custom.agent).toBe("reviewer");
+    for (const reserved of ["general", "Plan"])
+      expect(
+        codingWorkbenchRuntimeReducer(offered, { kind: "select-agent", agent: reserved }).agent,
+      ).toBe("build");
+  });
+
   it("keeps the offered agents and the selection while a mode change reloads readiness", () => {
     const planned = codingWorkbenchRuntimeReducer(offering(readyState()), {
       kind: "select-agent",

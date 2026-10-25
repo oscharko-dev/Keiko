@@ -1280,12 +1280,14 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   - **Nothing of the original frontmatter is forwarded.** The frontmatter is parsed by a closed
     subset of YAML (top-level `key: scalar`, quoted and block scalars, indented continuation), a
     per-kind allowlist is read by typed readers, and the copy's frontmatter is rendered anew:
-    agents keep `description`, `mode` (`subagent` or `primary`; absent is admitted as `subagent`,
-    because Keiko offers no selector for a custom primary agent) and bounded numeric `temperature`
-    (at most 2) and `top_p` (at most 1); commands keep `description`, `agent` and `subagent` (its
-    deprecated alias `subtask` is accepted); skills keep `name` (the directory name; a different
-    one is refused) and a required `description`. `model`, `permission(s)`, `tools`, `provider`,
-    `mcp`, `plugin(s)`, `disabled`, `request` and every other key are dropped and only counted. A
+    agents keep `description`, `mode` (`subagent` or `primary`; absent is admitted as `subagent`)
+    and bounded numeric `temperature` (at most 2) and `top_p` (at most 1), and `model` only as
+    the gateway-bound model it names (`keiko-runtime/<id>` of a model the Model Gateway serves,
+    #3903 AC1; any other model is dropped and counted); commands keep `description`, `agent` and
+    `subagent` (its deprecated alias `subtask` is accepted); skills keep `name` (the directory
+    name; a different one is refused) and a required `description`. `permission(s)`, `tools`,
+    `provider`, `mcp`, `plugin(s)`, `disabled`, `request` and every other key are dropped and only
+    counted. A
     shape the parser does not understand (a quoted key, a duplicate key, a flow collection, an
     anchor, a tag) is refused, never guessed at. Control, bidirectional and zero-width characters
     anywhere in the file are refused. The body is untrusted prose (a system prompt, a template, a
@@ -1451,7 +1453,28 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   a start before any run exists and a follow-up before the adapter is reached. The switch only
   narrows what a turn may do; the Authority Envelope, the mode and the policy hook below decide
   every action as before. Each effective switch is recorded body-free as
-  `coding-runtime.agent.selected` (run, new and previous agent). The browser learns what it may
+  `coding-runtime.agent.selected` (run, new and previous agent; a custom agent as `custom`).
+  **Custom primary agents (#3903 AC1).** On the native profile a follow-up may also name a custom
+  primary agent: a repository or configured agent whose mode is `primary` (or `all`). The contract
+  admits a well-formed name that no built-in, built-in subagent (`general`, `explore`) or hidden
+  agent (`compaction`, `title`, `summary`) carries in any spelling; a start still names a
+  built-in only, because only a live run lists its custom agents. Before the switch the composition
+  confirms the name against the runtime's own listing (`GET /api/agent`, primary or all-mode,
+  visible); an unlisted name, a subagent or a failed listing refuses the turn with no switch and
+  no prompt. The commands channel carries the run's custom primary agents (`primaryAgents`), and
+  the composer's agent switch offers them beside Build and Plan on a paused native run. They work
+  within the run's mode like every agent. **Per-agent models (#3903 AC1, owner decision
+  2026-10-25).** The primary agent keeps the run's model; any agent may name its own model, as in
+  standalone OpenCode (a large orchestrator, small subagents), but only a model the Model Gateway
+  serves: the one gateway-bound provider declares the gateway's coding-capable models beside the
+  run's alias (`opencodeNativeAgentModels.ts`), the server-owned `agents` setting carries the
+  `agents`/`agent` overrides of the user's global and the project's configuration that name one
+  of them, an agent file keeps a `model` that names one, and every other model is refused and
+  counted (the agent keeps the run's model). The gateway resolves such a request against that
+  model's own profile (bounds, accounting, provider) under the run's capability and prompt budget;
+  the run's own upstream id and any model it does not serve stay refused on the runtime lane.
+  `coding-runtime.agent-models.bound` records the offered model and configured/refused override
+  counts. The browser learns what it may
   offer from the readiness read it already performs before a start: `selectableAgents` (always
   carrying `build`) is computed from the composed tool profile through `openCodeSelectableAgents`,
   and the contract validator refuses an absent, duplicated, unknown or `build`-less list. The

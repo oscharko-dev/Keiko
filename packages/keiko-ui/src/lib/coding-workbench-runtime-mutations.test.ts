@@ -453,6 +453,31 @@ describe("primary agent on the mutations (#3897)", () => {
     );
   });
 
+  it("starts and retries a run under build when the selection is a custom primary agent (#3903 AC1)", async () => {
+    // A custom agent lives in a running run's own listing; a new run always begins under a built-in.
+    const custom = { ...offered, agent: "reviewer" } as const;
+    await createStartMutation("task", stateWithRun(null, { canStart: true, ...custom }), {
+      projectMemoryEnabled: true,
+    }).run();
+    expect(apiMocks.startCodingWorkbenchRuntime.mock.lastCall?.[0]).toHaveProperty(
+      "agent",
+      "build",
+    );
+    await createRetryMutation(
+      "task",
+      stateWithRun(snapshot(), { canRetry: true, ...custom }),
+    ).run();
+    expect(apiMocks.retryCodingWorkbenchRuntime.mock.lastCall?.[1]).toHaveProperty(
+      "agent",
+      "build",
+    );
+    await createFollowUpMutation("task", stateWithRun(snapshot({ state: "paused" }), custom)).run();
+    expect(apiMocks.submitCodingWorkbenchRuntimeFollowUp.mock.lastCall?.[1]).toHaveProperty(
+      "agent",
+      "reviewer",
+    );
+  });
+
   it("never sends the selected agent for a source without an agent concept", async () => {
     const codex = { ...offered, agent: "plan", runtimePreference: "codex-subscription" } as const;
     await createStartMutation("task", stateWithRun(null, { canStart: true, ...codex }), {

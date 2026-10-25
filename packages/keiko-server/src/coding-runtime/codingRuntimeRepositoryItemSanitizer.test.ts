@@ -695,3 +695,35 @@ describe("skill sanitization", () => {
     expect(sanitize("skill", "---\ndescription: d\n---\nRun !`ls` to list", "demo").ok).toBe(true);
   });
 });
+
+// #3903 AC1: an agent file's own model survives only as the gateway-bound model it names.
+describe("agent model through the gateway", () => {
+  const agent = (model: string): string =>
+    [
+      "---",
+      "description: Reviews",
+      "mode: subagent",
+      `model: ${model}`,
+      "---",
+      "Review it.",
+      "",
+    ].join("\n");
+  const context = {
+    admittedSubagents: new Set<string>(),
+    agentModel: (value: string): string | undefined =>
+      value === "gemma-small" ? "keiko-runtime/gemma-small" : undefined,
+  };
+
+  it("keeps a model the gateway serves and drops any other", () => {
+    const kept = sanitizeRepositoryItem("agent", "reviewer", agent("gemma-small"), context);
+    expect(kept).toMatchObject({ ok: true, strippedAuthorityKeyCount: 0 });
+    expect(kept.ok && kept.content).toContain('model: "keiko-runtime/gemma-small"');
+    const dropped = sanitizeRepositoryItem("agent", "reviewer", agent("openai/gpt-x"), context);
+    expect(dropped).toMatchObject({ ok: true, strippedAuthorityKeyCount: 1 });
+    expect(dropped.ok && dropped.content).not.toContain("model:");
+    const withoutPort = sanitizeRepositoryItem("agent", "reviewer", agent("gemma-small"), {
+      admittedSubagents: new Set(),
+    });
+    expect(withoutPort.ok && withoutPort.content).not.toContain("model:");
+  });
+});

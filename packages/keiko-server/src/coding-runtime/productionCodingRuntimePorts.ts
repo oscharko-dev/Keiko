@@ -53,7 +53,11 @@ import type {
 import type { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
 import type { CodingRuntimeIssueAttachment } from "./codingRuntimeIssueIntake.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
-import type { CodingWorkbenchAgent, WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
+import type {
+  CodingWorkbenchAgent,
+  CodingWorkbenchBuiltInAgent,
+  WorkspaceInfo,
+} from "@oscharko-dev/keiko-contracts";
 import { isAgentAdmitted } from "./opencodeAgents.js";
 import type {
   PrDescriptionArtifact,
@@ -234,7 +238,7 @@ export interface ProductionRuntimeTurnPort {
    * means the default agent only: a request for any other is refused before the adapter is reached
    * (a read-only `plan` request must never run as an editing agent).
    */
-  readonly selectableAgents?: readonly CodingWorkbenchAgent[] | undefined;
+  readonly selectableAgents?: readonly CodingWorkbenchBuiltInAgent[] | undefined;
   readonly abortTurn: (runId: string) => Promise<boolean>;
   readonly waitForTerminal: (
     runId: string,

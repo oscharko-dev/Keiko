@@ -58,6 +58,12 @@ export function openCodeRepositoryInstructionsPath(stateRoot: string): string {
   return join(openCodeConfigDirectory(stateRoot), "AGENTS.md");
 }
 
+/** The further gateway models and per-agent overrides of a native launch (#3903 AC1). */
+export interface OpenCodeAgentModelsInput {
+  readonly models: Readonly<Record<string, OpenCodeContextGeometry>>;
+  readonly agents: Readonly<Record<string, { readonly model: string }>>;
+}
+
 export interface OpenCodeContextGeometry {
   readonly contextWindowTokens: number;
   readonly maxInputTokens: number;
@@ -106,6 +112,12 @@ export interface OpenCodeLaunchProfileInput {
    * setting; absent carries the built-ins alone.
    */
   readonly formatterDocuments?: readonly Readonly<Record<string, unknown>>[] | undefined;
+  /**
+   * #3903 AC1 (`opencodeNativeAgentModels.ts`): the further gateway models the one provider
+   * declares beside the run's alias, and the per-agent overrides that name them. Native profile
+   * only; absent declares the run's model alone.
+   */
+  readonly agentModels?: OpenCodeAgentModelsInput | undefined;
   /**
    * The native run's admitted MCP servers (`openCodeNativeMcpAdmission`), written on the
    * server-owned binding. Absent means none: the binding still names an empty set, so no other
@@ -210,6 +222,7 @@ export function buildOpenCodeLaunchProfile(
       mcp: input.mcp,
       externalReadRoots: input.externalReadRoots,
       formatterDocuments: input.formatterDocuments,
+      agentModels: input.agentModels,
     },
   );
   return {
@@ -460,7 +473,6 @@ const NO_MCP_SERVERS: { readonly servers: Readonly<Record<string, unknown>> } = 
   servers: Object.freeze({}),
 });
 
-/** Original V2 execution with exactly the server-selected governed tool profile. */
 /** What only the native profile's configuration carries; every field has a fail-closed default. */
 export interface OpenCodeNativeConfigOptions {
   readonly stateRoot?: string | undefined;
@@ -468,8 +480,10 @@ export interface OpenCodeNativeConfigOptions {
   readonly mcp?: { readonly servers: Readonly<Record<string, unknown>> } | undefined;
   readonly externalReadRoots?: readonly string[] | undefined;
   readonly formatterDocuments?: readonly Readonly<Record<string, unknown>>[] | undefined;
+  readonly agentModels?: OpenCodeAgentModelsInput | undefined;
 }
 
+/** Original V2 execution with exactly the server-selected governed tool profile. */
 export function createFixedOpenCodeV2Config(
   contextGeometry: OpenCodeContextGeometry,
   unavailableOptionalTools?: ReadonlySet<OpenCodeOptionalToolName>,
@@ -482,13 +496,26 @@ export function createFixedOpenCodeV2Config(
     mcp = NO_MCP_SERVERS,
     externalReadRoots = [],
     formatterDocuments = [],
+    agentModels,
   } = native;
   openCodeVisibleToolNames(profile);
   if (profile === "native")
-    return createNativeOpenCodeV2Config(contextGeometry, stateRoot, mcp, externalReadRoots, {
-      disposition: formatter,
-      documents: formatterDocuments,
-    });
+    return createNativeOpenCodeV2Config(
+      contextGeometry,
+      stateRoot,
+      mcp,
+      externalReadRoots,
+      { disposition: formatter, documents: formatterDocuments },
+      agentModels,
+    );
+  return createGovernedOpenCodeV2Config(contextGeometry, unavailableOptionalTools, profile);
+}
+
+function createGovernedOpenCodeV2Config(
+  contextGeometry: OpenCodeContextGeometry,
+  unavailableOptionalTools: ReadonlySet<OpenCodeOptionalToolName> | undefined,
+  profile: Exclude<OpenCodeToolProfile, "native">,
+): Readonly<Record<string, unknown>> {
   const unavailable = unavailableOptionalTools ?? new Set<OpenCodeOptionalToolName>();
   const reserved = Math.min(
     OPENCODE_COMPACTION_MAX_RESERVED_TOKENS,
@@ -551,6 +578,7 @@ function createNativeOpenCodeV2Config(
     readonly disposition: OpenCodeNativeFormatterDisposition;
     readonly documents: readonly Readonly<Record<string, unknown>>[];
   },
+  agentModels: OpenCodeAgentModelsInput | undefined,
 ): Readonly<Record<string, unknown>> {
   const reserved = Math.min(
     OPENCODE_COMPACTION_MAX_RESERVED_TOKENS,
@@ -569,10 +597,18 @@ function createNativeOpenCodeV2Config(
     formatter: openCodeNativeFormatterSetting(formatter.disposition, formatter.documents),
     model: `${OPENCODE_RUNTIME_PROVIDER_ID}/${OPENCODE_RUNTIME_MODEL_ALIAS}`,
     default_agent: "build",
-    providers: fixedOpenCodeV2Provider(contextGeometry, {
-      image: contextGeometry.imageInput === true,
-      pdf: contextGeometry.documentInput === true,
-    }),
+    providers: fixedOpenCodeV2Provider(
+      contextGeometry,
+      {
+        image: contextGeometry.imageInput === true,
+        pdf: contextGeometry.documentInput === true,
+      },
+      agentModels?.models,
+    ),
+    // #3903 AC1: per-agent models, each one the gateway serves (`opencodeNativeAgentModels.ts`).
+    ...(agentModels === undefined || Object.keys(agentModels.agents).length === 0
+      ? {}
+      : { agents: agentModels.agents }),
     policies: OPENCODE_GATEWAY_PROVIDER_POLICIES,
     compaction: { auto: true, keep: { tokens: recent }, buffer: reserved },
     tool_output: { max_bytes: CODING_TOOL_MAX_BODY_BYTES },
@@ -663,6 +699,7 @@ const OPENCODE_NATIVE_SERVER_OWNED_KEYS = [
   "providers",
   "policies",
   "permissions",
+  "agents",
 ] as const;
 
 function nativeServerOwnedBinding(
@@ -676,29 +713,43 @@ function nativeServerOwnedBinding(
  * becomes model-visible media only when the provider model declares it, exactly as in standalone
  * OpenCode (https://opencode.ai/v2/docs/tools/). The direct and Code Mode profiles never pass them.
  */
-function fixedOpenCodeV2Provider(
+function providerModel(
+  name: string,
   geometry: OpenCodeContextGeometry,
   media: { readonly image: boolean; readonly pdf: boolean },
 ): Readonly<Record<string, unknown>> {
+  return {
+    name,
+    capabilities: {
+      tools: true,
+      input: ["text", ...(media.image ? ["image"] : []), ...(media.pdf ? ["pdf"] : [])],
+      output: ["text"],
+    },
+    limit: {
+      context: geometry.contextWindowTokens,
+      input: geometry.maxInputTokens,
+      output: geometry.maxOutputTokens,
+    },
+    cost: { input: 0, output: 0 },
+  };
+}
+
+function fixedOpenCodeV2Provider(
+  geometry: OpenCodeContextGeometry,
+  media: { readonly image: boolean; readonly pdf: boolean },
+  further: Readonly<Record<string, OpenCodeContextGeometry>> = {},
+): Readonly<Record<string, unknown>> {
+  // The further gateway models (#3903 AC1) are text and tools; the run's alias keeps its media.
+  const furtherModels = Object.entries(further).map(
+    ([id, model]) => [id, providerModel(id, model, { image: false, pdf: false })] as const,
+  );
   return {
     [OPENCODE_RUNTIME_PROVIDER_ID]: {
       name: "Keiko Governed Coding Gateway",
       package: "@opencode/ai/providers/openai-compatible",
       models: {
-        [OPENCODE_RUNTIME_MODEL_ALIAS]: {
-          name: "Keiko Governed Coding",
-          capabilities: {
-            tools: true,
-            input: ["text", ...(media.image ? ["image"] : []), ...(media.pdf ? ["pdf"] : [])],
-            output: ["text"],
-          },
-          limit: {
-            context: geometry.contextWindowTokens,
-            input: geometry.maxInputTokens,
-            output: geometry.maxOutputTokens,
-          },
-          cost: { input: 0, output: 0 },
-        },
+        ...Object.fromEntries(furtherModels),
+        [OPENCODE_RUNTIME_MODEL_ALIAS]: providerModel("Keiko Governed Coding", geometry, media),
       },
       settings: {
         baseURL: "{env:KEIKO_MODEL_GATEWAY_URL}",

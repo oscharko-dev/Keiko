@@ -176,6 +176,8 @@ export interface ProductionOpenCodeActivationInput {
   >;
   readonly resolveGatewayRunMetadata?:
     ((modelId: string) => CodingWorkbenchSidecarGatewayRunMetadata | undefined) | undefined;
+  /** The gateway's coding-capable model ids right now (#3903 AC1); absent offers none beside a run's. */
+  readonly gatewayCodingModelIds?: (() => readonly string[]) | undefined;
   /** Explicit test/composition override; packaged production constructs its own verified port. */
   readonly secureWorkspaceTextRead?: SecureWorkspaceTextReadPort | undefined;
   /** Live active-task-workspace root resolution for the dev-lane secure-read port. */
@@ -286,6 +288,24 @@ function mcpOAuthPorts(input: ProductionOpenCodeActivationInput): {
   };
 }
 
+/** The backend inputs a deployment may leave out; an absent one adds no key. */
+function optionalBackendInputs(
+  input: ProductionOpenCodeActivationInput,
+): Partial<Parameters<typeof createProductionOpenCodeBackend>[0]> {
+  return {
+    ...(input.gatewayCodingModelIds === undefined
+      ? {}
+      : { gatewayCodingModelIds: input.gatewayCodingModelIds }),
+    ...(input.activityLog ? { activityLog: input.activityLog } : {}),
+    ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
+    ...(input.nativeWorktrees ? { nativeWorktrees: input.nativeWorktrees } : {}),
+    ...(input.fetch ? { fetch: input.fetch } : {}),
+    ...(input.runtimeMaxDurationMs === undefined
+      ? {}
+      : { runtimeMaxDurationMs: input.runtimeMaxDurationMs }),
+  };
+}
+
 function activatedPorts(
   input: ProductionOpenCodeActivationInput,
   portable: ResolvedPortableOpenCodeRuntime,
@@ -325,15 +345,9 @@ function activatedPorts(
       toolFacadeUrl: endpoints.toolFacadeUrl,
       runtimeEvidence: input.runtimeEvidence,
       gatewayReadiness: input.gatewayReadiness,
-      ...(input.activityLog ? { activityLog: input.activityLog } : {}),
-      ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
-      ...(input.nativeWorktrees ? { nativeWorktrees: input.nativeWorktrees } : {}),
       // #3900 AC5: the operator's accepted external references, resolved per native run.
       externalReadRoots: input.env[KEIKO_CODING_EXTERNAL_READ_ROOTS_ENV],
-      ...(input.fetch ? { fetch: input.fetch } : {}),
-      ...(input.runtimeMaxDurationMs === undefined
-        ? {}
-        : { runtimeMaxDurationMs: input.runtimeMaxDurationMs }),
+      ...optionalBackendInputs(input),
     }),
     secureWorkspaceTextRead,
     editorAgentClient:

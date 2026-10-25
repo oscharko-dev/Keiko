@@ -200,6 +200,56 @@ describe("Coding Workbench runtime API contracts", () => {
     }
   });
 
+  // #3903 AC1: a follow-up may name a custom primary agent the run lists; a start names a built-in.
+  it("admits a custom primary agent name on a follow-up only, never a reserved one", () => {
+    expect(isCodingWorkbenchAgent("reviewer")).toBe(true);
+    expect(isCodingWorkbenchAgent("docs-writer.v2")).toBe(true);
+    for (const reserved of [
+      "general",
+      "explore",
+      "compaction",
+      "title",
+      "summary",
+      "Plan",
+      "BUILD",
+    ])
+      expect(isCodingWorkbenchAgent(reserved), reserved).toBe(false);
+    const followUp = { requestId: "request-1", expectedRevision: 3, taskIntent: "Review it" };
+    expect(parseCodingWorkbenchRuntimeFollowUpRequest({ ...followUp, agent: "reviewer" })).toEqual({
+      ok: true,
+      value: { ...followUp, agent: "reviewer" },
+    });
+    expect(
+      parseCodingWorkbenchRuntimeStartRequest({
+        requestId: "request-1",
+        taskIntent: "Review it",
+        requestedMode: "supervised-coding",
+        agent: "reviewer",
+      }),
+    ).toEqual({ ok: false, errors: ["agent is invalid"] });
+  });
+
+  it("validates the commands channel's custom primary agents like the mentionable ones", () => {
+    expect(
+      validateCodingWorkbenchRuntimeCommandsChannelPayload({
+        session: "active",
+        primaryAgents: [{ name: "reviewer", description: "Reviews" }],
+      }).ok,
+    ).toBe(true);
+    for (const primaryAgents of [[{ name: "bad name" }], [{ name: "a" }, { name: "a" }], "x"])
+      expect(
+        validateCodingWorkbenchRuntimeCommandsChannelPayload({ session: "active", primaryAgents })
+          .ok,
+        JSON.stringify(primaryAgents),
+      ).toBe(false);
+    expect(
+      validateCodingWorkbenchRuntimeCommandsChannelPayload({
+        session: "unpaired",
+        primaryAgents: [],
+      }).ok,
+    ).toBe(false);
+  });
+
   it("keeps the selectable primary agents a closed vocabulary", () => {
     expect(CODING_WORKBENCH_AGENTS).toEqual(["build", "plan"]);
     expect(DEFAULT_CODING_WORKBENCH_AGENT).toBe("build");

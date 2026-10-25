@@ -1,5 +1,10 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import {
+  openCodeAgentModelBinding,
+  type OpenCodeAgentModelBinding,
+  type OpenCodeAgentModelCatalog,
+} from "./opencodeNativeAgentModels.js";
+import {
   DEFAULT_SANDBOX_POLICY,
   GOVERNED_TOOL_SETTLEMENT_GRACE_MS,
 } from "@oscharko-dev/keiko-contracts/runtime/tools";
@@ -158,6 +163,8 @@ import {
 import {
   DEFAULT_CODING_WORKBENCH_AGENT,
   type CodingWorkbenchAgent,
+  type CodingWorkbenchBuiltInAgent,
+  isCodingWorkbenchBuiltInAgent,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
@@ -292,7 +299,8 @@ const SIDECAR_SESSION_BOUND_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-const CODING_WORKBENCH_AGENT_VALUES = ["build", "plan"] as const;
+// A custom primary agent (#3903 AC1) is recorded by its kind, never by its repository-authored name.
+const CODING_WORKBENCH_AGENT_VALUES = ["build", "plan", "custom"] as const;
 
 const CODING_WORKBENCH_MODE_VALUES = [
   "governed-assist",
@@ -525,6 +533,11 @@ export interface OpenCodeRuntimeCompositionInput {
       }) => Promise<readonly Readonly<Record<string, unknown>>[]>)
     | undefined;
   /**
+   * Native profile only: the gateway's coding-capable models a run's agents may use beside its own
+   * (#3903 AC1, `opencodeNativeAgentModels.ts`). Absent declares the run's model alone.
+   */
+  readonly agentModelCatalog?: (() => OpenCodeAgentModelCatalog | undefined) | undefined;
+  /**
    * Native profile only: the run's accepted external references (#3900 AC5), the roots its kernel
    * allowlist reads; the launch profile hands them to the policy, which decides each read.
    */
@@ -749,7 +762,7 @@ export interface OpenCodeRunPort {
    * The primary agents this composition's tool profile can honour (`openCodeSelectableAgents`):
    * `plan` exists only on the native profile. A request for another agent is refused here.
    */
-  readonly selectableAgents?: readonly CodingWorkbenchAgent[] | undefined;
+  readonly selectableAgents?: readonly CodingWorkbenchBuiltInAgent[] | undefined;
   readonly abortTask: (runId: string) => Promise<boolean>;
   /**
    * Undo and restore of the run's newest turn (B3, S04, `opencodeRevert.ts`): an undo stops the
@@ -990,7 +1003,7 @@ function recordNativeNarrowingRefused(
 
 /** What the tool profile decides about a run's port. */
 interface RunPortProfile {
-  readonly selectableAgents: readonly CodingWorkbenchAgent[];
+  readonly selectableAgents: readonly CodingWorkbenchBuiltInAgent[];
   /** Native runs record turn images for undo. */
   readonly snapshots: boolean;
   /** Native runs offer their MCP servers' OAuth authorization (#3903 AC3). */
@@ -1125,7 +1138,7 @@ function createSubmitTask(
     readonly activityLog: ServerLogSink | undefined;
     readonly refreshInstructions: (run: ReadyRun) => Promise<boolean>;
   },
-  selectableAgents: readonly CodingWorkbenchAgent[],
+  selectableAgents: readonly CodingWorkbenchBuiltInAgent[],
 ): OpenCodeRunPort["submitTask"] {
   const { diagnostics, activityLog } = sinks;
   return async (runId, text, initialContext, agent, inputs, origin): Promise<boolean> => {
@@ -1324,7 +1337,7 @@ async function postOnceMore(
 async function selectPrimaryAgent(
   run: ReadyRun,
   requested: CodingWorkbenchAgent | undefined,
-  selectableAgents: readonly CodingWorkbenchAgent[],
+  selectableAgents: readonly CodingWorkbenchBuiltInAgent[],
   diagnostics: ServerDiagnosticSink | undefined,
   activityLog: ServerLogSink | undefined,
 ): Promise<boolean> {
@@ -1334,6 +1347,7 @@ async function selectPrimaryAgent(
   }
   const current = run.agent ?? DEFAULT_CODING_WORKBENCH_AGENT;
   if (requested === undefined || requested === current) return true;
+  if (!(await customAgentListed(run, requested, diagnostics))) return false;
   try {
     await run.client.switchAgent(run.sessionId, requested);
   } catch (error) {
@@ -1343,6 +1357,32 @@ async function selectPrimaryAgent(
   run.agent = requested;
   recordAgentSelected(activityLog, run.runId, requested, current);
   return true;
+}
+
+/**
+ * A built-in agent needs no listing. A custom primary agent must be one the runtime lists for the
+ * run's workspace right now (#3903 AC1): the runtime would switch to any name it is given, so this
+ * is what keeps an unlisted or since-removed agent out. A listing that fails refuses the switch.
+ */
+async function customAgentListed(
+  run: ReadyRun,
+  requested: CodingWorkbenchAgent,
+  diagnostics: ServerDiagnosticSink | undefined,
+): Promise<boolean> {
+  if (isCodingWorkbenchBuiltInAgent(requested)) return true;
+  try {
+    const listed = await run.client.primaryAgents(run.workspaceRoot);
+    if (listed.some((agent) => agent.name === requested)) return true;
+    recordOpenCodeTurnFailure(diagnostics, run, "agent-unsupported");
+    return false;
+  } catch (error) {
+    recordOpenCodeTurnFailure(diagnostics, run, "agent", error);
+    return false;
+  }
+}
+
+function agentKind(agent: CodingWorkbenchAgent): (typeof CODING_WORKBENCH_AGENT_VALUES)[number] {
+  return isCodingWorkbenchBuiltInAgent(agent) ? agent : "custom";
 }
 
 function recordAgentSelected(
@@ -1355,7 +1395,7 @@ function recordAgentSelected(
     activityLogEvent(
       AGENT_SELECTED_OPERATION,
       { correlationId: runId },
-      { runId, agent, previousAgent },
+      { runId, agent: agentKind(agent), previousAgent: agentKind(previousAgent) },
     ),
   );
 }
@@ -1765,7 +1805,11 @@ async function materializePrepare(
     input.toolProfile === "native"
       ? await input.configDocuments?.({ runId: request.runId, signal: request.signal })
       : undefined;
-  const { profile, mcp } = runLaunchProfile(input, request, runRoot, validations, documents);
+  const agentModels = nativeAgentModels(input, documents);
+  const { profile, mcp } = runLaunchProfile(input, request, runRoot, validations, {
+    documents,
+    agentModels,
+  });
   const config = profile.config;
   materialize(runRoot, config, createGeneratedOpenCodeV2Plugins(input.toolProfile));
   await admitRepositoryItems(input, request, runRoot);
@@ -1791,6 +1835,7 @@ async function materializePrepare(
     profile.formatter,
     profile.formatterEntries,
   );
+  recordAgentModelsBound(input.activityLog, request, agentModels);
   recordProviderPolicyBound(input.activityLog, request, profile, input.toolProfile ?? "direct");
   return result;
 }
@@ -1801,7 +1846,10 @@ function runLaunchProfile(
   request: OpenCodeLifecyclePrepareRequest,
   runRoot: string,
   validations: ReadonlyMap<string, McpOAuthIssuerValidation>,
-  formatterDocuments?: readonly Readonly<Record<string, unknown>>[],
+  configured: {
+    readonly documents: readonly Readonly<Record<string, unknown>>[] | undefined;
+    readonly agentModels: OpenCodeAgentModelBinding | undefined;
+  },
 ): {
   readonly profile: Extract<OpenCodeLaunchProfileResult, { readonly ok: true }>;
   readonly mcp: OpenCodeNativeMcpAdmission | undefined;
@@ -1813,7 +1861,8 @@ function runLaunchProfile(
     contextGeometry: input.contextGeometry,
     toolProfile: input.toolProfile,
     mode: request.env.KEIKO_CODING_MODE,
-    ...(formatterDocuments === undefined ? {} : { formatterDocuments }),
+    ...(configured.documents === undefined ? {} : { formatterDocuments: configured.documents }),
+    ...(configured.agentModels === undefined ? {} : { agentModels: configured.agentModels }),
     ...(mcp === undefined ? {} : { mcp: mcp.config }),
     ...(input.toolProfile === "native" && input.externalReadRoots !== undefined
       ? { externalReadRoots: input.externalReadRoots }
@@ -2015,6 +2064,59 @@ function seedRun(
 }
 
 /** A native run's built-in formatter decision, once per prepared run (parity row C07). */
+/** The run's further gateway models and per-agent overrides (#3903 AC1); none off the native profile. */
+function nativeAgentModels(
+  input: OpenCodeRuntimeCompositionInput,
+  documents: readonly Readonly<Record<string, unknown>>[] | undefined,
+): OpenCodeAgentModelBinding | undefined {
+  if (input.toolProfile !== "native") return undefined;
+  const catalog = input.agentModelCatalog?.();
+  return catalog === undefined ? undefined : openCodeAgentModelBinding(documents ?? [], catalog);
+}
+
+const AGENT_MODELS_BOUND_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.agent-models.bound",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.opencodeRuntimeComposition.recordAgentModelsBound",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    // The gateway models the provider declares beside the run's own, and the configured overrides.
+    offeredModelCount: { type: "integer", dataClass: "count", required: true },
+    configuredAgentCount: { type: "integer", dataClass: "count", required: true },
+    refusedAgentCount: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-runtime-agent-selection"],
+  proofIds: ["coding-runtime.agent-models.bound.emitted-line"],
+  releaseImpact: "patch",
+});
+
+/** One body-free line per prepared native run: counts only, never a model or an agent name. */
+function recordAgentModelsBound(
+  activityLog: ServerLogSink | undefined,
+  request: OpenCodeLifecyclePrepareRequest,
+  binding: OpenCodeAgentModelBinding | undefined,
+): void {
+  if (binding === undefined) return;
+  (activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      AGENT_MODELS_BOUND_OPERATION,
+      { correlationId: request.runId },
+      {
+        runId: request.runId,
+        offeredModelCount: Object.keys(binding.models).length,
+        configuredAgentCount: binding.admittedCount,
+        refusedAgentCount: binding.refusedCount,
+      },
+    ),
+  );
+}
+
 function recordNativeFormatterBound(
   activityLog: ServerLogSink | undefined,
   request: OpenCodeLifecyclePrepareRequest,

@@ -10,6 +10,7 @@ import {
 } from "react";
 import type {
   CodingWorkbenchAgent,
+  CodingWorkbenchBuiltInAgent,
   CodingWorkbenchMode,
   CodingWorkbenchPromptDelivery,
   CodingWorkbenchPromptReference,
@@ -22,6 +23,7 @@ import type {
 import { isCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import type {
   CodingWorkbenchCommandRequest,
+  CodingWorkbenchMentionableAgent,
   CodingWorkbenchPromptMentions,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import { CODING_WORKBENCH_TASK_INTENT_MAX_CHARS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
@@ -31,6 +33,7 @@ import { FileReferenceChips, FileReferencePopover } from "./CodingWorkbenchFileR
 import promptStyles from "./CodingWorkbenchPromptInputs.module.css";
 import { SkillMentionPopover, SlashCommandPopover } from "./CodingWorkbenchComposerMenu";
 import { useComposerMentions, type ComposerMentions } from "./useComposerMentions";
+import { useCodingWorkbenchCommands } from "@/lib/useCodingWorkbenchCommands";
 import type { PromptDeliveryNotice } from "./usePromptDeliveryNotice";
 import { activeRunState } from "./codingWorkbenchLabels";
 import type { SlashSubmission } from "./codingWorkbenchSlashCommands";
@@ -208,8 +211,8 @@ interface TaskStartSectionProps {
   readonly reasoningEffort: ModelReasoningEffort | null;
   readonly onSelectedModelChange: (modelId: string | null) => void;
   readonly onReasoningEffortChange: (effort: ModelReasoningEffort | null) => void;
-  /** The primary agents the server offers; the Build | Plan switch shows only for more than one. */
-  readonly offeredAgents: readonly CodingWorkbenchAgent[];
+  /** The built-in agents the server offers; the agent switch shows only for more than one. */
+  readonly offeredAgents: readonly CodingWorkbenchBuiltInAgent[];
   readonly agent: CodingWorkbenchAgent;
   /** True while a turn runs: the agent is fixed for the turn and changes only between turns. */
   readonly agentLocked: boolean;
@@ -761,7 +764,25 @@ function DictationControl({
   ) : null;
 }
 
+const NO_CUSTOM_AGENTS: readonly CodingWorkbenchMentionableAgent[] = Object.freeze([]);
+
+/**
+ * The custom primary agents a paused native run's runtime lists (#3903 AC1), read from the run's
+ * own listing when the agent can be chosen; none while a turn runs or before a run exists.
+ */
+function useCustomPrimaryAgents(
+  input: TaskStartSectionProps,
+): readonly CodingWorkbenchMentionableAgent[] {
+  const wanted =
+    input.runState === "paused" &&
+    input.runId !== undefined &&
+    input.offeredAgents.includes("plan");
+  const listing = useCodingWorkbenchCommands({ runId: wanted ? input.runId : undefined, wanted });
+  return wanted ? listing.primaryAgents : NO_CUSTOM_AGENTS;
+}
+
 function ComposerConfigurationControls({ input, t }: ControlProps): ReactNode {
+  const customAgents = useCustomPrimaryAgents(input);
   const selected = input.models.find((model) => model.id === input.selectedModelId);
   const efforts = selected?.reasoningEfforts ?? [];
   // #3563 owner directive: only Keiko Gateway ships today; a Codex-subscription source is not
@@ -775,6 +796,7 @@ function ComposerConfigurationControls({ input, t }: ControlProps): ReactNode {
       <AuthorityControl input={input} t={t} />
       <CodingWorkbenchAgentToggle
         agents={input.offeredAgents}
+        customAgents={customAgents}
         value={input.agent}
         disabled={input.agentLocked}
         onChange={input.onAgentChange}

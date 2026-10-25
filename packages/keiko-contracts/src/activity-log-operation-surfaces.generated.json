@@ -91,6 +91,7 @@
   "coding-context.pack": "tools-workflows",
   "coding-repository-handler.settled": "tools-workflows",
   "coding-repository-handler.started": "tools-workflows",
+  "coding-runtime.agent-models.bound": "tools-workflows",
   "coding-runtime.agent.selected": "tools-workflows",
   "coding-runtime.approval.decided": "tools-workflows",
   "coding-runtime.approval.retired": "tools-workflows",

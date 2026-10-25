@@ -817,7 +817,13 @@ export async function handleCodingRuntimeCommands(
     ...(commands === undefined ? {} : { commands }),
     ...(mentionables === undefined
       ? {}
-      : { agents: mentionables.agents, skills: mentionables.skills }),
+      : {
+          agents: mentionables.agents,
+          skills: mentionables.skills,
+          ...(mentionables.primaryAgents === undefined
+            ? {}
+            : { primaryAgents: mentionables.primaryAgents }),
+        }),
   };
   return { status: 200, body: payload };
 }

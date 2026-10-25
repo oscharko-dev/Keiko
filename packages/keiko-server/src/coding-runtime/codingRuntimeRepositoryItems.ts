@@ -205,6 +205,8 @@ export interface CodingRuntimeRepositoryItemsInput {
   /** Whether the workspace the secure read resolves to is still this run's own. */
   readonly isRunWorkspace: () => boolean;
   readonly activityLog: ServerLogSink | undefined;
+  /** #3903 AC1: the gateway-bound model an agent's own `model` names; absent drops every one. */
+  readonly agentModel?: ((value: string) => string | undefined) | undefined;
 }
 
 export function createCodingRuntimeRepositoryItemsPort(
@@ -235,6 +237,7 @@ interface Scan {
   readonly files: AdmittedRepositoryFile[];
   /** Agents admitted as subagents so far: the only agents a command may name. */
   readonly subagents: Set<string>;
+  readonly agentModel?: ((value: string) => string | undefined) | undefined;
 }
 
 interface Candidate {
@@ -332,6 +335,7 @@ async function scanWorkspace(
     tally,
     files: [],
     subagents: new Set(),
+    ...(input.agentModel === undefined ? {} : { agentModel: input.agentModel }),
   };
   // The listings are independent. Reading is not: the budgets and, for a command, the agents
   // admitted before it are shared state, and the helper answers `busy` beyond eight live reads.
@@ -572,6 +576,7 @@ async function admitCandidate(
   if (text === undefined) return;
   const outcome = sanitizeRepositoryItem(kind, candidate.name, text, {
     admittedSubagents: scan.subagents,
+    ...(scan.agentModel === undefined ? {} : { agentModel: scan.agentModel }),
   });
   if (!outcome.ok) {
     refuse(scan, kind, outcome.reason);

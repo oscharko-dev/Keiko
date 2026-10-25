@@ -374,6 +374,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The agent changes files and runs commands within the selected mode.",
   "codingWorkbench.composer.agent.plan.description":
     "The agent analyzes and writes a plan without changing workspace files.",
+  "codingWorkbench.composer.agent.custom.description":
+    "A primary agent this repository defines; it works within the selected mode.",
   "codingWorkbench.composer.projectMemory.label": "MemoriaViva",
   "codingWorkbench.composer.projectMemory.help":
     "MemoriaViva uses only the active project memory in Coding Workbench.",

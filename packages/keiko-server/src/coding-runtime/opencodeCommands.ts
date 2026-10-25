@@ -49,13 +49,15 @@ export interface CommandsRun {
   readonly runId: string;
   /** The run's workspace: the location the runtime lists its subagents and skills for. */
   readonly workspaceRoot: string;
-  readonly client: Pick<OpenCodeV2HttpClient, "commands" | "agents" | "skills">;
+  readonly client: Pick<OpenCodeV2HttpClient, "commands" | "agents" | "primaryAgents" | "skills">;
 }
 
 /** The subagents and skills a prompt of the run may mention, as the browser may receive them. */
 export interface CodingRuntimeMentionables {
   readonly agents: readonly CodingWorkbenchMentionableAgent[];
   readonly skills: readonly CodingWorkbenchMentionableSkill[];
+  /** The custom primary agents the run may switch to beside `build` and `plan` (#3903 AC1). */
+  readonly primaryAgents?: readonly CodingWorkbenchMentionableAgent[] | undefined;
 }
 
 export interface OpenCodeCommandsRunPort {
@@ -459,13 +461,21 @@ function listRunMentions(
       const agents = await loadedAgents(deps, run);
       const skills = await run.client.skills(run.workspaceRoot);
       const projected = projectMentionables(agents, skills);
+      const primaryAgents = projectList(
+        await run.client.primaryAgents(run.workspaceRoot),
+        "agents",
+        (entry) => entry.name,
+      );
       const listed = {
         outcome: "listed",
         agentCount: projected.agents.length,
         skillCount: projected.skills.length,
         skippedCount: projected.skippedCount,
       } as const;
-      return [{ agents: projected.agents, skills: projected.skills }, listed] as const;
+      return [
+        { agents: projected.agents, skills: projected.skills, primaryAgents },
+        listed,
+      ] as const;
     },
   );
 }

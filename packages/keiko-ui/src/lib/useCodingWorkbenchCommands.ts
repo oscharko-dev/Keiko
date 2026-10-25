@@ -35,6 +35,8 @@ export interface UseCodingWorkbenchCommandsResult {
   /** The subagents and skills a prompt may mention (#3906), from the same read; empty until ready. */
   readonly agents: readonly CodingWorkbenchMentionableAgent[];
   readonly skills: readonly CodingWorkbenchMentionableSkill[];
+  /** The custom primary agents the run may switch to (#3903 AC1), from the same read. */
+  readonly primaryAgents: readonly CodingWorkbenchMentionableAgent[];
   /** Reads the listing again, the operator's recourse after a failed read. */
   readonly retry: () => void;
 }
@@ -44,12 +46,18 @@ interface CommandsState {
   readonly commands: readonly CodingWorkbenchCommand[];
   readonly agents: readonly CodingWorkbenchMentionableAgent[];
   readonly skills: readonly CodingWorkbenchMentionableSkill[];
+  readonly primaryAgents: readonly CodingWorkbenchMentionableAgent[];
 }
 
 const NO_COMMANDS: readonly CodingWorkbenchCommand[] = Object.freeze([]);
 const NO_AGENTS: readonly CodingWorkbenchMentionableAgent[] = Object.freeze([]);
 const NO_SKILLS: readonly CodingWorkbenchMentionableSkill[] = Object.freeze([]);
-const EMPTY = { commands: NO_COMMANDS, agents: NO_AGENTS, skills: NO_SKILLS } as const;
+const EMPTY = {
+  commands: NO_COMMANDS,
+  agents: NO_AGENTS,
+  skills: NO_SKILLS,
+  primaryAgents: NO_AGENTS,
+} as const;
 const IDLE: CommandsState = { status: "idle", ...EMPTY };
 const LOADING: CommandsState = { status: "loading", ...EMPTY };
 const FAILED: CommandsState = { status: "error", ...EMPTY };
@@ -136,5 +144,6 @@ function projectCommands(payload: CodingWorkbenchRuntimeCommandsChannelPayload):
     commands: payload.commands ?? NO_COMMANDS,
     agents: payload.agents ?? NO_AGENTS,
     skills: payload.skills ?? NO_SKILLS,
+    primaryAgents: payload.primaryAgents ?? NO_AGENTS,
   };
 }

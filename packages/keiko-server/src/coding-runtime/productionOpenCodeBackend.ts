@@ -59,6 +59,7 @@ import {
   readGlobalConfigDocuments,
   readProjectConfigDocuments,
 } from "./opencodeConfigDocuments.js";
+import { gatewayAgentModel, type OpenCodeAgentModelCatalog } from "./opencodeNativeAgentModels.js";
 import type { OutboundHttpEgressConfig } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import type { NativeWorktreeProvisionPort } from "./opencodeNativeWorktree.js";
 import {
@@ -101,6 +102,7 @@ import {
   openCodeConfigDirectory,
   openCodePlanDirectory,
   resolveOpenCodeContextGeometry,
+  type OpenCodeContextGeometry,
 } from "./opencodeLaunchProfile.js";
 import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
 import type { RipgrepRuntimeManifest } from "./ripgrepRuntime.js";
@@ -167,6 +169,11 @@ export interface ProductionOpenCodeBackendInput {
   readonly portable: ResolvedPortableOpenCodeRuntime;
   readonly runtimeStateRoot: string;
   readonly gatewayUrl: string;
+  /**
+   * The gateway's coding-capable model ids right now (#3903 AC1): the models a native run's agents
+   * may use beside the run's own. Absent offers the run's model alone.
+   */
+  readonly gatewayCodingModelIds?: (() => readonly string[]) | undefined;
   readonly resolveGatewayRunMetadata?:
     ((modelId: string) => CodingWorkbenchSidecarGatewayRunMetadata | undefined) | undefined;
   /**
@@ -471,11 +478,13 @@ function nativeRunInputs(
   | "nativeWorktrees"
   | "externalReadRoots"
   | "configDocuments"
+  | "agentModelCatalog"
 > {
   if (toolProfile !== "native") return {};
   return {
     repositoryItems: repositoryItemsFor(input, run),
     configDocuments: configDocumentsFor(input, run),
+    agentModelCatalog: () => agentModelCatalogFor(input, run),
     ...(input.operatorPluginRegistry === undefined
       ? {}
       : { operatorPlugins: operatorPluginsFor(input, run, input.operatorPluginRegistry) }),
@@ -595,6 +604,23 @@ function repositoryInstructionsFor(
   };
 }
 
+// The gateway models a native run's agents may use beside its own (#3903 AC1): every coding-capable
+// model the gateway resolves right now, each with the geometry the gateway admits for it.
+function agentModelCatalogFor(
+  input: LaunchInput,
+  run: ProductionRuntimeBackendInput,
+): OpenCodeAgentModelCatalog {
+  const runModelId = run.context.modelProfile.profileId;
+  const models: Record<string, OpenCodeContextGeometry> = {};
+  for (const modelId of input.gatewayCodingModelIds?.() ?? []) {
+    if (modelId === runModelId) continue;
+    const metadata = input.resolveGatewayRunMetadata?.(modelId);
+    const geometry = metadata === undefined ? undefined : resolveOpenCodeContextGeometry(metadata);
+    if (geometry !== undefined) models[modelId] = geometry;
+  }
+  return { runModelId, models };
+}
+
 // The user's global and the project's OpenCode configuration documents (#3900 AC4), the project's
 // read only while the run's workspace is still the active one. Without a secure read source a run
 // reads the global documents alone.
@@ -620,11 +646,14 @@ function repositoryItemsFor(
   input: LaunchInput,
   run: ProductionRuntimeBackendInput,
 ): ReturnType<typeof createCodingRuntimeRepositoryItemsPort> {
+  const catalog = agentModelCatalogFor(input, run);
   return createCodingRuntimeRepositoryItemsPort({
     enabled: input.repositoryItemsEnabled !== false,
     source: input.secureWorkspaceTextRead,
     isRunWorkspace: run.workspaceIsCurrent,
     activityLog: input.activityLog ?? processServerLogSink(),
+    // #3903 AC1: an agent file's own model, kept when it names a model the gateway serves.
+    agentModel: (value) => gatewayAgentModel(value, catalog),
   });
 }
 

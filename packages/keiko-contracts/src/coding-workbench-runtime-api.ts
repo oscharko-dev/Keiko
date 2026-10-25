@@ -66,24 +66,59 @@ export const CODING_WORKBENCH_RUNTIME_PREFERENCES: readonly CodingWorkbenchRunti
   Object.freeze(["managed-gateway", "codex-subscription"] as const);
 
 /**
- * The primary agents an operator may select for a Coding Workbench turn, as in standalone OpenCode
- * (Tab switches between them). `build` is the default agent every run starts under; `plan` is
- * OpenCode's own read-only agent: its shipped policy denies edits except its own plan file, so it
- * narrows what the turn may do and never widens authority. A closed vocabulary: the browser cannot
- * name an arbitrary OpenCode agent, only one of these.
+ * The built-in primary agents an operator may select for a Coding Workbench turn, as in standalone
+ * OpenCode (Tab switches between them). `build` is the default agent every run starts under; `plan`
+ * is OpenCode's own read-only agent: its shipped policy denies edits except its own plan file, so
+ * it narrows what the turn may do and never widens authority.
  */
-export type CodingWorkbenchAgent = "build" | "plan";
+export type CodingWorkbenchBuiltInAgent = "build" | "plan";
 
-export const CODING_WORKBENCH_AGENTS: readonly CodingWorkbenchAgent[] = Object.freeze([
+export const CODING_WORKBENCH_AGENTS: readonly CodingWorkbenchBuiltInAgent[] = Object.freeze([
   "build",
   "plan",
 ] as const);
 
-/** The agent every run starts under and the one an absent `agent` field means. */
-export const DEFAULT_CODING_WORKBENCH_AGENT: CodingWorkbenchAgent = "build";
+/**
+ * The primary agent a turn runs under: a built-in, or on the native profile a custom primary agent
+ * the run's runtime lists right now (#3903 AC1), a repository or configured agent whose mode is
+ * `primary` or `all`. A custom one is named by its bounded agent name and the server confirms it
+ * against the run's live listing before it switches; the run's mode still decides every action.
+ * The intersection keeps the built-in names as literals beside every other name.
+ */
+export type CodingWorkbenchAgent = CodingWorkbenchBuiltInAgent | (string & Record<never, never>);
 
-export function isCodingWorkbenchAgent(value: unknown): value is CodingWorkbenchAgent {
+/** The agent every run starts under and the one an absent `agent` field means. */
+export const DEFAULT_CODING_WORKBENCH_AGENT: CodingWorkbenchBuiltInAgent = "build";
+
+export function isCodingWorkbenchBuiltInAgent(
+  value: unknown,
+): value is CodingWorkbenchBuiltInAgent {
   return isOneOf(value, CODING_WORKBENCH_AGENTS);
+}
+
+// Names a custom primary agent can never carry: the runtime's built-in subagents and hidden agents,
+// and any spelling of a built-in primary agent other than its own. Selecting one of them as the
+// primary agent is never a choice the runtime offers (#3897).
+const CODING_WORKBENCH_RESERVED_AGENT_NAMES: ReadonlySet<string> = new Set([
+  "build",
+  "plan",
+  "general",
+  "explore",
+  "compaction",
+  "title",
+  "summary",
+]);
+
+/**
+ * A built-in agent, or a well-formed custom primary agent name that no built-in or reserved agent
+ * carries in any spelling. Whether such an agent exists is the run's own live listing.
+ */
+export function isCodingWorkbenchAgent(value: unknown): value is CodingWorkbenchAgent {
+  if (isCodingWorkbenchBuiltInAgent(value)) return true;
+  return (
+    isCodingWorkbenchMentionName(value) &&
+    !CODING_WORKBENCH_RESERVED_AGENT_NAMES.has(value.toLowerCase())
+  );
 }
 
 /**
@@ -410,7 +445,7 @@ function mentionableErrors(
 
 function mentionablesErrors(
   value: unknown,
-  key: "agents" | "skills",
+  key: "agents" | "primaryAgents" | "skills",
   keys: readonly string[],
 ): string[] {
   if (value === undefined) return [];
@@ -443,6 +478,11 @@ export interface CodingWorkbenchRuntimeCommandsChannelPayload {
   readonly commands?: readonly CodingWorkbenchCommand[] | undefined;
   /** The subagents a prompt may mention with `@` (#3906); absent, the run offers none. */
   readonly agents?: readonly CodingWorkbenchMentionableAgent[] | undefined;
+  /**
+   * The custom primary agents the run may switch to beside `build` and `plan` (#3903 AC1), as the
+   * runtime lists them; absent, it offers none.
+   */
+  readonly primaryAgents?: readonly CodingWorkbenchMentionableAgent[] | undefined;
   /** The skills a prompt may mention with `$` (#3906); absent, the run offers none. */
   readonly skills?: readonly CodingWorkbenchMentionableSkill[] | undefined;
 }
@@ -458,19 +498,22 @@ export function validateCodingWorkbenchRuntimeCommandsChannelPayload(
   if (!isRecord(value)) return invalid("commands channel payload must be an object");
   const errors = exactKeys(
     value,
-    ["session", "commands", "agents", "skills"],
+    ["session", "commands", "agents", "primaryAgents", "skills"],
     "commandsChannelPayload",
   );
   if (!isOneOf(value.session, CODING_WORKBENCH_RUNTIME_COMMANDS_SESSION_STATES)) {
     errors.push("commandsChannelPayload.session is invalid");
   }
-  const listed = [value.commands, value.agents, value.skills].some((list) => list !== undefined);
+  const listed = [value.commands, value.agents, value.primaryAgents, value.skills].some(
+    (list) => list !== undefined,
+  );
   if (value.session === "unpaired" && listed) {
     errors.push("commandsChannelPayload listings must be absent when the session is unpaired");
   }
   errors.push(
     ...(value.commands === undefined ? [] : commandListErrors(value.commands)),
     ...mentionablesErrors(value.agents, "agents", ["name", "description"]),
+    ...mentionablesErrors(value.primaryAgents, "primaryAgents", ["name", "description"]),
     ...mentionablesErrors(value.skills, "skills", ["id", "name", "description"]),
   );
   return result(value, errors);
@@ -559,7 +602,7 @@ export interface CodingWorkbenchRuntimeReadiness {
    * an editing agent. The browser offers an agent switch only for what is listed here, and the
    * server refuses (`invalid-intent`) any start or follow-up that names an agent outside it.
    */
-  readonly selectableAgents: readonly CodingWorkbenchAgent[];
+  readonly selectableAgents: readonly CodingWorkbenchBuiltInAgent[];
   /**
    * What the composed OpenCode tool profile can do with a prompt's inputs, computed server-side
    * (#3897). Absent reads as nothing: the browser offers Send now, Queue and the `@` file picker
@@ -648,9 +691,9 @@ export interface CodingWorkbenchRuntimeStartRequest {
   /**
    * The primary agent the run's first turn runs under. Absent means the default (`build`), exactly
    * as before. Selecting `plan` needs a runtime that can honour it; the server refuses the start
-   * (`invalid-intent`) rather than run a read-only request as `build`.
+   * (`invalid-intent`) rather than run a read-only request as `build`. A start names a built-in.
    */
-  readonly agent?: CodingWorkbenchAgent | undefined;
+  readonly agent?: CodingWorkbenchBuiltInAgent | undefined;
   /**
    * Workspace files the first prompt references with `@`, by path relative to the workspace root
    * (ADR-0137 D10). They are resolved against the run's own canonical workspace root when the
@@ -1195,6 +1238,12 @@ function validateAgent(value: unknown, errors: string[]): void {
   if (value !== undefined && !isCodingWorkbenchAgent(value)) errors.push("agent is invalid");
 }
 
+// A start names a built-in agent only: a custom primary agent exists in a run's own listing, so it
+// can be chosen for a follow-up once that run lists it, never for a run that does not exist yet.
+function validateStartAgent(value: unknown, errors: string[]): void {
+  if (value !== undefined && !isCodingWorkbenchBuiltInAgent(value)) errors.push("agent is invalid");
+}
+
 function validateRuntimePreference(value: unknown, errors: string[]): void {
   if (value !== undefined && !isOneOf(value, CODING_WORKBENCH_RUNTIME_PREFERENCES)) {
     errors.push("runtimePreference is invalid");
@@ -1276,7 +1325,7 @@ export function parseCodingWorkbenchRuntimeStartRequest(
   validateIssueRef(value.issueRef, errors);
   validateIssuePurpose(value.issuePurpose, value.issueRef, errors);
   validateProjectMemoryRequest(value.projectMemory, errors);
-  validateAgent(value.agent, errors);
+  validateStartAgent(value.agent, errors);
   validateStartPromptInputs(value, errors);
   if (
     value.expectedIssueBindingDigest !== undefined &&
@@ -1926,7 +1975,7 @@ function validateSelectableAgents(value: Record<string, unknown>, errors: string
   if (
     !Array.isArray(agents) ||
     agents.length > CODING_WORKBENCH_AGENTS.length ||
-    !agents.every(isCodingWorkbenchAgent) ||
+    !agents.every(isCodingWorkbenchBuiltInAgent) ||
     new Set<unknown>(agents).size !== agents.length
   ) {
     errors.push("selectableAgents is invalid");

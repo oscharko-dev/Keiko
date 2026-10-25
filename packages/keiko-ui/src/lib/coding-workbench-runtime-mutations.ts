@@ -1,6 +1,7 @@
 import type { CodingWorkbenchStartOptions } from "./coding-workbench-runtime-actions";
 import type {
   CodingWorkbenchAgent,
+  CodingWorkbenchBuiltInAgent,
   CodingWorkbenchMode,
   CodingWorkbenchPromptDelivery,
   CodingWorkbenchPromptReference,
@@ -10,12 +11,14 @@ import type {
   CodingWorkbenchRuntimeStartRequest,
 } from "@oscharko-dev/keiko-contracts";
 import { isCodingWorkbenchModeWidening } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
-import type {
-  CodingWorkbenchCommandRequest,
-  CodingWorkbenchPromptMentions,
-  CodingWorkbenchRuntimeForkRequest,
-  CodingWorkbenchRuntimeInboxAction,
-  CodingWorkbenchRuntimeRevertAction,
+import {
+  DEFAULT_CODING_WORKBENCH_AGENT,
+  isCodingWorkbenchBuiltInAgent,
+  type CodingWorkbenchCommandRequest,
+  type CodingWorkbenchPromptMentions,
+  type CodingWorkbenchRuntimeForkRequest,
+  type CodingWorkbenchRuntimeInboxAction,
+  type CodingWorkbenchRuntimeRevertAction,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import {
   acknowledgeCodingWorkbenchRuntimeRecovery,
@@ -70,6 +73,21 @@ function agentSelection(current: CodingWorkbenchRuntimeState): {
 }
 
 /**
+ * A new run starts under a built-in agent (#3903 AC1): a custom primary agent exists only in a running
+ * run's own listing, so a selection carried over from an earlier run starts the default agent.
+ */
+function startAgentSelection(current: CodingWorkbenchRuntimeState): {
+  readonly agent?: CodingWorkbenchBuiltInAgent;
+} {
+  if (offeredCodingWorkbenchAgents(current).length <= 1) return {};
+  return {
+    agent: isCodingWorkbenchBuiltInAgent(current.agent)
+      ? current.agent
+      : DEFAULT_CODING_WORKBENCH_AGENT,
+  };
+}
+
+/**
  * What the first prompt carries beside its text (ADR-0137 D10): the files it references with `@`, the
  * slash command it starts with, and the task it forks (S03). All are absent for the ordinary start,
  * which keeps its request body exactly as it was.
@@ -103,7 +121,7 @@ function startRequest(
     runtimePreference: current.runtimePreference,
     projectMemory: { enabled: options.projectMemoryEnabled },
     ...managedGatewayModelSelection(current),
-    ...agentSelection(current),
+    ...startAgentSelection(current),
     ...startPromptInputs(options),
   };
   if (options.issue === undefined) return request;
@@ -389,7 +407,7 @@ export function createRetryMutation(
         requestedMode: current.requestedMode,
         runtimePreference: current.runtimePreference,
         ...managedGatewayModelSelection(current),
-        ...agentSelection(current),
+        ...startAgentSelection(current),
       }),
   };
 }

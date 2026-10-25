@@ -53,6 +53,9 @@ const SKILLS: readonly OpenCodeV2Skill[] = [
 ];
 const WORKSPACE = "/workspace/repo";
 
+// #3903 AC1: the custom primary agents the run may switch to ride the same listing.
+const PRIMARY_AGENTS: readonly OpenCodeV2Agent[] = [{ name: "reviewer", description: "Reviews" }];
+
 function harness(
   options: {
     readonly capabilities?: typeof NATIVE;
@@ -60,6 +63,7 @@ function harness(
     readonly listing?: () => Promise<readonly OpenCodeV2Command[]>;
     readonly agents?: () => Promise<readonly OpenCodeV2Agent[]>;
     readonly skills?: () => Promise<readonly OpenCodeV2Skill[]>;
+    readonly primaryAgents?: () => Promise<readonly OpenCodeV2Agent[]>;
     readonly directories?: string[];
     readonly pauses?: number[];
   } = {},
@@ -86,6 +90,13 @@ function harness(
         options.directories?.push(directory);
         return (
           options.skills ?? ((): Promise<readonly OpenCodeV2Skill[]> => Promise.resolve(SKILLS))
+        )();
+      },
+      primaryAgents: (directory) => {
+        options.directories?.push(directory);
+        return (
+          options.primaryAgents ??
+          ((): Promise<readonly OpenCodeV2Agent[]> => Promise.resolve(PRIMARY_AGENTS))
         )();
       },
     },
@@ -399,9 +410,10 @@ describe("the subagents and skills a prompt may mention (#3906)", () => {
     await expect(h.port.listMentions("run-1", "corr-mentions-1")).resolves.toEqual({
       agents: AGENTS,
       skills: SKILLS,
+      primaryAgents: PRIMARY_AGENTS,
     });
 
-    expect(directories).toEqual([WORKSPACE, WORKSPACE]);
+    expect(directories).toEqual([WORKSPACE, WORKSPACE, WORKSPACE]);
     expect(lines(h)).toEqual([
       { runId: "run-1", outcome: "listed", agentCount: 2, skillCount: 1, skippedCount: 0 },
     ]);

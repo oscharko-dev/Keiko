@@ -11,7 +11,12 @@ import {
   resolveDarwinGitExecutable,
 } from "@oscharko-dev/keiko-sandbox";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
-import { buildOpenCodeLaunchProfile, openCodeConfigDirectory } from "./opencodeLaunchProfile.js";
+import {
+  buildOpenCodeLaunchProfile,
+  openCodeConfigDirectory,
+  type OpenCodeAgentModelsInput,
+} from "./opencodeLaunchProfile.js";
+import { openCodeAgentModelBinding } from "./opencodeNativeAgentModels.js";
 import { createNativeQuestionPort, type NativeQuestionPort } from "./opencodeNativeQuestions.js";
 import {
   NATIVE_CHILD_SESSION_MAX,
@@ -74,6 +79,8 @@ interface ModelContext {
   readonly role: Role;
   readonly lastRole: string;
   readonly lastText: string;
+  /** The model the request names: the run's alias or an agent's own gateway model (#3903 AC1). */
+  readonly model: string;
 }
 
 type ModelPlan =
@@ -90,7 +97,12 @@ type ModelPlan =
 interface Gateway {
   readonly server: Server;
   port: number;
-  readonly requests: { readonly at: number; readonly role: Role; readonly lastText: string }[];
+  readonly requests: {
+    readonly at: number;
+    readonly role: Role;
+    readonly lastText: string;
+    readonly model: string;
+  }[];
   /** When a Code Mode program reached `/hang`, which is never answered. */
   readonly hangs: number[];
   script: (context: ModelContext) => ModelPlan;
@@ -102,19 +114,24 @@ async function readBody(request: IncomingMessage): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
+function roleOf(messages: unknown): Role {
+  const all = JSON.stringify(messages);
+  if (all.includes("PARENT_TASK")) return "parent";
+  return all.includes("STRANGER_TASK") ? "stranger" : "child";
+}
+
+const textOf = (value: unknown): string => (typeof value === "string" ? value : "");
+
 function modelContext(body: unknown): ModelContext {
   const raw = object(body)?.messages;
   const messages = Array.isArray(raw) ? raw.map(object) : [];
-  const all = JSON.stringify(messages);
-  let role: Role = "child";
-  if (all.includes("PARENT_TASK")) role = "parent";
-  else if (all.includes("STRANGER_TASK")) role = "stranger";
   const last = messages.at(-1);
   const content = last?.content;
   return {
-    role,
-    lastRole: typeof last?.role === "string" ? last.role : "",
+    role: roleOf(messages),
+    lastRole: textOf(last?.role),
     lastText: typeof content === "string" ? content : JSON.stringify(content ?? ""),
+    model: textOf(object(body)?.model),
   };
 }
 
@@ -187,7 +204,12 @@ async function startGateway(): Promise<Gateway> {
     }
     void readBody(request).then(async (text) => {
       const context = modelContext(JSON.parse(text) as unknown);
-      gateway.requests.push({ at: Date.now(), role: context.role, lastText: context.lastText });
+      gateway.requests.push({
+        at: Date.now(),
+        role: context.role,
+        lastText: context.lastText,
+        model: context.model,
+      });
       await respond(gateway.script(context), response);
     });
   });
@@ -285,6 +307,7 @@ function launch(
   runtimeRoot: string,
   ports: { readonly gateway: number; readonly facade: number },
   privateServiceCwd = false,
+  agentModels?: OpenCodeAgentModelsInput,
 ): Launched {
   const profile = buildOpenCodeLaunchProfile({
     executable: binary,
@@ -295,6 +318,7 @@ function launch(
       maxInputTokens: 24_000,
       maxOutputTokens: 4_096,
     },
+    ...(agentModels === undefined ? {} : { agentModels }),
   });
   if (!profile.ok) throw new Error("fixture-profile-invalid");
   materializePrivateConfiguration(fixture, profile.config);
@@ -385,6 +409,7 @@ interface Run {
 async function withRun(
   body: (run: Run) => Promise<void>,
   privateServiceCwd = false,
+  agentModels?: OpenCodeAgentModelsInput,
 ): Promise<void> {
   if (BINARY === undefined || RESOURCE_ROOT === undefined)
     throw new Error("fixture-binary-missing");
@@ -401,6 +426,7 @@ async function withRun(
       facade: facade.port,
     },
     privateServiceCwd,
+    agentModels,
   );
   try {
     const endpoint = await childEndpoint(launched.child);
@@ -683,6 +709,54 @@ const pause = (signal: AbortSignal): Promise<boolean> =>
 describe("pinned native OpenCode session tree: background subagents", () => {
   const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
   const CHILD_DELAY_MS = 4_000;
+
+  // #3903 AC1 (owner decision 2026-10-25): the orchestrating parent keeps the run's model and a
+  // subagent configured with its own gateway model runs on it; both requests reach the gateway.
+  it.skipIf(skip)(
+    "runs a subagent on its own gateway model while the parent keeps the run's model",
+    async () => {
+      const binding = openCodeAgentModelBinding(
+        [{ agents: { explore: { model: "gemma-small" } } }],
+        {
+          runModelId: "gemma-large",
+          models: {
+            "gemma-small": {
+              contextWindowTokens: 16_384,
+              maxInputTokens: 12_000,
+              maxOutputTokens: 2_048,
+            },
+          },
+        },
+      );
+      expect(binding.admittedCount).toBe(1);
+      await withRun(
+        async (run) => {
+          const parent = launchingParent(false, "explore");
+          run.gateway.script = (context): ModelPlan =>
+            context.role === "parent" ? parent(context) : { kind: "text", text: "CHILD_DONE" };
+          await run.client.prompt(run.sessionId, "PARENT_TASK delegate to explore");
+          await expect
+            .poll(
+              () => run.gateway.requests.filter((request) => request.role === "parent").length > 1,
+              { timeout: 60_000 },
+            )
+            .toBe(true);
+          const models = (role: Role): readonly string[] => [
+            ...new Set(
+              run.gateway.requests
+                .filter((request) => request.role === role)
+                .map((request) => request.model),
+            ),
+          ];
+          expect(models("parent")).toEqual(["coding"]);
+          expect(models("child")).toEqual(["gemma-small"]);
+        },
+        false,
+        binding,
+      );
+    },
+    120_000,
+  );
 
   it.skipIf(skip)(
     "holds the run until a delayed background child reported back and its parent read the report",

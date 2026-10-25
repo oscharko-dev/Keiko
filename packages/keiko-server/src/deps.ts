@@ -35,6 +35,7 @@ import {
   loadConfigFromFile,
   loadEgressConfigFromFile,
   parseGatewayConfig,
+  listConfiguredCapabilities,
   resolveCodingSafeSidecarGatewayProfile,
   resolveOutboundHttpEgressConfig,
   selectConfiguredModel,
@@ -6000,6 +6001,15 @@ function nativeWorktreeProvisioning(
   });
 }
 
+function configuredChatModelIds(args: UiHandlerDepsAssemblyArgs): readonly string[] {
+  const config = args.runtimeConfig.current();
+  return config === undefined
+    ? []
+    : listConfiguredCapabilities(config)
+        .filter((capability) => capability.kind === "chat")
+        .map((capability) => capability.id);
+}
+
 // The attested-portable activation path supplies Keiko's own confirmation plane; injected
 // ports never receive a fallback consumer, so external composition stays fail-closed (#2377).
 function resolveProductionRuntimePorts(
@@ -6034,6 +6044,8 @@ function resolveProductionRuntimePorts(
       });
       return result.status === "available" ? result.runMetadata : undefined;
     },
+    // #3903 AC1: the chat models a native run's agents may use; each one still has to resolve.
+    gatewayCodingModelIds: (): readonly string[] => configuredChatModelIds(args),
     activityLog: processServerLogSink(),
     nativeWorktrees: nativeWorktreeProvisioning(workspaceLifecycle, args.bundle),
     // A proof that could not run (IDENTITY_PROOF_FAILED, logged at its source) yields no root: the

@@ -1,7 +1,10 @@
 import {
   CODING_WORKBENCH_AGENTS,
   DEFAULT_CODING_WORKBENCH_AGENT,
+  isCodingWorkbenchAgent,
+  isCodingWorkbenchBuiltInAgent,
   type CodingWorkbenchAgent,
+  type CodingWorkbenchBuiltInAgent,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 
 import type { OpenCodeToolProfile } from "./opencodeToolSchemas.js";
@@ -18,22 +21,22 @@ import type { OpenCodeToolProfile } from "./opencodeToolSchemas.js";
  */
 export function openCodeSelectableAgents(
   profile: OpenCodeToolProfile,
-): readonly CodingWorkbenchAgent[] {
+): readonly CodingWorkbenchBuiltInAgent[] {
   return profile === "native" ? CODING_WORKBENCH_AGENTS : [DEFAULT_CODING_WORKBENCH_AGENT];
 }
 
 /**
  * Whether a turn may ask for `agent` on a run that offers `selectable`. The default agent is every
- * run's baseline and needs no capability; any other must be offered. An absent request is always
- * admitted: it keeps whatever agent the run already has.
+ * run's baseline and needs no capability; any other built-in must be offered. A custom primary
+ * agent (#3903 AC1) exists only where OpenCode runs its own agents, the profile that offers `plan`;
+ * there it is admitted here by its well-formed name and confirmed against the run's live listing
+ * before the switch. An absent request is always admitted: it keeps the run's current agent.
  */
 export function isAgentAdmitted(
-  selectable: readonly CodingWorkbenchAgent[] | undefined,
+  selectable: readonly CodingWorkbenchBuiltInAgent[] | undefined,
   agent: CodingWorkbenchAgent | undefined,
 ): boolean {
-  return (
-    agent === undefined ||
-    agent === DEFAULT_CODING_WORKBENCH_AGENT ||
-    selectable?.includes(agent) === true
-  );
+  if (agent === undefined || agent === DEFAULT_CODING_WORKBENCH_AGENT) return true;
+  if (isCodingWorkbenchBuiltInAgent(agent)) return selectable?.includes(agent) === true;
+  return isCodingWorkbenchAgent(agent) && selectable?.includes("plan") === true;
 }

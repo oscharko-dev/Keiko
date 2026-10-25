@@ -6702,21 +6702,67 @@
       "lifecycleTransitions": ["state"],
       "lifecycleOperations": {
         "start": [],
-        "state": ["coding-runtime.agent.selected"],
+        "state": ["coding-runtime.agent-models.bound", "coding-runtime.agent.selected"],
         "end": [],
         "failure": [],
         "loss": []
       },
       "causalEdges": [
         {
+          "op": "coding-runtime.agent-models.bound",
+          "mode": "correlation"
+        },
+        {
           "op": "coding-runtime.agent.selected",
           "mode": "correlation"
         }
       ],
       "lossSignals": [],
-      "resourceSignals": ["coding-runtime.agent.selected"],
+      "resourceSignals": ["coding-runtime.agent-models.bound", "coding-runtime.agent.selected"],
       "replayReferences": [],
       "operations": [
+        {
+          "op": "coding-runtime.agent-models.bound",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "configuredAgentCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "offeredModelCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "refusedAgentCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "runId",
+              "type": "string",
+              "dataClass": "opaque-id",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["completeness-state", "count", "loss-state", "opaque-id"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["coding-runtime.agent-models.bound.emitted-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
         {
           "op": "coding-runtime.agent.selected",
           "owner": "keiko-server",

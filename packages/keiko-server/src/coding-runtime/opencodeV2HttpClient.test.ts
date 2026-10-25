@@ -991,6 +991,38 @@ describe("OpenCode V2 agent and skill mentions (#3906)", () => {
       headers: { "content-type": "application/json" },
     });
 
+  // #3903 AC1: the custom primary agents a session may switch to: primary or all-mode, visible,
+  // never the built-in build and plan, never their prompt.
+  it("lists the custom primary agents by id, for the run's workspace", async () => {
+    const { client, fetch } = clientWith(() =>
+      json({
+        location: { directory: "/workspace/repo" },
+        data: [
+          { id: "build", mode: "primary", hidden: false },
+          { id: "plan", mode: "primary", hidden: false },
+          {
+            id: "reviewer",
+            mode: "primary",
+            hidden: false,
+            description: "Reviews",
+            system: "SECRET",
+          },
+          { id: "docs", mode: "all", hidden: false },
+          { id: "general", mode: "subagent", hidden: false },
+          { id: "summary", mode: "primary", hidden: true },
+          { id: "bad name", mode: "primary", hidden: false },
+        ],
+      }),
+    );
+    const agents = await client.primaryAgents("/workspace/repo");
+    expect(agents).toEqual([{ name: "reviewer", description: "Reviews" }, { name: "docs" }]);
+    expect(JSON.stringify(agents)).not.toContain("SECRET");
+    const url = fetch.mock.calls[0]?.[0];
+    expect(url instanceof URL ? url.searchParams.get("location[directory]") : undefined).toBe(
+      "/workspace/repo",
+    );
+  });
+
   it("lists only visible subagents by id, for the run's workspace, and never their prompt", async () => {
     const { client, fetch } = clientWith(() =>
       json({

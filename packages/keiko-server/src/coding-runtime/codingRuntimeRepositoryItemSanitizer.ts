@@ -145,6 +145,11 @@ export function repositoryItemNameRefusal(
 export interface RepositoryItemContext {
   /** The agents admitted as subagents in this run: the only agents a command may name. */
   readonly admittedSubagents: ReadonlySet<string>;
+  /**
+   * #3903 AC1: the gateway-bound model an agent's own `model` names (`gatewayAgentModel`), or
+   * `undefined` when it names none. Absent, every agent `model` is dropped as before.
+   */
+  readonly agentModel?: ((value: string) => string | undefined) | undefined;
 }
 
 export type RepositoryItemOutcome =
@@ -183,6 +188,7 @@ export function sanitizeRepositoryItem(
   const read = readFields(kind, name, entries, body, context);
   if (!read.ok) return read;
   const allowed = new Set(ALLOWED_KEYS[kind]);
+  if (read.value.fields.some(([key]) => key === "model")) allowed.add("model");
   const stripped = entries.filter(({ key }) => !allowed.has(key));
   const authority = stripped.filter(({ key }) => AUTHORITY_KEY_NAMES.has(key)).length;
   return {
@@ -333,6 +339,22 @@ function descriptionReader(kind: RepositoryItemKind): (value: string) => Step<st
   };
 }
 
+/**
+ * An agent's own `model`, kept only as the gateway-bound model it names (#3903 AC1): the copy then
+ * routes the agent through the Model Gateway. A model the gateway does not serve is dropped like
+ * any other authority key, and the agent keeps the run's model.
+ */
+function agentModelField(
+  entries: readonly FrontmatterEntry[],
+  context: RepositoryItemContext,
+): Step<Field | undefined> {
+  const entry = entryNamed(entries, "model");
+  if (entry === undefined || context.agentModel === undefined) return ok(undefined);
+  const scalar = scalarOf(entry);
+  const routed = scalar.ok ? context.agentModel(scalar.value) : undefined;
+  return ok(routed === undefined ? undefined : (["model", JSON.stringify(routed)] as const));
+}
+
 function enumReader(allowed: readonly string[]): (value: string) => Step<string> {
   return (value): Step<string> => (allowed.includes(value) ? ok(value) : refuse("value-invalid"));
 }
@@ -371,18 +393,22 @@ function readFields(
   body: string,
   context: RepositoryItemContext,
 ): Step<ReadFields> {
-  if (kind === "agent") return agentFields(entries);
+  if (kind === "agent") return agentFields(entries, context);
   if (kind === "command") return commandFields(entries, body, context);
   return skillFields(name, entries);
 }
 
 // A custom agent Keiko cannot select as the session's primary agent is only useful as a subagent,
 // so an agent that names no mode is admitted as one (the producer's own default would be primary).
-function agentFields(entries: readonly FrontmatterEntry[]): Step<ReadFields> {
+function agentFields(
+  entries: readonly FrontmatterEntry[],
+  context: RepositoryItemContext,
+): Step<ReadFields> {
   const mode = optionalField(entries, "mode", enumReader(["subagent", "primary"]));
   if (!mode.ok) return mode;
   const fields = collectFields([
     optionalField(entries, "description", descriptionReader("agent")),
+    agentModelField(entries, context),
     optionalField(entries, "temperature", boundedNumberReader(TEMPERATURE_MAX)),
     optionalField(entries, "top_p", boundedNumberReader(TOP_P_MAX)),
     agentRestrictions(entries),

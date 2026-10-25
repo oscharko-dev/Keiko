@@ -113,6 +113,7 @@ const OAUTH_SERVER: McpServerDefinition = {
 };
 import { NATIVE_SESSION_LOCATION_MAX } from "./opencodeNativeSessionTree.js";
 import type { NativeWorktreeProvisionPort } from "./opencodeNativeWorktree.js";
+import type { OpenCodeAgentModelCatalog } from "./opencodeNativeAgentModels.js";
 import { createProductionAcceptedInitializationAuthority } from "./productionCodingRuntimeResolver.js";
 import {
   catalogRuntimeFixture,
@@ -243,7 +244,8 @@ interface OpenCodeRuntimeComposition {
       runId: string,
       text: string,
       initialContext?: string,
-      agent?: "build" | "plan",
+      // A built-in, or a custom primary agent the runtime lists (#3903 AC1).
+      agent?: string,
       inputs?: AdmittedPromptInputs,
       origin?: "verification-continuation",
     ) => Promise<boolean>;
@@ -711,6 +713,9 @@ interface StartBridgeControl {
   readonly repositoryInstructions?: InstructionsCopyPort;
   /** The managed owner for an approved Code Mode `worktree_create` (#3903 AC4). */
   readonly nativeWorktrees?: NativeWorktreeProvisionPort;
+  /** #3900 AC4 / #3903 AC1: the run's configuration documents and the gateway's further models. */
+  readonly configDocuments?: () => Promise<readonly Readonly<Record<string, unknown>>[]>;
+  readonly agentModelCatalog?: () => OpenCodeAgentModelCatalog | undefined;
   readonly startTimeoutMs?: number;
   readonly shutdownTimeoutMs?: number;
   readonly onRelease?: (runId: string) => void;
@@ -750,6 +755,8 @@ interface StartBridgeControl {
       readonly promptsBefore: number;
     }[];
     readonly agentResponse?: () => Response;
+    /** `GET /api/agent`: the agents the runtime lists for the run's workspace (#3903 AC1). */
+    readonly agentListing?: readonly Readonly<Record<string, unknown>>[];
     /** The slash command routes of a native run (C02): the listing and the session command. */
     readonly commands?: {
       /** Each `GET /api/command` and `POST /api/session/{id}/command`, in arrival order. */
@@ -1056,8 +1063,16 @@ function optionalRepositoryInstructions(control: StartBridgeControl | undefined)
 
 function optionalNativeWorktrees(control: StartBridgeControl | undefined): {
   readonly nativeWorktrees?: NativeWorktreeProvisionPort;
+  readonly configDocuments?: () => Promise<readonly Readonly<Record<string, unknown>>[]>;
+  readonly agentModelCatalog?: () => OpenCodeAgentModelCatalog | undefined;
 } {
-  return control?.nativeWorktrees === undefined ? {} : { nativeWorktrees: control.nativeWorktrees };
+  return {
+    ...(control?.nativeWorktrees === undefined ? {} : { nativeWorktrees: control.nativeWorktrees }),
+    ...(control?.configDocuments === undefined ? {} : { configDocuments: control.configDocuments }),
+    ...(control?.agentModelCatalog === undefined
+      ? {}
+      : { agentModelCatalog: control.agentModelCatalog }),
+  };
 }
 
 function optionalToolResultCorrelation(control: StartBridgeControl | undefined): {
@@ -1375,6 +1390,9 @@ async function startBridgeFixture(
         return storedTurnPrompt(control.runControl, path, init.body);
       }
       return Promise.resolve(v2Envelope(promptReceipt(path, init?.body)));
+    }
+    if (path === "/api/agent" && control?.runControl?.agentListing !== undefined) {
+      return Promise.resolve(v2Envelope(control.runControl.agentListing));
     }
     if (path.endsWith("/agent")) {
       control?.runControl?.agentRequests?.push({
@@ -4061,6 +4079,59 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
       }
     },
   );
+
+  // #3903 AC1: the further gateway models and the configured per-agent overrides reach the binding,
+  // and one body-free line records their counts.
+  it("binds the agents' gateway models and records the offered and configured counts", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+      mode: "autonomous-delivery",
+      readToolProfile: () => "native",
+      activityLog,
+      configDocuments: () =>
+        Promise.resolve([
+          { agents: { explore: { model: "gemma-small" }, general: { model: "openai/gpt-x" } } },
+        ]),
+      agentModelCatalog: () => ({
+        runModelId: "gemma-large",
+        models: {
+          "gemma-small": {
+            contextWindowTokens: 16_384,
+            maxInputTokens: 12_000,
+            maxOutputTokens: 2_048,
+          },
+        },
+      }),
+    });
+    try {
+      const binding = JSON.parse(fixture.preparation.env.OPENCODE_CONFIG_CONTENT ?? "null") as {
+        readonly agents?: unknown;
+        readonly providers: Record<string, { readonly models: Record<string, unknown> }>;
+      };
+      expect(binding.agents).toEqual({ explore: { model: "keiko-runtime/gemma-small" } });
+      expect(Object.keys(binding.providers["keiko-runtime"]?.models ?? {}).sort()).toEqual([
+        "coding",
+        "gemma-small",
+      ]);
+      const [bound] = activityLog.events.filter(
+        (event) => event.op === "coding-runtime.agent-models.bound",
+      );
+      expect(
+        expectActivityLogProof(
+          "coding-runtime.agent-models.bound.emitted-line",
+          formatActivityLogProofLine(bound ?? {}),
+        ),
+      ).toMatchObject({
+        correlationId: FIXTURE_RUN_ID,
+        offeredModelCount: 1,
+        configuredAgentCount: 1,
+        refusedAgentCount: 1,
+      });
+      expect(JSON.stringify(bound)).not.toContain("gemma-small");
+    } finally {
+      await fixture.stop();
+    }
+  });
 
   // Parity row S11: every profile binds the producer's provider policy and keeps the hosted free
   // models off, so the runtime knows no model route but the Model Gateway. The line is read from
@@ -7524,7 +7595,10 @@ describe("primary agent selection on the run port (#3897)", () => {
     await port.waitForTerminal(FIXTURE_RUN_ID, AbortSignal.abort());
   }
 
-  function agentControl(extra: Partial<StartBridgeControl> = {}): {
+  function agentControl(
+    extra: Partial<StartBridgeControl> = {},
+    agentListing?: readonly Readonly<Record<string, unknown>>[],
+  ): {
     readonly control: StartBridgeControl;
     readonly agentRequests: NonNullable<
       NonNullable<StartBridgeControl["runControl"]>["agentRequests"]
@@ -7551,7 +7625,13 @@ describe("primary agent selection on the run port (#3897)", () => {
             diagnostics.push(record);
           },
         },
-        runControl: { promptBodies, abortSessions: [], statusResponses: [{}], agentRequests },
+        runControl: {
+          promptBodies,
+          abortSessions: [],
+          statusResponses: [{}],
+          agentRequests,
+          ...(agentListing === undefined ? {} : { agentListing }),
+        },
         ...extra,
       },
     };
@@ -7570,6 +7650,51 @@ describe("primary agent selection on the run port (#3897)", () => {
       } finally {
         await fixture.stop();
       }
+    }
+  });
+
+  // #3903 AC1: a custom primary agent is switched to only while the runtime lists it as primary; an
+  // unlisted name, a subagent and a failed listing send no switch and no prompt.
+  it("switches to a custom primary agent the runtime lists, and to nothing it does not list", async () => {
+    const listing = [
+      { id: "build", mode: "primary", hidden: false },
+      { id: "reviewer", mode: "primary", hidden: false, description: "Reviews the change" },
+      { id: "helper", mode: "subagent", hidden: false },
+      { id: "summary", mode: "primary", hidden: true },
+    ];
+    const { control, agentRequests, promptBodies, activityLog } = agentControl(
+      { readToolProfile: () => "native" },
+      listing,
+    );
+    const fixture = await startBridgeFixture(agentFacade, undefined, control);
+    try {
+      const port = fixture.runtime.runPort;
+      for (const unlisted of ["helper", "ghost"]) {
+        await expect(
+          port.submitTask(FIXTURE_RUN_ID, "review it", undefined, unlisted),
+          unlisted,
+        ).resolves.toBe(false);
+      }
+      expect(agentRequests).toEqual([]);
+      expect(promptBodies).toEqual([]);
+      await expect(
+        port.submitTask(FIXTURE_RUN_ID, "review it", undefined, "reviewer"),
+      ).resolves.toBe(true);
+      expect(agentRequests).toEqual([
+        { path: "/api/session/ses_tool/agent", body: '{"agent":"reviewer"}', promptsBefore: 0 },
+      ]);
+      const [line] = activityLog.events.filter(
+        (event) => event.op === "coding-runtime.agent.selected",
+      );
+      expect(
+        expectActivityLogProof(
+          "coding-runtime.agent.selected.emitted-line",
+          formatActivityLogProofLine(line ?? {}),
+        ),
+      ).toMatchObject({ agent: "custom", previousAgent: "build" });
+      expect(JSON.stringify(activityLog.events)).not.toContain("reviewer");
+    } finally {
+      await fixture.stop();
     }
   });
 

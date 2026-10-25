@@ -2,7 +2,11 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { CodingWorkbenchAgent } from "@oscharko-dev/keiko-contracts";
+import type {
+  CodingWorkbenchAgent,
+  CodingWorkbenchBuiltInAgent,
+} from "@oscharko-dev/keiko-contracts";
+import type { CodingWorkbenchMentionableAgent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import {
   I18nProvider,
   I18N_STORAGE_KEY,
@@ -16,7 +20,8 @@ import { CodingWorkbenchAgentToggle } from "./CodingWorkbenchAgentToggle";
 const AXE_OPTIONS = { rules: { region: { enabled: false } } } as const;
 
 interface ToggleOverrides {
-  readonly agents?: readonly CodingWorkbenchAgent[];
+  readonly agents?: readonly CodingWorkbenchBuiltInAgent[];
+  readonly customAgents?: readonly CodingWorkbenchMentionableAgent[];
   readonly value?: CodingWorkbenchAgent;
   readonly disabled?: boolean;
 }
@@ -29,6 +34,7 @@ function renderToggle(
     <I18nProvider>
       <CodingWorkbenchAgentToggle
         agents={overrides.agents ?? ["build", "plan"]}
+        customAgents={overrides.customAgents}
         value={overrides.value ?? "build"}
         disabled={overrides.disabled ?? false}
         onChange={onChange}
@@ -130,5 +136,31 @@ describe("Coding Workbench agent toggle", () => {
       "Der Agent analysiert und erstellt einen Plan, ohne Arbeitsbereichsdateien zu ändern.",
     );
     expect(await axe(document.body, AXE_OPTIONS)).toHaveNoViolations();
+  });
+
+  // #3903 AC1: a paused native run's custom primary agents sit beside Build and Plan, by name.
+  it("offers the run's custom primary agents beside the built-ins and selects one by name", async () => {
+    const onChange = renderToggle({
+      customAgents: [{ name: "reviewer", description: "Reviews the change." }, { name: "docs" }],
+    });
+    const reviewer = screen.getByRole("button", { name: "reviewer" });
+    expect(reviewer).toHaveAttribute("title", "Reviews the change.");
+    expect(screen.getByRole("button", { name: "docs" })).toHaveAttribute("aria-pressed", "false");
+    await userEvent.click(reviewer);
+    expect(onChange).toHaveBeenCalledWith("reviewer");
+  });
+
+  it("offers no custom agent where the server runs no agents of its own (no plan)", () => {
+    renderToggle({ agents: ["build"], customAgents: [{ name: "reviewer" }] });
+    expect(screen.queryByTestId("coding-workbench-agent-toggle")).toBeNull();
+  });
+
+  it("marks a selected custom agent as pressed", () => {
+    renderToggle({ value: "reviewer", customAgents: [{ name: "reviewer" }] });
+    expect(screen.getByRole("button", { name: "reviewer" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Build" })).toHaveAttribute("aria-pressed", "false");
   });
 });
