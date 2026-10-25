@@ -10,6 +10,7 @@ import { createBufferedServerLogSink } from "../../../../tests/support/buffered-
 import {
   descendantsOf,
   parseProcessListing,
+  parseWorkingDirectories,
   RuntimeDescendantTracker,
   type ProcessIdentity,
 } from "./darwinRuntimeDescendants.js";
@@ -114,6 +115,7 @@ describe("macOS runtime descendants (#3899 AC2)", () => {
       survivorCount: 0,
       failedSampleCount: 0,
       refusedSignalCount: 0,
+      adoptedCount: 0,
     });
     expect(table.signals).toEqual([
       { pid: 20, signal: "SIGTERM" },
@@ -177,6 +179,7 @@ describe("macOS runtime descendants (#3899 AC2)", () => {
       survivorCount: 1,
       failedSampleCount: 0,
       refusedSignalCount: 0,
+      adoptedCount: 0,
     });
     expect(table.signals.map((entry) => entry.signal)).toEqual([
       "SIGTERM",
@@ -239,6 +242,84 @@ describe("macOS runtime descendants (#3899 AC2)", () => {
       outcome: "survivors",
       failedSampleCount: 1,
       refusedSignalCount: 5,
+    });
+  });
+
+  // #3901 AC3: `cmd &` hands its process to launchd at once, so it never appears below the service.
+  describe("processes a command detached", () => {
+    const WORKSPACE = "/managed/ws_1";
+    const BEFORE = "Sun Oct 25 14:40:00 2026";
+
+    function adopting(
+      table: HostTable,
+      directories: Readonly<Record<number, string>>,
+    ): RuntimeDescendantTracker {
+      return new RuntimeDescendantTracker({
+        rootPid: ROOT,
+        runId: RUN_ID,
+        activityLog: { write: (): void => undefined },
+        list: table.list,
+        workspaceRoots: [WORKSPACE],
+        directoriesOf: (pids) =>
+          Promise.resolve(
+            new Map(
+              pids.flatMap((pid) => (pid in directories ? [[pid, directories[pid] ?? ""]] : [])),
+            ),
+          ),
+        signal: table.signal,
+        sampleIntervalMs: 2,
+        settleMs: 1,
+      });
+    }
+
+    it("ends a launchd child of the run's workspace that started while the service ran", async () => {
+      const table = hostTable([{ pid: ROOT, ppid: 1, started: STARTED }]);
+      const descendants = adopting(table, {
+        40: `${WORKSPACE}/src`,
+        41: "/Users/someone",
+        42: WORKSPACE,
+        43: "/managed/ws_10",
+      });
+      descendants.start();
+      await sampled(table);
+      table.rows.splice(
+        0,
+        table.rows.length,
+        ...[
+          { pid: 40, ppid: 1, started: LATER },
+          { pid: 41, ppid: 1, started: LATER },
+          { pid: 42, ppid: 1, started: BEFORE },
+          { pid: 43, ppid: 1, started: LATER },
+          { pid: 44, ppid: 40, started: LATER },
+        ],
+      );
+
+      await expect(descendants.sweep()).resolves.toMatchObject({
+        outcome: "reaped",
+        adoptedCount: 1,
+        signalledCount: 2,
+      });
+      expect(table.signals.map((entry) => entry.pid)).toEqual([40, 44]);
+    });
+
+    it("adopts nothing before it has seen the service start", async () => {
+      const table = hostTable([{ pid: 40, ppid: 1, started: LATER }]);
+      const descendants = adopting(table, { 40: WORKSPACE });
+
+      await expect(descendants.sweep()).resolves.toMatchObject({
+        outcome: "clean",
+        adoptedCount: 0,
+      });
+      expect(table.signals).toEqual([]);
+    });
+
+    it("reads lsof's process and name records", () => {
+      expect(parseWorkingDirectories("p40\nfcwd\nn/managed/ws_1\np41\nfcwd\nn/tmp\n")).toEqual(
+        new Map([
+          [40, "/managed/ws_1"],
+          [41, "/tmp"],
+        ]),
+      );
     });
   });
 

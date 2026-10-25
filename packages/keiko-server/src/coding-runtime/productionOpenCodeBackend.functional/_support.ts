@@ -777,12 +777,15 @@ function scriptedResponseFor(script: ScriptState, transcript: string): Normalize
 
 /** The background child a lifecycle turn starts through the runtime's own shell tool. */
 export const FUNCTIONAL_LIFECYCLE_BACKGROUND_COMMAND = "sleep 3899.2";
+/** A process the command itself detaches (`&`): launchd adopts it at once (#3901 AC3). */
+export const FUNCTIONAL_LIFECYCLE_DETACHED_COMMAND = "sleep 3899.3";
 /** The foreground child that keeps a lifecycle turn busy until it is cancelled or killed. */
 export const FUNCTIONAL_LIFECYCLE_FOREGROUND_COMMAND = "sleep 3899.1";
 const TITLE_GENERATION_PREFIX = "Generate a title for this conversation:";
 
-// #3899 AC2: one background and one foreground child of the original service, so cancellation,
-// a crash and shutdown each have a live process tree to reap. A continued task answers plainly.
+// #3899 AC2, #3901 AC3: a background job, a process the command detaches itself and a foreground
+// child of the original service, so cancellation, a crash and shutdown each have a live process
+// tree to reap. A continued task answers plainly.
 // The runtime's own title request carries no tools and never advances the turn.
 function lifecycleResponse(script: ScriptState, transcript: string): NormalizedResponse {
   if (script.mode === "lifecycle-continue" || transcript.includes(TITLE_GENERATION_PREFIX))
@@ -790,7 +793,11 @@ function lifecycleResponse(script: ScriptState, transcript: string): NormalizedR
   const replies = toolReplyCount(transcript);
   if (replies === 0)
     return tool("shell", { command: FUNCTIONAL_LIFECYCLE_BACKGROUND_COMMAND, background: true });
-  return replies === 1
+  if (replies === 1)
+    return tool("shell", {
+      command: `${FUNCTIONAL_LIFECYCLE_DETACHED_COMMAND} > /dev/null 2>&1 &`,
+    });
+  return replies === 2
     ? tool("shell", { command: FUNCTIONAL_LIFECYCLE_FOREGROUND_COMMAND, timeout: 0 })
     : normal();
 }

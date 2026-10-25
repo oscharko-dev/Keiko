@@ -26,6 +26,7 @@ import { processServerLogSink } from "../process-log-sink.js";
 import { createCodingRuntimeLineParser } from "./codingRuntimeProcessIo.js";
 import {
   parseProcessListing,
+  parseWorkingDirectories,
   RuntimeDescendantTracker,
   type DescendantSweep,
   type DescendantTrackerOptions,
@@ -167,14 +168,41 @@ const execFileAsync = promisify(execFile);
 const PS_PATH = "/bin/ps";
 const PS_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 
-/** The host's process table as the same user sees it, locale-independent (macOS `ps`). */
+const LSOF_PATH = "/usr/sbin/lsof";
+
+/** This user's processes, locale-independent (macOS `ps`); the run's descendants are among them. */
 async function listDarwinProcesses(): Promise<readonly ProcessIdentity[]> {
-  const { stdout } = await execFileAsync(PS_PATH, ["-axo", "pid=,ppid=,lstart="], {
+  const uid = String(process.getuid?.() ?? -1);
+  const { stdout } = await execFileAsync(PS_PATH, ["-x", "-U", uid, "-o", "pid=,ppid=,lstart="], {
     encoding: "utf8",
     env: { LC_ALL: "C" },
     maxBuffer: PS_MAX_BUFFER_BYTES,
   });
   return parseProcessListing(stdout);
+}
+
+// A process lsof could not inspect makes it exit 1 with the others still printed; anything else
+// (no output at all) is the listing's own failure and propagates to the sweep's evidence.
+function partialLsofOutput(error: unknown): string {
+  const stdout = (error as { readonly stdout?: unknown } | null)?.stdout;
+  if (typeof stdout === "string" && stdout.length > 0) return stdout;
+  throw error;
+}
+
+/** The working directory of each given process (macOS `lsof`); unreadable ones are absent. */
+async function darwinWorkingDirectories(
+  pids: readonly number[],
+): Promise<ReadonlyMap<number, string>> {
+  // lsof exits 1 when some of the processes cannot be inspected; what it printed still holds.
+  const output = await execFileAsync(LSOF_PATH, ["-a", "-d", "cwd", "-p", pids.join(","), "-Fpn"], {
+    encoding: "utf8",
+    env: { LC_ALL: "C" },
+    maxBuffer: PS_MAX_BUFFER_BYTES,
+  }).then(
+    (result) => result.stdout,
+    (error: unknown) => partialLsofOutput(error),
+  );
+  return parseWorkingDirectories(output);
 }
 
 class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
@@ -249,7 +277,7 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
       },
     );
     this.ownedTrees.add(tree);
-    this.trackDescendants(tree, request.runId);
+    this.trackDescendants(tree, request.runId, [cwd]);
     return tree;
   }
 
@@ -303,12 +331,16 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
       },
     );
     this.ownedTrees.add(tree);
-    this.trackDescendants(tree, request.runId);
+    this.trackDescendants(tree, request.runId, [cwd]);
     return tree;
   }
 
   // macOS only: Linux's namespace launcher owns its own tree, and its exit is the proof it gives.
-  private trackDescendants(tree: DevLaneTree, runId: string): void {
+  private trackDescendants(
+    tree: DevLaneTree,
+    runId: string,
+    workspaceRoots: readonly string[],
+  ): void {
     const rootPid = tree.child.pid;
     if (
       this.identity.platform !== "darwin" ||
@@ -321,6 +353,8 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
       runId,
       activityLog: this.activityLog,
       list: listDarwinProcesses,
+      workspaceRoots,
+      directoriesOf: darwinWorkingDirectories,
     });
     tree.descendants = tracker;
     tracker.start();

@@ -6669,6 +6669,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: true,
       },
+      adoptedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
       durationMs: {
         type: "integer",
         dataClass: "duration",

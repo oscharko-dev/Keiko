@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "2e27d29c245aa611d8667f2a46f7cb1f02a4d21a6576fb2c2136f8a0bff49622",
+    "catalogDigest": "5b0296c24e0e6b6e2ce1ea5bf80e36baef938c7c6f06f4564351c785045ad729",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -6986,6 +6986,11 @@
             "dataClass": "count",
             "required": true
           },
+          "adoptedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
           "durationMs": {
             "type": "integer",
             "dataClass": "duration",
@@ -7018,8 +7023,8 @@
         "failureClasses": ["coding-runtime-descendant-sweep"],
         "proofIds": ["coding-runtime.descendants.swept.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.ts:57",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.ts:276"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.ts:75",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.ts:380"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -31820,8 +31825,8 @@
         },
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeActivityOperations.ts:181",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:517",
-          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:589",
+          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:551",
+          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:623",
           "packages/keiko-server/src/coding-runtime/nativeRuntimeProcessBackend.ts:255"
         ]
       },
@@ -31999,7 +32004,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeActivityOperations.ts:188",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:565",
+          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:599",
           "packages/keiko-server/src/coding-runtime/nativeRuntimeProcessBackend.ts:281"
         ]
       },
@@ -59610,6 +59615,12 @@
               "causal": "correlation",
               "analyzerProjection": "process-lifecycle",
               "safeContextFields": [
+                {
+                  "name": "adoptedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
                 {
                   "name": "causeChain",
                   "type": "string-array",
@@ -100558,7 +100569,7 @@
     {
       "op": "coding-runtime.descendants.swept",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.ts:60",
+      "site": "packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.ts:78",
       "package": "keiko-server"
     },
     {

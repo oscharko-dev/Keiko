@@ -71,6 +71,7 @@ import {
   FUNCTIONAL_ACTIVITY_ASSISTANT_PREFIX,
   FUNCTIONAL_ACTIVITY_TRUNCATED_TAIL,
   FUNCTIONAL_LIFECYCLE_BACKGROUND_COMMAND,
+  FUNCTIONAL_LIFECYCLE_DETACHED_COMMAND,
   FUNCTIONAL_LIFECYCLE_FOREGROUND_COMMAND,
   FUNCTIONAL_PLAN_STEP_READ,
   FUNCTIONAL_PLAN_STEP_VERIFY,
@@ -1078,7 +1079,7 @@ describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
       await expectServiceTreeReaped(run.service);
     }, 180_000);
 
-    it("cancels a busy turn and reaps the service with its foreground and background children", async () => {
+    it("cancels a busy turn and reaps the service, its background job and what a command detached", async () => {
       const run = await startLifecycleRun("lifecycle-cancel");
       expect(childCommands(run.service.pid)).toEqual(
         expect.arrayContaining([
@@ -1086,9 +1087,21 @@ describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
           FUNCTIONAL_LIFECYCLE_FOREGROUND_COMMAND,
         ]),
       );
+      // The detached process belongs to launchd already, in the run's workspace (#3901 AC3).
+      const detached = onlyProcess(FUNCTIONAL_LIFECYCLE_DETACHED_COMMAND);
+      expect(detached.ppid).toBe(1);
+      expect(realpathSync(processDirectory(detached.pid))).toBe(
+        realpathSync(run.fixture.workspace),
+      );
       await stopRun(run.pipeline.baseUrl, run.runId);
-      await expectServiceTreeReaped(run.service);
+      // Physical execution is settled before Stop answers: nothing is left to wait for (#3901 AC3).
+      expectNothingLeft(run.service);
       expect(run.pipeline.orchestrator.getSnapshot(run.runId)?.state).toBe("cancelled");
+      await vi.waitFor(() => {
+        expect(sweepLines(run.log, run.runId)).toEqual([
+          expect.objectContaining({ outcome: "reaped", survivorCount: 0, adoptedCount: 1 }),
+        ]);
+      });
     }, 180_000);
 
     it("ends the children of a crashed service and continues the task in a new service", async () => {
@@ -1102,9 +1115,12 @@ describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
       await new Promise((resolve) => setTimeout(resolve, 1_200));
       process.kill(run.service.pid, "SIGKILL");
       await expectServiceTreeReaped(run.service);
-      expect(sweepLines(run.log, run.runId)).toEqual([
-        { outcome: "reaped", signalledCount: 2, survivorCount: 0 },
-      ]);
+      // The line follows the sweep's final listing, after the processes are gone.
+      await vi.waitFor(() => {
+        expect(sweepLines(run.log, run.runId)).toEqual([
+          { outcome: "reaped", signalledCount: 3, survivorCount: 0, adoptedCount: 1 },
+        ]);
+      });
       await vi.waitFor(
         () => {
           expect(run.pipeline.orchestrator.getSnapshot(run.runId)?.state).not.toBe("running");
@@ -1160,7 +1176,7 @@ describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
     it("ends an active run and reaps its service tree when the server shuts down", async () => {
       const run = await startLifecycleRun("lifecycle-shutdown");
       await run.pipeline.deps.dispose?.();
-      await expectServiceTreeReaped(run.service);
+      expectNothingLeft(run.service);
       expect(settledStates(run.log, run.runId)).toContain("cancelled");
     }, 180_000);
   },
@@ -1252,6 +1268,7 @@ function sweepLines(
             outcome: event.extra?.outcome,
             signalledCount: event.extra?.signalledCount,
             survivorCount: event.extra?.survivorCount,
+            adoptedCount: event.extra?.adoptedCount,
           },
         ]
       : [],
@@ -1341,18 +1358,23 @@ async function expectRefusedWithoutTheRunPassword(origin: string): Promise<void>
   expect(statuses).toEqual([401, 401, 401]);
 }
 
+const LIFECYCLE_COMMANDS: ReadonlySet<string> = new Set([
+  FUNCTIONAL_LIFECYCLE_BACKGROUND_COMMAND,
+  FUNCTIONAL_LIFECYCLE_DETACHED_COMMAND,
+  FUNCTIONAL_LIFECYCLE_FOREGROUND_COMMAND,
+]);
+
+/** The service, its children and every lifecycle command are gone right now. */
+function expectNothingLeft(service: ProcessRow): void {
+  const live = processTable();
+  expect(live.filter((row) => row.pid === service.pid || row.ppid === service.pid)).toEqual([]);
+  expect(live.filter((row) => LIFECYCLE_COMMANDS.has(row.command))).toEqual([]);
+}
+
 async function expectServiceTreeReaped(service: ProcessRow): Promise<void> {
   await vi.waitFor(
     () => {
-      const live = processTable();
-      expect(live.filter((row) => row.pid === service.pid || row.ppid === service.pid)).toEqual([]);
-      expect(
-        live.filter(
-          (row) =>
-            row.command === FUNCTIONAL_LIFECYCLE_BACKGROUND_COMMAND ||
-            row.command === FUNCTIONAL_LIFECYCLE_FOREGROUND_COMMAND,
-        ),
-      ).toEqual([]);
+      expectNothingLeft(service);
     },
     { timeout: 20_000, interval: 200 },
   );

@@ -7779,6 +7779,12 @@
           "analyzerProjection": "process-lifecycle",
           "safeContextFields": [
             {
+              "name": "adoptedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
               "name": "causeChain",
               "type": "string-array",
               "dataClass": "error-kind",
