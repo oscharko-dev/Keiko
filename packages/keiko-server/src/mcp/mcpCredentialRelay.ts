@@ -1,7 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { causeChain, keikoStackFrames, type ServerLogSink } from "@oscharko-dev/keiko-activity-log";
-import { createSecretLiteralStreamRedactor } from "@oscharko-dev/keiko-security";
+import { createSecretSpellingStreamRedactor } from "@oscharko-dev/keiko-security";
 import type { McpRemoteSecretHeader } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 import {
   activityLogEvent,
@@ -165,6 +165,7 @@ const REASONS = [
   "secret-unavailable",
   "secret-invalid",
   "relay-unavailable",
+  "credential-in-response-header",
 ] as const;
 type RelayReason = (typeof REASONS)[number];
 
@@ -351,33 +352,65 @@ function upstreamHeaders(
   return { ...headers, ...target.headers };
 }
 
-function responseHeaders(upstream: Response): Readonly<Record<string, string>> {
+// A forwarded header the run reads back as it is (the session id is echoed on every request), so a
+// header that spells a credential cannot be rewritten: the response is refused instead.
+function responseHeaders(
+  upstream: Response,
+  target: McpRelayTarget,
+): Readonly<Record<string, string>> {
   const headers: Record<string, string> = {
     "cache-control": "no-store",
     "x-content-type-options": "nosniff",
   };
   for (const name of FORWARDED_RESPONSE_HEADERS) {
     const value = upstream.headers.get(name);
-    if (value !== null) headers[name] = value;
+    if (value === null) continue;
+    const scrubbed = createSecretSpellingStreamRedactor(credentialForms(target));
+    scrubbed.push(value);
+    scrubbed.finish();
+    if (scrubbed.redactedCount() > 0) throw new RelayRefusal(502, "credential-in-response-header");
+    headers[name] = value;
   }
   return headers;
 }
 
-// A server that reflects a credential answers with it as sent, or escaped inside the JSON of an MCP
-// result (once, or again in a JSON text it carries) or in a URL. Each form is a literal the run may
-// not receive, for the header value and for the bare credential.
-function credentialLiterals(target: McpRelayTarget): readonly string[] {
-  const forms = [...Object.values(target.headers), ...target.secrets].flatMap((value) => {
-    const escaped = JSON.stringify(value).slice(1, -1);
-    return [
-      value,
-      escaped,
-      escaped.replaceAll("/", String.raw`\/`),
-      JSON.stringify(escaped).slice(1, -1),
-      encodeURIComponent(value),
-    ];
+// A refused response is not read further.
+async function admittedResponseHeaders(
+  upstream: Response,
+  target: McpRelayTarget,
+): Promise<Readonly<Record<string, string>>> {
+  try {
+    return responseHeaders(upstream, target);
+  } catch (error) {
+    await upstream.body?.cancel();
+    throw error;
+  }
+}
+
+// The credential as a reflecting server may return it: each header value and each bare credential,
+// in any spelling a JSON parser, URL decoder or browser restores (createSecretSpellingStreamRedactor),
+// and inside base64 or base64url text.
+function credentialForms(target: McpRelayTarget): readonly string[] {
+  const values = [...Object.values(target.headers), ...target.secrets];
+  return [...new Set([...values, ...values.flatMap(base64Cores)])];
+}
+
+// Shorter base64 cores would also match unrelated encoded data.
+const BASE64_CORE_MIN_CHARS = 16;
+
+// The characters every base64 text holding `value` contains, at each of the three byte alignments:
+// the characters that depend on a neighbouring byte at either end are left out.
+function base64Cores(value: string): readonly string[] {
+  const bytes = Buffer.from(value, "utf8");
+  return [0, 1, 2].flatMap((offset) => {
+    // base64url carries no padding; the standard alphabet differs only in two characters.
+    const encoded = Buffer.concat([Buffer.alloc(offset), bytes]).toString("base64url");
+    const head = [0, 2, 3][offset] ?? 0;
+    const tail = (offset + bytes.length) % 3 === 0 ? 0 : 1;
+    const core = encoded.slice(head, encoded.length - tail);
+    if (core.length < BASE64_CORE_MIN_CHARS) return [];
+    return [core.replaceAll("-", "+").replaceAll("_", "/"), core];
   });
-  return [...new Set(forms)];
 }
 
 async function writeChunk(response: ServerResponse, text: string): Promise<void> {
@@ -387,7 +420,7 @@ async function writeChunk(response: ServerResponse, text: string): Promise<void>
 
 /**
  * Streams the upstream body with backpressure, stops at the response bound and replaces every
- * credential literal, one split across chunks included. MCP's Streamable HTTP transport is UTF-8
+ * spelling of a credential, one split across chunks included. MCP's Streamable HTTP transport is UTF-8
  * JSON or event-stream text, decoded and re-encoded unchanged; an event ends with a line break,
  * which no credential contains, so a whole event is never held back. Returns the upstream byte
  * count and the number of replaced occurrences.
@@ -400,7 +433,7 @@ async function pipeResponse(
   let bytes = 0;
   if (upstream.body === null) return { bytes, redacted: 0 };
   const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
-  const redactor = createSecretLiteralStreamRedactor(credentialLiterals(target));
+  const redactor = createSecretSpellingStreamRedactor(credentialForms(target));
   for await (const chunk of upstream.body as unknown as AsyncIterable<Uint8Array>) {
     bytes += chunk.byteLength;
     if (bytes > MCP_RELAY_RESPONSE_MAX_BYTES) throw new RelayRefusal(502, "response-too-large");
@@ -462,7 +495,7 @@ async function exchange(
     throw new RelayRefusal(502, "redirect-refused");
   }
   state.status = upstream.status;
-  response.writeHead(upstream.status, responseHeaders(upstream));
+  response.writeHead(upstream.status, await admittedResponseHeaders(upstream, admission.target));
   const piped = await pipeResponse(upstream, response, admission.target);
   state.responseBytes = piped.bytes;
   state.redactedCount = piped.redacted;

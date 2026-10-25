@@ -355,7 +355,8 @@ Changes apply to the next run.
   capability for that run and that server, and Keiko adds the header and forwards each request to
   exactly the registered URL through its egress (no redirect, no loopback or private target). A
   server that answers with the credential it received has it replaced by `[REDACTED]` before the
-  run reads the answer. A server whose variable is unset or holds a line break is left out of the
+  run reads the answer, however its JSON, URL, HTML or base64 text spells it; a server that puts it
+  into a response header is refused (`credential-in-response-header`). A server whose variable is unset or holds a line break is left out of the
   run. `headers` and
   `oauth` cannot be combined. The Activity Log records `coding-runtime.mcp-relay` (bound with
   relayed and refused server counts, then one line per relayed request with method, status,

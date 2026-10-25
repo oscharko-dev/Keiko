@@ -141,22 +141,30 @@ detaches or changes its session, directory or environment, and the native profil
 signal only members of its own instance (`(target same-sandbox)`; another instance of the identical
 profile is refused). The native launch starts a sandbox member beside the service
 (`darwinSandboxMembership.ts`): a shell of builtins only, on descriptor 3, in a process group of its
-own, which the service never holds. Once the service has exited, Keiko lists this user's live
-processes outside the sandbox, the member answers which of them it may signal, and the sweep ends
-those, through the member (SIGTERM, then SIGKILL, in bounded rounds), until a listing holds no
-member. The member forks nothing, and only members start members, so that listing proves the run's
-execution has ended; a process of anyone else is never signalled, even if it reuses a PID, because
-the kernel refuses the member's signal to it. Zombies have already ended and are not asked about.
-Only `clean` and `reaped` settle the tree. A member that survives every round (`survivors`), a
-listing the sweep cannot take (`listing-failed`), a member that no longer answers
-(`membership-unavailable`) and a run whose profile has no shell for a member (`unproven`, the
-gateway profile) leave the tree unended, so the manager reports `runtime-reap-unproven` instead of a
-stopped runtime; without an answer, the descendants recorded by PID and start time while the
-service ran are still ended, but that is cleanup, not proof. `coding-runtime.descendants.swept`
-records the outcome and the tracked, member, signalled and surviving counts. A process cannot leave
-its Seatbelt instance, so no Endpoint Security monitor (ADR-0163 D4) is needed for this proof; a
-member killed by the run's own commands turns the run's next sweep into `membership-unavailable`,
-never into a false stop.
+own, which the service never holds. Once the service has exited, the member sends every signal:
+the kernel refuses its signal to any process of anyone else, even one that reused a PID a moment
+before, and without the member nothing is signalled at all. A listing is a snapshot, and a member
+can fork and exit between a listing and the member's answer, so an empty answer about an older
+listing proves nothing (PR #4064 review). The sweep therefore freezes the run first: each round
+lists this user's processes, asks the member which of the live ones are the run's, and lists again.
+It proves the end only when every member the answer names was already stopped at the first listing,
+and no process that was running then and could have been a member has gone by the second. Only a
+running process forks, so no member can have appeared since. A gone process could not have been a
+member when it started before the run, or when its parent is alive at the second listing and no
+member: macOS reparents an orphan only to launchd, so that parent started it, and the child of a
+process outside the sandbox is outside it too. Otherwise the member stops (SIGSTOP) every member it
+named and the next round asks again; once proven, it kills the frozen members and a final answer
+must name none. Zombies have already ended and are not asked about. Only `clean` and `reaped`
+settle the tree. A member that outlives every kill (`survivors`), a listing the sweep cannot take
+(`listing-failed`), a member that no longer answers (`membership-unavailable`), a run whose profile
+has no shell for a member (`unproven`, the gateway profile) and a run that is not proven frozen
+within twenty rounds (`unproven`: one that keeps re-forking faster than a round, or a host whose
+launchd children keep ending in every round) leave the tree unended, so the manager reports
+`runtime-reap-unproven` instead of a stopped runtime. `coding-runtime.descendants.swept` records the
+outcome and the member, signalled, surviving and round counts. A process cannot leave its Seatbelt
+instance, so no Endpoint Security monitor (ADR-0163 D4) is needed for this proof; a member killed
+by the run's own commands turns the run's next sweep into `membership-unavailable`, never into a
+false stop.
 
 ### D4 — Honest, content-free unavailability reasons
 

@@ -40,12 +40,7 @@ function privateKeyScope(
   return { start: open === undefined ? before : Math.min(before, open), completedThrough };
 }
 
-/** Where a suffix of `text[0, before)` could still grow into one of `literals`; `before` if nowhere. */
-export function literalPrefixStart(
-  text: string,
-  before: number,
-  literals: readonly string[],
-): number {
+function literalPrefixStart(text: string, before: number, literals: readonly string[]): number {
   let end = before;
   const prefix = text.slice(0, before);
   for (const literal of literals) {

@@ -9,7 +9,8 @@ import type { Duplex } from "node:stream";
 // service and kept apart from its work: a shell of builtins only, in a process group of its own, on
 // descriptor 3. It tests the PIDs Keiko lists (`kill -0`) and signals the ones it may. A PID it may
 // signal belongs to the run; one it may not does not, whoever its parent is. The member forks
-// nothing, so a listing in which no other member remains proves that none can appear afterwards.
+// nothing and stops or kills only what the kernel lets it signal; how a sweep turns its answers into
+// a proof is darwinRuntimeDescendants.ts's.
 
 const MEMBER_SCRIPT = [
   "trap '' HUP INT TERM",
@@ -17,7 +18,7 @@ const MEMBER_SCRIPT = [
   "while read -r command pids; do",
   '  case "$command" in',
   '    members) out=""; for p in $pids; do [ "$p" != "$$" ] && kill -0 "$p" 2>/dev/null && out="$out $p"; done; echo "members$out" ;;',
-  '    term) for p in $pids; do [ "$p" != "$$" ] && kill -TERM "$p" 2>/dev/null; done; echo signalled ;;',
+  '    stop) for p in $pids; do [ "$p" != "$$" ] && kill -STOP "$p" 2>/dev/null; done; echo signalled ;;',
   '    kill) for p in $pids; do [ "$p" != "$$" ] && kill -KILL "$p" 2>/dev/null; done; echo signalled ;;',
   "    *) exit 0 ;;",
   "  esac",
@@ -51,7 +52,7 @@ export interface SandboxMembership {
   /** The given PIDs that belong to the run's sandbox instance, as the kernel answers its member. */
   members(pids: readonly number[]): Promise<readonly number[]>;
   /** Signals the given PIDs from inside the instance; the kernel refuses every other process. */
-  signal(pids: readonly number[], signal: "term" | "kill"): Promise<void>;
+  signal(pids: readonly number[], signal: "stop" | "kill"): Promise<void>;
   /** Ends the member; it is not part of the run's work. */
   close(): void;
 }
@@ -97,7 +98,7 @@ class ChannelSandboxMembership implements SandboxMembership {
     return members;
   }
 
-  public async signal(pids: readonly number[], signal: "term" | "kill"): Promise<void> {
+  public async signal(pids: readonly number[], signal: "stop" | "kill"): Promise<void> {
     if (pids.length === 0) return;
     await this.ask(`${signal} ${pids.join(" ")}`, /^signalled$/u);
   }

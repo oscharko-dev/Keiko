@@ -339,23 +339,21 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
 
   // macOS only: Linux's namespace launcher owns its own tree, and its exit is the proof it gives.
   private trackDescendants(tree: DevLaneTree, runId: string): void {
-    const rootPid = tree.child.pid;
     if (
       this.identity.platform !== "darwin" ||
-      rootPid === undefined ||
+      tree.child.pid === undefined ||
       this.createDescendantTracker === undefined
     )
       return;
     const member = tree.child.sandboxMember;
     const tracker = this.createDescendantTracker({
-      rootPid,
       runId,
       activityLog: this.activityLog,
       list: listDarwinProcesses,
+      startedAtMs: Date.now(),
       ...(member === undefined ? {} : { membership: createSandboxMembership(member) }),
     });
     tree.descendants = tracker;
-    tracker.start();
     tree.onTreeExit(() => {
       void tracker.sweep();
     });

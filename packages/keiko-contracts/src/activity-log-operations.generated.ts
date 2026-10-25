@@ -6646,15 +6646,10 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "clean",
           "reaped",
           "survivors",
+          "unproven",
           "listing-failed",
           "membership-unavailable",
-          "unproven",
         ],
-      },
-      trackedCount: {
-        type: "integer",
-        dataClass: "count",
-        required: true,
       },
       memberCount: {
         type: "integer",
@@ -6671,12 +6666,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: true,
       },
-      failedSampleCount: {
-        type: "integer",
-        dataClass: "count",
-        required: true,
-      },
-      refusedSignalCount: {
+      roundCount: {
         type: "integer",
         dataClass: "count",
         required: true,
@@ -6710,7 +6700,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     diagnosticWhen: [
       {
         field: "outcome",
-        values: ["survivors", "listing-failed", "membership-unavailable", "unproven"],
+        values: ["survivors", "unproven", "listing-failed", "membership-unavailable"],
       },
     ],
   },
@@ -8348,6 +8338,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "secret-unavailable",
           "secret-invalid",
           "relay-unavailable",
+          "credential-in-response-header",
         ],
       },
       method: {

@@ -437,6 +437,57 @@ describe("a credential the server reflects (#3903 AC3)", () => {
     expect(body).toBe(forms.map(() => "<[REDACTED]>").join(" "));
   });
 
+  // PR #4064 review (4371600693): a result that writes the credential with JSON `\uXXXX` escapes is
+  // valid JSON, and the run's ordinary JSON.parse restores the exact credential; so do base64 and
+  // HTML character references. Split into three-byte chunks, as the review's counter did.
+  it("replaces the credential however a result escapes or encodes it, in any chunking", async () => {
+    const escaped = Array.from(
+      SECRET,
+      (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
+    ).join("");
+    const html = Array.from(SECRET, (character) => `&#${String(character.charCodeAt(0))};`).join(
+      "",
+    );
+    const base64 = Buffer.from(`token ${SECRET} end`).toString("base64");
+    const text = `{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"${escaped} ${html} ${base64}"}]}}`;
+    const cuts = Array.from({ length: Math.floor(text.length / 3) }, (_, index) => (index + 1) * 3);
+    const { url, capability, records } = await reflecting(SECRET, () => sliced(text, cuts));
+    const body = await (await post(url, capability)).text();
+
+    const parsed = JSON.parse(body) as {
+      readonly result: { readonly content: readonly { readonly text: string }[] };
+    };
+    const delivered = parsed.result.content[0]?.text ?? "";
+    expect(delivered).not.toContain(SECRET);
+    expect(delivered.startsWith("[REDACTED] [REDACTED] ")).toBe(true);
+    expect(Buffer.from(delivered.split(" ").at(-1) ?? "", "base64").toString()).not.toContain(
+      SECRET,
+    );
+    expect(lines(records)).toEqual([
+      expect.objectContaining({ outcome: "relayed", redactedCount: 3 }),
+    ]);
+  });
+
+  // PR #4064 review (4371600693): the session id is echoed by the run on every request, so a server
+  // that puts the credential into it cannot be answered with a rewritten id: the response is refused.
+  it("refuses a response whose forwarded header carries the credential", async () => {
+    const { url, capability, records } = await reflecting(
+      SECRET,
+      (authorization) =>
+        new Response("{}", {
+          status: 200,
+          headers: { "content-type": "application/json", "mcp-session-id": authorization },
+        }),
+    );
+    const response = await post(url, capability);
+    expect(response.status).toBe(502);
+    expect(response.headers.get("mcp-session-id")).toBeNull();
+    expect(await response.text()).not.toContain(SECRET);
+    expect(lines(records)).toEqual([
+      expect.objectContaining({ outcome: "refused", reason: "credential-in-response-header" }),
+    ]);
+  });
+
   it("passes an ordinary result through byte for byte", async () => {
     const result = { jsonrpc: "2.0", id: 1, result: { text: "Bearer of good news: café ☕" } };
     const { url, capability, records } = await reflecting(SECRET, () => json(result));

@@ -7791,12 +7791,6 @@
               "required": true
             },
             {
-              "name": "failedSampleCount",
-              "type": "integer",
-              "dataClass": "count",
-              "required": true
-            },
-            {
               "name": "frames",
               "type": "string-array",
               "dataClass": "opaque-id",
@@ -7815,7 +7809,7 @@
               "required": true
             },
             {
-              "name": "refusedSignalCount",
+              "name": "roundCount",
               "type": "integer",
               "dataClass": "count",
               "required": true
@@ -7828,12 +7822,6 @@
             },
             {
               "name": "survivorCount",
-              "type": "integer",
-              "dataClass": "count",
-              "required": true
-            },
-            {
-              "name": "trackedCount",
               "type": "integer",
               "dataClass": "count",
               "required": true

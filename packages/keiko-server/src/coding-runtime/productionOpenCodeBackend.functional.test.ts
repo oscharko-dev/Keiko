@@ -1469,6 +1469,16 @@ describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
       });
     }, 180_000);
 
+    // PR #4064 review: a negated OpenSSL switch is one of Node's own OpenSSL-only forms.
+    it("keeps a quoted configuration together with a negated OpenSSL switch", async () => {
+      let nodeOptions = "";
+      const probe = await probeBoundary((opensslConf) => {
+        nodeOptions = `--openssl-config="${opensslConf}" --openssl-shared-config --no-openssl-legacy-provider`;
+        return { NODE_OPTIONS: nodeOptions };
+      }, "operator openssl");
+      expect(probe.facts).toMatchObject({ node_options_sha: sha256(nodeOptions), node: "ok" });
+    }, 180_000);
+
     it("keeps NODE_OPTIONS that carry anything besides OpenSSL and FIPS switches out of the run", async () => {
       const probe = await probeBoundary(() => ({
         NODE_OPTIONS: "--openssl-shared-config --max-old-space-size=64",

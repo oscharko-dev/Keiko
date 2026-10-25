@@ -12,7 +12,6 @@ import { privateKeyRegions } from "./redaction-private-key.js";
 import type { AuditRedactionConfig } from "@oscharko-dev/keiko-contracts";
 import {
   createStreamingRedactor as createBlockRedactor,
-  literalPrefixStart,
   type StreamingRedactor,
 } from "./redaction-stream.js";
 import {
@@ -417,68 +416,6 @@ function redactIdentifiedPatterns(
  */
 export function redactSecretLiterals(input: string, secrets: readonly string[]): string {
   return redactLiteralSpans(input, secrets, false);
-}
-
-export interface SecretLiteralStreamRedactor {
-  /** What can no longer belong to a secret literal, with every whole literal replaced. */
-  push(text: string): string;
-  /** What remains once the stream completed; a cancelled stream discards its instance instead. */
-  finish(): string;
-  /** Literal occurrences replaced so far; overlapping occurrences count once. */
-  redactedCount(): number;
-}
-
-/**
- * `redactSecretLiterals` for a stream: text that may still complete a literal across the next chunk
- * waits, so neither the literal's parts nor the whole reach the consumer. Only the exact literals
- * are replaced, never a heuristic shape, and at most the longest literal less one character waits.
- */
-export function createSecretLiteralStreamRedactor(
-  secrets: readonly string[],
-): SecretLiteralStreamRedactor {
-  const literals = secrets.filter((secret) => secret.length > 0);
-  let pending = "";
-  let redacted = 0;
-  const publish = (text: string): string => {
-    const spans = literalSecretSpans(text, literals, false);
-    redacted += disjointSpanCount(spans);
-    return replaceCodeSpans(text, spans, false);
-  };
-  return {
-    push(text: string): string {
-      pending += text;
-      const end = literalSafeEnd(pending, literals);
-      const ready = pending.slice(0, end);
-      pending = pending.slice(end);
-      return publish(ready);
-    },
-    finish(): string {
-      const rest = pending;
-      pending = "";
-      return publish(rest);
-    },
-    redactedCount: (): number => redacted,
-  };
-}
-
-// The end of what may be published: before any suffix that could still grow into a literal, but
-// never inside a literal that is already whole.
-function literalSafeEnd(text: string, literals: readonly string[]): number {
-  let end = literalPrefixStart(text, text.length, literals);
-  const spans = [...literalSecretSpans(text, literals, false)].sort((a, b) => a.start - b.start);
-  for (const span of spans) if (span.start < end && end < span.end) end = span.end;
-  return end;
-}
-
-// Overlapping spans are replaced as one, so they count as one.
-function disjointSpanCount(spans: readonly RedactionSpan[]): number {
-  let count = 0;
-  let reach = -1;
-  for (const span of [...spans].sort((a, b) => a.start - b.start)) {
-    if (span.start >= reach) count += 1;
-    reach = Math.max(reach, span.end);
-  }
-  return count;
 }
 
 function redactLiteralSpans(

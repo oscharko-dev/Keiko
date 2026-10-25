@@ -300,7 +300,34 @@ describe("nativeOpenSslReadRoots", () => {
     );
     expect(nativeOpenSslNodeOptions("--openssl-config")).toBe(false);
     expect(nativeOpenSslNodeOptions('--openssl-config=""')).toBe(false);
-    expect(nativeOpenSslNodeOptions("--enable-fips=1")).toBe(false);
     expect(nativeOpenSslNodeOptions('""')).toBe(false);
+    // Node refuses these; a negated or valued foreign switch stays foreign.
+    expect(nativeOpenSslNodeOptions("--no-openssl-config")).toBe(false);
+    expect(nativeOpenSslNodeOptions("--no-max-old-space-size")).toBe(false);
+    expect(nativeOpenSslNodeOptions("--openssl-shared-config --no-require=x.js")).toBe(false);
+  });
+
+  // PR #4064 review: Node's boolean switches have a `--no-` form, and Node accepts a value on either
+  // form (and ignores it), so these are all OpenSSL-only NODE_OPTIONS Node starts with.
+  it("accepts the negated and valued forms of Node's OpenSSL and FIPS switches", () => {
+    const root = tree();
+    mkdirSync(join(root, "ssl dir"), { recursive: true });
+    writeFileSync(join(root, "ssl dir", "openssl.cnf"), "");
+    const config = `--openssl-config="${join(root, "ssl dir", "openssl.cnf")}"`;
+    for (const switches of [
+      "--openssl-shared-config --no-openssl-legacy-provider",
+      "--no-enable-fips --no-force-fips",
+      "--no-openssl-shared-config",
+      "--openssl-shared-config=true",
+      "--enable-fips=1",
+      "--no_openssl_shared_config",
+      "--no-openssl-shared-config=true",
+    ]) {
+      const value = `${config} ${switches}`;
+      expect(nativeOpenSslNodeOptions(value), value).toBe(true);
+      expect(nativeOpenSslReadRoots({ NODE_OPTIONS: value }, join(root, "home")), value).toEqual([
+        join(root, "ssl dir"),
+      ]);
+    }
   });
 });

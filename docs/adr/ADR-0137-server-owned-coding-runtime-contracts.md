@@ -1180,13 +1180,20 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   `mcp-session-id`, `mcp-protocol-version` and `last-event-id` pass, 4 MiB request, 32 MiB
   response) to exactly the registered URL through Keiko's egress (no redirect followed, loopback
   and private targets refused); a redirect answers 502. A server can answer with the credential it
-  received, so the response is not passed through unread: the relay replaces every occurrence of
-  each header value and each bare credential, as sent, JSON-escaped (once, with `\/`, and again
-  inside a JSON text) or percent-encoded, before the run reads it. Only those exact literals are
-  replaced, never a heuristic shape, through `createSecretLiteralStreamRedactor` beside
-  `redactSecretLiterals` in `keiko-security`; text that may still complete a literal across the
-  next chunk waits for it (at most the longest literal less one character), so an event stream
-  still flows event by event. A run's disposal releases its bindings and ends every exchange it
+  received, so the response is not passed through unread: the relay replaces every spelling of
+  each header value and each bare credential that a JSON parser, a URL decoder or a browser turns
+  back into it, before the run reads it. Each character may be written as itself, as JSON's
+  `\uXXXX` or short escape (once, and again inside a JSON text), percent-encoded or as an HTML
+  character reference, in any mix; base64 and base64url text holding a credential is matched at
+  each byte alignment. Only text decoding to an exact credential is replaced, never a heuristic
+  shape (`createSecretSpellingStreamRedactor` in `keiko-security`); text that may still complete a
+  spelling across the next chunk waits for it, and a line break never waits, so an event stream
+  still flows event by event. A forwarded response header is read back by the run as it is (the
+  session id is echoed on every request), so a header that spells a credential cannot be rewritten:
+  the response is refused (502, `credential-in-response-header`). A server that deliberately
+  re-encodes its credential some other way still receives it on every request; the relay keeps the
+  credential out of the run's configuration and out of an echo, not out of a hostile server's
+  hands. A run's disposal releases its bindings and ends every exchange it
   holds. The server-owned binding (`OPENCODE_CONFIG_CONTENT`) joins the
   shell environment denylist, so an agent's shell cannot read a capability. A server whose secret
   is unset or holds a line break is left out with its tools. Evidence: `coding-runtime.mcp-relay`
@@ -1977,7 +1984,10 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   still inherit nothing. An operator's explicit OpenSSL and FIPS configuration is kept as a
   standalone shell keeps it (#3901 AC4): `OPENSSL_CONF`, `OPENSSL_CONF_INCLUDE` and
   `OPENSSL_MODULES` are inherited, `NODE_OPTIONS` only when it consists of Node's OpenSSL and FIPS
-  switches alone (`--openssl-*`, `--enable-fips`, `--force-fips`), and the directories they name
+  switches alone, read with Node's own grammar (quotes, escapes inside quotes, `_` for `-`): the
+  boolean switches `--openssl-legacy-provider`, `--openssl-shared-config`, `--enable-fips` and
+  `--force-fips` in their `--no-` forms too and with any value, which Node ignores, and
+  `--openssl-config` with its file inline or as the next option, and the directories they name
   (the configuration file's directory, the include directory, the modules, an
   `--openssl-config=` file's directory) open read-only through `nativeOpenSslReadRoots`, under the
   toolchain root rule: never the user's home or above it, a system prefix or a credential store. The launch gate that keeps a host secret out of the child compares the

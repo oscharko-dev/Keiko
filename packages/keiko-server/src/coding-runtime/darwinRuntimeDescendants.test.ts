@@ -8,7 +8,6 @@ import {
 } from "../../../../tests/support/activity-log-proof.js";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import {
-  descendantsOf,
   parseProcessListing,
   RuntimeDescendantTracker,
   sweepProvesEnd,
@@ -19,267 +18,297 @@ import {
   type SandboxMembership,
 } from "./darwinSandboxMembership.js";
 
-const ROOT = 4_711;
 const RUN_ID = "run-descendants";
-const STARTED = "Sun Oct 25 14:50:39 2026";
-const LATER = "Sun Oct 25 14:59:01 2026";
+const STARTED_AT_MS = Date.parse("Sun Oct 25 14:50:39 2026");
+const BEFORE = "Sun Oct 25 14:40:00 2026";
+const DURING = "Sun Oct 25 14:59:01 2026";
 
-function row(pid: number, ppid: number, started = STARTED, state = "S"): ProcessIdentity {
-  return { pid, ppid, state, started };
+function row(pid: number, state = "S", started = DURING): ProcessIdentity {
+  return { pid, ppid: 1, state, started };
 }
 
-interface HostTable {
+interface Host {
   readonly rows: ProcessIdentity[];
-  readonly signals: { readonly pid: number; readonly signal: NodeJS.Signals }[];
+  readonly members: Set<number>;
+  readonly signals: { readonly pid: number; readonly signal: "stop" | "kill" }[];
   readonly list: Mock<() => Promise<readonly ProcessIdentity[]>>;
-  readonly signal: (pid: number, signal: NodeJS.Signals) => void;
+  /** Runs when the member is asked, between the listing it was given and its answer. */
+  onAnswer?: (() => void) | undefined;
 }
 
-// A process table the test owns: a signalled process leaves it unless `keep` says otherwise.
-function hostTable(
-  rows: ProcessIdentity[],
-  keep: (pid: number) => boolean = () => false,
-): HostTable {
-  const signals: { readonly pid: number; readonly signal: NodeJS.Signals }[] = [];
+// A process table and the kernel's answer for one sandbox instance: `members` are the PIDs its
+// member may signal, and a signal from inside reaches only those, as the Seatbelt rule enforces.
+function host(rows: ProcessIdentity[], members: readonly number[]): Host {
   return {
     rows,
-    signals,
-    list: vi.fn(() => Promise.resolve([...rows])),
-    signal: (pid: number, signal: NodeJS.Signals): void => {
-      signals.push({ pid, signal });
-      if (keep(pid)) return;
-      const index = rows.findIndex((entry) => entry.pid === pid);
-      if (index >= 0) rows.splice(index, 1);
-    },
+    members: new Set(members),
+    signals: [],
+    list: vi.fn(() => Promise.resolve(rows.map((entry) => ({ ...entry })))),
   };
 }
 
-interface Kernel extends SandboxMembership {
-  readonly asked: (readonly number[])[];
-  readonly closed: () => boolean;
-}
-
-// The kernel's answer for one sandbox instance: `members` are the PIDs its member may signal. A
-// signal from inside reaches only those, exactly as the Seatbelt rule enforces.
-function kernel(table: HostTable, members: ReadonlySet<number>): Kernel {
-  const asked: (readonly number[])[] = [];
-  let closed = false;
+function kernel(table: Host, keep: (pid: number) => boolean = () => false): SandboxMembership {
   return {
-    asked,
-    closed: (): boolean => closed,
     members: (pids): Promise<readonly number[]> => {
-      asked.push(pids);
-      return Promise.resolve(pids.filter((pid) => members.has(pid)));
+      table.onAnswer?.();
+      const live = new Set(table.rows.map((entry) => entry.pid));
+      return Promise.resolve(pids.filter((pid) => table.members.has(pid) && live.has(pid)));
     },
     signal: (pids, signal): Promise<void> => {
-      for (const pid of pids)
-        if (members.has(pid)) table.signal(pid, signal === "term" ? "SIGTERM" : "SIGKILL");
+      for (const pid of pids) {
+        if (!table.members.has(pid)) continue;
+        table.signals.push({ pid, signal });
+        const index = table.rows.findIndex((entry) => entry.pid === pid);
+        const current = table.rows[index];
+        if (current === undefined || keep(pid)) continue;
+        if (signal === "kill") table.rows.splice(index, 1);
+        else table.rows[index] = { ...current, state: "T" };
+      }
       return Promise.resolve();
     },
-    close: (): void => {
-      closed = true;
-    },
+    close: vi.fn(),
   };
 }
 
 function tracker(
-  table: HostTable,
-  membership?: SandboxMembership,
+  table: Host,
+  membership: SandboxMembership | undefined,
   events: ServerLogEvent[] = [],
 ): RuntimeDescendantTracker {
   return new RuntimeDescendantTracker({
-    rootPid: ROOT,
     runId: RUN_ID,
     activityLog: { write: (event) => void events.push(event) },
     list: table.list,
     ...(membership === undefined ? {} : { membership }),
-    signal: table.signal,
-    sampleIntervalMs: 2,
+    startedAtMs: STARTED_AT_MS,
     settleMs: 1,
   });
 }
 
-async function sampled(table: HostTable, count = 2): Promise<void> {
-  await vi.waitFor(() => {
-    expect(table.list.mock.calls.length).toBeGreaterThanOrEqual(count);
-  });
+function line(event: ServerLogEvent | undefined): Readonly<Record<string, unknown>> {
+  if (event === undefined) throw new TypeError("swept line missing");
+  return expectActivityLogProof(
+    "coding-runtime.descendants.swept.emitted-line",
+    formatActivityLogProofLine(event),
+  );
 }
 
 describe("macOS runtime descendants (#3899 AC2, #3901 AC3)", () => {
   it("parses a locale-independent listing with each process's state and ignores anything else", () => {
     expect(
-      parseProcessListing(
-        `  ${String(ROOT)}     1 Ss ${STARTED}\n  12 ${String(ROOT)} Z ${LATER}\ngarbage\n\n`,
-      ),
-    ).toEqual([row(ROOT, 1, STARTED, "Ss"), row(12, ROOT, LATER, "Z")]);
+      parseProcessListing(`  4711     1 Ss ${BEFORE}\n  12 4711 Z ${DURING}\ngarbage\n\n`),
+    ).toEqual([
+      { pid: 4711, ppid: 1, state: "Ss", started: BEFORE },
+      { pid: 12, ppid: 4711, state: "Z", started: DURING },
+    ]);
   });
 
-  it("finds every descendant of the roots, roots excluded", () => {
-    const rows = [row(ROOT, 1), row(20, ROOT), row(21, 20), row(22, 21), row(30, 1)];
-    expect(descendantsOf(rows, new Set([ROOT])).map((entry) => entry.pid)).toEqual([20, 21, 22]);
-  });
-
-  // The kernel answers ownership: a child of the service, a process that left the tree with
-  // `setsid` before any sample, and one that changed its directory all belong to the run.
-  it("ends every member of the run's sandbox, however it left the tree, and proves the end", async () => {
-    const table = hostTable([row(20, 1), row(40, 1, LATER), row(41, 1, LATER), row(50, 1, LATER)]);
-    const membership = kernel(table, new Set([20, 40, 41]));
+  it("proves a clean end when no member is left, and signals nothing", async () => {
+    const table = host([row(50), row(51, "S", BEFORE)], []);
     const sink = createBufferedServerLogSink();
-    const descendants = tracker(table, membership, sink.events);
+    const sweep = await tracker(table, kernel(table), sink.events).sweep();
 
-    const sweep = await descendants.sweep();
+    expect(sweep).toEqual({
+      outcome: "clean",
+      memberCount: 0,
+      signalledCount: 0,
+      survivorCount: 0,
+      roundCount: 1,
+    });
+    expect(sweepProvesEnd(sweep)).toBe(true);
+    expect(table.signals).toEqual([]);
+    expect(line(sink.events[0])).toMatchObject({ level: "info", outcome: "clean" });
+  });
+
+  // The members run, are stopped, are proven to be all there are, and only then are killed.
+  it("freezes the run's members, proves none can appear, then ends them", async () => {
+    const table = host([row(20), row(40), row(41), row(50)], [20, 40, 41]);
+    const membership = kernel(table);
+    const close = vi.spyOn(membership, "close");
+    const sink = createBufferedServerLogSink();
+    const sweep = await tracker(table, membership, sink.events).sweep();
+
     expect(sweep).toEqual({
       outcome: "reaped",
-      trackedCount: 0,
       memberCount: 3,
       signalledCount: 3,
       survivorCount: 0,
-      failedSampleCount: 0,
-      refusedSignalCount: 0,
+      roundCount: 2,
     });
-    expect(sweepProvesEnd(sweep)).toBe(true);
-    expect(table.signals.map((entry) => entry.pid)).toEqual([20, 40, 41]);
+    expect(table.signals.map((entry) => entry.signal)).toEqual([
+      "stop",
+      "stop",
+      "stop",
+      "kill",
+      "kill",
+      "kill",
+    ]);
     expect(table.rows.map((entry) => entry.pid)).toEqual([50]);
-    expect(membership.closed()).toBe(true);
-    expect(
-      expectActivityLogProof(
-        "coding-runtime.descendants.swept.emitted-line",
-        formatActivityLogProofLine(sink.events[0] as ServerLogEvent),
-      ),
-    ).toMatchObject({
+    expect(close).toHaveBeenCalledOnce();
+    expect(line(sink.events[0])).toMatchObject({
       level: "info",
       op: "coding-runtime.descendants.swept",
       correlationId: RUN_ID,
       outcome: "reaped",
       memberCount: 3,
-      signalledCount: 3,
-      survivorCount: 0,
+      roundCount: 2,
     });
-    expect(sink.lines().join("\n")).not.toContain(STARTED);
+    expect(sink.lines().join("\n")).not.toContain(DURING);
   });
 
-  // PR #4064 review, finding 4371328652: a process the human started in the workspace after the
-  // service, later adopted by launchd, was signalled by the former working-directory rule.
-  it("never signals a process outside the run's sandbox, whatever its parent, directory or start", async () => {
-    const table = hostTable([row(ROOT, 1), row(60, 1, LATER), row(61, 1, LATER)]);
-    const descendants = tracker(table, kernel(table, new Set()));
-    descendants.start();
-    await sampled(table);
-    table.rows.shift();
+  // PR #4064 review, finding 4371619368: a member forks and exits between the listing and the
+  // answer; its child is absent from the listing and its own PID is no longer a member, so the
+  // answer is empty although the run's child lives.
+  it("never proves an end from a listing a member left before the answer", async () => {
+    const table = host([row(70)], [70]);
+    table.onAnswer = (): void => {
+      table.onAnswer = undefined;
+      table.rows.splice(0, 1, row(71));
+      table.members.add(71);
+    };
+    const sweep = await tracker(table, kernel(table)).sweep();
 
-    await expect(descendants.sweep()).resolves.toMatchObject({
-      outcome: "clean",
-      memberCount: 0,
-      signalledCount: 0,
-    });
-    expect(table.signals).toEqual([]);
-  });
-
-  // PR #4064 review, finding 4371328653: a descendant that left the tree before the first sample
-  // left nothing to sweep, and the sweep reported a clean end.
-  it("finds a member no sample ever saw", async () => {
-    const table = hostTable([row(70, 1, LATER)]);
-    const membership = kernel(table, new Set([70]));
-    const descendants = tracker(table, membership);
-
-    await expect(descendants.sweep()).resolves.toMatchObject({
-      outcome: "reaped",
-      trackedCount: 0,
-      memberCount: 1,
-    });
+    expect(sweep).toMatchObject({ outcome: "reaped", memberCount: 1, signalledCount: 1 });
+    expect(sweep.roundCount).toBeGreaterThan(1);
     expect(table.rows).toEqual([]);
   });
 
-  it("never reports a clean end without the member's answer", async () => {
-    const table = hostTable([row(ROOT, 1), row(20, ROOT), row(80, 1, LATER)]);
+  // PR #4064 review, finding 4371619380: without the member, a host signal to a recorded PID could
+  // reach a process that reused it. Nothing is signalled, and the end stays unproven.
+  it("signals nothing and proves nothing without the member's answer", async () => {
+    const table = host([row(80), row(81)], [80]);
+    const signal = vi.fn(() => Promise.resolve());
     const membership: SandboxMembership = {
       members: () => Promise.reject(new SandboxMembershipUnavailableError("ended")),
-      signal: () => Promise.resolve(),
-      close: (): void => undefined,
+      signal,
+      close: vi.fn(),
     };
     const sink = createBufferedServerLogSink();
-    const descendants = tracker(table, membership, sink.events);
-    descendants.start();
-    await sampled(table);
-    table.rows.splice(0, 1);
+    const sweep = await tracker(table, membership, sink.events).sweep();
 
-    const sweep = await descendants.sweep();
-    // What was recorded is still ended; the unseen process cannot be, and the end is unproven.
-    expect(sweep).toMatchObject({
-      outcome: "membership-unavailable",
-      trackedCount: 1,
-      signalledCount: 1,
-      survivorCount: 0,
-    });
+    expect(sweep).toMatchObject({ outcome: "membership-unavailable", signalledCount: 0 });
     expect(sweepProvesEnd(sweep)).toBe(false);
-    expect(table.rows.map((entry) => entry.pid)).toEqual([80]);
-    expect(
-      expectActivityLogProof(
-        "coding-runtime.descendants.swept.emitted-line",
-        formatActivityLogProofLine(sink.events[0] as ServerLogEvent),
-      ),
-    ).toMatchObject({
+    expect(signal).not.toHaveBeenCalled();
+    expect(table.rows.map((entry) => entry.pid)).toEqual([80, 81]);
+    expect(line(sink.events[0])).toMatchObject({
       level: "warn",
       outcome: "membership-unavailable",
       frames: expect.any(Array) as unknown,
     });
   });
 
-  it("reports a run without a member as unproven, even when nothing is left", async () => {
-    const table = hostTable([row(ROOT, 1)]);
-    const descendants = tracker(table);
-    descendants.start();
-    await sampled(table);
-    table.rows.shift();
+  it("reports a run without a member as unproven and signals nothing", async () => {
+    const table = host([row(80)], []);
+    const sweep = await tracker(table, undefined).sweep();
 
-    const sweep = await descendants.sweep();
-    expect(sweep).toMatchObject({ outcome: "unproven", signalledCount: 0, survivorCount: 0 });
+    expect(sweep).toMatchObject({ outcome: "unproven", signalledCount: 0, roundCount: 0 });
     expect(sweepProvesEnd(sweep)).toBe(false);
+    expect(table.list).not.toHaveBeenCalled();
+  });
+
+  it("stays unproven while running processes keep ending in every round", async () => {
+    let next = 1_000;
+    const table = host([], []);
+    // A process of the host's that ends between every two listings of a round.
+    table.list.mockImplementation(() => Promise.resolve([row((next += 1))]));
+    const sweep = await tracker(table, kernel(table)).sweep();
+
+    expect(sweep).toMatchObject({ outcome: "unproven", roundCount: 20, signalledCount: 0 });
+  });
+
+  // A child of a live process outside the sandbox is outside it too (macOS reparents an orphan only
+  // to launchd), so the host's own short-lived work does not keep the run unproven.
+  it("does not count a child of a live foreign process as a possible member", async () => {
+    let next = 3_000;
+    const table = host([], []);
+    table.list.mockImplementation(() =>
+      Promise.resolve([row(60), { ...row((next += 1)), ppid: 60 }]),
+    );
+
+    await expect(tracker(table, kernel(table)).sweep()).resolves.toMatchObject({
+      outcome: "clean",
+      roundCount: 1,
+    });
+  });
+
+  it("counts a vanished child of a member, or of a parent that is gone, as a possible member", async () => {
+    for (const parent of [70, 71]) {
+      let next = 4_000;
+      const table = host([row(70, "T")], [70]);
+      // 70 is a frozen member; 71 has gone. A running child of either vanishes in every round.
+      table.list.mockImplementation(() =>
+        Promise.resolve([...table.rows, { ...row((next += 1)), ppid: parent }]),
+      );
+      await expect(tracker(table, kernel(table)).sweep(), String(parent)).resolves.toMatchObject({
+        outcome: "unproven",
+      });
+    }
+  });
+
+  it("does not count a process that ran before the run as a possible member", async () => {
+    let next = 2_000;
+    const table = host([], []);
+    table.list.mockImplementation(() => Promise.resolve([row((next += 1), "S", BEFORE)]));
+
+    await expect(tracker(table, kernel(table)).sweep()).resolves.toMatchObject({
+      outcome: "clean",
+      roundCount: 1,
+    });
   });
 
   it("never asks about a zombie, which has already ended", async () => {
-    const table = hostTable([row(90, 1, LATER, "Z"), row(91, 1, LATER)]);
-    const membership = kernel(table, new Set([90, 91]));
+    const table = host([row(90, "Z"), row(91)], [90, 91]);
+    const asked: number[][] = [];
+    const membership = kernel(table);
+    const members = membership.members.bind(membership);
+    membership.members = (pids): Promise<readonly number[]> => {
+      asked.push([...pids]);
+      return members(pids);
+    };
 
     await expect(tracker(table, membership).sweep()).resolves.toMatchObject({
       outcome: "reaped",
       memberCount: 1,
     });
-    expect(membership.asked.every((pids) => !pids.includes(90))).toBe(true);
+    expect(asked.every((pids) => !pids.includes(90))).toBe(true);
   });
 
-  it("escalates to SIGKILL and reports a member it cannot end", async () => {
-    const table = hostTable([row(20, 1)], (pid) => pid === 20);
+  it("reports a member it cannot end", async () => {
+    const table = host([row(20)], [20]);
     const events: ServerLogEvent[] = [];
-    const sweep = await tracker(table, kernel(table, new Set([20])), events).sweep();
+    const sweep = await tracker(
+      table,
+      kernel(table, (pid) => pid === 20),
+      events,
+    ).sweep();
 
-    expect(sweep).toMatchObject({ outcome: "survivors", signalledCount: 1, survivorCount: 1 });
+    // The member never stops either, so the run is never proven frozen.
+    expect(sweep).toMatchObject({ outcome: "unproven", survivorCount: 0 });
     expect(sweepProvesEnd(sweep)).toBe(false);
-    expect(table.signals.map((entry) => entry.signal)).toEqual([
-      "SIGTERM",
-      "SIGKILL",
-      "SIGKILL",
-      "SIGKILL",
-      "SIGKILL",
-    ]);
     expect(events[0]).toMatchObject({ level: "warn", errorKind: "internal" });
   });
 
-  it("reports a listing it could not take instead of a clean tree, with its error evidence", async () => {
-    const table = hostTable([row(ROOT, 1)]);
-    const sink = createBufferedServerLogSink();
-    const descendants = tracker(table, kernel(table, new Set()), sink.events);
+  it("reports survivors when a frozen member outlives every kill", async () => {
+    const table = host([row(20, "T")], [20]);
+    const sweep = await tracker(
+      table,
+      kernel(table, (pid) => pid === 20),
+    ).sweep();
+
+    expect(sweep).toMatchObject({ outcome: "survivors", survivorCount: 1, signalledCount: 1 });
+  });
+
+  it("reports a listing it could not take instead of a clean end, with its error evidence", async () => {
+    const table = host([row(20)], [20]);
     table.list.mockRejectedValue(
       new TypeError("ps-unavailable", { cause: new RangeError("ps-output-too-large") }),
     );
+    const sink = createBufferedServerLogSink();
 
-    await expect(descendants.sweep()).resolves.toMatchObject({ outcome: "listing-failed" });
-    expect(
-      expectActivityLogProof(
-        "coding-runtime.descendants.swept.emitted-line",
-        formatActivityLogProofLine(sink.events[0] as ServerLogEvent),
-      ),
-    ).toMatchObject({
+    await expect(tracker(table, kernel(table), sink.events).sweep()).resolves.toMatchObject({
+      outcome: "listing-failed",
+    });
+    expect(line(sink.events[0])).toMatchObject({
       level: "warn",
       outcome: "listing-failed",
       causeChain: ["RangeError"],
@@ -288,59 +317,12 @@ describe("macOS runtime descendants (#3899 AC2, #3901 AC3)", () => {
     expect(sink.lines().join("\n")).not.toMatch(/ps-unavailable|ps-output-too-large/u);
   });
 
-  // Without a member, only a process recorded as the service's descendant is ended, and only while
-  // it is still the same process.
-  it("never signals a process that reuses a recorded PID", async () => {
-    const table = hostTable([row(ROOT, 1), row(20, ROOT)]);
-    const descendants = tracker(table);
-    descendants.start();
-    await sampled(table);
-    table.rows.splice(0, table.rows.length, row(20, 1, LATER));
-
-    await expect(descendants.sweep()).resolves.toMatchObject({
-      outcome: "unproven",
-      signalledCount: 0,
-    });
-    expect(table.signals).toEqual([]);
-  });
-
-  it("counts samples it could not take and signals the host refused", async () => {
-    const table = hostTable([row(ROOT, 1), row(20, ROOT)]);
-    const descendants = new RuntimeDescendantTracker({
-      rootPid: ROOT,
-      runId: RUN_ID,
-      activityLog: { write: (): void => undefined },
-      list: table.list,
-      signal: (pid): never => {
-        throw Object.assign(new Error("refused"), { code: pid === 20 ? "EPERM" : "ESRCH" });
-      },
-      sampleIntervalMs: 2,
-      settleMs: 1,
-    });
-    table.list.mockRejectedValueOnce(new Error("busy"));
-    descendants.start();
-    await sampled(table, 3);
-    table.rows.shift();
-
-    await expect(descendants.sweep()).resolves.toMatchObject({
-      outcome: "survivors",
-      failedSampleCount: 1,
-      refusedSignalCount: 5,
-    });
-  });
-
-  it("sweeps once, stops sampling and ends the member", async () => {
-    const table = hostTable([row(ROOT, 1)]);
-    const membership = kernel(table, new Set());
-    const descendants = tracker(table, membership);
-    descendants.start();
+  it("sweeps once", async () => {
+    const table = host([], []);
+    const descendants = tracker(table, kernel(table));
     const first = descendants.sweep();
 
     expect(descendants.sweep()).toBe(first);
-    await expect(first).resolves.toMatchObject({ outcome: "clean", trackedCount: 0 });
-    expect(membership.closed()).toBe(true);
-    const calls = table.list.mock.calls.length;
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(table.list.mock.calls).toHaveLength(calls);
+    await expect(first).resolves.toMatchObject({ outcome: "clean" });
   });
 });

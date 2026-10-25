@@ -978,6 +978,7 @@
     "keiko-security/redaction-java",
     "keiko-security/redaction-private-key",
     "keiko-security/redaction-source-map",
+    "keiko-security/redaction-spelling",
     "keiko-security/redaction-stream",
     "keiko-security/redaction-typescript",
     "keiko-security/redaction-yaml",

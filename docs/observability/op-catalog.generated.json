@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "87865daf53c7ac89fd1a3b5b060a0c94ff3e6dc2cbaafd2d273546b76c9e8c81",
+    "catalogDigest": "fdab39172f695eb3cd2a731180fa7f53f5629c9f422890cfe06054a89e350c45",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -6963,15 +6963,10 @@
               "clean",
               "reaped",
               "survivors",
+              "unproven",
               "listing-failed",
-              "membership-unavailable",
-              "unproven"
+              "membership-unavailable"
             ]
-          },
-          "trackedCount": {
-            "type": "integer",
-            "dataClass": "count",
-            "required": true
           },
           "memberCount": {
             "type": "integer",
@@ -6988,12 +6983,7 @@
             "dataClass": "count",
             "required": true
           },
-          "failedSampleCount": {
-            "type": "integer",
-            "dataClass": "count",
-            "required": true
-          },
-          "refusedSignalCount": {
+          "roundCount": {
             "type": "integer",
             "dataClass": "count",
             "required": true
@@ -7024,14 +7014,14 @@
         "diagnosticWhen": [
           {
             "field": "outcome",
-            "values": ["survivors", "listing-failed", "membership-unavailable", "unproven"]
+            "values": ["survivors", "unproven", "listing-failed", "membership-unavailable"]
           }
         ],
         "failureClasses": ["coding-runtime-descendant-sweep"],
         "proofIds": ["coding-runtime.descendants.swept.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.ts:78",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.ts:371"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.ts:82",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.ts:308"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -8732,7 +8722,8 @@
               "cancelled",
               "secret-unavailable",
               "secret-invalid",
-              "relay-unavailable"
+              "relay-unavailable",
+              "credential-in-response-header"
             ]
           },
           "method": {
@@ -8803,8 +8794,8 @@
         "failureClasses": ["coding-runtime-mcp-relay"],
         "proofIds": ["coding-runtime.mcp-relay.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/mcp/mcpCredentialRelay.ts:171",
-        "emitterSites": ["packages/keiko-server/src/mcp/mcpCredentialRelay.ts:263"]
+        "registrationSite": "packages/keiko-server/src/mcp/mcpCredentialRelay.ts:172",
+        "emitterSites": ["packages/keiko-server/src/mcp/mcpCredentialRelay.ts:264"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -31837,8 +31828,8 @@
         },
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeActivityOperations.ts:181",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:550",
-          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:622",
+          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:548",
+          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:620",
           "packages/keiko-server/src/coding-runtime/nativeRuntimeProcessBackend.ts:255"
         ]
       },
@@ -32016,7 +32007,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeActivityOperations.ts:188",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:598",
+          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:596",
           "packages/keiko-server/src/coding-runtime/nativeRuntimeProcessBackend.ts:281"
         ]
       },
@@ -59640,12 +59631,6 @@
                   "required": true
                 },
                 {
-                  "name": "failedSampleCount",
-                  "type": "integer",
-                  "dataClass": "count",
-                  "required": true
-                },
-                {
                   "name": "frames",
                   "type": "string-array",
                   "dataClass": "opaque-id",
@@ -59664,7 +59649,7 @@
                   "required": true
                 },
                 {
-                  "name": "refusedSignalCount",
+                  "name": "roundCount",
                   "type": "integer",
                   "dataClass": "count",
                   "required": true
@@ -59677,12 +59662,6 @@
                 },
                 {
                   "name": "survivorCount",
-                  "type": "integer",
-                  "dataClass": "count",
-                  "required": true
-                },
-                {
-                  "name": "trackedCount",
                   "type": "integer",
                   "dataClass": "count",
                   "required": true
@@ -100587,7 +100566,7 @@
     {
       "op": "coding-runtime.descendants.swept",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.ts:81",
+      "site": "packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.ts:85",
       "package": "keiko-server"
     },
     {
@@ -100775,7 +100754,7 @@
     {
       "op": "coding-runtime.mcp-relay",
       "category": "security",
-      "site": "packages/keiko-server/src/mcp/mcpCredentialRelay.ts:174",
+      "site": "packages/keiko-server/src/mcp/mcpCredentialRelay.ts:175",
       "package": "keiko-server"
     },
     {

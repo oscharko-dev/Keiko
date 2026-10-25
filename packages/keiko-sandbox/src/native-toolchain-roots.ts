@@ -209,13 +209,16 @@ function nodeOptionParts(token: string): { readonly name: string; readonly value
 }
 
 // The OpenSSL option at `index`: the configuration file it names, if any, and the index after it.
-// `--openssl-config` takes its file inline (`=file`) or as the next option, as Node does.
+// Node's boolean switches also take a `--no-` form, and Node ignores a value given to either
+// (`--enable-fips=false` still enables FIPS); the value passes to Node unchanged, which decides.
+// `--openssl-config` takes its file inline (`=file`) or as the next option, and has no `--no-` form.
 function openSslNodeOption(
   tokens: readonly string[],
   index: number,
 ): { readonly file?: string; readonly next: number } | undefined {
   const option = nodeOptionParts(tokens[index] ?? "");
-  if (OPENSSL_NODE_FLAGS.has(option.name) && option.value === undefined) return { next: index + 1 };
+  const flag = option.name.startsWith("--no-") ? `--${option.name.slice(5)}` : option.name;
+  if (OPENSSL_NODE_FLAGS.has(flag)) return { next: index + 1 };
   if (option.name !== OPENSSL_CONFIG_OPTION) return undefined;
   const file = option.value ?? tokens[index + 1];
   if (file === undefined || file === "") return undefined;

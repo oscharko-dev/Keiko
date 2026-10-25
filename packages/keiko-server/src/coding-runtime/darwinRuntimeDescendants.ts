@@ -4,7 +4,6 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-
 import {
   SandboxMembershipUnavailableError,
   type SandboxMembership,
@@ -13,22 +12,29 @@ import {
 // #3899 AC2 / #3901 AC3: on macOS the runtime's shell children leave its process group (the
 // original service starts each in its own), and a command can detach a process itself (`cmd &`,
 // `nohup`, `setsid`); launchd adopts it at once. A group kill therefore ends only the service. Once
-// the service has exited, the sweep ends every process of the run's sandbox instance: the run's
-// member answers which of this user's processes those are (darwinSandboxMembership.ts), so
-// ownership is the kernel's, not an inference from a parent link, a working directory or a start
-// time, and a process of anyone else is never signalled. The sweep repeats until a listing holds no
-// member; only members start members, so none can appear afterwards, and only then is the run's
-// execution proven to have ended. Without an answering member (a profile with no shell, or a member
-// that ended), the descendants recorded by PID and start time while the service ran are still ended,
-// but the sweep reports `unproven`, never clean: a child forked between samples and orphaned before
-// the sweep is not seen (ADR-0140 D3). The process listing is the backend's capability
-// (devLaneRuntimeProcessBackend.ts).
+// the service has exited, the sweep ends every process of the run's sandbox instance. The run's
+// member answers which of this user's processes those are (darwinSandboxMembership.ts) and sends
+// every signal: ownership is the kernel's, and a process of anyone else is never signalled, even
+// when its PID was reused a moment before.
+//
+// A listing is a snapshot, and a member may fork and exit between the listing and the member's
+// answer, so an empty answer about an older listing proves nothing (PR #4064 review). The sweep
+// therefore first freezes the run: each round lists, asks, and lists again. It proves the end only
+// when every member the answer names was already stopped at the first listing, and no process that
+// was running then and could have been a member has gone by the second: only a running process
+// forks, so no member can have appeared since. Otherwise the member stops what it found and the next round
+// asks again. Once proven, the member kills the frozen members and a final answer must name none.
+// Without the member's answer nothing is signalled and nothing is proven (`unproven`,
+// `membership-unavailable`): a host signal could reach a reused PID. A run that keeps re-forking
+// faster than a round, or a host whose processes keep ending in every round, stays `unproven`
+// after the bounded rounds; that is never reported as a clean end. The process listing is the
+// backend's capability (devLaneRuntimeProcessBackend.ts).
 
 /** One process: its parent, its state and the start time that tells it apart from a PID reuse. */
 export interface ProcessIdentity {
   readonly pid: number;
   readonly ppid: number;
-  /** `ps` state; a zombie (`Z`) has already ended and holds no execution. */
+  /** `ps` state: `T` is stopped, `Z` a zombie that has already ended; anything else may run. */
   readonly state: string;
   readonly started: string;
 }
@@ -36,41 +42,39 @@ export interface ProcessIdentity {
 export type ProcessListing = () => Promise<readonly ProcessIdentity[]>;
 
 export type DescendantSweepOutcome =
-  "clean" | "reaped" | "survivors" | "listing-failed" | "membership-unavailable" | "unproven";
+  "clean" | "reaped" | "survivors" | "unproven" | "listing-failed" | "membership-unavailable";
 
 export interface DescendantSweep {
   readonly outcome: DescendantSweepOutcome;
-  /** Distinct descendants recorded while the service ran or found below them during the sweep. */
-  readonly trackedCount: number;
   /** Distinct processes the kernel confirmed as members of the run's sandbox during the sweep. */
   readonly memberCount: number;
-  /** Distinct processes the sweep signalled. */
+  /** Distinct members the sweep ended. */
   readonly signalledCount: number;
-  /** Processes of the run still alive after the last round. */
+  /** Members still alive after the last check. */
   readonly survivorCount: number;
-  /** Samples of the running service the listing could not take. */
-  readonly failedSampleCount: number;
-  /** Signals the host refused for a reason other than the process having already ended. */
-  readonly refusedSignalCount: number;
+  /** Freeze rounds the sweep needed, or used up when the end stayed unproven. */
+  readonly roundCount: number;
   /** The failure that ended the proof, when `outcome` is `listing-failed` or `membership-unavailable`. */
   readonly error?: unknown;
 }
 
 export interface DescendantTrackerOptions {
-  readonly rootPid: number;
   readonly runId: string;
   readonly activityLog: ServerLogSink;
   readonly list: ProcessListing;
   /** The kernel's answer to which processes belong to the run; absent when the run has no member. */
   readonly membership?: SandboxMembership | undefined;
-  readonly signal?: ((pid: number, signal: NodeJS.Signals) => void) | undefined;
-  readonly sampleIntervalMs?: number | undefined;
+  /** When the run's service was started; every member started after it. */
+  readonly startedAtMs: number;
   readonly settleMs?: number | undefined;
 }
 
-const SAMPLE_INTERVAL_MS = 500;
-const SETTLE_MS = 150;
-const SWEEP_ROUNDS = 5;
+const SETTLE_MS = 50;
+const LAUNCHD_PID = 1;
+const FREEZE_ROUNDS = 20;
+const END_CHECKS = 10;
+// `lstart` has one-second resolution, and the service starts a moment before it is recorded.
+const START_RESOLUTION_MS = 2_000;
 // Matched against a trimmed line: the digit, space and non-space classes alternate, so the match is
 // linear (no backtracking between adjacent repetitions).
 const PROCESS_ROW = /^(\d+)\s+(\d+)\s+(\S+)\s+(\S.*)$/u;
@@ -91,17 +95,15 @@ export const RUNTIME_DESCENDANTS_SWEPT_OPERATION = defineActivityLogOperation({
         "clean",
         "reaped",
         "survivors",
+        "unproven",
         "listing-failed",
         "membership-unavailable",
-        "unproven",
       ],
     },
-    trackedCount: { type: "integer", dataClass: "count", required: true },
     memberCount: { type: "integer", dataClass: "count", required: true },
     signalledCount: { type: "integer", dataClass: "count", required: true },
     survivorCount: { type: "integer", dataClass: "count", required: true },
-    failedSampleCount: { type: "integer", dataClass: "count", required: true },
-    refusedSignalCount: { type: "integer", dataClass: "count", required: true },
+    roundCount: { type: "integer", dataClass: "count", required: true },
     durationMs: { type: "integer", dataClass: "duration", required: true },
     frames: {
       type: "string-array",
@@ -124,7 +126,7 @@ export const RUNTIME_DESCENDANTS_SWEPT_OPERATION = defineActivityLogOperation({
   diagnosticWhen: [
     {
       field: "outcome",
-      values: ["survivors", "listing-failed", "membership-unavailable", "unproven"],
+      values: ["survivors", "unproven", "listing-failed", "membership-unavailable"],
     },
   ],
   failureClasses: ["coding-runtime-descendant-sweep"],
@@ -140,63 +142,15 @@ export function parseProcessListing(output: string): readonly ProcessIdentity[] 
   });
 }
 
-/** Every process below the given roots in one listing, roots excluded. */
-export function descendantsOf(
-  rows: readonly ProcessIdentity[],
-  roots: ReadonlySet<number>,
-): readonly ProcessIdentity[] {
-  const children = new Map<number, ProcessIdentity[]>();
-  for (const row of rows) {
-    const siblings = children.get(row.ppid) ?? [];
-    siblings.push(row);
-    children.set(row.ppid, siblings);
-  }
-  const found: ProcessIdentity[] = [];
-  const pending = [...roots];
-  const seen = new Set(roots);
-  for (let parent = pending.pop(); parent !== undefined; parent = pending.pop()) {
-    for (const child of children.get(parent) ?? []) {
-      if (seen.has(child.pid)) continue;
-      seen.add(child.pid);
-      found.push(child);
-      pending.push(child.pid);
-    }
-  }
-  return found;
-}
-
-function signalProcess(pid: number, signal: NodeJS.Signals): void {
-  process.kill(pid, signal);
-}
-
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms).unref();
   });
 }
 
-interface SweepCounters {
-  failedSamples: number;
-  refusedSignals: number;
-  /** The failure that ended the proof; the sweep's line carries its frames and cause chain. */
-  failure?: unknown;
-}
-
-// A missed sample only narrows what the sweep can see; it is counted onto the sweep's line.
-function recordFailedSample(counters: SweepCounters): void {
-  counters.failedSamples += 1;
-}
-
-// The first failure that ended the proof is the one the sweep's line reports.
-function recordSweepFailure(counters: SweepCounters, error: unknown): void {
-  counters.failure ??= error;
-}
-
-// ESRCH: the process ended between the listing and the signal. Any other refusal leaves it alive,
-// so the next round's listing counts it, and the refusal is counted onto the sweep's line.
-function recordSignalFailure(counters: SweepCounters, error: unknown): void {
-  if ((error as { readonly code?: unknown } | null)?.code !== "ESRCH") counters.refusedSignals += 1;
-}
+const stopped = (row: ProcessIdentity): boolean => row.state.startsWith("T");
+const ended = (row: ProcessIdentity): boolean => row.state.startsWith("Z");
+const identity = (row: ProcessIdentity): string => `${String(row.pid)}@${row.started}`;
 
 function isProven(outcome: DescendantSweepOutcome): boolean {
   return outcome === "clean" || outcome === "reaped";
@@ -207,27 +161,28 @@ export function sweepProvesEnd(sweep: DescendantSweep): boolean {
   return isProven(sweep.outcome) && sweep.survivorCount === 0;
 }
 
+interface SweepCounters {
+  readonly members: Set<number>;
+  readonly signalled: Set<number>;
+  rounds: number;
+  /** The failure that ended the proof; the sweep's line carries its frames and cause chain. */
+  failure?: unknown;
+}
+
+// The first failure that ended the proof is the one the sweep's line reports.
+function recordSweepFailure(counters: SweepCounters, error: unknown): void {
+  counters.failure ??= error;
+}
+
 export class RuntimeDescendantTracker {
-  private readonly known = new Map<number, string>();
-  private readonly members = new Set<number>();
-  private readonly counters: SweepCounters = { failedSamples: 0, refusedSignals: 0 };
-  private readonly signal: (pid: number, signal: NodeJS.Signals) => void;
-  private timer: NodeJS.Timeout | undefined;
-  private sampling: Promise<void> = Promise.resolve();
+  private readonly counters: SweepCounters = {
+    members: new Set(),
+    signalled: new Set(),
+    rounds: 0,
+  };
   private swept: Promise<DescendantSweep> | undefined;
 
-  public constructor(private readonly options: DescendantTrackerOptions) {
-    this.signal = options.signal ?? signalProcess;
-  }
-
-  /** Samples the service's descendants until the sweep starts. */
-  public start(): void {
-    if (this.timer !== undefined || this.swept !== undefined) return;
-    this.timer = setInterval(() => {
-      this.sampling = this.sampling.then(() => this.sample());
-    }, this.options.sampleIntervalMs ?? SAMPLE_INTERVAL_MS);
-    this.timer.unref();
-  }
+  public constructor(private readonly options: DescendantTrackerOptions) {}
 
   /** Ends what the exited service left behind, once; later callers share the first result. */
   public sweep(): Promise<DescendantSweep> {
@@ -235,33 +190,8 @@ export class RuntimeDescendantTracker {
     return this.swept;
   }
 
-  private async sample(): Promise<void> {
-    if (this.swept !== undefined) return;
-    try {
-      const rows = await this.options.list();
-      this.remember(descendantsOf(rows, new Set([this.options.rootPid])));
-    } catch {
-      recordFailedSample(this.counters);
-    }
-  }
-
-  private remember(rows: readonly ProcessIdentity[]): void {
-    for (const row of rows) this.known.set(row.pid, row.started);
-  }
-
-  /** Recorded processes that are still the same process, and everything below them. */
-  private targets(rows: readonly ProcessIdentity[]): readonly ProcessIdentity[] {
-    const live = rows.filter((row) => this.known.get(row.pid) === row.started);
-    const below = descendantsOf(rows, new Set(live.map((row) => row.pid)));
-    this.remember(below);
-    return [...live, ...below].filter((row) => !row.state.startsWith("Z"));
-  }
-
   private async runSweep(): Promise<DescendantSweep> {
-    clearInterval(this.timer);
-    this.timer = undefined;
     const startedAt = performance.now();
-    await this.sampling;
     const result = await this.sweepOnce();
     this.options.membership?.close();
     recordDescendantSweep(this.options, result, performance.now() - startedAt);
@@ -269,92 +199,99 @@ export class RuntimeDescendantTracker {
   }
 
   private async sweepOnce(): Promise<DescendantSweep> {
-    const signalled = new Set<number>();
     const { membership } = this.options;
-    if (membership === undefined) return this.reapRecorded(signalled, "unproven");
+    // Without the member nothing is signalled: only the kernel's answer may name a target.
+    if (membership === undefined) return this.result("unproven", 0);
     try {
-      return await this.reapMembers(membership, signalled);
+      return await this.freezeAndEnd(membership);
     } catch (error) {
-      // Without the member's answer nothing proves the end; what was recorded is still ended.
       recordSweepFailure(this.counters, error);
-      return error instanceof SandboxMembershipUnavailableError
-        ? this.reapRecorded(signalled, "membership-unavailable")
-        : this.result("listing-failed", signalled, 0);
+      return this.result(
+        error instanceof SandboxMembershipUnavailableError
+          ? "membership-unavailable"
+          : "listing-failed",
+        0,
+      );
     }
   }
 
-  /** Ends every member of the run's sandbox until a listing holds none. */
-  private async reapMembers(
-    membership: SandboxMembership,
-    signalled: Set<number>,
-  ): Promise<DescendantSweep> {
-    for (let round = 0; round < SWEEP_ROUNDS; round += 1) {
-      const live = await this.liveMembers(membership);
-      if (live.length === 0) return this.result(undefined, signalled, 0);
-      for (const pid of live) signalled.add(pid);
-      await membership.signal(live, round === 0 ? "term" : "kill");
+  private async freezeAndEnd(membership: SandboxMembership): Promise<DescendantSweep> {
+    for (let round = 1; round <= FREEZE_ROUNDS; round += 1) {
+      this.counters.rounds = round;
+      const before = await this.options.list();
+      const members = await this.members(membership, before);
+      const after = await this.options.list();
+      if (this.frozen(before, members, after)) return this.end(membership, members);
+      await membership.signal(members, "stop");
       await delay(this.options.settleMs ?? SETTLE_MS);
     }
-    return this.result(undefined, signalled, (await this.liveMembers(membership)).length);
+    return this.result("unproven", 0);
   }
 
-  private async liveMembers(membership: SandboxMembership): Promise<readonly number[]> {
-    const rows = await this.options.list();
-    const live = await membership.members(
-      rows.filter((row) => !row.state.startsWith("Z")).map((row) => row.pid),
+  /** The members among a listing's live processes, as the run's member answers now. */
+  private async members(
+    membership: SandboxMembership,
+    rows: readonly ProcessIdentity[],
+  ): Promise<readonly number[]> {
+    const members = await membership.members(
+      rows.filter((row) => !ended(row)).map((row) => row.pid),
     );
-    for (const pid of live) this.members.add(pid);
-    return live;
+    for (const pid of members) this.counters.members.add(pid);
+    return members;
   }
 
-  /** Ends the recorded descendants; without a member's answer this never proves the end. */
-  private async reapRecorded(
-    signalled: Set<number>,
-    outcome: "membership-unavailable" | "unproven",
+  /**
+   * Every member alive at `before` was stopped then: none the answer names was running, and no
+   * process that was running at `before` and has gone by `after` can have been a member that forked
+   * and exited before the answer. A process could not be one when it started before the run, or
+   * when its parent is alive at `after` and no member: macOS reparents an orphan only to launchd,
+   * so that parent started it, and a child of a process outside the sandbox is outside it too.
+   */
+  private frozen(
+    before: readonly ProcessIdentity[],
+    members: readonly number[],
+    after: readonly ProcessIdentity[],
+  ): boolean {
+    const memberSet = new Set(members);
+    const still = new Set(after.map(identity));
+    const foreignParents = new Set(
+      after.filter((row) => !memberSet.has(row.pid)).map((row) => row.pid),
+    );
+    const notBefore = this.options.startedAtMs - START_RESOLUTION_MS;
+    return before.every((row) => {
+      if (stopped(row) || ended(row)) return true;
+      if (memberSet.has(row.pid)) return false;
+      if (still.has(identity(row))) return true;
+      const started = Date.parse(row.started);
+      if (Number.isFinite(started) && started < notBefore) return true;
+      return row.ppid !== LAUNCHD_PID && foreignParents.has(row.ppid);
+    });
+  }
+
+  /** Kills the frozen members through the member until an answer names none. */
+  private async end(
+    membership: SandboxMembership,
+    frozen: readonly number[],
   ): Promise<DescendantSweep> {
-    try {
-      for (let round = 0; round < SWEEP_ROUNDS; round += 1) {
-        const targets = this.targets(await this.options.list());
-        if (targets.length === 0) return this.result(outcome, signalled, 0);
-        for (const target of targets) {
-          signalled.add(target.pid);
-          this.signalOnce(target.pid, round === 0 ? "SIGTERM" : "SIGKILL");
-        }
-        await delay(this.options.settleMs ?? SETTLE_MS);
-      }
-      const survivors = this.targets(await this.options.list()).length;
-      return this.result(outcome, signalled, survivors);
-    } catch (error) {
-      recordSweepFailure(this.counters, error);
-      return this.result("listing-failed", signalled, 0);
+    let left = frozen;
+    for (let check = 0; check < END_CHECKS && left.length > 0; check += 1) {
+      for (const pid of left) this.counters.signalled.add(pid);
+      await membership.signal(left, "kill");
+      await delay(this.options.settleMs ?? SETTLE_MS);
+      left = await this.members(membership, await this.options.list());
     }
+    if (left.length > 0) return this.result("survivors", left.length);
+    return this.result(this.counters.signalled.size > 0 ? "reaped" : "clean", 0);
   }
 
-  private signalOnce(pid: number, signal: NodeJS.Signals): void {
-    try {
-      this.signal(pid, signal);
-    } catch (error) {
-      recordSignalFailure(this.counters, error);
-    }
-  }
-
-  // `fixed` is the outcome of a sweep that proves nothing; a proving sweep derives its own.
-  private result(
-    fixed: DescendantSweepOutcome | undefined,
-    signalled: ReadonlySet<number>,
-    survivorCount: number,
-  ): DescendantSweep {
+  private result(outcome: DescendantSweepOutcome, survivorCount: number): DescendantSweep {
     const error = this.counters.failure;
-    let outcome: DescendantSweepOutcome = fixed ?? (signalled.size > 0 ? "reaped" : "clean");
-    if (survivorCount > 0 && outcome !== "listing-failed") outcome = "survivors";
     return {
       outcome,
-      trackedCount: this.known.size,
-      memberCount: this.members.size,
-      signalledCount: signalled.size,
+      memberCount: this.counters.members.size,
+      signalledCount: this.counters.signalled.size,
       survivorCount,
-      failedSampleCount: this.counters.failedSamples,
-      refusedSignalCount: this.counters.refusedSignals,
+      roundCount: this.counters.rounds,
       ...(error === undefined ? {} : { error }),
     };
   }
@@ -375,12 +312,10 @@ export function recordDescendantSweep(
         : { level: "info", correlationId: runId },
       {
         outcome: sweep.outcome,
-        trackedCount: sweep.trackedCount,
         memberCount: sweep.memberCount,
         signalledCount: sweep.signalledCount,
         survivorCount: sweep.survivorCount,
-        failedSampleCount: sweep.failedSampleCount,
-        refusedSignalCount: sweep.refusedSignalCount,
+        roundCount: sweep.roundCount,
         durationMs: Math.max(0, Math.round(durationMs)),
         ...(sweep.error === undefined
           ? {}

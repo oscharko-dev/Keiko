@@ -37,9 +37,11 @@ export {
   objectContainsCredentialKey,
   REDACTION_PLACEHOLDER,
   redactSecretLiterals,
-  createSecretLiteralStreamRedactor,
-  type SecretLiteralStreamRedactor,
 } from "./redaction.js";
+export {
+  createSecretSpellingStreamRedactor,
+  type SecretSpellingStreamRedactor,
+} from "./redaction-spelling.js";
 
 export { assertValidRunId } from "./runid.js";
 
