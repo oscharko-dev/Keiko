@@ -2760,9 +2760,18 @@ function privateModuleExportsHelper(state, path) {
     .some((symbol) => privateExportExposes(state, owned.context, symbol));
 }
 
+function privateDirectPublicExposure(state) {
+  const paths = privatePublicPaths(state.compiler, new Set([state.identity.producer.path]));
+  return paths?.some((path) => privateModuleExportsHelper(state, path) === true) ?? false;
+}
+
 function privateRawPublicExposure(state, index) {
   const key = canonicalRawStateKey(state.identity, -1);
   if (index.privacy.has(key)) return index.privacy.get(key);
+  if (privateDirectPublicExposure(state)) {
+    index.privacy.set(key, true);
+    return true;
+  }
   const relevant = privateReachableModules(state, index, state.identity.producer.path);
   if (!relevant) return true;
   const paths = privatePublicPaths(state.compiler, relevant);

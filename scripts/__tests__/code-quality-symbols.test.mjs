@@ -2424,6 +2424,135 @@ async function privateModuleSymbolFixture(variant = "direct", options = {}) {
   return own;
 }
 
+function configureExposureConsumer(own) {
+  const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json"), "utf8"));
+  own.put("packages/exposure-ui/package.json", {
+    name: "exposure-ui",
+    version: "0.0.0",
+    type: "module",
+    private: true,
+    exports: {},
+  });
+  own.put("packages/exposure-ui/tsconfig.json", config);
+  own.put(
+    "packages/exposure-ui/src/consumer.ts",
+    'import { isRecord } from "../../alpha/dist/helper.js";\n' +
+      'import type { Bound } from "fixture-bound";\n' +
+      "export const observed = isRecord(null); export type Domain = Bound;\n",
+  );
+  own.dependencyPath = "packages/exposure-ui/node_modules/fixture-bound/package.json";
+  own.put(own.dependencyPath, {
+    name: "fixture-bound",
+    version: "0.0.0",
+    types: "index.d.ts",
+    fixturePadding: "fixture-owned package metadata bytes ".repeat(8192),
+  });
+  own.put(
+    "packages/exposure-ui/node_modules/fixture-bound/index.d.ts",
+    "export interface Bound { readonly value: number; }\n",
+  );
+  emitSymbolFixture(own.root, "packages/exposure-ui");
+}
+
+function resetExposureResolver(own, options = {}) {
+  own.resolver?.close();
+  own.resolver = createSymbolResolver(own.subject, options, [
+    { owner: "packages/alpha", paths: ["packages/alpha/src/proof.test.ts"] },
+  ]);
+  own.rawRoots = own.records.map((record) => ({
+    identity: own.resolver.resolveProofExport(record.input).identities[0],
+    index: 0,
+    recordId: record.id,
+  }));
+}
+
+async function exposureConsumerFixture(variant = "public-subpath") {
+  const own = createPrivateModuleParserFixture(variant);
+  fixtures.push(own);
+  configureExposureConsumer(own);
+  own.subject = await collectPolicySubject(own.root);
+  resetExposureResolver(own);
+  return own;
+}
+
+function measuredExposureControl(own) {
+  const path = "packages/exposure-ui/src/consumer.ts";
+  const before = own.resolver.stats();
+  const text = readFileSync(join(own.root, path), "utf8");
+  own.resolver.describeAt({ path, offset: text.indexOf("observed") });
+  const dependencyBytes = Buffer.byteLength(
+    readFileSync(join(own.root, own.dependencyPath), "utf8"),
+  );
+  expect(own.resolver.stats().sourceBytes - before.sourceBytes).toBeGreaterThan(dependencyBytes);
+  expect(own.resolver.stats().created).toBeGreaterThan(before.created);
+  const slots = own.resolver.collectiveRawCheckingSlots(
+    own.rawRoots,
+    "anti-slop/no-unknown-parameters",
+  );
+  const stats = own.resolver.stats();
+  return { slots, stats, dependencyBytes, sourceBytes: stats.sourceBytes - dependencyBytes };
+}
+
+// Work-admission regression: the limit comes from an actual generous resolver and one independently
+// loaded package manifest, not a copy of compiler accounting or the production source-byte ceiling.
+describe("public raw producer exposure ordering (#3918)", () => {
+  it("withholds a public helper before admitting an irrelevant foreign Program", async () => {
+    const own = await exposureConsumerFixture();
+    const control = measuredExposureControl(own);
+    expect(control.slots.filter((slot) => slot.path === "packages/alpha/src/helper.ts")).toEqual(
+      [],
+    );
+    const rootPaths = new Set(["packages/alpha/src/owner.ts", "packages/alpha/src/second.ts"]);
+    expect(control.slots.filter((slot) => rootPaths.has(slot.path))).toHaveLength(2);
+    expect(control.sourceBytes).toBeGreaterThan(0);
+    resetExposureResolver(own, { sourceBytes: control.sourceBytes });
+    const slots = own.resolver.collectiveRawCheckingSlots(
+      own.rawRoots,
+      "anti-slop/no-unknown-parameters",
+    );
+    expect(slots).toEqual(control.slots);
+    const actual = own.resolver.stats();
+    expect(actual.sourceBytes).toBeLessThanOrEqual(control.sourceBytes);
+    expect(control.stats.sourceBytes - actual.sourceBytes).toBeGreaterThanOrEqual(
+      control.dependencyBytes,
+    );
+    expect(actual.created).toBeLessThan(control.stats.created);
+  }, 30_000);
+
+  it.each(["direct", "public-named", "colocated-type-reexport", "colocated-inline-type-reexport"])(
+    "retains the full incoming-owner walk without a direct public witness for %s",
+    async (variant) => {
+      const own = await exposureConsumerFixture(variant);
+      const control = measuredExposureControl(own);
+      expect(control.slots.length).toBeGreaterThan(0);
+      resetExposureResolver(own, { sourceBytes: control.sourceBytes });
+      expect(() =>
+        own.resolver.collectiveRawCheckingSlots(own.rawRoots, "anti-slop/no-unknown-parameters"),
+      ).toThrow("symbol-source-budget");
+    },
+    30_000,
+  );
+
+  it.each([
+    "packages/alpha/package.json",
+    "packages/alpha/dist/helper.js",
+    "packages/alpha/dist/helper.d.ts",
+    "packages/alpha/dist/helper.d.ts.map",
+  ])(
+    "revalidates the cached public witness after %s changes",
+    async (path) => {
+      const own = await privateModuleSymbolFixture("public-subpath");
+      own.resolver.collectiveRawCheckingSlots(own.rawRoots, "anti-slop/no-unknown-parameters");
+      const absolute = join(own.root, path);
+      writeFileSync(absolute, readFileSync(absolute, "utf8") + "\n");
+      expect(() =>
+        own.resolver.collectiveRawCheckingSlots(own.rawRoots, "anti-slop/no-unknown-parameters"),
+      ).toThrow("symbol-subject-changed");
+    },
+    30_000,
+  );
+});
+
 function evictPrivateModuleProgram(own) {
   const path = "src/cache-owner.ts";
   const text = readFileSync(join(own.root, path), "utf8");

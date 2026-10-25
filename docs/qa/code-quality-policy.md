@@ -453,6 +453,18 @@ flags in the private exposure walk before canonical alias resolution; they do no
 public exposure. Semantic default imports, including `{ default as local }`, remain outside the admitted
 helper-edge grammar; their presence never conceals observed value escapes.
 
+Before following incoming modules to decide whether an imported raw helper is private, the
+resolver first tries the existing canonical public-exposure proof on the producer source's own
+supported runtime entries. A positively proven public value export withholds the helper immediately;
+its native/policy accounting and legitimate root slots remain unchanged. This can avoid constructing
+an unrelated incoming owner's full Program merely to establish an already sufficient public
+rejection. An empty, unsupported, untyped, type-only or nonmatching early result supplies no privacy
+certificate and retains the complete existing reachability fallback. The same owning checker,
+canonical identity, export visibility, output provenance, currentness, alias limits and source-byte
+admission remain authoritative. No UI/package source filter, negative early cache, budget reset or
+capacity change is introduced. Whole-owner work-admission proofs compare actual resolver byte and
+Program observations with a generous control and retain private/barrel/type-only fallback refusals.
+
 The resolver builds a snapshot-bound module index once, reading the complete owned production
 membership through the existing compiler snapshot path. The mandatory inventory syntax visitors
 also observe richer detached module references and top-level binding descriptors while their
