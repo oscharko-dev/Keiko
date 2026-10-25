@@ -119,6 +119,7 @@ async function managedSearchFixture(): Promise<{
   const repositoryRoot = await mkdtemp(join(tmpdir(), "keiko-workspace-search-managed-source-"));
   managedSourceRoot = repositoryRoot;
   execFileSync("git", ["init", "-q"], { cwd: repositoryRoot });
+  execFileSync("git", ["config", "--local", "commit.gpgsign", "false"], { cwd: repositoryRoot });
   execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: repositoryRoot });
   execFileSync("git", ["config", "user.name", "Keiko Test"], { cwd: repositoryRoot });
   execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "fixture"], { cwd: repositoryRoot });

@@ -43,6 +43,7 @@ let instance: WorkspaceInstance;
 
 function initGitRepo(dir: string): void {
   execFileSync("git", ["init", "-q"], { cwd: dir });
+  execFileSync("git", ["config", "--local", "commit.gpgsign", "false"], { cwd: dir });
   execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: dir });
   execFileSync("git", ["config", "user.name", "Keiko Test"], { cwd: dir });
 }
