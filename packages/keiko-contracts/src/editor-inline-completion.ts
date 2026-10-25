@@ -25,6 +25,7 @@
 // shares one stable, content-free provenance model with the completion gateway.
 
 import { isOneOf } from "./contract-validation-primitives.js";
+import { collectEditorDocumentRequestErrors } from "./editor-request-validation.js";
 import {
   isLanguageDocumentOverlay,
   isLanguagePosition,
@@ -35,7 +36,6 @@ import {
 import {
   buildContextSelectors,
   collectContextErrors,
-  collectEditorSessionIdError,
   isBoundedEditorSessionId,
   isCostClass,
   isNonEmptyString,
@@ -184,16 +184,7 @@ function isWireTriggerKind(value: unknown): value is EditorInlineCompletionWireT
 // the parser entry point stays low-complexity).
 function collectRequestErrors(value: Record<string, unknown>): string[] {
   const errors: string[] = [];
-  if (!isNonEmptyString(value.root)) {
-    errors.push("root must be a non-empty string");
-  }
-  collectEditorSessionIdError(value.editorSessionId, errors);
-  if (!isLanguageDocumentOverlay(value.document)) {
-    errors.push("document must be { path, languageId, text }");
-  }
-  if (!isLanguagePosition(value.position)) {
-    errors.push("position must be { line, character }");
-  }
+  collectEditorDocumentRequestErrors(value, errors);
   if (!isWireTriggerKind(value.triggerKind)) {
     errors.push(
       `triggerKind must be one of: ${EDITOR_INLINE_COMPLETION_WIRE_TRIGGER_KINDS.join(", ")}`,

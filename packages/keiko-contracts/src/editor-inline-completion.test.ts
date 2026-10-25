@@ -376,3 +376,100 @@ describe("#3918 trigger membership boundaries", () => {
     expect(coercions).toBe(0);
   });
 });
+
+describe.each([
+  ["source", parseEditorInlineCompletionRequest],
+  ["public", publicOwner.parseEditorInlineCompletionRequest],
+] as const)("#3918 eager document-request prefix through %s", (_surface, parse) => {
+  it("preserves ordered prefix diagnostics before local request diagnostics", () => {
+    expect(
+      parse({
+        ...baseRequest(),
+        root: "",
+        editorSessionId: "",
+        document: null,
+        position: null,
+        triggerKind: "foreign",
+        contextBudgetBytes: -1,
+        maxCostClass: "unknown",
+        context: 7,
+      }),
+    ).toEqual({
+      ok: false,
+      errors: [
+        "root must be a non-empty string",
+        `editorSessionId must be a non-empty string of at most ${EDITOR_AGENT_SESSION_ID_MAX_BYTES.toString()} UTF-8 bytes when provided`,
+        "document must be { path, languageId, text }",
+        "position must be { line, character }",
+        "triggerKind must be one of: automatic, explicit",
+        "contextBudgetBytes must be a non-negative integer",
+        "maxCostClass must be one of: low, medium, high",
+        "context must be an object when provided",
+      ],
+    });
+  });
+
+  it("continues eager prefix observations after root refusal and retains healthy references", () => {
+    const reads: string[] = [];
+    const input = new Proxy(
+      { ...baseRequest(), root: "", editorSessionId: "session" },
+      {
+        get(target, key, receiver): unknown {
+          if (typeof key === "string") reads.push(key);
+          const member: unknown = Reflect.get(target, key, receiver);
+          return member;
+        },
+      },
+    );
+    expect(parse(input)).toEqual({ ok: false, errors: ["root must be a non-empty string"] });
+    expect(reads).toEqual([
+      "root",
+      "editorSessionId",
+      "document",
+      "position",
+      "triggerKind",
+      "contextBudgetBytes",
+      "maxCostClass",
+      "maxOutputTokens",
+      "context",
+    ]);
+    const healthy = baseRequest();
+    const parsed = parse(healthy);
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(parsed.value.document).toBe(healthy.document);
+      expect(parsed.value.position).toBe(healthy.position);
+    }
+  });
+
+  it("propagates the same inherited document getter failure before position and local fields", () => {
+    const failure = new TypeError("opaque document-prefix inspection");
+    const reads: string[] = [];
+    const values: Record<string, unknown> = {
+      ...baseRequest(),
+      root: "",
+      editorSessionId: "session",
+    };
+    delete values.document;
+    Object.setPrototypeOf(values, {
+      get document(): never {
+        throw failure;
+      },
+    });
+    const input = new Proxy(values, {
+      get(target, key, receiver): unknown {
+        if (typeof key === "string") reads.push(key);
+        const member: unknown = Reflect.get(target, key, receiver);
+        return member;
+      },
+    });
+    let observed: unknown;
+    try {
+      parse(input);
+    } catch (error) {
+      observed = error;
+    }
+    expect(observed).toBe(failure);
+    expect(reads).toEqual(["root", "editorSessionId", "document"]);
+  });
+});
