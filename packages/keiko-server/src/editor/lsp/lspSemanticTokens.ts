@@ -50,9 +50,11 @@ function isRecord(value: unknown): value is UnknownRecord {
 
 function rawArrayExtent(value: readonly unknown[], maximum: number): number | undefined {
   const initial = value.length;
-  if (!(initial <= maximum)) return undefined;
-  const extent = value.length;
-  return Number.isSafeInteger(extent) && extent >= 0 && extent <= maximum ? extent : undefined;
+  if (initial <= maximum) {
+    const extent = value.length;
+    return Number.isSafeInteger(extent) && extent >= 0 && extent <= maximum ? extent : undefined;
+  }
+  return undefined;
 }
 
 function captureRawLegendValues(value: unknown, maximum: number): readonly string[] | undefined {

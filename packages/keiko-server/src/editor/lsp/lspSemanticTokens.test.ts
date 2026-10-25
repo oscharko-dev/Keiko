@@ -180,7 +180,7 @@ describe("semantic-token owning resource captures", () => {
         tokenModifiers: [],
       },
     });
-    expect(result !== undefined).toBe(true);
+    expect(result).toBeDefined();
     expect((result?.tokenTypeMap.length ?? Infinity) <= MANAGED_LSP_SEMANTIC_TOKEN_MAX_TYPES).toBe(
       true,
     );

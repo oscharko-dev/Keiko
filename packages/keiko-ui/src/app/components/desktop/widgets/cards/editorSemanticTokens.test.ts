@@ -254,7 +254,7 @@ describe("editor semantic-token bounded publication", () => {
     });
     const semantic = host(() => Promise.resolve(data()), legend({ tokenTypes: types }));
     try {
-      expect(semantic !== undefined).toBe(true);
+      expect(semantic).toBeDefined();
       expect(semantic?.provider.getLegend().tokenTypes.length).toBe(2);
       expect(iterations).toBe(0);
     } finally {
