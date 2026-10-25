@@ -299,6 +299,24 @@ describe("production OpenCode activation", () => {
     expect(backendInput?.secureWorkspaceTextRead).toBe(result.ports?.secureWorkspaceTextRead);
   });
 
+  // #3903 AC2: the operator's plugin registry is read from Keiko's own state directory, at each
+  // native run's prepare, never from the workspace.
+  it("hands the backend the operator plugin registry of the runtime state directory", () => {
+    const staged = devLaneFixture();
+    const stateDir = join(staged.root, "runtime-state");
+    mkdirSync(stateDir, { recursive: true });
+    const create = vi.spyOn(backendModule, "createProductionOpenCodeBackend");
+    resolveProductionOpenCodeActivation(
+      activationInput({ ...staged.env, KEIKO_UI_PORT: "1983" }, { stateDir }),
+    );
+    const registry = create.mock.calls.at(-1)?.[0].operatorPluginRegistry;
+    expect(registry?.()).toEqual({ state: "absent", plugins: [] });
+    writeFileSync(join(stateDir, "opencode-plugins.json"), '{"schemaVersion":1,"plugins":[]}', {
+      mode: 0o600,
+    });
+    expect(registry?.()).toEqual({ state: "loaded", plugins: [] });
+  });
+
   it("activates the staged Windows dev lane through the production composition", () => {
     const staged = devLaneFixture("windows-x64");
     const stateDir = join(staged.root, "runtime-state");

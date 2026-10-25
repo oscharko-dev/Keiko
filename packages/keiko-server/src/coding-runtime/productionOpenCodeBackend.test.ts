@@ -67,6 +67,7 @@ import type { QualifiedPortableOpenCodeRuntime } from "./productionPortableCodin
 import type { ProductionRuntimeBackendInput } from "./productionCodingRuntimeResolver.js";
 import type { CodingRuntimeTrustedContext } from "./runtimeAuthorityService.js";
 import type { OpenCodeContextGeometry } from "./opencodeLaunchProfile.js";
+import type { OperatorPluginRegistry } from "./opencodeOperatorPlugins.js";
 
 describe("production OpenCode backend composition", () => {
   it("captures the trusted registry profile once without changing the default runtime", () => {
@@ -605,8 +606,12 @@ describe("production OpenCode backend composition", () => {
       readonly source: SecureWorkspaceTextReadPort;
       readonly readText: ReturnType<typeof vi.fn<SecureWorkspaceTextReadPort["readText"]>>;
     } {
-      const readText = vi.fn<SecureWorkspaceTextReadPort["readText"]>(() =>
-        Promise.resolve({ ok: true, text: "---\ndescription: d\n---\nPrompt\n" }),
+      const readText = vi.fn<SecureWorkspaceTextReadPort["readText"]>(({ relativePath }) =>
+        Promise.resolve(
+          relativePath === ".opencode/agents/helper.md"
+            ? { ok: true, text: "---\ndescription: d\n---\nPrompt\n" }
+            : { ok: false, reason: "not-found" },
+        ),
       );
       const list = vi.fn<SecureWorkspaceNativeFileIO["list"]>(({ relativePath }) =>
         Promise.resolve(
@@ -653,7 +658,14 @@ describe("production OpenCode backend composition", () => {
 
         await port?.admitForRun({ runId: "run-windows", discoveryRoot: discovery });
 
-        expect(readText).toHaveBeenCalledTimes(1);
+        // The agent, then the project's own configuration files (#3903 AC2), each read once.
+        expect(readText.mock.calls.map(([request]) => request.relativePath).sort()).toEqual([
+          ".opencode/agents/helper.md",
+          ".opencode/opencode.json",
+          ".opencode/opencode.jsonc",
+          "opencode.json",
+          "opencode.jsonc",
+        ]);
         expect(readFileSync(join(discovery, "agents", "helper.md"), "utf8")).toBe(
           '---\ndescription: "d"\nmode: subagent\n---\nPrompt\n',
         );
@@ -710,6 +722,77 @@ describe("production OpenCode backend composition", () => {
           secureWorkspaceTextRead: agentSource().source,
         }).createRun(runInput(root));
         expect(compose.mock.calls.at(-1)?.[0].repositoryItems).toBeUndefined();
+      } finally {
+        rmSync(root, { force: true, recursive: true });
+      }
+    });
+  });
+
+  // #3903 AC2: the operator's plugins reach a native run only, and a workspace source is read only
+  // while the run's workspace is still the active one.
+  describe("operator plugin admission", () => {
+    const PLUGIN = 'export default { id: "acme.lint", async setup() {} };\n';
+    const registry = (): OperatorPluginRegistry => ({
+      state: "loaded",
+      plugins: [
+        {
+          name: "lint",
+          source: { kind: "workspace", path: ".opencode/plugins/lint.js" },
+          sha256: createHash("sha256").update(PLUGIN, "utf8").digest("hex"),
+        },
+      ],
+    });
+
+    function admission(
+      root: string,
+      current: boolean,
+      readText: SecureWorkspaceTextReadPort["readText"],
+    ): composition.OpenCodeRuntimeCompositionInput["operatorPlugins"] {
+      const compose = vi.spyOn(composition, "createOpenCodeRuntimeComposition");
+      createProductionOpenCodeBackend({
+        ...backendInput(root, releaseQualifiedLinuxRuntime(root)),
+        gatewayReadiness: createOpenCodeGatewayReadinessRegistry("native"),
+        secureWorkspaceTextRead: { readText },
+        operatorPluginRegistry: registry,
+      }).createRun({ ...runInput(root), workspaceIsCurrent: () => current });
+      return compose.mock.calls.at(-1)?.[0].operatorPlugins;
+    }
+
+    it.each([
+      [true, 1, true],
+      [false, 0, false],
+    ] as const)(
+      "with the workspace current %s reads the source %i times",
+      async (current, reads, admitted) => {
+        const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-operator-plugins-backend-")));
+        try {
+          const readText = vi.fn<SecureWorkspaceTextReadPort["readText"]>(() =>
+            Promise.resolve({ ok: true, text: PLUGIN }),
+          );
+          const discovery = join(root, "discovery");
+          mkdirSync(join(discovery, "plugins"), { recursive: true });
+          await admission(root, current, readText)?.admitForRun({
+            runId: "run-plugins",
+            discoveryRoot: discovery,
+            mode: "autonomous-delivery",
+          });
+          expect(readText).toHaveBeenCalledTimes(reads);
+          expect(existsSync(join(discovery, "plugins", "admitted-lint.ts"))).toBe(admitted);
+        } finally {
+          rmSync(root, { force: true, recursive: true });
+        }
+      },
+    );
+
+    it("hands the mapped profiles none", () => {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-operator-plugins-backend-")));
+      try {
+        const compose = vi.spyOn(composition, "createOpenCodeRuntimeComposition");
+        createProductionOpenCodeBackend({
+          ...backendInput(root, releaseQualifiedLinuxRuntime(root)),
+          operatorPluginRegistry: registry,
+        }).createRun(runInput(root));
+        expect(compose.mock.calls.at(-1)?.[0].operatorPlugins).toBeUndefined();
       } finally {
         rmSync(root, { force: true, recursive: true });
       }

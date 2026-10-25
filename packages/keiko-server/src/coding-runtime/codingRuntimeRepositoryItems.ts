@@ -16,11 +16,17 @@ import {
   type RepositoryItemRefusalReason,
 } from "./codingRuntimeRepositoryItemSanitizer.js";
 import {
+  PROJECT_CONFIG_FILES,
+  PROJECT_CONFIG_UNSUPPORTED_FILES,
+  projectConfigItems,
+} from "./codingRuntimeRepositoryConfig.js";
+import {
   exactWorkspaceRead,
   type SecureWorkspaceNativeFileIO,
   type SecureWorkspaceTextReadPort,
 } from "./secureWorkspaceTextRead.js";
 import type { SecureWorkspaceNativeDirEntry } from "./secureWorkspaceTextReadProtocol.js";
+import { CODING_RUNTIME_FAILURE_TRACE_FIELDS } from "./codingRuntimeActivityOperations.js";
 
 /**
  * Repository agents, commands and skills as sanitized items (#3903, ADR-0137). The native profile
@@ -99,6 +105,8 @@ const UNAVAILABLE_REASONS: ReadonlySet<AdmissionReason> = new Set([
   "workspace-unavailable",
 ]);
 
+const COUNT = { type: "integer", dataClass: "count", required: true } as const;
+
 const CODING_RUNTIME_REPOSITORY_ITEMS_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -114,19 +122,23 @@ const CODING_RUNTIME_REPOSITORY_ITEMS_OPERATION = defineActivityLogOperation({
       required: true,
       values: [...ADMISSION_STATES],
     },
-    agentAdmittedCount: { type: "integer", dataClass: "count", required: true },
-    agentRefusedCount: { type: "integer", dataClass: "count", required: true },
-    commandAdmittedCount: { type: "integer", dataClass: "count", required: true },
-    commandRefusedCount: { type: "integer", dataClass: "count", required: true },
-    skillAdmittedCount: { type: "integer", dataClass: "count", required: true },
-    skillRefusedCount: { type: "integer", dataClass: "count", required: true },
+    agentAdmittedCount: COUNT,
+    agentRefusedCount: COUNT,
+    commandAdmittedCount: COUNT,
+    commandRefusedCount: COUNT,
+    skillAdmittedCount: COUNT,
+    skillRefusedCount: COUNT,
     // Directories the helper could neither list nor prove absent (a link, a file, an unusable root).
-    directoryFailureCount: { type: "integer", dataClass: "count", required: true },
+    directoryFailureCount: COUNT,
+    // #3903 AC2: the project's own opencode.json files read, and those refused whole (malformed,
+    // JSONC or unreadable).
+    configFileCount: COUNT,
+    configRefusedCount: COUNT,
     // Frontmatter keys dropped from the admitted copies: those that would have registered authority,
     // routed a model, switched a tool or loaded code, and every other unknown key.
-    strippedAuthorityKeyCount: { type: "integer", dataClass: "count", required: true },
-    strippedOtherKeyCount: { type: "integer", dataClass: "count", required: true },
-    admittedByteCount: { type: "integer", dataClass: "count", required: true },
+    strippedAuthorityKeyCount: COUNT,
+    strippedOtherKeyCount: COUNT,
+    admittedByteCount: COUNT,
     // SHA-256 over the admitted copies (their destinations and content digests), so the exact set the
     // producer saw is reconstructable without a name, a path or a body in the log.
     contentSha256: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
@@ -134,7 +146,7 @@ const CODING_RUNTIME_REPOSITORY_ITEMS_OPERATION = defineActivityLogOperation({
       type: "string-array",
       dataClass: "closed-enum",
       required: false,
-      maxItems: 17,
+      maxItems: 20,
       values: [...REPOSITORY_ITEM_REFUSAL_REASONS],
     },
     reason: {
@@ -143,20 +155,7 @@ const CODING_RUNTIME_REPOSITORY_ITEMS_OPERATION = defineActivityLogOperation({
       required: false,
       values: [...ADMISSION_REASONS],
     },
-    frames: {
-      type: "string-array",
-      dataClass: "opaque-id",
-      required: false,
-      maxLength: 512,
-      maxItems: 8,
-    },
-    causeChain: {
-      type: "string-array",
-      dataClass: "error-kind",
-      required: false,
-      maxLength: 128,
-      maxItems: 5,
-    },
+    ...CODING_RUNTIME_FAILURE_TRACE_FIELDS,
   },
   causal: "correlation",
   lifecycle: "state",
@@ -221,6 +220,8 @@ interface Tally {
   readonly refused: PerKind;
   readonly reasons: Set<RepositoryItemRefusalReason>;
   directoryFailures: number;
+  configFiles: number;
+  configRefused: number;
   strippedAuthority: number;
   strippedOther: number;
   bytes: number;
@@ -239,6 +240,8 @@ interface Scan {
 interface Candidate {
   readonly name: string;
   readonly path: string;
+  /** An entry of the project's opencode.json, already rendered as a Markdown item. */
+  readonly text?: string | undefined;
 }
 
 type CandidateOrRefusal =
@@ -261,6 +264,8 @@ function newTally(): Tally {
     refused: { agent: 0, command: 0, skill: 0 },
     reasons: new Set(),
     directoryFailures: 0,
+    configFiles: 0,
+    configRefused: 0,
     strippedAuthority: 0,
     strippedOther: 0,
     bytes: 0,
@@ -287,7 +292,12 @@ async function admitForRun(
     }
     const files = await scanWorkspace(input, request, tally);
     if (files.length > 0) writeAdmittedRepositoryItems(request.discoveryRoot, files);
-    const found = sum(tally.admitted) + sum(tally.refused) + tally.directoryFailures;
+    const found =
+      sum(tally.admitted) +
+      sum(tally.refused) +
+      tally.directoryFailures +
+      tally.configFiles +
+      tally.configRefused;
     recordRepositoryItemsAdmission(
       input.activityLog,
       request.runId,
@@ -330,10 +340,93 @@ async function scanWorkspace(
     listCandidates("command", scan),
     listCandidates("skill", scan),
   ]);
-  await admitFrom("agent", agents, 0, scan);
-  await admitFrom("command", commands, 0, scan);
+  const config = await projectConfigCandidates(scan);
+  await admitFrom("agent", joinedCandidates("agent", agents, config.agent, scan), 0, scan);
+  await admitFrom("command", joinedCandidates("command", commands, config.command, scan), 0, scan);
   await admitFrom("skill", skills, 0, scan);
   return scan.files;
+}
+
+/**
+ * The agents and commands of the project's own opencode.json (#3903 AC2), as Markdown items. A
+ * file the producer would read in a format Keiko does not parse (JSONC) is refused whole; so is a
+ * malformed or unreadable one.
+ */
+async function projectConfigCandidates(
+  scan: Scan,
+): Promise<Readonly<Record<"agent" | "command", readonly Candidate[]>>> {
+  const found: Record<"agent" | "command", Candidate[]> = { agent: [], command: [] };
+  for (const path of PROJECT_CONFIG_UNSUPPORTED_FILES) {
+    if ((await readConfigFile(scan, path)) !== undefined)
+      refuseConfig(scan, "config-unsupported-format");
+  }
+  for (const path of PROJECT_CONFIG_FILES) {
+    const text = await readConfigFile(scan, path);
+    if (text !== undefined) admitConfigFile(scan, path, text, found);
+  }
+  return found;
+}
+
+function admitConfigFile(
+  scan: Scan,
+  path: string,
+  text: string,
+  found: Record<"agent" | "command", Candidate[]>,
+): void {
+  scan.tally.configFiles += 1;
+  const parsed = projectConfigItems(text);
+  if (!parsed.ok) {
+    refuseConfig(scan, parsed.reason);
+    return;
+  }
+  scan.tally.strippedAuthority += parsed.strippedAuthorityKeyCount;
+  scan.tally.strippedOther += parsed.strippedOtherKeyCount;
+  for (const { kind, reason } of parsed.refused) refuse(scan, kind, reason);
+  for (const item of parsed.items) {
+    const refusal = repositoryItemNameRefusal(item.name);
+    if (refusal === undefined) found[item.kind].push({ name: item.name, path, text: item.text });
+    else refuse(scan, item.kind, refusal);
+  }
+}
+
+// The file's text, or `undefined` when it is absent; a file that exists but cannot be read is
+// refused here so it never counts as read.
+async function readConfigFile(scan: Scan, path: string): Promise<string | undefined> {
+  throwIfStopped(scan.signal);
+  const read = await scan.source.readText({ relativePath: path, signal: scan.signal });
+  if (read.ok) return read.text;
+  if (read.reason === "cancelled") throw new RepositoryItemsStop("cancelled");
+  if (read.reason === "workspace-unavailable")
+    throw new RepositoryItemsStop("workspace-unavailable");
+  if (read.reason !== "not-found" && read.reason !== "denied") refuseConfig(scan, "unreadable");
+  return undefined;
+}
+
+function refuseConfig(scan: Scan, reason: RepositoryItemRefusalReason): void {
+  scan.tally.configRefused += 1;
+  scan.tally.reasons.add(reason);
+}
+
+// The Markdown items come first, as the producer's own discovery would find them; a config entry
+// of the same name, or a second config entry of one name, is a duplicate.
+function joinedCandidates(
+  kind: RepositoryItemKind,
+  markdown: readonly Candidate[],
+  config: readonly Candidate[],
+  scan: Scan,
+): readonly Candidate[] {
+  const seen = new Set(markdown.map((candidate) => candidate.name));
+  const joined = [...markdown];
+  for (const candidate of config) {
+    if (seen.has(candidate.name)) refuse(scan, kind, "duplicate-name");
+    else {
+      seen.add(candidate.name);
+      joined.push(candidate);
+    }
+  }
+  const excess = joined.splice(MAX_CANDIDATES[kind]);
+  if (excess.length > 0) refuse(scan, kind, "limit-exceeded", excess.length);
+  return joined;
 }
 
 function throwIfStopped(signal: AbortSignal): void {
@@ -475,16 +568,9 @@ async function admitCandidate(
     refuse(scan, kind, "limit-exceeded");
     return;
   }
-  const read = await scan.source.readText({
-    relativePath: candidate.path,
-    signal: scan.signal,
-    denyListException: "repository-claude-skill",
-  });
-  if (!read.ok) {
-    refuseRead(scan, kind, read.reason);
-    return;
-  }
-  const outcome = sanitizeRepositoryItem(kind, candidate.name, read.text, {
+  const text = candidate.text ?? (await candidateText(kind, candidate, scan));
+  if (text === undefined) return;
+  const outcome = sanitizeRepositoryItem(kind, candidate.name, text, {
     admittedSubagents: scan.subagents,
   });
   if (!outcome.ok) {
@@ -506,6 +592,21 @@ async function admitCandidate(
   scan.tally.strippedAuthority += outcome.strippedAuthorityKeyCount;
   scan.tally.strippedOther += outcome.strippedOtherKeyCount;
   if (outcome.mode === "subagent") scan.subagents.add(candidate.name);
+}
+
+async function candidateText(
+  kind: RepositoryItemKind,
+  candidate: Candidate,
+  scan: Scan,
+): Promise<string | undefined> {
+  const read = await scan.source.readText({
+    relativePath: candidate.path,
+    signal: scan.signal,
+    denyListException: "repository-claude-skill",
+  });
+  if (read.ok) return read.text;
+  refuseRead(scan, kind, read.reason);
+  return undefined;
 }
 
 function destinationOf(kind: RepositoryItemKind, name: string): string {
@@ -636,6 +737,8 @@ function recordRepositoryItemsAdmission(
         skillAdmittedCount: tally.admitted.skill,
         skillRefusedCount: tally.refused.skill,
         directoryFailureCount: tally.directoryFailures,
+        configFileCount: tally.configFiles,
+        configRefusedCount: tally.configRefused,
         strippedAuthorityKeyCount: tally.strippedAuthority,
         strippedOtherKeyCount: tally.strippedOther,
         admittedByteCount: tally.bytes,

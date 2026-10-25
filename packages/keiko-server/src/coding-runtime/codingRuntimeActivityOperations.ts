@@ -108,7 +108,7 @@ const RUNTIME_CONFINEMENT_DIAGNOSTIC_KINDS = [
 // `frames` whenever none of its stack frames anchor to a known workspace package. `required: true`
 // would demand a field the production sink itself omits whenever there is nothing to report, so a
 // persisted line could never satisfy its own contract.
-const RUNTIME_CONFINEMENT_FAILURE_TRACE_FIELDS = {
+export const CODING_RUNTIME_FAILURE_TRACE_FIELDS = {
   frames: {
     type: "string-array",
     dataClass: "opaque-id",
@@ -175,7 +175,7 @@ const RUNTIME_CONFINEMENT_FAILED_FIELDS = {
     required: false,
     values: RUNTIME_CONFINEMENT_DIAGNOSTIC_KINDS,
   },
-  ...RUNTIME_CONFINEMENT_FAILURE_TRACE_FIELDS,
+  ...CODING_RUNTIME_FAILURE_TRACE_FIELDS,
 } as const;
 
 export const RUNTIME_CONFINEMENT_FAILED_OPERATION = defineActivityLogOperation({

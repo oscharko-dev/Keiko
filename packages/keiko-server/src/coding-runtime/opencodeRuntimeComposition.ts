@@ -222,6 +222,7 @@ import type {
   OpenCodeLaunchProfileResult,
 } from "./opencodeLaunchProfile.js";
 import type { CodingRuntimeRepositoryItemsPort } from "./codingRuntimeRepositoryItems.js";
+import type { OperatorPluginsPort } from "./opencodeOperatorPlugins.js";
 import type { CodingRuntimeRepositoryInstructionsCopyRequest } from "./codingRuntimeRepositoryInstructions.js";
 import {
   createGeneratedOpenCodeV2Plugins,
@@ -463,6 +464,11 @@ export interface OpenCodeRuntimeCompositionInput {
    * absent leaves the discovery directory exactly as Keiko generated it.
    */
   readonly repositoryItems?: CodingRuntimeRepositoryItemsPort | undefined;
+  /**
+   * Admits the operator's digest-pinned plugins for a run launched in Full access (#3903 AC2).
+   * Native profile only; absent loads none of them.
+   */
+  readonly operatorPlugins?: OperatorPluginsPort | undefined;
   /**
    * Native profile only: writes Keiko's bounded copy of the workspace's AGENTS.md into the
    * producer's own global instruction slot (#3900 AC3); true when the copy changed.
@@ -1666,6 +1672,7 @@ async function materializePrepare(
   const config = profile.config;
   materialize(runRoot, config, createGeneratedOpenCodeV2Plugins(input.toolProfile));
   await admitRepositoryItems(input, request, runRoot);
+  await admitOperatorPlugins(input, request, runRoot);
   await refreshRepositoryInstructions(input, request.runId, runRoot, request.signal);
   const password = profile.env.OPENCODE_SERVER_PASSWORD;
   if (password === undefined) throw new Error("password-missing");
@@ -1807,6 +1814,21 @@ async function admitRepositoryItems(
   await input.repositoryItems?.admitForRun({
     runId: request.runId,
     discoveryRoot: openCodeConfigDirectory(runRoot),
+    ...(request.signal === undefined ? {} : { signal: request.signal }),
+  });
+}
+
+// The launch mode decides: only a run launched in Full access loads operator code (#3903 AC2).
+async function admitOperatorPlugins(
+  input: OpenCodeRuntimeCompositionInput,
+  request: OpenCodeLifecyclePrepareRequest,
+  runRoot: string,
+): Promise<void> {
+  if (input.toolProfile !== "native") return;
+  await input.operatorPlugins?.admitForRun({
+    runId: request.runId,
+    discoveryRoot: openCodeConfigDirectory(runRoot),
+    mode: request.env.KEIKO_CODING_MODE,
     ...(request.signal === undefined ? {} : { signal: request.signal }),
   });
 }

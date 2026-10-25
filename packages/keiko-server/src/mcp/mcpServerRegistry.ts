@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { closeSync, constants, fstatSync, lstatSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
+import { OwnerPrivateFileRefused, readOwnerPrivateFile } from "../ownerPrivateStateFile.js";
 import { causeChain, keikoStackFrames, type ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import type { McpServerDefinition } from "@oscharko-dev/keiko-contracts";
 import { parseMcpServerRegistry } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
@@ -87,43 +87,9 @@ export interface McpServerRegistryLoad {
   readonly reason?: McpRegistryLoadReason | undefined;
 }
 
-/** A registry the loader refuses, with the closed reason; the message never quotes the file. */
-class McpRegistryRefused extends Error {
-  public constructor(public readonly reason: McpRegistryLoadReason) {
-    super(`mcp-registry-${reason}`);
-    this.name = "McpRegistryRefused";
-  }
-}
-
-// The file, opened without following a link and checked on the open descriptor, so the bytes read
-// are the bytes of the file that was checked. A missing file is an empty registry.
+// The owner-private file, opened without following a link and checked on its descriptor.
 function readRegistryText(path: string): string | undefined {
-  const probe = lstatSync(path, { throwIfNoEntry: false });
-  if (probe === undefined) return undefined;
-  if (!probe.isFile()) throw new McpRegistryRefused("not-regular-file");
-  const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-  try {
-    return readCheckedDescriptor(descriptor);
-  } finally {
-    closeSync(descriptor);
-  }
-}
-
-function readCheckedDescriptor(descriptor: number): string {
-  const stat = fstatSync(descriptor);
-  if (!stat.isFile()) throw new McpRegistryRefused("not-regular-file");
-  const ownUid = typeof process.getuid === "function" ? process.getuid() : stat.uid;
-  if (stat.uid !== ownUid || (stat.mode & 0o022) !== 0)
-    throw new McpRegistryRefused("not-owner-private");
-  if (stat.size > MAX_REGISTRY_BYTES) throw new McpRegistryRefused("too-large");
-  const buffer = Buffer.alloc(stat.size);
-  let offset = 0;
-  while (offset < buffer.length) {
-    const count = readSync(descriptor, buffer, offset, buffer.length - offset, null);
-    if (count === 0) break;
-    offset += count;
-  }
-  return buffer.subarray(0, offset).toString("utf8");
+  return readOwnerPrivateFile(path, MAX_REGISTRY_BYTES)?.toString("utf8");
 }
 
 function parsedRegistry(text: string): McpServerRegistryLoad {
@@ -134,7 +100,7 @@ function parsedRegistry(text: string): McpServerRegistryLoad {
 }
 
 function refusalOf(error: unknown): McpRegistryLoadReason {
-  if (error instanceof McpRegistryRefused) return error.reason;
+  if (error instanceof OwnerPrivateFileRefused) return error.reason;
   if (error instanceof SyntaxError) return "not-json";
   return (error as NodeJS.ErrnoException).code === "ELOOP" ? "not-regular-file" : "unreadable";
 }

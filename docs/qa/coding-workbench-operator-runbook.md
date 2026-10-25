@@ -193,8 +193,13 @@ from `.opencode/skills`, `.opencode/skill` and `.agents/skills` (`<name>/SKILL.m
 is read through the secure read helper while the run's own workspace is the active one, its
 frontmatter is validated against a closed allowlist and rendered anew (`model`, permissions, tools,
 MCP and plugin keys never survive), and the copy is written before the runtime starts. The
-project's `opencode.json`, plugins, nested discovery and `.claude/` stay unloaded, except a
-skill's `.claude/skills/<name>/SKILL.md`, which is admitted like the other skill directories. A command whose template contains a shell-substitution block is refused. Limits: 16
+`agents`/`agent` and `commands`/`command` sections of the project's `opencode.json` (or
+`.opencode/opencode.json`) become the same items; its other keys (providers, model, permissions,
+plugins, MCP, ...) are dropped, an agent entry with `permission`, `permissions` or `tools` is
+refused rather than admitted unrestricted, and `opencode.jsonc` is refused. Plugins, nested
+discovery and `.claude/` stay unloaded, except a skill's `.claude/skills/<name>/SKILL.md`, which is
+admitted like the other skill directories. A command whose template contains a shell-substitution
+block is refused. Limits: 16
 agents, 32 commands and 16 skills of at most 32 KiB each; names lowercase with hyphens and not a
 built-in (`build`, `plan`, `general`, `explore`, `init`, `review`, `opencode`, `report`, ...).
 
@@ -206,7 +211,51 @@ stripped-key counts and a digest of the copies, never a name or a body). To see 
 appear, read its `refusalReasons`: `invalid-name`, `reserved-name`, `duplicate-name`,
 `frontmatter-malformed`, `frontmatter-unsupported`, `value-invalid`, `description-missing`,
 `body-empty`, `unsafe-characters`, `oversize`, `template-shell-substitution`, `agent-not-admitted`,
-`name-mismatch`, `not-regular-file`, `unreadable`, `directory-unreadable` or `limit-exceeded`.
+`name-mismatch`, `not-regular-file`, `unreadable`, `directory-unreadable`, `limit-exceeded`,
+`restriction-unrepresentable`, `config-malformed` or `config-unsupported-format`.
+
+## OpenCode plugins
+
+A plugin is code the runtime runs inside its own process, so a repository can never register one.
+An operator who trusts a local plugin registers it in `opencode-plugins.json` in Keiko's state
+directory, with the same ownership rules as `mcp-servers.json` (owned by the user Keiko runs as,
+`chmod 600`; a missing file means no plugin). Changes apply to the next run.
+
+```json
+{
+  "schemaVersion": 1,
+  "plugins": [
+    {
+      "name": "audit",
+      "path": "/opt/keiko/plugins/audit.js",
+      "sha256": "<the output of: shasum -a 256 /opt/keiko/plugins/audit.js>"
+    },
+    {
+      "name": "lint",
+      "workspacePath": ".opencode/plugins/lint.ts",
+      "sha256": "<the SHA-256 of that file's exact bytes>"
+    }
+  ]
+}
+```
+
+- A plugin loads only in a run launched in **Full access**; Ask for approval and Supervised
+  workspace load none. Per-action approval cannot govern code that runs inside the runtime.
+- `name` is lowercase letters, digits and `-`, not starting with `keiko`; at most 8 plugins. The
+  source is either an absolute `path` the operator installed or a `workspacePath` inside the
+  run's workspace, a `.js`, `.mjs` or `.ts` file of at most 512 KiB.
+- `sha256` pins the exact file: a changed file is refused until the registry names its new digest.
+  The plugin must be one self-contained module (bundle its dependencies); its own relative imports
+  do not travel with the copy, and only the public `setup` plugin form loads.
+- The plugin's permission hooks may only make a decision stricter; they can never allow what Keiko
+  refuses or asks for. Beyond that, an admitted plugin is trusted code bounded by the run's sandbox
+  and Keiko's server-side authority, like the runtime itself.
+- A plugin that claims the identity of one of Keiko's own plugins (`keiko.native-policy`, ...)
+  stops the run from becoming ready.
+- The Activity Log records `coding-runtime.operator-plugins.admitted` per run (`absent`,
+  `registry-refused` with a closed reason, `mode-restricted`, `admitted` or `failed`, with counts,
+  the per-plugin refusal reasons `digest-mismatch`, `unreadable`, `too-large` or
+  `workspace-unavailable`, and a digest of the admitted set).
 
 ## MCP servers
 

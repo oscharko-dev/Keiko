@@ -131,6 +131,7 @@
   "coding-runtime.native-turn.interrupted": "tools-workflows",
   "coding-runtime.operation.refused": "tools-workflows",
   "coding-runtime.operator-decision": "tools-workflows",
+  "coding-runtime.operator-plugins.admitted": "tools-workflows",
   "coding-runtime.project-memory.context": "tools-workflows",
   "coding-runtime.prompt-inputs.settled": "tools-workflows",
   "coding-runtime.provider-policy.bound": "tools-workflows",

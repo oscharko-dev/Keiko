@@ -22,6 +22,7 @@ import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { ServerDiagnosticSink } from "../diagnostics-log.js";
 import type { ServerLogSink } from "../observability/index.js";
 import { loadMcpServerRegistry } from "../mcp/mcpServerRegistry.js";
+import { loadOperatorPluginRegistry } from "./opencodeOperatorPlugins.js";
 import { KEIKO_CODING_EXTERNAL_READ_ROOTS_ENV } from "./opencodeNativeExternalRoots.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import type { CodingRuntimeEvidenceAggregator } from "./codingRuntimeEvidenceAggregator.js";
@@ -255,6 +256,8 @@ function activatedPorts(
       // sanitized copies, read through this same helper.
       secureWorkspaceTextRead,
       ...repositoryOptions(input.env),
+      // #3903 AC2: the operator's digest-pinned plugins, read at each native run's prepare.
+      operatorPluginRegistry: () => loadOperatorPluginRegistry(input.runtimeStateDir),
       // #3903 (C04): the operator's MCP server registry, read once for each native run at its
       // launch; the run's sandbox and its runtime binding see the same load.
       mcpServers: memoizedPerRun(

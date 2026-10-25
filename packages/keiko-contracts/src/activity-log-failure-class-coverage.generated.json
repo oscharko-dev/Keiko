@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 361,
-  "completeClassCount": 361,
+  "supportedClassCount": 362,
+  "completeClassCount": 362,
   "completeness": "complete",
   "classes": [
     {
@@ -9277,6 +9277,118 @@
       "completeness": "complete"
     },
     {
+      "failureClass": "coding-runtime-operator-plugins",
+      "requirementContract": "coding-runtime-operator-plugins",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["state"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": ["coding-runtime.operator-plugins.admitted"],
+        "end": [],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "coding-runtime.operator-plugins.admitted",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["coding-runtime.operator-plugins.admitted"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "coding-runtime.operator-plugins.admitted",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "admittedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "admittedSha256",
+              "type": "string",
+              "dataClass": "digest",
+              "required": false
+            },
+            {
+              "name": "causeChain",
+              "type": "string-array",
+              "dataClass": "error-kind",
+              "required": false
+            },
+            {
+              "name": "frames",
+              "type": "string-array",
+              "dataClass": "opaque-id",
+              "required": false
+            },
+            {
+              "name": "pluginCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "refusalReasons",
+              "type": "string-array",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "refusedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "registryReason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "runId",
+              "type": "string",
+              "dataClass": "opaque-id",
+              "required": true
+            },
+            {
+              "name": "state",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "digest",
+            "error-kind",
+            "loss-state",
+            "opaque-id"
+          ],
+          "frameCauseEvidence": {
+            "frames": true,
+            "causeChain": true
+          },
+          "proofIds": ["coding-runtime.operator-plugins.admitted.emitted-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
       "failureClass": "coding-runtime-project-memory",
       "requirementContract": "coding-runtime-project-memory",
       "productSurfaces": ["keiko-server"],
@@ -10310,6 +10422,18 @@
             },
             {
               "name": "commandRefusedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "configFileCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "configRefusedCount",
               "type": "integer",
               "dataClass": "count",
               "required": true

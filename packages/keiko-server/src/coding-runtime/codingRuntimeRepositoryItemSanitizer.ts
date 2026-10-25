@@ -47,6 +47,9 @@ export const REPOSITORY_ITEM_REFUSAL_REASONS = [
   "agent-not-admitted",
   "name-mismatch",
   "restriction-unrepresentable",
+  // #3903 AC2: the project's own opencode.json.
+  "config-malformed",
+  "config-unsupported-format",
 ] as const;
 export type RepositoryItemRefusalReason = (typeof REPOSITORY_ITEM_REFUSAL_REASONS)[number];
 
@@ -110,6 +113,11 @@ const AUTHORITY_KEY_NAMES: ReadonlySet<string> = new Set([
   "options",
   "variant",
 ]);
+
+/** Whether a dropped key is one that would have registered authority, routed a model or loaded code. */
+export function isRepositoryItemAuthorityKey(key: string): boolean {
+  return AUTHORITY_KEY_NAMES.has(key);
+}
 
 type Step<T> =
   | { readonly ok: true; readonly value: T }

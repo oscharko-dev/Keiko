@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "b00a1a89ecb7143a9ae36a8ac048cbc4fc18bbb7168beb509751db66456797b5"
+    "catalogDigest": "31c0c09788565157ff5ba33843bf4c05e1ab7b48e507551cc0492f694a9f2b92"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -59,10 +59,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 579,
-    "proofCount": 592,
-    "resolvedProofCount": 592,
-    "failureClassCount": 361,
+    "operationCount": 580,
+    "proofCount": 593,
+    "resolvedProofCount": 593,
+    "failureClassCount": 362,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -349,6 +349,7 @@
         "coding-runtime.native-turn.interrupted",
         "coding-runtime.operation.refused",
         "coding-runtime.operator-decision",
+        "coding-runtime.operator-plugins.admitted",
         "coding-runtime.project-memory.context",
         "coding-runtime.prompt-inputs.settled",
         "coding-runtime.provider-policy.bound",
@@ -831,6 +832,7 @@
     "coding-runtime-prompt-inputs": ["tools-workflows.dependency-failure"],
     "coding-runtime-repository-instructions": ["tools-workflows.dependency-failure"],
     "coding-runtime-repository-items": ["tools-workflows.dependency-failure"],
+    "coding-runtime-operator-plugins": ["tools-workflows.dependency-failure"],
     "mcp-registry": ["tools-workflows.dependency-failure"],
     "coding-runtime-question-authority": ["tools-workflows.dependency-failure"],
     "coding-runtime-question-list": ["tools-workflows.dependency-failure"],
@@ -1507,6 +1509,9 @@
     ],
     "coding-runtime.operator-decision.emitted-line": [
       "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.test.ts"
+    ],
+    "coding-runtime.operator-plugins.admitted.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/opencodeOperatorPlugins.test.ts"
     ],
     "coding-runtime.project-memory.context.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.test.ts"

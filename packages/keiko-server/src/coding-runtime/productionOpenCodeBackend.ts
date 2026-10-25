@@ -48,13 +48,18 @@ import {
   type CodingSafeActivitySignal,
 } from "./codingSafeActivityProjection.js";
 import { createCodingRuntimeRepositoryItemsPort } from "./codingRuntimeRepositoryItems.js";
+import {
+  createOperatorPluginsPort,
+  type OperatorPluginRegistry,
+  type OperatorPluginsPort,
+} from "./opencodeOperatorPlugins.js";
 import { createCodingRuntimeRepositoryInstructionsPort } from "./codingRuntimeRepositoryInstructions.js";
 import type { NativeWorktreeProvisionPort } from "./opencodeNativeWorktree.js";
 import {
   recordNativeExternalRootsResolved,
   resolveNativeExternalReadRoots,
 } from "./opencodeNativeExternalRoots.js";
-import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
+import { exactWorkspaceRead, type SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
 import { createDevLaneRuntimeProcessBackend } from "./devLaneRuntimeProcessBackend.js";
 import { createNativeRuntimeProcessBackend } from "./nativeRuntimeProcessBackend.js";
 import {
@@ -172,6 +177,8 @@ export interface ProductionOpenCodeBackendInput {
    * custom agents, commands and skills through (#3903). Absent, a native run admits none and says so.
    */
   readonly secureWorkspaceTextRead?: SecureWorkspaceTextReadPort | undefined;
+  /** The operator's plugin registry (#3903 AC2), read at each native run's prepare; absent loads none. */
+  readonly operatorPluginRegistry?: (() => OperatorPluginRegistry) | undefined;
   /** The operator's `KEIKO_CODING_REPOSITORY_ITEMS_ENABLED` decision; absent keeps the default, on. */
   readonly repositoryItemsEnabled?: boolean | undefined;
   /** The operator's opt-out of the workspace AGENTS.md (#3900 AC3); absent keeps it on. */
@@ -434,6 +441,7 @@ function nativeRunInputs(
 ): Pick<
   OpenCodeRuntimeCompositionInput,
   | "repositoryItems"
+  | "operatorPlugins"
   | "repositoryInstructions"
   | "mcpServers"
   | "nativeWorktrees"
@@ -442,6 +450,9 @@ function nativeRunInputs(
   if (toolProfile !== "native") return {};
   return {
     repositoryItems: repositoryItemsFor(input, run),
+    ...(input.operatorPluginRegistry === undefined
+      ? {}
+      : { operatorPlugins: operatorPluginsFor(input, run, input.operatorPluginRegistry) }),
     repositoryInstructions: repositoryInstructionsFor(input, run),
     ...(input.mcpServers === undefined ? {} : { mcpServers: input.mcpServers }),
     ...(input.nativeWorktrees === undefined ? {} : { nativeWorktrees: input.nativeWorktrees }),
@@ -539,6 +550,27 @@ function repositoryItemsFor(
     enabled: input.repositoryItemsEnabled !== false,
     source: input.secureWorkspaceTextRead,
     isRunWorkspace: run.workspaceIsCurrent,
+    activityLog: input.activityLog ?? processServerLogSink(),
+  });
+}
+
+// The operator's plugins (#3903 AC2); a workspace source is read only while the run's workspace is
+// still the active one.
+function operatorPluginsFor(
+  input: LaunchInput,
+  run: ProductionRuntimeBackendInput,
+  registry: () => OperatorPluginRegistry,
+): OperatorPluginsPort {
+  const source = input.secureWorkspaceTextRead;
+  return createOperatorPluginsPort({
+    registry,
+    readWorkspaceText: (relativePath, signal) =>
+      source === undefined
+        ? Promise.resolve({ ok: false, reason: "workspace-unavailable" })
+        : exactWorkspaceRead(source, run.workspaceIsCurrent, "workspace-unavailable").readText({
+            relativePath,
+            ...(signal === undefined ? {} : { signal }),
+          }),
     activityLog: input.activityLog ?? processServerLogSink(),
   });
 }

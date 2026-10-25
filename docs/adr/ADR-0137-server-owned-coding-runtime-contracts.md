@@ -1179,10 +1179,9 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   generated plugins load from the private discovery directory, which the switch does not touch.
   The restriction stands for what is executable or authoritative: the project `opencode.json`,
   every plugin, the project's own instruction discovery and `instructions` sources, `.claude/`
-  and MCP configuration do not load. Plugins and
-  `opencode.json` stay refused until an operator admission exists that keeps an accepted plugin
-  inside the live Authority Envelope and unable to replace the governing `keiko.native-policy`
-  hook.
+  and MCP configuration do not load as a layer. Keiko itself admits what is data in them: the
+  Markdown items and the `opencode.json` agents and commands below, and plugins only through the
+  operator's digest-pinned registry (below), never through repository text.
 - **Markdown-only repository items are admitted one by one as sanitized copies (#3903).** The
   native profile (only; the mapped profiles keep their behaviour) reads the workspace's custom
   agents (`.opencode/agents/*.md`, `.opencode/agent/*.md`), custom commands
@@ -1287,7 +1286,62 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
     `failed` (cancelled, deadline, write failure, exception, at `warn` with the closed error kind
     and the dist-anchored frames), the admitted and refused counts per kind, the closed refusal
     reasons present, directory failures, the stripped authority-bearing and other key counts, the
-    copies' byte total and a SHA-256 over them, never a name, a path or a body.
+    copies' byte total and a SHA-256 over them, never a name, a path or a body. The same line
+    counts the project configuration files read and refused (`configFileCount`,
+    `configRefusedCount`).
+  - **The project `opencode.json` contributes its agents and commands (#3903 AC2).** Keiko reads
+    `opencode.json` and `.opencode/opencode.json` through the same secure read (a JSONC variant is
+    refused as `config-unsupported-format`; comments are not JSON) and turns each entry of the
+    current `agents` (prompt in `system`) and `commands` sections, and of the earlier `agent`
+    (prompt in `prompt`) and `command` sections the producer still migrates, into the same
+    Markdown item: JSON-quoted scalar frontmatter and the prompt or template as its body, which the
+    sanitizer above then judges like any file. Every other top-level key (`plugins`, `providers`,
+    `permissions`, `mcp`, `model`, `instructions`, `references`, ...) and every non-scalar entry
+    key is dropped and counted. An agent entry carrying `permission`, `permissions` or `tools` is
+    refused (`restriction-unrepresentable`): its restrictions exist only in a shape the Markdown
+    renderer does not carry, and an agent must never be admitted less restricted than written. A
+    Markdown item wins over a configuration entry of the same name; the configuration entry is
+    refused as a duplicate. The real-binary suite proves the configuration's agents and commands
+    list and run while none of its plugins, providers or MCP servers load.
+- **Plugins are operator code, admitted by digest for Full access only (#3903 AC2).** A plugin is a
+  module the producer imports into its own process, so no repository text can register one. The
+  operator registers local plugins in the owner-private `<stateDir>/opencode-plugins.json`
+  (`opencodeOperatorPlugins.ts`), read with the same no-follow, owner-checked reader as the MCP
+  registry (`ownerPrivateStateFile.ts`): `{ "schemaVersion": 1, "plugins": [{ "name", "workspacePath"
+  | "path", "sha256" }] }`, at most 8, a name of `^[a-z0-9][a-z0-9-]{0,47}$` not starting with
+  `keiko`, exactly one source (a normalized workspace-relative module read through the run's exact
+  workspace read, or a normalized absolute module the operator installed), a `.js`, `.mjs` or `.ts`
+  module of at most 512 KiB and the lowercase SHA-256 of its exact bytes. Anything else refuses the
+  whole registry. At each native prepare Keiko first removes what an earlier admission wrote, then
+  admits only when the run's launch mode is Full access (`autonomous-delivery`): per-action
+  approval cannot bind code that runs inside the producer, while Full access is the mode whose
+  effects already proceed inside the envelope without a per-action decision. A plugin whose bytes
+  no longer match, or that cannot be read, is refused; the others still load. An admitted file is
+  copied (exclusive create, 0600) to `operator-plugins/` in the run's private configuration
+  directory, outside the producer's `plugin`/`plugins` discovery and inside the root the kernel
+  keeps read-only to the run, and the producer discovers Keiko's generated
+  `plugins/admitted-<name>.ts` wrapper. The wrapper hands the plugin the producer's context with one
+  change: its permission hooks run on a structured copy of the event and may only narrow the
+  effect (allow, ask, deny), so neither the order in which the producer runs hooks nor a lazy
+  registration lets a plugin widen Keiko's decision or alter the resources Keiko's own hook judges;
+  every other permission hook, the rest of the permission API and the `effect` plugin form (which
+  would reach the producer's services directly) are refused. Beyond permissions an admitted plugin
+  is trusted operator code: the kernel boundary and Keiko's server-side authority (the delivery
+  redemption, the tool facade's capability) bind it like the runtime itself, and the operator who
+  registers it accepts that. Keiko's generated plugins stay required: a plugin that claims one of
+  their identities fails the run's readiness. A plugin must be one self-contained module, since its
+  own relative imports do not travel with the copy. A failure to clear an earlier admission fails
+  the prepare, because a copy left behind would load in a run that never admitted it. Each prepare
+  records one body-free `coding-runtime.operator-plugins.admitted` line (`absent`,
+  `registry-refused` with its closed reason, `mode-restricted`, `admitted` or `failed`, the
+  registered, admitted and refused counts, the closed per-plugin refusal reasons and a SHA-256 over
+  the admitted names and digests, never a name, path or byte). The staged 2.1.4 executable proves
+  it under the real native Seatbelt wrapper (`opencodeNativeRepositoryItems.real.test.ts`): a
+  registered plugin is active at Full access, an approve-everything hook neither widens Keiko's
+  denial of a shell command nor empties the resources Keiko judges, a narrowing hook refuses a
+  shell command Keiko allows (control: an allowed command runs), a Supervised run and changed
+  bytes load none, and a plugin claiming `keiko.native-policy` fails readiness. npm plugin packages
+  stay disabled: the package manager is offline and installing one leaves the machine.
 - **The server-owned binding rides the highest layer.** The profile also passes the single
   provider, model, `default_agent`, `update`/`share` switches, the built-in `formatter` setting
   (above) and the mode-independent permission floor as `OPENCODE_CONFIG_CONTENT`, a secret-free

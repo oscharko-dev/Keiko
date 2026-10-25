@@ -95,6 +95,7 @@ import {
 } from "./secureWorkspaceTextReadProcess.js";
 import type { SecureWorkspaceNativeFileIO } from "./secureWorkspaceTextRead.js";
 import type { CodingRuntimeRepositoryItemsPort } from "./codingRuntimeRepositoryItems.js";
+import type { OperatorPluginsPort } from "./opencodeOperatorPlugins.js";
 import { NATIVE_SESSION_LOCATION_MAX } from "./opencodeNativeSessionTree.js";
 import type { NativeWorktreeProvisionPort } from "./opencodeNativeWorktree.js";
 import { createProductionAcceptedInitializationAuthority } from "./productionCodingRuntimeResolver.js";
@@ -684,6 +685,8 @@ interface StartBridgeControl {
   readonly activityLog?: ServerLogSink;
   /** The repository items admission the composition is handed (#3903). */
   readonly repositoryItems?: CodingRuntimeRepositoryItemsPort;
+  /** The operator plugin admission the composition is handed (#3903 AC2). */
+  readonly operatorPlugins?: OperatorPluginsPort;
   /** The native AGENTS.md copy the composition is handed (#3900 AC3). */
   readonly repositoryInstructions?: InstructionsCopyPort;
   /** The managed owner for an approved Code Mode `worktree_create` (#3903 AC4). */
@@ -1001,6 +1004,12 @@ function optionalRepositoryItems(control: StartBridgeControl | undefined): {
   readonly repositoryItems?: CodingRuntimeRepositoryItemsPort;
 } {
   return control?.repositoryItems === undefined ? {} : { repositoryItems: control.repositoryItems };
+}
+
+function optionalOperatorPlugins(control: StartBridgeControl | undefined): {
+  readonly operatorPlugins?: OperatorPluginsPort;
+} {
+  return control?.operatorPlugins === undefined ? {} : { operatorPlugins: control.operatorPlugins };
 }
 
 function optionalRepositoryInstructions(control: StartBridgeControl | undefined): {
@@ -1436,6 +1445,7 @@ async function startBridgeFixture(
     ...optionalDiagnostics(control),
     ...optionalActivityLog(control),
     ...optionalRepositoryItems(control),
+    ...optionalOperatorPlugins(control),
     ...optionalRepositoryInstructions(control),
     ...optionalNativeWorktrees(control),
     ...optionalToolResultCorrelation(control),
@@ -3896,6 +3906,43 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
       },
     );
   });
+
+  // #3903 AC2: the operator's plugins are admitted into the discovery directory before the first
+  // launch, with the run's launch mode, which alone decides whether operator code may load.
+  it.each([
+    ["native", "autonomous-delivery", 1],
+    ["native", "supervised-coding", 1],
+    ["direct", "autonomous-delivery", 0],
+  ] as const)(
+    "hands the %s profile's operator plugin admission the %s launch mode before the spawn",
+    async (profile, mode, expected) => {
+      const order: string[] = [];
+      const calls: { readonly mode: string | undefined; readonly discoveryRoot: string }[] = [];
+      const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+        mode,
+        readToolProfile: () => profile,
+        operatorPlugins: {
+          admitForRun: (request): Promise<void> => {
+            order.push("admit");
+            calls.push({ mode: request.mode, discoveryRoot: request.discoveryRoot });
+            return Promise.resolve();
+          },
+        },
+        onSpawn: () => order.push("spawn"),
+      });
+      try {
+        expect(calls).toHaveLength(expected);
+        if (expected === 0) return;
+        expect(calls[0]?.mode).toBe(mode);
+        expect(calls[0]?.discoveryRoot.endsWith(join(FIXTURE_RUN_ID, "config", "opencode"))).toBe(
+          true,
+        );
+        expect(order).toEqual(["admit", "spawn"]);
+      } finally {
+        await fixture.stop();
+      }
+    },
+  );
 
   // #3897 (parity row C07): the producer runs a built-in formatter after its own edits without any
   // permission, so the launch mode decides whether it may, and the choice is recorded body-free.
