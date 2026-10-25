@@ -86,3 +86,30 @@ export function validateAllowedKeys(
 
   return valid;
 }
+
+export function validatePhysicalArrayEntries(
+  value: unknown,
+  path: string,
+  errors: string[],
+  requireNonEmpty: boolean,
+  missingMemberIssue: string,
+  validateMember: (value: unknown, path: string, errors: string[]) => boolean,
+): boolean {
+  let valid = true;
+  if (!Array.isArray(value)) {
+    valid = [appendValidationIssues(errors, `${path} must be an array`), valid].every(Boolean);
+    return valid;
+  }
+  if (requireNonEmpty && value.length === 0) {
+    valid = [appendValidationIssues(errors, `${path} must not be empty`), valid].every(Boolean);
+  }
+  const extent = value.length;
+  for (let index = 0; index < extent; index += 1) {
+    const memberPath = `${path}[${String(index)}]`;
+    if (!(index in value))
+      return appendValidationIssues(errors, `${memberPath} ${missingMemberIssue}`);
+    const entry: unknown = value[index];
+    valid = [validateMember(entry, memberPath, errors), valid].every(Boolean);
+  }
+  return valid;
+}

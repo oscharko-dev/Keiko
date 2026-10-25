@@ -3,6 +3,7 @@ import {
   isRecord,
   isOneOf,
   validateAllowedKeys,
+  validatePhysicalArrayEntries,
 } from "./contract-validation-primitives.js";
 import {
   CODING_WORKBENCH_SCHEMA_VERSION,
@@ -166,27 +167,19 @@ function validateStringArray(
   errors: string[],
   requireNonEmpty: boolean,
 ): boolean {
-  let valid = true;
-  if (!Array.isArray(value)) {
-    valid = [appendValidationIssues(errors, `${path} must be an array`), valid].every(Boolean);
-    return valid;
-  }
-  if (requireNonEmpty && value.length === 0) {
-    valid = [appendValidationIssues(errors, `${path} must not be empty`), valid].every(Boolean);
-  }
-  const extent = value.length;
-  for (let index = 0; index < extent; index += 1) {
-    if (!(index in value))
-      return appendValidationIssues(errors, `${path}[${String(index)}] is invalid`);
-    const entry: unknown = value[index];
-    if (typeof entry !== "string" || !allowed.includes(entry)) {
-      valid = [appendValidationIssues(errors, `${path}[${String(index)}] is invalid`), valid].every(
-        Boolean,
-      );
-    }
-  }
-
-  return valid;
+  return validatePhysicalArrayEntries(
+    value,
+    path,
+    errors,
+    requireNonEmpty,
+    "is invalid",
+    (entry, memberPath, memberErrors): boolean => {
+      if (typeof entry !== "string" || !allowed.includes(entry)) {
+        return appendValidationIssues(memberErrors, `${memberPath} is invalid`);
+      }
+      return true;
+    },
+  );
 }
 
 function validateProfileEnums(record: Record<string, unknown>, errors: string[]): boolean {

@@ -146,3 +146,166 @@ describe("runtime health field admission preservation", () => {
     },
   );
 });
+
+async function physicalPermissionListValidator(
+  surface: "source" | "public",
+): Promise<typeof validateCodingWorkbenchPermissionRequest> {
+  return surface === "source"
+    ? validateCodingWorkbenchPermissionRequest
+    : (await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation"))
+        .validateCodingWorkbenchPermissionRequest;
+}
+
+function physicalConnectorPermission(connectorScopes: unknown): Record<string, unknown> {
+  return {
+    requestId: "perm-3918",
+    kind: "connector-access",
+    actionClass: "connector-access",
+    reasonCode: "verification-required",
+    expiresAt: "2026-07-19T00:00:00.000Z",
+    connectorScopes,
+  };
+}
+
+async function physicalEvidenceListErrors(
+  surface: "source" | "public",
+  taskRefs: unknown,
+): Promise<readonly string[]> {
+  const module =
+    surface === "source"
+      ? await import("./coding-workbench-validation.js")
+      : await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation");
+  const result = module.validateCodingWorkbenchAuthorityEnvelope({ taskRefs });
+  expect(result.ok).toBe(false);
+  return result.ok
+    ? []
+    : result.errors.filter((error) => error.startsWith("authorityEnvelope.taskRefs"));
+}
+
+for (const surface of ["source", "public"] as const) {
+  it(`${surface}: accepts a healthy connector list with original permission identity`, async () => {
+    const validate = await physicalPermissionListValidator(surface);
+    const value = physicalConnectorPermission(["source-control.read"]);
+    const result = validate(value);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(value);
+  });
+
+  it(`${surface}: retains required empty connector-list diagnostics`, async () => {
+    const validate = await physicalPermissionListValidator(surface);
+    expect(validate(physicalConnectorPermission([]))).toEqual({
+      ok: false,
+      errors: ["permissionRequest.connectorScopes must not be empty"],
+    });
+  });
+
+  it(`${surface}: preserves nonempty-before-enum connector diagnostics and eager order`, async () => {
+    const validate = await physicalPermissionListValidator(surface);
+    expect(validate(physicalConnectorPermission(["", "not-a-scope", 7]))).toEqual({
+      ok: false,
+      errors: [
+        "permissionRequest.connectorScopes[0] must be a non-empty string",
+        "permissionRequest.connectorScopes[1] is invalid",
+        "permissionRequest.connectorScopes[2] must be a non-empty string",
+      ],
+    });
+  });
+
+  it(`${surface}: retains separate empty-check and captured-extent connector observations`, async () => {
+    const validate = await physicalPermissionListValidator(surface);
+    const reads: string[] = [];
+    let lengths = 0;
+    const members = new Proxy(["source-control.read"], {
+      get(target, key, receiver): unknown {
+        reads.push(`get:${String(key)}`);
+        if (key === "length") return ++lengths === 1 ? 0 : 1;
+        return Reflect.get(target, key, receiver);
+      },
+      has(target, key): boolean {
+        reads.push(`has:${String(key)}`);
+        return Reflect.has(target, key);
+      },
+    });
+    expect(validate(physicalConnectorPermission(members))).toEqual({
+      ok: false,
+      errors: ["permissionRequest.connectorScopes must not be empty"],
+    });
+    expect(reads).toEqual(["get:length", "get:length", "has:0", "get:0"]);
+  });
+
+  it(`${surface}: stops connector traversal at a hole after an invalid member`, async () => {
+    const validate = await physicalPermissionListValidator(surface);
+    const members = new Array<unknown>(3);
+    members[0] = "";
+    Object.defineProperty(members, "2", {
+      get: (): never => {
+        throw new TypeError("Connector admission passed a hole");
+      },
+    });
+    expect(validate(physicalConnectorPermission(members))).toEqual({
+      ok: false,
+      errors: [
+        "permissionRequest.connectorScopes[0] must be a non-empty string",
+        "permissionRequest.connectorScopes[1] must be a non-empty string",
+      ],
+    });
+  });
+
+  it(`${surface}: rejects non-array evidence without inspecting length`, async () => {
+    const members = Object.defineProperty({}, "length", {
+      get: (): never => {
+        throw new TypeError("Non-array evidence length was inspected");
+      },
+    });
+    expect(await physicalEvidenceListErrors(surface, members)).toEqual([
+      "authorityEnvelope.taskRefs must be an array",
+    ]);
+  });
+
+  it(`${surface}: retains required empty evidence diagnostics`, async () => {
+    expect(await physicalEvidenceListErrors(surface, [])).toEqual([
+      "authorityEnvelope.taskRefs must not be empty",
+    ]);
+  });
+
+  it(`${surface}: retains evidence policy and immediate hole termination`, async () => {
+    const members = new Array<unknown>(3);
+    members[0] = "https://example.test/private";
+    Object.defineProperty(members, "2", {
+      get: (): never => {
+        throw new TypeError("Evidence admission passed a hole");
+      },
+    });
+    expect(await physicalEvidenceListErrors(surface, members)).toEqual([
+      "authorityEnvelope.taskRefs[0] must be content-free evidence-safe text",
+      "authorityEnvelope.taskRefs[1] must be content-free evidence-safe text",
+    ]);
+  });
+
+  it(`${surface}: captures evidence extent and accepts inherited members before later growth`, async () => {
+    const members = new Array<unknown>(1);
+    Object.setPrototypeOf(
+      members,
+      Object.defineProperty([], "0", {
+        get: (): string => {
+          members.push(null);
+          return "issue-3918";
+        },
+      }),
+    );
+    const reads: string[] = [];
+    const observed = new Proxy(members, {
+      get(target, key, receiver): unknown {
+        reads.push(`get:${String(key)}`);
+        return Reflect.get(target, key, receiver);
+      },
+      has(target, key): boolean {
+        reads.push(`has:${String(key)}`);
+        return Reflect.has(target, key);
+      },
+    });
+    expect(await physicalEvidenceListErrors(surface, observed)).toEqual([]);
+    expect(reads).toEqual(["get:length", "get:length", "has:0", "get:0"]);
+    expect(members).toHaveLength(2);
+  });
+}

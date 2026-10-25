@@ -356,3 +356,101 @@ describe("Coding structural admission mechanics preservation", () => {
     });
   }
 });
+
+async function physicalAuthListValidator(
+  surface: "source" | "public",
+): Promise<
+  typeof import("./coding-workbench-codex-auth.js").validateCodingWorkbenchCodexSubscriptionProfile
+> {
+  const module =
+    surface === "source"
+      ? await import("./coding-workbench-codex-auth.js")
+      : await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-codex-auth");
+  return module.validateCodingWorkbenchCodexSubscriptionProfile;
+}
+
+for (const surface of ["source", "public"] as const) {
+  it(`${surface}: retains optional empty auth runtime sources and original identity`, async () => {
+    const validate = await physicalAuthListValidator(surface);
+    const value = { ...c1bCoverageProfile(), runtimeBinarySources: [] };
+    expect(validate(value)).toEqual({ ok: true, value });
+    const result = validate(value);
+    if (result.ok) expect(result.value).toBe(value);
+  });
+
+  it(`${surface}: refuses non-array auth sources before consulting length`, async () => {
+    const validate = await physicalAuthListValidator(surface);
+    const members = Object.defineProperty({}, "length", {
+      get: (): never => {
+        throw new TypeError("Non-array length was inspected");
+      },
+    });
+    expect(validate({ ...c1bCoverageProfile(), runtimeBinarySources: members })).toEqual({
+      ok: false,
+      errors: ["profile.runtimeBinarySources must be an array"],
+    });
+  });
+
+  it(`${surface}: retains auth enum diagnostics and stops at a hole after an invalid member`, async () => {
+    const validate = await physicalAuthListValidator(surface);
+    const members = new Array<unknown>(3);
+    members[0] = "";
+    Object.defineProperty(members, "2", {
+      get: (): never => {
+        throw new TypeError("Admission passed a hole");
+      },
+    });
+    expect(validate({ ...c1bCoverageProfile(), runtimeBinarySources: members })).toEqual({
+      ok: false,
+      errors: [
+        "profile.runtimeBinarySources[0] is invalid",
+        "profile.runtimeBinarySources[1] is invalid",
+      ],
+    });
+  });
+
+  it(`${surface}: captures the auth extent before an inherited member grows the array`, async () => {
+    const validate = await physicalAuthListValidator(surface);
+    const members = new Array<unknown>(1);
+    Object.setPrototypeOf(
+      members,
+      Object.defineProperty([], "0", {
+        get: (): string => {
+          members.push(null);
+          return "managed-sidecar-runtime";
+        },
+      }),
+    );
+    const reads: string[] = [];
+    const observed = new Proxy(members, {
+      get(target, key, receiver): unknown {
+        reads.push(`get:${String(key)}`);
+        return Reflect.get(target, key, receiver);
+      },
+      has(target, key): boolean {
+        reads.push(`has:${String(key)}`);
+        return Reflect.has(target, key);
+      },
+    });
+    const value = { ...c1bCoverageProfile(), runtimeBinarySources: observed };
+    const result = validate(value);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(value);
+    expect(reads).toEqual(["get:length", "has:0", "get:0"]);
+    expect(members).toHaveLength(2);
+  });
+
+  it(`${surface}: keeps eager auth inspection after an invalid entry`, async () => {
+    const validate = await physicalAuthListValidator(surface);
+    const failure = new TypeError("Auth later member inspection");
+    const members: unknown[] = [7];
+    Object.defineProperty(members, "1", {
+      get: (): never => {
+        throw failure;
+      },
+    });
+    expect(() => validate({ ...c1bCoverageProfile(), runtimeBinarySources: members })).toThrow(
+      failure,
+    );
+  });
+}

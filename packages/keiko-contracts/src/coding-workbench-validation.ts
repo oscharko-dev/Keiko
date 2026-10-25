@@ -3,6 +3,7 @@ import {
   isRecord,
   isOneOf,
   validateAllowedKeys,
+  validatePhysicalArrayEntries,
 } from "./contract-validation-primitives.js";
 import { isCodeTaskChildRunId, isCodeTaskSkillId } from "./code-task-auxiliary.js";
 import { isCodingWorkbenchEvidenceSafeText } from "./coding-workbench-evidence.js";
@@ -80,34 +81,22 @@ function validateStringArray(
   errors: string[],
   requireNonEmpty: boolean,
 ): boolean {
-  let valid = true;
-  if (!Array.isArray(value)) {
-    valid = [appendValidationIssues(errors, `${path} must be an array`), valid].every(Boolean);
-    return valid;
-  }
-  if (requireNonEmpty && value.length === 0) {
-    valid = [appendValidationIssues(errors, `${path} must not be empty`), valid].every(Boolean);
-  }
-  const extent = value.length;
-  for (let index = 0; index < extent; index += 1) {
-    if (!(index in value))
-      return appendValidationIssues(errors, `${path}[${String(index)}] must be a non-empty string`);
-    const entry: unknown = value[index];
-    if (typeof entry !== "string" || entry.length === 0) {
-      valid = [
-        appendValidationIssues(errors, `${path}[${String(index)}] must be a non-empty string`),
-        valid,
-      ].every(Boolean);
-      continue;
-    }
-    if (allowed !== undefined && !allowed.includes(entry)) {
-      valid = [appendValidationIssues(errors, `${path}[${String(index)}] is invalid`), valid].every(
-        Boolean,
-      );
-    }
-  }
-
-  return valid;
+  return validatePhysicalArrayEntries(
+    value,
+    path,
+    errors,
+    requireNonEmpty,
+    "must be a non-empty string",
+    (entry, memberPath, memberErrors): boolean => {
+      if (typeof entry !== "string" || entry.length === 0) {
+        return appendValidationIssues(memberErrors, `${memberPath} must be a non-empty string`);
+      }
+      if (allowed !== undefined && !allowed.includes(entry)) {
+        return appendValidationIssues(memberErrors, `${memberPath} is invalid`);
+      }
+      return true;
+    },
+  );
 }
 
 function validateSafeEvidenceTextArray(
@@ -116,34 +105,15 @@ function validateSafeEvidenceTextArray(
   errors: string[],
   requireNonEmpty: boolean,
 ): boolean {
-  let valid = true;
-  if (!Array.isArray(value)) {
-    valid = [appendValidationIssues(errors, `${path} must be an array`), valid].every(Boolean);
-    return valid;
-  }
-  if (requireNonEmpty && value.length === 0) {
-    valid = [appendValidationIssues(errors, `${path} must not be empty`), valid].every(Boolean);
-  }
-  const extent = value.length;
-  for (let index = 0; index < extent; index += 1) {
-    if (!(index in value))
-      return appendValidationIssues(
-        errors,
-        `${path}[${String(index)}] must be content-free evidence-safe text`,
-      );
-    const entry: unknown = value[index];
-    if (!isCodingWorkbenchEvidenceSafeText(entry)) {
-      valid = [
-        appendValidationIssues(
-          errors,
-          `${path}[${String(index)}] must be content-free evidence-safe text`,
-        ),
-        valid,
-      ].every(Boolean);
-    }
-  }
-
-  return valid;
+  return validatePhysicalArrayEntries(
+    value,
+    path,
+    errors,
+    requireNonEmpty,
+    "must be content-free evidence-safe text",
+    (entry, memberPath, memberErrors): boolean =>
+      validateSafeEvidenceText(entry, memberPath, memberErrors),
+  );
 }
 
 function validateSafeEvidenceText(value: unknown, path: string, errors: string[]): boolean {
