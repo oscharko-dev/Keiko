@@ -340,25 +340,19 @@ function checkPlan(
   }
   const anchor = validateSafeId(value.anchorMessageId, `${path}.anchorMessageId`, errors, 128);
   const updated = validateUtcMilliseconds(value.updatedAt, `${path}.updatedAt`, errors);
-  const steps = validatePlanSteps(value.steps, path, errors);
+  const steps = validateBoundedActivityMembers(
+    value.steps,
+    `${path}.steps`,
+    CODING_SAFE_ACTIVITY_MAX_PLAN_STEPS,
+    errors,
+    validatePlanStep,
+  );
   const truncated = typeof value.truncated === "boolean";
   if (!truncated) errors.push(`${path}.truncated must be a boolean`);
   if (hasTruncatedActivityMember(value, "steps") && value.truncated !== true) {
     errors.push(`${path}.truncated must reflect truncated steps`);
   }
   return [revision, anchor, updated, steps, truncated].every(Boolean);
-}
-
-function validatePlanSteps(
-  value: unknown,
-  path: string,
-  errors: string[],
-): value is readonly CodingSafeActivityPlanStep[] {
-  if (!Array.isArray(value) || value.length > CODING_SAFE_ACTIVITY_MAX_PLAN_STEPS) {
-    errors.push(`${path}.steps must be a bounded array`);
-    return false;
-  }
-  return validateCodingPhysicalMembers(value, `${path}.steps`, errors, validatePlanStep);
 }
 
 function validatePlanStep(
@@ -390,6 +384,20 @@ function validatePlanStep(
     errors.push(`${path}.truncated must be a boolean`);
   }
   return text && state && truncated;
+}
+
+function validateBoundedActivityMembers<Member>(
+  value: unknown,
+  path: string,
+  limit: number,
+  errors: string[],
+  validateMember: (value: unknown, path: string, errors: string[]) => value is Member,
+): value is readonly Member[] {
+  if (!Array.isArray(value) || value.length > limit) {
+    errors.push(`${path} must be a bounded array`);
+    return false;
+  }
+  return validateCodingPhysicalMembers(value, path, errors, validateMember);
 }
 
 function hasTruncatedActivityMember(
@@ -447,33 +455,32 @@ function checkTurn(
   }
   errors.push(...exactKeys(value, ["turnId", "messages", "tools", "truncated"], path));
   const turn = validateUniqueId(value.turnId, `${path}.turnId`, ids.turns, errors);
-  const messages = validateMessages(value.messages, path, ids.messages, errors);
-  const tools = validateTools(value.tools, path, ids.tools, errors);
+  const messageValues = value.messages;
+  const messageIds = ids.messages;
+  const messages = validateBoundedActivityMembers(
+    messageValues,
+    `${path}.messages`,
+    CODING_SAFE_ACTIVITY_MAX_MESSAGES_PER_TURN,
+    errors,
+    (member, memberPath, memberErrors): member is CodingSafeActivityMessage =>
+      validateMessage(member, memberPath, messageIds, memberErrors),
+  );
+  const toolValues = value.tools;
+  const toolIds = ids.tools;
+  const tools = validateBoundedActivityMembers(
+    toolValues,
+    `${path}.tools`,
+    CODING_SAFE_ACTIVITY_MAX_TOOLS_PER_TURN,
+    errors,
+    (member, memberPath, memberErrors): member is CodingSafeActivityTool =>
+      validateTool(member, memberPath, toolIds, memberErrors),
+  );
   const truncated = typeof value.truncated === "boolean";
   if (!truncated) errors.push(`${path}.truncated must be a boolean`);
   if (hasTruncatedActivityMember(value, "messages") && value.truncated !== true) {
     errors.push(`${path}.truncated must reflect truncated messages`);
   }
   return turn && messages && tools && truncated;
-}
-
-function validateMessages(
-  value: unknown,
-  path: string,
-  ids: Set<string>,
-  errors: string[],
-): value is readonly CodingSafeActivityMessage[] {
-  if (!Array.isArray(value) || value.length > CODING_SAFE_ACTIVITY_MAX_MESSAGES_PER_TURN) {
-    errors.push(`${path}.messages must be a bounded array`);
-    return false;
-  }
-  return validateCodingPhysicalMembers(
-    value,
-    `${path}.messages`,
-    errors,
-    (member, memberPath, memberErrors): member is CodingSafeActivityMessage =>
-      validateMessage(member, memberPath, ids, memberErrors),
-  );
 }
 
 function validateMessage(
@@ -518,7 +525,13 @@ function checkMessage(
     errors.push(`${path}.role is invalid`);
   }
   const occurred = validateUtcMilliseconds(value.occurredAt, `${path}.occurredAt`, errors);
-  const segments = validateSegments(value.segments, path, errors);
+  const segments = validateBoundedActivityMembers(
+    value.segments,
+    `${path}.segments`,
+    CODING_SAFE_ACTIVITY_MAX_SEGMENTS_PER_MESSAGE,
+    errors,
+    validateSegment,
+  );
   const reasoning = !("reasoning" in value) || validateReasoning(value, path, errors);
   const truncated = typeof value.truncated === "boolean";
   if (!truncated) errors.push(`${path}.truncated must be a boolean`);
@@ -526,18 +539,6 @@ function checkMessage(
     errors.push(`${path}.truncated must reflect truncated segments`);
   }
   return [message, role, occurred, segments, reasoning, truncated].every(Boolean);
-}
-
-function validateSegments(
-  value: unknown,
-  path: string,
-  errors: string[],
-): value is readonly CodingSafeActivityTextSegment[] {
-  if (!Array.isArray(value) || value.length > CODING_SAFE_ACTIVITY_MAX_SEGMENTS_PER_MESSAGE) {
-    errors.push(`${path}.segments must be a bounded array`);
-    return false;
-  }
-  return validateCodingPhysicalMembers(value, `${path}.segments`, errors, validateSegment);
 }
 
 function validateSegment(
@@ -603,25 +604,6 @@ function validateReasoning(
 
 function utf8Bytes(value: string): number {
   return new TextEncoder().encode(value).length;
-}
-
-function validateTools(
-  value: unknown,
-  path: string,
-  ids: Set<string>,
-  errors: string[],
-): value is readonly CodingSafeActivityTool[] {
-  if (!Array.isArray(value) || value.length > CODING_SAFE_ACTIVITY_MAX_TOOLS_PER_TURN) {
-    errors.push(`${path}.tools must be a bounded array`);
-    return false;
-  }
-  return validateCodingPhysicalMembers(
-    value,
-    `${path}.tools`,
-    errors,
-    (member, memberPath, memberErrors): member is CodingSafeActivityTool =>
-      validateTool(member, memberPath, ids, memberErrors),
-  );
 }
 
 function validateTool(

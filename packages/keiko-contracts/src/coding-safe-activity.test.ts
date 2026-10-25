@@ -978,3 +978,77 @@ for (const surface of ["source", "public"] as const) {
     expect(reads).toEqual(["get:length", "get:length", "has:0", "get:0", "has:1", "get:1"]);
   });
 }
+
+const BOUNDED_ACTIVITY_ADMISSION_CASES = [
+  {
+    field: "steps",
+    path: "safeActivityFeed.plan.steps",
+    parentError: "safeActivityFeed.plan.revision must be a positive safe integer",
+    limit: CODING_SAFE_ACTIVITY_MAX_PLAN_STEPS,
+    lengthReads: 2,
+  },
+  {
+    field: "segments",
+    path: "safeActivityFeed.turns[0].messages[0].segments",
+    parentError: "safeActivityFeed.turns[0].messages[0].role is invalid",
+    limit: CODING_SAFE_ACTIVITY_MAX_SEGMENTS_PER_MESSAGE,
+    lengthReads: 2,
+  },
+  {
+    field: "messages",
+    path: "safeActivityFeed.turns[0].messages",
+    parentError: "safeActivityFeed.turns[0].turnId must be a bounded safe identifier",
+    limit: CODING_SAFE_ACTIVITY_MAX_MESSAGES_PER_TURN,
+    lengthReads: 2,
+  },
+  {
+    field: "tools",
+    path: "safeActivityFeed.turns[0].tools",
+    parentError: "safeActivityFeed.turns[0].turnId must be a bounded safe identifier",
+    limit: CODING_SAFE_ACTIVITY_MAX_TOOLS_PER_TURN,
+    lengthReads: 1,
+  },
+] as const;
+
+for (const surface of ["source", "public"] as const) {
+  it.each(BOUNDED_ACTIVITY_ADMISSION_CASES)(
+    `${surface}: rejects a non-array $field without consulting its length`,
+    async ({ field, path, parentError }) => {
+      const validate = await physicalActivityValidator(surface);
+      const members = Object.defineProperty({}, "length", {
+        get: (): never => {
+          throw new TypeError("Non-array admission inspected length");
+        },
+      });
+      expect(validate(physicalActivityInput(field, members))).toEqual({
+        ok: false,
+        errors: [parentError, `${path} must be a bounded array`],
+      });
+    },
+  );
+
+  it.each(BOUNDED_ACTIVITY_ADMISSION_CASES)(
+    `${surface}: rejects over-bound $field before physical member admission`,
+    async ({ field, path, parentError, limit, lengthReads }) => {
+      const validate = await physicalActivityValidator(surface);
+      const reads: string[] = [];
+      let lengths = 0;
+      const members = new Proxy([], {
+        get(target, key, receiver): unknown {
+          reads.push(`get:${String(key)}`);
+          if (key === "length") return ++lengths === 1 ? limit + 1 : 0;
+          return Reflect.get(target, key, receiver);
+        },
+        has(target, key): boolean {
+          reads.push(`has:${String(key)}`);
+          return Reflect.has(target, key);
+        },
+      });
+      expect(validate(physicalActivityInput(field, members))).toEqual({
+        ok: false,
+        errors: [parentError, `${path} must be a bounded array`],
+      });
+      expect(reads).toEqual(Array.from({ length: lengthReads }, () => "get:length"));
+    },
+  );
+}
