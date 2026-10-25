@@ -8,7 +8,12 @@ import type {
   ManualRefreshReasonCode,
   UnsupportedDocumentGuidanceCode,
 } from "@oscharko-dev/keiko-contracts";
-import { useLocale, type Locale, type MessageValues } from "@/lib/i18n";
+import {
+  interpolateMessage as interpolate,
+  useLocale,
+  type Locale,
+  type MessageValues,
+} from "@/lib/i18n";
 import type { KnowledgePodGuidanceCode, KnowledgePodUiGuidance } from "@/lib/local-knowledge-api";
 
 const LOCAL_KNOWLEDGE_EN_MESSAGES = {
@@ -1414,13 +1419,6 @@ type LocalKnowledgeMessageCatalog = Readonly<Record<LocalKnowledgeMessageKey, st
 
 function catalogFor(locale: Locale): LocalKnowledgeMessageCatalog {
   return locale === "de" ? LOCAL_KNOWLEDGE_DE_MESSAGES : LOCAL_KNOWLEDGE_EN_MESSAGES;
-}
-
-function interpolate(template: string, values: MessageValues = {}): string {
-  return template.replace(/\{(\w+)\}/gu, (match, name: string) => {
-    const value = values[name];
-    return value === undefined ? match : String(value);
-  });
 }
 
 export function translateLocalKnowledge(

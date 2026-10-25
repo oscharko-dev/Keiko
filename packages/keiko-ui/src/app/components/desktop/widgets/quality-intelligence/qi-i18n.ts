@@ -1,7 +1,12 @@
 "use client";
 
 import { useMemo } from "react";
-import { useLocale, type Locale, type MessageValues } from "@/lib/i18n";
+import {
+  interpolateMessage as interpolate,
+  useLocale,
+  type Locale,
+  type MessageValues,
+} from "@/lib/i18n";
 
 const QI_EN_MESSAGES = {
   "common.cancel": "Cancel",
@@ -499,13 +504,6 @@ type QiMessageCatalog = Readonly<Record<QiMessageKey, string>>;
 
 function catalogFor(locale: Locale): QiMessageCatalog {
   return locale === "de" ? QI_DE_MESSAGES : QI_EN_MESSAGES;
-}
-
-function interpolate(template: string, values: MessageValues = {}): string {
-  return template.replace(/\{(\w+)\}/gu, (match, name: string) => {
-    const value = values[name];
-    return value === undefined ? match : String(value);
-  });
 }
 
 export function translateQi(locale: Locale, key: QiMessageKey, values?: MessageValues): string {

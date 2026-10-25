@@ -46,16 +46,20 @@ function messageCatalogFor(locale: Locale): MessageCatalog {
   return loadedMessageCatalogs[locale] ?? EN_MESSAGES;
 }
 
+export function interpolateMessage(template: string, values: MessageValues = {}): string {
+  return template.replace(/\{(\w+)\}/gu, (match, name: string) => {
+    const value = values[name];
+    return value === undefined ? match : String(value);
+  });
+}
+
 function translateFromCatalog(
   catalog: MessageCatalog,
   key: MessageKey,
   values: MessageValues = {},
 ): string {
   const template = catalog[key] ?? EN_MESSAGES[key];
-  return template.replace(/\{(\w+)\}/gu, (match, name: string) => {
-    const value = values[name];
-    return value === undefined ? match : String(value);
-  });
+  return interpolateMessage(template, values);
 }
 
 function isLocaleReady(locale: Locale): boolean {

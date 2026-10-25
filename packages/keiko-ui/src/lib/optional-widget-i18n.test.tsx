@@ -94,3 +94,24 @@ describe("optional widget catalog ownership", () => {
     expect(screen.getByLabelText("Clicks")).toHaveTextContent("2");
   });
 });
+
+describe("optional widget interpolation value observations", () => {
+  it("preserves inherited missing and literal optional catalog values", () => {
+    let reads = 0;
+    class InheritedValues {
+      readonly [name: string]: string | number;
+      get count(): number {
+        reads += 1;
+        return 7;
+      }
+    }
+    const values = new InheritedValues();
+    expect(Object.hasOwn(values, "count")).toBe(false);
+    expect(translateOptionalWidget("en", "agentLauncher.agentCount", values)).toBe("7 agents");
+    expect(reads).toBe(1);
+    expect(translateOptionalWidget("en", "agentLauncher.agentCount")).toBe("{count} agents");
+    expect(translateOptionalWidget("en", "agentLauncher.agentCount", { count: "$& {other}" })).toBe(
+      "$& {other} agents",
+    );
+  });
+});

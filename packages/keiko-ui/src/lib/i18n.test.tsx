@@ -306,3 +306,38 @@ describe("I18nProvider", () => {
     expect(setterRenders).toBe(1);
   });
 });
+
+describe("core interpolation value observations", () => {
+  it("preserves missing zero empty and literal replacement values", () => {
+    expect(translate("en", "workspace.selection.many")).toBe("{count} workspace windows selected");
+    expect(translate("en", "workspace.selection.many", {})).toBe(
+      "{count} workspace windows selected",
+    );
+    expect(translate("en", "workspace.selection.many", { count: 0 })).toBe(
+      "0 workspace windows selected",
+    );
+    expect(translate("en", "workspace.selection.many", { count: "" })).toBe(
+      " workspace windows selected",
+    );
+    expect(translate("en", "workspace.selection.many", { count: "$& {other}" })).toBe(
+      "$& {other} workspace windows selected",
+    );
+  });
+
+  it("reads an inherited count getter once without requiring an own property", () => {
+    let reads = 0;
+    class InheritedValues {
+      readonly [name: string]: string | number;
+      get count(): number {
+        reads += 1;
+        return 4;
+      }
+    }
+    const values = new InheritedValues();
+    expect(Object.hasOwn(values, "count")).toBe(false);
+    expect(translate("en", "workspace.selection.many", values)).toBe(
+      "4 workspace windows selected",
+    );
+    expect(reads).toBe(1);
+  });
+});

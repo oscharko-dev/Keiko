@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useReducer } from "react";
-import { translate, useLocale, type Locale, type MessageValues } from "./i18n";
+import { interpolateMessage, translate, useLocale, type Locale, type MessageValues } from "./i18n";
 import type { MessageKey } from "./i18n-messages.en";
 import {
   OPTIONAL_WIDGET_EN_MESSAGES,
@@ -79,10 +79,7 @@ function translateWithCatalog(
   values: MessageValues = {},
 ): string {
   if (!isOptionalWidgetKey(key)) return translate(locale, key, values);
-  return catalog[key].replace(/\{(\w+)\}/gu, (match, name: string) => {
-    const value = values[name];
-    return value === undefined ? match : String(value);
-  });
+  return interpolateMessage(catalog[key], values);
 }
 
 function isOptionalWidgetKey(key: WidgetMessageKey): key is OptionalWidgetMessageKey {
