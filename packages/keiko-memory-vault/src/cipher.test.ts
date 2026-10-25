@@ -76,7 +76,7 @@ describe("resolveVaultKey — keyfile tier", () => {
     const fakeDir = mkdtempSync(join(tmpdir(), "keiko-keychain-"));
     try {
       const hangs = join(fakeDir, "security");
-      writeFileSync(hangs, "#!/bin/sh\nsleep 30\n");
+      writeFileSync(hangs, "#!/bin/sh\nexec sleep 30\n");
       chmodSync(hangs, 0o700);
 
       const started = process.hrtime.bigint();

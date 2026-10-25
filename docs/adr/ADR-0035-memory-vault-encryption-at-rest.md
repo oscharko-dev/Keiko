@@ -52,10 +52,30 @@ message, field path, record id or content, and does not claim that an outer tran
 settled. Foreign observational errors retain their original classification. The existing port's
 loss ledger and sink-failure fallback remain authoritative when evidence cannot be delivered.
 
-This initial gate runs before redaction. Its evidence does not certify the later physical SQL
-binding: the accepted post-redaction physical-write repair remains a separate obligation, with
-its own failure-first row, returned-record and success-event proofs. Legacy read normalization and
-the encrypted content/cleartext metadata split remain unchanged.
+### Physical record admission
+
+After all redaction callbacks, the serializer captures the fixed-schema write fields into owned,
+plain frozen containers and admits that projection through the canonical Memory record validator.
+Only those captured values supply encryption and SQL bindings. Foreign `toJSON` hooks and retained
+input references cannot supply later write values. The row writer returns that same admitted
+snapshot; vault return values and postcommit success events consume it, including batch and graph
+updates. Existing transaction, pre-image and throwing postcommit-hook semantics remain in force.
+
+Canonical invalidity at this boundary emits `memory-vault.write.rejected` with
+`stage: physical-admission`; initial caller admission keeps its existing stage. A technical inability
+to capture emits the separate same-port `memory-vault.write.capture-failed`, with the invocation id,
+closed method/stage/reason and no content or foreign error message. The optional process sink
+`errorEvidence` capability supplies the existing bounded Keiko frames/causes. Usable admitted frames
+permit complete evidence; absent, unreadable or failed capability produces partial evidence with
+loss none when retained. An empty cause chain is legitimate. Unknown correlation stays degraded in
+support analysis. Actual transport loss follows the existing ledger/fallback once.
+
+The capture catch ends before encoding, cipher and SQL, so those technical failures retain their
+original errors and classification. Read-decoder legacy normalization, immutable update identity,
+encryption tiers and the encrypted content/cleartext metadata split remain unchanged. Whole proofs
+select the actual physical row, preserve rollback/no-success/reopen pins, and reconstruct the
+registered refusal/capture outcomes through the real writer and support analyzer with zero optional
+context.
 
 ### Key resolution tiers (`keiko-memory-vault/cipher.ts`)
 
