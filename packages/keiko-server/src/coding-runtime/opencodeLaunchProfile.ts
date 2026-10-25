@@ -46,6 +46,17 @@ export function openCodePlanDirectory(stateRoot: string): string {
   return join(stateRoot, "home", ".opencode", "plan");
 }
 
+/**
+ * Where a native run's copy of the task workspace's `AGENTS.md` lives (#3900 AC3): the producer's
+ * own global instruction file in the private configuration directory the agent cannot write. Its
+ * instruction plugin watches that path from launch, so a copy Keiko writes, changes or removes
+ * later (after `/init`, say) reaches the next model call; a configured `instructions` source is
+ * watched only when it exists at launch, which would miss a file created during the run.
+ */
+export function openCodeRepositoryInstructionsPath(stateRoot: string): string {
+  return join(openCodeConfigDirectory(stateRoot), "AGENTS.md");
+}
+
 export interface OpenCodeContextGeometry {
   readonly contextWindowTokens: number;
   readonly maxInputTokens: number;
@@ -491,6 +502,9 @@ function createNativeOpenCodeV2Config(
     experimental: { todo: true },
     // The operator's admitted MCP servers, and nothing else (#3903, `opencodeNativeMcp.ts`).
     mcp,
+    // No configured source: the one instruction file is Keiko's bounded copy of the workspace's
+    // AGENTS.md in the producer's own global slot (`openCodeRepositoryInstructionsPath`, #3900 AC3).
+    instructions: [],
     permissions: [
       { action: "external_directory", resource: "*", effect: "deny" },
       // Last match wins: the plan agent's own plan directory is the one admitted external path.
@@ -513,7 +527,8 @@ function createNativeOpenCodeV2Config(
  * formatter setting (a child process the permission hook never sees, so no layer may turn it on
  * for a mode that must not run it; see `openCodeNativeFormatterDisposition`), and the MCP servers
  * (an MCP server is a process or a remote endpoint, so only the operator's registry names one;
- * see `opencodeNativeMcp.ts`). The pinned runtime
+ * see `opencodeNativeMcp.ts`), and the configured instruction sources (none: the one instruction
+ * file is Keiko's bounded copy of the workspace's AGENTS.md). The pinned runtime
  * merges `OPENCODE_CONFIG_CONTENT` after the private file and after every discovered project
  * document, so this subset is the last word if a project layer is ever admitted (#3903). Only
  * `{env:…}` placeholders appear in it; the gateway address and capability stay in the child
@@ -524,6 +539,7 @@ const OPENCODE_NATIVE_SERVER_OWNED_KEYS = [
   "share",
   "formatter",
   "mcp",
+  "instructions",
   "model",
   "default_agent",
   "providers",

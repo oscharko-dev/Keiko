@@ -112,6 +112,22 @@ remain capped at 16 KiB and 800 lines. An oversized requested model window retur
 smaller line window. Files above 1 MiB remain refused; neither a tool argument nor this loader can
 override the pinned helper ceiling.
 
+On the native profile the same bounded read reaches the model through the producer's own
+instruction plugin instead of the first message (#3900 AC3, 2026-10-25). Keiko writes it, under a
+header that labels it repository-authored and untrusted and grants no authority, to `AGENTS.md` in
+the run's private configuration directory: the pinned 2.1.4 runtime's global instruction file,
+which the agent cannot write. The producer watches that one slot from launch (a configured
+`instructions` source is watched only when it exists at launch, so it would miss a file created
+during the run), so Keiko refreshes the copy before the launch and before every turn, through the
+same exact-workspace read, renaming a complete file into place or removing it when nothing is
+admitted. After a change the turn waits out the producer's watcher before its prompt, so an edit, a
+file the guided `init` command creates and a removal reach the next model call as the producer's
+own instruction update. The initial turn then attaches no block, so the text reaches the model
+once; the mapped profiles keep the first-message block. The `instructions` setting is server-owned
+and empty, so no layer can name another source. Each refresh records the same
+`coding-runtime.repository-instructions.context` line, and a copy that cannot be written is a
+`refused` line with the `exception` reason, its frames and cause chain, never a failed turn.
+
 An application upgrade may still resolve the immutable npm runtime 1.1.3. Its previously approved
 helper digests remain admitted with their original 64 KiB wire capability; unknown bytes remain
 refused. The verified artifact, never a tool argument, selects one of the two closed protocol caps.
@@ -1109,10 +1125,12 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   sets `OPENCODE_DISABLE_PROJECT_CONFIG=true` for every tool profile: nothing under the workspace
   is a configuration layer, runs as a plugin, or selects a provider, model, credential or
   permission. The workspace-root `AGENTS.md` still reaches the model as Keiko's own bounded,
-  nonce-framed, untrusted initial context (ADR-0137 D1). Keiko's generated plugins load from the
-  private discovery directory, which the switch does not touch. The restriction stands for what
-  is executable or authoritative: the project `opencode.json`, every plugin, nested and walk-up
-  `AGENTS.md` discovery, `.claude/` and MCP configuration do not load. Plugins and
+  untrusted copy in the producer's global instruction slot (ADR-0137 D1), and the producer's
+  `read` loads the nested `AGENTS.md` files between its target and the workspace root. Keiko's
+  generated plugins load from the private discovery directory, which the switch does not touch.
+  The restriction stands for what is executable or authoritative: the project `opencode.json`,
+  every plugin, the project's own instruction discovery and `instructions` sources, `.claude/`
+  and MCP configuration do not load. Plugins and
   `opencode.json` stay refused until an operator admission exists that keeps an accepted plugin
   inside the live Authority Envelope and unable to replace the governing `keiko.native-policy`
   hook.

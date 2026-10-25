@@ -25,6 +25,10 @@ import { loadMcpServerRegistry } from "../mcp/mcpServerRegistry.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import type { CodingRuntimeEvidenceAggregator } from "./codingRuntimeEvidenceAggregator.js";
 import {
+  configuredCodingRuntimeRepositoryInstructionsEnabled,
+  KEIKO_CODING_REPOSITORY_INSTRUCTIONS_ENABLED_ENV,
+} from "./codingRuntimeRepositoryInstructions.js";
+import {
   configuredCodingRuntimeRepositoryItemsEnabled,
   KEIKO_CODING_REPOSITORY_ITEMS_ENABLED_ENV,
 } from "./codingRuntimeRepositoryItems.js";
@@ -216,6 +220,21 @@ function memoizedPerRun<Value>(load: (runId: string) => Value): (runId: string) 
   };
 }
 
+// The operator's decisions on the workspace's Markdown items (#3903) and its AGENTS.md (#3900 AC3).
+function repositoryOptions(env: NodeJS.ProcessEnv): {
+  readonly repositoryItemsEnabled: boolean;
+  readonly repositoryInstructionsEnabled: boolean;
+} {
+  return {
+    repositoryItemsEnabled: configuredCodingRuntimeRepositoryItemsEnabled(
+      env[KEIKO_CODING_REPOSITORY_ITEMS_ENABLED_ENV],
+    ),
+    repositoryInstructionsEnabled: configuredCodingRuntimeRepositoryInstructionsEnabled(
+      env[KEIKO_CODING_REPOSITORY_INSTRUCTIONS_ENABLED_ENV],
+    ),
+  };
+}
+
 function activatedPorts(
   input: ProductionOpenCodeActivationInput,
   portable: ResolvedPortableOpenCodeRuntime,
@@ -232,9 +251,7 @@ function activatedPorts(
       // #3903: the native profile admits the workspace's Markdown agents, commands and skills as
       // sanitized copies, read through this same helper.
       secureWorkspaceTextRead,
-      repositoryItemsEnabled: configuredCodingRuntimeRepositoryItemsEnabled(
-        input.env[KEIKO_CODING_REPOSITORY_ITEMS_ENABLED_ENV],
-      ),
+      ...repositoryOptions(input.env),
       // #3903 (C04): the operator's MCP server registry, read once for each native run at its
       // launch; the run's sandbox and its runtime binding see the same load.
       mcpServers: memoizedPerRun(

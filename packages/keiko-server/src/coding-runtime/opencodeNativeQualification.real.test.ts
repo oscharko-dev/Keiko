@@ -33,7 +33,10 @@ import {
   buildOpenCodeLaunchProfile,
   openCodeConfigDirectory,
   openCodePlanDirectory,
+  openCodeRepositoryInstructionsPath,
 } from "./opencodeLaunchProfile.js";
+import { createCodingRuntimeRepositoryInstructionsPort } from "./codingRuntimeRepositoryInstructions.js";
+import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
 import { OPENCODE_NATIVE_TOOL_DEFINITIONS } from "./opencodeNativeTools.js";
 import {
   decideOpenCodeNativePolicy,
@@ -324,7 +327,7 @@ interface LaunchOptions {
    */
   readonly toolchainPath?: string | undefined;
   /** Provisions the workspace beyond plain text files (a project's installed packages). */
-  readonly prepare?: ((fixture: Fixture) => void) | undefined;
+  readonly prepare?: ((fixture: Fixture) => void | Promise<void>) | undefined;
 }
 
 const PRODUCTION_LAUNCH: LaunchOptions = {
@@ -543,7 +546,7 @@ async function withRun(
     throw new Error("fixture-binary-missing");
   expect(process.platform).toBe("darwin");
   const fixture = createFixture(options.files);
-  options.prepare?.(fixture);
+  await options.prepare?.(fixture);
   const gateway = await startGateway();
   const mcp =
     options.mcpServers === undefined
@@ -1852,6 +1855,145 @@ describe("pinned native OpenCode with the project's own toolchain (#3901 AC1)", 
       });
     },
     240_000,
+  );
+});
+
+// ─── C03: repository instructions (#3900 AC3) ──────────────────────────────────────────────────
+
+// The project layer stays off, so the producer does not discover the workspace's AGENTS.md itself.
+// Keiko's bounded copy of it sits in the producer's own global instruction slot, which its
+// instruction plugin watches from launch, so a refreshed or newly created copy reaches the next
+// turn, and the original read tool still adds a nested AGENTS.md it walks past.
+describe("pinned native OpenCode repository instructions (C03, #3900 AC3)", () => {
+  const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
+
+  /** What production's secure read answers for the run's own workspace, read plainly here. */
+  function workspaceSource(fixture: Fixture): SecureWorkspaceTextReadPort {
+    return {
+      readText: ({ relativePath }) =>
+        Promise.resolve({
+          ok: true,
+          text: readFileSync(join(fixture.workspace, relativePath), "utf8"),
+        }),
+    };
+  }
+
+  function instructionsPort(
+    fixture: Fixture,
+  ): ReturnType<typeof createCodingRuntimeRepositoryInstructionsPort> {
+    return createCodingRuntimeRepositoryInstructionsPort({
+      enabled: true,
+      delivery: "native-instructions",
+      source: workspaceSource(fixture),
+      activityLog: undefined,
+    });
+  }
+
+  function requestText(run: Run, from: number): string {
+    return JSON.stringify(run.gateway.requests.slice(from).map((request) => request.body));
+  }
+
+  it.skipIf(skip)(
+    "loads Keiko's copy, refreshes it before the next turn and adds a nested AGENTS.md the read reaches",
+    async () => {
+      let materialize = (): Promise<boolean> => Promise.resolve(false);
+      const files = {
+        "AGENTS.md": "ROOT-RULE-ONE\n",
+        "src/AGENTS.md": "NESTED-RULE\n",
+        "src/a.ts": "export const a = 1;\n",
+      };
+      await withRun(
+        {
+          files,
+          prepare: async (fixture) => {
+            const port = instructionsPort(fixture);
+            const request = {
+              runId: RUN_ID,
+              isRunWorkspace: (): boolean => true,
+              targetPath: openCodeRepositoryInstructionsPath(fixture.state),
+            };
+            materialize = (): Promise<boolean> => port.materializeForRun(request);
+            expect(await materialize()).toBe(true);
+          },
+        },
+        async (run) => {
+          await scriptedTurn(run, read("src/a.ts"));
+          const first = JSON.stringify(run.gateway.requests[0]?.body);
+          // Exactly Keiko's copy, once: the producer did not discover the workspace file itself.
+          expect(first.split("ROOT-RULE-ONE").length - 1).toBe(1);
+          expect(first).toContain("copied by Keiko");
+          // The read of src/a.ts walked past src/AGENTS.md: a later call of the turn carries it.
+          expect(requestText(run, 1)).toContain("NESTED-RULE");
+
+          writeFileSync(join(run.fixture.workspace, "AGENTS.md"), "ROOT-RULE-TWO\n");
+          // What the composition does before every turn.
+          expect(await materialize()).toBe(true);
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          const before = run.gateway.requests.length;
+          await scriptedTurn(run, read("src/a.ts"));
+          // The producer keeps its system prompt stable and announces the change as its own
+          // system update carrying the new copy.
+          const messages =
+            (run.gateway.requests[before]?.body as { messages?: { content: unknown }[] })
+              .messages ?? [];
+          const update = messages
+            .map((message) => JSON.stringify(message.content))
+            .find((content) => content.includes("The instructions changed"));
+          expect(update).toContain("ROOT-RULE-TWO");
+          expect(update).not.toContain("ROOT-RULE-ONE");
+        },
+      );
+    },
+    180_000,
+  );
+
+  // `/init` (C02) writes the workspace's first AGENTS.md during a run: the copy Keiko writes before
+  // the next turn lands in the slot the producer has watched since launch.
+  it.skipIf(skip)(
+    "loads an AGENTS.md created during the run once Keiko copies it before the next turn",
+    async () => {
+      let materialize = (): Promise<boolean> => Promise.resolve(false);
+      await withRun(
+        {
+          files: { "src/a.ts": "export const a = 1;\n" },
+          prepare: async (fixture) => {
+            const port = createCodingRuntimeRepositoryInstructionsPort({
+              enabled: true,
+              delivery: "native-instructions",
+              source: {
+                readText: ({ relativePath }) => {
+                  const path = join(fixture.workspace, relativePath);
+                  return Promise.resolve(
+                    existsSync(path)
+                      ? { ok: true, text: readFileSync(path, "utf8") }
+                      : { ok: false, reason: "not-found" },
+                  );
+                },
+              },
+              activityLog: undefined,
+            });
+            const request = {
+              runId: RUN_ID,
+              isRunWorkspace: (): boolean => true,
+              targetPath: openCodeRepositoryInstructionsPath(fixture.state),
+            };
+            materialize = (): Promise<boolean> => port.materializeForRun(request);
+            expect(await materialize()).toBe(false);
+          },
+        },
+        async (run) => {
+          await scriptedTurn(run, read("src/a.ts"));
+          expect(requestText(run, 0)).not.toContain("CREATED-RULE");
+          writeFileSync(join(run.fixture.workspace, "AGENTS.md"), "CREATED-RULE\n");
+          expect(await materialize()).toBe(true);
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          const before = run.gateway.requests.length;
+          await scriptedTurn(run, read("src/a.ts"));
+          expect(requestText(run, before)).toContain("CREATED-RULE");
+        },
+      );
+    },
+    180_000,
   );
 });
 

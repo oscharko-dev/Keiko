@@ -221,7 +221,8 @@ export interface CodingRuntimeControlPlaneInput {
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly activityLog?: ServerLogSink | undefined;
   readonly projectMemory?: CodingRuntimeProjectMemoryPort | undefined;
-  readonly repositoryInstructions?: CodingRuntimeRepositoryInstructionsPort | undefined;
+  readonly repositoryInstructions?:
+    Pick<CodingRuntimeRepositoryInstructionsPort, "loadForRun"> | undefined;
 }
 
 export interface CodingRuntimeControlPlane {

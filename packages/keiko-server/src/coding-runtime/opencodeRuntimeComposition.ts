@@ -204,12 +204,14 @@ import {
   OPENCODE_RUNTIME_READINESS_PROMPT,
   openCodeConfigDirectory,
   openCodePlanDirectory,
+  openCodeRepositoryInstructionsPath,
 } from "./opencodeLaunchProfile.js";
 import type {
   OpenCodeContextGeometry,
   OpenCodeLaunchProfileResult,
 } from "./opencodeLaunchProfile.js";
 import type { CodingRuntimeRepositoryItemsPort } from "./codingRuntimeRepositoryItems.js";
+import type { CodingRuntimeRepositoryInstructionsCopyRequest } from "./codingRuntimeRepositoryInstructions.js";
 import {
   createGeneratedOpenCodeV2Plugins,
   createOpenCodeRuntimeAdapter,
@@ -450,6 +452,17 @@ export interface OpenCodeRuntimeCompositionInput {
    * absent leaves the discovery directory exactly as Keiko generated it.
    */
   readonly repositoryItems?: CodingRuntimeRepositoryItemsPort | undefined;
+  /**
+   * Native profile only: writes Keiko's bounded copy of the workspace's AGENTS.md into the
+   * producer's own global instruction slot (#3900 AC3); true when the copy changed.
+   */
+  readonly repositoryInstructions?:
+    | {
+        readonly materializeForRun: (
+          request: Omit<CodingRuntimeRepositoryInstructionsCopyRequest, "isRunWorkspace">,
+        ) => Promise<boolean>;
+      }
+    | undefined;
   /**
    * The operator's MCP server registry, read once per native run at launch (#3903,
    * `mcpServerRegistry.ts`); absent admits no MCP server.
@@ -792,15 +805,13 @@ export function createOpenCodeRuntimeComposition(
   return {
     manager,
     toolBridge: bridge.publicPort,
-    runPort: createRunPort(
-      runs,
-      input.diagnostics,
-      input.activityLog,
-      approvals,
-      openCodeSelectableAgents(toolProfile),
-      toolProfile === "native",
-      openCodePromptInputs(toolProfile),
-    ),
+    runPort: createRunPort(runs, input.diagnostics, input.activityLog, approvals, {
+      selectableAgents: openCodeSelectableAgents(toolProfile),
+      snapshots: toolProfile === "native",
+      promptInputs: openCodePromptInputs(toolProfile),
+      refreshInstructions: (run) =>
+        refreshRepositoryInstructions(input, run.runId, run.runRoot, undefined),
+    }),
   };
 }
 
@@ -886,23 +897,29 @@ function recordNativeNarrowingRefused(
   );
 }
 
+/** What the tool profile decides about a run's port. */
+interface RunPortProfile {
+  readonly selectableAgents: readonly CodingWorkbenchAgent[];
+  /** Native runs record turn images for undo. */
+  readonly snapshots: boolean;
+  readonly promptInputs: OpenCodePromptInputsRunPort["promptInputs"];
+  /** Refreshes a native run's AGENTS.md copy before a turn (#3900 AC3); true when it changed. */
+  readonly refreshInstructions: (run: ReadyRun) => Promise<boolean>;
+}
+
 function createRunPort(
   runs: Map<string, PreparedRun>,
   diagnostics: ServerDiagnosticSink | undefined,
   activityLog: ServerLogSink | undefined,
   approvals: ReturnType<typeof createOpenCodeV2ApprovalRequests>,
-  selectableAgents: readonly CodingWorkbenchAgent[],
-  snapshots: boolean,
-  promptInputs: OpenCodePromptInputsRunPort["promptInputs"],
+  profile: RunPortProfile,
 ): OpenCodeRunPort {
+  const { selectableAgents, snapshots, promptInputs, refreshInstructions } = profile;
   const readyRun = (runId: string): ReadyRun | undefined => {
     const run = runs.get(runId);
     return isReadyRun(run) ? run : undefined;
   };
-  const revertRun = (runId: string): ReadyRun | undefined => {
-    const run = runs.get(runId);
-    return run?.revertReady === true && hasRunClient(run) ? run : undefined;
-  };
+  const revertRun = revertReadyRun(runs);
   const { ports: deliveryPorts, withdrawPendingInbox } = createDeliveryPorts(
     readyRun,
     promptInputs,
@@ -911,7 +928,11 @@ function createRunPort(
   );
   const abortTask = createAbortTask(readyRun, activityLog, withdrawPendingInbox);
   return {
-    submitTask: createSubmitTask(readyRun, diagnostics, activityLog, selectableAgents),
+    submitTask: createSubmitTask(
+      readyRun,
+      { diagnostics, activityLog, refreshInstructions },
+      selectableAgents,
+    ),
     selectableAgents,
     ...createOpenCodeCommandsRunPort({ readyRun, capabilities: promptInputs, activityLog }),
     ...deliveryPorts,
@@ -940,6 +961,14 @@ function createRunPort(
  * yet (`opencodeInbox.ts`), both over the one delivery ledger. The interrupt's withdrawal of what is
  * still pending is returned separately: it belongs to the abort, not to the run port's surface.
  */
+// The run an undo may act on: its client is bound and its turn images are recorded.
+function revertReadyRun(runs: Map<string, PreparedRun>): ReadyRunLookup {
+  return (runId) => {
+    const run = runs.get(runId);
+    return run?.revertReady === true && hasRunClient(run) ? run : undefined;
+  };
+}
+
 function createDeliveryPorts(
   readyRun: ReadyRunLookup,
   promptInputs: OpenCodePromptInputsRunPort["promptInputs"],
@@ -974,10 +1003,14 @@ function createDeliveryPorts(
 
 function createSubmitTask(
   readyRun: ReadyRunLookup,
-  diagnostics: ServerDiagnosticSink | undefined,
-  activityLog: ServerLogSink | undefined,
+  sinks: {
+    readonly diagnostics: ServerDiagnosticSink | undefined;
+    readonly activityLog: ServerLogSink | undefined;
+    readonly refreshInstructions: (run: ReadyRun) => Promise<boolean>;
+  },
   selectableAgents: readonly CodingWorkbenchAgent[],
 ): OpenCodeRunPort["submitTask"] {
+  const { diagnostics, activityLog } = sinks;
   return async (runId, text, initialContext, agent, inputs, origin): Promise<boolean> => {
     const run = readyRun(runId);
     // A delivery joins the turn in flight (`deliverPrompt`); it never starts or arms one.
@@ -994,6 +1027,7 @@ function createSubmitTask(
       return false;
     }
     if (!(await synchronizeTurnBaseline(run))) return false;
+    await refreshedInstructions(run, sinks.refreshInstructions);
     if (!run.runtimeAdapter.armTurn()) return false;
     // A new turn: what an undo must find unchanged is recorded afresh from here on. Keiko's own
     // continuation of the human's request keeps that request's images: its undo reaches back to it.
@@ -1605,6 +1639,7 @@ async function materializePrepare(
   const config = profile.config;
   materialize(runRoot, config, createGeneratedOpenCodeV2Plugins(input.toolProfile));
   await admitRepositoryItems(input, request, runRoot);
+  await refreshRepositoryInstructions(input, request.runId, runRoot, request.signal);
   const password = profile.env.OPENCODE_SERVER_PASSWORD;
   if (password === undefined) throw new Error("password-missing");
   const configDigest = createHash("sha256").update(config, "utf8").digest("hex");
@@ -1695,6 +1730,39 @@ function preparedLaunch(
       KEIKO_TOOL_FACADE_CAPABILITY: input.capabilities.toolFacadeCapability,
     },
   };
+}
+
+/**
+ * Keiko's bounded copy of the workspace's AGENTS.md in the producer's own global instruction slot
+ * (#3900 AC3): before the launch, and again before each turn so an edit, a new file (`/init`) or a
+ * removal reaches the next turn. The producer's instruction plugin watches that path from launch;
+ * after a change the turn waits out its 100 ms debounce, so the change is loaded before the prompt.
+ */
+async function refreshRepositoryInstructions(
+  input: OpenCodeRuntimeCompositionInput,
+  runId: string,
+  runRoot: string,
+  signal: AbortSignal | undefined,
+): Promise<boolean> {
+  if (input.toolProfile !== "native" || input.repositoryInstructions === undefined) return false;
+  return input.repositoryInstructions.materializeForRun({
+    runId,
+    targetPath: openCodeRepositoryInstructionsPath(runRoot),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+const REPOSITORY_INSTRUCTIONS_REFRESH_MS = 250;
+
+/** Refreshes the copy before a turn and, after a change, waits out the producer's file watcher. */
+async function refreshedInstructions(
+  run: ReadyRun,
+  refresh: (run: ReadyRun) => Promise<boolean>,
+): Promise<void> {
+  if (!(await refresh(run))) return;
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, REPOSITORY_INSTRUCTIONS_REFRESH_MS);
+  });
 }
 
 // The copies join the discovery directory before the first launch, so the config digest stays the

@@ -7,6 +7,7 @@ import {
   OPENCODE_GOVERNED_COMPACTION_PROMPT,
   OPENCODE_GOVERNED_SYSTEM_PROMPT,
   openCodeConfigDirectory,
+  openCodeRepositoryInstructionsPath,
   resolveOpenCodeContextGeometry,
   type OpenCodeLaunchProfileInput,
   openCodePlanDirectory,
@@ -246,6 +247,7 @@ describe("OpenCode launch profile", () => {
       expect(Object.keys(content).sort()).toEqual([
         "default_agent",
         "formatter",
+        "instructions",
         "mcp",
         "model",
         "permissions",
@@ -316,7 +318,14 @@ describe("OpenCode launch profile", () => {
       expect(content).not.toContain(env.OPENCODE_SERVER_PASSWORD ?? "unset");
       expect(content).not.toMatch(/https?:\/\//u);
       expect(content).not.toContain("plugin");
-      expect(content).not.toContain("instructions");
+      // #3900 AC3: no configured instruction source at all, never a workspace path or a URL; the
+      // one instruction file is Keiko's copy in the private configuration directory.
+      const instructions = (JSON.parse(content) as { readonly instructions?: unknown })
+        .instructions;
+      expect(instructions).toEqual([]);
+      expect(openCodeRepositoryInstructionsPath("/private/run")).toBe(
+        `${openCodeConfigDirectory("/private/run")}/AGENTS.md`,
+      );
     });
 
     it("leaves the mapped profiles without a configuration-content layer", () => {

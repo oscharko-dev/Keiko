@@ -173,7 +173,8 @@ function optionalOrchestratorDeps(input: {
   readonly activityLog?: ServerLogSink | undefined;
   readonly issueIntake?: CodingRuntimeIssueIntake | undefined;
   readonly projectMemory?: CodingRuntimeProjectMemoryPort | undefined;
-  readonly repositoryInstructions?: CodingRuntimeRepositoryInstructionsPort | undefined;
+  readonly repositoryInstructions?:
+    Pick<CodingRuntimeRepositoryInstructionsPort, "loadForRun"> | undefined;
   readonly terminalFacts?: CodingRuntimeTerminalFacts | undefined;
   readonly runEffort?: ((runId: string) => CodingRuntimeHostRunEffort | undefined) | undefined;
 }): Partial<OptionalOrchestratorDeps> {
@@ -276,7 +277,7 @@ function fixture(
   snapshotStore?: CodingRuntimeSnapshotStore,
   projectMemory?: CodingRuntimeProjectMemoryPort,
   history?: CodingRuntimeHistory,
-  repositoryInstructions?: CodingRuntimeRepositoryInstructionsPort,
+  repositoryInstructions?: Pick<CodingRuntimeRepositoryInstructionsPort, "loadForRun">,
   terminalFacts?: CodingRuntimeTerminalFacts,
   runEffort?: (runId: string) => CodingRuntimeHostRunEffort | undefined,
   // #3873 review: the workspace the global active pointer resolves to, overridable so a test can

@@ -5074,6 +5074,10 @@ function createUiCodingRuntimeRepositoryInstructions(
     enabled: configuredCodingRuntimeRepositoryInstructionsEnabled(
       args.options.env[KEIKO_CODING_REPOSITORY_INSTRUCTIONS_ENABLED_ENV],
     ),
+    // A native run's own instruction plugin loads the file (#3900 AC3); the initial turn then
+    // attaches no block, so the instructions reach the model once.
+    delivery:
+      productionOpenCodeToolProfile() === "native" ? "native-instructions" : "initial-context",
     source: codingRuntimeHost?.secureWorkspaceTextRead,
     activityLog: processServerLogSink(),
   });

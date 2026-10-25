@@ -682,6 +682,8 @@ interface StartBridgeControl {
   readonly activityLog?: ServerLogSink;
   /** The repository items admission the composition is handed (#3903). */
   readonly repositoryItems?: CodingRuntimeRepositoryItemsPort;
+  /** The native AGENTS.md copy the composition is handed (#3900 AC3). */
+  readonly repositoryInstructions?: InstructionsCopyPort;
   readonly startTimeoutMs?: number;
   readonly shutdownTimeoutMs?: number;
   readonly onRelease?: (runId: string) => void;
@@ -982,10 +984,27 @@ function optionalActivityLog(control: StartBridgeControl | undefined): {
   return control?.activityLog === undefined ? {} : { activityLog: control.activityLog };
 }
 
+/** The composition's native AGENTS.md copy port (#3900 AC3), as the backend binds it. */
+interface InstructionsCopyPort {
+  readonly materializeForRun: (request: {
+    readonly runId: string;
+    readonly targetPath: string;
+    readonly signal?: AbortSignal | undefined;
+  }) => Promise<boolean>;
+}
+
 function optionalRepositoryItems(control: StartBridgeControl | undefined): {
   readonly repositoryItems?: CodingRuntimeRepositoryItemsPort;
 } {
   return control?.repositoryItems === undefined ? {} : { repositoryItems: control.repositoryItems };
+}
+
+function optionalRepositoryInstructions(control: StartBridgeControl | undefined): {
+  readonly repositoryInstructions?: InstructionsCopyPort;
+} {
+  return control?.repositoryInstructions === undefined
+    ? {}
+    : { repositoryInstructions: control.repositoryInstructions };
 }
 
 function optionalToolResultCorrelation(control: StartBridgeControl | undefined): {
@@ -1407,6 +1426,7 @@ async function startBridgeFixture(
     ...optionalDiagnostics(control),
     ...optionalActivityLog(control),
     ...optionalRepositoryItems(control),
+    ...optionalRepositoryInstructions(control),
     ...optionalToolResultCorrelation(control),
     ...optionalRuntimeEvents(control),
     ...optionalSpawnGuard(control),
@@ -3564,6 +3584,70 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
     } finally {
       await fixture.stop();
     }
+  });
+
+  // #3900 AC3: Keiko's bounded copy of the workspace's AGENTS.md is written before the launch, into
+  // the producer's global instruction slot, and refreshed before every turn.
+  describe("repository instructions copy", () => {
+    function recordingInstructions(
+      order: string[],
+      changed: boolean[],
+    ): {
+      readonly port: InstructionsCopyPort;
+      readonly targets: string[];
+    } {
+      const targets: string[] = [];
+      return {
+        targets,
+        port: {
+          materializeForRun: (request): Promise<boolean> => {
+            order.push("materialize");
+            targets.push(request.targetPath);
+            return Promise.resolve(changed.shift() ?? false);
+          },
+        },
+      };
+    }
+
+    it("writes the copy before the native child starts and refreshes it before each turn", async () => {
+      const order: string[] = [];
+      const { port, targets } = recordingInstructions(order, [true, true]);
+      const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+        mode: "supervised-coding",
+        readToolProfile: () => "native",
+        repositoryInstructions: port,
+        onSpawn: () => order.push("spawn"),
+      });
+      try {
+        expect(order).toEqual(["materialize", "spawn"]);
+        await expect(
+          fixture.runtime.runPort.submitTask(FIXTURE_RUN_ID, "bounded task"),
+        ).resolves.toBe(true);
+        expect(order).toEqual(["materialize", "spawn", "materialize"]);
+        expect(targets).toHaveLength(2);
+        expect(new Set(targets).size).toBe(1);
+        expect(targets[0]?.endsWith(join("config", "opencode", "AGENTS.md"))).toBe(true);
+      } finally {
+        await fixture.stop();
+      }
+    });
+
+    it.each(["direct", "code-mode"] as const)(
+      "never writes a copy on the mapped %s profile",
+      async (profile) => {
+        const order: string[] = [];
+        const { port } = recordingInstructions(order, []);
+        const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+          readToolProfile: () => profile,
+          repositoryInstructions: port,
+        });
+        try {
+          expect(order).toEqual([]);
+        } finally {
+          await fixture.stop();
+        }
+      },
+    );
   });
 
   // #3903: the native profile admits the workspace's Markdown agents, commands and skills into the

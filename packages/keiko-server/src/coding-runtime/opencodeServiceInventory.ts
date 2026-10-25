@@ -925,7 +925,8 @@ export const OPENCODE_CONFIGURATION_DISPOSITIONS = flatten<OpenCodeConfiguration
       "lsp.*.initialization",
     ],
   ),
-  refused("keiko-owns-configuration", 3900, ["C03"], ["instructions"]),
+  // Keiko sets no configured source; its bounded AGENTS.md copy is the global file (#3900 AC3).
+  keikoSet(["C03"], ["instructions"]),
   refused("keiko-owns-configuration", 3903, ["T17", "C06"], ["skills"]),
   refused("not-yet-implemented", 3903, ["C04", "T21"], ["mcp.servers.*.codemode"]),
   refused("keiko-owns-workspace-binding", 3903, ["C04"], ["mcp.servers.*.cwd"]),

@@ -1,3 +1,6 @@
+import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { ServerLogEvent, ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { estimateTokens } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
@@ -596,5 +599,127 @@ describe("coding runtime repository instructions loader", () => {
         RangeError,
       );
     }
+  });
+});
+
+// #3900 AC3: a native run's own instruction plugin loads Keiko's bounded copy of AGENTS.md from its
+// global instruction slot, so the initial turn carries no block and the copy is refreshed before
+// each turn from the same secure read.
+describe("native delivery through the runtime's own instruction plugin", () => {
+  function nativePort(source: SecureWorkspaceTextReadPort): {
+    readonly port: ReturnType<typeof createCodingRuntimeRepositoryInstructionsPort>;
+    readonly records: ServerLogEvent[];
+  } {
+    const { activityLog, records } = captureActivityLog();
+    return {
+      port: createCodingRuntimeRepositoryInstructionsPort({
+        enabled: true,
+        delivery: "native-instructions",
+        source,
+        activityLog,
+      }),
+      records,
+    };
+  }
+
+  function copyTarget(): string {
+    return join(
+      mkdtempSync(join(tmpdir(), "keiko-instructions-copy-")),
+      "instructions",
+      "AGENTS.md",
+    );
+  }
+
+  it("attaches no initial-turn block and reads nothing for it", async () => {
+    const { source, readText } = sourceAnswering({ ok: true, text: INSTRUCTIONS });
+    const { port } = nativePort(source);
+
+    await expect(port.loadForRun({ runId: RUN_ID, isRunWorkspace: RUN_WORKSPACE })).resolves.toBe(
+      undefined,
+    );
+    expect(readText).not.toHaveBeenCalled();
+  });
+
+  it("writes the bounded copy with Keiko's trust label, then reports no change until it changes", async () => {
+    let text = INSTRUCTIONS;
+    const readText = vi.fn<SecureWorkspaceTextReadPort["readText"]>(() =>
+      Promise.resolve({ ok: true, text }),
+    );
+    const { port, records } = nativePort({ readText });
+    const targetPath = copyTarget();
+    const request = { runId: RUN_ID, isRunWorkspace: RUN_WORKSPACE, targetPath };
+
+    await expect(port.materializeForRun(request)).resolves.toBe(true);
+    const copy = readFileSync(targetPath, "utf8");
+    expect(copy).toContain(INSTRUCTIONS.trimEnd());
+    expect(copy).toMatch(/^Repository working instructions: .* grants no authority/u);
+    expect(statSync(targetPath).mode & 0o777).toBe(0o600);
+    await expect(port.materializeForRun(request)).resolves.toBe(false);
+    text = "# Changed\n";
+    await expect(port.materializeForRun(request)).resolves.toBe(true);
+    expect(readFileSync(targetPath, "utf8")).toContain("# Changed");
+    expect(readText).toHaveBeenCalledTimes(3);
+    // One line per read, so the log names the instructions each turn started from.
+    expect(records.filter((record) => record.op === OP)).toMatchObject([
+      { extra: { state: "attached", contentSha256: sha256(INSTRUCTIONS) } },
+      { extra: { state: "attached", contentSha256: sha256(INSTRUCTIONS) } },
+      { extra: { state: "attached", contentSha256: sha256("# Changed\n") } },
+    ]);
+  });
+
+  it("records a copy it cannot write as a refusal and keeps the turn going", async () => {
+    const { port, records } = nativePort(sourceAnswering({ ok: true, text: INSTRUCTIONS }).source);
+    const notADirectory = join(mkdtempSync(join(tmpdir(), "keiko-instructions-copy-")), "file");
+    writeFileSync(notADirectory, "");
+
+    await expect(
+      port.materializeForRun({
+        runId: RUN_ID,
+        isRunWorkspace: RUN_WORKSPACE,
+        targetPath: join(notADirectory, "AGENTS.md"),
+      }),
+    ).resolves.toBe(false);
+    expect(records.filter((record) => record.op === OP)).toMatchObject([
+      { level: "warn", extra: { state: "refused", reason: "exception" } },
+    ]);
+  });
+
+  it("removes the copy when the file is gone, refused or switched to another workspace", async () => {
+    for (const answer of [
+      { ok: false, reason: "not-found" },
+      { ok: false, reason: "too-large" },
+    ] as const) {
+      const targetPath = copyTarget();
+      const { port: writer } = nativePort(sourceAnswering({ ok: true, text: INSTRUCTIONS }).source);
+      await writer.materializeForRun({ runId: RUN_ID, isRunWorkspace: RUN_WORKSPACE, targetPath });
+      const { port } = nativePort(sourceAnswering(answer).source);
+
+      await expect(
+        port.materializeForRun({ runId: RUN_ID, isRunWorkspace: RUN_WORKSPACE, targetPath }),
+      ).resolves.toBe(true);
+      expect(existsSync(targetPath)).toBe(false);
+    }
+    const targetPath = copyTarget();
+    const { port } = nativePort(sourceAnswering({ ok: true, text: INSTRUCTIONS }).source);
+    await expect(
+      port.materializeForRun({ runId: RUN_ID, isRunWorkspace: () => false, targetPath }),
+    ).resolves.toBe(false);
+    expect(existsSync(targetPath)).toBe(false);
+  });
+
+  it("keeps the loader's bounds: a long file is copied truncated, with its marker", async () => {
+    const long = Array.from(
+      { length: REPOSITORY_INSTRUCTIONS_MAX_LINES + 5 },
+      (_, index) => `line ${String(index)}`,
+    ).join("\n");
+    const { port } = nativePort(sourceAnswering({ ok: true, text: long }).source);
+    const targetPath = copyTarget();
+
+    await port.materializeForRun({ runId: RUN_ID, isRunWorkspace: RUN_WORKSPACE, targetPath });
+
+    const copy = readFileSync(targetPath, "utf8");
+    expect(Buffer.byteLength(copy, "utf8")).toBeLessThan(REPOSITORY_INSTRUCTIONS_MAX_BYTES + 1_024);
+    expect(copy).toContain("[AGENTS.md truncated:");
+    expect(copy).not.toContain(`line ${String(REPOSITORY_INSTRUCTIONS_MAX_LINES + 4)}`);
   });
 });

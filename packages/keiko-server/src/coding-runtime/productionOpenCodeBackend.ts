@@ -48,6 +48,7 @@ import {
   type CodingSafeActivitySignal,
 } from "./codingSafeActivityProjection.js";
 import { createCodingRuntimeRepositoryItemsPort } from "./codingRuntimeRepositoryItems.js";
+import { createCodingRuntimeRepositoryInstructionsPort } from "./codingRuntimeRepositoryInstructions.js";
 import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
 import { createDevLaneRuntimeProcessBackend } from "./devLaneRuntimeProcessBackend.js";
 import { createNativeRuntimeProcessBackend } from "./nativeRuntimeProcessBackend.js";
@@ -168,6 +169,8 @@ export interface ProductionOpenCodeBackendInput {
   readonly secureWorkspaceTextRead?: SecureWorkspaceTextReadPort | undefined;
   /** The operator's `KEIKO_CODING_REPOSITORY_ITEMS_ENABLED` decision; absent keeps the default, on. */
   readonly repositoryItemsEnabled?: boolean | undefined;
+  /** The operator's opt-out of the workspace AGENTS.md (#3900 AC3); absent keeps it on. */
+  readonly repositoryInstructionsEnabled?: boolean | undefined;
   /** The operator's MCP server registry for one native run (`mcpServerRegistry.ts`). */
   readonly mcpServers?: ((correlationId: string) => readonly McpServerDefinition[]) | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
@@ -419,10 +422,14 @@ function nativeRunInputs(
   input: LaunchInput,
   run: ProductionRuntimeBackendInput,
   toolProfile: OpenCodeToolProfile,
-): Pick<OpenCodeRuntimeCompositionInput, "repositoryItems" | "mcpServers"> {
+): Pick<
+  OpenCodeRuntimeCompositionInput,
+  "repositoryItems" | "repositoryInstructions" | "mcpServers"
+> {
   if (toolProfile !== "native") return {};
   return {
     repositoryItems: repositoryItemsFor(input, run),
+    repositoryInstructions: repositoryInstructionsFor(input, run),
     ...(input.mcpServers === undefined ? {} : { mcpServers: input.mcpServers }),
   };
 }
@@ -440,6 +447,24 @@ function sessionContinuityFor(
           workspaceId: run.context.workspaceId,
         },
       };
+}
+
+// The run's AGENTS.md as the native runtime's own instruction source (#3900 AC3), read only while
+// its workspace is still the active one.
+function repositoryInstructionsFor(
+  input: LaunchInput,
+  run: ProductionRuntimeBackendInput,
+): NonNullable<OpenCodeRuntimeCompositionInput["repositoryInstructions"]> {
+  const port = createCodingRuntimeRepositoryInstructionsPort({
+    enabled: input.repositoryInstructionsEnabled !== false,
+    delivery: "native-instructions",
+    source: input.secureWorkspaceTextRead,
+    activityLog: input.activityLog ?? processServerLogSink(),
+  });
+  return {
+    materializeForRun: (request) =>
+      port.materializeForRun({ ...request, isRunWorkspace: run.workspaceIsCurrent }),
+  };
 }
 
 // The run's own repository items (#3903), read only while its workspace is still the active one.

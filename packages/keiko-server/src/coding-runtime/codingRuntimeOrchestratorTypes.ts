@@ -122,7 +122,8 @@ export interface CodingRuntimeOrchestratorDeps {
    * project memory (ADR-0137 D1). Composed by `deps.ts` for every production control plane; a
    * fixture that omits it starts its runs without repository instructions and without the line.
    */
-  readonly repositoryInstructions?: CodingRuntimeRepositoryInstructionsPort | undefined;
+  readonly repositoryInstructions?:
+    Pick<CodingRuntimeRepositoryInstructionsPort, "loadForRun"> | undefined;
   readonly serverPrincipal: () => string | undefined;
   /**
    * Server-level read-only research grant registry (#2387). The grant is exposed only through the
