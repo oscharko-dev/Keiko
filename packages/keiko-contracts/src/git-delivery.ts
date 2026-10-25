@@ -815,16 +815,20 @@ function isPushInputs(
   );
 }
 
+function hasValidPrMetadata(value: Record<string, unknown>): boolean {
+  return (
+    isNonEmptyString(value.headBranchName) &&
+    isNonEmptyString(value.baseBranchName) &&
+    isNonNegativeInteger(value.titleByteLength) &&
+    isNonNegativeInteger(value.bodyByteLength)
+  );
+}
+
 function isPrCreateInputs(
   value: Record<string, unknown>,
 ): value is Record<string, unknown> & Omit<GitDeliveryPrCreateInputs, "kind"> {
   return (
-    isGitObjectId(value.verifiedCommitSha) &&
-    isNonEmptyString(value.headBranchName) &&
-    isNonEmptyString(value.baseBranchName) &&
-    isNonNegativeInteger(value.titleByteLength) &&
-    isNonNegativeInteger(value.bodyByteLength) &&
-    isBoolean(value.isDraft)
+    isGitObjectId(value.verifiedCommitSha) && hasValidPrMetadata(value) && isBoolean(value.isDraft)
   );
 }
 
@@ -834,10 +838,7 @@ function isPrUpdateInputs(
   return (
     isGitObjectId(value.verifiedCommitSha) &&
     isNonEmptyString(value.prExternalId) &&
-    isNonEmptyString(value.headBranchName) &&
-    isNonEmptyString(value.baseBranchName) &&
-    isNonNegativeInteger(value.titleByteLength) &&
-    isNonNegativeInteger(value.bodyByteLength) &&
+    hasValidPrMetadata(value) &&
     isBoolean(value.convertToDraft) &&
     isBoolean(value.convertFromDraft) &&
     // KEIKO-0805: convertToDraft and convertFromDraft are mutually exclusive — a single pr-update

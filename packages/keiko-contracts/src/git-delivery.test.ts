@@ -1113,3 +1113,179 @@ describe("optional execution detail factory boundary preservation", () => {
     });
   }
 });
+
+function prMetadataInput(kind: "pr-create" | "pr-update"): Record<string, unknown> {
+  const metadata = {
+    kind,
+    verifiedCommitSha: "a".repeat(40),
+    headBranchName: "feature",
+    baseBranchName: "dev",
+    titleByteLength: 5,
+    bodyByteLength: 9,
+  };
+  return kind === "pr-create"
+    ? { ...metadata, isDraft: false }
+    : { ...metadata, prExternalId: "42", convertToDraft: true, convertFromDraft: false };
+}
+
+interface PrMetadataRefusal {
+  readonly field: string;
+  readonly invalid: string | number;
+  readonly reads: readonly string[];
+}
+
+function prMetadataRefusals(kind: "pr-create" | "pr-update"): readonly PrMetadataRefusal[] {
+  const prefix =
+    kind === "pr-create" ? ["verifiedCommitSha"] : ["verifiedCommitSha", "prExternalId"];
+  return [
+    { field: "verifiedCommitSha", invalid: "bad", reads: ["verifiedCommitSha"] },
+    ...(kind === "pr-update"
+      ? [{ field: "prExternalId", invalid: "", reads: ["verifiedCommitSha", "prExternalId"] }]
+      : []),
+    { field: "headBranchName", invalid: "", reads: [...prefix, "headBranchName"] },
+    {
+      field: "baseBranchName",
+      invalid: 7,
+      reads: [...prefix, "headBranchName", "baseBranchName"],
+    },
+    {
+      field: "titleByteLength",
+      invalid: 0.5,
+      reads: [...prefix, "headBranchName", "baseBranchName", "titleByteLength"],
+    },
+    {
+      field: "bodyByteLength",
+      invalid: -1,
+      reads: [...prefix, "headBranchName", "baseBranchName", "titleByteLength", "bodyByteLength"],
+    },
+  ];
+}
+
+describe.each([
+  ["source", parseGitDeliveryResolvedInputs],
+  ["public", g2PublicDelivery.parseGitDeliveryResolvedInputs],
+] as const)("#3918 PR metadata observations through %s", (_surface, parse) => {
+  describe.each(["pr-create", "pr-update"] as const)("%s", (kind) => {
+    it("preserves healthy order, identity and repeated draft observations", () => {
+      const prefix =
+        kind === "pr-create" ? ["verifiedCommitSha"] : ["verifiedCommitSha", "prExternalId"];
+      const metadataFields = [
+        "headBranchName",
+        "baseBranchName",
+        "titleByteLength",
+        "bodyByteLength",
+      ];
+      const draftReads =
+        kind === "pr-create"
+          ? ["isDraft"]
+          : ["convertToDraft", "convertFromDraft", "convertToDraft", "convertFromDraft"];
+      const reads: string[] = [];
+      const input = new Proxy(prMetadataInput(kind), {
+        get(target, key, receiver): unknown {
+          if (typeof key === "string" && key !== "kind") reads.push(key);
+          const member: unknown = Reflect.get(target, key, receiver);
+          return member;
+        },
+      });
+      const parsed = parse(input);
+      expect(parsed.ok).toBe(true);
+      if (parsed.ok) expect(parsed.value).toBe(input);
+      expect(reads).toEqual([...prefix, ...metadataFields, ...draftReads]);
+
+      if (kind === "pr-update") {
+        reads.length = 0;
+        input.convertToDraft = false;
+        input.convertFromDraft = true;
+        expect(parse(input).ok).toBe(true);
+        expect(reads).toEqual([
+          ...prefix,
+          ...metadataFields,
+          "convertToDraft",
+          "convertFromDraft",
+          "convertToDraft",
+        ]);
+      }
+    });
+
+    it("preserves inherited metadata and existing integer admission", () => {
+      const inherited = prMetadataInput(kind);
+      delete inherited.headBranchName;
+      delete inherited.baseBranchName;
+      delete inherited.titleByteLength;
+      delete inherited.bodyByteLength;
+      Object.setPrototypeOf(inherited, {
+        headBranchName: " ",
+        baseBranchName: "dev",
+        titleByteLength: 0,
+        bodyByteLength: 0,
+      });
+      const inheritedResult = parse(inherited);
+      expect(inheritedResult.ok).toBe(true);
+      if (inheritedResult.ok) expect(inheritedResult.value).toBe(inherited);
+      expect(
+        parse({
+          ...prMetadataInput(kind),
+          titleByteLength: -0,
+          bodyByteLength: Number.MAX_SAFE_INTEGER + 1,
+        }).ok,
+      ).toBe(true);
+    });
+
+    it("preserves every finite refusal frontier before later property reads", () => {
+      const refusals = prMetadataRefusals(kind);
+      for (const refusal of refusals) {
+        const reads: string[] = [];
+        const input = new Proxy(
+          { ...prMetadataInput(kind), [refusal.field]: refusal.invalid },
+          {
+            get(target, key, receiver): unknown {
+              if (typeof key === "string" && key !== "kind") {
+                reads.push(key);
+                if (!refusal.reads.includes(key))
+                  throw new TypeError("later PR field must remain unread");
+              }
+              const member: unknown = Reflect.get(target, key, receiver);
+              return member;
+            },
+          },
+        );
+        expect(parse(input)).toEqual({
+          ok: false,
+          errors: [`resolvedInputs for kind "${kind}" has invalid fields`],
+        });
+        expect(reads).toEqual(refusal.reads);
+      }
+    });
+
+    it("propagates an inherited middle getter's exact failure before later metadata", () => {
+      const failure = new TypeError("opaque PR metadata inspection");
+      const reads: string[] = [];
+      const values = prMetadataInput(kind);
+      delete values.baseBranchName;
+      Object.setPrototypeOf(values, {
+        get baseBranchName(): never {
+          throw failure;
+        },
+      });
+      const input = new Proxy(values, {
+        get(target, key, receiver): unknown {
+          if (typeof key === "string" && key !== "kind") reads.push(key);
+          const member: unknown = Reflect.get(target, key, receiver);
+          return member;
+        },
+      });
+      let observed: unknown;
+      try {
+        parse(input);
+      } catch (error) {
+        observed = error;
+      }
+      expect(observed).toBe(failure);
+      expect(reads).toEqual(
+        kind === "pr-create"
+          ? ["verifiedCommitSha", "headBranchName", "baseBranchName"]
+          : ["verifiedCommitSha", "prExternalId", "headBranchName", "baseBranchName"],
+      );
+    });
+  });
+});
