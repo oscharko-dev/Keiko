@@ -2083,7 +2083,6 @@ function continuationContext(
   return {
     service: continuity.service,
     workspaceId: continuity.workspaceId,
-    native: input.toolProfile === "native",
     runtimeVersion: input.portable.verification.summary.upstreamVersion,
     maxInputTokens: input.contextGeometry.maxInputTokens,
     activityLog: input.activityLog,

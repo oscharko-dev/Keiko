@@ -108,7 +108,6 @@ interface Harness {
 function harness(
   options: {
     store?: RetainedSessionStore | null;
-    native?: boolean;
     taskOfRun?: (runId: string) => string | undefined;
     results?: Parameters<typeof fakeStore>[0];
     workspaceId?: string;
@@ -136,7 +135,6 @@ function harness(
     context: {
       service,
       workspaceId: options.workspaceId ?? "workspace-1",
-      native: options.native ?? true,
       runtimeVersion: "2.1.4",
       maxInputTokens: 24_000,
       activityLog: log,
@@ -231,18 +229,18 @@ describe("seeding a run's database from a task's retained entry", () => {
     expect(h.calls.checkouts[0]?.binding.taskId).toBe("source-task");
   });
 
-  it.each([
-    ["a mapped tool profile", { native: false }, "not-native-profile"],
-    ["retention switched off", { store: null }, "disabled"],
-  ] as const)("falls back to a fresh session for %s", (_name, options, reason) => {
-    const h = harness(options);
-    h.service.declare(RUN, RESUME);
+  it.each([["retention switched off", { store: null }, "disabled"]] as const)(
+    "falls back to a fresh session for %s",
+    (_name, options, reason) => {
+      const h = harness(options);
+      h.service.declare(RUN, RESUME);
 
-    expect(seedContinuation(h.context, location())).toBeUndefined();
+      expect(seedContinuation(h.context, location())).toBeUndefined();
 
-    expect(h.outcomes).toEqual([{ kind: "fresh", reason }]);
-    expect(lines(h)).toMatchObject([{ action: "resume", outcome: "fresh", reason }]);
-  });
+      expect(h.outcomes).toEqual([{ kind: "fresh", reason }]);
+      expect(lines(h)).toMatchObject([{ action: "resume", outcome: "fresh", reason }]);
+    },
+  );
 
   it.each([
     ["no-retained-state", "fresh"],
@@ -799,7 +797,7 @@ describe("retaining a settled run", () => {
     },
   );
 
-  it("skips a run without a session or a task, and a mapped profile", () => {
+  it("skips a run without a session or a task", () => {
     const noSession = harness();
     retainSettledRun(noSession.context, { ...run, sessionId: undefined }, "succeeded");
     expect(lines(noSession)).toMatchObject([{ outcome: "skipped", reason: "no-session" }]);
@@ -809,11 +807,6 @@ describe("retaining a settled run", () => {
     retainSettledRun(noTask.context, run, "succeeded");
     expect(lines(noTask)).toMatchObject([{ outcome: "skipped", reason: "no-task" }]);
     expect(noTask.calls.removed).toEqual([]);
-
-    const mapped = harness({ native: false });
-    retainSettledRun(mapped.context, run, "succeeded");
-    expect(lines(mapped)).toMatchObject([{ outcome: "skipped", reason: "not-native-profile" }]);
-    expect(mapped.calls.retains).toEqual([]);
   });
 
   it("keeps nothing and removes nothing when retention is switched off", () => {

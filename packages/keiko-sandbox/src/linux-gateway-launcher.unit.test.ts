@@ -165,6 +165,29 @@ describe("Linux gateway launcher in-process orchestration", () => {
     restorePrivateEnvironment();
   });
 
+  it("keeps ordinary gateway commands outside service forwarding", async () => {
+    const control = fakeChild();
+    spawnMock.mockReturnValue(control.child);
+    const run = runLinuxGatewayLauncher(hostArgs(19_983));
+    expect(spawnMock.mock.calls[0]?.[2]?.stdio).toEqual([
+      "inherit",
+      "inherit",
+      "inherit",
+      "ignore",
+      "ignore",
+      "ignore",
+      "ignore",
+      "ignore",
+      "ignore",
+      "ignore",
+      "ipc",
+    ]);
+    control.child.emit("message", { kind: "ready" });
+    control.exit(0);
+    await expect(run).resolves.toBe(0);
+    expect(control.send).not.toHaveBeenCalled();
+  });
+
   it("transfers only a host-connected gateway socket after the ready handshake", async () => {
     const gateway = createServer();
     const port = await listen(gateway);

@@ -95,3 +95,8 @@ export type {
   RuntimeGatewayFilesystem,
   RuntimeGatewayProfile,
 } from "./types.js";
+
+export {
+  LINUX_GATEWAY_SERVICE_ENV,
+  parseRuntimeLoopbackServiceEndpoint,
+} from "./runtime-service.js";

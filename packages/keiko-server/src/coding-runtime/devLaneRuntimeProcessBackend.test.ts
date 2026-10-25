@@ -449,12 +449,55 @@ describe("dev-lane runtime process backend", () => {
     child.settle(0);
   });
 
-  it("leaves Linux on its existing lifetime and refuses an unqualified stdin lease", () => {
+  it.each(["clean", "forced", "nonzero", "pipe-error"] as const)(
+    "uses Linux stdin lifetime and refuses uncertain %s reaping at wait and reconciliation",
+    async (outcome) => {
+      const fixture = stageFixture();
+      const stdin = new PassThrough();
+      const child = { ...fakeChild(4711, true), stdin };
+      const killProcessGroup = vi.fn();
+      const backend = createDevLaneRuntimeProcessBackend({
+        identity: LINUX_IDENTITY,
+        platform: "linux",
+        runtimeRoot: fixture.runtimeRoot,
+        gatewayConfinement: gatewayConfinement(),
+        spawnRuntime: () => child,
+        killProcessGroup,
+        activityLog: createBufferedServerLogSink(),
+        probeAvailability: () => ({
+          bubblewrap: true,
+          unshare: false,
+          seatbelt: false,
+          docker: false,
+          podman: false,
+        }),
+      });
+      const tree = backend.spawnOwnedTree({
+        ...launchRequest(fixture),
+        parentLifetime: "stdin-eof",
+      });
+      expect(backend.supportsStdinLifetime).toBe(true);
+      backend.signalTree(tree, "graceful");
+      backend.signalTree(tree, "graceful");
+      expect(stdin.writableEnded).toBe(true);
+      expect(killProcessGroup).not.toHaveBeenCalled();
+      if (outcome === "forced") backend.signalTree(tree, "force");
+      if (outcome === "pipe-error") stdin.emit("error", new Error("fixture-lease-failed"));
+      const waiting = backend.waitForCompleteTreeExit(tree, 100);
+      child.settle(outcome === "nonzero" ? 1 : 0);
+      expect(await waiting).toBe(outcome === "clean");
+      expect(await backend.waitForCompleteTreeExit(tree, 100)).toBe(outcome === "clean");
+      expect(await backend.reconcileTreeExit(tree)).toBe(outcome === "clean");
+      expect(killProcessGroup).toHaveBeenCalledTimes(outcome === "forced" ? 1 : 0);
+    },
+  );
+
+  it("refuses a stdin lease when platform and runtime identity disagree", () => {
     const fixture = stageFixture();
     const spawnRuntime = vi.fn(() => fakeChild(4711, true));
     const backend = createDevLaneRuntimeProcessBackend({
       identity: LINUX_IDENTITY,
-      platform: "linux",
+      platform: "darwin",
       runtimeRoot: fixture.runtimeRoot,
       gatewayConfinement: gatewayConfinement(),
       spawnRuntime,

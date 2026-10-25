@@ -10603,7 +10603,7 @@ function observeNativeReadBytes(
 // seeds the run's private database from the task's entry before the runtime starts, binds the
 // started runtime to the retained (or forked) session, proves the gateway route in a scratch
 // session, shows only what the run adds, and retains the database of a run that settled normally.
-describe("native session continuity in the composition", () => {
+describe.each(["native", "direct", "code-mode"] as const)("%s session continuity", (profile) => {
   const TASK = "task-continued";
 
   interface StoreCalls {
@@ -10697,7 +10697,7 @@ describe("native session continuity in the composition", () => {
       .map((event) => ({ ...event, ...(event.extra as Record<string, unknown>) }));
   }
 
-  const native = { readToolProfile: (): "native" => "native" } as const;
+  const tools = { readToolProfile: (): typeof profile => profile } as const;
   const facade = (): CodingToolFacade => ({
     execute: () => Promise.resolve({ status: "observed", evidence: [] }),
   });
@@ -10709,7 +10709,7 @@ describe("native session continuity in the composition", () => {
     world.continuity.service.declare(FIXTURE_RUN_ID, { kind: "resume", taskId: TASK });
 
     const fixture = await startBridgeFixture(facade(), undefined, {
-      ...native,
+      ...tools,
       continuity: world.continuity,
       activityLog,
       governedEvents,
@@ -10765,7 +10765,10 @@ describe("native session continuity in the composition", () => {
 
   it("forks the retained session through its end and removes the source from the run's database", async () => {
     const activityLog = createBufferedServerLogSink();
-    const world = continuedWorld({ retainedSessionId: "ses_source", forkedSessionId: "ses_tool" });
+    const world = continuedWorld({
+      retainedSessionId: "ses_source",
+      forkedSessionId: "ses_tool",
+    });
     world.continuity.service.declare(FIXTURE_RUN_ID, {
       kind: "fork",
       sourceTaskId: "task-source",
@@ -10773,7 +10776,7 @@ describe("native session continuity in the composition", () => {
     });
 
     const fixture = await startBridgeFixture(facade(), undefined, {
-      ...native,
+      ...tools,
       continuity: world.continuity,
       activityLog,
     });
@@ -10809,7 +10812,7 @@ describe("native session continuity in the composition", () => {
     world.continuity.service.declare(FIXTURE_RUN_ID, { kind: "resume", taskId: TASK });
 
     const fixture = await startBridgeFixture(facade(), undefined, {
-      ...native,
+      ...tools,
       continuity: world.continuity,
       activityLog,
       sessionCreateCalls,
@@ -10837,7 +10840,7 @@ describe("native session continuity in the composition", () => {
     const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
 
     const fixture = await startBridgeFixture(facade(), undefined, {
-      ...native,
+      ...tools,
       continuity: world.continuity,
       activityLog,
       diagnostics,
@@ -10860,7 +10863,7 @@ describe("native session continuity in the composition", () => {
     world.continuity.service.declare(FIXTURE_RUN_ID, { kind: "resume", taskId: TASK });
 
     const fixture = await startBridgeFixture(facade(), undefined, {
-      ...native,
+      ...tools,
       continuity: world.continuity,
       activityLog,
       expectedStart: { ok: false, failureCode: "protocol-schema-mismatch", retryable: false },
@@ -10882,7 +10885,7 @@ describe("native session continuity in the composition", () => {
     const world = continuedWorld();
     world.continuity.service.declare(FIXTURE_RUN_ID, { kind: "resume", taskId: TASK });
     const fixture = await startBridgeFixture(facade(), undefined, {
-      ...native,
+      ...tools,
       continuity: world.continuity,
       activityLog,
     });
@@ -10913,7 +10916,7 @@ describe("native session continuity in the composition", () => {
       const world = continuedWorld();
       world.continuity.service.declare(FIXTURE_RUN_ID, { kind: "resume", taskId: TASK });
       const fixture = await startBridgeFixture(facade(), undefined, {
-        ...native,
+        ...tools,
         continuity: world.continuity,
         activityLog,
       });
@@ -10933,7 +10936,7 @@ describe("native session continuity in the composition", () => {
   it("retains the database of a run that continued nothing, so the next run of its task can resume it", async () => {
     const world = continuedWorld({ serveSessions: false });
     const fixture = await startBridgeFixture(facade(), undefined, {
-      ...native,
+      ...tools,
       continuity: world.continuity,
     });
 
@@ -10942,29 +10945,6 @@ describe("native session continuity in the composition", () => {
     expect(world.calls.checkouts).toEqual([]);
     expect(world.calls.retains).toMatchObject([
       { binding: { taskId: TASK }, sessionId: "ses_tool" },
-    ]);
-  });
-
-  it("keeps a mapped tool profile on a fresh session and retains nothing", async () => {
-    const activityLog = createBufferedServerLogSink();
-    const world = continuedWorld({ serveSessions: false });
-    world.continuity.service.declare(FIXTURE_RUN_ID, { kind: "resume", taskId: TASK });
-    const fixture = await startBridgeFixture(facade(), undefined, {
-      continuity: world.continuity,
-      activityLog,
-    });
-
-    await fixture.runtime.manager.stop(FIXTURE_RUN_ID, "succeeded");
-
-    expect(world.calls.checkouts).toEqual([]);
-    expect(world.calls.retains).toEqual([]);
-    expect(world.continuity.service.outcome(FIXTURE_RUN_ID)).toEqual({
-      kind: "fresh",
-      reason: "not-native-profile",
-    });
-    expect(continuityLines(activityLog).map((line) => line.reason)).toEqual([
-      "not-native-profile",
-      "not-native-profile",
     ]);
   });
 });

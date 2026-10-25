@@ -1,3 +1,4 @@
+import { LINUX_GATEWAY_SERVICE_ENV } from "@oscharko-dev/keiko-sandbox";
 import { randomBytes as nodeRandomBytes } from "node:crypto";
 import { isAbsolute, join } from "node:path";
 
@@ -275,6 +276,7 @@ function launchEnvironment(
     OPENCODE_DISABLE_MODELS_FETCH: "1",
     OPENCODE_DB: join(input.stateRoot, "state", "opencode.db"),
     OPENCODE_SERVER_PASSWORD: secret.toString("base64url"),
+    ...(process.platform === "linux" ? { [LINUX_GATEWAY_SERVICE_ENV]: "1" } : {}),
   });
 }
 

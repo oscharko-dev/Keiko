@@ -29,7 +29,6 @@ import { codingRuntimeFactDigest } from "./runtimeAuthorityService.js";
 export interface SessionContinuationContext {
   readonly service: CodingSessionContinuity;
   readonly workspaceId: string;
-  readonly native: boolean;
   readonly runtimeVersion: string;
   /** The input window of the run's model, the bound a retained history must fit. */
   readonly maxInputTokens: number;
@@ -117,8 +116,8 @@ export function seedContinuation(
   if (intent === undefined) return undefined;
   const taskId = intent.kind === "resume" ? intent.taskId : intent.sourceTaskId;
   const store = context.service.store;
-  if (!context.native || store === undefined) {
-    recordFallBack(context, location, intent, context.native ? "disabled" : "not-native-profile");
+  if (store === undefined) {
+    recordFallBack(context, location, intent, "disabled");
     return undefined;
   }
   let checkout: CheckoutResult;
@@ -381,7 +380,7 @@ export function retainSettledRun(
     action: "retain" as const,
     ...(taskId === undefined ? {} : { taskId }),
   };
-  const reason = skipReason(context, store, run, taskId, terminalStatus);
+  const reason = skipReason(store, run, taskId, terminalStatus);
   if (reason === undefined && store !== undefined && taskId !== undefined) {
     attemptRetain(context, store, run, taskId, line);
     return;
@@ -416,13 +415,11 @@ function removeEntry(
 }
 
 function skipReason(
-  context: SessionContinuationContext,
   store: CodingSessionContinuity["store"],
   run: SettledContinuedRun,
   taskId: string | undefined,
   terminalStatus: string | undefined,
 ): ContinuityReason | undefined {
-  if (!context.native) return "not-native-profile";
   if (store === undefined) return "disabled";
   if (
     terminalStatus !== "succeeded" &&

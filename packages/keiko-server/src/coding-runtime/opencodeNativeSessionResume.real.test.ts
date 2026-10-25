@@ -11,11 +11,14 @@ import {
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { Readable } from "node:stream";
+import type { Readable, Writable } from "node:stream";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import {
   buildRuntimeGatewaySeatbeltCommand,
+  buildWrappedCommand,
+  type RuntimeGatewayConfinement,
+  type WrappedCommand,
   createRuntimeGatewayConfinement,
   resolveDarwinGitExecutable,
 } from "@oscharko-dev/keiko-sandbox";
@@ -61,8 +64,11 @@ import type { CodingHistoryMessage } from "./codingRuntimeHistory.js";
  * KEIKO_OPENCODE_REAL_BINARY and KEIKO_OPENCODE_REAL_RESOURCE_ROOT set; otherwise it is skipped.
  * KEIKO_OPENCODE_REAL_VERSION selects another admitted version, such as the published 2.0.10 lane;
  * its actual protocol digest and persistence schema must match that version's own contracts.
+ * KEIKO_OPENCODE_REAL_TOOL_PROFILE selects the governed mapped profiles on Linux; their existing
+ * namespace gateway wrapper is used, while the unqualified native Linux profile stays refused.
  */
 const RUNTIME_VERSION = process.env.KEIKO_OPENCODE_REAL_VERSION ?? OPENCODE_PINNED_VERSION;
+const TOOL_PROFILE = fixtureToolProfile();
 const BINARY = process.env.KEIKO_OPENCODE_REAL_BINARY;
 const RESOURCE_ROOT = process.env.KEIKO_OPENCODE_REAL_RESOURCE_ROOT;
 const GATEWAY_CAPABILITY = "fixture-gateway-capability";
@@ -70,6 +76,38 @@ const FACADE_CAPABILITY = "fixture-facade-capability";
 const MAX_FIXTURE_BODY_BYTES = 4 * 1_024 * 1_024;
 const WORKSPACE_KEY = "a".repeat(64);
 const TASK_ID = "task-native-resume";
+
+function fixtureToolProfile(): "native" | "direct" | "code-mode" {
+  const value = process.env.KEIKO_OPENCODE_REAL_TOOL_PROFILE ?? "native";
+  if (value !== "native" && value !== "direct" && value !== "code-mode") {
+    throw new TypeError("fixture-tool-profile-invalid");
+  }
+  return value;
+}
+
+function fixtureGitExecutable(): string {
+  return process.platform === "darwin" ? resolveDarwinGitExecutable().path : "/usr/bin/git";
+}
+
+function fixtureCommand(
+  policy: RuntimeGatewayConfinement,
+  binary: string,
+  args: readonly string[],
+  workspace: string,
+): WrappedCommand {
+  if (process.platform === "darwin") {
+    return buildRuntimeGatewaySeatbeltCommand(policy, binary, args, fixtureGitExecutable());
+  }
+  const command = buildWrappedCommand("bubblewrap", {
+    command: binary,
+    args,
+    cwd: workspace,
+    network: { mode: "gateway", host: "127.0.0.1", port: policy.port },
+    gatewayProfile: policy.profile,
+  });
+  if (command === undefined) throw new Error("fixture-wrapper-unavailable");
+  return command;
+}
 
 interface Recorded {
   readonly url: string;
@@ -168,6 +206,10 @@ function streamedText(response: ServerResponse, text: string): void {
 /** Answers every model request with a plain text turn that names how many it has seen. */
 async function startGateway(): Promise<Stub> {
   return await startStub((self, recorded, response) => {
+    if (recorded.url.startsWith("/facade/")) {
+      response.writeHead(200, { "Content-Type": "application/json" }).end('{"effect":"allow"}');
+      return;
+    }
     const lastUser = userTexts(recorded).at(-1);
     if (lastUser === "FIXTURE-FAILED-TERMINAL-TURN") {
       response.writeHead(400, { "Content-Type": "application/json" });
@@ -198,10 +240,10 @@ interface Fixture {
 function committedRepository(root: string, workspace: string): void {
   mkdirSync(workspace, { recursive: true });
   writeFileSync(join(workspace, "notes.txt"), "resume fixture\n");
-  const git = resolveDarwinGitExecutable();
+  const git = fixtureGitExecutable();
   const env = {
     HOME: root,
-    PATH: dirname(git.path),
+    PATH: dirname(git),
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_CONFIG_GLOBAL: "/dev/null",
   };
@@ -211,7 +253,7 @@ function committedRepository(root: string, workspace: string): void {
     ["-C", workspace, ...identity, "add", "-A"],
     ["-C", workspace, ...identity, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "fixture"],
   ]) {
-    if (spawnSync(git.path, args, { env }).status !== 0) throw new Error("fixture-git-failed");
+    if (spawnSync(git, args, { env }).status !== 0) throw new Error("fixture-git-failed");
   }
 }
 
@@ -225,7 +267,7 @@ function createFixture(): Fixture {
 }
 
 interface Launched {
-  readonly child: ChildProcessByStdio<null, Readable, Readable>;
+  readonly child: ChildProcessByStdio<Writable, Readable, Readable>;
   readonly password: string;
 }
 
@@ -239,7 +281,7 @@ function launch(
   const profile = buildOpenCodeLaunchProfile({
     executable: binary,
     stateRoot,
-    toolProfile: "native",
+    toolProfile: TOOL_PROFILE,
     contextGeometry: {
       contextWindowTokens: 32_768,
       maxInputTokens: 24_000,
@@ -256,9 +298,9 @@ function launch(
   ])
     mkdirSync(path, { recursive: true, mode: 0o700 });
   writeFileSync(join(configRoot, "opencode.json"), profile.config, { mode: 0o600 });
-  for (const [name, source] of Object.entries(createGeneratedOpenCodeV2Plugins("native")))
+  for (const [name, source] of Object.entries(createGeneratedOpenCodeV2Plugins(TOOL_PROFILE)))
     writeFileSync(join(configRoot, "plugins", `${name}.ts`), source, { mode: 0o600 });
-  const git = resolveDarwinGitExecutable();
+  const git = fixtureGitExecutable();
   const policy = createRuntimeGatewayConfinement({
     gatewayUrl: `http://127.0.0.1:${String(stubs.gateway.port)}/v1`,
     runId: "run-native-resume",
@@ -266,16 +308,18 @@ function launch(
     envelopeDigest: "b".repeat(64),
     runtimeArtifactDigest: "c".repeat(64),
     modelProfileDigest: "d".repeat(64),
-    profile: "keiko-native",
+    profile: TOOL_PROFILE === "native" ? "keiko-native" : "keiko-gateway",
     filesystem: {
       workspaceRoot: fixture.workspace,
-      workspaceAccess: "read-write",
+      workspaceAccess: TOOL_PROFILE === "native" ? "read-write" : "read-only",
       privateStateRoot: stateRoot,
       runtimeReadRoot: runtimeRoot,
-      protectedWriteRoots: [openCodeConfigDirectory(stateRoot)],
+      ...(TOOL_PROFILE === "native"
+        ? { protectedWriteRoots: [openCodeConfigDirectory(stateRoot)] }
+        : {}),
     },
   });
-  const command = buildRuntimeGatewaySeatbeltCommand(policy, binary, profile.args, git.path);
+  const command = fixtureCommand(policy, binary, [...profile.args, "--stdio"], fixture.workspace);
   const password = profile.env.OPENCODE_SERVER_PASSWORD;
   if (password === undefined) throw new Error("fixture-password-missing");
   return {
@@ -284,21 +328,21 @@ function launch(
       cwd: fixture.workspace,
       env: {
         ...profile.env,
-        PATH: `${dirname(git.path)}:/usr/bin:/bin`,
+        PATH: `${dirname(git)}:/usr/bin:/bin`,
         KEIKO_MODEL_GATEWAY_URL: `http://127.0.0.1:${String(stubs.gateway.port)}/v1`,
         KEIKO_MODEL_GATEWAY_CAPABILITY: GATEWAY_CAPABILITY,
-        KEIKO_TOOL_FACADE_URL: `http://127.0.0.1:${String(stubs.facade.port)}/native-policy`,
+        KEIKO_TOOL_FACADE_URL: `http://127.0.0.1:${String(stubs.gateway.port)}/facade/native-policy`,
         KEIKO_TOOL_FACADE_CAPABILITY: FACADE_CAPABILITY,
         KEIKO_CODING_RUN_ID: "run-native-resume",
         KEIKO_CODING_MODE: "governed-assist",
       },
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
     }),
   };
 }
 
 async function childEndpoint(
-  child: ChildProcessByStdio<null, Readable, Readable>,
+  child: ChildProcessByStdio<Writable, Readable, Readable>,
 ): Promise<string> {
   return await new Promise<string>((resolve, reject) => {
     const timeout = setTimeout(() => {
@@ -326,16 +370,22 @@ async function childEndpoint(
   });
 }
 
-/** An orderly stop, like the supervisor's graceful termination; the database is then quiescent. */
-async function stopChild(child: ChildProcessByStdio<null, Readable, Readable>): Promise<void> {
+/** Use the production stdin lifetime; a forced or failed exit cannot prove quiescent state. */
+async function stopChild(child: ChildProcessByStdio<Writable, Readable, Readable>): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return;
-  await new Promise<void>((resolve) => {
-    const force = setTimeout(() => child.kill("SIGKILL"), 5_000);
-    child.once("exit", () => {
+  await new Promise<void>((resolve, reject) => {
+    const force = setTimeout(() => {
+      child.kill("SIGKILL");
+    }, 5_000);
+    child.once("exit", (code, signal) => {
       clearTimeout(force);
-      resolve();
+      if (code !== 0 || signal !== null) reject(new Error("fixture-runtime-reap-failed"));
+      else resolve();
     });
-    child.kill("SIGTERM");
+    child.stdin.once("error", () => {
+      child.kill("SIGKILL");
+    });
+    child.stdin.end();
   });
 }
 
@@ -402,7 +452,8 @@ async function withRuntime(
 async function withWorld(body: (world: World) => Promise<void>): Promise<void> {
   if (BINARY === undefined || RESOURCE_ROOT === undefined)
     throw new Error("fixture-binary-missing");
-  expect(process.platform).toBe("darwin");
+  expect(["darwin", "linux"]).toContain(process.platform);
+  if (process.platform === "linux") expect(TOOL_PROFILE).not.toBe("native");
   const fixture = createFixture();
   const [gateway, facade] = [await startGateway(), await startFacade()];
   try {
@@ -493,7 +544,6 @@ async function terminalHistoryRun(
   const context: SessionContinuationContext = {
     service: createCodingSessionContinuity({ store: world.store, taskOfRun: () => TASK_ID }),
     workspaceId: "workspace-terminal-history",
-    native: true,
     runtimeVersion: RUNTIME_VERSION,
     maxInputTokens: 24_000,
     activityLog: undefined,
@@ -842,7 +892,7 @@ describe("native session continuity on the pinned OpenCode runtime", () => {
             const project = (baseline: ReadonlySet<string> | undefined): ProjectedRun => {
               const captured: CodingHistoryMessage[][] = [];
               const projection = createOpenCodeV2HistoryProjection({
-                toolProfile: "native",
+                toolProfile: TOOL_PROFILE,
                 runId: "run-native-resume-b",
                 activityLog: undefined,
                 captureMessages: (messages): boolean => {

@@ -2179,8 +2179,16 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   24,000 characters of Coding History as hidden context. The pinned 2.0.10 and 2.1.4 producers admit
   `session.fork` (`POST /api/session/{sessionID}/fork`, body `{ before? }` naming a message) and
   `session.remove` (`DELETE /api/session/{sessionID}`); both are in the digest-pinned protocol
-  surface (30 operations). The design keeps authority out of the persisted state:
-  - **Retention.** When a native run ends `succeeded`, `failed` or `cancelled` through a settled stop
+  surface (30 operations). Original session state is retained for the native, direct and code-mode
+  profiles alike: a mapped tool profile is not a reason to discard the original session. Every run
+  still generates its own tool configuration and capability bindings; old message ids are excluded
+  from new tool-receipt projection. Both profile families bind the current model through the owned
+  provider alias and reset the resumed agent to `build`. Linux keeps its mapped tools and its
+  existing namespace boundary; graceful Linux shutdown uses the owned stdin lifetime, and uncertain
+  reaping denies retention. The authenticated service control route uses ADR-0043 D12's bounded
+  private-IPC forwarding. This does not qualify or enable native Linux tools.
+  The design keeps authority out of the persisted state:
+  - **Retention.** When an original runtime run ends `succeeded`, `failed` or `cancelled` through a settled stop
     (the manager passes the lifecycle settlement only for `stop()`, and the composition audits after
     the runtime process was reaped; an unsettled kill or timeout retains nothing) the run's `opencode.db`
     is copied with SQLite `VACUUM INTO` (a consistent, compacted copy) to

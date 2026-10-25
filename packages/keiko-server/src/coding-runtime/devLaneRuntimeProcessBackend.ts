@@ -109,6 +109,8 @@ export interface DevLaneRuntimeProcessBackendOptions {
 interface DevLaneTree extends RuntimeProcessTree {
   readonly child: DevLaneRuntimeChildProcess;
   readonly exits: Set<(code: number | null) => void>;
+  readonly parentLifetime: "stdin-eof" | undefined;
+  reapUncertain: boolean;
   exited: boolean;
   exitCode: number | null;
 }
@@ -157,7 +159,7 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
   ) {}
 
   public get supportsStdinLifetime(): true | undefined {
-    return this.identity.platform === "darwin" && this.platform === "darwin" ? true : undefined;
+    return this.identity.platform === this.platform ? true : undefined;
   }
 
   public spawnOwnedTree(
@@ -201,9 +203,14 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
       ...(request.parentLifetime === undefined ? {} : { parentLifetime: request.parentLifetime }),
     });
     this.attachLaunchPorts(child, request, sandbox.attestation.backend, setLaunchPhase);
-    const tree = ownTree(`dev-lane-opencode-${String(this.nextTreeId++)}`, child, (error) => {
-      recordChildConfinementFailure(this.activityLog, request.runId, child, error);
-    });
+    const tree = ownTree(
+      `dev-lane-opencode-${String(this.nextTreeId++)}`,
+      child,
+      request.parentLifetime,
+      (error) => {
+        recordChildConfinementFailure(this.activityLog, request.runId, child, error);
+      },
+    );
     this.ownedTrees.add(tree);
     return tree;
   }
@@ -249,9 +256,14 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
       gitExecutable,
       request.parentLifetime,
     );
-    const tree = ownTree(`dev-lane-opencode-${String(this.nextTreeId++)}`, child, (error) => {
-      recordChildConfinementFailure(this.activityLog, request.runId, child, error);
-    });
+    const tree = ownTree(
+      `dev-lane-opencode-${String(this.nextTreeId++)}`,
+      child,
+      request.parentLifetime,
+      (error) => {
+        recordChildConfinementFailure(this.activityLog, request.runId, child, error);
+      },
+    );
     this.ownedTrees.add(tree);
     return tree;
   }
@@ -289,6 +301,9 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
     // The remaining OS-level reuse window before Node observes the exit is part of the
     // documented best-effort dev-lane posture (ADR-0140 D3).
     if (owned.exited || owned.child.settled()) return;
+    if (signal === "graceful" && endStdinLifetime(owned)) return;
+    // A forced/uncertain namespace wrapper exit cannot attest that its database producer is gone.
+    if (this.identity.platform === "linux") owned.reapUncertain = true;
     const posixSignal: NodeJS.Signals = signal === "graceful" ? "SIGTERM" : "SIGKILL";
     if (owned.child.pid !== undefined) {
       try {
@@ -303,23 +318,30 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
 
   public waitForCompleteTreeExit(tree: RuntimeProcessTree, timeoutMs: number): Promise<boolean> {
     const owned = this.ownedTree(tree);
-    if (owned.exited) return Promise.resolve(true);
+    if (owned.exited) return Promise.resolve(this.completedTreeExit(owned));
     return new Promise<boolean>((resolve) => {
       const timeout = setTimeout(() => {
         owned.exits.delete(onExit);
-        resolve(owned.exited);
+        resolve(this.completedTreeExit(owned));
       }, timeoutMs);
       timeout.unref();
       const onExit = (): void => {
         clearTimeout(timeout);
-        resolve(true);
+        resolve(this.completedTreeExit(owned));
       };
       owned.exits.add(onExit);
     });
   }
 
   public reconcileTreeExit(tree: RuntimeProcessTree): Promise<boolean> {
-    return Promise.resolve(this.ownedTree(tree).exited);
+    return Promise.resolve(this.completedTreeExit(this.ownedTree(tree)));
+  }
+
+  private completedTreeExit(tree: DevLaneTree): boolean {
+    return (
+      tree.exited &&
+      (this.identity.platform !== "linux" || (!tree.reapUncertain && tree.exitCode === 0))
+    );
   }
 
   private ownedTree(tree: RuntimeProcessTree): DevLaneTree {
@@ -573,9 +595,17 @@ function assertStdinLifetime(
   throw new TypeError("runtime-stdin-lifetime-unavailable");
 }
 
+function endStdinLifetime(tree: DevLaneTree): boolean {
+  const stdin = tree.child.stdin;
+  if (tree.parentLifetime !== "stdin-eof" || stdin === undefined || stdin.destroyed) return false;
+  if (!stdin.writableEnded) stdin.end();
+  return true;
+}
+
 function ownTree(
   treeId: string,
   child: DevLaneRuntimeChildProcess,
+  parentLifetime: "stdin-eof" | undefined,
   recordError: (error: unknown) => void,
 ): DevLaneTree {
   const tree: DevLaneTree = {
@@ -584,6 +614,8 @@ function ownTree(
     stdout: child.stdout,
     stderr: child.stderr,
     exits: new Set(),
+    parentLifetime,
+    reapUncertain: false,
     exited: false,
     exitCode: null,
     onTreeExit(callback): void {
@@ -600,6 +632,7 @@ function ownTree(
   };
   child.onExit(settle);
   const onError = (error: unknown): void => {
+    tree.reapUncertain = true;
     recordError(error);
     // Node also emits `error` for failed kill/send operations on a live process. Only a failed
     // spawn with no PID, or the child's actual settled state, proves there is no process left.
