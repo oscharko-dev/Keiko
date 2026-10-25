@@ -348,3 +348,31 @@ describe.each([
     });
   });
 });
+
+describe("#3918 trigger membership boundaries", () => {
+  it.each([
+    ["source", parseEditorInlineCompletionRequest],
+    ["public", publicOwner.parseEditorInlineCompletionRequest],
+  ] as const)("%s preserves trigger boundaries without coercion", (_surface, parse) => {
+    for (const triggerKind of EDITOR_INLINE_COMPLETION_WIRE_TRIGGER_KINDS) {
+      const parsed = parse({ ...baseRequest(), triggerKind });
+      expect(parsed.ok).toBe(true);
+      if (parsed.ok) expect(parsed.value.triggerKind).toBe(triggerKind);
+    }
+
+    let coercions = 0;
+    const coercible = {
+      [Symbol.toPrimitive](): string {
+        coercions += 1;
+        throw new TypeError("trigger coercion must not occur");
+      },
+    };
+    for (const triggerKind of ["invoked", undefined, null, 7, Symbol("trigger"), coercible]) {
+      expect(parse({ ...baseRequest(), triggerKind })).toEqual({
+        ok: false,
+        errors: ["triggerKind must be one of: automatic, explicit"],
+      });
+    }
+    expect(coercions).toBe(0);
+  });
+});

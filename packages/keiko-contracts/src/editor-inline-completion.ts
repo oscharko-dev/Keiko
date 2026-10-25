@@ -24,6 +24,7 @@
 // source/mode/degrade vocabularies are reused from the sibling editor contracts so the inline tier
 // shares one stable, content-free provenance model with the completion gateway.
 
+import { isOneOf } from "./contract-validation-primitives.js";
 import {
   isLanguageDocumentOverlay,
   isLanguagePosition,
@@ -176,10 +177,7 @@ function isPositiveInteger(value: unknown): value is number {
 }
 
 function isWireTriggerKind(value: unknown): value is EditorInlineCompletionWireTriggerKind {
-  return (
-    typeof value === "string" &&
-    EDITOR_INLINE_COMPLETION_WIRE_TRIGGER_KINDS_ADMISSION_VALUES.includes(value)
-  );
+  return isOneOf(value, EDITOR_INLINE_COMPLETION_WIRE_TRIGGER_KINDS_ADMISSION_VALUES);
 }
 
 // Collects every field-level invariant error in fixed order (kept separate from the assembly step so

@@ -18,6 +18,7 @@
 // packages. The item-kind set is reused from the language-service contract so the editor renders one
 // stable icon set across deterministic and model-assisted items.
 
+import { isOneOf } from "./contract-validation-primitives.js";
 import {
   isLanguageDocumentOverlay,
   isLanguagePosition,
@@ -177,10 +178,7 @@ const EDITOR_COMPLETION_WIRE_TRIGGER_KINDS_ADMISSION_VALUES: readonly string[] =
   EDITOR_COMPLETION_WIRE_TRIGGER_KINDS;
 
 function isWireTriggerKind(value: unknown): value is EditorCompletionWireTriggerKind {
-  return (
-    typeof value === "string" &&
-    EDITOR_COMPLETION_WIRE_TRIGGER_KINDS_ADMISSION_VALUES.includes(value)
-  );
+  return isOneOf(value, EDITOR_COMPLETION_WIRE_TRIGGER_KINDS_ADMISSION_VALUES);
 }
 
 // Collects every field-level invariant error in fixed order (kept separate from the assembly step so
