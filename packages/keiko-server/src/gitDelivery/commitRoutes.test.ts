@@ -284,6 +284,7 @@ function buildManagedGitWorktree(
   execFileSync("git", ["init", "-q"], { cwd: sourceRepo });
   execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: sourceRepo });
   execFileSync("git", ["config", "user.name", "Keiko Test"], { cwd: sourceRepo });
+  execFileSync("git", ["config", "--local", "commit.gpgsign", "false"], { cwd: sourceRepo });
   execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "fixture"], { cwd: sourceRepo });
   mkdirSync(dirname(worktreePath), { recursive: true });
   execFileSync("git", ["worktree", "add", "-q", "-b", taskBranch, worktreePath, "HEAD"], {

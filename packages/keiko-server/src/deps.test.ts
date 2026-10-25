@@ -973,6 +973,7 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     execFileSync("git", ["init", "-q"], { cwd: repositoryRoot });
     execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: repositoryRoot });
     execFileSync("git", ["config", "user.name", "Keiko Test"], { cwd: repositoryRoot });
+    execFileSync("git", ["config", "--local", "commit.gpgsign", "false"], { cwd: repositoryRoot });
     const packageManifest = JSON.stringify({ name: "shared" });
     writeFileSync(join(repositoryRoot, "package.json"), packageManifest);
     execFileSync("git", ["add", "package.json"], { cwd: repositoryRoot });

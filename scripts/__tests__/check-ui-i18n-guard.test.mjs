@@ -1147,6 +1147,7 @@ async function withGitFixture(callback) {
     run(["init", "-q"]);
     run(["config", "user.email", "test@example.com"]);
     run(["config", "user.name", "Test"]);
+    run(["config", "--local", "commit.gpgsign", "false"]);
     for (const [file, contents] of Object.entries({
       [LITERAL_BASELINE]: '{ "files": {} }\n',
       ...matchingCatalogs,
