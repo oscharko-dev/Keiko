@@ -1359,9 +1359,7 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   (`opencodeOperatorPlugins.ts`), read with the same no-follow, owner-checked reader as the MCP
   registry (`ownerPrivateStateFile.ts`): `{ "schemaVersion": 1, "plugins": [{ "name", "workspacePath"
   | "path", "sha256" }] }`, at most 8, a name of `^[a-z0-9][a-z0-9-]{0,47}$` not starting with
-  `keiko`, exactly one source (a normalized workspace-relative module read through the run's exact
-  workspace read, or a normalized absolute module the operator installed), a `.js`, `.mjs` or `.ts`
-  module of at most 512 KiB and the lowercase SHA-256 of its exact bytes. Anything else refuses the
+  `keiko`, exactly one source (a normalized workspace-relative module read through the run's exact workspace read, a normalized absolute module the operator installed, or an npm package the operator installed into an absolute directory with `npm install --prefix`, named with its `entry` module), a `.js`, `.mjs` or `.ts` module of at most 512 KiB and the lowercase SHA-256 of its exact bytes; for a package the SHA-256 of the `shasum -a 256` listing of every regular file of the tree in byte order of its path (`find . -type f -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256 | shasum -a 256`; at most 4,096 files, 32 MiB), hashed from the same bytes it copies. Anything else refuses the
   whole registry. At each native prepare Keiko first removes what an earlier admission wrote, then
   admits only when the run's launch mode is Full access (`autonomous-delivery`): per-action
   approval cannot bind code that runs inside the producer, while Full access is the mode whose
@@ -1390,8 +1388,7 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   registered plugin is active at Full access, an approve-everything hook neither widens Keiko's
   denial of a shell command nor empties the resources Keiko judges, a narrowing hook refuses a
   shell command Keiko allows (control: an allowed command runs), a Supervised run and changed
-  bytes load none, and a plugin claiming `keiko.native-policy` fails readiness. npm plugin packages
-  stay disabled: the package manager is offline and installing one leaves the machine.
+  bytes load none, and a plugin claiming `keiko.native-policy` fails readiness, and an installed npm package whose plugin id comes from its own dependency is active (the dependency resolves inside the copied tree). `opencode plugin add` stays refused: it installs from the registry, which leaves the machine; the operator installs the package.
 - **The server-owned binding rides the highest layer.** The profile also passes the single
   provider, model, `default_agent`, `update`/`share` switches, the built-in `formatter` setting
   (above) and the mode-independent permission floor as `OPENCODE_CONFIG_CONTENT`, a secret-free
@@ -1816,10 +1813,25 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   than one link, and a read when any `AGENTS.md` between its target and the workspace root, which
   the producer's read tool loads as instructions without asking, has more than one link. The
   kernel refuses a sandboxed `link()` to a file the run may not read, so such an alias can only
-  predate the run. A shell or search child that reads a hard link created on the host before the
-  run is not bounded by link count: a package manager's global store (pnpm) links every
-  installed file to a store outside the workspace, so refusing externally linked files would
-  break those projects. The task workspace and the run's private state are re-allowed after
+  predate the run. The kernel profile therefore closes it for every reader at once, whatever the
+  runtime reads with (PR #4064 review, #3900 AC2/AC5): before each native launch Keiko scans the
+  workspace and every accepted external reference for regular files with more than one link
+  (`scanNativeLinkedFiles`) and names them in the filesystem plan (`linkedFiles`, bound into the
+  policy digest). Seatbelt then denies each one's contents, extended attributes, writes and links
+  to the whole process tree, and create/unlink on the directories between its root and the file,
+  so neither the file nor a parent can be renamed onto an undenied name; its metadata stays
+  readable, so listings, Git and a search walk still see the entry. The runtime's own search, its
+  read tool and a shell child all get `Operation not permitted`; the original 2.1.4 `grep` returns
+  the ordinary match and no linked bytes in all three modes. Read-only Git object files that a
+  local `git clone` shares with its source repository stay readable, so Git keeps working there.
+  A scan that cannot finish, or that finds more than 1,024 linked files, refuses the launch
+  (`workspace-unqualified`, `linked-files-unscanned` or `linked-files-excessive`) instead of
+  starting on a partial list; `coding-runtime.linked-files.resolved` records the counts. On macOS
+  pnpm and Bun clone package files from their stores by default, so an ordinary install has no
+  such links; a project configured to hard-link its store is denied those files. A link another
+  process of the same user creates during the run is outside this boundary, as a copy of the same
+  bytes would be; the per-action `linked-file` refusal above still covers the native read and edit
+  tools. The task workspace and the run's private state are re-allowed after
   the credential-root denials, because the packaged product keeps its managed task workspaces
   inside its own state directory, and the ancestor directory nodes of both are readable (their
   entry names, never their files or sibling subtrees) because the runtime opens the workspace's

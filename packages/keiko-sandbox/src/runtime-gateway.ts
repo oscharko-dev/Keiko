@@ -89,6 +89,39 @@ function isGatewayUrl(parsed: URL): boolean {
   );
 }
 
+/** The filesystem plan's fixed-position digest fields; a plan without one adds none. */
+function filesystemDigestFields(
+  filesystem: RuntimeGatewayFilesystem | undefined,
+): readonly string[] {
+  if (filesystem === undefined) return [];
+  return [
+    "native-filesystem-root-union-v1",
+    filesystem.workspaceRoot,
+    filesystem.workspaceAccess,
+    filesystem.privateStateRoot,
+    filesystem.runtimeReadRoot,
+    ...(filesystem.deniedReadRoots ?? []),
+    ...(filesystem.toolchainReadRoots === undefined
+      ? []
+      : ["native-toolchain-read-roots-v1", ...filesystem.toolchainReadRoots]),
+    ...(filesystem.gitMetadataReadRoots === undefined
+      ? []
+      : ["native-git-metadata-read-roots-v1", ...filesystem.gitMetadataReadRoots]),
+    ...(filesystem.externalReadRoots === undefined
+      ? []
+      : ["native-external-read-roots-v1", ...filesystem.externalReadRoots]),
+    ...(filesystem.protectedWriteRoots === undefined
+      ? []
+      : ["native-protected-write-roots-v1", ...filesystem.protectedWriteRoots]),
+    ...(filesystem.linkFreeWriteRoots === undefined
+      ? []
+      : ["native-link-free-write-roots-v1", ...filesystem.linkFreeWriteRoots]),
+    ...(filesystem.linkedFiles === undefined
+      ? []
+      : ["native-linked-files-v1", ...filesystem.linkedFiles]),
+  ];
+}
+
 function policyDigest(policy: Omit<RuntimeGatewayConfinement, "policyDigest">): string {
   // Fixed-position JSON framing is unambiguous; labels and enforcement version bind the ruler.
   return createHash("sha256")
@@ -108,31 +141,7 @@ function policyDigest(policy: Omit<RuntimeGatewayConfinement, "policyDigest">): 
           ? "native-exec-inherited-own-sandbox-process-targets-no-appleevents-no-lsopen"
           : "fork-allowed-exec-runtime-and-apple-git-only-own-sandbox-process-targets-no-mach-lookup-no-appleevents-no-lsopen",
         ...(policy.egress === undefined ? [] : [`native-egress-${policy.egress}-v1`]),
-        ...(policy.filesystem === undefined
-          ? []
-          : [
-              "native-filesystem-root-union-v1",
-              policy.filesystem.workspaceRoot,
-              policy.filesystem.workspaceAccess,
-              policy.filesystem.privateStateRoot,
-              policy.filesystem.runtimeReadRoot,
-              ...(policy.filesystem.deniedReadRoots ?? []),
-              ...(policy.filesystem.toolchainReadRoots === undefined
-                ? []
-                : ["native-toolchain-read-roots-v1", ...policy.filesystem.toolchainReadRoots]),
-              ...(policy.filesystem.gitMetadataReadRoots === undefined
-                ? []
-                : ["native-git-metadata-read-roots-v1", ...policy.filesystem.gitMetadataReadRoots]),
-              ...(policy.filesystem.externalReadRoots === undefined
-                ? []
-                : ["native-external-read-roots-v1", ...policy.filesystem.externalReadRoots]),
-              ...(policy.filesystem.protectedWriteRoots === undefined
-                ? []
-                : ["native-protected-write-roots-v1", ...policy.filesystem.protectedWriteRoots]),
-              ...(policy.filesystem.linkFreeWriteRoots === undefined
-                ? []
-                : ["native-link-free-write-roots-v1", ...policy.filesystem.linkFreeWriteRoots]),
-            ]),
+        ...filesystemDigestFields(policy.filesystem),
       ]),
     )
     .digest("hex");

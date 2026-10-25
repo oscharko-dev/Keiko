@@ -1167,6 +1167,7 @@
     "keiko-server/coding-runtime/opencodeNativeSessionTree",
     "keiko-server/coding-runtime/opencodeNativeTools",
     "keiko-server/coding-runtime/opencodeNativeWorktree",
+    "keiko-server/coding-runtime/opencodeOperatorPluginPackage",
     "keiko-server/coding-runtime/opencodeOperatorPlugins",
     "keiko-server/coding-runtime/opencodePersistenceContract",
     "keiko-server/coding-runtime/opencodePromptInputs",

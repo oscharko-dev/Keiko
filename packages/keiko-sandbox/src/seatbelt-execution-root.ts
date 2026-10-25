@@ -1,4 +1,5 @@
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
+import { NATIVE_LINKED_FILES_MAX } from "./native-linked-files.js";
 import { CREDENTIAL_PATH_SEATBELT_RULE } from "./seatbelt-credential-paths.js";
 import type { IsolatedRunPlan, RuntimeGatewayFilesystem } from "./types.js";
 
@@ -112,6 +113,7 @@ const OPTIONAL_GATEWAY_FILESYSTEM_KEYS = new Set([
   "externalReadRoots",
   "protectedWriteRoots",
   "linkFreeWriteRoots",
+  "linkedFiles",
 ]);
 
 function validRoot(value: unknown): value is string {
@@ -185,7 +187,25 @@ function validOptionalRoots(value: Record<string, unknown>): boolean {
     validGitMetadataReadRoots(value) &&
     validExternalReadRoots(value) &&
     validProtectedWriteRoots(value) &&
-    validLinkFreeWriteRoots(value)
+    validLinkFreeWriteRoots(value) &&
+    validLinkedFiles(value)
+  );
+}
+
+/** A linked file lies strictly inside the workspace or an accepted external reference. */
+function validLinkedFiles(value: Record<string, unknown>): boolean {
+  if (value.linkedFiles === undefined) return true;
+  const external: readonly unknown[] = Array.isArray(value.externalReadRoots)
+    ? (value.externalReadRoots as readonly unknown[])
+    : [];
+  const containers = [value.workspaceRoot, ...external];
+  return (
+    value.workspaceAccess === "read-write" &&
+    validRootList(value.linkedFiles, NATIVE_LINKED_FILES_MAX, (file) =>
+      containers.some(
+        (container) => typeof container === "string" && strictlyInside(container, file),
+      ),
+    )
   );
 }
 
@@ -358,6 +378,7 @@ export function nativeWorkspaceSeatbeltRules(filesystem: RuntimeGatewayFilesyste
     gitMetadataSeatbeltRules(closed) +
     protectedWriteSeatbeltRules(closed) +
     linkFreeWriteSeatbeltRules(closed) +
+    linkedFileSeatbeltRules(closed) +
     CREDENTIAL_PATH_SEATBELT_RULE
   );
 }
@@ -421,6 +442,28 @@ function linkFreeWriteSeatbeltRules(closed: RuntimeGatewayFilesystem): string {
     `(deny file-write-create (require-all (vnode-type SYMLINK) (require-any ${inside})))` +
     `(deny file-link ${inside})` +
     `(deny file-write-unlink ${pathFilters("literal", roots)})` +
+    (intermediates.length === 0
+      ? ""
+      : `(deny file-write-create file-write-unlink ${pathFilters("literal", intermediates)})`)
+  );
+}
+
+/**
+ * A file the launch scan found with more than one hard link may alias a file outside every
+ * admitted root (`scanNativeLinkedFiles`). Its contents, its extended attributes and every write or
+ * link of it are denied to every process of the run, so no reader -- the runtime's search, its read
+ * tool, a shell child -- obtains the other file's bytes through it. Its metadata stays readable, so
+ * a listing, Git and a directory walk still see the entry. The directories between its root and the
+ * file lose create/unlink on themselves, so neither the file nor a parent can be renamed onto a
+ * path the denial does not name (the protected-root pattern above).
+ */
+function linkedFileSeatbeltRules(closed: RuntimeGatewayFilesystem): string {
+  const files = closed.linkedFiles ?? [];
+  if (files.length === 0) return "";
+  const containers = [closed.workspaceRoot, ...(closed.externalReadRoots ?? [])];
+  const intermediates = files.flatMap((file) => intermediateDirectories(file, containers));
+  return (
+    `(deny file-read-data file-read-xattr file-write* file-link ${pathFilters("literal", files)})` +
     (intermediates.length === 0
       ? ""
       : `(deny file-write-create file-write-unlink ${pathFilters("literal", intermediates)})`)

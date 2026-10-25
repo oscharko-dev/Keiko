@@ -7907,6 +7907,83 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "coding-runtime.linked-files.resolved",
+    category: "process",
+    owner: "keiko-server",
+    emitter: "coding-runtime.opencodeNativeLinkedFiles.recordNativeLinkedFileScan",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      outcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["complete", "excessive", "incomplete"],
+      },
+      rootCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      scannedFileCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      linkedFileCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      gitObjectLinkCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      durationMs: {
+        type: "integer",
+        dataClass: "duration",
+        required: true,
+      },
+      frames: {
+        type: "string-array",
+        dataClass: "opaque-id",
+        required: false,
+        maxLength: 512,
+        maxItems: 8,
+      },
+      causeChain: {
+        type: "string-array",
+        dataClass: "error-kind",
+        required: false,
+        maxLength: 128,
+        maxItems: 5,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "capability",
+    failureClasses: ["coding-runtime-linked-files-unscanned"],
+    proofIds: ["coding-runtime.linked-files.resolved.emitted-line"],
+    releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "outcome",
+        values: ["excessive", "incomplete"],
+      },
+    ],
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "coding-runtime.mcp-authorization",
     category: "security",
     owner: "keiko-server",
@@ -8897,7 +8974,13 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: false,
         maxItems: 4,
-        values: ["digest-mismatch", "unreadable", "too-large", "workspace-unavailable"],
+        values: [
+          "digest-mismatch",
+          "unreadable",
+          "too-large",
+          "workspace-unavailable",
+          "entry-missing",
+        ],
       },
       registryReason: {
         type: "string",

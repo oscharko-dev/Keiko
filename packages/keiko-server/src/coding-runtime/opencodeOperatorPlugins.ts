@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { extname, isAbsolute, join, normalize, resolve } from "node:path";
+import { extname, isAbsolute, join, normalize, resolve, sep } from "node:path";
 import { causeChain, keikoStackFrames, type ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import {
   activityLogEvent,
@@ -14,6 +14,11 @@ import {
 } from "../ownerPrivateStateFile.js";
 import { onlyKeys, plainRecord } from "../operatorRegistryJson.js";
 import { CODING_RUNTIME_FAILURE_TRACE_FIELDS } from "./codingRuntimeActivityOperations.js";
+import {
+  readPluginPackage,
+  writePluginPackage,
+  type PluginPackageFile,
+} from "./opencodeOperatorPluginPackage.js";
 import type { SecureWorkspaceTextReadResult } from "./secureWorkspaceTextRead.js";
 
 /**
@@ -46,7 +51,9 @@ const FULL_ACCESS = "autonomous-delivery";
 
 export type OperatorPluginSource =
   | { readonly kind: "workspace"; readonly path: string }
-  | { readonly kind: "file"; readonly path: string };
+  | { readonly kind: "file"; readonly path: string }
+  /** A locally installed npm package: its directory and its entry module inside it. */
+  | { readonly kind: "package"; readonly path: string; readonly entry: string };
 
 export interface OperatorPluginDefinition {
   readonly name: string;
@@ -112,13 +119,16 @@ export function parseOperatorPluginRegistry(
 
 function pluginDefinition(value: unknown): OperatorPluginDefinition | undefined {
   const entry = plainRecord(value);
-  if (entry === undefined || !onlyKeys(entry, ["name", "workspacePath", "path", "sha256"]))
+  if (entry === undefined || !onlyKeys(entry, ["name", "workspacePath", "path", "entry", "sha256"]))
     return undefined;
   const { name, workspacePath, path, sha256 } = entry;
   if (typeof name !== "string" || !PLUGIN_NAME.test(name) || name.startsWith("keiko"))
     return undefined;
   if (typeof sha256 !== "string" || !SHA256_HEX.test(sha256)) return undefined;
-  const source = pluginSource(workspacePath, path);
+  const source =
+    entry.entry === undefined
+      ? pluginSource(workspacePath, path)
+      : packageSource(workspacePath, path, entry.entry);
   return source === undefined ? undefined : { name, source, sha256 };
 }
 
@@ -134,6 +144,21 @@ function pluginSource(workspacePath: unknown, path: unknown): OperatorPluginSour
       ? { kind: "file", path }
       : undefined;
   return undefined;
+}
+
+// A package is an absolute directory the operator installed, and its entry a module inside it.
+function packageSource(
+  workspacePath: unknown,
+  path: unknown,
+  entry: unknown,
+): OperatorPluginSource | undefined {
+  if (workspacePath !== undefined || typeof path !== "string" || typeof entry !== "string")
+    return undefined;
+  if (!isAbsolute(path) || resolve(path) !== path) return undefined;
+  const relative = entry.split("/").join(sep);
+  return containedRelative(relative) && moduleFile(entry) && !entry.includes("\\")
+    ? { kind: "package", path, entry }
+    : undefined;
 }
 
 function containedRelative(path: string): boolean {
@@ -157,6 +182,7 @@ const PLUGIN_REFUSALS = [
   "unreadable",
   "too-large",
   "workspace-unavailable",
+  "entry-missing",
 ] as const;
 type PluginRefusal = (typeof PLUGIN_REFUSALS)[number];
 
@@ -250,15 +276,44 @@ async function admission(
   const admitted: OperatorPluginDefinition[] = [];
   const refusals: PluginRefusal[] = [];
   for (const plugin of registry.plugins) {
-    const read = await pluginBytes(input, plugin, request.signal);
+    const read = await pluginContent(input, plugin, request.signal);
     if (typeof read === "string") refusals.push(read);
-    else if (sha256(read) !== plugin.sha256) refusals.push("digest-mismatch");
+    else if (read.sha256 !== plugin.sha256) refusals.push("digest-mismatch");
     else {
       writeAdmittedCopy(request.discoveryRoot, plugin, read);
       admitted.push(plugin);
     }
   }
   return { state: "admitted", pluginCount, admitted, refusals };
+}
+
+/** What an admitted plugin copies: its digest and the files below its module path. */
+interface PluginContent {
+  readonly sha256: string;
+  /** The module the wrapper imports, relative to the operator directory. */
+  readonly module: string;
+  readonly files: readonly PluginPackageFile[];
+}
+
+async function pluginContent(
+  input: OperatorPluginsAdmissionInput,
+  plugin: OperatorPluginDefinition,
+  signal: AbortSignal | undefined,
+): Promise<PluginContent | PluginRefusal> {
+  if (plugin.source.kind === "package") {
+    const read = readPluginPackage(plugin.source.path, plugin.source.entry);
+    if (!read.ok) return read.reason;
+    // The tree is copied below a directory of the plugin's own name, as its module path says.
+    return {
+      sha256: read.sha256,
+      module: `${plugin.name}/${plugin.source.entry}`,
+      files: read.files.map((file) => ({ path: `${plugin.name}/${file.path}`, bytes: file.bytes })),
+    };
+  }
+  const bytes = await pluginBytes(input, plugin, signal);
+  if (typeof bytes === "string") return bytes;
+  const module = `${plugin.name}${extname(plugin.source.path)}`;
+  return { sha256: sha256(bytes), module, files: [{ path: module, bytes }] };
 }
 
 async function pluginBytes(
@@ -291,16 +346,15 @@ function sha256(bytes: Buffer): string {
 function writeAdmittedCopy(
   discoveryRoot: string,
   plugin: OperatorPluginDefinition,
-  bytes: Buffer,
+  content: PluginContent,
 ): void {
   const operatorRoot = join(discoveryRoot, OPERATOR_PLUGIN_DIRECTORY);
   mkdirSync(operatorRoot, { recursive: true, mode: 0o700 });
   chmodSync(operatorRoot, 0o700);
-  const module = `${plugin.name}${extname(plugin.source.path)}`;
-  writePrivateCopy(join(operatorRoot, module), bytes);
+  writePluginPackage(operatorRoot, content.files);
   writePrivateCopy(
     join(discoveryRoot, "plugins", `${ADMITTED_PREFIX}${plugin.name}.ts`),
-    Buffer.from(operatorPluginWrapperSource(module), "utf8"),
+    Buffer.from(operatorPluginWrapperSource(content.module), "utf8"),
   );
 }
 

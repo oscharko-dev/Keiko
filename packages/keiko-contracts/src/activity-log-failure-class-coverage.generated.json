@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 366,
-  "completeClassCount": 366,
+  "supportedClassCount": 367,
+  "completeClassCount": 367,
   "completeness": "complete",
   "classes": [
     {
@@ -8669,6 +8669,106 @@
             "causeChain": false
           },
           "proofIds": ["coding-runtime.run.issue-context-attached.emitted-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "coding-runtime-linked-files-unscanned",
+      "requirementContract": "coding-runtime-linked-files-unscanned",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["state"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": ["coding-runtime.linked-files.resolved"],
+        "end": [],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "coding-runtime.linked-files.resolved",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["coding-runtime.linked-files.resolved"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "coding-runtime.linked-files.resolved",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "capability",
+          "safeContextFields": [
+            {
+              "name": "causeChain",
+              "type": "string-array",
+              "dataClass": "error-kind",
+              "required": false
+            },
+            {
+              "name": "durationMs",
+              "type": "integer",
+              "dataClass": "duration",
+              "required": true
+            },
+            {
+              "name": "frames",
+              "type": "string-array",
+              "dataClass": "opaque-id",
+              "required": false
+            },
+            {
+              "name": "gitObjectLinkCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "linkedFileCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "rootCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "scannedFileCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "duration",
+            "error-kind",
+            "loss-state",
+            "opaque-id"
+          ],
+          "frameCauseEvidence": {
+            "frames": true,
+            "causeChain": true
+          },
+          "proofIds": ["coding-runtime.linked-files.resolved.emitted-line"],
           "replayReferences": [],
           "missingObligations": []
         }

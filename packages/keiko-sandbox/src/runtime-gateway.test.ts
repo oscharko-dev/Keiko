@@ -1,6 +1,7 @@
 import { spawn, spawnSync, type SpawnOptions } from "node:child_process";
 import {
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -21,6 +22,7 @@ import {
   type RuntimeGatewayConfinementInput,
 } from "./runtime-gateway.js";
 import { resolveDarwinGitExecutable } from "./darwin-git.js";
+import { scanNativeLinkedFiles } from "./native-linked-files.js";
 import { nativeToolchainReadRoots } from "./native-toolchain-roots.js";
 import { currentPlatform, probeBackends } from "./probe.js";
 import {
@@ -268,6 +270,51 @@ describe("long-lived gateway network confinement", () => {
       createRuntimeGatewayConfinement({
         ...input,
         filesystem: { ...filesystem, workspaceAccess: "read-only", linkFreeWriteRoots: roots },
+      }),
+    ).toThrow("runtime-gateway-policy-invalid");
+  });
+
+  it("binds the launch's linked files into the policy digest and admits them inside the workspace or an accepted reference only", () => {
+    const filesystem = {
+      workspaceRoot: "/accepted/workspace",
+      workspaceAccess: "read-write" as const,
+      privateStateRoot: "/private/state",
+      runtimeReadRoot: "/immutable/runtime",
+      externalReadRoots: ["/accepted/reference/docs"],
+    };
+    const native = { ...input, profile: "keiko-native" as const };
+    const plain = createRuntimeGatewayConfinement({ ...native, filesystem });
+    const files = ["/accepted/workspace/src/linked.ts", "/accepted/reference/docs/aliased.md"];
+    const guarded = createRuntimeGatewayConfinement({
+      ...native,
+      filesystem: { ...filesystem, linkedFiles: files },
+    });
+    expect(guarded.policyDigest).not.toBe(plain.policyDigest);
+    expect(guarded.filesystem?.linkedFiles).toEqual(files);
+    for (const invalid of [
+      ["/accepted/workspace"],
+      ["/private/state/home/file"],
+      ["/elsewhere/file"],
+      ["relative/file"],
+      ["/accepted/workspace/../escape"],
+      Array.from({ length: 1_025 }, (_, index) => `/accepted/workspace/f-${String(index)}`),
+    ])
+      expect(() =>
+        createRuntimeGatewayConfinement({
+          ...native,
+          filesystem: { ...filesystem, linkedFiles: invalid },
+        }),
+      ).toThrow("runtime-gateway-policy-invalid");
+    expect(() =>
+      createRuntimeGatewayConfinement({
+        ...input,
+        filesystem: {
+          workspaceRoot: "/accepted/workspace",
+          workspaceAccess: "read-only",
+          privateStateRoot: "/private/state",
+          runtimeReadRoot: "/immutable/runtime",
+          linkedFiles: [files[0] ?? ""],
+        },
       }),
     ).toThrow("runtime-gateway-policy-invalid");
   });
@@ -687,6 +734,54 @@ function linkFreePlanProbes(tree: NativeProofTree): Readonly<Record<string, stri
     ancestorSymlinkSwap: `fs.rmSync(${JSON.stringify(dotOpencode)}, { recursive: true, force: true }); fs.symlinkSync(${JSON.stringify(tree.workspaceRoot)}, ${JSON.stringify(dotOpencode)})`,
     homeEntryWrite: `fs.writeFileSync(${JSON.stringify(join(home, "other.txt"))}, 'x')`,
   };
+}
+
+/**
+ * A workspace file that is a second name of the synthetic outside canary (PR #4064 review): every
+ * way a process of the run could read its bytes, keep a readable name for it or move it onto a
+ * name the denial does not cover, beside the ordinary work that must keep running next to it.
+ */
+function linkedFileProbes(tree: NativeProofTree): Readonly<Record<string, string>> {
+  const ws = tree.workspaceRoot;
+  const linked = join(ws, "src", "linked.txt");
+  return {
+    ordinaryRead: readFact(join(ws, "src", "app.js")),
+    ordinaryWriteAndRename: `fs.writeFileSync(${JSON.stringify(join(ws, "src", "new.js"))}, 'x'); fs.renameSync(${JSON.stringify(join(ws, "src", "new.js"))}, ${JSON.stringify(join(ws, "src", "renamed.js"))})`,
+    linkedListed: `if (!fs.readdirSync(${JSON.stringify(join(ws, "src"))}).includes("linked.txt")) throw new Error("absent")`,
+    linkedMetadata: `fs.statSync(${JSON.stringify(linked)})`,
+    linkedRead: readFact(linked),
+    linkedShellRead: shellFact("cat src/linked.txt", ws),
+    linkedSymlinkRead: `fs.symlinkSync(${JSON.stringify(linked)}, ${JSON.stringify(join(ws, "via-symlink.txt"))}); fs.readFileSync(${JSON.stringify(join(ws, "via-symlink.txt"))})`,
+    linkedCopy: `fs.copyFileSync(${JSON.stringify(linked)}, ${JSON.stringify(join(ws, "copy.txt"))})`,
+    linkedNewLink: `fs.linkSync(${JSON.stringify(linked)}, ${JSON.stringify(join(ws, "second-name.txt"))})`,
+    linkedOverwrite: `fs.writeFileSync(${JSON.stringify(linked)}, 'x')`,
+    linkedRename: `fs.renameSync(${JSON.stringify(linked)}, ${JSON.stringify(join(ws, "src", "moved.txt"))})`,
+    parentRename: `fs.renameSync(${JSON.stringify(join(ws, "src"))}, ${JSON.stringify(join(ws, "src-moved"))})`,
+    linkedUnlink: `fs.unlinkSync(${JSON.stringify(linked)})`,
+  };
+}
+
+function linkedFileRun(guard: "scanned" | undefined): unknown {
+  const tree = createNativeProofTree();
+  try {
+    linkSync(tree.canary, join(tree.workspaceRoot, "src", "linked.txt"));
+    const scan = scanNativeLinkedFiles([tree.workspaceRoot]);
+    if (scan.outcome !== "complete") throw new Error("fixture-scan-incomplete");
+    expect(scan.linkedFiles).toEqual([join(tree.workspaceRoot, "src", "linked.txt")]);
+    const policy = nativeConfinement(
+      tree,
+      "loopback-only",
+      1983,
+      guard === undefined ? {} : { linkedFiles: scan.linkedFiles },
+    );
+    const result = runNative(tree, policy, factScript(linkedFileProbes(tree)));
+    expect(result.status).toBe(0);
+    expect(result.stdout).not.toContain("synthetic-canary");
+    expect(readFileSync(tree.canary, "utf8")).toBe(guard === undefined ? "x" : "synthetic-canary");
+    return JSON.parse(result.stdout);
+  } finally {
+    tree.cleanup();
+  }
 }
 
 function linkFreePlanRun(guard: "link-free" | undefined): unknown {
@@ -1238,6 +1333,38 @@ describe("real OS-level gateway confinement (macOS Seatbelt, #2951)", () => {
         planRename: false,
         ancestorRename: false,
         ancestorSymlinkSwap: false,
+      });
+    },
+    30_000,
+  );
+
+  // PR #4064 review (#3900 AC2/AC5): a hard link that predates the run is a workspace name of an
+  // outside file. Whatever reads it -- the runtime's search, its read tool, a shell child -- the
+  // kernel returns none of the outside bytes once the launch scan named it.
+  it.skipIf(!canProveOnThisHost)(
+    "native profile: a pre-existing hard link yields no outside bytes to any reader of the run",
+    () => {
+      const ordinary = { ordinaryRead: true, ordinaryWriteAndRename: true, linkedListed: true };
+      // Failing-before control: without the scanned denial the second name reads the canary.
+      expect(linkedFileRun(undefined)).toMatchObject({
+        ...ordinary,
+        linkedMetadata: true,
+        linkedRead: true,
+        linkedShellRead: true,
+        linkedCopy: true,
+      });
+      expect(linkedFileRun("scanned")).toEqual({
+        ...ordinary,
+        linkedMetadata: true,
+        linkedRead: false,
+        linkedShellRead: false,
+        linkedSymlinkRead: false,
+        linkedCopy: false,
+        linkedNewLink: false,
+        linkedOverwrite: false,
+        linkedRename: false,
+        parentRename: false,
+        linkedUnlink: false,
       });
     },
     30_000,

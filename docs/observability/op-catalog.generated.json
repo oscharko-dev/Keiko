@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "91db5d11f6764f74f39cbb53bf715a57029dba3192edab0be67ef7af74b76bf7",
+    "catalogDigest": "a504fe7d5c76220048382fcb41a6daecfbee7a52b6cf00af559289e0a630a4ea",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -6881,9 +6881,9 @@
         "failureClasses": ["coding-runtime-context-usage"],
         "proofIds": ["coding-runtime.context-usage.observed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:114",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:115",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:1367"
+          "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:1383"
         ]
       },
       {
@@ -8276,6 +8276,85 @@
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
+        "op": "coding-runtime.linked-files.resolved",
+        "category": "process",
+        "owner": "keiko-server",
+        "emitter": "coding-runtime.opencodeNativeLinkedFiles.recordNativeLinkedFileScan",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "outcome": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["complete", "excessive", "incomplete"]
+          },
+          "rootCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "scannedFileCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "linkedFileCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "gitObjectLinkCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "durationMs": {
+            "type": "integer",
+            "dataClass": "duration",
+            "required": true
+          },
+          "frames": {
+            "type": "string-array",
+            "dataClass": "opaque-id",
+            "required": false,
+            "maxLength": 512,
+            "maxItems": 8
+          },
+          "causeChain": {
+            "type": "string-array",
+            "dataClass": "error-kind",
+            "required": false,
+            "maxLength": 128,
+            "maxItems": 5
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "capability",
+        "diagnosticWhen": [
+          {
+            "field": "outcome",
+            "values": ["excessive", "incomplete"]
+          }
+        ],
+        "failureClasses": ["coding-runtime-linked-files-unscanned"],
+        "proofIds": ["coding-runtime.linked-files.resolved.emitted-line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeNativeLinkedFiles.ts:19",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeNativeLinkedFiles.ts:60"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
         "op": "coding-runtime.mcp-authorization",
         "category": "security",
         "owner": "keiko-server",
@@ -9316,7 +9395,13 @@
             "dataClass": "closed-enum",
             "required": false,
             "maxItems": 4,
-            "values": ["digest-mismatch", "unreadable", "too-large", "workspace-unavailable"]
+            "values": [
+              "digest-mismatch",
+              "unreadable",
+              "too-large",
+              "workspace-unavailable",
+              "entry-missing"
+            ]
           },
           "registryReason": {
             "type": "string",
@@ -9361,8 +9446,8 @@
         "failureClasses": ["coding-runtime-operator-plugins"],
         "proofIds": ["coding-runtime.operator-plugins.admitted.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeOperatorPlugins.ts:373",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeOperatorPlugins.ts:438"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeOperatorPlugins.ts:427",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeOperatorPlugins.ts:492"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -43482,6 +43567,35 @@
       {
         "contractKind": "activity-log-failure-class",
         "schemaVersion": 1,
+        "failureClass": "coding-runtime-linked-files-unscanned",
+        "requiredProductSurfaces": ["keiko-server"],
+        "requiredLifecycleOperations": {
+          "start": [],
+          "state": ["coding-runtime.linked-files.resolved"],
+          "end": [],
+          "failure": [],
+          "loss": []
+        },
+        "requiredCausalOperations": ["coding-runtime.linked-files.resolved"],
+        "requiredLossOperations": [],
+        "requiredProofOperations": ["coding-runtime.linked-files.resolved"],
+        "requiredReplayProofIds": [],
+        "requiredResourceOperations": ["coding-runtime.linked-files.resolved"],
+        "requiredEvidenceClasses": [
+          "closed-enum",
+          "completeness-state",
+          "count",
+          "duration",
+          "error-kind",
+          "loss-state",
+          "opaque-id"
+        ],
+        "requiredFrameOperations": ["coding-runtime.linked-files.resolved"],
+        "requiredCauseOperations": ["coding-runtime.linked-files.resolved"]
+      },
+      {
+        "contractKind": "activity-log-failure-class",
+        "schemaVersion": 1,
         "failureClass": "coding-runtime-ripgrep-unavailable",
         "requiredProductSurfaces": ["keiko-server"],
         "requiredLifecycleOperations": {
@@ -51282,8 +51396,8 @@
     "failureClassCoverage": {
       "schemaVersion": 1,
       "releaseExpectation": "100%-complete",
-      "supportedClassCount": 366,
-      "completeClassCount": 366,
+      "supportedClassCount": 367,
+      "completeClassCount": 367,
       "completeness": "complete",
       "classes": [
         {
@@ -60015,6 +60129,106 @@
                 "causeChain": false
               },
               "proofIds": ["coding-runtime.run.issue-context-attached.emitted-line"],
+              "replayReferences": [],
+              "missingObligations": []
+            }
+          ],
+          "missingObligations": [],
+          "completeness": "complete"
+        },
+        {
+          "failureClass": "coding-runtime-linked-files-unscanned",
+          "requirementContract": "coding-runtime-linked-files-unscanned",
+          "productSurfaces": ["keiko-server"],
+          "lifecycleTransitions": ["state"],
+          "lifecycleOperations": {
+            "start": [],
+            "state": ["coding-runtime.linked-files.resolved"],
+            "end": [],
+            "failure": [],
+            "loss": []
+          },
+          "causalEdges": [
+            {
+              "op": "coding-runtime.linked-files.resolved",
+              "mode": "correlation"
+            }
+          ],
+          "lossSignals": [],
+          "resourceSignals": ["coding-runtime.linked-files.resolved"],
+          "replayReferences": [],
+          "operations": [
+            {
+              "op": "coding-runtime.linked-files.resolved",
+              "owner": "keiko-server",
+              "category": "process",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "capability",
+              "safeContextFields": [
+                {
+                  "name": "causeChain",
+                  "type": "string-array",
+                  "dataClass": "error-kind",
+                  "required": false
+                },
+                {
+                  "name": "durationMs",
+                  "type": "integer",
+                  "dataClass": "duration",
+                  "required": true
+                },
+                {
+                  "name": "frames",
+                  "type": "string-array",
+                  "dataClass": "opaque-id",
+                  "required": false
+                },
+                {
+                  "name": "gitObjectLinkCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "linkedFileCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "outcome",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "rootCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "scannedFileCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": [
+                "closed-enum",
+                "completeness-state",
+                "count",
+                "duration",
+                "error-kind",
+                "loss-state",
+                "opaque-id"
+              ],
+              "frameCauseEvidence": {
+                "frames": true,
+                "causeChain": true
+              },
+              "proofIds": ["coding-runtime.linked-files.resolved.emitted-line"],
               "replayReferences": [],
               "missingObligations": []
             }
@@ -99619,7 +99833,7 @@
     {
       "op": "coding-runtime.context-usage.observed",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:117",
+      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:118",
       "package": "keiko-server"
     },
     {
@@ -99787,6 +100001,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "coding-runtime.linked-files.resolved",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeNativeLinkedFiles.ts:22",
+      "package": "keiko-server"
+    },
+    {
       "op": "coding-runtime.mcp-authorization",
       "category": "security",
       "site": "packages/keiko-server/src/coding-runtime/opencodeNativeMcpAuthorization.ts:324",
@@ -99901,7 +100121,7 @@
     {
       "op": "coding-runtime.operator-plugins.admitted",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeOperatorPlugins.ts:376",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeOperatorPlugins.ts:430",
       "package": "keiko-server"
     },
     {
@@ -102735,6 +102955,7 @@
     "coding-runtime.initial-turn.dispatch-failed",
     "coding-runtime.initial-turn.stop-failed",
     "coding-runtime.lifecycle",
+    "coding-runtime.linked-files.resolved",
     "coding-runtime.mcp-authorization",
     "coding-runtime.mcp-credentials",
     "coding-runtime.mentions.listed",

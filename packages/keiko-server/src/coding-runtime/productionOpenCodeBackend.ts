@@ -98,6 +98,7 @@ import {
 } from "./opencodeLaunchProfile.js";
 import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
 import type { RipgrepRuntimeManifest } from "./ripgrepRuntime.js";
+import { nativeLinkedFilesField } from "./opencodeNativeLinkedFiles.js";
 import {
   recordOpenCodeRipgrepResolution,
   resolveOpenCodeRipgrep,
@@ -512,6 +513,20 @@ function externalReadRootsField(
   if (!macos) return {};
   const roots = nativeExternalReadRoots(input, run);
   return roots.length === 0 ? {} : { externalReadRoots: roots };
+}
+
+/** The workspace's and the accepted references' hard-linked files, denied by the kernel. */
+function linkedFilesField(
+  input: LaunchInput,
+  run: ProductionRuntimeBackendInput,
+  macos: boolean,
+): { readonly linkedFiles?: readonly string[] } {
+  if (!macos) return {};
+  return nativeLinkedFilesField(
+    input.activityLog ?? processServerLogSink(),
+    run.minted.authorityRef.runId,
+    [run.context.workspaceRoot, ...nativeExternalReadRoots(input, run)],
+  );
 }
 
 function nativePrivateStateRoot(input: LaunchInput, run: ProductionRuntimeBackendInput): string {
@@ -1222,6 +1237,7 @@ function gatewayFilesystem(
             ),
             ...nativeGitMetadataReadRoots(input, run),
             ...externalReadRootsField(input, run, macos),
+            ...linkedFilesField(input, run, macos),
             // The policy plugin and the private configuration are read-only to the shell.
             protectedWriteRoots: [openCodeConfigDirectory(privateStateRoot)],
             // The plan agent's private notes take no link that could name a workspace file.

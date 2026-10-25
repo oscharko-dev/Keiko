@@ -37,6 +37,8 @@ import {
 } from "./opencodeLaunchProfile.js";
 import { createCodingRuntimeRepositoryInstructionsPort } from "./codingRuntimeRepositoryInstructions.js";
 import { resolveNativeExternalReadRoots } from "./opencodeNativeExternalRoots.js";
+import { nativeLinkedFilesField } from "./opencodeNativeLinkedFiles.js";
+import { resolveOpenCodeRipgrep } from "./opencodeRipgrepLaunch.js";
 import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
 import { OPENCODE_NATIVE_TOOL_DEFINITIONS } from "./opencodeNativeTools.js";
 import {
@@ -481,6 +483,11 @@ function launch(
       // launcher's toolchain `PATH` (#3901 AC1).
       ...toolchainReadRoots(options, fixture),
       ...(external.length === 0 ? {} : { externalReadRoots: external }),
+      // As production scans them at launch: the hard links that predate the run (PR #4064 review).
+      ...nativeLinkedFilesField({ write: () => undefined }, RUN_ID, [
+        fixture.workspace,
+        ...external,
+      ]),
     },
   });
   const command = buildRuntimeGatewaySeatbeltCommand(policy, binary, profile.args, git.path);
@@ -885,6 +892,134 @@ describe("pinned native OpenCode directory reads (T02)", () => {
 // ─── T08: patch ────────────────────────────────────────────────────────────────────────────────
 
 // ─── PR #4064 review: hard links inside the workspace ─────────────────────────────────────────────
+
+// #3900 AC2/AC5 (the auditor's original-binary counter, comment 4369915598): a hard link that
+// already exists in the searched tree names a file outside every admitted root. The launch scan
+// names it and the kernel profile denies its bytes, so the original search -- and every other
+// reader of the run -- returns the ordinary match and none of the outside file, in every mode.
+// The boundary is Keiko's own: nothing here depends on which reader the runtime uses.
+describe("pinned native OpenCode search over a pre-existing hard link (#3900 AC2/AC5)", () => {
+  const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
+  const CANARY = "HARD-LINK-SEARCH-CANARY";
+  const files = {
+    [FIXTURE_FILE]: "readme\n",
+    "src/ordinary.ts": "export const harmless = 1;\n",
+  };
+  const grep = (pattern: string, extra: Readonly<Record<string, unknown>> = {}): ScriptedCall => ({
+    name: "grep",
+    arguments: { pattern, include: "*.ts", ...extra },
+  });
+
+  /** The pinned ripgrep's directory, verified as the production launch verifies it. */
+  function verifiedRipgrepPath(): string {
+    const resolution = resolveOpenCodeRipgrep({
+      target: "macos-arm64",
+      location: {
+        kind: "checkout",
+        checkoutRoot: fileURLToPath(new URL("../../../..", import.meta.url)),
+      },
+      env: {},
+    });
+    if (resolution.outcome !== "verified")
+      throw new Error(`fixture-ripgrep-not-provisioned:${resolution.reason}`);
+    return resolution.directory;
+  }
+
+  /** A synthetic outside file, hard-linked into `directory` before the run launches. */
+  function linkBeforeLaunch(fixture: Fixture, directory: string, alias: string): void {
+    const outside = join(fixture.root, `outside-${randomUUID()}.txt`);
+    writeFileSync(outside, `export const leaked = "${CANARY}";\n`);
+    mkdirSync(directory, { recursive: true });
+    linkSync(outside, join(directory, alias));
+  }
+
+  it.skipIf(skip)(
+    "finds the ordinary match and none of a linked file's bytes in all three modes",
+    async () => {
+      for (const mode of ["governed-assist", "supervised-coding", "autonomous-delivery"] as const) {
+        await withRun(
+          {
+            files,
+            mode,
+            toolchainPath: verifiedRipgrepPath(),
+            prepare: (fixture) => {
+              linkBeforeLaunch(fixture, join(fixture.workspace, "src"), "linked.ts");
+            },
+          },
+          async (run) => {
+            // Positive control: the original search still returns the ordinary source line.
+            expect(await scriptedTurn(run, grep("harmless")), mode).toContain("harmless");
+            const searched = await scriptedTurn(run, grep("HARD-LINK"));
+            expect(searched, mode).not.toContain(CANARY);
+            expect(
+              run.facade.decisions.filter((decision) => decision.permission === "grep"),
+              mode,
+            ).toEqual([
+              expect.objectContaining({ effect: "allow" }),
+              expect.objectContaining({ effect: "allow" }),
+            ]);
+            expect(JSON.stringify(run.gateway.requests), mode).not.toContain(CANARY);
+          },
+        );
+      }
+    },
+    600_000,
+  );
+
+  it.skipIf(skip)(
+    "gives a Full access shell child none of the linked file's bytes either",
+    async () => {
+      await withRun(
+        {
+          files,
+          mode: "autonomous-delivery",
+          prepare: (fixture) => {
+            linkBeforeLaunch(fixture, join(fixture.workspace, "src"), "linked.ts");
+          },
+        },
+        async (run) => {
+          const output = await scriptedTurn(
+            run,
+            shell("cat src/linked.ts; cp src/linked.ts copy.ts; mv src/linked.ts moved.ts"),
+          );
+          expect(output).toContain("Operation not permitted");
+          expect(output).not.toContain(CANARY);
+          expect(existsSync(join(run.fixture.workspace, "copy.ts"))).toBe(false);
+          expect(JSON.stringify(run.gateway.requests)).not.toContain(CANARY);
+        },
+      );
+    },
+    240_000,
+  );
+
+  it.skipIf(skip)(
+    "finds an accepted reference's ordinary match and none of its linked file's bytes",
+    async () => {
+      const reference = (fixture: Fixture): string => join(fixture.root, "reference", "src");
+      await withRun(
+        {
+          files,
+          mode: "autonomous-delivery",
+          toolchainPath: verifiedRipgrepPath(),
+          externalReadRoots: reference,
+          prepare: (fixture) => {
+            mkdirSync(reference(fixture), { recursive: true });
+            writeFileSync(join(reference(fixture), "guide.ts"), "export const harmless = 2;\n");
+            linkBeforeLaunch(fixture, reference(fixture), "aliased.ts");
+          },
+        },
+        async (run) => {
+          const path = reference(run.fixture);
+          expect(await scriptedTurn(run, grep("harmless", { path }))).toContain("harmless = 2");
+          const searched = await scriptedTurn(run, grep("HARD-LINK", { path }));
+          expect(searched).not.toContain(CANARY);
+          expect(JSON.stringify(run.gateway.requests)).not.toContain(CANARY);
+        },
+      );
+    },
+    240_000,
+  );
+});
 
 // #3900 AC1: the original Write and Edit keep their own schemas and results -- create, overwrite,
 // replace and replace-all -- while every write reaches Keiko's one native policy owner. Move and

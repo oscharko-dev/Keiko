@@ -79,6 +79,14 @@ export interface RuntimeGatewayFilesystem {
    * physically inside it (the plan agent's notes, #3897 review). Absent means no such constraint.
    */
   readonly linkFreeWriteRoots?: readonly string[] | undefined;
+  /**
+   * Native profile only: absolute regular files inside the workspace or an accepted external
+   * reference that had more than one hard link when the run launched (`scanNativeLinkedFiles`). A
+   * second name can alias a file outside every admitted root, so the kernel denies each one's
+   * contents and every write, rename or link of it to every process of the run, whatever tool reads
+   * it (PR #4064 review, #3900 AC2/AC5). Absent means the scan found none.
+   */
+  readonly linkedFiles?: readonly string[] | undefined;
 }
 
 // Which enforcing backends a host has available. Produced by the probe, then fed into the PURE

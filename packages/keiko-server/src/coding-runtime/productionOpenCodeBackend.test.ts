@@ -16,6 +16,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  linkSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -1688,6 +1689,7 @@ describe("ripgrep on the OpenCode launch", () => {
     readonly toolchainReadRoots: readonly string[] | undefined;
     readonly externalReadRoots: readonly string[] | undefined;
     readonly composedExternalReadRoots: readonly string[] | undefined;
+    readonly linkedFiles: readonly string[] | undefined;
     readonly events: readonly ServerLogEvent[];
   }
 
@@ -1730,11 +1732,15 @@ describe("ripgrep on the OpenCode launch", () => {
   function launchedRoots(
     filesystem: RuntimeGatewayFilesystem | undefined,
     composedExternalReadRoots: readonly string[] | undefined,
-  ): Pick<Launch, "toolchainReadRoots" | "externalReadRoots" | "composedExternalReadRoots"> {
+  ): Pick<
+    Launch,
+    "toolchainReadRoots" | "externalReadRoots" | "composedExternalReadRoots" | "linkedFiles"
+  > {
     return {
       toolchainReadRoots: filesystem?.toolchainReadRoots,
       externalReadRoots: filesystem?.externalReadRoots,
       composedExternalReadRoots,
+      linkedFiles: filesystem?.linkedFiles,
     };
   }
 
@@ -1941,6 +1947,41 @@ describe("ripgrep on the OpenCode launch", () => {
     }
   });
 
+  // PR #4064 review (#3900 AC2/AC5): the launch scans the workspace and every accepted reference,
+  // and the kernel profile it builds names each hard-linked file there.
+  it("names the workspace's and the accepted references' hard links in the kernel profile", () => {
+    const root = tmpRoot();
+    const outside = realpathSync(mkdtempSync(join(tmpdir(), "keiko-linked-launch-")));
+    vi.stubEnv("PATH", `/usr/bin${delimiter}/bin`);
+    try {
+      stage(join(root, "npm-package", "runtime", "native", "rg"));
+      const reference = join(outside, "reference");
+      mkdirSync(reference);
+      writeFileSync(join(outside, "secret.txt"), "OUTSIDE\n");
+      linkSync(join(outside, "secret.txt"), join(root, "linked.txt"));
+      linkSync(join(outside, "secret.txt"), join(reference, "aliased.txt"));
+      const result = launch(root, npmLaneMacRuntime(root), {
+        native: true,
+        processEnv: CONTENT_ENV,
+        key: "darwin-arm64",
+        externalReadRoots: reference,
+      });
+      expect(result.linkedFiles).toEqual(
+        [join(reference, "aliased.txt"), join(root, "linked.txt")].sort(),
+      );
+      expect(
+        result.events.filter((event) => event.op === "coding-runtime.linked-files.resolved"),
+      ).toMatchObject([
+        { level: "info", extra: { outcome: "complete", rootCount: 2, linkedFileCount: 2 } },
+      ]);
+      expect(JSON.stringify(result.events)).not.toContain("aliased.txt");
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(root, { force: true, recursive: true });
+      rmSync(outside, { force: true, recursive: true });
+    }
+  });
+
   // The clean npm installation (#4064): no override, no ripgrep on the launcher's PATH. The runtime
   // package installed next to Keiko carries the executable, and the launch finds it normally.
   it("verifies the ripgrep an npm runtime package ships and opens exactly its directory", () => {
@@ -1959,12 +2000,15 @@ describe("ripgrep on the OpenCode launch", () => {
         buildSandboxEnv(result.processEnv ?? {}, result.allowlist).PATH?.split(delimiter)[0],
       ).toBe(directory);
       expect(result.toolchainReadRoots).toEqual([directory]);
-      // The launch also records where the workspace's Git metadata lives (#3897 review).
+      // The launch also records where the workspace's Git metadata lives (#3897 review) and the
+      // hard links its scan found (PR #4064 review, none here).
       expect(result.events.map((event) => event.op)).toEqual([
         "coding-runtime.ripgrep.resolved",
         "coding-runtime.native-external-roots.resolved",
         "coding-runtime.git-metadata.resolved",
+        "coding-runtime.linked-files.resolved",
       ]);
+      expect(result.linkedFiles).toBeUndefined();
       expect(result.events[0]).toMatchObject({
         op: "coding-runtime.ripgrep.resolved",
         level: "info",

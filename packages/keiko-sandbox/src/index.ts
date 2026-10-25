@@ -15,6 +15,13 @@ export {
 export type { WrappedCommand } from "./backends.js";
 export { selectEnforcingBackend, selectGatewayBackend } from "./select.js";
 export { nativeHomeDeniedReadRoots, nativeToolchainReadRoots } from "./native-toolchain-roots.js";
+export {
+  NATIVE_LINKED_FILES_MAX,
+  NATIVE_LINKED_FILE_SCAN_ENTRIES_MAX,
+  scanNativeLinkedFiles,
+  type NativeLinkedFileScan,
+  type NativeLinkedFileScanLimits,
+} from "./native-linked-files.js";
 export { planIsolatedRun, GATEWAY_UNSUPPORTED_ON_HOST_REASON } from "./plan.js";
 export {
   DEBUG_CAPSULE_RUNTIME_MOUNT,

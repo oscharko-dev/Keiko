@@ -33,6 +33,7 @@ import {
   createOperatorPluginsPort,
   parseOperatorPluginRegistry,
 } from "./opencodeOperatorPlugins.js";
+import { readPluginPackage } from "./opencodeOperatorPluginPackage.js";
 import { buildOpenCodeLaunchProfile, openCodeConfigDirectory } from "./opencodeLaunchProfile.js";
 import {
   openCodeNativeMcpAdmission,
@@ -1377,6 +1378,65 @@ describe("pinned native OpenCode operator plugins", () => {
             (event) => event.op === "coding-runtime.operator-plugins.admitted",
           );
           expect(admitted?.extra).toMatchObject({ state, admittedCount: 0 });
+        },
+      );
+    },
+    120_000,
+  );
+
+  live(
+    "loads an npm package the operator installed, with its own dependencies, at Full access",
+    async () => {
+      const evidence = createBufferedServerLogSink();
+      await withRun(
+        {
+          beforeLaunch: async (fixture) => {
+            const installed = join(fixture.root, "operator", "lint");
+            mkdirSync(join(installed, "node_modules", "lint-rules"), { recursive: true });
+            writeFileSync(
+              join(installed, "node_modules", "lint-rules", "package.json"),
+              '{"name":"lint-rules","type":"module","main":"index.js"}',
+              { mode: 0o600 },
+            );
+            writeFileSync(
+              join(installed, "node_modules", "lint-rules", "index.js"),
+              'export const pluginId = "acme.lint";\n',
+              { mode: 0o600 },
+            );
+            writeFileSync(
+              join(installed, "plugin.js"),
+              'import { pluginId } from "lint-rules";\nexport default { id: pluginId, async setup() {} };\n',
+              { mode: 0o600 },
+            );
+            const read = readPluginPackage(installed, "plugin.js");
+            if (!read.ok) throw new Error(`fixture-package-${read.reason}`);
+            await createOperatorPluginsPort({
+              registry: () => ({
+                state: "loaded",
+                plugins: [
+                  {
+                    name: "lint",
+                    source: { kind: "package", path: installed, entry: "plugin.js" },
+                    sha256: read.sha256,
+                  },
+                ],
+              }),
+              readWorkspaceText: () => Promise.resolve({ ok: false, reason: "not-found" }),
+              activityLog: evidence,
+            }).admitForRun({
+              runId: RUN_ID,
+              discoveryRoot: openCodeConfigDirectory(fixture.state),
+              mode: "autonomous-delivery",
+            });
+          },
+        },
+        async (run) => {
+          const plugins = await settledPlugins(run);
+          // The id comes from the package's own dependency, resolved inside the copied tree.
+          expect(object(pluginById(plugins, "acme.lint")?.state)?.status).toBe("active");
+          expect(String(object(pluginById(plugins, "acme.lint")?.source)?.path)).toMatch(
+            /plugins\/admitted-lint\.ts$/u,
+          );
         },
       );
     },

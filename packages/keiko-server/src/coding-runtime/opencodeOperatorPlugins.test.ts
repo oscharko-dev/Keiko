@@ -29,6 +29,7 @@ import {
   parseOperatorPluginRegistry,
   type OperatorPluginRegistry,
 } from "./opencodeOperatorPlugins.js";
+import { pluginPackageDigest } from "./opencodeOperatorPluginPackage.js";
 
 const PLUGIN = 'export default { id: "acme.audit", async setup() {} };\n';
 const DIGEST = createHash("sha256").update(PLUGIN, "utf8").digest("hex");
@@ -180,6 +181,35 @@ describe("the operator plugin registry (#3903 AC2)", () => {
     expect(parseOperatorPluginRegistry(value)).toEqual({ ok: false, reason });
   });
 
+  it("accepts a locally installed package with its entry module, and refuses an unsafe entry", () => {
+    const entry = {
+      name: "lint",
+      path: "/opt/keiko/plugins/lint",
+      entry: "node_modules/opencode-lint/dist/index.js",
+      sha256: DIGEST,
+    };
+    expect(parseOperatorPluginRegistry({ schemaVersion: 1, plugins: [entry] })).toEqual({
+      ok: true,
+      plugins: [
+        {
+          name: "lint",
+          source: { kind: "package", path: entry.path, entry: entry.entry },
+          sha256: DIGEST,
+        },
+      ],
+    });
+    for (const unsafe of ["../escape.js", "/abs.js", "./index.js", "dist/index.json"])
+      expect(
+        parseOperatorPluginRegistry({ schemaVersion: 1, plugins: [{ ...entry, entry: unsafe }] }),
+      ).toEqual({ ok: false, reason: "plugin-invalid" });
+    expect(
+      parseOperatorPluginRegistry({
+        schemaVersion: 1,
+        plugins: [{ name: "lint", workspacePath: "lint", entry: "index.js", sha256: DIGEST }],
+      }),
+    ).toEqual({ ok: false, reason: "plugin-invalid" });
+  });
+
   it("reads an absent registry as no plugins and throws for one it cannot trust", () => {
     const stateDir = tempRoot();
     expect(loadOperatorPluginRegistry(stateDir)).toEqual({ state: "absent", plugins: [] });
@@ -267,6 +297,50 @@ describe("admitting the operator's plugins for a run (#3903 AC2)", () => {
       refusalReasons: ["digest-mismatch"],
     });
     expect(records[0]?.level).toBe("warn");
+  });
+
+  it("copies a package's whole tree and has the wrapper import its entry", async () => {
+    const root = discoveryRoot();
+    const records: ServerLogEvent[] = [];
+    const installed = join(tempRoot(), "lint");
+    mkdirSync(join(installed, "node_modules", "dep"), { recursive: true });
+    writeFileSync(join(installed, "node_modules", "dep", "index.js"), "export const x = 1;\n", {
+      mode: 0o600,
+    });
+    writeFileSync(join(installed, "index.js"), PLUGIN, { mode: 0o600 });
+    const files = [
+      { path: "index.js", bytes: Buffer.from(PLUGIN) },
+      { path: "node_modules/dep/index.js", bytes: Buffer.from("export const x = 1;\n") },
+    ];
+    const registry = (sha256: string) => (): OperatorPluginRegistry => ({
+      state: "loaded",
+      plugins: [
+        { name: "lint", source: { kind: "package", path: installed, entry: "index.js" }, sha256 },
+      ],
+    });
+    await port(registry(pluginPackageDigest(files)), records).admitForRun({
+      runId: "run-plugins-7",
+      discoveryRoot: root,
+      mode: "autonomous-delivery",
+    });
+    expect(
+      readFileSync(
+        join(root, "operator-plugins", "lint", "node_modules", "dep", "index.js"),
+        "utf8",
+      ),
+    ).toBe("export const x = 1;\n");
+    expect(readFileSync(join(root, "plugins", "admitted-lint.ts"), "utf8")).toBe(
+      operatorPluginWrapperSource("lint/index.js"),
+    );
+    expect(lineOf(records)).toMatchObject({ state: "admitted", admittedCount: 1 });
+    records.length = 0;
+    await port(registry(DIGEST), records).admitForRun({
+      runId: "run-plugins-7",
+      discoveryRoot: root,
+      mode: "autonomous-delivery",
+    });
+    expect(existsSync(join(root, "operator-plugins"))).toBe(false);
+    expect(lineOf(records)).toMatchObject({ refusalReasons: ["digest-mismatch"] });
   });
 
   it("reads a workspace source through the run's exact workspace read", async () => {

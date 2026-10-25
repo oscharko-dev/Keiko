@@ -184,6 +184,19 @@ external-file action of the run's mode (asked in Ask for approval and Supervised
 in Full access), and credential files, hard links and writes stay refused. On Linux no external
 root is admitted yet (`unsupported-platform`).
 
+### Hard links in the workspace
+
+Before every native launch Keiko scans the workspace and each accepted external reference for
+regular files with more than one hard link. Such a file can be a second name of a file outside the
+task, so the kernel profile denies its contents to every process of the run (search, read, shell);
+it stays visible in listings. Read-only Git objects shared by a local `git clone` stay readable.
+`coding-runtime.linked-files.resolved` records the scanned, linked and Git-object counts. A launch
+refused with `workspace-unqualified` and reason `linked-files-excessive` found more than 1,024
+linked files (typically a package store configured to hard-link into `node_modules`; use the
+default clone or copy import), and `linked-files-unscanned` means the tree could not be walked
+completely (more than two million entries or an unreadable entry); the run does not start on a
+partial list.
+
 ## Repository agents, commands and skills
 
 On the native profile a run admits the workspace's Markdown-only items as sanitized copies in its
@@ -263,14 +276,21 @@ directory, with the same ownership rules as `mcp-servers.json` (owned by the use
 }
 ```
 
+- An npm plugin package is installed by the operator into a directory of its own and registered
+  with its entry module: `npm install --prefix /opt/keiko/plugins/lint opencode-lint`, then
+  `{ "name": "lint", "path": "/opt/keiko/plugins/lint", "entry":
+"node_modules/opencode-lint/dist/index.js", "sha256": "<tree digest>" }`. The tree digest is
+  printed by `cd /opt/keiko/plugins/lint && find . -type f -print0 | LC_ALL=C sort -z | xargs -0
+shasum -a 256 | shasum -a 256`; any change to any file of the package needs the new digest.
+  Keiko copies the whole tree, so the package's own dependencies resolve; links are not copied.
 - A plugin loads only in a run launched in **Full access**; Ask for approval and Supervised
   workspace load none. Per-action approval cannot govern code that runs inside the runtime.
 - `name` is lowercase letters, digits and `-`, not starting with `keiko`; at most 8 plugins. The
   source is either an absolute `path` the operator installed or a `workspacePath` inside the
   run's workspace, a `.js`, `.mjs` or `.ts` file of at most 512 KiB.
 - `sha256` pins the exact file: a changed file is refused until the registry names its new digest.
-  The plugin must be one self-contained module (bundle its dependencies); its own relative imports
-  do not travel with the copy, and only the public `setup` plugin form loads.
+  A single-file plugin must be one self-contained module (its own relative imports do not travel
+  with the copy; register it as a package instead), and only the public `setup` plugin form loads.
 - The plugin's permission hooks may only make a decision stricter; they can never allow what Keiko
   refuses or asks for. Beyond that, an admitted plugin is trusted code bounded by the run's sandbox
   and Keiko's server-side authority, like the runtime itself.
