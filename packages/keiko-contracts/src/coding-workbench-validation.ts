@@ -128,20 +128,26 @@ function validateSafeEvidenceText(value: unknown, path: string, errors: string[]
   return valid;
 }
 
+function validateRequiredField(
+  record: Record<string, unknown>,
+  key: string,
+  path: string,
+  errors: string[],
+  validatePresent: (value: unknown, path: string, errors: string[]) => boolean,
+): boolean {
+  if (record[key] === undefined) {
+    return appendValidationIssues(errors, `${path}.${key} is required`);
+  }
+  return validatePresent(record[key], `${path}.${key}`, errors);
+}
+
 function validateRequiredSafeEvidenceTextField(
   record: Record<string, unknown>,
   key: string,
   path: string,
   errors: string[],
 ): boolean {
-  let valid = true;
-  if (record[key] === undefined) {
-    valid = [appendValidationIssues(errors, `${path}.${key} is required`), valid].every(Boolean);
-    return valid;
-  }
-  valid = [validateSafeEvidenceText(record[key], `${path}.${key}`, errors), valid].every(Boolean);
-
-  return valid;
+  return validateRequiredField(record, key, path, errors, validateSafeEvidenceText);
 }
 
 function validateRequiredEnumField(
@@ -210,14 +216,7 @@ function validateRequiredDigestField(
   path: string,
   errors: string[],
 ): boolean {
-  let valid = true;
-  if (record[key] === undefined) {
-    valid = [appendValidationIssues(errors, `${path}.${key} is required`), valid].every(Boolean);
-    return valid;
-  }
-  valid = [validateDigest(record[key], `${path}.${key}`, errors), valid].every(Boolean);
-
-  return valid;
+  return validateRequiredField(record, key, path, errors, validateDigest);
 }
 
 function validateDigest(value: unknown, path: string, errors: string[]): boolean {

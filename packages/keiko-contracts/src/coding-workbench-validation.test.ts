@@ -309,3 +309,283 @@ for (const surface of ["source", "public"] as const) {
     expect(members).toHaveLength(2);
   });
 }
+
+function requiredObservationField(
+  record: Record<string, unknown>,
+  key: string,
+  observe: () => unknown,
+  inherited = false,
+): Record<string, unknown> {
+  const descriptor = { enumerable: true, get: observe };
+  if (inherited) {
+    Reflect.deleteProperty(record, key);
+    Object.setPrototypeOf(record, Object.defineProperty({}, key, descriptor));
+  } else {
+    Object.defineProperty(record, key, descriptor);
+  }
+  return record;
+}
+
+function requiredObservationSequence(
+  observations: readonly unknown[],
+  field: string,
+  trace: string[],
+): () => unknown {
+  let count = 0;
+  return (): unknown => {
+    trace.push(field);
+    return count < observations.length ? observations[count++] : observations.at(-1);
+  };
+}
+
+function requiredDigestEvent(): Record<string, unknown> {
+  return {
+    schemaVersion: "1",
+    eventId: "evt-3918",
+    runId: "run-3918",
+    occurredAt: "2026-07-19T00:00:00.000Z",
+    kind: "artifact-produced",
+    artifactKind: "artifact",
+    artifactLabel: "approval-required",
+    artifactDigest: "d".repeat(64),
+    artifactBytes: 0,
+  };
+}
+
+const REQUIRED_TEXT_OBSERVATIONS = [
+  {
+    label: "missing first value",
+    values: [undefined, "perm-3918"],
+    reads: 1,
+    error: "is required",
+  },
+  {
+    label: "undefined second value",
+    values: ["perm-3918", undefined],
+    reads: 2,
+    error: "must be content-free evidence-safe text",
+  },
+  {
+    label: "unsafe second value",
+    values: ["perm-3918", "https://example.test/private"],
+    reads: 2,
+    error: "must be content-free evidence-safe text",
+  },
+  { label: "defined non-string first value", values: [7, "perm-3918"], reads: 2, error: undefined },
+] as const;
+
+const REQUIRED_DIGEST_OBSERVATIONS = [
+  {
+    label: "missing required and optional values",
+    values: [undefined],
+    reads: 2,
+    error: "is required",
+  },
+  {
+    label: "invalid required second value",
+    values: ["d".repeat(64), 7, undefined],
+    reads: 3,
+    error: "must be a 64-character lowercase hex digest",
+  },
+  {
+    label: "defined non-string first value",
+    values: [7, "d".repeat(64)],
+    reads: 4,
+    error: undefined,
+  },
+] as const;
+
+for (const surface of ["source", "public"] as const) {
+  it.each(REQUIRED_TEXT_OBSERVATIONS)(
+    `${surface}: retains required text $label observations`,
+    async ({ values, reads, error }) => {
+      const validate = await physicalPermissionListValidator(surface);
+      const trace: string[] = [];
+      const value = requiredObservationField(
+        physicalConnectorPermission(["source-control.read"]),
+        "requestId",
+        requiredObservationSequence(values, "requestId", trace),
+      );
+      const result = validate(value);
+      if (error === undefined) {
+        expect(result.ok).toBe(true);
+        if (result.ok) expect(result.value).toBe(value);
+      } else {
+        expect(result).toEqual({ ok: false, errors: [`permissionRequest.requestId ${error}`] });
+      }
+      expect(trace).toEqual(Array.from({ length: reads }, () => "requestId"));
+    },
+  );
+
+  it(`${surface}: retains two inherited required-text reads and original identity`, async () => {
+    const validate = await physicalPermissionListValidator(surface);
+    const trace: string[] = [];
+    const value = requiredObservationField(
+      physicalConnectorPermission(["source-control.read"]),
+      "requestId",
+      requiredObservationSequence(["perm-3918"], "requestId", trace),
+      true,
+    );
+    const result = validate(value);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(value);
+    expect(trace).toEqual(["requestId", "requestId"]);
+  });
+
+  it(`${surface}: propagates the exact second required-text inspection error`, async () => {
+    const validate = await physicalPermissionListValidator(surface);
+    const failure = new TypeError("Required text second observation");
+    let reads = 0;
+    const value = requiredObservationField(
+      physicalConnectorPermission(["source-control.read"]),
+      "requestId",
+      (): unknown => {
+        if (++reads === 2) throw failure;
+        return "perm-3918";
+      },
+    );
+    let caught: unknown;
+    try {
+      validate(value);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBe(failure);
+    expect(reads).toBe(2);
+  });
+
+  it(`${surface}: preserves prior-key then required-text error ordering`, async () => {
+    const validate = await physicalPermissionListValidator(surface);
+    const trace: string[] = [];
+    const value = requiredObservationField(
+      { ...physicalConnectorPermission(["source-control.read"]), unexpected: true },
+      "requestId",
+      requiredObservationSequence(["perm-3918", undefined], "requestId", trace),
+    );
+    expect(validate(value)).toEqual({
+      ok: false,
+      errors: [
+        "permissionRequest.unexpected is not allowed",
+        "permissionRequest.requestId must be content-free evidence-safe text",
+      ],
+    });
+    expect(trace).toEqual(["requestId", "requestId"]);
+  });
+
+  it.each(REQUIRED_DIGEST_OBSERVATIONS)(
+    `${surface}: retains required digest $label observations`,
+    async ({ values, reads, error }) => {
+      const module =
+        surface === "source"
+          ? await import("./coding-workbench-validation.js")
+          : await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation");
+      const trace: string[] = [];
+      const value = requiredObservationField(
+        requiredDigestEvent(),
+        "artifactDigest",
+        requiredObservationSequence(values, "artifactDigest", trace),
+      );
+      const result = module.validateCodingWorkbenchRuntimeEvent(value);
+      if (error === undefined) {
+        expect(result.ok).toBe(true);
+        if (result.ok) expect(result.value).toBe(value);
+      } else {
+        expect(result).toEqual({ ok: false, errors: [`event.artifactDigest ${error}`] });
+      }
+      expect(trace).toEqual(Array.from({ length: reads }, () => "artifactDigest"));
+    },
+  );
+
+  it(`${surface}: retains inherited required and optional digest reads with original identity`, async () => {
+    const module =
+      surface === "source"
+        ? await import("./coding-workbench-validation.js")
+        : await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation");
+    const trace: string[] = [];
+    const value = requiredObservationField(
+      requiredDigestEvent(),
+      "artifactDigest",
+      requiredObservationSequence(["d".repeat(64)], "artifactDigest", trace),
+      true,
+    );
+    const result = module.validateCodingWorkbenchRuntimeEvent(value);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(value);
+    expect(trace).toEqual(["artifactDigest", "artifactDigest", "artifactDigest", "artifactDigest"]);
+  });
+
+  it(`${surface}: propagates the exact second required-digest inspection error`, async () => {
+    const module =
+      surface === "source"
+        ? await import("./coding-workbench-validation.js")
+        : await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation");
+    const failure = new TypeError("Required digest second observation");
+    let reads = 0;
+    const value = requiredObservationField(requiredDigestEvent(), "artifactDigest", (): unknown => {
+      if (++reads === 2) throw failure;
+      return "d".repeat(64);
+    });
+    let caught: unknown;
+    try {
+      module.validateCodingWorkbenchRuntimeEvent(value);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBe(failure);
+    expect(reads).toBe(2);
+  });
+
+  it(`${surface}: preserves prior-key then required-digest error ordering`, async () => {
+    const module =
+      surface === "source"
+        ? await import("./coding-workbench-validation.js")
+        : await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation");
+    const trace: string[] = [];
+    const value = requiredObservationField(
+      { ...requiredDigestEvent(), unexpected: true },
+      "artifactDigest",
+      requiredObservationSequence(["d".repeat(64), 7, undefined], "artifactDigest", trace),
+    );
+    expect(module.validateCodingWorkbenchRuntimeEvent(value)).toEqual({
+      ok: false,
+      errors: [
+        "event.unexpected is not allowed",
+        "event.artifactDigest must be a 64-character lowercase hex digest",
+      ],
+    });
+    expect(trace).toEqual(["artifactDigest", "artifactDigest", "artifactDigest"]);
+  });
+
+  it(`${surface}: eagerly validates artifact bytes after required digest refusal`, async () => {
+    const module =
+      surface === "source"
+        ? await import("./coding-workbench-validation.js")
+        : await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation");
+    const trace: string[] = [];
+    const value = requiredObservationField(
+      requiredDigestEvent(),
+      "artifactDigest",
+      requiredObservationSequence(["d".repeat(64), 7, undefined], "artifactDigest", trace),
+    );
+    requiredObservationField(
+      value,
+      "artifactBytes",
+      requiredObservationSequence([0, -1, undefined], "artifactBytes", trace),
+    );
+    expect(module.validateCodingWorkbenchRuntimeEvent(value)).toEqual({
+      ok: false,
+      errors: [
+        "event.artifactDigest must be a 64-character lowercase hex digest",
+        "event.artifactBytes must be a non-negative safe integer",
+      ],
+    });
+    expect(trace).toEqual([
+      "artifactDigest",
+      "artifactDigest",
+      "artifactBytes",
+      "artifactBytes",
+      "artifactBytes",
+      "artifactDigest",
+    ]);
+  });
+}
