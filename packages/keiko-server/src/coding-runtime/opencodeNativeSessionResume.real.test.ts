@@ -31,10 +31,14 @@ import {
   projectOpenCodeV2ProtocolSurface,
 } from "./opencodeProtocolSurface.js";
 import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
+import { createCodingSessionContinuity } from "./codingSessionContinuity.js";
 import {
   bindContinuedSession,
+  retainSettledRun,
+  seedContinuation,
   withoutBaseline,
   type RunContinuation,
+  type SessionContinuationContext,
 } from "./opencodeSessionContinuation.js";
 import {
   auditDatabase,
@@ -162,7 +166,18 @@ function streamedText(response: ServerResponse, text: string): void {
 
 /** Answers every model request with a plain text turn that names how many it has seen. */
 async function startGateway(): Promise<Stub> {
-  return await startStub((self, _recorded, response) => {
+  return await startStub((self, recorded, response) => {
+    const lastUser = userTexts(recorded).at(-1);
+    if (lastUser === "FIXTURE-FAILED-TERMINAL-TURN") {
+      response.writeHead(400, { "Content-Type": "application/json" });
+      response.end('{"error":{"type":"invalid_request_error","message":"fixture-rejection"}}');
+      return;
+    }
+    if (lastUser === "FIXTURE-CANCELLED-TERMINAL-TURN") {
+      response.writeHead(200, { "Content-Type": "text/event-stream" });
+      response.flushHeaders();
+      return;
+    }
     streamedText(response, `Answer number ${String(self.requests.length)}.`);
   });
 }
@@ -425,6 +440,52 @@ async function settledRun(
   return { sessionId, messageCount: retained.messageCount };
 }
 
+async function terminalHistoryRun(
+  world: World,
+  status: "failed" | "cancelled",
+): Promise<{ readonly sessionId: string; readonly context: SessionContinuationContext }> {
+  let sessionId = "";
+  const name = `terminal-${status}`;
+  const marker = `FIXTURE-${status.toUpperCase()}-TERMINAL-TURN`;
+  await withRuntime(world, name, undefined, async ({ client, gateway }) => {
+    sessionId = String((await client.createSession(world.fixture.workspace)).id);
+    await turn(client, sessionId, "BEFORE-TERMINAL-TURN");
+    await client.prompt(sessionId, marker);
+    if (status === "cancelled") {
+      await expect.poll(() => userTexts(gateway.requests.at(-1)).at(-1)).toBe(marker);
+      await client.interrupt(sessionId);
+    }
+    await idle(client, sessionId);
+    const messages = await client.messages(sessionId);
+    expect(messages.length).toBeGreaterThanOrEqual(4);
+    if (status === "failed") {
+      expect(
+        messages.some((message) => message.type === "assistant" && message.error !== undefined),
+      ).toBe(true);
+    }
+  });
+  const context: SessionContinuationContext = {
+    service: createCodingSessionContinuity({ store: world.store, taskOfRun: () => TASK_ID }),
+    workspaceId: "workspace-terminal-history",
+    native: true,
+    runtimeVersion: OPENCODE_PINNED_VERSION,
+    maxInputTokens: 24_000,
+    activityLog: undefined,
+  };
+  retainSettledRun(
+    context,
+    {
+      runId: "run-100000001",
+      runRoot: join(world.fixture.root, name),
+      workspaceRoot: world.fixture.workspace,
+      sessionId,
+    },
+    status,
+  );
+  expect(existsSync(join(world.fixture.root, "retained", retainedSessionKey(TASK_ID)))).toBe(true);
+  return { sessionId, context };
+}
+
 function continuation(sessionId: string, intent: RunContinuation["intent"]): RunContinuation {
   return {
     intent,
@@ -472,6 +533,17 @@ function userTexts(request: Recorded | undefined): readonly unknown[] {
     .filter((content) => typeof content !== "string" || !content.startsWith("<system-update>"));
 }
 
+function requestHasUserText(request: Recorded | undefined, text: string): boolean {
+  return userTexts(request).some((content) => {
+    if (typeof content === "string") return content.includes(text);
+    if (!Array.isArray(content)) return false;
+    return content.some((part) => {
+      const value = object(part)?.text;
+      return typeof value === "string" && value.includes(text);
+    });
+  });
+}
+
 interface ProjectedRun {
   readonly events: readonly unknown[];
   readonly signals: string;
@@ -480,6 +552,48 @@ interface ProjectedRun {
 
 describe("native session continuity on the pinned OpenCode runtime", () => {
   const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
+
+  it.skipIf(skip).each(["failed", "cancelled"] as const)(
+    "retains a real %s turn after reaping and resumes its earlier native history",
+    async (status) => {
+      await withWorld(async (world) => {
+        const { sessionId, context } = await terminalHistoryRun(world, status);
+        const name = `resumed-${status}`;
+        const runId = "run-100000002";
+        context.service.declare(runId, { kind: "resume", taskId: TASK_ID });
+        let continued: RunContinuation | undefined;
+        await withRuntime(
+          world,
+          name,
+          () => {
+            continued = seedContinuation(context, {
+              runId,
+              runRoot: join(world.fixture.root, name),
+              workspaceRoot: world.fixture.workspace,
+            });
+            expect(continued?.sessionId).toBe(sessionId);
+          },
+          async ({ client, gateway }) => {
+            if (continued === undefined) throw new Error("fixture-terminal-history-not-retained");
+            expect(
+              await bindContinuedSession(client, continued, world.fixture.workspace, undefined),
+            ).toMatchObject({ ok: true, sessionId });
+            await turn(client, sessionId, "AFTER-TERMINAL-TURN");
+            const users = userTexts(gateway.requests.at(-1));
+            expect(users).toContain("BEFORE-TERMINAL-TURN");
+            expect(
+              requestHasUserText(
+                gateway.requests.at(-1),
+                `FIXTURE-${status.toUpperCase()}-TERMINAL-TURN`,
+              ),
+            ).toBe(true);
+            expect(users).toContain("AFTER-TERMINAL-TURN");
+          },
+        );
+      });
+    },
+    120_000,
+  );
 
   it.skipIf(skip)(
     "serves exactly the admitted protocol surface, including session fork and removal",

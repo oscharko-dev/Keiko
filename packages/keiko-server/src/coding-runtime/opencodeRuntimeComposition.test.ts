@@ -10597,7 +10597,7 @@ describe("native session continuity in the composition", () => {
     // The failed binding, then the disposal of the run that never started: it retains nothing.
     expect(continuityLines(activityLog)).toMatchObject([
       { action: "resume", outcome: "failed", reason: "session-mismatch" },
-      { action: "retain", outcome: "skipped", reason: "not-succeeded" },
+      { action: "retain", outcome: "skipped", reason: "no-session" },
     ]);
     // An entry the runtime does not see the way its manifest says is never used again.
     expect(world.calls.removed).toContain(TASK);
@@ -10657,7 +10657,7 @@ describe("native session continuity in the composition", () => {
   });
 
   it.each(["failed", "cancelled"] as const)(
-    "removes the task's entry instead of retaining when the run ended %s",
+    "passes the reaped %s run through the existing retention audit",
     async (status) => {
       const activityLog = createBufferedServerLogSink();
       const world = continuedWorld();
@@ -10670,12 +10670,12 @@ describe("native session continuity in the composition", () => {
 
       await fixture.runtime.manager.stop(FIXTURE_RUN_ID, status);
 
-      expect(world.calls.retains).toEqual([]);
-      expect(world.calls.removed).toEqual([TASK]);
+      expect(world.calls.retains).toHaveLength(1);
+      expect(world.calls.retains[0]).toMatchObject({ sessionId: "ses_tool" });
+      expect(world.calls.removed).toEqual([]);
       expect(continuityLines(activityLog).at(-1)).toMatchObject({
         action: "retain",
-        outcome: "skipped",
-        reason: "not-succeeded",
+        outcome: "retained",
       });
     },
   );

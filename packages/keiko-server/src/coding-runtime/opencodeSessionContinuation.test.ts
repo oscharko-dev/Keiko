@@ -704,41 +704,44 @@ describe("retaining a settled run", () => {
     sessionId: SESSION as string | undefined,
   };
 
-  it("retains the database of a run that succeeded and records counts only", () => {
-    const h = harness();
+  it.each(["succeeded", "failed", "cancelled"] as const)(
+    "audits and retains a reaped run that ended %s, recording counts only",
+    (status) => {
+      const h = harness();
 
-    retainSettledRun(h.context, run, "succeeded");
+      retainSettledRun(h.context, run, status);
 
-    expect(h.calls.retains).toEqual([
-      {
-        binding: {
-          taskId: TASK,
-          workspaceKey: expect.stringMatching(/^[a-f0-9]{64}$/u) as string,
-          runtimeVersion: "2.1.4",
-          maxInputTokens: 24_000,
+      expect(h.calls.retains).toEqual([
+        {
+          binding: {
+            taskId: TASK,
+            workspaceKey: expect.stringMatching(/^[a-f0-9]{64}$/u) as string,
+            runtimeVersion: "2.1.4",
+            maxInputTokens: 24_000,
+          },
+          sessionId: SESSION,
+          directory: WORKSPACE,
+          sourceDatabase: join("/run/root", "state", "opencode.db"),
         },
-        sessionId: SESSION,
-        directory: WORKSPACE,
-        sourceDatabase: join("/run/root", "state", "opencode.db"),
-      },
-    ]);
-    expect(h.calls.removed).toEqual([]);
-    expect(lines(h)).toMatchObject([
-      {
-        action: "retain",
-        outcome: "retained",
-        taskDigest: retainedSessionKey(TASK),
-        databaseBytes: 2048,
-        messageCount: 9,
-        entryCount: 2,
-        prunedCount: 1,
-      },
-    ]);
-  });
+      ]);
+      expect(h.calls.removed).toEqual([]);
+      expect(lines(h)).toMatchObject([
+        {
+          action: "retain",
+          outcome: "retained",
+          taskDigest: retainedSessionKey(TASK),
+          databaseBytes: 2048,
+          messageCount: 9,
+          entryCount: 2,
+          prunedCount: 1,
+        },
+      ]);
+    },
+  );
 
   it.each([
-    ["failed", "not-succeeded"],
-    ["cancelled", "not-succeeded"],
+    ["running", "not-succeeded"],
+    ["awaiting-approval", "not-succeeded"],
     [undefined, "not-succeeded"],
   ] as const)(
     "removes the task's entry instead of retaining when the run ended %s, so it never lags behind",
@@ -796,6 +799,19 @@ describe("retaining a settled run", () => {
     },
   );
 
+  it.each(["failed", "cancelled"] as const)(
+    "refuses unsafe state after %s rather than retaining or reusing an older entry",
+    (status) => {
+      const h = harness({ results: { retain: { ok: false, reason: "grant-present" } } });
+      retainSettledRun(h.context, run, status);
+      expect(h.calls.retains).toHaveLength(1);
+      expect(h.calls.removed).toEqual([TASK]);
+      expect(lines(h)).toMatchObject([
+        { action: "retain", outcome: "refused", reason: "grant-present" },
+      ]);
+    },
+  );
+
   it("names the audit check behind a schema-unknown retain refusal (#3904)", () => {
     const h = harness({
       results: { retain: { ok: false, reason: "schema-unknown", check: "workspace-rows" } },
@@ -845,7 +861,7 @@ describe("retaining a settled run", () => {
     const h = harness({ results: { remove: new Error("EPERM") } });
 
     expect(() => {
-      retainSettledRun(h.context, run, "failed");
+      retainSettledRun(h.context, run, undefined);
     }).not.toThrow();
 
     expect(lines(h)).toMatchObject([

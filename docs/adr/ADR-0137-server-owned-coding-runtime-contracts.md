@@ -1957,9 +1957,9 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   `session.fork` (`POST /api/session/{sessionID}/fork`, body `{ before? }` naming a message) and
   `session.remove` (`DELETE /api/session/{sessionID}`); both are in the digest-pinned protocol
   surface (30 operations). The design keeps authority out of the persisted state:
-  - **Retention.** When a native run ends `succeeded` through an orderly stop (the manager passes the
-    lifecycle settlement only for `stop()`, and the composition retains after the runtime process was
-    reaped; a kill, timeout, crash, cancelled or failed run retains nothing) the run's `opencode.db`
+  - **Retention.** When a native run ends `succeeded`, `failed` or `cancelled` through a settled stop
+    (the manager passes the lifecycle settlement only for `stop()`, and the composition audits after
+    the runtime process was reaped; an unsettled kill or timeout retains nothing) the run's `opencode.db`
     is copied with SQLite `VACUUM INTO` (a consistent, compacted copy) to
     `<stateDir>/coding-runtime/retained-sessions/<sha256(task)>/`, outside every workspace and run
     root. One entry per task; a new entry replaces the previous one and a run that retains nothing
@@ -2023,8 +2023,12 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
     previous conversation) are the person's own requests: a notice announces the pending fork and
     can cancel it, it ends with the run or task it was made against, it is not offered while a run is
     active, and the next start carries the fork instead of the conversation id.
-  - **Not done.** A stopped, cancelled or failed run may hold a half-finished tool call and takes the
-    history replay; the mapped (non-native) profile retains nothing; `session.update` (rename) stays
+  - **Terminal retention.** After its process is reaped, a failed or cancelled native run may retain
+    its current session only through the same strict database and binding audit as a successful run.
+    Grants, credentials, pending input, staged reverts, unknown state or schema drift still refuse
+    retention, remove the stale entry and use history replay. No persisted authority is restored.
+    Unsettled runs retain nothing.
+  - **Not done.** The mapped (non-native) profile retains nothing; `session.update` (rename) stays
     refused; a fork inside the run the timeline shows is offered only as a whole-task fork.
 
 What this amendment does not change: the three modes and the Authority Envelope (ADR-0124,

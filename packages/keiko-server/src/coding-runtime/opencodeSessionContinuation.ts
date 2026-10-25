@@ -363,11 +363,10 @@ export interface SettledContinuedRun {
 }
 
 /**
- * Retains the database of a run that settled normally as the entry of its task, or removes the
- * task's entry when the run did not: an entry always describes the task's latest settled state, so
- * a failed or stopped run (whose turns Coding History holds) is replayed from history and never
- * resumed from a state that lags behind it. Never throws: retention is an optimization, and a
- * failure is one `failed` line with its cause.
+ * After the runtime is reaped, submits a terminal run's database to the existing strict audit.
+ * Failed and cancelled turns may retain safe native history, without retaining authority or
+ * pending effects. Every refusal removes the stale entry and falls back to Coding History.
+ * Unsettled runs never retain. Never throws: a failure is one `failed` line with its cause.
  */
 export function retainSettledRun(
   context: SessionContinuationContext,
@@ -424,7 +423,13 @@ function skipReason(
 ): ContinuityReason | undefined {
   if (!context.native) return "not-native-profile";
   if (store === undefined) return "disabled";
-  if (terminalStatus !== "succeeded") return "not-succeeded";
+  if (
+    terminalStatus !== "succeeded" &&
+    terminalStatus !== "failed" &&
+    terminalStatus !== "cancelled"
+  ) {
+    return "not-succeeded";
+  }
   if (run.sessionId === undefined) return "no-session";
   return taskId === undefined ? "no-task" : undefined;
 }
