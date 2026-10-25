@@ -64,7 +64,9 @@ describe("scanNativeLinkedFiles", () => {
     });
   });
 
-  it("keeps a local clone's read-only Git objects readable, but not a writable file under that name", () => {
+  // PR #4064 review: a name and a read-only mode prove nothing. An outside read-only file linked
+  // under a Git object name was readable through it; every linked file is denied, objects included.
+  it("denies a linked file under a Git object name, read-only or not, and counts it apart", () => {
     const { workspace, outside } = tree();
     const objects = join(workspace, ".git", "objects");
     const object = join(objects, "ab", "c".repeat(38));
@@ -77,11 +79,18 @@ describe("scanNativeLinkedFiles", () => {
     }
     chmodSync(object, 0o444);
     chmodSync(pack, 0o444);
+    // The auditor's bypass: an outside read-only file aliased under an object name.
+    const secret = `${outside}-secret`;
+    writeFileSync(secret, "outside secret\n");
+    chmodSync(secret, 0o444);
+    const aliased = join(objects, "12", "3".repeat(38));
+    mkdirSync(join(aliased, ".."), { recursive: true });
+    linkSync(secret, aliased);
     const scan = scanNativeLinkedFiles([workspace]);
     expect(scan).toMatchObject({
       outcome: "complete",
-      linkedFiles: [writable],
-      gitObjectLinkCount: 2,
+      linkedFiles: [aliased, object, writable, pack].sort(),
+      gitObjectLinkCount: 4,
     });
   });
 

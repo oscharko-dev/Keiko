@@ -1,6 +1,7 @@
 import { spawn, spawnSync, type ChildProcessByStdio } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
+  chmodSync,
   cpSync,
   existsSync,
   linkSync,
@@ -970,6 +971,36 @@ describe("pinned native OpenCode search over a pre-existing hard link (#3900 AC2
       }
     },
     600_000,
+  );
+
+  // PR #4064 review (auditor's repro): an outside read-only file linked under a Git object name
+  // was readable through it. A name and a mode prove nothing; the link is denied like any other.
+  it.skipIf(skip)(
+    "denies an outside read-only file linked under a Git object name",
+    async () => {
+      const object = `.git/objects/12/${"3".repeat(38)}`;
+      await withRun(
+        {
+          files,
+          mode: "autonomous-delivery",
+          prepare: (fixture) => {
+            const outside = join(fixture.root, `outside-${randomUUID()}.txt`);
+            writeFileSync(outside, `export const leaked = "${CANARY}";\n`);
+            chmodSync(outside, 0o444);
+            mkdirSync(join(fixture.workspace, ".git", "objects", "12"), { recursive: true });
+            linkSync(outside, join(fixture.workspace, object));
+          },
+        },
+        async (run) => {
+          const output = await scriptedTurn(run, shell(`cat ${object}; echo READ-DONE`));
+          expect(output).toContain("READ-DONE");
+          expect(output).toContain("Operation not permitted");
+          expect(output).not.toContain(CANARY);
+          expect(JSON.stringify(run.gateway.requests)).not.toContain(CANARY);
+        },
+      );
+    },
+    240_000,
   );
 
   it.skipIf(skip)(

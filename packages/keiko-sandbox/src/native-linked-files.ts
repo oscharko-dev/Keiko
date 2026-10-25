@@ -22,7 +22,7 @@ export type NativeLinkedFileScan =
       /** Absolute paths of the regular files with more than one link, sorted. */
       readonly linkedFiles: readonly string[];
       readonly scannedFileCount: number;
-      /** Read-only Git object files a local clone shares with its source repository. */
+      /** Of those, files named like Git objects (a local clone's shared objects); denied too. */
       readonly gitObjectLinkCount: number;
     }
   | {
@@ -37,16 +37,17 @@ export interface NativeLinkedFileScanLimits {
   readonly entriesMax?: number | undefined;
 }
 
-// `git clone` of a local path hard-links the source repository's object files. Those files are the
-// repository's own immutable history, which Git writes without any write permission, so a
-// read-only file named by the object grammar stays readable and Git keeps working in such a clone.
-// Any other linked file, including a writable one under that name, is denied.
+// `git clone` of a local path hard-links the source repository's object files. A name and a mode
+// prove nothing about whose file a link aliases: an outside read-only file linked under an object
+// name would read as the object (PR #4064 review). Every linked file is therefore denied, these
+// included; they are only counted apart, so the evidence explains a clone whose Git cannot read
+// them. Such a clone works once its objects are its own (`git repack -a -d`, or a clone made with
+// `--no-hardlinks`).
 const GIT_OBJECTS_DIRECTORY = /(?:^|\/)\.git\/(?:[^/]+\/)*objects$/u;
 const LOOSE_OBJECT = /^[0-9a-f]{2}\/[0-9a-f]{38,62}$/u;
 const PACK_FILE = /^pack\/pack-[0-9a-f]{40,64}\.(?:pack|idx|rev|bitmap|keep|promisor|mtimes)$/u;
 
-function sharedGitObject(root: string, path: string, stat: Stats): boolean {
-  if ((stat.mode & 0o222) !== 0) return false;
+function namedLikeGitObject(root: string, path: string): boolean {
   const name = relative(root, path);
   const marker = name.lastIndexOf("objects/");
   if (marker < 0 || !GIT_OBJECTS_DIRECTORY.test(name.slice(0, marker + "objects".length)))
@@ -98,8 +99,8 @@ function inspectFile(root: string, path: string, state: ScanState): void {
   state.files += 1;
   const stat = linkStat(path);
   if (stat === undefined || !stat.isFile() || stat.nlink <= 1) return;
-  if (sharedGitObject(root, path, stat)) state.gitObjects += 1;
-  else state.linked.push(path);
+  state.linked.push(path);
+  if (namedLikeGitObject(root, path)) state.gitObjects += 1;
 }
 
 // Symbolic links are not followed: the kernel resolves each one to its target's own path, which is

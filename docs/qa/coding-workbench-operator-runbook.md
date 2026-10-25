@@ -189,7 +189,9 @@ root is admitted yet (`unsupported-platform`).
 Before every native launch Keiko scans the workspace and each accepted external reference for
 regular files with more than one hard link. Such a file can be a second name of a file outside the
 task, so the kernel profile denies its contents to every process of the run (search, read, shell);
-it stays visible in listings. Read-only Git objects shared by a local `git clone` stay readable.
+it stays visible in listings. This includes the object files a local `git clone` hard-links from
+its source: Git in such a clone cannot read them inside the run, so give the clone its own objects
+first (`git repack -a -d`, or clone with `--no-hardlinks`).
 `coding-runtime.linked-files.resolved` records the scanned, linked and Git-object counts. A launch
 refused with `workspace-unqualified` and reason `linked-files-excessive` found more than 1,024
 linked files (typically a package store configured to hard-link into `node_modules`; use the

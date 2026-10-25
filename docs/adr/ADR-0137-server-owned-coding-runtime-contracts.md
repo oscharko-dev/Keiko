@@ -1917,8 +1917,11 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   so neither the file nor a parent can be renamed onto an undenied name; its metadata stays
   readable, so listings, Git and a search walk still see the entry. The runtime's own search, its
   read tool and a shell child all get `Operation not permitted`; the original 2.1.4 `grep` returns
-  the ordinary match and no linked bytes in all three modes. Read-only Git object files that a
-  local `git clone` shares with its source repository stay readable, so Git keeps working there.
+  the ordinary match and no linked bytes in all three modes. No name or mode exempts a link: an
+  outside read-only file linked under a Git object name was readable through it (PR #4064 review),
+  so the objects a local `git clone` hard-links are denied too and only counted apart
+  (`gitObjectLinkCount`); Git works in such a clone once its objects are its own (`git repack -a
+  -d`, or a clone made with `--no-hardlinks`).
   A scan that cannot finish, or that finds more than 1,024 linked files, refuses the launch
   (`workspace-unqualified`, `linked-files-unscanned` or `linked-files-excessive`) instead of
   starting on a partial list; `coding-runtime.linked-files.resolved` records the counts. On macOS
