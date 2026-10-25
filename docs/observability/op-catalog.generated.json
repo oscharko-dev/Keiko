@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "4831213efc34fb4fc1fc12014b95ddb69fddf56a3a1dfbb38cee13e87ea4ae92",
+    "catalogDigest": "092a9741210975439edf359a17a59df8b186cc3e3400db1742782b41a99e50cb",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -7021,8 +7021,8 @@
         "failureClasses": ["coding-runtime-descendant-sweep"],
         "proofIds": ["coding-runtime.descendants.swept.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.ts:82",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.ts:308"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.ts:106",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.ts:355"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -8723,8 +8723,10 @@
               "cancelled",
               "secret-unavailable",
               "secret-invalid",
+              "secret-too-short",
               "relay-unavailable",
-              "credential-in-response-header"
+              "credential-in-response-header",
+              "credential-spelling-unbounded"
             ]
           },
           "method": {
@@ -8795,8 +8797,8 @@
         "failureClasses": ["coding-runtime-mcp-relay"],
         "proofIds": ["coding-runtime.mcp-relay.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/mcp/mcpCredentialRelay.ts:172",
-        "emitterSites": ["packages/keiko-server/src/mcp/mcpCredentialRelay.ts:264"]
+        "registrationSite": "packages/keiko-server/src/mcp/mcpCredentialRelay.ts:185",
+        "emitterSites": ["packages/keiko-server/src/mcp/mcpCredentialRelay.ts:277"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -31838,8 +31840,8 @@
         },
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeActivityOperations.ts:182",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:548",
-          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:620",
+          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:557",
+          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:629",
           "packages/keiko-server/src/coding-runtime/nativeRuntimeProcessBackend.ts:255"
         ]
       },
@@ -32017,7 +32019,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeActivityOperations.ts:189",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:596",
+          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:605",
           "packages/keiko-server/src/coding-runtime/nativeRuntimeProcessBackend.ts:281"
         ]
       },
@@ -100576,7 +100578,7 @@
     {
       "op": "coding-runtime.descendants.swept",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.ts:85",
+      "site": "packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.ts:109",
       "package": "keiko-server"
     },
     {
@@ -100764,7 +100766,7 @@
     {
       "op": "coding-runtime.mcp-relay",
       "category": "security",
-      "site": "packages/keiko-server/src/mcp/mcpCredentialRelay.ts:175",
+      "site": "packages/keiko-server/src/mcp/mcpCredentialRelay.ts:188",
       "package": "keiko-server"
     },
     {

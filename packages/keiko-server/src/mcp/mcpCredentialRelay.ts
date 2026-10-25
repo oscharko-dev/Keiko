@@ -1,7 +1,11 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { causeChain, keikoStackFrames, type ServerLogSink } from "@oscharko-dev/keiko-activity-log";
-import { createSecretSpellingStreamRedactor } from "@oscharko-dev/keiko-security";
+import {
+  createSecretSpellingStreamRedactor,
+  SecretSpellingOverflowError,
+  type SecretSpellingStreamRedactor,
+} from "@oscharko-dev/keiko-security";
 import type { McpRemoteSecretHeader } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 import {
   activityLogEvent,
@@ -30,6 +34,9 @@ export const MCP_RELAY_REQUEST_MAX_BYTES = 4 * 1024 * 1024;
 export const MCP_RELAY_RESPONSE_MAX_BYTES = 32 * 1024 * 1024;
 const MAX_BINDINGS = 256;
 const SECRET_VALUE = /^[\x20-\x7E]{1,8192}$/u;
+// A shorter credential could not be told apart from ordinary text in a response, and its base64
+// form would match unrelated encoded data, so the relay could not keep its promise to replace it.
+export const MCP_SECRET_MIN_CHARS = 16;
 const RELAY_ID = /^[A-Za-z0-9_-]{22}$/u;
 
 // Headers of the MCP Streamable HTTP transport that pass in each direction; nothing else does.
@@ -128,7 +135,10 @@ export type McpSecretHeaderResolution =
       readonly headers: Readonly<Record<string, string>>;
       readonly secrets: readonly string[];
     }
-  | { readonly ok: false; readonly reason: "secret-unavailable" | "secret-invalid" };
+  | {
+      readonly ok: false;
+      readonly reason: "secret-unavailable" | "secret-invalid" | "secret-too-short";
+    };
 
 /** The credential headers of one server from Keiko's environment, or why they cannot be had. */
 export function resolveMcpSecretHeaders(
@@ -143,6 +153,7 @@ export function resolveMcpSecretHeaders(
       return { ok: false, reason: "secret-unavailable" };
     const value = `${header.prefix ?? ""}${secret}`;
     if (!SECRET_VALUE.test(value)) return { ok: false, reason: "secret-invalid" };
+    if (secret.length < MCP_SECRET_MIN_CHARS) return { ok: false, reason: "secret-too-short" };
     resolved[name] = value;
     secrets.push(secret);
   }
@@ -164,8 +175,10 @@ const REASONS = [
   "cancelled",
   "secret-unavailable",
   "secret-invalid",
+  "secret-too-short",
   "relay-unavailable",
   "credential-in-response-header",
+  "credential-spelling-unbounded",
 ] as const;
 type RelayReason = (typeof REASONS)[number];
 
@@ -395,11 +408,9 @@ function credentialForms(target: McpRelayTarget): readonly string[] {
   return [...new Set([...values, ...values.flatMap(base64Cores)])];
 }
 
-// Shorter base64 cores would also match unrelated encoded data.
-const BASE64_CORE_MIN_CHARS = 16;
-
 // The characters every base64 text holding `value` contains, at each of the three byte alignments:
-// the characters that depend on a neighbouring byte at either end are left out.
+// the characters that depend on a neighbouring byte at either end are left out. An admitted
+// credential has at least MCP_SECRET_MIN_CHARS characters, so each core has at least 20.
 function base64Cores(value: string): readonly string[] {
   const bytes = Buffer.from(value, "utf8");
   return [0, 1, 2].flatMap((offset) => {
@@ -408,7 +419,6 @@ function base64Cores(value: string): readonly string[] {
     const head = [0, 2, 3][offset] ?? 0;
     const tail = (offset + bytes.length) % 3 === 0 ? 0 : 1;
     const core = encoded.slice(head, encoded.length - tail);
-    if (core.length < BASE64_CORE_MIN_CHARS) return [];
     return [core.replaceAll("-", "+").replaceAll("_", "/"), core];
   });
 }
@@ -416,6 +426,17 @@ function base64Cores(value: string): readonly string[] {
 async function writeChunk(response: ServerResponse, text: string): Promise<void> {
   if (text === "" || response.write(text)) return;
   await new Promise<void>((resolve) => response.once("drain", resolve));
+}
+
+// A response that keeps holding back a possible spelling ends where it is; nothing held is published.
+function pushed(redactor: SecretSpellingStreamRedactor, text: string): string {
+  try {
+    return redactor.push(text);
+  } catch (error) {
+    if (error instanceof SecretSpellingOverflowError)
+      throw new RelayRefusal(502, "credential-spelling-unbounded");
+    throw error;
+  }
 }
 
 /**
@@ -437,9 +458,9 @@ async function pipeResponse(
   for await (const chunk of upstream.body as unknown as AsyncIterable<Uint8Array>) {
     bytes += chunk.byteLength;
     if (bytes > MCP_RELAY_RESPONSE_MAX_BYTES) throw new RelayRefusal(502, "response-too-large");
-    await writeChunk(response, redactor.push(decoder.decode(chunk, { stream: true })));
+    await writeChunk(response, pushed(redactor, decoder.decode(chunk, { stream: true })));
   }
-  await writeChunk(response, redactor.push(decoder.decode()) + redactor.finish());
+  await writeChunk(response, pushed(redactor, decoder.decode()) + redactor.finish());
   return { bytes, redacted: redactor.redactedCount() };
 }
 

@@ -3044,6 +3044,7 @@
     "SafeArtifactFileError",
     "SandboxMembershipUnavailableError",
     "SecretDisclosureError",
+    "SecretSpellingOverflowError",
     "SecretVaultStoreError",
     "SecretVaultUnsafeTargetError",
     "SecretboxError",

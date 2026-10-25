@@ -356,8 +356,12 @@ Changes apply to the next run.
   exactly the registered URL through its egress (no redirect, no loopback or private target). A
   server that answers with the credential it received has it replaced by `[REDACTED]` before the
   run reads the answer, however its JSON, URL, HTML or base64 text spells it; a server that puts it
-  into a response header is refused (`credential-in-response-header`). A server whose variable is unset or holds a line break is left out of the
-  run. `headers` and
+  into a response header is refused (`credential-in-response-header`), and a response that keeps
+  an incomplete spelling open for more than 256 Ki characters is cut off where it is
+  (`credential-spelling-unbounded`). A server whose variable is unset or holds a line break is left
+  out of the run (`secret-unavailable`, `secret-invalid`), and so is one whose credential has fewer
+  than 16 characters (`secret-too-short`): the relay could not tell a shorter value apart from
+  ordinary text, or find it inside base64. `headers` and
   `oauth` cannot be combined. The Activity Log records `coding-runtime.mcp-relay` (bound with
   relayed and refused server counts, then one line per relayed request with method, status,
   sizes, the number of replaced credential occurrences and duration), never the value, the URL or

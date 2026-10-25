@@ -26,7 +26,8 @@ export interface OpenCodeMcpRelayInput {
   readonly secrets: Readonly<Record<string, string | undefined>>;
 }
 
-type BindRefusal = "secret-unavailable" | "secret-invalid" | "relay-unavailable";
+type BindRefusal =
+  "secret-unavailable" | "secret-invalid" | "secret-too-short" | "relay-unavailable";
 
 function bindOne(
   relay: OpenCodeMcpRelayInput,

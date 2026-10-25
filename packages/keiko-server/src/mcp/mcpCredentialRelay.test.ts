@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ServerLogEvent, ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import { decodeHtmlEntities } from "@oscharko-dev/keiko-workspace";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -12,6 +13,7 @@ import {
   MCP_RELAY_CAPABILITY_HEADER,
   MCP_RELAY_PATH_PREFIX,
   MCP_RELAY_REQUEST_MAX_BYTES,
+  MCP_SECRET_MIN_CHARS,
   resolveMcpSecretHeaders,
   serveMcpRelayRequest,
   type McpCredentialRelay,
@@ -20,6 +22,58 @@ import {
 } from "./mcpCredentialRelay.js";
 
 const SECRET = "static-secret-canary";
+// A generated credential of exactly the admitted minimum length.
+const SHORTEST_SECRET = "k3Y9-qL2_wX7.pB4";
+// A generated credential holding every printable ASCII character that has a named HTML reference.
+const PUNCTUATED_SECRET = "Kx9:/._@!#$%&'()*+,;=?[\\]^`{|}\"<>~-Q7z";
+// Named references of the WHATWG table, each checked against an independent decoder below.
+const NAMED: Readonly<Record<string, string>> = {
+  ":": "&colon;",
+  "/": "&sol;",
+  ".": "&period;",
+  _: "&lowbar;",
+  "@": "&commat;",
+  "!": "&excl;",
+  "#": "&num;",
+  $: "&dollar;",
+  "%": "&percnt;",
+  "&": "&amp;",
+  "'": "&apos;",
+  "(": "&lpar;",
+  ")": "&rpar;",
+  "*": "&ast;",
+  "+": "&plus;",
+  ",": "&comma;",
+  ";": "&semi;",
+  "=": "&equals;",
+  "?": "&quest;",
+  "[": "&lsqb;",
+  "\\": "&bsol;",
+  "]": "&rsqb;",
+  "^": "&Hat;",
+  "`": "&grave;",
+  "{": "&lcub;",
+  "|": "&verbar;",
+  "}": "&rcub;",
+  '"': "&quot;",
+  "<": "&lt;",
+  ">": "&gt;",
+};
+
+// The credential as an HTML page may spell it: named references, and decimal and hexadecimal
+// references padded with zeros, with and without their semicolons.
+function htmlSpellings(secret: string): readonly string[] {
+  const each = (spell: (character: string, code: number) => string): string =>
+    Array.from(secret, (character) => spell(character, character.charCodeAt(0))).join("");
+  const hex = (code: number): string => code.toString(16);
+  return [
+    each((character) => NAMED[character] ?? character),
+    each((_, code) => `&#000${String(code)};`),
+    each((_, code) => `&#x00${hex(code)};`),
+    each((_, code) => `&#X0${hex(code).toUpperCase()}`),
+    each((_, code) => `&#0${String(code)}`),
+  ];
+}
 const RUN_ID = "run-relay";
 
 const servers: Server[] = [];
@@ -174,6 +228,23 @@ describe("the MCP credential relay's bindings (#3903 AC3)", () => {
       ok: false,
       reason: "secret-invalid",
     });
+  });
+
+  // PR #4064 review (4371888093): a credential too short for the relay to tell apart from ordinary
+  // text, or to find inside base64, is refused instead of being admitted without that protection.
+  it("refuses a credential shorter than the relay can replace", () => {
+    const headers = { Authorization: { secretEnv: "KEIKO_MCP_SECRET_A", prefix: "Bearer " } };
+    const shortest = SHORTEST_SECRET.slice(0, MCP_SECRET_MIN_CHARS);
+    expect(resolveMcpSecretHeaders(headers, { KEIKO_MCP_SECRET_A: shortest })).toMatchObject({
+      ok: true,
+      secrets: [shortest],
+    });
+    for (const short of ["k", "k3Y9-qL2", shortest.slice(0, -1)]) {
+      expect(resolveMcpSecretHeaders(headers, { KEIKO_MCP_SECRET_A: short }), short).toEqual({
+        ok: false,
+        reason: "secret-too-short",
+      });
+    }
   });
 });
 
@@ -468,6 +539,72 @@ describe("a credential the server reflects (#3903 AC3)", () => {
     ]);
   });
 
+  // PR #4064 review (4371888087): the WHATWG reference grammar a browser applies, and Python's
+  // html.unescape too, reflected through the relay in three-byte chunks.
+  it("replaces every HTML reference spelling of the credential, in three-byte chunks", async () => {
+    const spellings = htmlSpellings(PUNCTUATED_SECRET);
+    for (const spelling of spellings) expect(decodeHtmlEntities(spelling)).toBe(PUNCTUATED_SECRET);
+    const text = spellings.map((spelling) => `data: ${spelling}\n`).join("");
+    const cuts = Array.from({ length: Math.floor(text.length / 3) }, (_, index) => (index + 1) * 3);
+    const { url, capability, records } = await reflecting(PUNCTUATED_SECRET, () =>
+      sliced(text, cuts),
+    );
+    const body = await (await post(url, capability)).text();
+
+    expect(body).toBe(spellings.map(() => "data: [REDACTED]\n").join(""));
+    expect(lines(records)).toEqual([
+      expect.objectContaining({ outcome: "relayed", redactedCount: spellings.length }),
+    ]);
+  });
+
+  // PR #4064 review (4371888093): the shortest admitted credential, as base64 and base64url at each
+  // of the three byte alignments.
+  it("replaces the shortest admitted credential's base64 at every alignment", async () => {
+    const encoded = [0, 1, 2].flatMap((offset) => {
+      const bytes = Buffer.from(`${"x".repeat(offset)}${SHORTEST_SECRET}!`);
+      return [bytes.toString("base64"), bytes.toString("base64url")];
+    });
+    const { url, capability, records } = await reflecting(
+      SHORTEST_SECRET,
+      () => new Response(encoded.map((form) => `${form}\n`).join(""), { status: 200 }),
+    );
+    const body = await (await post(url, capability)).text();
+    const delivered = body.split("\n").filter((line) => line !== "");
+
+    expect(delivered).toHaveLength(6);
+    for (const line of delivered) {
+      expect(line).toContain("[REDACTED]");
+      expect(Buffer.from(line, "base64").toString("latin1")).not.toContain(SHORTEST_SECRET);
+    }
+    expect(lines(records)).toEqual([
+      expect.objectContaining({ outcome: "relayed", redactedCount: 6 }),
+    ]);
+  });
+
+  // A reference still incomplete beyond any credential's longest spelling ends the response where it
+  // is: nothing held back is published.
+  it("ends a response that holds back a possible spelling beyond any credential's", async () => {
+    const held = `data: ok\n\ndata: &#${"0".repeat(300 * 1024)}65;`;
+    const cuts = Array.from({ length: 20 }, (_, index) => 6 + (index + 1) * 16 * 1024);
+    const { url, capability, records } = await reflecting(SECRET, () => sliced(held, cuts));
+    const reader = (await post(url, capability)).body?.getReader();
+    let delivered = "";
+    await expect(
+      (async (): Promise<void> => {
+        for (;;) {
+          const next = await reader?.read();
+          if (next === undefined || next.done) return;
+          delivered += new TextDecoder().decode(next.value);
+        }
+      })(),
+    ).rejects.toThrow();
+
+    expect(delivered).not.toContain("&#0");
+    await expect
+      .poll(() => lines(records).map((line) => [line.outcome, line.reason]))
+      .toEqual([["failed", "credential-spelling-unbounded"]]);
+  });
+
   // PR #4064 review (4371600693): the session id is echoed by the run on every request, so a server
   // that puts the credential into it cannot be answered with a rewritten id: the response is refused.
   it("refuses a response whose forwarded header carries the credential", async () => {
@@ -487,6 +624,27 @@ describe("a credential the server reflects (#3903 AC3)", () => {
       expect.objectContaining({ outcome: "refused", reason: "credential-in-response-header" }),
     ]);
   });
+
+  // PR #4064 review (4371888087): named references in each forwarded header refuse the response.
+  it.each(["mcp-session-id", "content-type", "mcp-protocol-version"])(
+    "refuses a response whose %s spells the credential with named references",
+    async (header) => {
+      const [named] = htmlSpellings(PUNCTUATED_SECRET);
+      if (named === undefined) throw new TypeError("spelling-missing");
+      expect(decodeHtmlEntities(named)).toBe(PUNCTUATED_SECRET);
+      const { url, capability, records } = await reflecting(
+        PUNCTUATED_SECRET,
+        () => new Response("{}", { status: 200, headers: { [header]: named } }),
+      );
+      const response = await post(url, capability);
+
+      expect(response.status).toBe(502);
+      expect(response.headers.get(header)).not.toBe(named);
+      expect(lines(records)).toEqual([
+        expect.objectContaining({ outcome: "refused", reason: "credential-in-response-header" }),
+      ]);
+    },
+  );
 
   it("passes an ordinary result through byte for byte", async () => {
     const result = { jsonrpc: "2.0", id: 1, result: { text: "Bearer of good news: café ☕" } };

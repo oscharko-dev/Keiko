@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { createSecretSpellingStreamRedactor } from "./redaction-spelling.js";
+import {
+  createSecretSpellingStreamRedactor,
+  SecretSpellingOverflowError,
+} from "./redaction-spelling.js";
 import { createStreamingRedactor, redact, redactSecretLiterals } from "./redaction.js";
 
 describe("configured literal redaction uses original source intervals", () => {
@@ -163,6 +166,70 @@ describe("createSecretSpellingStreamRedactor", () => {
   it("publishes a whole secret the held tail would otherwise cut", () => {
     expect(streamed(["xab", "a", "y"], ["aba"])).toBe("x[REDACTED]y");
     expect(streamed(["x", "abaab", "a"], ["aba"])).toBe("x[REDACTED][REDACTED]");
+  });
+
+  // PR #4064 review (4371888087): a decoder takes every digit of a numeric reference, leading zeros
+  // included and with or without its semicolon, and the longest named reference of the WHATWG
+  // table, case-sensitive; the legacy names also stand without their semicolon.
+  it("replaces every HTML reference a browser or html.unescape turns back into it", () => {
+    const value = ':/._@<fj>&"';
+    const spellings = [
+      "&colon;&sol;&period;&lowbar;&commat;&lt;&fjlig;&gt;&amp;&quot;",
+      "&colon;&sol;&period;&UnderBar;&commat;&LT;fj&GT;&AMP;&QUOT;",
+      // The legacy names without their semicolon.
+      ":/._@&ltfj&gt&amp&quot",
+      ":/._@&LTfj&GT&AMP&QUOT",
+      // Zero-padded numeric references, decimal and hexadecimal, with and without semicolons.
+      "&#0058;&#x002f;&#X2E;&#0000095&#x00040;&#60fj&#62&#038;&#x22",
+      // Python's html.unescape drops a reference to a control character or a noncharacter.
+      ':/&#1;._&#x7f;@<f&#xFFFE;j>&"',
+    ];
+    for (const spelling of spellings) {
+      expect(streamed([`(${spelling})`], [value]), spelling).toBe("([REDACTED])");
+    }
+  });
+
+  it("matches named references by their exact name and takes the longest", () => {
+    // `&Colon;` is ∷, and `&ltcc;` is ⪦, not `<` followed by `cc;`.
+    expect(streamed(["(&Colon;", "x)"], [":x"])).toBe("(&Colon;x)");
+    expect(streamed(["(&ltcc;)"], ["<cc;"])).toBe("(&ltcc;)");
+    expect(streamed(["(&ltcx)"], ["<cx"])).toBe("([REDACTED])");
+    // A legacy name at the end of a chunk waits until the next decides what it stands for.
+    const redactor = createSecretSpellingStreamRedactor(["<b"]);
+    expect(redactor.push("(&lt")).toBe("(");
+    expect(redactor.push("b)")).toBe("[REDACTED])");
+  });
+
+  it("follows a numeric reference's digits across chunks, however many zeros lead", () => {
+    const zeros = "0".repeat(200);
+    expect(streamed(["(&#", zeros, "6", "5", ";B)"], ["AB"])).toBe("([REDACTED])");
+    expect(streamed(["(&#", zeros, "65", "0;B)"], ["AB"])).toBe(`(&#${zeros}650;B)`);
+    expect(streamed(["(&#x", zeros, "41B)"], ["AB"])).toBe(`(&#x${zeros}41B)`);
+  });
+
+  it("never starts a spelling at a reference that stands for nothing", () => {
+    const redactor = createSecretSpellingStreamRedactor(["AB"]);
+    expect(redactor.push("&#1;&#1;&#1;x\n")).toBe("&#1;&#1;&#1;x\n");
+    expect(redactor.push("&#1;AB")).toBe("&#1;[REDACTED]");
+  });
+
+  it("replaces a form's `+` for a space", () => {
+    expect(streamed(["(open+sesame)"], ["open sesame"])).toBe("([REDACTED])");
+  });
+
+  // A spelling that stays incomplete beyond any secret's longest spelling ends the stream: the held
+  // text is never published, and nothing after it either.
+  it("ends a stream that holds back more than any spelling needs", () => {
+    const redactor = createSecretSpellingStreamRedactor(["AB"]);
+    expect(redactor.push("ok &#")).toBe("ok ");
+    expect(() => redactor.push("0".repeat(300 * 1024))).toThrow(SecretSpellingOverflowError);
+    expect(() => redactor.push("65;B")).toThrow(SecretSpellingOverflowError);
+    expect(() => redactor.finish()).toThrow(SecretSpellingOverflowError);
+  });
+
+  it("refuses a secret that is not printable ASCII", () => {
+    expect(() => createSecretSpellingStreamRedactor(["café-secret"])).toThrow(TypeError);
+    expect(() => createSecretSpellingStreamRedactor(["line\nbreak"])).toThrow(TypeError);
   });
 
   it("passes everything through unchanged without secrets", () => {

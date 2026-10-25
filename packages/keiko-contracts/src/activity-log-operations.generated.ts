@@ -8338,8 +8338,10 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "cancelled",
           "secret-unavailable",
           "secret-invalid",
+          "secret-too-short",
           "relay-unavailable",
           "credential-in-response-header",
+          "credential-spelling-unbounded",
         ],
       },
       method: {

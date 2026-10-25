@@ -40,6 +40,7 @@ export {
 } from "./redaction.js";
 export {
   createSecretSpellingStreamRedactor,
+  SecretSpellingOverflowError,
   type SecretSpellingStreamRedactor,
 } from "./redaction-spelling.js";
 
