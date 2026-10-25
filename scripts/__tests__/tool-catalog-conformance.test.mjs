@@ -74,6 +74,7 @@ function git(cwd, args) {
 }
 function initHermeticRepo(cwd) {
   git(cwd, ["init", "--quiet", "--initial-branch=dev"]);
+  git(cwd, ["config", "--local", "commit.gpgsign", "false"]);
   git(cwd, ["config", "user.email", "h1-evidence@example.invalid"]);
   git(cwd, ["config", "user.name", "H1 Evidence Test"]);
 }

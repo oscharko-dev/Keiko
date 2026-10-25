@@ -92,6 +92,7 @@ beforeEach(() => {
   db = new DatabaseSync(":memory:");
   runMigrations(db);
   git("init", "-q", "-b", "main");
+  git("config", "--local", "commit.gpgsign", "false");
   // These fixtures need lightweight tags regardless of the user's tag-signing default.
   git("config", "tag.gpgSign", "false");
   git("config", "user.email", "test@example.invalid");

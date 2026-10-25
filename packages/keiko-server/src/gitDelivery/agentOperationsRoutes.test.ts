@@ -124,6 +124,7 @@ async function waitUntil(assertion: () => void): Promise<void> {
 // mirrors `prRoutes.test.ts`/`mergeRoutes.test.ts`'s identical `initOriginFixture` repair.
 function initOriginFixture(projectRoot: string): void {
   execFileSync("git", ["init", "-q"], { cwd: projectRoot });
+  execFileSync("git", ["config", "--local", "commit.gpgsign", "false"], { cwd: projectRoot });
   execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: projectRoot });
   execFileSync("git", ["config", "user.name", "Keiko Test"], { cwd: projectRoot });
   execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "initial"], {
@@ -136,15 +137,18 @@ function initOriginFixture(projectRoot: string): void {
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "keiko-agent-git-"));
-  initOriginFixture(root);
   store = createInMemoryUiStore();
+  initOriginFixture(root);
   store.createProject(root, "fixture");
 });
 
 afterEach(() => {
-  resetServerLogger();
-  store.close();
-  rmSync(root, { recursive: true, force: true });
+  try {
+    resetServerLogger();
+    store.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 describe("POST /api/git/agent/operations", () => {

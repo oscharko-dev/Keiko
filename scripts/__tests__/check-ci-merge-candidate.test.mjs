@@ -149,6 +149,7 @@ describe("CI merge candidate", () => {
     const repository = mkdtempSync(join(tmpdir(), "keiko-ci-candidate-dirty-"));
     try {
       git(repository, ["init", "--initial-branch=main"]);
+      git(repository, ["config", "--local", "commit.gpgsign", "false"]);
       git(repository, ["config", "user.email", "ci@example.invalid"]);
       git(repository, ["config", "user.name", "CI"]);
       writeFileSync(join(repository, "tracked.txt"), "original\n", "utf8");
@@ -169,6 +170,7 @@ describe("CI merge candidate", () => {
   it("reads raw merge parents when Git marks the checked-out commit as shallow", () => {
     const repository = mkdtempSync(join(tmpdir(), "keiko-ci-candidate-"));
     git(repository, ["init", "--initial-branch=main"]);
+    git(repository, ["config", "--local", "commit.gpgsign", "false"]);
     git(repository, ["config", "user.email", "ci@example.invalid"]);
     git(repository, ["config", "user.name", "CI"]);
     git(repository, ["commit", "--allow-empty", "-m", "base"]);
@@ -193,6 +195,7 @@ describe("CI merge candidate", () => {
     const repository = mkdtempSync(join(tmpdir(), "keiko-ci-candidate-message-"));
     try {
       git(repository, ["init", "--initial-branch=main"]);
+      git(repository, ["config", "--local", "commit.gpgsign", "false"]);
       git(repository, ["config", "user.email", "ci@example.invalid"]);
       git(repository, ["config", "user.name", "CI"]);
       git(repository, ["commit", "--allow-empty", "-m", "base"]);

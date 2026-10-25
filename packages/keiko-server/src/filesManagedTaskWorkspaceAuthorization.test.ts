@@ -109,6 +109,7 @@ function git(cwd: string, args: readonly string[]): void {
 beforeEach(async (): Promise<void> => {
   fixtureRoot = realpathSync(await mkdtemp(join(tmpdir(), "keiko-files-managed-auth-")));
   managedRoot = join(fixtureRoot, "managed", "task-workspaces");
+  dependencies = createDependencies();
   assertManagedRootOwned(managedRoot);
   managedWorktree = deriveManagedWorktreePath({
     managedRoot,
@@ -121,6 +122,7 @@ beforeEach(async (): Promise<void> => {
   // test below to reach a genuine 200 rather than the fail-closed 403 an unrecognized identity
   // produces.
   git(fixtureRoot, ["init", "-q"]);
+  git(fixtureRoot, ["config", "--local", "commit.gpgsign", "false"]);
   git(fixtureRoot, ["config", "user.email", "test@example.invalid"]);
   git(fixtureRoot, ["config", "user.name", "Keiko Test"]);
   await writeFile(join(fixtureRoot, "README.md"), "managed workspace fixture\n");
@@ -163,13 +165,15 @@ beforeEach(async (): Promise<void> => {
     recoveryHints: [],
     auditCorrelationId: "corr_files_managed_auth",
   };
-  dependencies = createDependencies();
 });
 
 afterEach(async (): Promise<void> => {
-  resetServerLogger();
-  dependencies.store.close();
-  await rm(fixtureRoot, { recursive: true, force: true });
+  try {
+    resetServerLogger();
+    dependencies.store.close();
+  } finally {
+    await rm(fixtureRoot, { recursive: true, force: true });
+  }
 });
 
 // The managed-root gate logs through the process sink (route deps carry no per-request sink), so

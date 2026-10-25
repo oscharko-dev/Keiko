@@ -188,6 +188,7 @@ beforeEach(() => {
   repositoryRoot = join(base, "repository");
   mkdirSync(repositoryRoot);
   git(["init", "-q"]);
+  git(["config", "--local", "commit.gpgsign", "false"]);
   git(["config", "user.email", "test@example.invalid"]);
   git(["config", "user.name", "Keiko Test"]);
   writeFileSync(join(repositoryRoot, "README.md"), "managed root fixture\n");

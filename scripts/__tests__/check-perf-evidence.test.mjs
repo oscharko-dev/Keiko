@@ -46,6 +46,7 @@ function withTemporaryGitRepository(callback) {
   const root = mkdtempSync(join(tmpdir(), "keiko-perf-evidence-"));
   try {
     execFileSync("git", ["init", "--quiet"], { cwd: root });
+    execFileSync("git", ["config", "--local", "commit.gpgsign", "false"], { cwd: root });
     writeFileSync(join(root, ".gitignore"), "ignored.ts\n", "utf8");
     writeFileSync(join(root, "package.json"), "{}\n", "utf8");
     execFileSync("git", ["add", ".gitignore", "package.json"], { cwd: root });
