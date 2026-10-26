@@ -21,7 +21,7 @@ import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import type { AtlassianNetworkConfig } from "@oscharko-dev/keiko-contracts";
 import { responseCorrelationIdOf } from "./bff-correlation.js";
 import {
-  expectActivityLogProof,
+  expectRegisteredActivityLogLine,
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
 
@@ -184,8 +184,8 @@ describe("Atlassian browser client through the real credential route (#4082)", (
     expect(await listAtlassianConnectors()).toEqual([metadata]);
     const event = events.find((entry) => entry.op === "atlassian.credential.created");
     assert(event !== undefined);
-    const proof = expectActivityLogProof(
-      "atlassian.credential.created.line",
+    const proof = expectRegisteredActivityLogLine(
+      "atlassian.credential.created",
       formatActivityLogProofLine(event),
     );
     expect(proof.correlationId).toBe(responseCorrelationIdOf(metadata));

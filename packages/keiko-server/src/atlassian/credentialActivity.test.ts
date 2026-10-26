@@ -1,5 +1,6 @@
 import { assert, describe, expect, it } from "vitest";
 import type { AtlassianCredentialMetadata } from "@oscharko-dev/keiko-connectors";
+import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
   expectActivityLogProof,
@@ -62,17 +63,27 @@ describe("credential creation activity", () => {
       "credential-create-fixture",
     );
     assert(event !== undefined);
-    const proof = expectActivityLogProof(
-      "atlassian.credential.created.line",
-      formatActivityLogProofLine(event),
-    );
+    const line = formatActivityLogProofLine(event);
+    const proof = expectActivityLogProof("atlassian.credential.created.line", line);
     expect(proof).toMatchObject({
       correlationId: "credential-create-fixture",
       status: 200,
       provider: "jira",
+      authScheme: "basic-api-token",
       completeness: "complete",
       loss: "none",
     });
+    expect(analyzeLogText(line).timelines).toMatchObject([
+      {
+        correlationId: "credential-create-fixture",
+        lines: [
+          {
+            op: "atlassian.credential.created",
+            extra: { provider: "jira", authScheme: "basic-api-token" },
+          },
+        ],
+      },
+    ]);
     for (const value of [metadata.baseUrl, metadata.authRef, metadata.displayName])
       expect(JSON.stringify(proof)).not.toContain(value);
   });

@@ -2951,12 +2951,5 @@
     "ui.crash": ["tests/activity-log-scenarios/client-diagnostics-ui.test.ts"],
     "ui.dependency-failure": ["tests/activity-log-scenarios/client-diagnostics-ui.test.ts"]
   },
-  "violations": [
-    {
-      "code": "proof-outside-owner",
-      "site": "packages/keiko-ui/src/lib/atlassian-connector-client.integration.test.ts:187",
-      "detail": "atlassian.credential.created.line",
-      "correctiveAction": "Prove the operation in a test of its owning package, through its production emitter."
-    }
-  ]
+  "violations": []
 }

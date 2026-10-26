@@ -375,3 +375,11 @@ separate browser and Node compiler environments while exercising the real HTTP s
 The root TypeScript check and UI TypeScript check pass; the final UI client/integration run
 passed **12 tests**. Root test narrowing was updated for the credential discriminated union.
 The operation catalog remains **605/605** proofs with zero inventory violations.
+
+The fixture move initially triggered `proof-outside-owner`: a UI test cannot own the server
+operation's proof. The follow-up uses the existing `expectRegisteredActivityLogLine` helper
+for cross-package evidence; the owner proof remains in `credentialActivity.test.ts`.
+Regeneration now passes with **605/605** proofs and zero violations. Two valid review comments
+are also addressed: the owner proof asserts `authScheme`, and the real support analyzer must
+retain the event in the correlated timeline. Package build, root typecheck, affected lint,
+7 owner tests and 3 client/HTTP integration tests passed after the correction.
