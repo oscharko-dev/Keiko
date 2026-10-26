@@ -516,6 +516,8 @@ independent measurement and the freshness check. No ceiling widened; two tighten
 
 The committed candidate was measured again after the Sonar repair at `4428bcb19` against this
 calibration: p95 1525.4, 1.89, 2.37 and 140.6 ms, each below its committed ceiling.
+After the await-in-loop review at `1ddc81669` it was measured again: p95 1565.8, 2.00, 2.19
+and 154.6 ms, each below its committed ceiling.
 
 The PR lane runs `check:perf-evidence:coding-runtime` and the hermetic ruler tests
 (`test:perf:coding-runtime`). It checks integrity and budgets unconditionally. Set
