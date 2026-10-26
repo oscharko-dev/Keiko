@@ -383,3 +383,20 @@ Regeneration now passes with **605/605** proofs and zero violations. Two valid r
 are also addressed: the owner proof asserts `authScheme`, and the real support analyzer must
 retain the event in the correlated timeline. Package build, root typecheck, affected lint,
 7 owner tests and 3 client/HTTP integration tests passed after the correction.
+
+### Cloud HTML/identity verification correction (#4082 AC1/2/6, partial)
+
+The auditor finding was reproduced through the real browser client, HTTP route, vault and
+outbound adapter: both Jira and Confluence Cloud returned `ok` for HTML-200 responses.
+Those two regression tests failed before the fix and pass now. Valid JSON responses and
+Basic authentication passed both before and after. Both Cloud paths now use the existing
+bounded body transport and the same JSON/status parser as Data Center; no parallel verifier
+or credential path was introduced. The current-user result must contain a bounded nonempty
+account ID and an active Jira user or known Confluence user. Malformed/truncated/oversized
+bodies and anonymous users are rejected. Remote content never enters the result or log.
+
+Targeted results: package build, root and UI typechecks, changed-source/test lint and formatting;
+**73** connector/server tests and **7** real client/HTTP tests passed. The final route rerun
+passed **25** tests. The operation catalog has **605/605** proofs and zero violations.
+The accepted HTML finding is fixed; real HTTPS lab qualification and the remaining epic
+criteria are still pending.

@@ -283,6 +283,17 @@ intentional (fail-closed defense in depth, not redundant complexity to remove).
 any derived request URL containing `username`/`password` userinfo is rejected at validation time
 and, as defense in depth, at request-construction time.
 
+**Connection identity verification (#4082).** Cloud verification reads at most 64 KiB of
+JSON from the authenticated current-user endpoint within one 30-second deadline. Jira Cloud
+requires a nonempty account ID and an active user; Confluence Cloud requires a nonempty
+account ID and a known user. HTML/SSO pages, malformed or truncated JSON and anonymous
+identities fail closed. Data Center uses the same bounded parser for REST-v2 `serverInfo`
+and `myself` within a shared deadline. Remote identities and bodies are neither logged nor
+returned; only the closed verification outcome enters the existing Activity Log.
+The endpoint contracts are the official
+[Jira Cloud current-user API](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-myself/)
+and [Confluence Cloud current-user API](https://developer.atlassian.com/cloud/confluence/rest/v1/api-group-users/).
+
 **Bounded timeouts:** 30 000 ms per request for interactive write/read actions (issue and page
 CRUD, transitions, comments); 60 000 ms per paginated fetch for bulk sync requests (matching
 `FigmaHttpPort`'s existing `DEFAULT_TIMEOUT_MS`); 15 000 ms for the live JQL search action (#2248),

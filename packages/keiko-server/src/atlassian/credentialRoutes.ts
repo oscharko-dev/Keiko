@@ -389,7 +389,7 @@ export function handleVerifyAtlassianConnectorCredential(
             metadata.baseUrl,
           )
         : await verifyAtlassianConnection(
-            guard.httpPortFactory(metadata, ctx.correlationId ?? UNKNOWN_CORRELATION_ID),
+            guard.httpBodyPortFactory(metadata, ctx.correlationId ?? UNKNOWN_CORRELATION_ID),
             {
               provider: metadata.provider,
               baseUrl: metadata.baseUrl,

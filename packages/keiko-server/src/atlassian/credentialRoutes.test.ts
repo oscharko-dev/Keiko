@@ -22,6 +22,7 @@ import {
   type AtlassianHttpBodyResult,
   type AtlassianHttpPort,
   type AtlassianHttpRequest,
+  type AtlassianHttpBodyRequest,
   type AtlassianHttpResult,
 } from "@oscharko-dev/keiko-connectors";
 import {
@@ -56,7 +57,7 @@ let port: number;
 let diagnostics: ServerDiagnosticRecord[];
 let wiring: AtlassianConnectorCredentialDeps;
 let fakePortResult: AtlassianHttpResult;
-let fakePortRequests: AtlassianHttpRequest[];
+let fakePortRequests: (AtlassianHttpRequest | AtlassianHttpBodyRequest)[];
 
 function vaultEnv(): Record<string, string> {
   return { KEIKO_ATLASSIAN_CONNECTOR_CREDENTIALS_KEY: randomBytes(32).toString("base64") };
@@ -68,6 +69,22 @@ function fakeHttpPortFactory(): (metadata: AtlassianCredentialMetadata) => Atlas
       fakePortRequests.push(request);
       return Promise.resolve(fakePortResult);
     };
+}
+
+function fakeHttpBodyPortFactory(): (
+  metadata: AtlassianCredentialMetadata,
+) => AtlassianHttpBodyPort {
+  return () => (request) => {
+    fakePortRequests.push(request);
+    if (fakePortResult.kind !== "response") return Promise.resolve(fakePortResult);
+    const bodyText = JSON.stringify({ accountId: "synthetic-id", active: true });
+    return Promise.resolve({
+      ...fakePortResult,
+      bodyText,
+      bodyBytes: Buffer.byteLength(bodyText),
+      truncated: false,
+    });
+  };
 }
 
 function baseDeps(atlassian: AtlassianConnectorCredentialDeps | undefined): UiHandlerDeps {
@@ -192,7 +209,7 @@ beforeEach(async () => {
   wiring = {
     custody: built.custody,
     httpPortFactory: fakeHttpPortFactory(),
-    httpBodyPortFactory: built.httpBodyPortFactory,
+    httpBodyPortFactory: fakeHttpBodyPortFactory(),
   };
   const listening = await buildServer(baseDeps(wiring));
   server = listening.server;
@@ -545,7 +562,7 @@ describe("POST /api/atlassian-connectors/credentials/:authRef/verify", () => {
     [{ kind: "response", status: 200 } satisfies AtlassianHttpResult, "ok"],
     [{ kind: "response", status: 401 } satisfies AtlassianHttpResult, "auth-failed"],
     [{ kind: "response", status: 403 } satisfies AtlassianHttpResult, "forbidden"],
-    [{ kind: "response", status: 302 } satisfies AtlassianHttpResult, "unreachable"],
+    [{ kind: "response", status: 302 } satisfies AtlassianHttpResult, "redirect-refused"],
     [{ kind: "timeout" } satisfies AtlassianHttpResult, "timeout"],
     [{ kind: "network-error" } satisfies AtlassianHttpResult, "unreachable"],
   ])("maps the transport outcome %o to %s", async (portResult, expected) => {
@@ -647,7 +664,7 @@ describe("end-to-end verify through the gateway transport adapter", () => {
           typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url,
         authorization: new Headers(init?.headers).get("authorization"),
       });
-      return Promise.resolve(new Response(null, { status: 200 }));
+      return Promise.resolve(Response.json({ accountId: "synthetic-id", active: true }));
     }) as typeof fetch;
     const realWiring = buildAtlassianConnectorCredentialDeps({
       configPath,

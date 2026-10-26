@@ -131,6 +131,58 @@ afterEach(async () => {
 });
 
 describe("Atlassian browser client through the real credential route (#4082)", () => {
+  it.each(["jira", "confluence"] as const)(
+    "rejects HTML-2xx through the real %s Cloud path",
+    async (provider) => {
+      const metadata = await createAtlassianConnector({
+        provider,
+        displayName: "Synthetic Cloud",
+        baseUrl: "https://cloud.example",
+        accountEmail: "fixture@example.test",
+        apiToken: syntheticToken(),
+      });
+      responses.push(
+        new Response("<html><form>Sign in</form></html>", {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        }),
+      );
+      expect(await verifyAtlassianConnector(metadata.authRef)).toMatchObject({
+        status: "invalid-response",
+      });
+      expect(outbound).toHaveLength(1);
+    },
+  );
+
+  it.each(["jira", "confluence"] as const)(
+    "preserves valid JSON verification and Basic auth for %s Cloud",
+    async (provider) => {
+      const metadata = await createAtlassianConnector({
+        provider,
+        displayName: "Synthetic Cloud",
+        baseUrl: "https://cloud.example",
+        accountEmail: "fixture@example.test",
+        apiToken: syntheticToken(),
+      });
+      responses.push(
+        Response.json(
+          provider === "jira"
+            ? { accountId: "synthetic-id", active: true }
+            : { accountId: "synthetic-id", type: "known" },
+        ),
+      );
+      expect(await verifyAtlassianConnector(metadata.authRef)).toMatchObject({ status: "ok" });
+      expect(outbound[0]?.url).toBe(
+        provider === "jira"
+          ? "https://cloud.example/rest/api/3/myself"
+          : "https://cloud.example/wiki/rest/api/user/current",
+      );
+      expect(outbound[0]?.authorization).toBe(
+        `Basic ${Buffer.from(`fixture@example.test:${syntheticToken()}`).toString("base64")}`,
+      );
+    },
+  );
+
   it("creates a Data Center PAT credential without an account email", async () => {
     const metadata = await createAtlassianConnector({
       provider: "jira",
