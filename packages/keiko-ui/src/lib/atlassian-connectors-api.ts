@@ -149,7 +149,7 @@ export async function createAtlassianConnector(
 ): Promise<AtlassianConnectorMetadata> {
   return fetchJson<AtlassianConnectorMetadata>(CREDENTIALS_PATH, {
     method: "POST",
-    body: JSON.stringify(input),
+    body: JSON.stringify({ ...input, authScheme: "basic-api-token" }),
   });
 }
 

@@ -42,6 +42,7 @@ import {
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
+import { recordCredentialCreated } from "./credentialActivity.js";
 
 const MAX_CREDENTIAL_BODY_BYTES = 16_000;
 
@@ -329,7 +330,9 @@ export async function handleCreateAtlassianConnectorCredential(
   if (isRouteResult(guard)) return guard;
   return runHandler(guard, ctx, async () => {
     const body = await readJsonObject(ctx.req);
-    return { status: 200, body: guard.custody.create(body) };
+    const metadata = guard.custody.create(body);
+    recordCredentialCreated(guard, metadata, ctx.correlationId ?? UNKNOWN_CORRELATION_ID);
+    return { status: 200, body: metadata };
   });
 }
 

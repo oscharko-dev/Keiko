@@ -1532,24 +1532,58 @@
       "failureClass": "atlassian-credential-custody",
       "requirementContract": "atlassian-credential-custody",
       "productSurfaces": ["keiko-server"],
-      "lifecycleTransitions": ["failure"],
+      "lifecycleTransitions": ["end", "failure"],
       "lifecycleOperations": {
         "start": [],
         "state": [],
-        "end": [],
+        "end": ["atlassian.credential.created"],
         "failure": ["atlassian.credential.rejected"],
         "loss": []
       },
       "causalEdges": [
+        {
+          "op": "atlassian.credential.created",
+          "mode": "correlation"
+        },
         {
           "op": "atlassian.credential.rejected",
           "mode": "none"
         }
       ],
       "lossSignals": [],
-      "resourceSignals": [],
+      "resourceSignals": ["atlassian.credential.created"],
       "replayReferences": [],
       "operations": [
+        {
+          "op": "atlassian.credential.created",
+          "owner": "keiko-server",
+          "category": "setup",
+          "lifecycle": "end",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "authScheme",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "provider",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["atlassian.credential.created.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
         {
           "op": "atlassian.credential.rejected",
           "owner": "keiko-server",

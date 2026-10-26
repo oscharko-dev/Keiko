@@ -159,6 +159,7 @@ describe("atlassian-connectors-api — write-only token", () => {
     });
     // The create request is the ONE hop the token makes.
     expect(calls[0]?.body).toContain("s3cr3t-token");
+    expect(JSON.parse(calls[0]?.body ?? "{}")).toMatchObject({ authScheme: "basic-api-token" });
     // The returned metadata carries no token field.
     expect(JSON.stringify(metadata)).not.toContain("s3cr3t-token");
     expect((metadata as unknown as Record<string, unknown>).apiToken).toBeUndefined();
