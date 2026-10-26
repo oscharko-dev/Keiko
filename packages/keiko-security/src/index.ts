@@ -168,4 +168,4 @@ export {
 
 export * from "./errors/index.js";
 
-export { writeActivityLogPortEvent } from "./log-port-delivery.js";
+export { writeActivityLogPortEvent, reportActivityLogPortFailure } from "./log-port-delivery.js";
