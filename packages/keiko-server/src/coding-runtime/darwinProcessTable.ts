@@ -53,7 +53,7 @@ const TABLE_SCRIPT = [
   String.raw`my $size = 4 * 65536; my $buf = "\0" x $size;`,
   // proc_info(LISTPIDS = 1, PROC_ALL_PIDS = 1): the size of the PID array in bytes.
   "my $n = syscall(336, 1, 1, 0, 0, $buf, $size);",
-  'die "listpids\\n" if $n < 0;',
+  String.raw`die "listpids\n" if $n < 0;`,
   'for my $pid (grep { $_ > 0 } unpack("l*", substr($buf, 0, $n))) {',
   String.raw`  my $info = "\0" x 192;`,
   // proc_info(PIDINFO = 2, pid, PROC_PIDT_BSDINFOWITHUNIQID = 18, arg 1 = zombies too).
@@ -61,14 +61,14 @@ const TABLE_SCRIPT = [
   "  if ($read == 192) {",
   '    my ($status) = unpack("x4 L", $info);',
   '    my ($uniq, $puniq) = unpack("Q Q", substr($info, 152, 16));',
-  '    print "$pid $status $uniq $puniq\\n";',
-  '  } elsif ($errno == 3) { print "$pid gone\\n"; }',
+  String.raw`    print "$pid $status $uniq $puniq\n";`,
+  String.raw`  } elsif ($errno == 3) { print "$pid gone\n"; }`,
   // EPERM: PROC_PIDT_SHORTBSDINFO (13, 64 bytes) names the effective uid at offset 36.
   "  elsif ($errno == 1) {",
   String.raw`    my $short = "\0" x 64;`,
   '    my $other = syscall(336, 2, $pid, 13, 1, $short, 64) == 64 && unpack("L", substr($short, 36, 4)) != $>;',
-  '    print "$pid ", ($other ? "foreign" : "unidentified"), "\\n";',
-  '  } else { print "$pid unidentified\\n"; }',
+  String.raw`    print "$pid ", ($other ? "foreign" : "unidentified"), "\n";`,
+  String.raw`  } else { print "$pid unidentified\n"; }`,
   "}",
 ].join("\n");
 const RECORD = /^(\d+) (\d+) (\d+) (\d+)$/u;

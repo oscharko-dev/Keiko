@@ -386,18 +386,18 @@ const SYNC_BLOCKS: ReadonlySet<GitSyncOutcome> = new Set([
   "git-missing",
   "unsafe-repository",
 ]);
+function syncState(status: CodingRuntimeGitSync["status"]): RuntimeGitActivityFields["state"] {
+  if (status === "succeeded") return "succeeded";
+  if (status === "up-to-date") return "completed";
+  if (status === "authority-denied") return "refused";
+  return SYNC_BLOCKS.has(status) ? "blocked" : "failed";
+}
 function syncEvidence(result: CodingRuntimeGitSync): RuntimeGitActivityFields {
-  const state =
-    result.status === "succeeded"
-      ? "succeeded"
-      : result.status === "up-to-date"
-        ? "completed"
-        : result.status === "authority-denied"
-          ? "refused"
-          : SYNC_BLOCKS.has(result.status)
-            ? "blocked"
-            : "failed";
-  return { state, syncOutcome: result.status, truncated: result.truncated };
+  return {
+    state: syncState(result.status),
+    syncOutcome: result.status,
+    truncated: result.truncated,
+  };
 }
 
 /** The log outcome of a result: a sync that settled anywhere but Git's success is a warning. */

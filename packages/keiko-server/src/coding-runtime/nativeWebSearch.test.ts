@@ -71,9 +71,9 @@ describe("the admitted web search integration (#3903 AC3)", () => {
       "file:///etc/passwd",
       "not a url",
     ])
-      expect(nativeWebSearchConfigFromEnv({ KEIKO_CODING_WEBSEARCH_ENDPOINT: refused })).toBe(
-        undefined,
-      );
+      expect(
+        nativeWebSearchConfigFromEnv({ KEIKO_CODING_WEBSEARCH_ENDPOINT: refused }),
+      ).toBeUndefined();
   });
 
   it("reads the provider's answer as bounded web results, in either transport", () => {
@@ -98,6 +98,12 @@ describe("the admitted web search integration (#3903 AC3)", () => {
     const [bounded] = parseNativeWebSearchAnswer(answer(long)) ?? [];
     expect(bounded?.title?.length).toBeLessThanOrEqual(513);
     expect(bounded?.content?.length).toBeLessThanOrEqual(4_001);
+    // Labels are read line by line, so a hostile run of blanks is scanned once, not backtracked.
+    const blanks = " ".repeat(200_000);
+    const hostile = `Title:${blanks}\nURL:${blanks}https://example.test/y\nText:${blanks}\n${blanks}`;
+    expect(parseNativeWebSearchAnswer(answer(hostile))).toEqual([
+      { url: "https://example.test/y" },
+    ]);
   });
 
   it("searches once for the query the run's policy allowed, through the configured endpoint only", async () => {

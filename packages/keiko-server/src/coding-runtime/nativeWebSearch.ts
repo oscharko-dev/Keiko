@@ -223,9 +223,24 @@ function resultText(result: Readonly<Record<string, unknown>>): string | undefin
   return undefined;
 }
 
-function field(block: string, pattern: RegExp): string | undefined {
-  const value = pattern.exec(block)?.[1]?.trim();
+function present(raw: string | undefined): string | undefined {
+  const value = raw?.trim();
   return value === undefined || value === "" || value === "N/A" ? undefined : value;
+}
+
+// A labelled field is the rest of its own line; line scanning keeps parsing linear in the block.
+function field(lines: readonly string[], label: string): string | undefined {
+  const prefix = `${label}:`;
+  return present(lines.find((line) => line.startsWith(prefix))?.slice(prefix.length));
+}
+
+// The excerpt runs from its label to the end of the block, including the label's own line.
+function excerpt(lines: readonly string[]): string | undefined {
+  const start = lines.findIndex((line) => /^(?:Highlights|Text):/u.test(line));
+  const header = lines[start];
+  if (header === undefined) return undefined;
+  const rest = [header.slice(header.indexOf(":") + 1), ...lines.slice(start + 1)];
+  return present(rest.join("\n"));
 }
 
 function bounded(value: string | undefined, max: number): string | undefined {
@@ -236,15 +251,13 @@ function bounded(value: string | undefined, max: number): string | undefined {
 }
 
 function parsedResult(block: string): NativeWebSearchResult | undefined {
-  const url = field(block, /^URL:\s*(.+)$/mu);
+  const lines = block.split("\n");
+  const url = field(lines, "URL");
   if (url === undefined || url.length > MAX_URL_CHARS || !URL.canParse(url)) return undefined;
   if (!["http:", "https:"].includes(new URL(url).protocol)) return undefined;
-  const title = bounded(field(block, /^Title:\s*(.+)$/mu), MAX_TITLE_CHARS);
-  const content = bounded(
-    field(block, /^(?:Highlights|Text):\s*\n?([\s\S]*)$/mu),
-    MAX_CONTENT_CHARS,
-  );
-  const published = Date.parse(field(block, /^Published:\s*(.+)$/mu) ?? "");
+  const title = bounded(field(lines, "Title"), MAX_TITLE_CHARS);
+  const content = bounded(excerpt(lines), MAX_CONTENT_CHARS);
+  const published = Date.parse(field(lines, "Published") ?? "");
   return {
     url,
     ...(title === undefined ? {} : { title }),
