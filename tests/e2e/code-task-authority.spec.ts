@@ -449,11 +449,7 @@ async function proveLiveActivityTimeline(
 // The scripted (mapped) engine reads through Keiko's own workspace tool; the real binary reads
 // through its own `read`, which `proveRepositorySearchConsumption` already asserts.
 async function proveScriptedWorkspaceRead(timeline: Locator): Promise<void> {
-  const completedRead = timeline
-    .locator('[data-tool-state="succeeded"]')
-    .filter({ hasText: "workspace" });
-  await expect(completedRead).toHaveCount(1);
-  await expect(completedRead).toContainText("workspace");
+  await expect(toolActivity(timeline, "keiko_workspace_read")).toHaveCount(1);
 }
 
 function toolActivity(timeline: Locator, tool: string): Locator {

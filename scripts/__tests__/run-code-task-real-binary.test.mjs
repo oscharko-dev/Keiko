@@ -1039,8 +1039,13 @@ describe("#2483 real-binary observation helpers", () => {
       // Without the handoff proof the decisions alone do not show a search-derived read.
       write(decided("grep"), decided("read"));
       expect(readNativeGovernanceEvidence(stateDir, gateway, undefined)).toBeUndefined();
-      // Two runs that both qualify are ambiguous, and a malformed decision is never skipped.
+      // A second run that only searched does not qualify, so the one qualifying run is returned.
       write(decided("grep"), decided("read"), decided("grep", "allowed", "allow", "run-2"));
+      expect(readNativeGovernanceEvidence(stateDir, gateway, H1_SEARCH)).toEqual({
+        ...NATIVE_GOVERNANCE,
+        decisionCount: 2,
+      });
+      // Two runs that both qualify are ambiguous, and a malformed decision is never skipped.
       write(
         decided("grep"),
         decided("read"),
