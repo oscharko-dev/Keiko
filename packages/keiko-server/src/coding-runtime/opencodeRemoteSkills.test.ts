@@ -234,6 +234,35 @@ describe("the operator's remote skill sources (#3903 AC3)", () => {
     expect(records.every((record) => record.level === "warn")).toBe(true);
   });
 
+  // #3907 AC10: without a network every fetch could run into its own timeout, one source after the
+  // other; the admission as a whole still ends at its deadline and records each source it lost.
+  it("ends the whole admission at its deadline when no source answers", async () => {
+    const records: ServerLogEvent[] = [];
+    const sink: ServerLogSink = { write: (event) => void records.push(event) };
+    const other = "https://other.example.test/";
+    const silent = ((_input: string | URL | Request, init?: RequestInit): Promise<Response> =>
+      new Promise((_resolve, reject) => {
+        const aborted = (): void => {
+          reject(new DOMException("The operation was aborted.", "AbortError"));
+        };
+        if (init?.signal?.aborted === true) aborted();
+        init?.signal?.addEventListener("abort", aborted, { once: true });
+      })) as typeof fetch;
+    const started = Date.now();
+    await createRemoteSkillsPort({
+      registry: () => ({ state: "loaded", sources: [SOURCE, other] }),
+      egress: () => undefined,
+      activityLog: sink,
+      fetchImpl: silent,
+      admissionDeadlineMs: 50,
+    }).admitForRun({ runId: "r", discoveryRoot: discoveryRoot(), mode: "autonomous-delivery" });
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(lines(records)).toEqual([
+      expect.objectContaining({ scope: "source", state: "source-failed" }),
+      expect.objectContaining({ scope: "source", state: "source-failed" }),
+    ]);
+  });
+
   it("records a refused registry", async () => {
     const records: ServerLogEvent[] = [];
     await port(

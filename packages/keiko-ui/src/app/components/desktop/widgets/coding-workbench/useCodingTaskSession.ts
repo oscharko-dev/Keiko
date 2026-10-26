@@ -33,6 +33,11 @@ export interface CodingTaskForkSource {
    * task's own. Absent, the fork stays in the task's own workspace.
    */
   readonly targetWorkspace?: CodingTaskForkTarget | undefined;
+  /**
+   * The loaded task was imported from a saved file (#3904 AC4) and has no run of its own, so the
+   * next message always continues it as a new task. Nobody asked for it, so nobody can cancel it.
+   */
+  readonly implicit?: true | undefined;
 }
 
 /** A managed workspace provisioned from the loaded task's own, where the task may continue. */
@@ -125,7 +130,6 @@ export function useCodingTaskSession(options: SessionInput): CodingTaskSession {
   const fork = useTaskFork(input, scoped, setForkTarget);
   return {
     detail: scoped,
-    conversationId: scoped?.task.id,
     pending,
     error,
     newTask,
@@ -133,7 +137,26 @@ export function useCodingTaskSession(options: SessionInput): CodingTaskSession {
     visibleRun: sessionRunVisible(input, scoped, ignoredRun.current),
     forkTargets: forkTargetsOf(input, scoped),
     ...fork,
+    ...startPoint(scoped, input.active, fork.fork),
   };
+}
+
+/**
+ * What the next message continues: the loaded task itself, or the fork the person asked for. An
+ * imported task has no run to continue, so it is forked as it ended unless the person chose a
+ * fork of their own.
+ */
+function startPoint(
+  detail: CodingHistoryDetail | null,
+  active: boolean,
+  requested: CodingTaskForkSource | null,
+): Pick<CodingTaskSession, "conversationId" | "fork"> {
+  if (detail?.task.origin !== "imported")
+    return { conversationId: detail?.task.id, fork: requested };
+  const implicit = active
+    ? null
+    : { taskId: detail.task.id, title: detail.task.title, implicit: true as const };
+  return { conversationId: undefined, fork: requested ?? implicit };
 }
 
 /** The managed workspaces provisioned from the task's own (#3903 AC4, #3902 AC3). */

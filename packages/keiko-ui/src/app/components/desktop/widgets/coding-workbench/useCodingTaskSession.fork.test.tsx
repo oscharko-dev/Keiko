@@ -324,3 +324,54 @@ describe("continuing the loaded task in a workspace provisioned from its own", (
     expect(hook.result.current.detail?.task.id).toBe("chat-one");
   });
 });
+
+// #3904 AC4: an imported task has no run of its own, so the next message always continues it as a
+// new task; the person may still fork it before one of its messages instead.
+describe("continuing an imported coding task", () => {
+  const imported: CodingHistoryDetail = {
+    ...detail,
+    task: { ...detail.task, origin: "imported", latestRunId: undefined },
+  };
+
+  beforeEach(() => {
+    read.mockResolvedValue(imported);
+  });
+
+  it("forks the task as it ended without a conversation to continue", async () => {
+    const { result } = await loaded();
+
+    expect(result.current.conversationId).toBeUndefined();
+    expect(result.current.fork).toEqual({
+      taskId: "chat-one",
+      title: "Inspect the parser",
+      implicit: true,
+    });
+  });
+
+  it("lets the person's own fork point take its place", async () => {
+    const { result } = await loaded();
+
+    act(() => {
+      result.current.beginFork("m-3");
+    });
+
+    expect(result.current.fork).toEqual({
+      taskId: "chat-one",
+      title: "Inspect the parser",
+      beforeMessageId: "m-3",
+    });
+    act(() => {
+      result.current.cancelFork();
+    });
+    expect(result.current.fork).toMatchObject({ implicit: true });
+  });
+
+  it("offers no fork while a run is active and never continues the imported task itself", async () => {
+    const { result, rerender } = await loaded();
+
+    rerender({ runId: "run-one", active: true });
+
+    expect(result.current.fork).toBeNull();
+    expect(result.current.conversationId).toBeUndefined();
+  });
+});

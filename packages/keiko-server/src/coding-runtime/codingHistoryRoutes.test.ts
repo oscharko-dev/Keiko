@@ -5,7 +5,11 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
-import type { CodingTaskExportDocument } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  CODING_TASK_IMPORT_MAX_BYTES,
+  type CodingTaskExportDocument,
+  type CodingTaskImportResponse,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import {
   expectActivityLogProof,
@@ -22,10 +26,12 @@ import {
 import { createCodingAppSessionChannel } from "../coding-app-session/sessionChannel.js";
 import { createSessionRegistry } from "../coding-app-session/sessionRegistry.js";
 import { APP_SESSION_COOKIE_NAME } from "../coding-app-session/sessionCookie.js";
+import { TaskWorkspaceError } from "../task-workspace/errors.js";
 import { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
 import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import {
   exportCodingHistory,
+  importCodingHistory,
   listCodingHistory,
   readCodingHistory,
   updateCodingHistory,
@@ -353,6 +359,209 @@ describe("paired coding history export", () => {
     const logged = JSON.stringify(sink.events);
     for (const body of [CONFIGURED_KEY, "Generate tests", "alice", root]) {
       expect(logged).not.toContain(body);
+    }
+  });
+});
+
+describe("paired coding history import", () => {
+  const runId = "c5a98719-8123-4e81-b1da-b98ffdeafc67";
+  const workspace = {
+    instance: {
+      repositoryRoot: "",
+      workspaceId: "ws-import",
+      taskId: "task-import",
+      taskBranch: "feature/imported",
+    },
+  };
+  let importDeps: UiHandlerDeps;
+
+  beforeEach(() => {
+    workspace.instance.repositoryRoot = root;
+    importDeps = {
+      ...deps,
+      workspaceLifecycle: { getActive: () => workspace },
+    } as unknown as UiHandlerDeps;
+  });
+
+  function importContext(body: string, paired = true): RouteContext {
+    return {
+      ...context(body, id, paired),
+      url: new URL("http://localhost/api/coding-workbench/history/import"),
+    };
+  }
+
+  function exportedFile(): string {
+    const history = store.codingHistory;
+    if (history === undefined) throw new Error("Missing history fixture");
+    history.bindRun(id, runId);
+    history.append(id, runId, "intent", "user", "Generate the parser tests");
+    history.append(id, runId, "answer", "assistant", `Done with ${CONFIGURED_KEY}.`);
+    const result = exportCodingHistory(
+      {
+        ...context("", id),
+        url: new URL(`http://localhost/api/coding-workbench/history/${id}/export?format=json`),
+      },
+      deps,
+    );
+    return String((result.body as Record<string, unknown>).content);
+  }
+
+  function taskCount(): number {
+    return history.list("operator").length;
+  }
+
+  it("mounts the import on the production route table ahead of the task routes", () => {
+    expect(matchRoute("POST", "/api/coding-workbench/history/import")).toMatchObject({
+      definition: { method: "POST", handler: importCodingHistory },
+    });
+  });
+
+  it("answers an unpaired caller like an unavailable history and stores nothing", async () => {
+    const before = taskCount();
+    const unpaired = await importCodingHistory(importContext(exportedFile(), false), importDeps);
+    const noRuntime = await importCodingHistory(importContext(exportedFile()), {
+      ...importDeps,
+      codingRuntimeOrchestrator: undefined,
+    });
+    const unknown = readCodingHistory(context("{}", "unknown"), deps);
+    expect([unpaired.status, noRuntime.status]).toEqual([404, 404]);
+    expect(JSON.stringify(unpaired.body)).toBe(JSON.stringify(unknown.body));
+    expect(JSON.stringify(noRuntime.body)).toBe(JSON.stringify(unknown.body));
+    expect(taskCount()).toBe(before);
+  });
+
+  it("refuses with 409 when there is no workspace whose identity is proven", async () => {
+    const file = exportedFile();
+    const proofFailure = new TaskWorkspaceError("IDENTITY_PROOF_FAILED", "proof failed");
+    for (const lifecycle of [
+      undefined,
+      { getActive: (): undefined => undefined },
+      {
+        getActive: (): never => {
+          throw proofFailure;
+        },
+      },
+    ]) {
+      const result = await importCodingHistory(importContext(file), {
+        ...deps,
+        workspaceLifecycle: lifecycle,
+      } as unknown as UiHandlerDeps);
+      expect(result).toMatchObject({
+        status: 409,
+        body: { error: { code: "CODING_HISTORY_IMPORT_NO_WORKSPACE" } },
+      });
+    }
+    expect(taskCount()).toBe(1);
+  });
+
+  it("does not hide an unexpected workspace failure", async () => {
+    const failing = {
+      ...deps,
+      workspaceLifecycle: {
+        getActive: () => {
+          throw new Error("lifecycle broke");
+        },
+      },
+    } as unknown as UiHandlerDeps;
+    await expect(importCodingHistory(importContext("{}"), failing)).rejects.toThrow(
+      "lifecycle broke",
+    );
+  });
+
+  it("stores an exported task as a new imported task in the active workspace", async () => {
+    const result = await importCodingHistory(importContext(exportedFile()), importDeps);
+    expect(result.status).toBe(201);
+    expect(result.headers).toEqual({ "Cache-Control": "no-store" });
+    const body = result.body as CodingTaskImportResponse;
+    expect(body).toMatchObject({
+      source: "keiko-task-export",
+      messageCount: 2,
+      omittedMessageCount: 0,
+      skippedMessageCount: 0,
+      task: { title: "Generate tests", origin: "imported", status: "active" },
+    });
+    expect(body.task.id).not.toBe(id);
+    const detail = history.detail(body.task.id, "verify");
+    expect(detail?.task).toMatchObject({ branch: "feature/imported", origin: "imported" });
+    expect(detail?.messages.map((message) => [message.role, message.content])).toEqual([
+      ["user", "Generate the parser tests"],
+      ["assistant", "Done with [REDACTED]."],
+    ]);
+    expect(body.task.projectPath).toBe(root);
+  });
+
+  it.each([
+    ["not JSON", "{", 400, "CODING_HISTORY_IMPORT_INVALID"],
+    ["another document", '{"kind":"unrelated"}', 400, "CODING_HISTORY_IMPORT_INVALID"],
+    [
+      "a newer export",
+      JSON.stringify({ schema: "keiko-coding-task-export", schemaVersion: 2 }),
+      400,
+      "CODING_HISTORY_IMPORT_UNSUPPORTED_VERSION",
+    ],
+    [
+      "a transcript without text",
+      JSON.stringify({ info: { title: "t" }, messages: [] }),
+      400,
+      "CODING_HISTORY_IMPORT_EMPTY",
+    ],
+  ])("refuses %s without storing a task", async (_name, file, status, code) => {
+    const result = await importCodingHistory(importContext(file), importDeps);
+    expect(result).toMatchObject({
+      status,
+      body: { error: { code, correlationId: "history-route-test" } },
+    });
+    expect(taskCount()).toBe(1);
+  });
+
+  it("refuses a file above the import bound with 413", async () => {
+    const result = await importCodingHistory(
+      importContext("x".repeat(CODING_TASK_IMPORT_MAX_BYTES + 1)),
+      importDeps,
+    );
+    expect(result).toMatchObject({
+      status: 413,
+      body: { error: { code: "CODING_HISTORY_IMPORT_TOO_LARGE" } },
+    });
+    expect(taskCount()).toBe(1);
+  });
+
+  it("records the import under the request's correlation without any file content", async () => {
+    const file = JSON.stringify({
+      info: { title: "Generate tests" },
+      messages: [
+        {
+          info: { role: "user", time: { created: 1 } },
+          parts: [{ type: "text", text: "parser tests" }],
+        },
+        {
+          info: { role: "assistant", time: { created: 2 } },
+          parts: [{ type: "text", text: `Rotated ${CONFIGURED_KEY} in ${root}/a.ts` }],
+        },
+      ],
+    });
+    const sink = createBufferedServerLogSink();
+    history = new CodingRuntimeHistory(store, () => "operator", sink);
+    expect((await importCodingHistory(importContext(file), importDeps)).status).toBe(201);
+    expect((await importCodingHistory(importContext("{"), importDeps)).status).toBe(400);
+    const lines = sink.events.map((event) =>
+      expectActivityLogProof(
+        "coding-runtime.history.import.emitted-line",
+        formatActivityLogProofLine(event),
+      ),
+    );
+    expect(lines.map((line) => [line.correlationId, line.event, line.source, line.reason])).toEqual(
+      [
+        ["history-route-test", "requested", undefined, undefined],
+        ["history-route-test", "completed", "opencode-session", undefined],
+        ["history-route-test", "requested", undefined, undefined],
+        ["history-route-test", "refused", undefined, "invalid-document"],
+      ],
+    );
+    expect(lines[1]).toMatchObject({ messageCount: 2, redactedMessageCount: 1 });
+    const logged = JSON.stringify(sink.events);
+    for (const content of [CONFIGURED_KEY, "Generate tests", "parser tests", root]) {
+      expect(logged).not.toContain(content);
     }
   });
 });
