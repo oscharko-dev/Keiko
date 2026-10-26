@@ -1407,12 +1407,6 @@
     },
     {
       "path": "packages/keiko-local-knowledge/src/knowledge-log.ts",
-      "owner": "errorKindProperty",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-local-knowledge/src/knowledge-log.ts",
       "owner": "reportFailedKnowledgeLogSink",
       "kind": "unregistered-catch",
       "count": 1
@@ -1653,12 +1647,6 @@
     },
     {
       "path": "packages/keiko-memory-consolidation/src/log-port.ts",
-      "owner": "errorKindProperty",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-memory-consolidation/src/log-port.ts",
       "owner": "reportFailedConsolidationLogSink",
       "kind": "unregistered-catch",
       "count": 1
@@ -1690,12 +1678,6 @@
     {
       "path": "packages/keiko-memory-vault/src/schema.ts",
       "owner": "attemptWalCheckpointTruncate",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-memory-vault/src/vault-log.ts",
-      "owner": "errorKindProperty",
       "kind": "unregistered-catch",
       "count": 1
     },
@@ -1756,12 +1738,6 @@
     {
       "path": "packages/keiko-model-gateway/src/normalize.ts",
       "owner": "parseStructuredOutput",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-model-gateway/src/observability.ts",
-      "owner": "errorKindProperty",
       "kind": "unregistered-catch",
       "count": 1
     },

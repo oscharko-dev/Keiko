@@ -26,13 +26,12 @@
 // unknown>`, so `processServerLogSink()` remains a valid `MemoryVaultLogSink` with no adapter.
 
 import { createHash } from "node:crypto";
-import { writeActivityLogPortEvent } from "@oscharko-dev/keiko-security";
+import { securityErrorKind, writeActivityLogPortEvent } from "@oscharko-dev/keiko-security";
 
 import {
   activityLogEvent,
   activityLogEventWillBeRejected,
   normalizeKeikoFrame,
-  classifyErrorKind,
   defineActivityLogOperation,
   type RejectedActivityLogEvent,
   type ActivityLogEventEnvelope,
@@ -144,11 +143,9 @@ export function startMemoryVaultLogTimer(): () => number {
   return (): number => Math.round((performance.now() - startedAt) * 1000) / 1000;
 }
 
-// The shape an error KIND may have is `classifyErrorKind` (ADR-0173 D11), imported from
-// `keiko-contracts` rather than declared here, so this reducer and the ones in `knowledge-log.ts`,
-// `log-port.ts`, `keiko-activity-log/src/server-log.ts` and
-// `keiko-model-gateway/src/observability.ts` cannot drift into accepting different things: an
-// identifier, a taxonomy code, a constructor name — never a sentence.
+// Security's `securityErrorKind` (ADR-0173 D11) owns the guarded `code`/`name` reads and
+// canonical Contracts shape gate shared by Knowledge, Consolidation, Vault and Gateway:
+// an identifier, a taxonomy code, a constructor name — never a sentence.
 //
 // READING the property is itself a call into foreign code — `code`/`name` are ordinary properties
 // on an object this layer did not build, so an accessor or Proxy trap can throw. Every call site
@@ -156,23 +153,13 @@ export function startMemoryVaultLogTimer(): () => number {
 // just threw), so a throw here would replace a diagnosable failure with a classification failure.
 // An unreadable property degrades to the next candidate, exactly like a property whose value fails
 // the shape gate.
-function errorKindProperty(error: object, key: string): string | undefined {
-  let value: unknown;
-  try {
-    value = Reflect.get(error, key);
-  } catch {
-    return undefined;
-  }
-  return classifyErrorKind(value);
-}
 
 // Classification only: the coded `code`, else the constructor `name`, else "unknown". The message
 // is NEVER read — a thrown error's message routinely carries a path or a fragment of the value
 // that failed — and neither `code` nor `name` is trusted just because it is called one: both must
 // pass `classifyErrorKind`'s shape gate first.
 export function memoryVaultErrorKind(error: unknown): string {
-  if (typeof error !== "object" || error === null) return "unknown";
-  return errorKindProperty(error, "code") ?? errorKindProperty(error, "name") ?? "unknown";
+  return securityErrorKind(error);
 }
 
 // ─── Writing a line must never become the failure it describes ────────────────

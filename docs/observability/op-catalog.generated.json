@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "2f1d59c6fa6dcef3679817665eab8b77c941f44df6037c896bacb078d741e8d8",
+    "catalogDigest": "2f92d235a5aa6b981011a8e230d70da9a497bd313ec8a0cfc7f167574aa7c7cc",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -11964,8 +11964,8 @@
         "failureClasses": ["activity-log-sink"],
         "proofIds": ["consolidation.log.sink-failed.body-free"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-memory-consolidation/src/log-port.ts:102",
-        "emitterSites": ["packages/keiko-memory-consolidation/src/log-port.ts:155"]
+        "registrationSite": "packages/keiko-memory-consolidation/src/log-port.ts:89",
+        "emitterSites": ["packages/keiko-memory-consolidation/src/log-port.ts:132"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -25590,8 +25590,8 @@
         "failureClasses": ["activity-log-sink"],
         "proofIds": ["knowledge.log.sink-failed.body-free"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-local-knowledge/src/knowledge-log.ts:157",
-        "emitterSites": ["packages/keiko-local-knowledge/src/knowledge-log.ts:210"]
+        "registrationSite": "packages/keiko-local-knowledge/src/knowledge-log.ts:144",
+        "emitterSites": ["packages/keiko-local-knowledge/src/knowledge-log.ts:187"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -26119,8 +26119,8 @@
         "failureClasses": ["activity-log-sink"],
         "proofIds": ["memory-vault.log.sink-failed.body-free"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-memory-vault/src/vault-log.ts:202",
-        "emitterSites": ["packages/keiko-memory-vault/src/vault-log.ts:255"]
+        "registrationSite": "packages/keiko-memory-vault/src/vault-log.ts:182",
+        "emitterSites": ["packages/keiko-memory-vault/src/vault-log.ts:225"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -26357,10 +26357,10 @@
         "failureClasses": ["memory-write-capture"],
         "proofIds": ["memory-vault.write.capture-failed.physical-admission"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-memory-vault/src/vault-log.ts:350",
+        "registrationSite": "packages/keiko-memory-vault/src/vault-log.ts:320",
         "emitterSites": [
-          "packages/keiko-memory-vault/src/vault-log.ts:474",
-          "packages/keiko-memory-vault/src/vault-log.ts:482"
+          "packages/keiko-memory-vault/src/vault-log.ts:444",
+          "packages/keiko-memory-vault/src/vault-log.ts:452"
         ]
       },
       {
@@ -26422,8 +26422,8 @@
         "failureClasses": ["memory-write-validation"],
         "proofIds": ["memory-vault.write.rejected.initial-admission"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-memory-vault/src/vault-log.ts:281",
-        "emitterSites": ["packages/keiko-memory-vault/src/vault-log.ts:340"]
+        "registrationSite": "packages/keiko-memory-vault/src/vault-log.ts:251",
+        "emitterSites": ["packages/keiko-memory-vault/src/vault-log.ts:310"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -90809,7 +90809,7 @@
     {
       "op": "knowledge.log.sink-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-local-knowledge/src/knowledge-log.ts:160",
+      "site": "packages/keiko-local-knowledge/src/knowledge-log.ts:147",
       "package": "keiko-local-knowledge"
     },
     {
@@ -90863,7 +90863,7 @@
     {
       "op": "consolidation.log.sink-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-memory-consolidation/src/log-port.ts:105",
+      "site": "packages/keiko-memory-consolidation/src/log-port.ts:92",
       "package": "keiko-memory-consolidation"
     },
     {
@@ -90875,7 +90875,7 @@
     {
       "op": "memory-vault.log.sink-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-memory-vault/src/vault-log.ts:205",
+      "site": "packages/keiko-memory-vault/src/vault-log.ts:185",
       "package": "keiko-memory-vault"
     },
     {
@@ -90905,13 +90905,13 @@
     {
       "op": "memory-vault.write.capture-failed",
       "category": "memory",
-      "site": "packages/keiko-memory-vault/src/vault-log.ts:353",
+      "site": "packages/keiko-memory-vault/src/vault-log.ts:323",
       "package": "keiko-memory-vault"
     },
     {
       "op": "memory-vault.write.rejected",
       "category": "memory",
-      "site": "packages/keiko-memory-vault/src/vault-log.ts:284",
+      "site": "packages/keiko-memory-vault/src/vault-log.ts:254",
       "package": "keiko-memory-vault"
     },
     {

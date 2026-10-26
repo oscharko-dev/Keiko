@@ -1224,12 +1224,15 @@ answer: "a single definition cannot drift from itself." Wave 2 moved the pattern
 `packages/keiko-contracts/src/observability.ts` (the leaf every other package already depends on
 inward toward, per ADR-0019) and deleted that drift test.
 
-The three packages did not all converge on the shared constant the same way, and both shapes are
+The consumers now use the shared shape gate through two compositions, and both shapes remain
 load-bearing:
 
-- `keiko-model-gateway` and `keiko-local-knowledge` import `classifyErrorKind` from
-  `keiko-contracts` directly — literal delegation, so their `code`/`name` gate cannot drift from the
-  canonical pattern because there is no local copy of it left to drift.
+- The Knowledge, Consolidation, Memory Vault and Model Gateway error-kind wrappers delegate to
+  the existing public Security `securityErrorKind` classifier. It owns the guarded `code` then
+  `name` reads and delegates candidate strings to Contracts' `classifyErrorKind`, so neither the
+  reflective-read mechanics nor the canonical pattern is copied by these four ports. Their local
+  writers, reporters, loss accounting and Gateway's subsequent closed-vocabulary mapping remain
+  owned by their respective packages.
 - `@oscharko-dev/keiko-activity-log`'s `errorKindOf`
   (`packages/keiko-activity-log/src/server-log.ts`) was rewritten in the same wave to route through
   `packages/keiko-activity-log/src/error-classification.ts`'s

@@ -24,13 +24,13 @@
 
 import {
   activityLogEvent,
-  classifyErrorKind,
   defineActivityLogOperation,
   recordActivityLogLoss,
   type RejectedActivityLogEvent,
   withActivityLogCorrelation,
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { securityErrorKind } from "@oscharko-dev/keiko-security";
 import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 
 export type ModelGatewayLogLevel = "debug" | "info" | "warn" | "error";
@@ -309,34 +309,21 @@ export function logTimer(): () => number {
 // `extra` redaction entirely and is only length/prose-checked at the far end. A non-conforming
 // `code` is not hypothetical: SDKs routinely set it to a sentence ("The request body was rejected:
 // …"), which is a provider message reaching the log through the one field guaranteed to be
-// exempt from field-name policy. `classifyErrorKind` (ADR-0173 D11) is the identical shape gate
-// `keiko-server` and `keiko-local-knowledge` apply, imported from `keiko-contracts` rather than
-// restated here so the three surfaces cannot drift into accepting different things: an
-// identifier, a code, a taxonomy label — never a sentence.
+// exempt from field-name policy. Security's `securityErrorKind` (ADR-0173 D11) owns the guarded
+// reads and canonical Contracts shape gate, shared with the Knowledge, Consolidation and Vault
+// ports: an identifier, a code, a taxonomy label — never a sentence.
 //
 // Reading `code`/`name` also runs foreign code: an accessor, or a Proxy `get` trap, both of which
 // can throw. Every caller classifies a cause while it is already handling a failure — a retry
 // ladder mid-`catch`, a resilience event mid-construction — so a throw here would escape ahead of
 // any sink guard and replace the real failure with an unrelated "hostile accessor" crash. An
 // unreadable property is an unclassifiable one and must degrade to the next candidate.
-function errorKindProperty(error: object, key: string): string | undefined {
-  let value: unknown;
-  try {
-    value = Reflect.get(error, key);
-  } catch {
-    return undefined;
-  }
-  return classifyErrorKind(value);
-}
 
 // The error's KIND, never its text. A provider's `message` routinely carries the rejected body,
 // the endpoint, or an echoed prompt fragment, so it is not read here at all — the taxonomy code
 // (`PROXY_BLOCKED_BY_POLICY`, `RATE_LIMIT`, …) is what an operator greps for anyway.
 export function logErrorKind(error: unknown): string {
-  if (typeof error !== "object" || error === null) {
-    return "unknown";
-  }
-  return errorKindProperty(error, "code") ?? errorKindProperty(error, "name") ?? "unknown";
+  return securityErrorKind(error);
 }
 
 const ACTIVITY_LOG_ERROR_KIND_RULES: readonly Readonly<{

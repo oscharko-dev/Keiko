@@ -635,3 +635,96 @@ describe("#3918 actual source and public synchronous primary delivery", (): void
     });
   }
 });
+
+import { securityErrorKind as publicSecurityErrorKind } from "@oscharko-dev/keiko-security";
+
+describe("#3918 source and public Security classifier observation contract", (): void => {
+  for (const [surface, classify] of [
+    ["source", securityErrorKind],
+    ["public", publicSecurityErrorKind],
+  ] as const) {
+    describe(surface, (): void => {
+      it("accepts inherited code once with its original receiver and skips name", (): void => {
+        const trace: string[] = [];
+        const receivers: unknown[] = [];
+        const prototype = {
+          get code(): string {
+            trace.push("code");
+            receivers.push(this);
+            return "ENOSPC";
+          },
+          get name(): never {
+            trace.push("name");
+            throw new TypeError("accepted code must short-circuit");
+          },
+        };
+        const cause: unknown = Object.create(prototype);
+        expect(classify(cause)).toBe("ENOSPC");
+        expect(trace).toEqual(["code"]);
+        expect(receivers).toHaveLength(1);
+        expect(receivers[0]).toBe(cause);
+      });
+
+      it("falls back in inherited read order without coercing a foreign code", (): void => {
+        const trace: string[] = [];
+        const receivers: unknown[] = [];
+        const foreignCode = {
+          [Symbol.toPrimitive](): string {
+            trace.push("coerce");
+            return "ENOSPC";
+          },
+        };
+        const prototype = {
+          get code(): typeof foreignCode {
+            trace.push("code");
+            receivers.push(this);
+            return foreignCode;
+          },
+          get name(): string {
+            trace.push("name");
+            receivers.push(this);
+            return "TypeError";
+          },
+          get message(): never {
+            trace.push("message");
+            throw new TypeError("private-classifier-canary");
+          },
+        };
+        const cause: unknown = Object.create(prototype);
+        expect(classify(cause)).toBe("TypeError");
+        expect(trace).toEqual(["code", "name"]);
+        expect(receivers).toHaveLength(2);
+        expect(receivers[0]).toBe(cause);
+        expect(receivers[1]).toBe(cause);
+      });
+
+      it("refuses callable properties and contains both throwing and revoked proxies", (): void => {
+        let callableReads = 0;
+        const callable = (): string => "unused callable";
+        Object.defineProperty(callable, "code", {
+          get(): never {
+            callableReads += 1;
+            throw new TypeError("callable property must remain unread");
+          },
+        });
+        const trace: string[] = [];
+        const hostile = new Proxy(
+          {},
+          {
+            get(_target, key): never {
+              trace.push(String(key));
+              throw new TypeError("private-classifier-canary");
+            },
+          },
+        );
+        const revoked = Proxy.revocable({}, {});
+        revoked.revoke();
+        expect(classify(callable)).toBe("unknown");
+        expect(callableReads).toBe(0);
+        expect(classify(hostile)).toBe("unknown");
+        expect(trace).toEqual(["code", "name"]);
+        expect(classify(revoked.proxy)).toBe("unknown");
+      });
+    });
+  }
+});
