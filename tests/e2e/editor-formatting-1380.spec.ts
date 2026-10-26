@@ -156,25 +156,55 @@ async function seedFilesWindow(page: Page, projectPath: string): Promise<void> {
     headers: { "x-keiko-csrf": "1" },
   });
   expect(created.ok(), await created.text()).toBe(true);
-  await page.addInitScript((root) => {
-    window.localStorage.setItem(
-      "keiko.workspace.v4",
-      JSON.stringify([
-        {
-          id: "e2e-files-window",
-          type: "files",
-          x: 64,
-          y: 56,
-          w: 640,
-          h: 680,
-          z: 10,
-          cfg: { root },
-          max: false,
-        },
-      ]),
-    );
+  seededRoots.set(page, projectPath);
+  await page.addInitScript((windows) => {
+    // The blank page a fresh load passes through has no storage of its own to seed.
+    if (window.location.protocol === "about:") return;
+    window.localStorage.setItem("keiko.workspace.v4", JSON.stringify(windows));
     window.localStorage.removeItem("keiko.conns.v1");
-  }, projectPath);
+  }, seededWorkspaceWindows(projectPath));
+}
+
+// The fixture root each page seeded, so every fresh load can seed the server layout to match.
+const seededRoots = new WeakMap<Page, string>();
+
+function seededWorkspaceWindows(root: string): readonly Record<string, unknown>[] {
+  return [
+    {
+      id: "e2e-files-window",
+      type: "files",
+      x: 64,
+      y: 56,
+      w: 640,
+      h: 680,
+      z: 10,
+      cfg: { root },
+      max: false,
+    },
+  ];
+}
+
+// #1580: the workspace layout is shared through the server (`/api/workspace/state`), and a freshly
+// loaded page adopts the server's newer layout over the one seeded into localStorage. The server
+// therefore still held the previous open's editor window and Files preview, depending on whether
+// that page's debounced write had landed, and the next open intermittently found its file row or
+// its editor region covered. Leave the previous page first, so it can no longer retry a layout
+// write, then write the seeded Files window as the server's layout. A stale write from the old page
+// is refused by the revision precondition, so the fresh load starts from exactly this layout.
+async function seedServerWorkspaceLayout(page: Page): Promise<void> {
+  const root = seededRoots.get(page);
+  if (root === undefined) throw new Error("seedFilesWindow must run before a fresh load.");
+  await page.goto("about:blank");
+  await expect.poll(() => writeServerWorkspaceLayout(page, root)).toBe(200);
+}
+
+async function writeServerWorkspaceLayout(page: Page, root: string): Promise<number> {
+  const current = await page.request.get("/api/workspace/state");
+  const written = await page.request.put("/api/workspace/state", {
+    data: { windows: seededWorkspaceWindows(root), connections: [] },
+    headers: { "If-Match": current.headers().etag ?? "", "x-keiko-csrf": "1" },
+  });
+  return written.status();
 }
 
 // Select a root-level file row. Clicking a `.tr-file` row sets `selectedPath`, which makes the Files
@@ -194,10 +224,12 @@ async function selectTreeFile(
 // Open a single fixture file into the editor and return its editor region. The region aria-label is
 // `Editor: <relativePath> in <root>` (EditorRuntimeWidget.editorAriaLabel), so the active file's path
 // identifies the region. Each call starts from a FRESH page load: `addInitScript` re-seeds the Files
-// window on every navigation, so the tree always begins at the root listing and no editor windows
-// from a prior open can stack and occlude the FilePreview "Open in editor" button. Selecting the file
+// window on every navigation and `seedServerWorkspaceLayout` gives the server the same layout, so the
+// tree always begins at the root listing and no editor windows from a prior open can stack and
+// occlude the FilePreview "Open in editor" button. Selecting the file
 // swaps the tree for the FilePreview pane (FilesWidget.tsx:481), which exposes "Open in editor".
 async function openInEditor(page: Page, file: FixtureFile): Promise<ReturnType<Page["getByRole"]>> {
+  await seedServerWorkspaceLayout(page);
   await page.goto("/");
   const filesWindow = page.getByRole("region", { name: /^Files/u });
   await expect(filesWindow).toBeVisible();
