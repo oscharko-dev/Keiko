@@ -318,6 +318,15 @@ owners of per-request and terminal evidence.
 
 ### D4 — Action-class mapping table
 
+**Shared deployment ceiling (#4083).** Production composition resolves one ceiling for Coding and
+connector consumers: absent configuration permits `autonomous-delivery`; the selected human mode
+still defaults to Ask for approval. Explicit configuration and the retained compatibility option
+can narrow the ceiling; invalid values fail closed. Connector calls use that same resolved value
+for authority admission and budget reservation, and include it in the content-free action outcome.
+Memory retains its separate explicit-or-`governed-assist` default. This availability change does not
+itself grant a Chat read consent, mutation approval, connector scope or authority envelope.
+
+
 This is the normative mapping for every v1 governed connector operation. Rows are derived from
 `CODING_WORKBENCH_MODE_POLICIES`'s `internet` resource-scope row (all connector actions reach an
 external system over HTTPS) composed with `decideCodingWorkbenchActionForMode`'s scope gate
@@ -334,18 +343,18 @@ Authority Envelope.** The `Action class / kind` column below records both identi
 uniformly: reads name the `CodingWorkbenchActionClass`, writes name the
 `CodingWorkbenchSupervisedActionKind`.
 
-| # | Action | Provider | Action class / kind | Connector scope | Approval risk | Ask for approval | Approve for me | Full access |
+| # | Action | Provider | Action class / kind | Connector scope | Approval risk | Ask for approval | Supervised workspace | Full access |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `sync-space` | Confluence | `connector-access` | `knowledge-base.read` | low | review-required | allowed | allowed |
-| 2 | `sync-project` | Jira | `connector-access` | `issue-tracker.read` | low | review-required | allowed | allowed |
-| 3 | `search-issues-live` | Jira | `connector-access` | `issue-tracker.read` | low | review-required | allowed | allowed |
+| 1 | `sync-space` | Confluence | `connector-access` | `knowledge-base.read` | low | review-required | review-required | allowed |
+| 2 | `sync-project` | Jira | `connector-access` | `issue-tracker.read` | low | review-required | review-required | allowed |
+| 3 | `search-issues-live` | Jira | `connector-access` | `issue-tracker.read` | low | review-required | review-required | allowed |
 | 4 | `create-issue` | Jira | `connector-write` | `issue-tracker.write` | high | review-required | review-required | allowed |
-| 5 | `update-issue-fields` | Jira | `connector-write` | `issue-tracker.write` | medium | review-required | allowed | allowed |
+| 5 | `update-issue-fields` | Jira | `connector-write` | `issue-tracker.write` | medium | review-required | review-required | allowed |
 | 6 | `transition-issue` | Jira | `connector-write` | `issue-tracker.write` | high | review-required | review-required | allowed |
-| 7 | `add-issue-comment` | Jira | `connector-write` | `issue-tracker.write` | low | review-required | allowed | allowed |
+| 7 | `add-issue-comment` | Jira | `connector-write` | `issue-tracker.write` | low | review-required | review-required | allowed |
 | 8 | `create-page` | Confluence | `connector-write` | `knowledge-base.write` | high | review-required | review-required | allowed |
-| 9 | `update-page` | Confluence | `connector-write` | `knowledge-base.write` | medium | review-required | allowed | allowed |
-| 10 | `add-page-comment` | Confluence | `connector-write` | `knowledge-base.write` | low | review-required | allowed | allowed |
+| 9 | `update-page` | Confluence | `connector-write` | `knowledge-base.write` | medium | review-required | review-required | allowed |
+| 10 | `add-page-comment` | Confluence | `connector-write` | `knowledge-base.write` | low | review-required | review-required | allowed |
 
 **Risk-tier rationale (fixed here so #2244 does not have to invent it):** reads are uniformly `low`
 — every read is non-mutating, trivially reversible (re-run the query), and bounded by D5/D3.

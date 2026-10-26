@@ -1,3 +1,4 @@
+import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
   activityLogEvent,
   defineActivityLogOperation,
@@ -74,6 +75,12 @@ const ACTION_OUTCOME = defineActivityLogOperation({
         "none",
       ],
     },
+    deploymentCeiling: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["governed-assist", "supervised-coding", "autonomous-delivery"],
+    },
     durationMs: { type: "integer", dataClass: "count", required: true },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
@@ -90,6 +97,7 @@ const ACTION_OUTCOME = defineActivityLogOperation({
 export function recordAtlassianActionOutcome(
   deps: Pick<AtlassianConnectorCredentialDeps, "activityLog" | "diagnostics">,
   record: AtlassianConnectorActivityRecord,
+  deploymentCeiling: CodingWorkbenchMode,
 ): void {
   try {
     (deps.activityLog ?? processServerLogSink()).write(
@@ -105,6 +113,7 @@ export function recordAtlassianActionOutcome(
           disposition: record.disposition,
           outcome: record.outcome,
           durationMs: record.durationMs,
+          deploymentCeiling,
           failureReason:
             record.reasonCode === undefined
               ? "none"

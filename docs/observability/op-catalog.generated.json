@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "96a3460a1d2137b6b930df912ec3a15c1a9111fccd4a52fa5578106cd66fe1c3",
+    "catalogDigest": "9c48d7f287a1ec21793b95013789caed81d66b795f93542eba17cbc7bf4f1ef2",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -931,6 +931,12 @@
               "none"
             ]
           },
+          "deploymentCeiling": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["governed-assist", "supervised-coding", "autonomous-delivery"]
+          },
           "durationMs": {
             "type": "integer",
             "dataClass": "count",
@@ -943,8 +949,8 @@
         "failureClasses": ["atlassian-action-execution"],
         "proofIds": ["atlassian.action.outcome.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/atlassian/actionOutcomeActivity.ts:14",
-        "emitterSites": ["packages/keiko-server/src/atlassian/actionOutcomeActivity.ts:96"]
+        "registrationSite": "packages/keiko-server/src/atlassian/actionOutcomeActivity.ts:15",
+        "emitterSites": ["packages/keiko-server/src/atlassian/actionOutcomeActivity.ts:104"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -53927,6 +53933,12 @@
                   "required": true
                 },
                 {
+                  "name": "deploymentCeiling",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
                   "name": "disposition",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -101062,14 +101074,14 @@
     {
       "op": "atlassian.action.log-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/actionOutcomeActivity.ts:125",
+      "site": "packages/keiko-server/src/atlassian/actionOutcomeActivity.ts:134",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "atlassian.action.outcome",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/actionOutcomeActivity.ts:17",
+      "site": "packages/keiko-server/src/atlassian/actionOutcomeActivity.ts:18",
       "package": "keiko-server"
     },
     {
@@ -102775,7 +102787,7 @@
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:1574",
+      "site": "packages/keiko-server/src/deps.ts:1577",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -103553,7 +103565,7 @@
     {
       "op": "managed-lsp.trust.restrict",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:2425",
+      "site": "packages/keiko-server/src/deps.ts:2428",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -104003,7 +104015,7 @@
     {
       "op": "server.composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:4659",
+      "site": "packages/keiko-server/src/deps.ts:4658",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -104156,7 +104168,7 @@
     {
       "op": "task-workspace.reconcile.startup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:3267",
+      "site": "packages/keiko-server/src/deps.ts:3270",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

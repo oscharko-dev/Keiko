@@ -4,13 +4,17 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "96a3460a1d2137b6b930df912ec3a15c1a9111fccd4a52fa5578106cd66fe1c3"
+    "catalogDigest": "9c48d7f287a1ec21793b95013789caed81d66b795f93542eba17cbc7bf4f1ef2"
   },
   "autonomyContext": {
     "role": "closed-context",
     "matrixMultiplier": false,
     "modes": ["governed-assist", "supervised-coding", "autonomous-delivery"],
     "carriers": [
+      {
+        "op": "atlassian.action.outcome",
+        "field": "deploymentCeiling"
+      },
       {
         "op": "coding-context.pack",
         "field": "effectiveMode"

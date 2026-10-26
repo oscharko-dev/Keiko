@@ -679,3 +679,23 @@ This is not complete AC5 acceptance: existing route failure reasons still do not
 prove absence of a remote effect. Durable invocation intent, distinct uncertain
 and acknowledged-but-unconfirmed results, reconciliation and Chat/UI folds remain
 to be implemented. No automatic retry is permitted to bridge that gap.
+
+## Shared connector deployment ceiling — #4083 AC7 foundation
+
+Production `buildUiHandlerDeps` previously left the connector policy ceiling unset,
+while Coding resolved all-mode availability or configured limits. Six regression
+cases failed through actual composition. Both now consume the same resolver,
+including narrower retained compatibility options. Two further failure-before
+cases showed that a runtime option could hide a narrower or invalid environment
+value; explicit configuration is now intersected instead of widened by precedence.
+Invalid values fail closed. The existing action outcome records the resolved
+ceiling for reconstruction, and ADR-0124/0128 describe the corrected behavior.
+ADR-0128's stale Supervised table cells now match its existing ADR-0138 amendment.
+
+All 354 tests in 15 affected server suites pass, including actual composition and
+connector policy, existing Atlassian routes, Coding context and Memory isolation.
+All 97 registry tests pass. Package build, root typecheck, affected lint, error
+observability and ADR index pass; the generated registry has zero violations.
+The selected mode and scoped authority remain separate requirements. Memory keeps
+its explicit-or-Ask default. Chat authority integration and the full AC7 acceptance
+remain open; no artificial Coding session is presented as a Chat proof.

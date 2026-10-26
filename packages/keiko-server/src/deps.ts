@@ -113,7 +113,10 @@ import {
   DEFAULT_CONTEXT_PROFILE,
   deriveContextProfileFromCapability,
 } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
-import { isCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import {
+  isCodingWorkbenchMode,
+  resolveEffectiveCodingWorkbenchMode,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { validateWorkspaceManifest } from "@oscharko-dev/keiko-contracts/runtime/workspace-manifest";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import type { IncomingMessage } from "node:http";
@@ -935,8 +938,8 @@ export interface UiHandlerDeps {
   // built without buildUiHandlerDeps), which is the one case current behaviour is preserved for.
   readonly atlassianActionApprovalRegistry?: AtlassianActionApprovalRegistry | undefined;
   readonly atlassianSyncJobRegistry?: AtlassianSyncJobRegistry | undefined;
-  // Server-owned deployment ceiling for Autonomous Delivery requests. Undefined fails closed to the
-  // lowest authority posture instead of accepting the request-supplied ceiling.
+  // Shared resolved Coding/connector ceiling. Production always sets it; incomplete injected deps
+  // fail closed instead of accepting any request-supplied ceiling.
   readonly autonomousDeliveryDeploymentCeiling?: CodingWorkbenchMode | undefined;
   // Optional injectable ports for the coding-context intake route (#1989 wiring). Production
   // composes real ports from env/workspace when absent; tests inject deterministic fakes.
@@ -1315,8 +1318,8 @@ export interface BuildHandlerDepsOptions {
   // otherwise creates an isolated default store under <evidenceDir>/coding-workbench so /api/evidence
   // stays clean while sidecar routing evidence still persists.
   readonly codingWorkbenchEvidenceStore?: EvidenceStore | undefined;
-  // Optional server-owned Autonomous Delivery ceiling. When absent, autonomous confirmation and
-  // execution fail closed to governed-assist.
+  // Retained compatibility clamp: may only narrow the shared Coding/connector deployment ceiling.
+  // Absence uses the normal shared resolver; no retired confirmation/execution routes are restored.
   readonly autonomousDeliveryDeploymentCeiling?: CodingWorkbenchMode | undefined;
   // KEIKO-0565: injectable Atlassian action-approval and sync-job registries. Production wiring
   // constructs one instance per BFF process; test wiring can inject fresh instances to keep test
@@ -4504,11 +4507,7 @@ function codingSidecarGatewayModelSourceFields(
 function autonomousDeliveryFields(
   options: BuildHandlerDepsOptions,
 ): Pick<UiHandlerDeps, "autonomousDeliveryDeploymentCeiling"> {
-  return {
-    ...(options.autonomousDeliveryDeploymentCeiling === undefined
-      ? {}
-      : { autonomousDeliveryDeploymentCeiling: options.autonomousDeliveryDeploymentCeiling }),
-  };
+  return { autonomousDeliveryDeploymentCeiling: resolveCodingRuntimeDeploymentCeiling(options) };
 }
 
 // KEIKO-0565: DI-scoped Atlassian action-approval and sync-job registries. buildUiHandlerDeps
@@ -5971,23 +5970,36 @@ function buildRuntimeMutationLeaseDependency(
 export const KEIKO_CODING_DEPLOYMENT_CEILING_ENV = "KEIKO_CODING_DEPLOYMENT_CEILING";
 
 /**
- * Option precedence, then explicit deployment configuration, then the all-mode product default.
+ * Intersect explicit deployment configuration, then apply the all-mode product default.
  * An unrecognized explicit value fails closed; the selected run mode remains the human authority
  * decision and readiness reports the effective ceiling.
  */
 function resolveCodingRuntimeDeploymentCeiling(
   options: BuildHandlerDepsOptions,
 ): CodingWorkbenchMode {
-  return resolveConfiguredDeploymentCeiling(options) ?? "autonomous-delivery";
+  const ceiling = resolveConfiguredDeploymentCeiling(options) ?? "autonomous-delivery";
+  const legacy = options.autonomousDeliveryDeploymentCeiling;
+  if (legacy === undefined) return ceiling;
+  // The retained compatibility option may narrow every consumer, never widen the shared ceiling.
+  return resolveEffectiveCodingWorkbenchMode(
+    ceiling,
+    isCodingWorkbenchMode(legacy) ? legacy : "governed-assist",
+  );
 }
 
 function resolveConfiguredDeploymentCeiling(
   options: BuildHandlerDepsOptions,
 ): CodingWorkbenchMode | undefined {
-  const configured =
-    options.codingRuntimeDeploymentCeiling ?? options.env[KEIKO_CODING_DEPLOYMENT_CEILING_ENV];
-  if (configured === undefined) return undefined;
-  return isCodingWorkbenchMode(configured) ? configured : "governed-assist";
+  let ceiling: CodingWorkbenchMode | undefined;
+  for (const configured of [
+    options.codingRuntimeDeploymentCeiling,
+    options.env[KEIKO_CODING_DEPLOYMENT_CEILING_ENV],
+  ]) {
+    if (configured === undefined) continue;
+    const mode = isCodingWorkbenchMode(configured) ? configured : "governed-assist";
+    ceiling = ceiling === undefined ? mode : resolveEffectiveCodingWorkbenchMode(ceiling, mode);
+  }
+  return ceiling;
 }
 
 interface ProductionRuntimeComposition {

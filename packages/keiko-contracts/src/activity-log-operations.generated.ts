@@ -884,6 +884,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "none",
         ],
       },
+      deploymentCeiling: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["governed-assist", "supervised-coding", "autonomous-delivery"],
+      },
       durationMs: {
         type: "integer",
         dataClass: "count",

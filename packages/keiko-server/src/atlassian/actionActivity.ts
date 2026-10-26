@@ -43,7 +43,10 @@ import { resolveAtlassianSyncJobRegistry } from "./syncService.js";
 // `UiHandlerDeps` directly; it structurally satisfies this narrower Pick.
 export type AtlassianActivityRegistryDeps = Pick<
   UiHandlerDeps,
-  "atlassianActionApprovalRegistry" | "atlassianSyncJobRegistry" | "atlassianConnectorCredentials"
+  | "atlassianActionApprovalRegistry"
+  | "atlassianSyncJobRegistry"
+  | "atlassianConnectorCredentials"
+  | "autonomousDeliveryDeploymentCeiling"
 >;
 
 export interface AtlassianActionActivityInput {
@@ -88,7 +91,11 @@ export function recordAtlassianActionActivity(
     ...(input.resultIssueKeys === undefined ? {} : { resultIssueKeys: input.resultIssueKeys }),
   };
   resolveAtlassianSyncJobRegistry(deps).recordActivity(record);
-  recordAtlassianActionOutcome(deps.atlassianConnectorCredentials ?? {}, record);
+  recordAtlassianActionOutcome(
+    deps.atlassianConnectorCredentials ?? {},
+    record,
+    deps.autonomousDeliveryDeploymentCeiling ?? "governed-assist",
+  );
 }
 
 export interface BuildPendingApprovalInput {

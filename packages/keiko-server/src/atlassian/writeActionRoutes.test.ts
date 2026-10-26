@@ -1310,6 +1310,7 @@ it("records one failed write attempt without resending a possibly committed PUT 
   expect(expectActivityLogProof("atlassian.action.outcome.line", line)).toMatchObject({
     outcome: "failed",
     failureReason: "unavailable",
+    deploymentCeiling: "autonomous-delivery",
     actionType: "update-issue-fields",
     provider: "jira",
   });

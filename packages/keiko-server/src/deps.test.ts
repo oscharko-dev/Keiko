@@ -2443,9 +2443,9 @@ describe("buildUiHandlerDeps — coding-sidecar model-source wiring", () => {
   });
 
   // #2958 (KEIKO-0115/KEIKO-0135): the autonomous-delivery approval store this used to assert was
-  // deleted with its unmounted route group. The deployment ceiling outlives it and must still fail
-  // closed to undefined, which the mounted readers translate to `governed-assist`.
-  it("leaves the autonomous delivery deployment ceiling unset when nothing configures one", () => {
+  // deleted with its unmounted route group. #4083 threads the shared resolved deployment ceiling
+  // into the surviving connector/coding readers without restoring any retired delivery surface.
+  it("shares the all-mode deployment ceiling with connector consumers by default", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir: tmp("ev-autonomous-store-"),
@@ -2453,7 +2453,7 @@ describe("buildUiHandlerDeps — coding-sidecar model-source wiring", () => {
       store: createInMemoryUiStore(),
     });
 
-    expect(deps.autonomousDeliveryDeploymentCeiling).toBeUndefined();
+    expect(deps.autonomousDeliveryDeploymentCeiling).toBe("autonomous-delivery");
     expect("autonomousDeliveryApprovalStore" in deps).toBe(false);
   });
 
@@ -3171,7 +3171,7 @@ describe("buildUiHandlerDeps — coding-runtime ceiling and unavailable reason (
     );
   });
 
-  it("resolves the ceiling from the option, then the environment, then all-mode availability", () => {
+  it("intersects explicit option and environment ceilings before defaulting to all-mode availability", () => {
     const fromOption = depsWithEnv(
       { KEIKO_CODING_DEPLOYMENT_CEILING: "autonomous-delivery" },
       "supervised-coding",

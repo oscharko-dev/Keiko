@@ -1565,6 +1565,12 @@
               "required": true
             },
             {
+              "name": "deploymentCeiling",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
               "name": "disposition",
               "type": "string",
               "dataClass": "closed-enum",
