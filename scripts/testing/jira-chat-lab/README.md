@@ -59,8 +59,27 @@ The seed also creates restricted, edit-only and assignable identities with priva
 PATs. Explicit permission schemes separate edit, assignment and transition, and
 separate project visibility. It verifies the permission matrix and actual denied
 read/assignment/transition calls, then confirms status and assignee stayed unchanged.
-Required-field and transition-screen fixtures, pagination, hostile content and
-complete isolation journeys remain pending. This basic seed does not yet satisfy #4082 AC5.
+Pagination, hostile content and complete isolation journeys remain pending. This basic seed does not yet satisfy #4082 AC5.
+
+## Qualify required fields and transition screens
+
+```sh
+node scripts/testing/jira-chat-lab/qualify-fields.mjs "$HOME/.local/share/keiko-jira-4081-new"
+```
+
+Run this after the basic seed, before a qualification group, with no concurrent lab
+consumer. It creates a built-in text custom field and uses supported Jira admin UI
+controls to require it and associate the transition screen. A legacy issue predating
+the requirement has no value: a transition omitting it must fail; sending the field
+and transition together must succeed and match independent readback. The script also
+checks create refusal, unchanged issue count, and successful required-field data.
+Jira supplies a default Resolution automatically, so Resolution alone is not used as
+the missing-field proof. No third-party workflow app or modified Jira code is needed.
+
+Fixture preparation temporarily makes the field optional to prepare the legacy issue,
+then restores the requirement in a `finally` block. It leaves that issue ready for the
+next consumer. License checks bracket the group. Configuration, issue IDs and field
+IDs stay in the private fixture manifest; diagnostics contain closed cases/counts.
 
 ## Verify the actual product HTTPS path
 

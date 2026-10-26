@@ -460,3 +460,20 @@ are independently compared before/after the denied mutations. Repeated seeding
 reuses the actors, PATs and permission schemes and fails on scheme drift. License
 checks, script lint and formatting pass. Complete mandatory-field/screen, pagination,
 hostile-content and integrated isolation acceptance remain pending.
+
+### Required-field and transition fixture checkpoint (#4082 AC5, partial)
+
+Supported REST and scripted Jira administration now provision a required built-in
+text custom field and a real transition screen. The licensed qualification script
+passes missing-field create refusal (400), unchanged issue count, valid create data
+readback, missing-field transition refusal (400), unchanged status, and field-plus-
+transition success (204) with independent status/value/resolution readback. The legacy
+transition fixture is restored for the next consumer. The mandatory requirement is
+restored after preparation; no third-party validator or modified Jira code is used.
+
+The Resolution field alone was rejected as qualification evidence: Jira automatically
+fills its default when omitted. A legacy issue lacking the newly mandatory custom
+field supplies a genuine refusal. Data Center 10.3.26 also requires the paginated
+create-metadata endpoints; the retired aggregate endpoint returns 404. Script lint,
+formatting, scripted admin reset and the full field qualification passed. Pagination,
+hostile fixtures, automated initial setup and remaining integrated acceptance stay open.
