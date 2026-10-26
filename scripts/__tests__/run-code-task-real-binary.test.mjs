@@ -17,6 +17,7 @@ import { activityLogSegmentFileName } from "@oscharko-dev/keiko-contracts/runtim
 import {
   buildRealBinaryScenarioArtifact,
   buildJourneyReport,
+  captureNativeToolSet,
   classifyLsofNetworkNames,
   createJourneyContext,
   createMaterializedLimitObserver,
@@ -28,6 +29,7 @@ import {
   readDeclaredChildGeometry,
   readH1SearchEvidence,
   readManagedCatalogEvidence,
+  readNativeGovernanceEvidence,
   retainJourneyActivityLog,
   processIdsForExecutable,
   readMaterializedLimits,
@@ -37,7 +39,10 @@ import {
 } from "../run-code-task-real-binary.mjs";
 import { readReceipts } from "../check-coding-issue-journey-evidence.mjs";
 import { resolveCodingSafeSidecarGatewayProfile } from "@oscharko-dev/keiko-model-gateway";
-import { resolveOpenCodeContextGeometry } from "../../packages/keiko-server/dist/coding-runtime/opencodeLaunchProfile.js";
+import {
+  buildOpenCodeLaunchProfile,
+  resolveOpenCodeContextGeometry,
+} from "../../packages/keiko-server/dist/coding-runtime/opencodeLaunchProfile.js";
 import { OPENCODE_PINNED_VERSION } from "../../packages/keiko-server/dist/coding-runtime/opencodeToolSchemas.js";
 import { functionalGatewayConfig } from "../../packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.functional/_support.js";
 
@@ -70,6 +75,41 @@ const MANAGED_CATALOG = {
     causalHandoff: true,
   },
 };
+
+const NATIVE_TOOL_SET = {
+  runtime: { id: "opencode", version: OPENCODE_PINNED_VERSION },
+  toolSetDigest: "9".repeat(64),
+};
+const NATIVE_GOVERNANCE = {
+  toolSet: NATIVE_TOOL_SET,
+  correlationId: "run-real-binary-native",
+  decisionCount: 4,
+  proof: {
+    kind: "native-search-read",
+    searchAllowed: true,
+    readAllowed: true,
+    causalHandoff: true,
+  },
+};
+
+// The materialized child config exactly as the production launch profile writes it. A fixture that
+// restated the key layout would stay green while the profile moved (the V1 `provider` key it used to
+// restate no longer exists, #3561), so the file content is the producer's own output.
+function productionChildConfig({ context, input, output }) {
+  const launch = buildOpenCodeLaunchProfile({
+    toolProfile: "native",
+    executable: "/nonexistent/opencode",
+    stateRoot: "/nonexistent/state",
+    contextGeometry: {
+      contextWindowTokens: context,
+      maxInputTokens: input,
+      maxOutputTokens: output,
+    },
+    mode: "supervised-coding",
+  });
+  if (!launch.ok) throw new TypeError("production launch profile is unavailable");
+  return launch.config;
+}
 
 function expectedProductionGeometry() {
   const profile = resolveCodingSafeSidecarGatewayProfile(functionalGatewayConfig());
@@ -130,6 +170,37 @@ function completeQualificationReport() {
     target: "macos-arm64",
     wallClockMs: 41_128,
     completedAt: "2026-09-06T11:30:00.000Z",
+  });
+}
+
+function completeNativeReport() {
+  const declaredGeometry = productionDeclaredGeometry();
+  return buildJourneyReport({
+    sourceHead: SOURCE_HEAD,
+    exitCode: 0,
+    gateway: {
+      requestCount: 5,
+      outputTokenLimits: [declaredGeometry.maxOutputTokens],
+      catalogBindingRequestCount: 0,
+      nativeToolSet: NATIVE_TOOL_SET,
+      nativeToolSetRequestCount: 5,
+    },
+    declaredGeometry,
+    limits: [
+      {
+        context: declaredGeometry.contextWindowTokens,
+        input: declaredGeometry.maxInputTokens,
+        output: declaredGeometry.maxOutputTokens,
+      },
+    ],
+    missingPayload: { passed: true, unavailableReason: "payload-missing" },
+    h1Search: H1_SEARCH,
+    nativeGovernance: NATIVE_GOVERNANCE,
+    activityLog: ACTIVITY_LOG,
+    observer: createNetworkObserver("/nonexistent/opencode"),
+    target: "macos-arm64",
+    wallClockMs: 41_128,
+    completedAt: "2026-10-26T11:30:00.000Z",
   });
 }
 
@@ -247,21 +318,12 @@ describe("#2483 real-binary observation helpers", () => {
     );
     try {
       mkdirSync(configDir, { recursive: true });
-      writeFileSync(
-        join(configDir, "opencode.json"),
-        JSON.stringify({
-          provider: {
-            "keiko-runtime": {
-              models: { coding: { limit: { context: 32_768, input: 28_672, output: 4_096 } } },
-            },
-          },
-          prompt: "must-not-be-projected",
-        }),
-      );
+      const limits = { context: 32_768, input: 28_672, output: 4_096 };
+      writeFileSync(join(configDir, "opencode.json"), productionChildConfig(limits));
 
-      expect(readMaterializedLimits(stateDir)).toEqual([
-        { context: 32_768, input: 28_672, output: 4_096 },
-      ]);
+      // Only the triple is projected: the rest of the production config (permissions, prompts,
+      // provider settings) never reaches the evidence.
+      expect(readMaterializedLimits(stateDir)).toEqual([limits]);
     } finally {
       rmSync(stateDir, { recursive: true, force: true });
     }
@@ -285,30 +347,18 @@ describe("#2483 real-binary observation helpers", () => {
       mkdirSync(dirname(configPath), { recursive: true });
       writeFileSync(
         configPath,
-        JSON.stringify({
-          provider: {
-            "keiko-runtime": {
-              models: { coding: { limit: { context: 45_056, input: 40_960, output: 4_096 } } },
-            },
-          },
-        }),
+        productionChildConfig({ context: 45_056, input: 40_960, output: 4_096 }),
       );
       observer.sample();
       writeFileSync(
         configPath,
-        JSON.stringify({
-          provider: {
-            "keiko-runtime": {
-              models: { coding: { limit: { context: 45_056, input: 40_961, output: 4_096 } } },
-            },
-          },
-        }),
+        productionChildConfig({ context: 45_057, input: 40_961, output: 4_096 }),
       );
       observer.sample();
 
       expect(observer.report()).toEqual([
         { context: 45_056, input: 40_960, output: 4_096 },
-        { context: 45_056, input: 40_961, output: 4_096 },
+        { context: 45_057, input: 40_961, output: 4_096 },
       ]);
     } finally {
       rmSync(stateDir, { recursive: true, force: true });
@@ -744,6 +794,8 @@ describe("#2483 real-binary observation helpers", () => {
       outputTokenLimits: [],
       catalogBinding: undefined,
       catalogBindingRequestCount: 0,
+      nativeToolSet: undefined,
+      nativeToolSetRequestCount: 0,
     });
     // Non-integer entries are dropped rather than admitted into the evidence.
     expect(readGatewayObservation(partial)).toEqual({
@@ -751,7 +803,56 @@ describe("#2483 real-binary observation helpers", () => {
       outputTokenLimits: [4096, 8192],
       catalogBinding: undefined,
       catalogBindingRequestCount: 0,
+      nativeToolSet: undefined,
+      nativeToolSetRequestCount: 0,
     });
+  });
+
+  it("reads the native tool set the gateway observed and drops anything non-canonical", () => {
+    const dir = mkdtempSync(join(tmpdir(), "keiko-2483-native-"));
+    const observed = join(dir, "observed.json");
+    try {
+      writeFileSync(
+        observed,
+        JSON.stringify({
+          requestCount: 5,
+          outputTokenLimits: [8192],
+          catalogBinding: null,
+          catalogBindingRequestCount: 0,
+          nativeToolSet: NATIVE_TOOL_SET,
+          nativeToolSetRequestCount: 5,
+        }),
+      );
+      expect(readGatewayObservation(observed)).toEqual({
+        requestCount: 5,
+        outputTokenLimits: [8192],
+        catalogBinding: undefined,
+        catalogBindingRequestCount: 0,
+        nativeToolSet: NATIVE_TOOL_SET,
+        nativeToolSetRequestCount: 5,
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["another runtime", { ...NATIVE_TOOL_SET, runtime: { id: "other", version: "2.1.4" } }],
+    [
+      "another version than the pinned one",
+      { ...NATIVE_TOOL_SET, runtime: { id: "opencode", version: "0.0.0" } },
+    ],
+    ["a digest that is not a SHA-256", { ...NATIVE_TOOL_SET, toolSetDigest: "not-a-digest" }],
+    ["an extra field", { ...NATIVE_TOOL_SET, tools: ["grep"] }],
+    ["nothing", null],
+  ])("refuses a native tool set with %s", (_name, value) => {
+    expect(captureNativeToolSet(value)).toBeUndefined();
+  });
+
+  it("copies a canonical native tool set instead of passing the observed object through", () => {
+    const captured = captureNativeToolSet(NATIVE_TOOL_SET);
+    expect(captured).toEqual(NATIVE_TOOL_SET);
+    expect(captured).not.toBe(NATIVE_TOOL_SET);
   });
 
   it("joins actual gateway binding to successful search and derived bounded-read settlements", () => {
@@ -882,5 +983,210 @@ describe("#2483 real-binary observation helpers", () => {
     const serialized = JSON.stringify(report);
     expect(serialized).not.toContain("/Users");
     expect(serialized).not.toContain("http");
+  });
+  it("joins the stable native tool set to the allowed search and bounded-read decisions", () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-native-governance-"));
+    const logPath = join(stateDir, "activity", "logs", "server.log");
+    const correlationId = NATIVE_GOVERNANCE.correlationId;
+    const decided = (permission, outcome = "allowed", effect = "allow", id = correlationId) => ({
+      op: "coding-runtime.native-policy.decided",
+      correlationId: id,
+      mode: "supervised-coding",
+      permission,
+      effect,
+      outcome,
+    });
+    const write = (...events) =>
+      writeFileSync(logPath, events.map((event) => JSON.stringify(event)).join("\n"));
+    const gateway = {
+      requestCount: 5,
+      outputTokenLimits: [8192],
+      nativeToolSet: NATIVE_TOOL_SET,
+      nativeToolSetRequestCount: 5,
+    };
+    try {
+      mkdirSync(dirname(logPath), { recursive: true });
+      write(
+        decided("grep"),
+        decided("read"),
+        decided("skill"),
+        decided("question"),
+        decided("edit"),
+      );
+
+      expect(readNativeGovernanceEvidence(stateDir, gateway, H1_SEARCH)).toEqual({
+        ...NATIVE_GOVERNANCE,
+        decisionCount: 5,
+      });
+      // A request that carried no native tool set, or a changed one, is not a stable binding.
+      expect(
+        readNativeGovernanceEvidence(
+          stateDir,
+          { ...gateway, nativeToolSetRequestCount: 4 },
+          H1_SEARCH,
+        ),
+      ).toBeUndefined();
+      expect(
+        readNativeGovernanceEvidence(stateDir, { ...gateway, nativeToolSet: undefined }, H1_SEARCH),
+      ).toBeUndefined();
+      // The read must follow the search it was derived from, and both must have been allowed.
+      write(decided("read"), decided("grep"));
+      expect(readNativeGovernanceEvidence(stateDir, gateway, H1_SEARCH)).toBeUndefined();
+      write(decided("grep", "mode-denied", "deny"), decided("read"));
+      expect(readNativeGovernanceEvidence(stateDir, gateway, H1_SEARCH)).toBeUndefined();
+      write(decided("grep"), decided("read", "mode-denied", "deny"));
+      expect(readNativeGovernanceEvidence(stateDir, gateway, H1_SEARCH)).toBeUndefined();
+      // Without the handoff proof the decisions alone do not show a search-derived read.
+      write(decided("grep"), decided("read"));
+      expect(readNativeGovernanceEvidence(stateDir, gateway, undefined)).toBeUndefined();
+      // Two runs that both qualify are ambiguous, and a malformed decision is never skipped.
+      write(decided("grep"), decided("read"), decided("grep", "allowed", "allow", "run-2"));
+      write(
+        decided("grep"),
+        decided("read"),
+        decided("grep", "allowed", "allow", "run-2"),
+        decided("read", "allowed", "allow", "run-2"),
+      );
+      expect(readNativeGovernanceEvidence(stateDir, gateway, H1_SEARCH)).toBeUndefined();
+      write(decided("grep"), decided("read"), { ...decided("edit"), permission: 7 });
+      expect(readNativeGovernanceEvidence(stateDir, gateway, H1_SEARCH)).toBeUndefined();
+      writeFileSync(logPath, '{"op":"coding-runtime.native-policy.decided"\n');
+      expect(readNativeGovernanceEvidence(stateDir, gateway, H1_SEARCH)).toBeUndefined();
+    } finally {
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts a complete native run without a mapped catalog proof", () => {
+    const complete = completeNativeReport();
+
+    expect(realBinaryEvidenceComplete(complete)).toBe(true);
+    expect(missingRealBinaryEvidence(complete)).toEqual([]);
+    expect(complete.limits).toMatchObject({
+      gatewayRequestCount: 5,
+      gatewayCatalogBindingRequestCount: 0,
+      gatewayNativeToolSetRequestCount: 5,
+      nativeToolSet: NATIVE_TOOL_SET,
+    });
+    expect(complete.nativeGovernance).toEqual(NATIVE_GOVERNANCE);
+    expect(JSON.stringify(complete)).not.toContain("/Users");
+  });
+
+  it("keeps the mapped report shape free of native facts", () => {
+    const mapped = completeQualificationReport();
+
+    expect(mapped.limits).not.toHaveProperty("gatewayNativeToolSetRequestCount");
+    expect(mapped.limits).not.toHaveProperty("nativeToolSet");
+    expect(mapped).not.toHaveProperty("nativeGovernance");
+  });
+
+  it("names the native observation a run lacks instead of the mapped catalog's", () => {
+    const complete = completeNativeReport();
+
+    expect(
+      missingRealBinaryEvidence({
+        ...complete,
+        limits: { ...complete.limits, gatewayNativeToolSetRequestCount: 4 },
+      }),
+    ).toEqual(["not every gateway request carried the one stable native tool set"]);
+    expect(
+      missingRealBinaryEvidence({
+        ...complete,
+        limits: { ...complete.limits, nativeToolSet: undefined },
+      }),
+    ).toEqual(["not every gateway request carried the one stable native tool set"]);
+    expect(missingRealBinaryEvidence({ ...complete, nativeGovernance: undefined })).toEqual([
+      "no stable native governance evidence with an allowed search and bounded read",
+    ]);
+    for (const proof of [
+      { ...NATIVE_GOVERNANCE.proof, searchAllowed: false },
+      { ...NATIVE_GOVERNANCE.proof, readAllowed: false },
+      { ...NATIVE_GOVERNANCE.proof, causalHandoff: false },
+      { ...NATIVE_GOVERNANCE.proof, kind: "managed-search-read" },
+      { kind: "native-search-read" },
+    ]) {
+      expect(
+        realBinaryEvidenceComplete({
+          ...complete,
+          nativeGovernance: { ...NATIVE_GOVERNANCE, proof },
+        }),
+      ).toBe(false);
+    }
+    expect(
+      realBinaryEvidenceComplete({
+        ...complete,
+        nativeGovernance: { ...NATIVE_GOVERNANCE, decisionCount: 1 },
+      }),
+    ).toBe(false);
+  });
+
+  it("judges a run that observed nothing as the native run this lane exists to prove", () => {
+    expect(
+      missingRealBinaryEvidence({
+        journey: { exitCode: 1 },
+        limits: {
+          materializedChildLimits: [],
+          gatewayRequestCount: 0,
+          observedGatewayOutputTokenLimits: [],
+        },
+        missingPayload: undefined,
+      }),
+    ).toEqual(
+      expect.arrayContaining([
+        "not every gateway request carried the one stable native tool set",
+        "no stable native governance evidence with an allowed search and bounded read",
+      ]),
+    );
+  });
+
+  it("fails a run that mixes bound-catalog and native requests instead of passing either contract", () => {
+    const complete = completeNativeReport();
+    const mixed = {
+      ...complete,
+      limits: { ...complete.limits, gatewayCatalogBindingRequestCount: 2 },
+    };
+
+    expect(realBinaryEvidenceComplete(mixed)).toBe(false);
+    expect(missingRealBinaryEvidence(mixed)).toContain(
+      "not every gateway request carried the stable productive catalog binding",
+    );
+  });
+
+  it("does not let a mapped catalog proof stand in for a native run's missing evidence", () => {
+    const complete = completeNativeReport();
+
+    expect(
+      realBinaryEvidenceComplete({
+        ...complete,
+        nativeGovernance: undefined,
+        managedCatalog: MANAGED_CATALOG,
+      }),
+    ).toBe(false);
+  });
+
+  it("refuses to project a native run into the mapped qualification artifacts", () => {
+    const receiptsDir = mkdtempSync(join(tmpdir(), "keiko-real-binary-receipt-"));
+    const directory = mkdtempSync(join(tmpdir(), "keiko-managed-observation-"));
+    const complete = completeNativeReport();
+    process.env.KEIKO_TOOL_CATALOG_QUALIFICATION_DIR = directory;
+    process.env.KEIKO_TOOL_CATALOG_QUALIFICATION_HEAD = SOURCE_HEAD;
+    try {
+      expect(() => buildRealBinaryScenarioArtifact(complete)).toThrow(
+        "real-binary qualification evidence is incomplete",
+      );
+      expect(() =>
+        writeRealBinaryQualificationEvidence(complete, {
+          KEIKO_CODE_TASK_QUALIFICATION_RECEIPTS_DIR: receiptsDir,
+        }),
+      ).toThrow("real-binary qualification evidence is incomplete");
+      expect(writeManagedCatalogObservation(complete)).toBe(false);
+      expect(readdirSync(receiptsDir)).toEqual([]);
+      expect(readdirSync(directory)).toEqual([]);
+    } finally {
+      delete process.env.KEIKO_TOOL_CATALOG_QUALIFICATION_DIR;
+      delete process.env.KEIKO_TOOL_CATALOG_QUALIFICATION_HEAD;
+      rmSync(receiptsDir, { recursive: true, force: true });
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });

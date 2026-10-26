@@ -67,6 +67,7 @@ import {
   type RepositorySearchConsumptionProof,
 } from "./repositorySearchProof.js";
 import {
+  FUNCTIONAL_REPOSITORY_SKILL_NAME,
   SKILL_DISCOVERY_PROOF_CALL_ID,
   skillInvocationHandoff,
   type SkillDiscoveryConsumptionProof,
@@ -77,6 +78,8 @@ export const FUNCTIONAL_ACTIVITY_ASSISTANT_PREFIX = "VISIBLE_ASSISTANT_TEXT_2479
 export const FUNCTIONAL_ACTIVITY_TRUNCATED_TAIL = "TRUNCATED_TAIL_2479";
 export const FUNCTIONAL_PLAN_STEP_READ = "PLAN_STEP_READ_2480";
 export const FUNCTIONAL_PLAN_STEP_VERIFY = "PLAN_STEP_VERIFY_2480";
+/** The fixture file the native journeys read and edit with the runtime's own tools (#3897). */
+const NATIVE_TARGET_PATH = "src/example.ts";
 
 export interface ScriptState {
   mode:
@@ -103,7 +106,7 @@ export interface ScriptState {
   /** Invoked with every scripted tool name so a journey can assert what the model REQUESTED. */
   readonly observeToolCall?: (name: string) => void;
   readonly observeRepositorySearch?: (proof: RepositorySearchConsumptionProof) => void;
-  /** #3417: after its search-derived read, discover the approved skills and invoke the listed one. */
+  /** #3417: after its search-derived read, invoke the repository skill the runtime's own listing names. */
   readonly proveSkillDiscovery?: boolean;
   readonly observeSkillDiscovery?: (proof: SkillDiscoveryConsumptionProof) => void;
   /** Keeps a completed verification turn cancellable for browser journeys that prove Stop. */
@@ -773,12 +776,13 @@ function scriptedResponseFor(script: ScriptState, transcript: string): Normalize
         })
       : normal();
   }
-  // The discovery journey (#2475) proves activation and the live runtime with the real secure
-  // read and the runtime question. The edit and verification legs need a live browser bridge and
-  // a product-registered project respectively; the staged-seam control and the W1.10 UI journey
-  // own them.
+  // The discovery journey (#2475) proves activation and the live runtime with the runtime's own
+  // `read` (the mapped `keiko_workspace_read` does not exist in a native run, #3897) and the
+  // runtime question. The edit and verification legs need a live browser bridge and a
+  // product-registered project respectively; the staged-seam control and the W1.10 UI journey own
+  // them.
   if (script.mode === "discovery") {
-    if (step === 0) return tool("keiko_workspace_read", { relativePath: "src/example.ts" });
+    if (step === 0) return tool("read", { path: NATIVE_TARGET_PATH });
     return step === 1 ? tool("question", question()) : normal();
   }
   return productiveResponse(step, script);
@@ -940,42 +944,66 @@ function productiveResponse(step: number, script: ScriptState): NormalizedRespon
   return normal();
 }
 
+// The native journey (#3897): the original runtime's own tools, as the pinned 2.1.4 child offers
+// them to the model on macOS. Search, read and the repository skill are its `grep`, `read` and
+// `skill`; the contained edit is its `edit`; only the verification is Keiko's own tool, which a
+// native run registers beside the delivery tools. The mapped `keiko_*` read, search, changeset and
+// skill tools do not exist in a native run, and calling one is answered "No tool named ...".
+function nativeSearchSteps(
+  script: ScriptState,
+  transcript: string,
+): readonly (() => NormalizedResponse)[] {
+  const search = (): NormalizedResponse => ({
+    ...tool(
+      "grep",
+      { pattern: script.old.trim(), literal: true, caseSensitive: true, include: "*.ts" },
+      H1_PROOF_SEARCH_CALL_ID,
+    ),
+    content: FUNCTIONAL_PLAN_STEP_READ,
+  });
+  const read = (): NormalizedResponse =>
+    tool(
+      "read",
+      repositorySearchReadHandoff(transcript, script.old.trim(), script.observeRepositorySearch),
+    );
+  const skill = (): NormalizedResponse =>
+    tool(
+      "skill",
+      skillInvocationHandoff(
+        transcript,
+        FUNCTIONAL_REPOSITORY_SKILL_NAME,
+        script.observeSkillDiscovery,
+      ),
+      SKILL_DISCOVERY_PROOF_CALL_ID,
+    );
+  const edit = (): NormalizedResponse => ({
+    ...tool("edit", { path: NATIVE_TARGET_PATH, oldString: script.old, newString: script.next }),
+    content: FUNCTIONAL_PLAN_STEP_VERIFY,
+  });
+  const verify = (): NormalizedResponse => {
+    script.verificationIssued = true;
+    return tool("keiko_verification", { verifierId: "typecheck", targetPath: "" });
+  };
+  return [
+    search,
+    read,
+    ...(script.proveSkillDiscovery === true ? [skill] : []),
+    (): NormalizedResponse => tool("question", question()),
+    edit,
+    verify,
+  ];
+}
+
 function productiveSearchResponse(
   step: number,
   script: ScriptState,
   transcript: string,
 ): NormalizedResponse {
-  if (step === 0) {
-    return {
-      ...tool(
-        "keiko_repository_search",
-        {
-          mode: "literal",
-          query: script.old.trim(),
-          caseSensitive: true,
-          includeGlobs: ["src/**/*.ts"],
-          excludeGlobs: [],
-          maxResults: 5,
-        },
-        H1_PROOF_SEARCH_CALL_ID,
-      ),
-      content: FUNCTIONAL_PLAN_STEP_READ,
-    };
-  }
-  if (step === 1) {
-    return tool(
-      "keiko_workspace_read",
-      repositorySearchReadHandoff(transcript, script.old.trim(), script.observeRepositorySearch),
-    );
-  }
-  const skillSteps = script.proveSkillDiscovery === true ? 2 : 0;
-  if (skillSteps > 0 && step === 2) {
-    return tool("keiko_skill_discover", {}, SKILL_DISCOVERY_PROOF_CALL_ID);
-  }
-  if (skillSteps > 0 && step === 3) {
-    return tool("keiko_skill", skillInvocationHandoff(transcript, script.observeSkillDiscovery));
-  }
-  return productiveResponse(step - 1 - skillSteps, script);
+  const response = nativeSearchSteps(script, transcript)[step]?.();
+  if (response !== undefined) return response;
+  return script.holdAfterVerification === true && script.verificationIssued === true
+    ? tool("question", question())
+    : normal();
 }
 
 function question(): Record<string, unknown> {
@@ -1040,12 +1068,14 @@ let scriptedToolCallSequence = 0;
 
 function tool(
   name:
+    | "grep"
+    | "read"
+    | "skill"
+    | "edit"
     | "keiko_workspace_read"
-    | "keiko_repository_search"
     | "keiko_changeset_edit"
     | "keiko_verification"
     | "keiko_research_fetch"
-    | "keiko_skill_discover"
     | "keiko_skill"
     | "keiko_child_agent"
     | "keiko_git_stage"
