@@ -15,8 +15,15 @@ import {
   codeTaskQualificationVerdictFor,
   hasInheritedEnumerableProperty,
   isCodeTaskContentFreeNote,
+  isCodeTaskGitCommitSha,
+  isCodeTaskGitTreeSha,
+  type CodeTaskGitCommitSha,
+  type CodeTaskGitTreeSha,
   isCodeTaskIsoInstant,
   isCodeTaskRepoRelativePath,
+  isCodeTaskScenarioId,
+  isCodeTaskToolName,
+  type CodeTaskScenarioId,
   isCodeTaskSha256Digest,
   type CodeTaskSha256Digest,
   validateCodeTaskAcceptanceContribution,
@@ -2025,6 +2032,15 @@ describe("C1A acceptance preservation", () => {
 
 import {
   ownField as publicOwnField,
+  isCodeTaskGitCommitSha as publicCommitShaGuard,
+  isCodeTaskGitTreeSha as publicTreeShaGuard,
+  type CodeTaskGitCommitSha as PublicCommitSha,
+  type CodeTaskGitTreeSha as PublicTreeSha,
+  isCodeTaskSha256Digest as publicDigestGuard,
+  isCodeTaskScenarioId as publicScenarioGuard,
+  isCodeTaskToolName as publicToolGuard,
+  type CodeTaskSha256Digest as PublicDigest,
+  type CodeTaskScenarioId as PublicScenario,
   validateCodeTaskAcceptanceContribution as publicAcceptanceValidator,
   validateCodeTaskQualificationFlowArtifact as publicQualificationFlow,
   validateCodeTaskQualificationManifest as publicQualificationManifest,
@@ -3208,6 +3224,323 @@ describe("acceptance evidence header exception identity (#3918)", (): void => {
         expect(receivers).toHaveLength(1);
         expect(receivers[0]).toBe(input);
         expect(trace).toEqual(EVIDENCE_HEADER_OBSERVATIONS);
+      });
+    }
+  }
+});
+
+// Observe the actual production receiver without duplicating its lexical formula.
+function captureAcceptanceGitShaPattern(guard: (value: unknown) => boolean, value: string): RegExp {
+  const original = Object.getOwnPropertyDescriptor(RegExp.prototype, "test");
+  if (original === undefined) throw new TypeError("RegExp test descriptor is required");
+  const receivers: RegExp[] = [];
+  try {
+    Object.defineProperty(RegExp.prototype, "test", {
+      configurable: true,
+      writable: true,
+      value: function (this: RegExp): boolean {
+        receivers.push(this);
+        return true;
+      },
+    });
+    guard(value);
+  } finally {
+    Object.defineProperty(RegExp.prototype, "test", original);
+  }
+  const receiver = receivers[0];
+  if (receivers.length !== 1 || receiver === undefined) {
+    throw new TypeError("the guard must make one production regex call");
+  }
+  return receiver;
+}
+
+function restoreAcceptanceGitShaTest(
+  pattern: RegExp,
+  original: PropertyDescriptor | undefined,
+): void {
+  if (original === undefined) {
+    Reflect.deleteProperty(pattern, "test");
+  } else {
+    Object.defineProperty(pattern, "test", original);
+  }
+}
+
+function collectAcceptanceGitShaThrow(
+  guard: (value: unknown) => boolean,
+  value: string,
+  failures: unknown[],
+): void {
+  try {
+    guard(value);
+  } catch (error) {
+    failures.push(error);
+  }
+}
+
+function observeAcceptanceGitShaMethod(
+  commit: (value: unknown) => boolean,
+  tree: (value: unknown) => boolean,
+): void {
+  const contribution = validContribution();
+  const pattern = captureAcceptanceGitShaPattern(commit, contribution.sourceCommitSha);
+  const original = Object.getOwnPropertyDescriptor(pattern, "test");
+  const getters: RegExp[] = [];
+  const receivers: RegExp[] = [];
+  const values: string[] = [];
+  const outcomes: boolean[] = [];
+  try {
+    Object.defineProperty(pattern, "test", {
+      configurable: true,
+      get(this: RegExp): (value: string) => boolean {
+        getters.push(this);
+        return function (this: RegExp, value: string): boolean {
+          receivers.push(this);
+          values.push(value);
+          return values.length === 1;
+        };
+      },
+    });
+    outcomes.push(commit(contribution.sourceCommitSha), tree(contribution.sourceTreeSha));
+    outcomes.push(commit(null), tree({}));
+  } finally {
+    restoreAcceptanceGitShaTest(pattern, original);
+  }
+  expect(outcomes).toEqual([true, false, false, false]);
+  expect(getters).toHaveLength(2);
+  expect(receivers).toHaveLength(2);
+  for (const receiver of [...getters, ...receivers]) expect(receiver).toBe(pattern);
+  expect(values).toEqual([contribution.sourceCommitSha, contribution.sourceTreeSha]);
+}
+
+function observeAcceptanceGitShaThrows(
+  commit: (value: unknown) => boolean,
+  tree: (value: unknown) => boolean,
+): void {
+  const contribution = validContribution();
+  const pattern = captureAcceptanceGitShaPattern(commit, contribution.sourceCommitSha);
+  const original = Object.getOwnPropertyDescriptor(pattern, "test");
+  const failure: Error = Object.freeze(new TypeError("synthetic Git SHA method refusal"));
+  const failures: unknown[] = [];
+  const receivers: RegExp[] = [];
+  const values: string[] = [];
+  try {
+    Object.defineProperty(pattern, "test", {
+      configurable: true,
+      get(this: RegExp): never {
+        receivers.push(this);
+        throw failure;
+      },
+    });
+    collectAcceptanceGitShaThrow(commit, contribution.sourceCommitSha, failures);
+    collectAcceptanceGitShaThrow(tree, contribution.sourceTreeSha, failures);
+    Object.defineProperty(pattern, "test", {
+      configurable: true,
+      value: function (this: RegExp, value: string): never {
+        receivers.push(this);
+        values.push(value);
+        throw failure;
+      },
+    });
+    collectAcceptanceGitShaThrow(commit, contribution.sourceCommitSha, failures);
+    collectAcceptanceGitShaThrow(tree, contribution.sourceTreeSha, failures);
+  } finally {
+    restoreAcceptanceGitShaTest(pattern, original);
+  }
+  expect(failures).toHaveLength(4);
+  for (const caught of failures) expect(caught).toBe(failure);
+  expect(receivers).toHaveLength(4);
+  for (const receiver of receivers) expect(receiver).toBe(pattern);
+  expect(values).toEqual([contribution.sourceCommitSha, contribution.sourceTreeSha]);
+}
+
+const ACCEPTANCE_GIT_SHA_SURFACES = [
+  { name: "source", commit: isCodeTaskGitCommitSha, tree: isCodeTaskGitTreeSha },
+  { name: "public", commit: publicCommitShaGuard, tree: publicTreeShaGuard },
+] as const;
+
+describe("Acceptance Git SHA admission observations (#3918)", () => {
+  it("preserves each source and public nominal predicate contract", (): void => {
+    expectTypeOf(isCodeTaskGitCommitSha).toEqualTypeOf<
+      (value: unknown) => value is CodeTaskGitCommitSha
+    >();
+    expectTypeOf(isCodeTaskGitTreeSha).toEqualTypeOf<
+      (value: unknown) => value is CodeTaskGitTreeSha
+    >();
+    expectTypeOf(publicCommitShaGuard).toEqualTypeOf<
+      (value: unknown) => value is PublicCommitSha
+    >();
+    expectTypeOf(publicTreeShaGuard).toEqualTypeOf<(value: unknown) => value is PublicTreeSha>();
+  });
+
+  for (const surface of ACCEPTANCE_GIT_SHA_SURFACES) {
+    for (const [name, guard] of [
+      ["commit", surface.commit],
+      ["tree", surface.tree],
+    ] as const) {
+      it(`${surface.name} ${name} retains exact lexical bounds and never coerces`, (): void => {
+        const contribution = validContribution();
+        const healthy =
+          name === "commit" ? contribution.sourceCommitSha : contribution.sourceTreeSha;
+        let conversions = 0;
+        const hostile = {
+          [Symbol.toPrimitive](): never {
+            conversions += 1;
+            throw new TypeError("Git SHA input must not be coerced");
+          },
+        };
+        const boxed: unknown = Reflect.construct(String, [healthy]);
+        expect(guard(healthy)).toBe(true);
+        for (const value of [
+          healthy.slice(1),
+          `${healthy}a`,
+          DIGEST,
+          healthy.toUpperCase(),
+          "g".repeat(40),
+          "",
+        ]) {
+          expect(guard(value)).toBe(false);
+        }
+        for (const value of [
+          undefined,
+          null,
+          0,
+          true,
+          Symbol("sha"),
+          [],
+          {},
+          hostile,
+          boxed,
+          (): string => healthy,
+        ]) {
+          expect(guard(value)).toBe(false);
+        }
+        expect(conversions).toBe(0);
+      });
+    }
+    it(`${surface.name} retains late method lookup and the same commit/tree regex receiver`, (): void => {
+      observeAcceptanceGitShaMethod(surface.commit, surface.tree);
+    });
+    it(`${surface.name} propagates exact getter and method failures for both brands`, (): void => {
+      observeAcceptanceGitShaThrows(surface.commit, surface.tree);
+    });
+  }
+});
+
+interface AcceptancePatternCase {
+  readonly name: string;
+  readonly source: (value: unknown) => boolean;
+  readonly public: (value: unknown) => boolean;
+  readonly healthy: readonly string[];
+  readonly refused: readonly string[];
+}
+
+function remainingAcceptancePatternCases(): readonly AcceptancePatternCase[] {
+  const scenario = validContribution().scenarios[0];
+  const tool = CODE_TASK_QUALIFICATION_REQUIRED_TOOLS[0];
+  const digestValue = scenario?.artifactDigests[0];
+  if (scenario === undefined || digestValue === undefined) {
+    throw new TypeError("complete Acceptance fixtures are required");
+  }
+  return [
+    {
+      name: "digest",
+      source: isCodeTaskSha256Digest,
+      public: publicDigestGuard,
+      healthy: [digestValue],
+      refused: [
+        digestValue.slice(1),
+        `${digestValue}a`,
+        COMMIT_SHA,
+        digestValue.toUpperCase(),
+        "g".repeat(64),
+        "",
+      ],
+    },
+    {
+      name: "scenario",
+      source: isCodeTaskScenarioId,
+      public: publicScenarioGuard,
+      healthy: [scenario.scenarioId, "a-b", "1ab", "a".repeat(64)],
+      refused: ["ab", "a".repeat(65), "Aaa", "a_b", ""],
+    },
+    {
+      name: "tool",
+      source: isCodeTaskToolName,
+      public: publicToolGuard,
+      healthy: [tool, "a1", "a_b", "a".repeat(64)],
+      refused: ["a", "a".repeat(65), "1ab", "a-b", "Aaa", ""],
+    },
+  ];
+}
+
+function expectAcceptancePatternNonStrings(
+  guard: (value: unknown) => boolean,
+  healthy: string,
+): void {
+  let conversions = 0;
+  const hostile = {
+    [Symbol.toPrimitive](): never {
+      conversions += 1;
+      throw new TypeError("Acceptance lexical inputs must not be coerced");
+    },
+  };
+  const boxed: unknown = Reflect.construct(String, [healthy]);
+  for (const value of [
+    undefined,
+    null,
+    0,
+    true,
+    Symbol("format"),
+    [],
+    {},
+    hostile,
+    boxed,
+    (): string => healthy,
+  ]) {
+    expect(guard(value)).toBe(false);
+  }
+  expect(conversions).toBe(0);
+}
+
+function expectAcceptancePatternLanguage(
+  policy: AcceptancePatternCase,
+  guard: (value: unknown) => boolean,
+): void {
+  const first = policy.healthy[0];
+  if (first === undefined) throw new TypeError("a native healthy control is required");
+  for (const value of policy.healthy) expect(guard(value)).toBe(true);
+  for (const value of policy.refused) expect(guard(value)).toBe(false);
+  expectAcceptancePatternNonStrings(guard, first);
+}
+
+describe("Acceptance remaining pattern admission observations (#3918)", () => {
+  it("preserves each source and public digest, scenario and tool predicate contract", (): void => {
+    expectTypeOf(isCodeTaskSha256Digest).toEqualTypeOf<
+      (value: unknown) => value is CodeTaskSha256Digest
+    >();
+    expectTypeOf(isCodeTaskScenarioId).toEqualTypeOf<
+      (value: unknown) => value is CodeTaskScenarioId
+    >();
+    expectTypeOf(isCodeTaskToolName).toEqualTypeOf<(value: unknown) => value is string>();
+    expectTypeOf(publicDigestGuard).toEqualTypeOf<(value: unknown) => value is PublicDigest>();
+    expectTypeOf(publicScenarioGuard).toEqualTypeOf<(value: unknown) => value is PublicScenario>();
+    expectTypeOf(publicToolGuard).toEqualTypeOf<(value: unknown) => value is string>();
+  });
+
+  for (const policy of remainingAcceptancePatternCases()) {
+    for (const surface of [
+      { name: "source", guard: policy.source },
+      { name: "public", guard: policy.public },
+    ]) {
+      it(`${surface.name} ${policy.name} retains its own native language and refuses coercion`, (): void => {
+        expectAcceptancePatternLanguage(policy, surface.guard);
+      });
+      it(`${surface.name} ${policy.name} retains late lookup, arguments and its actual receiver`, (): void => {
+        // Controlled primitive strings observe forwarding separately from native-language admission.
+        observeAcceptanceGitShaMethod(surface.guard, surface.guard);
+      });
+      it(`${surface.name} ${policy.name} propagates exact getter and method failures`, (): void => {
+        observeAcceptanceGitShaThrows(surface.guard, surface.guard);
       });
     }
   }

@@ -84,26 +84,30 @@ const CONTENT_FREE_NOTE_PATTERN = /^[\x20-\x7E]{1,200}$/u;
 const NOTE_SECRET_MARKERS = /(?:secret|token|password|api[-_]?key|bearer |ghp_|-----BEGIN)/iu;
 const GITHUB_REPOSITORY_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
 
+function matchesCodeTaskStringPattern(value: unknown, pattern: RegExp): boolean {
+  return typeof value === "string" && pattern.test(value);
+}
+
 export function isCodeTaskGitCommitSha(value: unknown): value is CodeTaskGitCommitSha {
-  return typeof value === "string" && GIT_SHA_PATTERN.test(value);
+  return matchesCodeTaskStringPattern(value, GIT_SHA_PATTERN);
 }
 
 export function isCodeTaskGitTreeSha(value: unknown): value is CodeTaskGitTreeSha {
-  return typeof value === "string" && GIT_SHA_PATTERN.test(value);
+  return matchesCodeTaskStringPattern(value, GIT_SHA_PATTERN);
 }
 
 export function isCodeTaskSha256Digest(value: unknown): value is CodeTaskSha256Digest {
-  return typeof value === "string" && SHA_256_PATTERN.test(value);
+  return matchesCodeTaskStringPattern(value, SHA_256_PATTERN);
 }
 
 export function isCodeTaskScenarioId(value: unknown): value is CodeTaskScenarioId {
-  return typeof value === "string" && SCENARIO_ID_PATTERN.test(value);
+  return matchesCodeTaskStringPattern(value, SCENARIO_ID_PATTERN);
 }
 
 /** A governed-tool catalog name (e.g. `keiko_changeset_edit`): content-free by construction, never
  * a prompt, argument, or result. */
 export function isCodeTaskToolName(value: unknown): value is string {
-  return typeof value === "string" && TOOL_NAME_PATTERN.test(value);
+  return matchesCodeTaskStringPattern(value, TOOL_NAME_PATTERN);
 }
 
 export function isCodeTaskIsoInstant(value: unknown): value is CodeTaskIsoInstant {
