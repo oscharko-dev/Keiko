@@ -28,6 +28,7 @@
 // Leaf-package rule (ADR-0019 direction 1): no `@oscharko-dev/keiko-*` imports may appear here; sibling
 // types are reached by relative path.
 
+import { isOneOf } from "./contract-validation-primitives.js";
 import type { VoiceProfile } from "./gateway.js";
 import type {
   VoicePlaybackState,
@@ -188,11 +189,11 @@ export const VOICE_PLAYBACK_TRANSITIONS: Record<VoicePlaybackPhase, readonly Voi
 
 // ─── Type guards & lookups ───────────────────────────────────────────────────────
 export function isVoicePlaybackPhase(value: unknown): value is VoicePlaybackPhase {
-  return typeof value === "string" && new Set<string>(VOICE_PLAYBACK_PHASES).has(value);
+  return isOneOf(value, VOICE_PLAYBACK_PHASES);
 }
 
 export function isVoicePlaybackFailureKind(value: unknown): value is VoicePlaybackFailureKind {
-  return typeof value === "string" && new Set<string>(VOICE_PLAYBACK_FAILURE_KINDS).has(value);
+  return isOneOf(value, VOICE_PLAYBACK_FAILURE_KINDS);
 }
 
 export function voicePlaybackPhaseReplayClass(phase: VoicePlaybackPhase): VoiceReplayClass {
@@ -293,7 +294,7 @@ export const VOICE_PLAYBACK_EFFECTS: readonly VoicePlaybackEffect[] = [
 ] as const;
 
 export function isVoicePlaybackEffect(value: unknown): value is VoicePlaybackEffect {
-  return typeof value === "string" && new Set<string>(VOICE_PLAYBACK_EFFECTS).has(value);
+  return isOneOf(value, VOICE_PLAYBACK_EFFECTS);
 }
 
 // ─── Capability-gating predicates (AC1/AC2) — derived from the contract ─────────

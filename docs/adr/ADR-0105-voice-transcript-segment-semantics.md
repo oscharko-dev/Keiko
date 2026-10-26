@@ -54,7 +54,7 @@ It contains no IO, no async, no provider-specific URLs or credentials, and no ra
 exclusively types, constants, classification tables, and pure functions (`mapWireKindToVoiceTranscriptSegmentState`,
 `selectCommittedVoiceTranscript`, `summarizeVoiceTranscript`, etc.). It is a **sibling, not an edit** to
 the #496 wire protocol contract (`voice-protocol.ts`). It respects the leaf-package rule (ADR-0019):
-the contract imports only from `./gateway.js` and `./voice-protocol.js` via relative path. The root
+the contract imports only from `./gateway.js`, `./voice-protocol.js`, and the existing import-free `./contract-validation-primitives.js` for canonical string-catalog admission, via relative paths. The root
 `index.ts` does not re-export keiko-contracts — the contract has **zero package-surface impact**.
 
 The contract is SERVER-IMPORTABLE (keiko-server #503 and #504 need the committed-only selector and
@@ -78,6 +78,7 @@ VoiceTranscriptSegmentState:
 
 The wire protocol knows exactly three transcript message kinds: `transcript.partial`, `transcript.committed`,
 and `transcript.discarded`. These establish an initial state via `mapWireKindToVoiceTranscriptSegmentState`:
+
 - `transcript.partial` → `partial`
 - `transcript.committed` → `committed`
 - `transcript.discarded` → `discarded`

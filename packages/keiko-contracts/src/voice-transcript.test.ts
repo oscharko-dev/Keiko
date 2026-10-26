@@ -379,3 +379,56 @@ describe("summarizeVoiceTranscript (AC5 evidence-safe)", () => {
     expect(summary.highestSeq).toBe(0);
   });
 });
+
+import * as publicTranscriptCatalog from "@oscharko-dev/keiko-contracts/runtime/voice-transcript";
+
+it.each([
+  ["segment state/source", isVoiceTranscriptSegmentState, VOICE_TRANSCRIPT_SEGMENT_STATES],
+  [
+    "segment state/public",
+    publicTranscriptCatalog.isVoiceTranscriptSegmentState,
+    publicTranscriptCatalog.VOICE_TRANSCRIPT_SEGMENT_STATES,
+  ],
+  [
+    "provider error kind/source",
+    isVoiceTranscriptProviderErrorKind,
+    VOICE_TRANSCRIPT_PROVIDER_ERROR_KINDS,
+  ],
+  [
+    "provider error kind/public",
+    publicTranscriptCatalog.isVoiceTranscriptProviderErrorKind,
+    publicTranscriptCatalog.VOICE_TRANSCRIPT_PROVIDER_ERROR_KINDS,
+  ],
+  ["source/source", isVoiceTranscriptSource, VOICE_TRANSCRIPT_SOURCES],
+  [
+    "source/public",
+    publicTranscriptCatalog.isVoiceTranscriptSource,
+    publicTranscriptCatalog.VOICE_TRANSCRIPT_SOURCES,
+  ],
+] as const)(
+  "%s accepts catalog strings without coercing foreign candidates",
+  (_name, guard, catalog): void => {
+    for (const legal of catalog) expect(guard(legal)).toBe(true);
+    let coercions = 0;
+    const coercionCandidate = {
+      [Symbol.toPrimitive](): never {
+        coercions += 1;
+        throw new TypeError("voice catalog candidate must not be coerced");
+      },
+    };
+    const boxed: unknown = Object(catalog[0]);
+    const refused: readonly unknown[] = [
+      "foreign-voice-catalog-entry",
+      "",
+      undefined,
+      null,
+      0,
+      true,
+      Symbol("voice-catalog-candidate"),
+      boxed,
+      coercionCandidate,
+    ];
+    for (const candidate of refused) expect(guard(candidate)).toBe(false);
+    expect(coercions).toBe(0);
+  },
+);
