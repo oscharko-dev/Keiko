@@ -3,9 +3,13 @@ import {
   isCodingRuntimeGitPath,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
-import type { CodingToolRequestIdentity } from "./codingToolIpc.js";
+import type { CodingToolApprovalProof, CodingToolRequestIdentity } from "./codingToolIpc.js";
 export type RuntimeGitRequest = CodingToolRequestIdentity & { readonly action: "git" } & (
     | { readonly operation: "status" }
+    // #3902 AC2: one fetch, or one fast-forward pull from the upstream, through the Git sync owner;
+    // a narrower mode redeems the operator's approval of this exact call.
+    | { readonly operation: "fetch"; readonly approvalProof?: CodingToolApprovalProof | undefined }
+    | { readonly operation: "pull"; readonly approvalProof?: CodingToolApprovalProof | undefined }
     | {
         readonly operation: "diff";
         readonly scope: "working-tree" | "index";
@@ -24,6 +28,12 @@ export type RuntimeGitRequest = CodingToolRequestIdentity & { readonly action: "
   );
 /** The proposals that change the index: staging and, its inverse, unstaging (#3902 AC2). */
 export type RuntimeGitIndexOperation = "stage" | "unstage";
+/** The remote synchronizations the runtime may ask the Git sync owner for (#3902 AC2). */
+export type RuntimeGitSyncOperation = "fetch" | "pull";
+
+export function isRuntimeGitSyncOperation(value: unknown): value is RuntimeGitSyncOperation {
+  return value === "fetch" || value === "pull";
+}
 const PROPOSAL_ID: Readonly<Record<RuntimeGitIndexOperation, RegExp>> = {
   stage: /^stage-\d{1,39}$/u,
   unstage: /^unstage-\d{1,39}$/u,

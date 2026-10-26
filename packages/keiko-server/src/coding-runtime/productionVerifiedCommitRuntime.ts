@@ -13,6 +13,7 @@ import type {
   VerifiedCommitServiceOptions,
 } from "../gitDelivery/verifiedCommitTypes.js";
 import type { CodingRuntimeTrustedContext } from "./runtimeAuthorityService.js";
+import type { GovernedSyncHead } from "./governedSyncHeads.js";
 import type { CodingWorkbenchCodeTaskDeliveryAction } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 
 export interface VerifiedCommitRuntimeDependencies extends Omit<
@@ -21,6 +22,8 @@ export interface VerifiedCommitRuntimeDependencies extends Omit<
 > {
   readonly resolveWorkspace: (root: string) => WorkspaceInfo | undefined;
   readonly buffersClean: (root: string, runId: string) => boolean;
+  /** Records the head a governed fast-forward of a run wrote (governedSyncHeads.ts, #3902 AC2). */
+  readonly recordGovernedSyncHead?: ((head: GovernedSyncHead) => void) | undefined;
 }
 export interface VerifiedCommitRuntimeBinding {
   readonly runId: string;

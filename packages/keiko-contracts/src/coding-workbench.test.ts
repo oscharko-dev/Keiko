@@ -193,6 +193,8 @@ describe("coding-workbench constants", () => {
       "file-edit",
       "git-stage",
       "git-unstage",
+      "git-fetch",
+      "git-pull",
       "verification-command",
       "ci-observe",
       "connector-read",

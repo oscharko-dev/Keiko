@@ -1,3 +1,9 @@
+import {
+  answerNativeWebSearch,
+  parseNativeWebSearchRequest,
+  type NativeWebSearch,
+  type NativeWebSearchRequest,
+} from "./nativeWebSearch.js";
 import { createHash, timingSafeEqual } from "node:crypto";
 import {
   openCodeAgentModelBinding,
@@ -524,6 +530,11 @@ export interface OpenCodeRuntimeCompositionInput {
    */
   readonly nativeWorktrees?: NativeWorktreeProvisionPort | undefined;
   /**
+   * Native profile only: the web search integration the operator admitted (nativeWebSearch.ts,
+   * #3903 AC3); absent, the policy refuses `websearch` and the provider has nothing to call.
+   */
+  readonly nativeWebSearch?: NativeWebSearch | undefined;
+  /**
    * Native profile only: the user's global and the project's OpenCode configuration documents for
    * one run, in merge order (#3900 AC4, `opencodeConfigDocuments.ts`), read before its launch
    * profile is built. Absent reads none.
@@ -902,6 +913,7 @@ export function createOpenCodeRuntimeComposition(
       ...(input.externalReadRoots === undefined
         ? {}
         : { externalReadRoots: input.externalReadRoots }),
+      ...(input.nativeWebSearch === undefined ? {} : { nativeWebSearch: input.nativeWebSearch }),
     },
     input.toolBridge,
     input.toolFacadeOrigin,
@@ -3290,6 +3302,7 @@ interface ToolBridgeExecutionDeps {
   readonly renderedResults?: RenderedResultLog | undefined;
   readonly nativeWorktrees?: NativeWorktreeProvisionPort | undefined;
   readonly externalReadRoots?: readonly string[] | undefined;
+  readonly nativeWebSearch?: NativeWebSearch | undefined;
 }
 
 /** Where a delivered tool result's model-facing rendering is recorded (#3873). */
@@ -3695,6 +3708,16 @@ function handleDirectToolRequest(
   if (nativePolicy !== undefined) {
     return handleNativePolicyRequest(nativePolicy, input.signal, deps, approvals, runs);
   }
+  const webSearch = nativeWebSearchTransportValue(input.body);
+  if (webSearch !== undefined) {
+    const run = runs.get(webSearch.runId);
+    return answerNativeWebSearch(
+      deps.nativeWebSearch,
+      webSearch,
+      run?.ready === true && run.mode === "autonomous-delivery",
+      input.signal,
+    );
+  }
   const admission = gate.admit(
     toolBridgeRequestDeadlineMs(gate.limits.requestDeadlineMs, input.body),
   );
@@ -3742,6 +3765,7 @@ async function handleNativePolicyRequest(
     nowMs: Date.now(),
     ...(run.mcp === undefined ? {} : { mcp: run.mcp }),
     ...(deps.externalReadRoots === undefined ? {} : { externalRoots: deps.externalReadRoots }),
+    webSearch: deps.nativeWebSearch?.admitted === true,
   });
   const decision = admittedSessionMove(run, request, decided);
   const settled = await settleNativePolicyOutcome(run, decision, request, signal, deps, {
@@ -3749,6 +3773,18 @@ async function handleNativePolicyRequest(
     sessionRelation,
   });
   return answerNativePolicy(run, request, decision, { ...settled, sessionRelation }, deps);
+}
+
+// #3903 AC3: the provider may search exactly the query the policy just allowed for this run.
+function grantAllowedWebSearch(
+  run: PreparedRun,
+  request: OpenCodeNativePolicyRequest,
+  outcome: OpenCodeNativePolicyOutcome,
+  deps: ToolBridgeExecutionDeps,
+): void {
+  const [query] = request.resources;
+  if (request.permission === "websearch" && outcome === "allowed" && query !== undefined)
+    deps.nativeWebSearch?.grant(run.runId, query);
 }
 
 // The settled decision becomes the hook's answer and its one body-free line; an approved
@@ -3761,6 +3797,7 @@ async function answerNativePolicy(
   deps: ToolBridgeExecutionDeps,
 ): Promise<OpenCodeToolBridgeResponse> {
   const { outcome } = settled;
+  grantAllowedWebSearch(run, request, outcome, deps);
   const worktree = await nativeWorktreeOutcome(run, request, outcome, deps);
   if ((outcome !== "allowed" && outcome !== "approved") || worktree !== undefined)
     noteNativeCallRefused(deps, request);
@@ -4979,6 +5016,10 @@ type NativeReadTransportPacket = Readonly<{
         outcome: "completed" | "failed" | "cancelled";
       }>
   );
+
+function nativeWebSearchTransportValue(body: string): NativeWebSearchRequest | undefined {
+  return validJson(body) ? parseNativeWebSearchRequest(JSON.parse(body)) : undefined;
+}
 
 function nativeReadTransportValue(body: string): unknown {
   if (!validJson(body)) return undefined;

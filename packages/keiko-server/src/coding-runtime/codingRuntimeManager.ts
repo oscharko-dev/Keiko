@@ -3582,7 +3582,7 @@ function supervisedMutationEvent(
  * through this gate the way "ci-observe"/"connector-read" previously did.
  */
 const TOOL_APPROVAL_BRIDGE_ACTION_KINDS: ReadonlySet<CodingWorkbenchSupervisedActionKind> = new Set(
-  ["verification-command", "ci-observe", "connector-read"],
+  ["verification-command", "ci-observe", "connector-read", "git-fetch", "git-pull"],
 );
 
 // Duplicates codingToolApprovalBridge.ts's private CI_OBSERVATION_TARGET_ID: that file is owned by
@@ -3593,7 +3593,8 @@ const CODING_TOOL_CI_OBSERVATION_TARGET_ID = "ci";
 function toolApprovalBridgeAction(
   actionKind: CodingWorkbenchSupervisedActionKind,
 ): "verification" | "git" | "connector" {
-  if (actionKind === "ci-observe") return "git";
+  if (actionKind === "ci-observe" || actionKind === "git-fetch" || actionKind === "git-pull")
+    return "git";
   if (actionKind === "connector-read") return "connector";
   return "verification";
 }
@@ -3604,6 +3605,9 @@ function toolApprovalTargetId(
   targetPathHash: string | undefined,
 ): string | undefined {
   if (actionKind === "ci-observe") return CODING_TOOL_CI_OBSERVATION_TARGET_ID;
+  // #3902 AC2: a governed fetch or pull is approved as its operation (codingToolApprovalBridge.ts).
+  if (actionKind === "git-fetch") return "fetch";
+  if (actionKind === "git-pull") return "pull";
   if (actionKind === "verification-command" && commandLabel !== undefined) {
     return codingToolVerificationApprovalTargetId(commandLabel, targetPathHash);
   }

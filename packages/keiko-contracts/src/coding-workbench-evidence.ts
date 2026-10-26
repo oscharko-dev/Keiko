@@ -233,6 +233,8 @@ export const APPROVED_EVIDENCE_SEGMENTS = new Set<string>([
   "commit",
   "push",
   "pull",
+  // #3902 AC2: the `git-fetch` action kind's own segment (`git-pull` reuses "pull").
+  "fetch",
   "merge",
   // "request", "system", "mutation": NOT part of the original 184-entry table, added because a
   // real, currently-reachable producer needs them as standalone segments, not just as part of a

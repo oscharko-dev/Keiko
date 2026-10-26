@@ -184,6 +184,20 @@ external-file action of the run's mode (asked in Ask for approval and Supervised
 in Full access), and credential files, hard links and writes stay refused. On Linux no external
 root is admitted yet (`unsupported-platform`).
 
+## Web search
+
+A native run's `websearch` reaches a search integration only when the operator admitted one before
+starting the server: `KEIKO_CODING_WEBSEARCH_ENDPOINT` names an Exa-style MCP endpoint (for
+example `https://mcp.exa.ai/mcp`), https, or http on the loopback interface for a search service on
+the same machine; `KEIKO_CODING_WEBSEARCH_API_KEY` optionally carries its key, which stays in the
+server and never reaches the run (#3903 AC3). An endpoint with credentials in its URL, a fragment,
+or plain http to another host admits nothing. The search runs in Keiko's server through the
+deployment's proxy and CA settings, for the exact query the run's policy just allowed; it is
+available in Full access, like `webfetch`, and refused below it. Without an admitted integration
+the policy refuses `websearch` in every mode and names `webfetch` of a known URL instead.
+`coding-runtime.websearch.performed` records each search's outcome, result count, response size and
+duration, never the query, a result or the endpoint.
+
 ### Hard links in the workspace
 
 Before every native launch Keiko scans the workspace and each accepted external reference for

@@ -74,6 +74,8 @@ import {
   FUNCTIONAL_INDEX_AFTER_MARKER,
   FUNCTIONAL_INDEX_PATH,
   FUNCTIONAL_INDEX_STAGED_MARKER,
+  FUNCTIONAL_SYNC_HEAD_MARKER,
+  FUNCTIONAL_WEBSEARCH_QUERY,
   FUNCTIONAL_LIFECYCLE_BACKGROUND_COMMAND,
   FUNCTIONAL_LIFECYCLE_DETACHED_COMMAND,
   FUNCTIONAL_LIFECYCLE_FOREGROUND_COMMAND,
@@ -1622,5 +1624,177 @@ describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
       expect(git(workspace, ["diff", "--name-only"])).toBe(FUNCTIONAL_INDEX_PATH);
       expect(readFile(join(workspace, FUNCTIONAL_INDEX_PATH))).toContain("staged by the agent");
     }, 240_000);
+  },
+);
+
+// #3902 AC2 (PR #4064 review 4373825976): synchronization as the original runtime reaches it in the
+// managed task worktree. Its shell's own `git fetch` stays refused in every mode; `keiko_git_sync`
+// fetches and fast-forwards through the Git sync owner, below Full access only after the operator
+// approves the exact operation. A fixture-owned bare remote is the task branch's upstream, and a
+// second clone moves it ahead; no external network is reached.
+describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
+  "original OpenCode synchronization through Keiko (#3902 AC2)",
+  () => {
+    function publishUpstream(fixture: FunctionalWorkspaceFixture): string {
+      const remote = join(fixture.root, "remote.git");
+      git(fixture.root, ["init", "-q", "--bare", "-b", "main", remote]);
+      git(fixture.repository, ["remote", "add", "origin", remote]);
+      const branch = git(fixture.workspace, ["rev-parse", "--abbrev-ref", "HEAD"]);
+      git(fixture.workspace, ["push", "-q", "-u", "origin", branch]);
+      const other = join(fixture.root, "other");
+      git(fixture.root, ["clone", "-q", "-b", branch, remote, other]);
+      git(other, ["config", "user.email", "remote@keiko.example"]);
+      git(other, ["config", "user.name", "Keiko Remote"]);
+      git(other, ["config", "commit.gpgsign", "false"]);
+      writeFileSync(join(other, "REMOTE.md"), "from the remote\n");
+      git(other, ["add", "REMOTE.md"]);
+      git(other, ["commit", "-q", "-m", "remote change"]);
+      git(other, ["push", "-q", "origin", branch]);
+      return git(other, ["rev-parse", "HEAD"]);
+    }
+
+    it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
+      "fetches and fast-forwards through Keiko in %s, while the shell's own fetch stays refused",
+      async (mode) => {
+        const fixture = await setupWorkspace(["bff-state", "ui-db", "task-workspaces"]);
+        const remoteHead = publishUpstream(fixture);
+        fixture.script.mode = "sync";
+        const transcripts: string[] = [];
+        const pipeline = await bootDiscoveryPipeline(fixture, (request) => {
+          transcripts.push(JSON.stringify(request.messages));
+        });
+        const runId = await startRun(pipeline, {
+          requestId: `sync-${mode}`,
+          taskIntent: SECRET,
+          requestedMode: mode,
+        });
+        // The operator approves whatever the run asks; the asks are recorded by what they are.
+        const asked: string[] = [];
+        await vi.waitFor(
+          async () => {
+            const snapshot = pipeline.orchestrator.getSnapshot(runId);
+            const pending = snapshot?.pendingPermission;
+            if (snapshot?.state === "awaiting-approval" && pending !== undefined) {
+              asked.push(pending.actionKind ?? "native");
+              await pipeline.orchestrator.decideApproval(runId, {
+                requestId: pending.requestId,
+                decision: "approved",
+                expectedRevision: snapshot.revision,
+              });
+            }
+            expect(transcripts.join("\n")).toContain(`${FUNCTIONAL_SYNC_HEAD_MARKER}remote change`);
+          },
+          { timeout: 180_000, interval: 200 },
+        );
+        await stopRun(pipeline.baseUrl, runId);
+        const transcript = transcripts.join("\n");
+        // The shell's fetch was refused with the pointer to the governed tool, and reached nothing.
+        expect(transcript).toContain("Fetch or fast-forward pull with keiko_git_sync");
+        expect(transcript).toMatch(/kind\\*":\\*"fetch\\*",\\*"status\\*":\\*"succeeded/u);
+        expect(transcript).toMatch(/kind\\*":\\*"pull\\*",\\*"status\\*":\\*"succeeded/u);
+        expect(git(fixture.workspace, ["rev-parse", "HEAD"])).toBe(remoteHead);
+        expect(asked.filter((kind) => kind === "git-fetch" || kind === "git-pull")).toEqual(
+          mode === "autonomous-delivery" ? [] : ["git-fetch", "git-pull"],
+        );
+      },
+      300_000,
+    );
+  },
+);
+
+// #3903 AC3 / #3907 AC10 (PR #4064 review 4372361272): the original `websearch` through the search
+// integration the operator admitted. A fixture-owned loopback service answers as an Exa-style MCP
+// endpoint; no external network is reached. Connected, Full access searches once through Keiko's
+// provider and the model reads the result; below Full access, and without an admitted integration,
+// the honest refusal stands and nothing is searched.
+describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
+  "original OpenCode web search through an admitted integration (#3903 AC3)",
+  () => {
+    const FIXTURE_TITLE = "Keiko fixture search result";
+    const FIXTURE_URL = "https://example.test/keiko-governed-search";
+
+    async function searchService(): Promise<{
+      readonly endpoint: string;
+      readonly queries: string[];
+    }> {
+      const queries: string[] = [];
+      const server = createServer((request, response) => {
+        let body = "";
+        request.setEncoding("utf8");
+        request.on("data", (chunk: string) => {
+          body += chunk;
+        });
+        request.on("end", () => {
+          const call = JSON.parse(body) as {
+            readonly params?: { readonly arguments?: { readonly query?: string } };
+          };
+          queries.push(call.params?.arguments?.query ?? "");
+          const text = `Title: ${FIXTURE_TITLE}\nURL: ${FIXTURE_URL}\nPublished: 2026-10-01T00:00:00.000Z\nText: The fixture page about governed search.`;
+          response.writeHead(200, { "content-type": "text/event-stream" });
+          response.end(
+            `event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [{ type: "text", text }] } })}\n\n`,
+          );
+        });
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      disposers.push(
+        () =>
+          new Promise<void>((resolve) => {
+            server.close(() => {
+              resolve();
+            });
+          }),
+      );
+      const address = server.address();
+      if (address === null || typeof address === "string") throw new Error("fixture-address");
+      return { endpoint: `http://127.0.0.1:${String(address.port)}/mcp`, queries };
+    }
+
+    async function journey(
+      mode: "supervised-coding" | "autonomous-delivery",
+      endpoint: string | undefined,
+    ): Promise<string> {
+      const fixture = await setupWorkspace(["bff-state", "ui-db", "task-workspaces"]);
+      fixture.script.mode = "websearch";
+      const transcripts: string[] = [];
+      const pipeline = await bootDiscoveryPipeline(
+        fixture,
+        (request) => {
+          transcripts.push(JSON.stringify(request.messages));
+        },
+        endpoint === undefined ? undefined : { KEIKO_CODING_WEBSEARCH_ENDPOINT: endpoint },
+      );
+      const runId = await startRun(pipeline, {
+        requestId: `websearch-${mode}`,
+        taskIntent: SECRET,
+        requestedMode: mode,
+      });
+      // The search's answer (or its refusal) is the second model request's last message.
+      await vi.waitFor(
+        () => {
+          expect(transcripts.join("\n")).toContain('"role":"tool"');
+        },
+        { timeout: 120_000, interval: 200 },
+      );
+      await stopRun(pipeline.baseUrl, runId);
+      return transcripts.join("\n");
+    }
+
+    it("searches once through Keiko's provider in Full access, and the model reads the result", async () => {
+      const service = await searchService();
+      const transcript = await journey("autonomous-delivery", service.endpoint);
+      expect(service.queries).toEqual([FUNCTIONAL_WEBSEARCH_QUERY]);
+      expect(transcript).toContain(FIXTURE_TITLE);
+      expect(transcript).toContain(FIXTURE_URL);
+    }, 240_000);
+
+    it("keeps the honest refusals: below Full access, and with no admitted integration", async () => {
+      const service = await searchService();
+      const supervised = await journey("supervised-coding", service.endpoint);
+      expect(supervised).toContain("internet access is only available in Full access");
+      const unconfigured = await journey("autonomous-delivery", undefined);
+      expect(unconfigured).toContain("web search needs a search integration");
+      expect(service.queries).toEqual([]);
+    }, 360_000);
   },
 );

@@ -4,6 +4,8 @@ import { isDenied } from "@oscharko-dev/keiko-workspace";
 
 import type { CiRepairExecutionBudget } from "./codingRuntimeCiRepairController.js";
 import { isDraftToolRequest } from "./codingRuntimeDeliveryIpc.js";
+import { isRuntimeGitSyncOperation, type RuntimeGitSyncOperation } from "./codingRuntimeGitIpc.js";
+import { gitOperationEnvelopeDecision } from "../gitDelivery/runBoundAuthority.js";
 import type {
   CodingWorkbenchAuthorityEnvelope,
   CodingWorkbenchMode,
@@ -824,11 +826,7 @@ function actionClassesAllowed(
   request: CodingToolActionRequest,
   approved: boolean,
 ): boolean {
-  if (
-    request.action === "git" &&
-    (request.operation === "stage" || request.operation === "unstage") &&
-    approved
-  )
+  if (request.action === "git" && gitClassesDecidedElsewhere(request, approved))
     return hasClasses(envelope.authority.actionClasses, ["workspace-read"]);
   // Propose/reconcile plan a delivery without performing one yet, so they need only
   // workspace-read -- but a matched per-action approval on the EXECUTE phase is not a substitute
@@ -843,6 +841,18 @@ function actionClassesAllowed(
     return hasClasses(envelope.authority.actionClasses, ["workspace-read"]);
   }
   return hasClasses(envelope.authority.actionClasses, codingToolRequiredActionClasses(request));
+}
+
+// An approved stage or unstage redemption carries its own approval; a fetch's or pull's delivery
+// and network gate is the Git sync owner's decision (runtimeGitPolicyAllowed below), which defers
+// it to the mode matrix below Full access exactly as it does for the Git Client's own Fetch and
+// Pull (#3902 AC2).
+function gitClassesDecidedElsewhere(
+  request: Extract<CodingToolActionRequest, { readonly action: "git" }>,
+  approved: boolean,
+): boolean {
+  if (isRuntimeGitSyncOperation(request.operation)) return true;
+  return (request.operation === "stage" || request.operation === "unstage") && approved;
 }
 
 // The extra policy beyond the required action class, one exhaustive case per governed action.
@@ -970,12 +980,27 @@ function runtimeGitPolicyAllowed(
     );
   if (request.operation === "read" || request.operation === "write")
     return gitPolicyAllowed(envelope, request.operation, approved);
+  if (isRuntimeGitSyncOperation(request.operation))
+    return gitSyncPolicyAllowed(envelope, request.operation, approved);
   if (
     (request.operation === "stage" || request.operation === "unstage") &&
     request.phase === "execute"
   )
     return workspaceMediumRiskAllowed(envelope, approved);
   return true;
+}
+
+// #3902 AC2: the decision the Git sync owner makes for the Git Client's Fetch and Pull
+// (runBoundAuthority.ts): Full access admits them within the envelope's own delivery and network
+// scope; a lower mode's approval-required delivery effect is redeemed only by the operator's
+// approval of this exact call, and a denied one by nothing.
+function gitSyncPolicyAllowed(
+  envelope: CodingWorkbenchRuntimeAuthorityEnvelope,
+  operation: RuntimeGitSyncOperation,
+  approved: boolean,
+): boolean {
+  const decision = gitOperationEnvelopeDecision(envelope.authority, operation);
+  return decision.ok || (approved && decision.reason === "approval-required");
 }
 
 function gitPolicyAllowed(

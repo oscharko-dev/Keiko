@@ -1420,10 +1420,48 @@ function sharedV2ToolPluginSource(profile: OpenCodeToolProfile): string {
     ),
     ...definitions.map(({ name }) => `      register_${name}(editor);`),
     "    });",
+    ...(native ? nativeWebSearchProviderSource() : []),
     "    return () => { disposed = true; parents.clear(); closedParents.clear(); };",
     "  },",
     "};",
   ].join("\n");
+}
+
+// #3903 AC3 (PR #4064 review 4372361272): the original `websearch` keeps its tool, permission ask
+// and result formatting; its provider is Keiko's, the default of the runtime's websearch service, so
+// the search runs in the server through the integration the operator admitted (nativeWebSearch.ts).
+// A producer without the service keeps its own providers, and the policy decides as before.
+function nativeWebSearchProviderSource(): readonly string[] {
+  return [
+    "    if (ctx.websearch) await ctx.websearch.transform((editor) => {",
+    "      editor.add({",
+    '        id: "keiko",',
+    '        name: "Keiko",',
+    "        async execute(input, options) {",
+    "          const endpoint = process.env.KEIKO_TOOL_FACADE_URL;",
+    "          const capability = process.env.KEIKO_TOOL_FACADE_CAPABILITY;",
+    "          const runId = process.env.KEIKO_CODING_RUN_ID;",
+    '          if (disposed || !endpoint || !capability || !runId) throw new Error("keiko-websearch-unavailable");',
+    `          const timeout = AbortSignal.timeout(${String(OPEN_CODE_TOOL_CLIENT_TIMEOUT_MS)});`,
+    "          const signal = options && options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;",
+    '          const body = JSON.stringify({ action: "web-search", runId, query: String(input.query) });',
+    '          const response = await fetch(endpoint, { method: "POST", redirect: "manual", signal, headers: { Authorization: "Bearer " + capability, "Content-Type": "application/json" }, body });',
+    "          const text = await response.text();",
+    `          if (text.length > ${String(CODING_TOOL_MAX_BODY_BYTES)}) throw new Error("keiko-websearch-oversized");`,
+    "          const answer = JSON.parse(text);",
+    '          if (!response.ok) throw new Error("Keiko web search " + (answer && typeof answer.reason === "string" ? answer.reason : "failed"));',
+    '          if (!answer || !Array.isArray(answer.results)) throw new Error("keiko-websearch-invalid");',
+    "          return answer.results.map((result) => ({",
+    "            url: String(result.url),",
+    '            ...(typeof result.title === "string" ? { title: result.title } : {}),',
+    '            ...(typeof result.content === "string" ? { content: result.content } : {}),',
+    '            time: typeof result.published === "number" ? { published: result.published } : {},',
+    "          }));",
+    "        },",
+    "      });",
+    '      editor.default.set("keiko");',
+    "    });",
+  ];
 }
 
 function v2ExecuteHooksSource(): readonly string[] {
@@ -1524,6 +1562,7 @@ type GeneratedToolAction =
   | "git-push"
   | "git-pull-request"
   | "git-ci"
+  | "git-sync"
   | "git-execute";
 
 /**
@@ -1549,6 +1588,9 @@ function wireRequestFor(
       return { action: "git", literal: { operation: "stage", phase: "propose" } };
     case "git-ci":
       return { action: "git", literal: { operation: "ci" } };
+    // #3902 AC2: `toolSource` sets the operation from the model-supplied `pull` flag.
+    case "git-sync":
+      return { action: "git", literal: {} };
     case "git-commit":
       return { action: "delivery", literal: { intent: "commit", phase: "propose" } };
     case "git-push":
@@ -1595,9 +1637,19 @@ function toolApprovalProofSource(): readonly string[] {
     '    patterns: ["ci"], metadata: { kind: "command-execution", actionClass: "command-execution", reasonCode: "approval-required", actionKind: "ci-observe", scopeLabel: "workspace-scope", risk: "low", policyReason: "approval-required", commandLabel: "ci", ...approvalProof },',
     "  };",
     "}",
+    // #3902 AC2: a governed fetch or pull asks on the same lane, as what it is.
+    "function syncPermission(operation, approvalProof) {",
+    '  if (!approvalProof) throw new Error("keiko-tool-invalid");',
+    "  return {",
+    '    patterns: [operation], metadata: { kind: "command-execution", actionClass: "command-execution", reasonCode: "approval-required", actionKind: operation === "pull" ? "git-pull" : "git-fetch", scopeLabel: "workspace-scope", risk: operation === "pull" ? "high" : "medium", policyReason: "approval-required", commandLabel: operation, ...approvalProof },',
+    "  };",
+    "}",
+    "function isGitSync(request) {",
+    '  return request.action === "git" && (request.operation === "fetch" || request.operation === "pull");',
+    "}",
     "function toolApprovalRequired(request) {",
     "  const mode = process.env.KEIKO_CODING_MODE;",
-    '  if (request.action === "git" && request.operation === "ci") return mode === "governed-assist" || mode === "supervised-coding";',
+    '  if ((request.action === "git" && request.operation === "ci") || isGitSync(request)) return mode === "governed-assist" || mode === "supervised-coding";',
     '  return mode === "governed-assist" && ["verification", "command"].includes(request.action);',
     "}",
     "async function toolApprovalTarget(request) {",
@@ -1609,6 +1661,7 @@ function toolApprovalProofSource(): readonly string[] {
     "  }",
     '  if (request.action === "verification") return { targetId: request.verifierId };',
     '  if (request.action === "command") return { targetId: request.commandId };',
+    "  if (isGitSync(request)) return { targetId: request.operation };",
     '  return request.action === "git" && request.operation === "ci" ? { targetId: "ci" } : undefined;',
     "}",
     "async function toolApprovalProof(request) {",
@@ -1643,6 +1696,7 @@ function governedPermissionSource(version: "v1" | "v2" = "v1"): readonly string[
     "  let request;",
     '  if (mode === "governed-assist" && action === "verification") request = verificationPermission(args, approvalProof);',
     '  else if ((mode === "governed-assist" || mode === "supervised-coding") && action === "git-ci") request = ciObservationPermission(approvalProof);',
+    '  else if ((mode === "governed-assist" || mode === "supervised-coding") && action === "git-sync") request = syncPermission(args.pull === true ? "pull" : "fetch", approvalProof);',
     "  if (!request) return;",
     // The ask expires with the one human-decision wait every governed layer budgets (PR #3452 review).
     `  const metadata = { ...request.metadata, expiresAt: new Date(Date.now() + ${String(GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS)}).toISOString() };`,
@@ -1786,6 +1840,12 @@ function toolSource(
     '    if (action === "git-stage") {',
     '      if (args.unstage === true) request.operation = "unstage";',
     "      delete request.unstage;",
+    "    }",
+    // #3902 AC2: keiko_git_sync's `pull` flag selects the operation; the wire carries the
+    // operation, never the flag.
+    '    if (action === "git-sync") {',
+    '      request.operation = args.pull === true ? "pull" : "fetch";',
+    "      delete request.pull;",
     "    }",
     // git-execute is the one action whose wire shape depends on a model-supplied argument
     // (`kind`): redeeming a stage or unstage proposal posts `{action:"git",operation:kind,...}`

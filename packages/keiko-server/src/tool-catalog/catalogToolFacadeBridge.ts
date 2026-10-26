@@ -291,6 +291,9 @@ function gitCatalogAction(
       toolId: "keiko.ci.status",
       arguments: { forceFresh: request.forceFresh ?? false },
     };
+  // #3902 AC2: one governed fetch or fast-forward pull.
+  if (request.operation === "fetch" || request.operation === "pull")
+    return { toolId: "keiko.git.sync", arguments: { pull: request.operation === "pull" } };
   if (request.operation !== "stage" && request.operation !== "unstage") return undefined;
   // Unstaging is staging's inverse under the same proposal and redemption (#3902 AC2).
   return request.phase === "propose"
@@ -393,6 +396,7 @@ function deliveryRepresentative(
     };
   if (canonicalId === "keiko.git.execute")
     return { ...base, action: "git", operation: "stage", phase: "execute", proposalId: "stage-1" };
+  if (canonicalId === "keiko.git.sync") return { ...base, action: "git", operation: "pull" };
   return { ...base, action: "git", operation: "ci", forceFresh: false };
 }
 

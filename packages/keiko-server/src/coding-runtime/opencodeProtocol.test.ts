@@ -1382,6 +1382,44 @@ describe("OpenCode v1.18.30 protocol boundary", () => {
       actionKind: "ci-observe",
       commandLabel: "ci",
     });
+    // #3902 AC2: a governed fetch or pull is asked as its own operation, at its own risk; another
+    // label, risk or pattern for that kind is not its ask.
+    const syncAsk = (
+      operation: "fetch" | "pull",
+      overrides: Readonly<Record<string, unknown>> = {},
+      patterns: readonly string[] = [operation],
+    ): unknown =>
+      projectOpenCodePermissionEvent(
+        {
+          ...base,
+          properties: {
+            ...base.properties,
+            patterns,
+            metadata: {
+              kind: "command-execution",
+              actionClass: "command-execution",
+              reasonCode: "approval-required",
+              expiresAt: "2026-07-23T14:05:00.000Z",
+              actionKind: `git-${operation}`,
+              scopeLabel: "workspace-scope",
+              risk: operation === "pull" ? "high" : "medium",
+              policyReason: "approval-required",
+              commandLabel: operation,
+              actionId: "session:sync-call",
+              idempotencyKey: "session:sync-call",
+              approvalId: "session:sync-call",
+              approvalDigest: "b".repeat(64),
+              ...overrides,
+            },
+          },
+        },
+        "ses_1",
+      );
+    expect(syncAsk("fetch")).toMatchObject({ actionKind: "git-fetch", commandLabel: "fetch" });
+    expect(syncAsk("pull")).toMatchObject({ actionKind: "git-pull", risk: "high" });
+    expect(syncAsk("pull", { commandLabel: "fetch" }, ["fetch"])).toBeUndefined();
+    expect(syncAsk("pull", { risk: "low" })).toBeUndefined();
+    expect(syncAsk("fetch", {}, ["origin"])).toBeUndefined();
     for (const rejected of [
       { ...base, extra: true },
       { ...base, properties: { ...base.properties, sessionID: "ses_foreign" } },

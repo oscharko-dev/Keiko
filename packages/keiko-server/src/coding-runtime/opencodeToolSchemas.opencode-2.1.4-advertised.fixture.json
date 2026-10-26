@@ -221,6 +221,20 @@
     }
   },
   {
+    "name": "keiko_git_sync",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "pull": {
+          "type": "boolean",
+          "description": "false fetches the upstream remote's branches; true fast-forwards the current branch to its upstream (never merges, rebases or overwrites local changes)."
+        }
+      },
+      "required": ["pull"],
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "keiko_pull_request",
     "parameters": {
       "type": "object",

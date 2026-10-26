@@ -748,6 +748,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.approval.actionKind.file-edit": "File edit",
   "codingWorkbench.approval.actionKind.git-stage": "Stage changes",
   "codingWorkbench.approval.actionKind.git-unstage": "Unstage changes",
+  "codingWorkbench.approval.actionKind.git-fetch": "Fetch from the remote",
+  "codingWorkbench.approval.actionKind.git-pull": "Fast-forward from the remote",
   "codingWorkbench.approval.actionKind.verification-command": "Verification command",
   "codingWorkbench.approval.actionKind.ci-observe": "CI status check",
   "codingWorkbench.approval.actionKind.connector-read": "Connector read",

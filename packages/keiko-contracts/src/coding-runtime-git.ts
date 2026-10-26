@@ -1,6 +1,7 @@
 import { isRootRelativeFileIdentifier } from "./editor-workspace-path.js";
 import { parseGitEditorDiffResponse, type GitEditorDiffResponse } from "./git-editor.js";
 import { GIT_STATUS_CODES, isSafeGitRefName, type GitChangedFile } from "./git-repository.js";
+import { isGitSyncOutcome, type GitSyncOutcome } from "./git-sync.js";
 
 export const CODING_RUNTIME_GIT_MAX_PATHS = 50;
 export const CODING_RUNTIME_GIT_MAX_BYTES = 65_536;
@@ -62,8 +63,27 @@ export interface CodingRuntimeGitUnstage {
   readonly reason: CodingRuntimeGitStage["reason"];
   readonly pathCount: number;
 }
+/**
+ * A fetch, or a fast-forward pull of the current branch from its upstream, that the Git sync owner
+ * ran for the run (#3902 AC2): its closed outcome, and the branch and its distance from the
+ * upstream afterwards when Git could still read them.
+ */
+export type CodingRuntimeGitSync =
+  | (CodingRuntimeGitSyncFacts & { readonly kind: "fetch" })
+  | (CodingRuntimeGitSyncFacts & { readonly kind: "pull" });
+interface CodingRuntimeGitSyncFacts {
+  readonly status: GitSyncOutcome;
+  readonly branch?: string;
+  readonly ahead?: number;
+  readonly behind?: number;
+  readonly truncated: boolean;
+}
 export type CodingRuntimeGitResult =
-  CodingRuntimeGitStatus | CodingRuntimeGitDiff | CodingRuntimeGitStage | CodingRuntimeGitUnstage;
+  | CodingRuntimeGitStatus
+  | CodingRuntimeGitDiff
+  | CodingRuntimeGitStage
+  | CodingRuntimeGitUnstage
+  | CodingRuntimeGitSync;
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -141,11 +161,37 @@ function proposal(value: Record<string, unknown>, kind: "stage" | "unstage"): bo
     value.pathCount <= CODING_RUNTIME_GIT_MAX_PATHS
   );
 }
+function count(value: unknown): boolean {
+  return (
+    value === undefined || (typeof value === "number" && Number.isSafeInteger(value) && value >= 0)
+  );
+}
+function sync(value: Record<string, unknown>): boolean {
+  return (
+    keys(value, ["kind", "status", "branch", "ahead", "behind", "truncated"]) &&
+    isGitSyncOutcome(value.status) &&
+    (value.branch === undefined ||
+      (typeof value.branch === "string" && isSafeGitRefName(value.branch))) &&
+    count(value.ahead) &&
+    count(value.behind) &&
+    typeof value.truncated === "boolean"
+  );
+}
 function stageStatusReason(status: unknown, reason: unknown): boolean {
   if (typeof status !== "string" || !Object.hasOwn(STAGE_STATUS_REASONS, status)) return false;
   const allowed: readonly unknown[] =
     STAGE_STATUS_REASONS[status as CodingRuntimeGitStage["status"]];
   return allowed.includes(reason);
+}
+function resultOfKind(value: Record<string, unknown>): boolean {
+  if (value.kind === "status") return status(value);
+  if (value.kind === "stage" || value.kind === "unstage") return proposal(value, value.kind);
+  if (value.kind === "fetch" || value.kind === "pull") return sync(value);
+  return (
+    value.kind === "diff" &&
+    keys(value, ["kind", "diff"]) &&
+    parseGitEditorDiffResponse(value.diff).ok
+  );
 }
 export function isCodingRuntimeGitResult(value: unknown): value is CodingRuntimeGitResult {
   try {
@@ -154,13 +200,7 @@ export function isCodingRuntimeGitResult(value: unknown): value is CodingRuntime
       new TextEncoder().encode(JSON.stringify(value)).length > CODING_RUNTIME_GIT_MAX_BYTES
     )
       return false;
-    if (value.kind === "status") return status(value);
-    if (value.kind === "stage" || value.kind === "unstage") return proposal(value, value.kind);
-    return (
-      value.kind === "diff" &&
-      keys(value, ["kind", "diff"]) &&
-      parseGitEditorDiffResponse(value.diff).ok
-    );
+    return resultOfKind(value);
   } catch {
     return false;
   }

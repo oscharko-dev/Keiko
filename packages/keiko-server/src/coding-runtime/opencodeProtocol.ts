@@ -402,11 +402,20 @@ function projectGovernedPermissionByKind(
   if (
     metadata.actionKind === "verification-command" ||
     metadata.actionKind === "ci-observe" ||
-    metadata.actionKind === "connector-read"
+    metadata.actionKind === "connector-read" ||
+    metadata.actionKind === "git-fetch" ||
+    metadata.actionKind === "git-pull"
   ) {
     return projectGovernedCommandPermission(properties, metadata);
   }
   return undefined;
+}
+
+// The risk a governed command ask states (supervisedCodingPolicy.ts states the same): a fetch moves
+// only remote-tracking refs, a pull the worktree (#3902 AC2); the bounded commands are low.
+function governedCommandRisk(actionKind: string): string {
+  if (actionKind === "git-fetch") return "medium";
+  return actionKind === "git-pull" ? "high" : "low";
 }
 
 function projectGovernedEditPermission(
@@ -457,7 +466,7 @@ function projectGovernedCommandPermission(
       "command-execution",
       "command-execution",
       actionKind,
-      "low",
+      governedCommandRisk(actionKind),
     ) ||
     !validCommandApproval(properties, metadata)
   ) {
@@ -492,6 +501,9 @@ function validCommandApproval(
 function validGovernedCommandTarget(actionKind: unknown, commandLabel: string): boolean {
   if (actionKind === "verification-command") return GOVERNED_VERIFIERS.has(commandLabel);
   if (actionKind === "ci-observe") return commandLabel === "ci";
+  // #3902 AC2: a governed fetch or pull is approved as its own operation.
+  if (actionKind === "git-fetch") return commandLabel === "fetch";
+  if (actionKind === "git-pull") return commandLabel === "pull";
   return actionKind === "connector-read" && boundedApprovalIdentity(commandLabel);
 }
 

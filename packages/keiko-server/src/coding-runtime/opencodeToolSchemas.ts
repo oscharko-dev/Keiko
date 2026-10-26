@@ -436,6 +436,22 @@ const GIT_PULL_REQUEST_SCHEMA = {
   required: ["title"],
 } as const;
 
+// #3902 AC2: one fetch, or one fast-forward pull of the current branch from its upstream, through
+// the Git sync owner (runtimeGitService.ts). The flag selects the operation; nothing else is the
+// model's to choose.
+const GIT_SYNC_SCHEMA = {
+  type: "object",
+  properties: {
+    pull: {
+      type: "boolean",
+      description:
+        "false fetches the upstream remote's branches; true fast-forwards the current branch to " +
+        "its upstream (never merges, rebases or overwrites local changes).",
+    },
+  },
+  required: ["pull"],
+} as const;
+
 const GIT_CI_STATUS_SCHEMA = {
   type: "object",
   properties: {
@@ -489,6 +505,7 @@ export const OPENCODE_MODEL_VISIBLE_TOOLS = [
   { name: "keiko_git_push", parameters: GIT_PUSH_SCHEMA },
   { name: "keiko_pull_request", parameters: GIT_PULL_REQUEST_SCHEMA },
   { name: "keiko_git_execute", parameters: GIT_EXECUTE_SCHEMA },
+  { name: "keiko_git_sync", parameters: GIT_SYNC_SCHEMA },
   { name: "keiko_ci_status", parameters: GIT_CI_STATUS_SCHEMA },
 ] as const;
 
@@ -592,6 +609,11 @@ export const OPENCODE_TOOL_SOURCE_DEFINITIONS = [
       kind: GIT_EXECUTE_SCHEMA.properties.kind,
       proposalId: GIT_EXECUTE_SCHEMA.properties.proposalId,
     },
+  },
+  {
+    name: "keiko_git_sync",
+    action: "git-sync",
+    arguments: { pull: GIT_SYNC_SCHEMA.properties.pull },
   },
   {
     name: "keiko_ci_status",

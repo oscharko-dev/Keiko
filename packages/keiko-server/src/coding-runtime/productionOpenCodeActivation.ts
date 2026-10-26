@@ -195,6 +195,8 @@ export interface ProductionOpenCodeActivationInput {
   readonly runtimeMaxDurationMs?: number | undefined;
   /** Keiko's managed task-workspace owner for an approved Code Mode `worktree_create` (#3903 AC4). */
   readonly nativeWorktrees?: ProductionOpenCodeBackendInput["nativeWorktrees"];
+  /** The web search integration the operator admitted for native runs (#3903 AC3). */
+  readonly nativeWebSearch?: ProductionOpenCodeBackendInput["nativeWebSearch"];
 }
 
 export type ProductionOpenCodeActivationResult =
@@ -302,6 +304,7 @@ function optionalBackendInputs(
     ...(input.mcpRelay ? { mcpRelay: input.mcpRelay } : {}),
     ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
     ...(input.nativeWorktrees ? { nativeWorktrees: input.nativeWorktrees } : {}),
+    ...(input.nativeWebSearch ? { nativeWebSearch: input.nativeWebSearch } : {}),
     ...(input.fetch ? { fetch: input.fetch } : {}),
     ...(input.runtimeMaxDurationMs === undefined
       ? {}

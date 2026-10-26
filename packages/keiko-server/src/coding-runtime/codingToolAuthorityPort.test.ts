@@ -398,6 +398,116 @@ describe("CodingToolAuthorityPort", () => {
     expect(port.admit("capability", approved).ok).toBe(false);
   });
 
+  // #3902 AC2: a governed fetch or pull meets the Git sync owner's decision. Full access admits it
+  // within the production envelope; below Full access it is approval-required, and only the
+  // operator's approval of that exact call admits it -- once, and never for the other operation.
+  // The production envelope there carries no network egress at all: the owner defers that gate to
+  // the mode matrix, as it does for the Git Client's own Fetch and Pull.
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "admits a fetch or pull at %s only through the operator's approval of that exact call",
+    (mode) => {
+      const envelope = restrictedEnvelope({
+        effectiveMode: mode,
+        actionClasses: codingRuntimeActionClassesForMode(mode, false),
+        connectorScopes: codingRuntimeConnectorScopesForMode(mode),
+        networkPolicy: codingRuntimeNetworkPolicyForMode(mode, false),
+      });
+      const authority = {
+        revalidateCapabilityForMutation: vi.fn(() => ({ ok: true as const, envelope })),
+        resolveCapabilityForDelegation: vi.fn(() => ({ ok: true as const, envelope })),
+      };
+      const approvalProofVerifier = createCodingToolApprovalBridge();
+      const port = createCodingToolAuthorityPort(authority, runtimeContext, {
+        approvalProofVerifier,
+      });
+      const nowMs = Date.parse("2026-07-12T09:00:00.000Z");
+      for (const operation of ["fetch", "pull"] as const) {
+        const request = {
+          action: "git" as const,
+          operation,
+          actionId: `${operation}-${mode}`,
+          idempotencyKey: `${operation}-${mode}`,
+        };
+        const approvalProof = {
+          approvalId: request.actionId,
+          approvalDigest: codingToolApprovalBindingDigest("run-authority-a", request),
+        };
+        expect(port.admit("capability", request).ok).toBe(false);
+        expect(port.admit("capability", { ...request, approvalProof }).ok).toBe(false);
+        expect(
+          approvalProofVerifier.observePermission({
+            runId: "run-authority-a",
+            requestId: `permission-${request.actionId}`,
+            action: "git",
+            actionId: request.actionId,
+            idempotencyKey: request.idempotencyKey,
+            targetId: operation,
+            proof: approvalProof,
+            expiresAt: "2026-07-12T09:05:00.000Z",
+            nowMs,
+          }),
+        ).toBe(true);
+        expect(
+          approvalProofVerifier.activatePermission({
+            runId: "run-authority-a",
+            requestId: `permission-${request.actionId}`,
+            approvalAuthorityDigest: "c".repeat(64),
+            expiresAtMs: Date.parse("2026-07-12T09:05:00.000Z"),
+            nowMs,
+          }),
+        ).toBe(true);
+        const other = operation === "fetch" ? "pull" : "fetch";
+        expect(port.admit("capability", { ...request, operation: other, approvalProof }).ok).toBe(
+          false,
+        );
+        expect(port.admit("capability", { ...request, approvalProof }).ok).toBe(true);
+        expect(port.admit("capability", { ...request, approvalProof }).ok).toBe(false);
+      }
+    },
+  );
+
+  it("admits a fetch and a pull at autonomous-delivery within its production envelope, without an approval", () => {
+    const envelope = restrictedEnvelope({
+      effectiveMode: "autonomous-delivery",
+      actionClasses: codingRuntimeActionClassesForMode("autonomous-delivery", false),
+      connectorScopes: codingRuntimeConnectorScopesForMode("autonomous-delivery"),
+      networkPolicy: codingRuntimeNetworkPolicyForMode("autonomous-delivery", false),
+    });
+    const authority = {
+      revalidateCapabilityForMutation: vi.fn(() => ({ ok: true as const, envelope })),
+      resolveCapabilityForDelegation: vi.fn(() => ({ ok: true as const, envelope })),
+    };
+    const port = createCodingToolAuthorityPort(authority, runtimeContext);
+    for (const operation of ["fetch", "pull"] as const)
+      expect(
+        port.admit("capability", {
+          action: "git",
+          operation,
+          actionId: operation,
+          idempotencyKey: operation,
+        }).ok,
+      ).toBe(true);
+    const narrowed = restrictedEnvelope({
+      effectiveMode: "autonomous-delivery",
+      networkPolicy: { mode: "deny-all", connectorScopes: [] },
+    });
+    const refused = createCodingToolAuthorityPort(
+      {
+        revalidateCapabilityForMutation: vi.fn(() => ({ ok: true as const, envelope: narrowed })),
+        resolveCapabilityForDelegation: vi.fn(() => ({ ok: true as const, envelope: narrowed })),
+      },
+      runtimeContext,
+    );
+    expect(
+      refused.admit("capability", {
+        action: "git",
+        operation: "fetch",
+        actionId: "fetch",
+        idempotencyKey: "fetch",
+      }).ok,
+    ).toBe(false);
+  });
+
   it("admits a connector read at supervised-coding once its scoped approval is redeemed, never a mismatched scope", () => {
     const envelope = restrictedEnvelope({
       effectiveMode: "supervised-coding",

@@ -774,6 +774,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.approval.actionKind.file-edit": "Dateibearbeitung",
   "codingWorkbench.approval.actionKind.git-stage": "Änderungen vormerken",
   "codingWorkbench.approval.actionKind.git-unstage": "Vormerkung zurücknehmen",
+  "codingWorkbench.approval.actionKind.git-fetch": "Vom Remote abrufen",
+  "codingWorkbench.approval.actionKind.git-pull": "Vom Remote vorspulen (Fast-Forward)",
   "codingWorkbench.approval.actionKind.verification-command": "Verifikationsbefehl",
   "codingWorkbench.approval.actionKind.ci-observe": "CI-Statusabfrage",
   "codingWorkbench.approval.actionKind.connector-read": "Connector-Lesezugriff",

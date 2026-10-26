@@ -17,15 +17,17 @@ import { matchesCatalogSchema } from "./schema.js";
 
 const OPENCODE_PROFILE = { id: "opencode", version: 1 } as const;
 
-// The tools that wait in place for a local human decision (F44): the four proposal tools, and the
-// changeset edit, whose diff the operator confirms in the review panel under every mode below full
-// access (ADR-0125 D1). The edit tool was missed when F44 swept the others, so it kept the sandbox
-// default and every governed edit was cut off at 30 s mid-decision.
+// The tools that wait in place for a local human decision (F44): the four proposal tools, the
+// governed fetch/pull, which asks before it reaches the remote below full access (#3902 AC2), and
+// the changeset edit, whose diff the operator confirms in the review panel under every mode below
+// full access (ADR-0125 D1). The edit tool was missed when F44 swept the others, so it kept the
+// sandbox default and every governed edit was cut off at 30 s mid-decision.
 const APPROVAL_WAITING_TOOL_IDS: ReadonlySet<string> = new Set([
   "keiko.git.stage",
   "keiko.git.commit",
   "keiko.git.push",
   "keiko.git.pullrequest",
+  "keiko.git.sync",
   "keiko.changeset.edit",
 ]);
 
@@ -37,6 +39,7 @@ const GIT_DELIVERY_CANONICAL_IDS = [
   "keiko.git.push",
   "keiko.git.pullrequest",
   "keiko.git.execute",
+  "keiko.git.sync",
   "keiko.ci.status",
 ];
 const GIT_DELIVERY_ALIASES = [
@@ -47,6 +50,7 @@ const GIT_DELIVERY_ALIASES = [
   "keiko_git_push",
   "keiko_pull_request",
   "keiko_git_execute",
+  "keiko_git_sync",
   "keiko_ci_status",
 ];
 
@@ -129,7 +133,7 @@ describe("opencode registration set", () => {
   // (built from this same registration set) actually shows them to the real underlying model --
   // without this, a real model could never choose to call them even though the incoming wire
   // dispatch (opencodeToolSchemas.ts / opencodeRuntimeAdapter.ts) is ready to handle a call.
-  it("declares all eight #3386/#3387/#3388 Git/CI tools under their canonical identities", () => {
+  it("declares all nine #3386/#3387/#3388/#3902 Git/CI tools under their canonical identities", () => {
     const catalog = createKeikoToolCatalog([opencodeRegistrationSet()]);
     const projection = compileToolProjection(catalog, OPENCODE_PROFILE);
     const canonicalIds = projection.tools.map((tool) => tool.toolRef.canonicalId);
@@ -179,14 +183,14 @@ describe("opencode registration set", () => {
     });
   });
 
-  it("declares exactly seventeen governed tools with unique canonical identities and aliases", () => {
+  it("declares exactly eighteen governed tools with unique canonical identities and aliases", () => {
     const catalog = createKeikoToolCatalog([opencodeRegistrationSet()]);
     const projection = compileToolProjection(catalog, OPENCODE_PROFILE);
-    expect(projection.tools).toHaveLength(17);
+    expect(projection.tools).toHaveLength(18);
     const canonicalIds = projection.tools.map((tool) => tool.toolRef.canonicalId);
     const aliases = projection.tools.map((tool) => tool.alias);
-    expect(new Set(canonicalIds).size).toBe(17);
-    expect(new Set(aliases).size).toBe(17);
+    expect(new Set(canonicalIds).size).toBe(18);
+    expect(new Set(aliases).size).toBe(18);
   });
 
   // #3417: the catalog owns only the discovery descriptor; it reads, takes no argument, carries the
@@ -245,6 +249,19 @@ describe("opencode registration set", () => {
     expect(new Set(execute?.effects)).toEqual(requiredEffects);
   });
 
+  // #3902 AC2: a pull moves the worktree and both reach the remote, as gitOperationRequirements.ts
+  // states for fetch and pull.
+  it("gives the governed fetch and pull the sync owner's effects", () => {
+    const projection = compileToolProjection(
+      createKeikoToolCatalog([opencodeRegistrationSet()]),
+      OPENCODE_PROFILE,
+    );
+    const sync = projection.tools.find((entry) => entry.alias === "keiko_git_sync");
+    expect([...(sync?.effects ?? [])].sort()).toEqual(
+      ["workspace-write", "delivery-substrate", "network-egress"].sort(),
+    );
+  });
+
   // #3414: #3386's H1 local repository-search handler is implemented and mounted server-side, so
   // this issue projects it as the model-visible tool `keiko_repository_search` under its reserved
   // canonical identity `keiko.repo.search@1`. Read-only, search-only: `keiko_workspace_discover`
@@ -281,8 +298,8 @@ describe("opencode registration set", () => {
   it("is the source coding-sidecar-gateway.ts derives its outgoing gateway advertisement from", () => {
     const catalog = createKeikoToolCatalog([opencodeRegistrationSet()]);
     const definitions = gatewayToolDefinitions(catalog, OPENCODE_PROFILE);
-    expect(definitions).toHaveLength(17);
-    expect(new Set(definitions.map((tool) => tool.name)).size).toBe(17);
+    expect(definitions).toHaveLength(18);
+    expect(new Set(definitions.map((tool) => tool.name)).size).toBe(18);
     for (const tool of definitions) expect(tool.description.length).toBeGreaterThan(0);
   });
 
@@ -414,7 +431,7 @@ describe("inactive Code Mode catalog", () => {
     const direct = opencodeRegistrationSet();
     const grouped = opencodeRegistrationSet("code-mode");
     expect(grouped.entries).toEqual(direct.entries);
-    expect(grouped.entries).toHaveLength(17);
+    expect(grouped.entries).toHaveLength(18);
     expect(grouped.profile).toEqual({ id: "opencode-code-mode", version: 1 });
     expect(grouped.nativeExtensions).toEqual([
       { alias: "question", contractVersion: 1 },

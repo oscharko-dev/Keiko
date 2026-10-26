@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 369,
-  "completeClassCount": 369,
+  "supportedClassCount": 370,
+  "completeClassCount": 370,
   "completeness": "complete",
   "classes": [
     {
@@ -13440,6 +13440,100 @@
             "causeChain": false
           },
           "proofIds": ["coding-runtime.verification-summarized.emitted-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "coding-runtime-websearch",
+      "requirementContract": "coding-runtime-websearch",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["state"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": ["coding-runtime.websearch.performed"],
+        "end": [],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "coding-runtime.websearch.performed",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["coding-runtime.websearch.performed"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "coding-runtime.websearch.performed",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "causeChain",
+              "type": "string-array",
+              "dataClass": "error-kind",
+              "required": false
+            },
+            {
+              "name": "durationMs",
+              "type": "integer",
+              "dataClass": "duration",
+              "required": true
+            },
+            {
+              "name": "frames",
+              "type": "string-array",
+              "dataClass": "opaque-id",
+              "required": false
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "responseBytes",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "resultCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "duration",
+            "error-kind",
+            "loss-state",
+            "opaque-id"
+          ],
+          "frameCauseEvidence": {
+            "frames": true,
+            "causeChain": true
+          },
+          "proofIds": ["coding-runtime.websearch.performed.emitted-line"],
           "replayReferences": [],
           "missingObligations": []
         }
@@ -30297,6 +30391,12 @@
               "type": "string",
               "dataClass": "closed-enum",
               "required": true
+            },
+            {
+              "name": "syncOutcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
             },
             {
               "name": "truncated",

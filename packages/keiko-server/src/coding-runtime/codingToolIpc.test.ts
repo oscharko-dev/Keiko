@@ -116,6 +116,52 @@ describe("coding tool IPC authority effects", () => {
       }),
     ).toEqual(["workspace-write"]);
   });
+
+  // #3902 AC2: a fetch or pull carries the Git sync owner's own requirement, never a read's.
+  it.each(["fetch", "pull"] as const)("requires the Git sync owner's classes for a %s", (op) => {
+    expect(
+      codingToolRequiredActionClasses({
+        action: "git",
+        operation: op,
+        actionId: op,
+        idempotencyKey: op,
+      }),
+    ).toEqual(["delivery-substrate", "network-egress"]);
+  });
+});
+
+// #3902 AC2: keiko_git_sync's wire shape -- the operation, an optional redeemed approval, nothing
+// the model could use to name a remote, a ref or an argument.
+describe("coding tool IPC governed fetch and pull", () => {
+  const proof = { approvalId: "call-1", approvalDigest: "d".repeat(64) };
+
+  it.each(["fetch", "pull"] as const)("admits a %s with and without its approval proof", (op) => {
+    const request = { action: "git", operation: op, actionId: "call-1", idempotencyKey: "call-1" };
+    expect(parseCodingToolRequest(JSON.stringify(request), 262_144)).toEqual(request);
+    const approved = { ...request, approvalProof: proof };
+    expect(parseCodingToolRequest(JSON.stringify(approved), 262_144)).toEqual(approved);
+  });
+
+  it.each([
+    ["a remote", { remote: "origin" }],
+    ["a refspec", { refspec: "main" }],
+    ["the tool's own flag", { pull: true }],
+    ["an invalid proof", { approvalProof: { ...proof, approvalDigest: "not-a-digest" } }],
+  ])("refuses a fetch or pull carrying %s", (_label, extra) => {
+    for (const op of ["fetch", "pull"])
+      expect(
+        parseCodingToolRequest(
+          JSON.stringify({
+            action: "git",
+            operation: op,
+            actionId: "call-1",
+            idempotencyKey: "call-1",
+            ...extra,
+          }),
+          262_144,
+        ),
+      ).toBeUndefined();
+  });
 });
 
 describe("coding tool IPC read windows (#2473)", () => {

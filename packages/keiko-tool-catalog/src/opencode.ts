@@ -1,7 +1,7 @@
 import { WORKSPACE_PATH_DISCOVERY_MODES } from "@oscharko-dev/keiko-contracts/runtime/workspace";
 import { WORKSPACE_PORTABLE_PATH_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 // Canonical managed OpenCode descriptors, their profile and pinned native extension schemas.
-// The default profile exposes seventeen governed tools plus `question`. The explicit Code Mode
+// The default profile exposes eighteen governed tools plus `question`. The explicit Code Mode
 // profile retains those same governed capabilities and describes original native question/execute
 // transport. It is an inactive advertisement prerequisite, not a runtime or network activation.
 // Native extensions are never managed descriptors and retain their exact pinned wire schemas.
@@ -696,6 +696,26 @@ function gitExecuteSpec(): OpenCodeToolSpec {
   };
 }
 
+// #3902 AC2: one fetch, or one fast-forward pull, through the Git sync owner. A pull moves the
+// worktree, a fetch only remote-tracking refs; both reach the remote.
+function gitSyncSpec(): OpenCodeToolSpec {
+  return {
+    canonicalId: "keiko.git.sync",
+    alias: "keiko_git_sync",
+    description:
+      "Fetch the upstream remote's branches (pull: false), or fast-forward the current branch to " +
+      "its upstream (pull: true). It never merges, rebases or overwrites local changes; a branch " +
+      "that has diverged, has no upstream or has uncommitted changes is reported, not changed. " +
+      "This call waits for any required operator decision.",
+    inputSchema: managedObjectSchema({ pull: { type: "boolean" } }, ["pull"]),
+    effects: ["workspace-write", "delivery-substrate", "network-egress"],
+    idempotency: "server-key-required",
+    handlerId: "opencode-git-sync-port",
+    // It waits in place for the operator's approval of the call below Full access.
+    maxDurationMs: GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
+  };
+}
+
 function ciStatusSpec(): OpenCodeToolSpec {
   return {
     canonicalId: "keiko.ci.status",
@@ -742,6 +762,7 @@ export function opencodeRegistrationSet(
       gitPushSpec(),
       gitPullRequestSpec(),
       gitExecuteSpec(),
+      gitSyncSpec(),
       ciStatusSpec(),
     ].map((spec) => entryFor(spec)),
   };

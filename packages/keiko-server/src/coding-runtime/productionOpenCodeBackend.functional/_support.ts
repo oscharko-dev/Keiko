@@ -88,7 +88,9 @@ export interface ScriptState {
     | "lifecycle"
     | "lifecycle-continue"
     | "probe"
-    | "index";
+    | "index"
+    | "sync"
+    | "websearch";
   calls: number;
   readonly old: string;
   readonly next: string;
@@ -814,7 +816,40 @@ function processResponse(script: ScriptState, transcript: string): NormalizedRes
   if (script.mode === "lifecycle" || script.mode === "lifecycle-continue")
     return lifecycleResponse(script, transcript);
   if (script.mode === "index") return indexResponse(transcript);
+  if (script.mode === "sync") return syncResponse(transcript);
+  if (script.mode === "websearch") return webSearchResponse(transcript);
   return script.mode === "probe" ? probeResponse(script, transcript) : undefined;
+}
+
+/** The query a web search journey asks the original `websearch` tool. */
+export const FUNCTIONAL_WEBSEARCH_QUERY = "keiko governed search fixture";
+
+// #3903 AC3: the original runtime searches once with its own `websearch` tool and answers.
+function webSearchResponse(transcript: string): NormalizedResponse {
+  if (transcript.includes(TITLE_GENERATION_PREFIX)) return normal();
+  return toolReplyCount(transcript) === 0
+    ? tool("websearch", { query: FUNCTIONAL_WEBSEARCH_QUERY })
+    : normal();
+}
+
+/** Printed by the agent's shell once it has fetched and fast-forwarded through Keiko. */
+export const FUNCTIONAL_SYNC_HEAD_MARKER = "sync.head=";
+
+// #3902 AC2: the original runtime tries its shell's own fetch first (refused in every mode), then
+// fetches and fast-forwards through `keiko_git_sync`, and reads the commit it now stands on with its
+// own Git. Each step answers the previous tool result, as a model does.
+function syncResponse(transcript: string): NormalizedResponse {
+  if (transcript.includes(TITLE_GENERATION_PREFIX)) return normal();
+  const steps: readonly (() => NormalizedResponse)[] = [
+    (): NormalizedResponse => tool("shell", { command: "git fetch origin" }),
+    (): NormalizedResponse => tool("keiko_git_sync", { pull: false }),
+    (): NormalizedResponse => tool("keiko_git_sync", { pull: true }),
+    (): NormalizedResponse =>
+      tool("shell", {
+        command: `printf '${FUNCTIONAL_SYNC_HEAD_MARKER}%s\\n' "$(git log -1 --format=%s)"`,
+      }),
+  ];
+  return steps[toolReplyCount(transcript)]?.() ?? normal();
 }
 
 /** The file an index journey changes, stages and gives back to the worktree. */
@@ -1015,8 +1050,10 @@ function tool(
     | "keiko_child_agent"
     | "keiko_git_stage"
     | "keiko_git_execute"
+    | "keiko_git_sync"
     | "question"
-    | "shell",
+    | "shell"
+    | "websearch",
   args: Record<string, unknown>,
   callId?: string,
 ): NormalizedResponse {

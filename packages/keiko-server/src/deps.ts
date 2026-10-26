@@ -453,6 +453,15 @@ import {
 } from "./gitDelivery/prDescriptionRoutes.js";
 import { descriptionAuthorityEnvelopeDigest } from "./gitDelivery/runBoundAuthority.js";
 import { createProductionVerifiedCommitDependencies } from "./coding-runtime/productionVerifiedCommitDependencies.js";
+import {
+  createNativeWebSearch,
+  nativeWebSearchConfigFromEnv,
+  type NativeWebSearch,
+} from "./coding-runtime/nativeWebSearch.js";
+import {
+  createGovernedSyncHeads,
+  type GovernedSyncHeads,
+} from "./coding-runtime/governedSyncHeads.js";
 import { createProductionDraftDeliveryDependencies } from "./coding-runtime/productionDraftDeliveryDependencies.js";
 import {
   createProductionCodingRuntimeResolver,
@@ -6036,6 +6045,26 @@ function configuredChatModelIds(args: UiHandlerDepsAssemblyArgs): readonly strin
         .map((capability) => capability.id);
 }
 
+// A proof that could not run (IDENTITY_PROOF_FAILED, logged at its source) yields no root: the
+// activation stays unavailable rather than crashing the resolution or trusting an unproven tree.
+function activeWorkspaceRoot(workspaceLifecycle: WorkspaceLifecycleService): string | undefined {
+  try {
+    return workspaceLifecycle.getActive()?.binding.activeRoot;
+  } catch (error) {
+    if (isIdentityProofFailure(error)) return undefined;
+    throw error;
+  }
+}
+
+// #3903 AC3: the operator's admitted web search integration; none keeps the honest refusal.
+function nativeWebSearchFor(args: UiHandlerDepsAssemblyArgs): NativeWebSearch {
+  return createNativeWebSearch({
+    config: nativeWebSearchConfigFromEnv(args.options.env),
+    activityLog: processServerLogSink(),
+    egress: () => args.runtimeConfig.current()?.egress ?? args.egress,
+  });
+}
+
 // The attested-portable activation path supplies Keiko's own confirmation plane; injected
 // ports never receive a fallback consumer, so external composition stays fail-closed (#2377).
 function resolveProductionRuntimePorts(
@@ -6075,16 +6104,8 @@ function resolveProductionRuntimePorts(
     gatewayCodingModelIds: (): readonly string[] => configuredChatModelIds(args),
     activityLog: processServerLogSink(),
     nativeWorktrees: nativeWorktreeProvisioning(workspaceLifecycle, args.bundle),
-    // A proof that could not run (IDENTITY_PROOF_FAILED, logged at its source) yields no root: the
-    // activation stays unavailable rather than crashing the resolution or trusting an unproven tree.
-    resolveWorkspaceRoot: (): string | undefined => {
-      try {
-        return workspaceLifecycle.getActive()?.binding.activeRoot;
-      } catch (error) {
-        if (isIdentityProofFailure(error)) return undefined;
-        throw error;
-      }
-    },
+    nativeWebSearch: nativeWebSearchFor(args),
+    resolveWorkspaceRoot: () => activeWorkspaceRoot(workspaceLifecycle),
   });
   return {
     ports: activation.ports,
@@ -6251,16 +6272,22 @@ function qualifiedRuntimeResolver(
   const { args } = input;
   const confirmationConsumer = runtimeStartConfirmationConsumer(args, input.activated);
   const resolveWorkspaceRootAccess = createWorkspaceRootAccessResolver(args.bundle);
-  const verifiedCommit = runtimeVerifiedCommitDependencies(input);
+  // #3902 AC2: the heads a governed fast-forward writes, recorded by the runtime Git service and
+  // accepted by the workspace authority beside the verified commit's receipt.
+  const governedSyncHeads = createGovernedSyncHeads();
+  const verifiedCommit = runtimeVerifiedCommitDependencies(input, governedSyncHeads);
   const draftDelivery = runtimeDraftDeliveryDependencies(input);
   return createProductionCodingRuntimeResolver({
-    workspaceAuthority: runtimeWorkspaceAuthority(
-      args,
-      input.workspaceLifecycle,
-      input.managedTaskWorkspaceRoot,
-      input.deploymentCeiling,
-      input.envelopeBounds,
-    ),
+    workspaceAuthority: {
+      ...runtimeWorkspaceAuthority(
+        args,
+        input.workspaceLifecycle,
+        input.managedTaskWorkspaceRoot,
+        input.deploymentCeiling,
+        input.envelopeBounds,
+      ),
+      governedSyncHead: governedSyncHeads.latest,
+    },
     ...input.ports,
     serverRuntimeChangeset: createRuntimeChangesetApplyPort({
       runtimeMutationLease: input.runtimeMutationLeaseBroker,
@@ -6298,9 +6325,10 @@ function qualifiedRuntimeResolver(
 
 function runtimeVerifiedCommitDependencies(
   input: QualifiedRuntimeResolverInput,
+  governedSyncHeads: GovernedSyncHeads,
 ): ReturnType<typeof createProductionVerifiedCommitDependencies> {
   const { args } = input;
-  return createProductionVerifiedCommitDependencies(
+  const verified = createProductionVerifiedCommitDependencies(
     {
       store: args.bundle.uiStore,
       evidenceStore: args.evidenceStore,
@@ -6313,6 +6341,9 @@ function runtimeVerifiedCommitDependencies(
     },
     args.bundle.codingRuntimeSnapshotStore,
   );
+  return verified === undefined
+    ? undefined
+    : { ...verified, recordGovernedSyncHead: governedSyncHeads.record };
 }
 
 function runtimeDraftDeliveryDependencies(

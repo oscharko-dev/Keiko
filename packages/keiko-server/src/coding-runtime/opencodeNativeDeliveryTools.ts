@@ -27,6 +27,7 @@ export const OPENCODE_NATIVE_DELIVERY_TOOL_NAMES: readonly string[] = Object.fre
   "keiko_git_push",
   "keiko_pull_request",
   "keiko_git_execute",
+  "keiko_git_sync",
   "keiko_ci_status",
 ]);
 
@@ -42,4 +43,4 @@ export function isOpenCodeNativeDeliveryToolName(value: unknown): value is strin
  * the list above, so the pointer cannot name a tool the run does not have.
  */
 export const OPENCODE_NATIVE_DELIVERY_REFUSAL_MESSAGE =
-  "Keiko refused this command: Git delivery is a Keiko action, not a shell one. Propose it with keiko_git_stage (with unstage: true it gives staged changes back), keiko_git_commit, keiko_git_push and keiko_pull_request (the operator approves each proposal), then redeem an approved proposal with keiko_git_execute. Branches, merges and history rewrites are not available; read-only Git commands still run.";
+  "Keiko refused this command: Git delivery is a Keiko action, not a shell one. Propose it with keiko_git_stage (unstage: true gives staged changes back), keiko_git_commit, keiko_git_push and keiko_pull_request (the operator approves each proposal), then redeem an approved proposal with keiko_git_execute. Fetch or fast-forward pull with keiko_git_sync. Branches, merges and history rewrites are not available; read-only Git commands still run.";

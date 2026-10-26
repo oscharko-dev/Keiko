@@ -54,6 +54,7 @@ const KEIKO_PRODUCER_TOOLS = [
   "keiko_git_push",
   "keiko_pull_request",
   "keiko_git_execute",
+  "keiko_git_sync",
   "keiko_ci_status",
 ] as const;
 const MODEL_VISIBLE_TOOLS = ["question", ...KEIKO_PRODUCER_TOOLS] as const;

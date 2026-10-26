@@ -1,3 +1,4 @@
+import type { NativeWebSearch } from "./nativeWebSearch.js";
 import type { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
 import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync, realpathSync } from "node:fs";
@@ -216,6 +217,8 @@ export interface ProductionOpenCodeBackendInput {
   readonly instructionSourceEgress?: (() => OutboundHttpEgressConfig | undefined) | undefined;
   /** Keiko's managed task-workspace owner for an approved Code Mode `worktree_create` (#3903 AC4). */
   readonly nativeWorktrees?: NativeWorktreeProvisionPort | undefined;
+  /** The web search integration the operator admitted for native runs (#3903 AC3). */
+  readonly nativeWebSearch?: NativeWebSearch | undefined;
   /** The operator's raw `KEIKO_CODING_EXTERNAL_READ_ROOTS` (#3900 AC5); absent admits none. */
   readonly externalReadRoots?: string | undefined;
   /** The operator's MCP server registry for one native run (`mcpServerRegistry.ts`). */
@@ -503,6 +506,7 @@ function nativeRunInputs(
   | "mcpRelay"
   | "remoteSkills"
   | "nativeWorktrees"
+  | "nativeWebSearch"
   | "externalReadRoots"
   | "configDocuments"
   | "agentModelCatalog"
@@ -522,6 +526,7 @@ function nativeRunInputs(
     ...mcpRelayFor(input),
     ...(input.remoteSkills === undefined ? {} : { remoteSkills: input.remoteSkills }),
     ...(input.nativeWorktrees === undefined ? {} : { nativeWorktrees: input.nativeWorktrees }),
+    ...(input.nativeWebSearch === undefined ? {} : { nativeWebSearch: input.nativeWebSearch }),
     externalReadRoots: nativeExternalReadRoots(input, run),
   };
 }

@@ -942,7 +942,7 @@ describe("inactive native Code Mode provider advertisement", () => {
       () => NOW,
     );
     expect(bridge.tools.map((tool) => tool.name).sort()).toEqual(["execute", "question"]);
-    expect(advertisement.projection.tools).toHaveLength(17);
+    expect(advertisement.projection.tools).toHaveLength(18);
     const native = JSON.parse(
       readFileSync(
         new URL(

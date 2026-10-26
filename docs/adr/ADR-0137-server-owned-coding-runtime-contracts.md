@@ -1120,13 +1120,24 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   access), keeps the workspace's sensitive-path and hard-link refusals, and refuses every write. The
   Linux mount allowlist names no external root yet, so none is admitted there; repository
   references would leave the machine and stay refused.
-- **Web search needs an admitted search integration (T15, #3903 AC3).** The pinned 2.1.4 offers
-  `websearch` at Full access and calls the operator's selected search integration. Keiko admits
-  none, and without one the original tool waits on a provider it cannot reach (measured on the
-  executable), so the policy refuses it at once in every mode (`unsupported-action`) and names the
-  alternative, `webfetch` of a known URL, which Full access allows through the policy with
-  inherited egress (real binary: a loopback page is fetched in Full access and refused at once
-  below it).
+- **Web search runs through the search integration the operator admitted (T15, #3903 AC3,
+  PR #4064 review).** The pinned 2.1.4 `websearch` asks the policy for its query and then calls the
+  selected provider of the runtime's websearch service; with no provider selected it waits on the
+  user's choice. The generated `keiko.native-delivery` plugin registers Keiko's provider, `keiko`,
+  as that service's default (`ctx.websearch`), so the original tool, its permission ask and its
+  result formatting stay OpenCode's, while the search runs in the server (`nativeWebSearch.ts`):
+  only with an integration the operator admitted (`KEIKO_CODING_WEBSEARCH_ENDPOINT`, an Exa-style
+  MCP endpoint, https or a loopback http service; an optional `KEIKO_CODING_WEBSEARCH_API_KEY` that
+  never reaches the runtime), only for the exact query the run's policy has just allowed for that
+  run (a one-use grant), and through the gateway's outbound transport with the deployment's proxy
+  and CA, one POST to the configured host, no redirect, bounded time, bytes and results. With an
+  integration, `websearch` is an internet action like `webfetch`: Full access allows it, narrower
+  modes keep the honest refusal. Without one the policy refuses it at once in every mode
+  (`unsupported-action`) and names the alternative, `webfetch` of a known URL, which Full access
+  allows through the policy with inherited egress. `coding-runtime.websearch.performed` records the
+  outcome, counts, sizes and duration, never the query, a result or the endpoint. Real binary,
+  production composition: a fixture-owned loopback search service answers one Full access search
+  the model then reads; Supervised workspace and an unconfigured server search nothing.
 - **An unoffered native tool name is the producer's to answer.** The gateway binds a native call
   by name only and grants nothing (ADR-0175 D2). A model that names a tool the request did not
   offer (a hallucinated `bash`, say) reaches OpenCode, which answers with its own unavailable-tool
@@ -1825,8 +1836,11 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   tools). The native profile therefore registers exactly one group of Keiko tools, through the
   generated `keiko.native-delivery` plugin (`keiko_native_delivery.ts`): `keiko_git_status`,
   `keiko_git_diff`, `keiko_git_stage`, `keiko_git_commit`, `keiko_git_push`,
-  `keiko_pull_request`, `keiko_git_execute`, `keiko_ci_status` and `keiko_verification`
-  (`opencodeNativeDeliveryTools.ts` holds the list once). The managed worktree's Git directory is
+  `keiko_pull_request`, `keiko_git_execute`, `keiko_git_sync`, `keiko_ci_status` and
+  `keiko_verification` (`opencodeNativeDeliveryTools.ts` holds the list once).
+  `keiko_git_sync` fetches the upstream or fast-forwards the run's branch to it through the Git
+  sync owner, under the owner's own mode decision (ADR-0138 D3 item 5); the shell's own fetch and
+  pull stay refused (#3902 AC2). The managed worktree's Git directory is
   read-only to the run, so its own Git reads status, diff, log, show and blame but cannot write the
   index; `keiko_git_stage` with `unstage: true` gives staged paths back to the worktree through
   the same proposal, approval and redemption as staging (`unstage-<n>`, redeemed as

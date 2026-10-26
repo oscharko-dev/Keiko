@@ -148,6 +148,8 @@ export type CodingWorkbenchSupervisedActionKind =
   | "file-edit"
   | "git-stage"
   | "git-unstage"
+  | "git-fetch"
+  | "git-pull"
   | "verification-command"
   | "ci-observe"
   | "connector-read"
@@ -165,6 +167,8 @@ export const CODING_WORKBENCH_SUPERVISED_ACTION_KINDS: readonly CodingWorkbenchS
     "file-edit",
     "git-stage",
     "git-unstage",
+    "git-fetch",
+    "git-pull",
     "verification-command",
     "ci-observe",
     "connector-read",
@@ -915,6 +919,14 @@ export function isCodingWorkbenchActionAllowedForMode(
   return decideCodingWorkbenchActionForMode(mode, actionClass, connectorScopes).allowed;
 }
 
+const COMMAND_EXECUTION_ACTION_KINDS: ReadonlySet<CodingWorkbenchSupervisedActionKind> = new Set([
+  "verification-command",
+  "ci-observe",
+  "connector-read",
+  "git-fetch",
+  "git-pull",
+]);
+
 export function permissionKindForSupervisedCodingAction(
   actionKind: CodingWorkbenchSupervisedActionKind,
 ): CodingWorkbenchPermissionRequestKind {
@@ -927,13 +939,10 @@ export function permissionKindForSupervisedCodingAction(
   // these two actions and would leave Approve permanently unbound. They also must never map to
   // "connector-access": that permission kind is hard-denied at every mode by
   // unavailableRuntimeActionEvent (codingRuntimeManager.ts), which would make them unreachable.
-  if (
-    actionKind === "verification-command" ||
-    actionKind === "ci-observe" ||
-    actionKind === "connector-read"
-  ) {
-    return "command-execution";
-  }
+  // git-fetch and git-pull (#3902 AC2) are the same single, fixed-argv Git command on the same ask
+  // lane; their delivery-scope decision is the Git sync owner's (runBoundAuthority.ts), and
+  // "delivery-substrate" here would be hard-denied by that same function before anyone could answer.
+  if (COMMAND_EXECUTION_ACTION_KINDS.has(actionKind)) return "command-execution";
   if (actionKind === "research") return "network-egress";
   if (actionKind === "connector-write" || actionKind === "external-write") {
     return "connector-access";

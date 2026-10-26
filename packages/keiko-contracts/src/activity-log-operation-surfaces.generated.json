@@ -181,6 +181,7 @@
   "coding-runtime.undo-window": "tools-workflows",
   "coding-runtime.verification": "tools-workflows",
   "coding-runtime.verification-summarized": "tools-workflows",
+  "coding-runtime.websearch.performed": "tools-workflows",
   "coding-runtime.workspace-discovery": "tools-workflows",
   "coding-runtime.workspace-read": "tools-workflows",
   "coding-sidecar.gateway.outcome": "tools-workflows",

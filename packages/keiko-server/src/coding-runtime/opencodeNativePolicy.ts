@@ -123,9 +123,10 @@ const READ_ACTIONS = new Set([
 const EDIT_ACTIONS = new Set(["edit", "write", "patch"]);
 const EGRESS_ACTIONS = new Set(["webfetch"]);
 /**
- * The original `websearch` (T15) calls the operator's selected search integration. Keiko admits
- * none, and without one the pinned 2.1.4 tool waits on a provider it cannot reach (measured with
- * the original executable at Full access), so it is refused at once, in every mode, with the
+ * The original `websearch` (T15) calls the selected provider of the runtime's websearch service,
+ * which Keiko's generated plugin sets to Keiko's own (nativeWebSearch.ts): the search runs in the
+ * server, through the integration the operator admitted. With one admitted it is an internet action
+ * like `webfetch` (Full access). Without one it is refused at once, in every mode, with the
  * alternative the model has: `webfetch` of a known URL (Full access).
  */
 const WEBSEARCH_UNCONFIGURED: Classified = Object.freeze({
@@ -740,6 +741,8 @@ export interface OpenCodeNativePolicyInput {
    * A tool, or a resource of a server, that it does not name stays an unsupported action.
    */
   readonly mcp?: OpenCodeNativeMcpGrants | undefined;
+  /** Whether the operator admitted a web search integration (nativeWebSearch.ts, #3903 AC3). */
+  readonly webSearch?: boolean | undefined;
 }
 
 export interface OpenCodeNativeMcpGrants {
@@ -793,6 +796,7 @@ function admittedRootsOf(input: OpenCodeNativePolicyInput): AdmittedRoots {
     workspaceRoot: input.workspaceRoot,
     planRoot: input.planRoot,
     externalRoots: input.externalRoots ?? [],
+    webSearch: input.webSearch === true,
   };
 }
 
@@ -812,6 +816,8 @@ interface AdmittedRoots {
   readonly workspaceRoot: string;
   readonly planRoot?: string | undefined;
   readonly externalRoots?: readonly string[] | undefined;
+  /** The operator admitted a web search integration. */
+  readonly webSearch?: boolean | undefined;
 }
 
 function classifyNativeAction(
@@ -822,7 +828,7 @@ function classifyNativeAction(
   if (permission === OPENCODE_CODE_MODE_SESSION_MOVE)
     return classifySessionMove(request, roots.workspaceRoot);
   if (permission === OPENCODE_CODE_MODE_WORKTREE_CREATE) return classifyWorktreeCreate(request);
-  if (permission === "websearch") return WEBSEARCH_UNCONFIGURED;
+  if (permission === "websearch") return roots.webSearch === true ? EGRESS : WEBSEARCH_UNCONFIGURED;
   if (!KNOWN_ACTIONS.has(permission))
     return {
       reason: "unsupported-action",

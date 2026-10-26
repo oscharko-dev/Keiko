@@ -1,6 +1,7 @@
 import type {
   CodingRuntimeGitResult,
   CodingRuntimeGitStage,
+  CodingRuntimeGitSync,
   CodingRuntimeGitUnstage,
   CodingWorkbenchMode,
   CodingWorkbenchRuntimePendingApprovalReview,
@@ -11,7 +12,9 @@ import {
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { isCodingRuntimeGitResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
+import { isSafeGitRefName } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import {
+  readGitRevision,
   readGitStageCandidate,
   readGitStageSupport,
   readGitRawWorktreeSnapshot,
@@ -33,6 +36,8 @@ import {
   executeGovernedMutation,
   gitDeliveryActivityErrorKind,
   gitDeliveryActivityFailureKind,
+  gitDeliveryTerminationHandler,
+  recordKeikoWrittenHead,
 } from "./execution.js";
 import {
   admitStageSelection,
@@ -47,12 +52,17 @@ import {
 import {
   snapshotRuntimeGitRequest,
   type RuntimeGitRequest,
+  type RuntimeGitSyncOperation,
 } from "../coding-runtime/codingRuntimeGitIpc.js";
+import { buildSyncPreview, runSyncExecute, type GitDeliverySyncSeams } from "./syncExecution.js";
+import { persistGitSyncResult } from "./syncEvidence.js";
 import type { CodingToolMutationGuard } from "../coding-runtime/codingToolFacadePorts.js";
+import type { GovernedSyncHead } from "../coding-runtime/governedSyncHeads.js";
 import { describeError } from "../diagnostics-log.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { errorKindOf } from "@oscharko-dev/keiko-activity-log";
+import type { GitSyncOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-sync";
 
 const RUNTIME_GIT_STATE_FIELD = {
   type: "string",
@@ -138,6 +148,8 @@ const RUNTIME_GIT_OPERATION = defineActivityLogOperation({
         "stage-execute",
         "unstage-propose",
         "unstage-execute",
+        "fetch",
+        "pull",
       ],
     },
     runId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
@@ -147,6 +159,31 @@ const RUNTIME_GIT_OPERATION = defineActivityLogOperation({
     pathCount: { type: "integer", dataClass: "count", required: false },
     fileCount: { type: "integer", dataClass: "count", required: false },
     truncated: { type: "boolean", dataClass: "closed-enum", required: false },
+    // #3902 AC2: the closed outcome of a fetch or pull (`GIT_SYNC_OUTCOMES`); the Git process lines
+    // of the same correlation carry a failure's own error evidence.
+    syncOutcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "succeeded",
+        "up-to-date",
+        "no-remote",
+        "no-upstream",
+        "detached-head",
+        "dirty-worktree",
+        "not-fast-forward",
+        "authority-denied",
+        "auth-failed",
+        "untrusted-host-key",
+        "remote-unavailable",
+        "timeout",
+        "output-truncated",
+        "git-missing",
+        "unsafe-repository",
+        "git-error",
+      ],
+    },
     failureKind: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
     errorClass: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
     code: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
@@ -168,7 +205,8 @@ type RuntimeGitPhase =
   | "stage-propose"
   | "stage-execute"
   | "unstage-propose"
-  | "unstage-execute";
+  | "unstage-execute"
+  | RuntimeGitSyncOperation;
 /** A proposal's result: staging, or its inverse unstaging (#3902 AC2), on one lifecycle. */
 type IndexProposalResult = CodingRuntimeGitStage | CodingRuntimeGitUnstage;
 interface RuntimeGitActivityFields {
@@ -186,6 +224,7 @@ interface RuntimeGitActivityFields {
   readonly pathCount?: number;
   readonly fileCount?: number;
   readonly truncated?: boolean;
+  readonly syncOutcome?: GitSyncOutcome;
   readonly failureKind?: string;
   readonly errorClass?: string;
   readonly code?: string;
@@ -253,6 +292,10 @@ const MAX_OPEN_PROPOSALS = 64;
 interface RuntimeGitOptions extends VerifiedCommitServiceOptions {
   readonly mode: () => CodingWorkbenchMode | undefined;
   readonly invalidateVerification: () => void;
+  /** Test seams of the Git sync owner's executor (its runner, clock, bounds). */
+  readonly sync?: Pick<GitDeliverySyncSeams, "runner" | "now" | "maxBytes" | "timeoutMs">;
+  /** Records the head a governed fast-forward wrote (governedSyncHeads.ts). */
+  readonly recordGovernedSyncHead?: ((head: GovernedSyncHead) => void) | undefined;
 }
 function buildStageProposal(
   context: VerifiedCommitRunContext,
@@ -333,8 +376,43 @@ function assembleProposal(
   };
 }
 
+// A settled fetch or pull: Git's own outcome, in the state vocabulary of the other runtime actions.
+const SYNC_BLOCKS: ReadonlySet<GitSyncOutcome> = new Set([
+  "no-remote",
+  "no-upstream",
+  "detached-head",
+  "dirty-worktree",
+  "not-fast-forward",
+  "git-missing",
+  "unsafe-repository",
+]);
+function syncEvidence(result: CodingRuntimeGitSync): RuntimeGitActivityFields {
+  const state =
+    result.status === "succeeded"
+      ? "succeeded"
+      : result.status === "up-to-date"
+        ? "completed"
+        : result.status === "authority-denied"
+          ? "refused"
+          : SYNC_BLOCKS.has(result.status)
+            ? "blocked"
+            : "failed";
+  return { state, syncOutcome: result.status, truncated: result.truncated };
+}
+
+/** The log outcome of a result: a sync that settled anywhere but Git's success is a warning. */
+function resultOutcome(result: RuntimeGitOutcome): "ok" | "refused" {
+  if (result.kind === "refused") return "refused";
+  return (result.kind === "fetch" || result.kind === "pull") &&
+    result.status !== "succeeded" &&
+    result.status !== "up-to-date"
+    ? "refused"
+    : "ok";
+}
+
 function resultEvidence(result: RuntimeGitOutcome): RuntimeGitActivityFields {
   if (result.kind === "refused") return { state: "refused", reason: result.reason };
+  if (result.kind === "fetch" || result.kind === "pull") return syncEvidence(result);
   if (result.kind === "stage" || result.kind === "unstage")
     return {
       state: result.status,
@@ -432,12 +510,7 @@ export class RuntimeGitService {
       const result = await this.dispatch(context, request, guard);
       if (result.kind !== "refused" && !isCodingRuntimeGitResult(result))
         throw new Error("git-runtime-result-invalid");
-      this.log(
-        context,
-        phase,
-        resultEvidence(result),
-        result.kind === "refused" ? "refused" : "ok",
-      );
+      this.log(context, phase, resultEvidence(result), resultOutcome(result));
       if (context.stillAuthorized()) return result;
       this.log(context, phase, { state: "withheld", reason: "authority-revoked" }, "refused");
       return REFUSED_AUTHORITY;
@@ -527,6 +600,8 @@ export class RuntimeGitService {
     const execution = this.options.execution ?? {};
     await readVerifiedCommitFacts(context, execution);
     if (request.operation === "status") return runtimeGitStatus(context, execution);
+    if (request.operation === "fetch" || request.operation === "pull")
+      return this.sync(context, request.operation);
     if (request.operation === "diff")
       return {
         kind: "diff",
@@ -542,6 +617,68 @@ export class RuntimeGitService {
     return request.operation === "stage"
       ? this.propose(context, request.paths)
       : this.proposeUnstage(context, request.paths);
+  }
+  // #3902 AC2: one fetch, or one fast-forward pull of the current branch from its upstream, through
+  // the Git sync owner's own executor: the fixed argv, hardened runner, bounds and closed outcomes of
+  // the Git Client's Fetch and Pull. The run's live authority is proven again immediately before
+  // the remote dispatch, and the outcome lands in the same sync evidence ledger.
+  private async sync(
+    context: VerifiedCommitRunContext,
+    operation: RuntimeGitSyncOperation,
+  ): Promise<CodingRuntimeGitSync> {
+    const root = context.workspace.root;
+    const seams: GitDeliverySyncSeams = {
+      ...this.options.sync,
+      correlationId: context.correlationId,
+      activityLog: this.options.execution?.activityLog,
+      beforeRemoteDispatch: () => context.stillAuthorized(),
+    };
+    const before = await buildSyncPreview(operation, root, undefined, seams);
+    const result = await runSyncExecute(operation, root, undefined, seams, before);
+    if (operation === "pull" && result.outcome === "succeeded")
+      await this.recordWrittenHead(context);
+
+    persistGitSyncResult(this.options.mutationDeps, {
+      operation,
+      remote: undefined,
+      workspaceRoot: root,
+      before,
+      result,
+      recordedAtMs: this.now(),
+    });
+    const branch = result.branch ?? before.branch;
+    return {
+      kind: operation,
+      status: result.outcome,
+      ...(branch !== undefined && isSafeGitRefName(branch) ? { branch } : {}),
+      ...(result.ahead === undefined ? {} : { ahead: result.ahead }),
+      ...(result.behind === undefined ? {} : { behind: result.behind }),
+      truncated: result.truncated,
+    };
+  }
+  // #3902 AC2: the fast-forward moved the run's branch to a head Keiko itself wrote. The workspace's
+  // verified head and the run's sync receipt both record it, so the run's authority stands on it as
+  // it stands on a head Keiko's verified commit wrote.
+  private async recordWrittenHead(context: VerifiedCommitRunContext): Promise<void> {
+    const execution = this.options.execution ?? {};
+    await recordKeikoWrittenHead(this.options.mutationDeps, context.workspace, execution, {
+      activityLog: execution.activityLog,
+      correlationId: context.correlationId,
+    });
+    const headSha = await readGitRevision(
+      {
+        workspace: context.workspace,
+        processEnv: execution.processEnv,
+        signal: context.signal,
+        onTerminated: gitDeliveryTerminationHandler(execution, context.correlationId),
+      },
+      "HEAD",
+    );
+    this.options.recordGovernedSyncHead?.({
+      runId: context.runId,
+      headSha,
+      workspaceDigest: context.workspaceDigest,
+    });
   }
   private pruneExpired(): void {
     for (const [id, proposal] of this.proposals) {

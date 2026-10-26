@@ -1083,6 +1083,8 @@ describe("coding-sidecar gateway", () => {
       // #3902 AC2: staging carries the explicit `unstage` choice.
       ["keiko_git_stage", "f8a74e3d1d15960a9252ea9471a03e55ab92f544e8d2c4286ff645e428f9328a"],
       ["keiko_git_status", "d746974fa9afd5e951f76f9af38954b0ad7f436f2120dc974da65e5ee39f856f"],
+      // #3902 AC2: the governed fetch / fast-forward pull, captured from the producer.
+      ["keiko_git_sync", "fa0f6ff1b09f36182eceb06bd3b72e028f5d71accf1a597c24ab3549f060b228"],
       ["keiko_pull_request", "3a1a2638bddc571a74a54ff53556219b1ead22034797cd62f683b2abd7ab8ef1"],
       [
         "keiko_repository_search",
@@ -5763,10 +5765,10 @@ describe("coding sidecar gateway rejection activity log", () => {
       extra: {
         reason: "tool-contract-drift",
         runId: "run-1",
-        expectedToolCount: 18,
+        expectedToolCount: 19,
         receivedToolCount: 2,
         unexpectedToolCount: 0,
-        missingToolCount: 16,
+        missingToolCount: 17,
         completeness: "complete",
         loss: "none",
       },
@@ -5798,7 +5800,7 @@ describe("coding sidecar gateway rejection activity log", () => {
     expect(result).toMatchObject({ status: 403 });
     expect(sink.events[0]?.extra).toMatchObject({
       unexpectedToolCount: 1,
-      missingToolCount: 18,
+      missingToolCount: 19,
       completeness: "complete",
       loss: "none",
     });
@@ -9209,7 +9211,7 @@ describe("inactive Code Mode readiness selection", () => {
     expect(readiness.isVerified("run-1")).toBe(false);
   });
 
-  it("advertises two outer tools and retains the seventeen canonical inner bindings", async () => {
+  it("advertises two outer tools and retains the eighteen canonical inner bindings", async () => {
     const readiness = createOpenCodeGatewayReadinessRegistry("code-mode");
     const chat = vi.fn((_request: GatewayRequest) =>
       Promise.resolve(assistantResponse("azure-coding-model")),
@@ -9234,8 +9236,8 @@ describe("inactive Code Mode readiness selection", () => {
       "execute",
       "question",
     ]);
-    expect(catalog?.projection.tools).toHaveLength(17);
-    expect(catalog?.offered.toolRefs).toHaveLength(17);
+    expect(catalog?.projection.tools).toHaveLength(18);
+    expect(catalog?.offered.toolRefs).toHaveLength(18);
     expect(catalog?.projection.profile).toEqual({
       id: "opencode-code-mode",
       version: 1,

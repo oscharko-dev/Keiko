@@ -43,6 +43,7 @@ const EXPECTED_DELIVERY_TOOLS = [
   "keiko_git_push",
   "keiko_git_stage",
   "keiko_git_status",
+  "keiko_git_sync",
   "keiko_pull_request",
   "keiko_verification",
 ];
@@ -65,6 +66,21 @@ interface GeneratedTool {
   ) => Promise<{ readonly content: string; readonly output?: unknown }>;
 }
 
+/** A provider of the runtime's websearch service, as the producer's plugin API registers it. */
+interface WebSearchProvider {
+  readonly id: string;
+  readonly name: string;
+  readonly execute: (
+    input: unknown,
+    options: { readonly signal?: AbortSignal },
+  ) => Promise<unknown>;
+}
+
+interface WebSearchEditor {
+  readonly add: (provider: WebSearchProvider) => void;
+  readonly default: { readonly set: (id: string) => void };
+}
+
 interface GeneratedPlugin {
   readonly id: string;
   readonly setup: (context: {
@@ -73,6 +89,9 @@ interface GeneratedPlugin {
       readonly transform: (
         callback: (editor: { readonly add: (tool: GeneratedTool) => void }) => void,
       ) => Promise<unknown>;
+    };
+    readonly websearch?: {
+      readonly transform: (callback: (editor: WebSearchEditor) => void) => Promise<unknown>;
     };
   }) => Promise<unknown>;
 }
@@ -94,6 +113,8 @@ interface Loaded {
   readonly delays: number[];
   /** What the producer does when it disposes the plugin. */
   readonly dispose: () => void;
+  /** The websearch providers the plugin registered, and the default it selected. */
+  readonly webSearch: { readonly providers: WebSearchProvider[]; selected?: string };
 }
 
 const CONTEXT: ToolContext = {
@@ -109,7 +130,11 @@ const FACADE_RESULT = {
 };
 
 /** Runs a generated plugin source the way the producer loads it, against a recording fetch. */
-async function load(profile: "direct" | "native", mode: string): Promise<Loaded> {
+async function load(
+  profile: "direct" | "native",
+  mode: string,
+  answer: unknown = FACADE_RESULT,
+): Promise<Loaded> {
   const sources = createGeneratedOpenCodeV2Plugins(profile);
   const source =
     profile === "native"
@@ -140,10 +165,12 @@ async function load(profile: "direct" | "native", mode: string): Promise<Loaded>
         headers: init.headers,
         body: JSON.parse(String(init.body)) as Record<string, unknown>,
       });
-      return Promise.resolve(new Response(JSON.stringify(FACADE_RESULT), { status: 200 }));
+      return Promise.resolve(new Response(JSON.stringify(answer), { status: 200 }));
     },
     AbortController,
     AbortSignal,
+    Array,
+    String,
     TextEncoder,
     TextDecoder,
     Uint8Array,
@@ -153,7 +180,23 @@ async function load(profile: "direct" | "native", mode: string): Promise<Loaded>
     },
     clearTimeout,
   }) as GeneratedPlugin;
+  const webSearch: Loaded["webSearch"] = { providers: [] };
   const cleanup = await plugin.setup({
+    websearch: {
+      transform: (callback): Promise<unknown> => {
+        callback({
+          add: (provider): void => {
+            webSearch.providers.push(provider);
+          },
+          default: {
+            set: (id): void => {
+              webSearch.selected = id;
+            },
+          },
+        });
+        return Promise.resolve();
+      },
+    },
     tool: {
       hook: (name): Promise<unknown> => {
         hooks.push(name);
@@ -179,6 +222,7 @@ async function load(profile: "direct" | "native", mode: string): Promise<Loaded>
     dispose: (): void => {
       if (typeof cleanup === "function") (cleanup as () => void)();
     },
+    webSearch,
   };
 }
 
@@ -198,6 +242,7 @@ const ARGUMENTS: Readonly<Record<string, Record<string, unknown>>> = {
   keiko_git_push: {},
   keiko_pull_request: { title: "feat: add a" },
   keiko_git_execute: { kind: "commit", proposalId: mintProposalId("commit") },
+  keiko_git_sync: { pull: false },
   keiko_ci_status: { forceFresh: false },
 };
 
@@ -315,6 +360,8 @@ describe("the generated native plugins", () => {
     ["keiko_git_stage", ARGUMENTS.keiko_git_stage, "git"],
     ["keiko_git_stage", { paths: ["src/a.ts"], unstage: true }, "git"],
     ["keiko_ci_status", ARGUMENTS.keiko_ci_status, "git"],
+    ["keiko_git_sync", { pull: false }, "git"],
+    ["keiko_git_sync", { pull: true }, "git"],
     ["keiko_verification", ARGUMENTS.keiko_verification, "verification"],
     ["keiko_git_commit", ARGUMENTS.keiko_git_commit, "delivery"],
     ["keiko_git_push", {}, "delivery"],
@@ -370,6 +417,44 @@ describe("the generated native plugins", () => {
     ]);
   });
 
+  // #3902 AC2: keiko_git_sync names its operation on the wire, never its `pull` flag. Below Full
+  // access it asks the operator first, as the operation it is, and redeems that approval.
+  it("fetch and pull through keiko_git_sync, asking the operator first below Full access", async () => {
+    for (const mode of ["governed-assist", "supervised-coding"]) {
+      const native = await load("native", mode);
+      await toolOf(native, "keiko_git_sync").execute({ pull: false }, CONTEXT);
+      await toolOf(native, "keiko_git_sync").execute({ pull: true }, CONTEXT);
+      const bodies = native.fetches.map((call) => call.body);
+      expect(bodies.map((body) => body.action)).toEqual([
+        "permission-request",
+        "git",
+        "permission-request",
+        "git",
+      ]);
+      expect(bodies[0]).toMatchObject({
+        properties: {
+          patterns: ["fetch"],
+          metadata: { actionKind: "git-fetch", kind: "command-execution", commandLabel: "fetch" },
+        },
+      });
+      expect(bodies[2]).toMatchObject({
+        properties: { patterns: ["pull"], metadata: { actionKind: "git-pull" } },
+      });
+      expect(bodies[1]).toMatchObject({ action: "git", operation: "fetch" });
+      expect(bodies[3]).toMatchObject({ action: "git", operation: "pull" });
+      for (const body of [bodies[1], bodies[3]]) {
+        expect(body).not.toHaveProperty("pull");
+        expect(body?.approvalProof).toMatchObject({ approvalId: body?.actionId });
+      }
+    }
+    const full = await load("native", "autonomous-delivery");
+    await toolOf(full, "keiko_git_sync").execute({ pull: true }, CONTEXT);
+    expect(full.fetches.map((call) => call.body)).toEqual([
+      expect.objectContaining({ action: "git", operation: "pull" }),
+    ]);
+    expect(full.fetches[0]?.body).not.toHaveProperty("approvalProof");
+  });
+
   it("ask the operator first for a verification below Full access, as the mapped tool does", async () => {
     const native = await load("native", "governed-assist");
     await toolOf(native, "keiko_verification").execute(ARGUMENTS.keiko_verification ?? {}, CONTEXT);
@@ -383,6 +468,24 @@ describe("the generated native plugins", () => {
     const full = await load("native", "autonomous-delivery");
     await toolOf(full, "keiko_verification").execute(ARGUMENTS.keiko_verification ?? {}, CONTEXT);
     expect(full.fetches.map((call) => call.body.action)).toEqual(["verification"]);
+  });
+
+  // #3903 AC3: the native plugin makes Keiko's provider the websearch service's default, and the
+  // provider asks the server for exactly the query, then hands the producer its results.
+  it("register Keiko's web search provider as the default, natively only", async () => {
+    const results = [{ url: "https://example.test/one", title: "One", published: 1 }];
+    const native = await load("native", "autonomous-delivery", { results });
+    expect(native.webSearch.providers.map((provider) => provider.id)).toEqual(["keiko"]);
+    expect(native.webSearch.selected).toBe("keiko");
+    const [provider] = native.webSearch.providers;
+    await expect(provider?.execute({ query: "governed search" }, {})).resolves.toEqual([
+      { url: "https://example.test/one", title: "One", time: { published: 1 } },
+    ]);
+    expect(native.fetches.map((call) => call.body)).toEqual([
+      { action: "web-search", runId: "run-native-delivery", query: "governed search" },
+    ]);
+    const mapped = await load("direct", "autonomous-delivery");
+    expect(mapped.webSearch.providers).toEqual([]);
   });
 
   it("refuse every late call once the producer disposes the plugin", async () => {
@@ -404,7 +507,12 @@ const DELIVERY_PROPOSALS = [
   "keiko_git_execute",
 ];
 /** Every tool the guidance must name for the model to complete a verified delivery. */
-const DELIVERY_STEPS = [...DELIVERY_PROPOSALS, "keiko_verification", "keiko_ci_status"];
+const DELIVERY_STEPS = [
+  ...DELIVERY_PROPOSALS,
+  "keiko_verification",
+  "keiko_ci_status",
+  "keiko_git_sync",
+];
 
 const POINTER_TOOL = /keiko_[a-z_]+/gu;
 
@@ -432,6 +540,10 @@ describe("the pointer from the shell to the delivery tools", () => {
     "git push origin HEAD",
     "npm test && git commit -m done",
     "gh pr create --fill",
+    // #3902 AC2: synchronization stays a Keiko action too; the shell keeps refusing it.
+    "git fetch origin",
+    "git pull --ff-only origin main",
+    "git -C . fetch --all",
   ])("tells the model which Keiko tools deliver when `%s` is refused, in every mode", (command) => {
     for (const mode of ["governed-assist", "supervised-coding", "autonomous-delivery"]) {
       const decision = decide(mode, command);
@@ -445,7 +557,8 @@ describe("the pointer from the shell to the delivery tools", () => {
   it("names only tools the native run has, and every tool a delivery needs", () => {
     const named = new Set(namedTools(OPENCODE_NATIVE_DELIVERY_REFUSAL_MESSAGE));
     for (const name of named) expect(isOpenCodeNativeDeliveryToolName(name), name).toBe(true);
-    for (const name of DELIVERY_PROPOSALS) expect(named.has(name), name).toBe(true);
+    for (const name of [...DELIVERY_PROPOSALS, "keiko_git_sync"])
+      expect(named.has(name), name).toBe(true);
     expect(OPENCODE_NATIVE_DELIVERY_REFUSAL_MESSAGE.length).toBeLessThan(500);
   });
 

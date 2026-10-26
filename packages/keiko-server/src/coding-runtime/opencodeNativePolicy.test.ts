@@ -171,7 +171,30 @@ describe("native policy effects per autonomy mode", () => {
     );
   });
 
-  // T15: Keiko admits no search integration, and the original tool then waits on a provider it
+  // T15 (#3903 AC3): with an integration the operator admitted, web search is an internet action
+  // like webfetch: Full access allows it, every narrower mode keeps the honest refusal.
+  it("treats web search through an admitted integration as an internet action", () => {
+    const decideAdmitted = (mode: string): OpenCodeNativePolicyDecision =>
+      decideOpenCodeNativePolicy({
+        mode,
+        workspaceRoot: WORKSPACE,
+        request: request("websearch", ["vitest mock timers"]),
+        nowMs: NOW,
+        webSearch: true,
+      });
+    const allowed = decideAdmitted("autonomous-delivery");
+    expect(allowed.effect === "allow" ? allowed.classification.scope : allowed.effect).toBe(
+      "internet",
+    );
+    for (const mode of ["governed-assist", "supervised-coding"]) {
+      const refused = decideAdmitted(mode);
+      expect(refused.effect === "deny" ? refused.message : refused.effect, mode).toMatch(
+        /only available in Full access/u,
+      );
+    }
+  });
+
+  // T15: without an admitted search integration, the original tool would wait on a provider it
   // cannot reach; it is refused at once in every mode and points the model at webfetch.
   it("refuses web search without a search integration in every mode, with the alternative", () => {
     for (const mode of ["governed-assist", "supervised-coding", "autonomous-delivery"]) {

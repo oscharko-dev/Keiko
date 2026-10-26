@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "c8247f3adbc078dec74affb10edf6083552495b3b2eb11547e46b4a95efd85d8"
+    "catalogDigest": "048e930598f7778d7e8a9cc232b91dd664820ada0e1be8ad307020fbbd6c35f5"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -59,10 +59,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 588,
-    "proofCount": 601,
-    "resolvedProofCount": 601,
-    "failureClassCount": 369,
+    "operationCount": 589,
+    "proofCount": 602,
+    "resolvedProofCount": 602,
+    "failureClassCount": 370,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -399,6 +399,7 @@
         "coding-runtime.undo-window",
         "coding-runtime.verification",
         "coding-runtime.verification-summarized",
+        "coding-runtime.websearch.performed",
         "coding-runtime.workspace-discovery",
         "coding-runtime.workspace-read",
         "coding-sidecar.gateway.outcome",
@@ -846,6 +847,7 @@
     "coding-runtime-mcp-credentials": ["tools-workflows.dependency-failure"],
     "coding-runtime-mcp-relay": ["tools-workflows.dependency-failure"],
     "coding-runtime-descendant-sweep": ["tools-workflows.dependency-failure"],
+    "coding-runtime-websearch": ["tools-workflows.dependency-failure"],
     "coding-runtime-mcp-authorization": ["tools-workflows.dependency-failure"],
     "mcp-oauth-issuer": ["tools-workflows.dependency-failure"],
     "coding-runtime-question-authority": ["tools-workflows.dependency-failure"],
@@ -1682,6 +1684,9 @@
     "coding-runtime.verification-summarized.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.test.ts"
     ],
+    "coding-runtime.websearch.performed.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/nativeWebSearch.test.ts"
+    ],
     "coding-runtime.workspace-discovery.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingToolDiscoveryLifecycle.test.ts",
       "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.test.ts"
@@ -2198,6 +2203,7 @@
       "packages/keiko-server/src/gitDelivery/repositoryInitializationRoutes.test.ts"
     ],
     "git.runtime-action.emitted-line": [
+      "packages/keiko-server/src/gitDelivery/runtimeGitService.sync.test.ts",
       "packages/keiko-server/src/gitDelivery/verifiedCommitService.test.ts"
     ],
     "git.runtime-diff.search-bounded.emitted-line": [
