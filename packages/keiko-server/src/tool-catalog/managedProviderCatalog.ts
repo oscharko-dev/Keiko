@@ -164,17 +164,28 @@ export async function createManagedProviderCatalog<Consumer extends CatalogConsu
     await host.admit(input.correlationId);
     return compileManagedCatalog(host, input);
   } catch (error) {
-    emitServerDiagnostic(
-      input.log.diagnostics,
-      serverDiagnosticFromError({
-        correlationId: input.correlationId,
-        operation: "tool-catalog.binding-failed",
-        source: "tool-catalog-binding",
-        error,
-        redact: () => "server-operation-failed",
-      }),
-    );
-    await host.close();
+    reportManagedCatalogFailure(input, error);
+    try {
+      await host.close();
+    } catch (cleanupError) {
+      reportManagedCatalogFailure(input, cleanupError);
+    }
     throw error;
   }
+}
+
+function reportManagedCatalogFailure<Consumer extends CatalogConsumer>(
+  input: ManagedProviderCatalogInput<Consumer>,
+  error: unknown,
+): void {
+  emitServerDiagnostic(
+    input.log.diagnostics,
+    serverDiagnosticFromError({
+      correlationId: input.correlationId,
+      operation: "tool-catalog.binding-failed",
+      source: "tool-catalog-binding",
+      error,
+      redact: () => "server-operation-failed",
+    }),
+  );
 }

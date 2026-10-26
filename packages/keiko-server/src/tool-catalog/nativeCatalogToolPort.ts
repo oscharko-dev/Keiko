@@ -30,7 +30,7 @@ export interface NativeCatalogHandlerAction {
 export interface NativeCatalogToolPortInput {
   readonly host: WorkspaceToolHost;
   readonly actions: readonly NativeCatalogHandlerAction[];
-  readonly binder: Omit<CatalogToolBinderInput, "handlerBindings" | "projection">;
+  readonly binder: Omit<CatalogToolBinderInput, "handlerBindings" | "projection" | "consumerPort">;
   readonly options: CatalogToolBinderOptions;
   /** Existing server action owner supplies identity; provider toolCallId is correlation only. */
   readonly nextIdentity: (toolCallId: string) => CatalogActionIdentity;

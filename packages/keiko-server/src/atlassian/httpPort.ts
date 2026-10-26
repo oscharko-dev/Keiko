@@ -214,15 +214,19 @@ async function discardBody(response: Response): Promise<void> {
   }
 }
 
-export function createGatewayAtlassianHttpPort(
-  options: CreateAtlassianHttpPortOptions,
-): AtlassianHttpPort {
-  if (!isSafeAtlassianConnectorBaseUrl(options.baseUrl)) {
+function atlassianPortBaseUrl(baseUrl: string): URL {
+  if (!isSafeAtlassianConnectorBaseUrl(baseUrl)) {
     throw new AtlassianCredentialCustodyError("invalid-input", [
       "baseUrl must be an https URL without credentials, query, or fragment",
     ]);
   }
-  const base = new URL(options.baseUrl);
+  return new URL(baseUrl);
+}
+
+export function createGatewayAtlassianHttpPort(
+  options: CreateAtlassianHttpPortOptions,
+): AtlassianHttpPort {
+  const base = atlassianPortBaseUrl(options.baseUrl);
   return async (request: AtlassianHttpRequest): Promise<AtlassianHttpResult> => {
     const target = assertAllowlistedTarget(base, request.url);
     const egress = connectorEgressConfig(options);
@@ -329,12 +333,7 @@ function assertValidRequestBody(request: AtlassianHttpBodyRequest): void {
 export function createGatewayAtlassianHttpBodyPort(
   options: CreateAtlassianHttpPortOptions,
 ): AtlassianHttpBodyPort {
-  if (!isSafeAtlassianConnectorBaseUrl(options.baseUrl)) {
-    throw new AtlassianCredentialCustodyError("invalid-input", [
-      "baseUrl must be an https URL without credentials, query, or fragment",
-    ]);
-  }
-  const base = new URL(options.baseUrl);
+  const base = atlassianPortBaseUrl(options.baseUrl);
   return async (request: AtlassianHttpBodyRequest): Promise<AtlassianHttpBodyResult> => {
     const target = assertAllowlistedTarget(base, request.url);
     const egress = connectorEgressConfig(options);

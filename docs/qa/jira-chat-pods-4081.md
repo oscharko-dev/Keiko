@@ -726,3 +726,24 @@ groups and five stale baseline entries, including the reported shared offer-admi
 and the Atlassian transport paths. This is recorded as an open gate, not an accepted exemption;
 reproduction is complete and the next increment addresses the verified duplication. No new
 clone is reported in this field-validation increment.
+
+## Review repair — shared binder and unchanged gate policy (#4089 / #4082)
+
+The two offer paths now reuse one admission preamble, preserving context/scope capture,
+compatibility, expiry and minted-ID checks. The native Coding adapter no longer requires a
+consumer port that it replaces. A failing managed-host close no longer replaces the original
+admission failure; a focused regression failed before the repair and now verifies the original
+error plus two content-free diagnostics. The duplicate Atlassian base-URL check is also shared.
+
+The semantic gate was reproduced against both this branch and an isolated clean `origin/dev`
+source snapshot with the same pinned toolchain: dev passed with 938 baseline groups. After
+extracting the two actual new code clones, remaining reports involved data vocabularies or
+completely unchanged dev sources regrouped by Fallow. The existing exemption Map now uses keyed
+object data; an AST comparison verified all 90 exact keys/reasons unchanged and in order against
+`2714df157`. The existing ratchet command refreshed only the baseline representation and retained
+938 groups. No threshold, matching rule or exemption was added; the full semantic gate now passes.
+
+267 affected server tests, 97 registry tests and 48 gate/propagation regression tests pass. Package build, root typecheck, changed lint,
+error observability and the 607-proof/30-scenario registered inventory pass. The prior semantic
+failure is repaired. The separate clean-revision performance measurement and final full gates
+remain open; this increment does not complete any unfinished Jira/Chat acceptance criterion.

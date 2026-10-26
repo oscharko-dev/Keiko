@@ -426,9 +426,14 @@ function recordCatalogOffer<Consumer extends CatalogConsumer>(
     resultCount: toolRefs.length,
   });
 }
-function buildCatalogOffer<Consumer extends CatalogConsumer = CodingCatalogConsumer>(
+function admitCatalogOffer<Consumer extends CatalogConsumer>(
   state: CatalogBindingState<Consumer>,
-): OfferedToolSet {
+): {
+  readonly context: Consumer["context"];
+  readonly scopeDigest: CatalogDigest;
+  readonly expiry: number;
+  readonly offerId: string;
+} {
   const context = state.options.context();
   const scopeDigest = catalogScopeDigest(state.input.consumerPort.scope(context));
   assertCatalogCompatibility<Consumer>(state);
@@ -437,6 +442,12 @@ function buildCatalogOffer<Consumer extends CatalogConsumer = CodingCatalogConsu
   requireBinding(Number.isSafeInteger(expiry) && expiry > now);
   const offerId = state.options.mintId();
   requireBinding(/^[A-Za-z0-9_-]{1,128}$/u.test(offerId));
+  return { context, scopeDigest, expiry, offerId };
+}
+function buildCatalogOffer<Consumer extends CatalogConsumer = CodingCatalogConsumer>(
+  state: CatalogBindingState<Consumer>,
+): OfferedToolSet {
+  const { context, scopeDigest, expiry, offerId } = admitCatalogOffer(state);
   const readiness = state.handlers.map(catalogHandlerReadiness);
   const binding = catalogBoundToolSet<Consumer>(state, readiness);
   const toolRefs = state.handlers
@@ -491,14 +502,7 @@ function buildCatalogOfferForTool<Consumer extends CatalogConsumer = CodingCatal
   state: CatalogBindingState<Consumer>,
   toolRef: ToolRef,
 ): OfferedToolSet {
-  const context = state.options.context();
-  const scopeDigest = catalogScopeDigest(state.input.consumerPort.scope(context));
-  assertCatalogCompatibility<Consumer>(state);
-  const now = state.options.now();
-  const expiry = Math.min(Date.parse(context.authorityExpiresAt), now + 30_000);
-  requireBinding(Number.isSafeInteger(expiry) && expiry > now);
-  const offerId = state.options.mintId();
-  requireBinding(/^[A-Za-z0-9_-]{1,128}$/u.test(offerId));
+  const { context, scopeDigest, expiry, offerId } = admitCatalogOffer(state);
   const handler = catalogHandlerFor<Consumer>(state, toolRef);
   requireBinding(handler !== undefined);
   const readiness = catalogHandlerReadiness<Consumer>(handler);
