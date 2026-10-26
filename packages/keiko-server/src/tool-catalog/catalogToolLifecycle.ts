@@ -103,6 +103,7 @@ const STATE_CONTINUITY_REASONS = [
   "cursor-expired",
   "cursor-replayed",
   "workspace-stale",
+  "consumer-stale",
   "replay-conflict",
   "recovery-required",
 ] as const;
@@ -533,6 +534,7 @@ const CATALOG_REASON_ERROR_KIND: Readonly<Record<string, ActivityLogErrorKind>> 
   "cursor-expired": "invalid-request",
   "cursor-replayed": "conflict",
   "workspace-stale": "conflict",
+  "consumer-stale": "conflict",
   "replay-conflict": "conflict",
   "recovery-required": "conflict",
   "invocation-in-flight": "conflict",

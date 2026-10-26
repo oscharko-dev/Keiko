@@ -176,6 +176,7 @@ export const TOOL_RESULT_REASONS = deepFreeze({
     "cursor-expired",
     "cursor-replayed",
     "workspace-stale",
+    "consumer-stale",
     "replay-conflict",
     "recovery-required",
   ],

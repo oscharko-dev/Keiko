@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "5e86f497875d658050214d479ed20255a12c0060d0800b2ed20f36c661c55e18",
+    "catalogDigest": "56542dc15c3eb0af0605183e66f43ef6f8f270f79bc243a22cdda79fa4082ff9",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -13363,7 +13363,7 @@
         "failureClasses": ["coding-tool-authority"],
         "proofIds": ["coding-runtime.tool-authority.denied.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/codingToolAuthorityPort.ts:102",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/codingToolAuthorityPort.ts:103",
         "emitterSites": ["packages/keiko-server/src/coding-runtime/codingToolAuthorityPort.ts:276"]
       },
       {
@@ -21909,8 +21909,8 @@
         "failureClasses": ["gateway-tool-catalog"],
         "proofIds": ["gateway.tool-catalog.call-bound.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:160",
-        "emitterSites": ["packages/keiko-model-gateway/src/toolCatalogBridge.ts:570"]
+        "registrationSite": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:161",
+        "emitterSites": ["packages/keiko-model-gateway/src/toolCatalogBridge.ts:571"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -21953,10 +21953,10 @@
         "failureClasses": ["gateway-tool-catalog"],
         "proofIds": ["gateway.tool-catalog.native-passthrough.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:139",
+        "registrationSite": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:140",
         "emitterSites": [
-          "packages/keiko-model-gateway/src/toolCatalogBridge.ts:531",
-          "packages/keiko-model-gateway/src/toolCatalogBridge.ts:556"
+          "packages/keiko-model-gateway/src/toolCatalogBridge.ts:532",
+          "packages/keiko-model-gateway/src/toolCatalogBridge.ts:557"
         ]
       },
       {
@@ -22006,10 +22006,10 @@
         "failureClasses": ["gateway-tool-catalog"],
         "proofIds": ["gateway.tool-catalog.projected.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:179",
+        "registrationSite": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:180",
         "emitterSites": [
-          "packages/keiko-model-gateway/src/toolCatalogBridge.ts:724",
-          "packages/keiko-model-gateway/src/toolCatalogBridge.ts:737"
+          "packages/keiko-model-gateway/src/toolCatalogBridge.ts:725",
+          "packages/keiko-model-gateway/src/toolCatalogBridge.ts:738"
         ]
       },
       {
@@ -22064,6 +22064,7 @@
               "cursor-expired",
               "cursor-replayed",
               "workspace-stale",
+              "consumer-stale",
               "replay-conflict",
               "recovery-required"
             ]
@@ -22142,7 +22143,7 @@
         "proofIds": ["gateway.tool-catalog.rejected.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:38",
-        "emitterSites": ["packages/keiko-model-gateway/src/toolCatalogBridge.ts:472"]
+        "emitterSites": ["packages/keiko-model-gateway/src/toolCatalogBridge.ts:473"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -39443,8 +39444,8 @@
         "failureClasses": ["tool-catalog-binding"],
         "proofIds": ["tool-catalog.bind-ready.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:179",
-        "emitterSites": ["packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:600"]
+        "registrationSite": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:180",
+        "emitterSites": ["packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:602"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -39518,6 +39519,7 @@
               "cursor-expired",
               "cursor-replayed",
               "workspace-stale",
+              "consumer-stale",
               "replay-conflict",
               "recovery-required",
               "handler-unavailable",
@@ -39535,8 +39537,8 @@
         "failureClasses": ["tool-catalog-binding-unavailable"],
         "proofIds": ["tool-catalog.bind-unavailable.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:202",
-        "emitterSites": ["packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:613"]
+        "registrationSite": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:203",
+        "emitterSites": ["packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:615"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -39620,8 +39622,8 @@
         "failureClasses": ["tool-catalog-late-completion"],
         "proofIds": ["tool-catalog.completion-discarded.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:328",
-        "emitterSites": ["packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:694"]
+        "registrationSite": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:329",
+        "emitterSites": ["packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:696"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -39668,8 +39670,8 @@
         "failureClasses": ["tool-catalog-dispatch-unbound"],
         "proofIds": ["tool-catalog.dispatch-unbound.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:77",
-        "emitterSites": ["packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:916"]
+        "registrationSite": "packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:79",
+        "emitterSites": ["packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:918"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -39784,6 +39786,7 @@
               "cursor-expired",
               "cursor-replayed",
               "workspace-stale",
+              "consumer-stale",
               "replay-conflict",
               "recovery-required",
               "invocation-in-flight",
@@ -39862,8 +39865,8 @@
         "failureClasses": ["tool-catalog-invocation-settlement"],
         "proofIds": ["tool-catalog.invocation-settled.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:262",
-        "emitterSites": ["packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:681"]
+        "registrationSite": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:263",
+        "emitterSites": ["packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:683"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -39948,8 +39951,8 @@
         "failureClasses": ["tool-catalog-invocation"],
         "proofIds": ["tool-catalog.invocation-started.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:230",
-        "emitterSites": ["packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:626"]
+        "registrationSite": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:231",
+        "emitterSites": ["packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:628"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -40010,8 +40013,8 @@
         "failureClasses": ["tool-catalog-projection"],
         "proofIds": ["tool-catalog.projection.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:156",
-        "emitterSites": ["packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:587"]
+        "registrationSite": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:157",
+        "emitterSites": ["packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:589"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -98611,7 +98614,7 @@
   },
   "legacyDiscovery": {
     "dynamicCount": 82,
-    "unknownCategoryCount": 77,
+    "unknownCategoryCount": 75,
     "authoritative": false
   },
   "entries": [
@@ -100208,19 +100211,19 @@
     {
       "op": "gateway.tool-catalog.call-bound",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:163",
+      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:164",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.tool-catalog.native-passthrough",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:142",
+      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:143",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.tool-catalog.projected",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:182",
+      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:183",
       "package": "keiko-model-gateway"
     },
     {
@@ -102030,7 +102033,7 @@
     {
       "op": "coding-runtime.tool-authority.denied",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-runtime/codingToolAuthorityPort.ts:105",
+      "site": "packages/keiko-server/src/coding-runtime/codingToolAuthorityPort.ts:106",
       "package": "keiko-server"
     },
     {
@@ -103976,93 +103979,81 @@
     {
       "op": "tool-catalog.bind-ready",
       "category": "unknown",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolBinder.ts:412",
-      "package": "keiko-server"
-    },
-    {
-      "op": "tool-catalog.bind-ready",
-      "category": "unknown",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolBinder.ts:449",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolBinder.ts:476",
       "package": "keiko-server"
     },
     {
       "op": "tool-catalog.bind-ready",
       "category": "security",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:181",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:182",
       "package": "keiko-server"
     },
     {
       "op": "tool-catalog.bind-ready",
       "category": "security",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:597",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:599",
       "package": "keiko-server"
     },
     {
       "op": "tool-catalog.bind-unavailable",
       "category": "unknown",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolBinder.ts:419",
-      "package": "keiko-server"
-    },
-    {
-      "op": "tool-catalog.bind-unavailable",
-      "category": "unknown",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolBinder.ts:457",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolBinder.ts:484",
       "package": "keiko-server"
     },
     {
       "op": "tool-catalog.bind-unavailable",
       "category": "security",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:669",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:671",
       "package": "keiko-server"
     },
     {
       "op": "tool-catalog.bind-unavailable",
       "category": "security",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:204",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:205",
       "package": "keiko-server"
     },
     {
       "op": "tool-catalog.bind-unavailable",
       "category": "security",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:610",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:612",
       "package": "keiko-server"
     },
     {
       "op": "tool-catalog.binding-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolBinder.ts:210",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolBinder.ts:225",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "tool-catalog.completion-discarded",
       "category": "security",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:330",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:331",
       "package": "keiko-server"
     },
     {
       "op": "tool-catalog.completion-discarded",
       "category": "security",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:691",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:693",
       "package": "keiko-server"
     },
     {
       "op": "tool-catalog.completion-discarded",
       "category": "unknown",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolSettlement.ts:372",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolSettlement.ts:375",
       "package": "keiko-server"
     },
     {
       "op": "tool-catalog.dispatch-context-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolDispatch.ts:186",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolDispatch.ts:194",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "tool-catalog.dispatch-unbound",
       "category": "security",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:80",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.ts:82",
       "package": "keiko-server"
     },
     {
@@ -104074,19 +104065,19 @@
     {
       "op": "tool-catalog.invocation-settled",
       "category": "security",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:264",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:265",
       "package": "keiko-server"
     },
     {
       "op": "tool-catalog.invocation-settled",
       "category": "security",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:640",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:642",
       "package": "keiko-server"
     },
     {
       "op": "tool-catalog.invocation-settled",
       "category": "unknown",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolSettlement.ts:335",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolSettlement.ts:338",
       "package": "keiko-server"
     },
     {
@@ -104098,25 +104089,25 @@
     {
       "op": "tool-catalog.invocation-started",
       "category": "security",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:232",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:233",
       "package": "keiko-server"
     },
     {
       "op": "tool-catalog.invocation-started",
       "category": "security",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:623",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:625",
       "package": "keiko-server"
     },
     {
       "op": "tool-catalog.invocation-started",
       "category": "unknown",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolSettlement.ts:167",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolSettlement.ts:170",
       "package": "keiko-server"
     },
     {
       "op": "tool-catalog.lifecycle-sink-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:754",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:756",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -104129,31 +104120,31 @@
     {
       "op": "tool-catalog.projection",
       "category": "unknown",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolBinder.ts:425",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolBinder.ts:424",
       "package": "keiko-server"
     },
     {
       "op": "tool-catalog.projection",
       "category": "unknown",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolBinder.ts:499",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolBinder.ts:530",
       "package": "keiko-server"
     },
     {
       "op": "tool-catalog.projection",
       "category": "security",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:158",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:159",
       "package": "keiko-server"
     },
     {
       "op": "tool-catalog.projection",
       "category": "security",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:584",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.ts:586",
       "package": "keiko-server"
     },
     {
       "op": "tool-catalog.settlement-emit-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolSettlement.ts:355",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolSettlement.ts:358",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

@@ -139,7 +139,13 @@ manifests expose IDs, versions, digests, bounds and enums; omit descriptions and
 The request/cursor domains serve a different, transient binder purpose. Canonical arguments can
 enter an invocation-scoped request digest only inside server memory; include a server nonce chosen once for that server-held idempotency binding, reused only for request comparisons inside the same binding. A new binding receives a fresh nonce. Same-key/same-arguments replay therefore retains the same request identity; low-entropy queries cannot be recovered from a stable public hash. Neither arguments, nonce nor
 request/cursor digest enter the generated catalog or durable evidence. Opaque cursor tokens address
-server-held entries; the catalog compiler never creates cursors or handles customer input.
+server-held entries; the catalog compiler never creates cursors or handles customer input. The request and cursor v2 domains include the captured consumer-scope digest:
+workspace identity/revision for Coding, or the server-owned scope of another consumer.
+An offer, admitted invocation and continuation must still match that scope. A newer
+offer cannot refresh the scope of an invocation already in flight. These transient
+in-memory cursors expire normally and do not migrate across server restarts. Consumer
+scope fields are never accepted from model arguments or written to lifecycle evidence.
+
 
 Compatibility entries are `{from, to, profile, adapter, transformId, ownerIssue, expiresAt,
 removalIssue}` with exact versions/digests, an explicit direction and tested non-widening transforms.

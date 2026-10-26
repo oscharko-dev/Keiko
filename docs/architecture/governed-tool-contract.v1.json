@@ -147,6 +147,7 @@
       "cursor-expired",
       "cursor-replayed",
       "workspace-stale",
+      "consumer-stale",
       "replay-conflict",
       "recovery-required"
     ],

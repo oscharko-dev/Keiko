@@ -1,3 +1,4 @@
+import type { ToolAuthorityAvailability } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 import type { OpenCodeToolProfile } from "./opencodeToolSchemas.js";
 import { createHash } from "node:crypto";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
@@ -187,8 +188,7 @@ interface RuntimeCodingToolFacadeOptions extends CodingToolFacadeOptions {
   readonly nativeVerification?: CodingToolNativeVerificationHooks | undefined;
 }
 
-export type CodingToolAuthorityAvailability =
-  { readonly ok: true } | { readonly ok: false; readonly reason: string };
+export type CodingToolAuthorityAvailability = ToolAuthorityAvailability;
 
 export type CodingToolAuthorityPreview = (
   capability: string | undefined,

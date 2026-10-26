@@ -77,6 +77,7 @@ const TOOL_CATALOG_REJECTED_OPERATION = defineActivityLogOperation({
         "cursor-expired",
         "cursor-replayed",
         "workspace-stale",
+        "consumer-stale",
         "replay-conflict",
         "recovery-required",
       ],

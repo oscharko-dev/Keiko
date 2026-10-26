@@ -17,6 +17,7 @@ import {
   type CodingToolActionRequest,
 } from "../coding-runtime/codingToolIpc.js";
 import type {
+  CatalogTrustedContext,
   CatalogBoundHandler,
   CatalogConsumerPort,
   CatalogToolExecutionOverride,
@@ -99,6 +100,13 @@ function captureUnchangedNativeReadAction(
 
 /** Existing Coding action codec and native-read exception, injected into the common binder. */
 export const codingCatalogConsumer: CatalogConsumerPort = Object.freeze({
+  scope: (context: CatalogTrustedContext): CatalogJsonObject => ({
+    kind: "coding",
+    workspaceRoot: context.workspaceRoot,
+    workspaceIdentity: context.workspaceIdentity,
+    workspaceRevision: context.workspaceRevision,
+  }),
+  staleReason: "workspace-stale",
   requiredEffects: codingToolRequiredActionClasses,
   captureAction: captureHandlerRequest,
   captureApprovedAction: (value: CatalogJsonValue): CodingToolActionRequest | undefined =>

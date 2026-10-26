@@ -1,3 +1,5 @@
+import type { CatalogBindingPreparation } from "./catalogToolBinder.js";
+import { codingCatalogConsumer } from "./catalogCodingConsumer.js";
 import { randomUUID } from "node:crypto";
 import type {
   CatalogJsonValue,
@@ -753,10 +755,10 @@ export function createCanonicalOpenCodeHandlerCoverage(
 
 interface PreparedDispatchBinder {
   readonly advertisement: ReturnType<typeof openCodeGatewayCatalogProjection>;
-  readonly preparation: ReturnType<typeof prepareCatalogToolBinder>;
+  readonly preparation: CatalogBindingPreparation;
   readonly preparationFor: (
     unavailable: ReadonlySet<OpenCodeOptionalToolName>,
-  ) => ReturnType<typeof prepareCatalogToolBinder>;
+  ) => CatalogBindingPreparation;
 }
 
 function unavailableKey(unavailable: ReadonlySet<OpenCodeOptionalToolName>): string {
@@ -767,19 +769,19 @@ function prepareDispatchBinder(
   bridgeInput: CanonicalCatalogFacadeBridgeInput,
   advertisement = catalogAdvertisementForProfile(bridgeInput.toolProfile ?? "direct"),
 ): PreparedDispatchBinder {
-  const descriptors = projectedDescriptors(advertisement);
   const fallback = representative("keiko.workspace.discover", {
     actionId: "catalog-composition",
     idempotencyKey: "catalog-composition",
   });
   const preparation = prepareCatalogToolBinder(
     {
+      consumerPort: codingCatalogConsumer,
       projection: advertisement.projection,
       handlerBindings: preparedBindings(
         fallback,
         bridgeInput.unavailableOptionalTools ??
           ((): ReadonlySet<OpenCodeOptionalToolName> => new Set()),
-        descriptors,
+        projectedDescriptors(advertisement),
       ),
       authorityPort: {
         preview: bridgeInput.previewAuthority,

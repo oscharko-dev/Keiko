@@ -1,6 +1,10 @@
-import { codingCatalogConsumer } from "./catalogCodingConsumer.js";
+import type { CatalogConsumer, CodingCatalogConsumer } from "./catalogToolPorts.js";
 import { CatalogDispatchFault, requireDispatch } from "./catalogToolErrors.js";
-import { sameRef } from "./catalogToolRequest.js";
+import {
+  catalogScopeDigest,
+  captureCatalogConsumerContext,
+  sameRef,
+} from "./catalogToolRequest.js";
 export { CatalogDispatchFault, requireDispatch } from "./catalogToolErrors.js";
 export { sameRef } from "./catalogToolRequest.js";
 import {
@@ -10,12 +14,12 @@ import {
 } from "@oscharko-dev/keiko-tool-catalog";
 import type {
   CatalogJsonObject,
+  CatalogDigest,
   CatalogJsonValue,
   CatalogProfile,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { deepFreeze } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
 import { canonicalise } from "@oscharko-dev/keiko-security/hashing";
-import { type CodingToolActionRequest } from "../coding-runtime/codingToolIpc.js";
 import {
   assertCatalogCompatibility,
   catalogHandlerFor,
@@ -28,7 +32,6 @@ import type {
   CatalogActionIdentity,
   CatalogConsumerPort,
   CatalogToolExecutionOverride,
-  CatalogTrustedContext,
 } from "./catalogToolPorts.js";
 
 export function catalogBudgetOperation<T>(operation: () => T): T {
@@ -52,8 +55,8 @@ function captureInvocationObject(source: unknown): CatalogJsonObject {
     throw new CatalogDispatchFault("invalid", "invalid-arguments");
   }
 }
-export function captureCatalogInvocation(
-  state: CatalogBindingState,
+export function captureCatalogInvocation<Consumer extends CatalogConsumer = CodingCatalogConsumer>(
+  state: CatalogBindingState<Consumer>,
   source: unknown,
 ): BoundToolInvocation {
   const object = captureInvocationObject(source);
@@ -76,10 +79,10 @@ export function captureCatalogInvocation(
     "unoffered-tool",
   );
   const ref = captureRef(object.toolRef);
-  const handler = catalogHandlerFor(state, ref);
+  const handler = catalogHandlerFor<Consumer>(state, ref);
   requireDispatch(handler !== undefined, "invalid", "unknown-tool");
   if (!state.latestOffer.toolRefs.some((item) => sameRef(item, ref))) {
-    const current = catalogDispatchContext(state);
+    const current = catalogDispatchContext<Consumer>(state);
     requireDispatch(
       catalogBudgetOperation(() => state.input.budgetPort.available(handler.descriptor, current)),
       "denied",
@@ -126,33 +129,33 @@ function captureRef(value: CatalogJsonValue | undefined): ReturnType<typeof crea
     throw new CatalogDispatchFault("invalid", "unknown-tool");
   }
 }
-export function catalogDispatchContext(state: CatalogBindingState): CatalogTrustedContext {
-  return Object.freeze({ ...state.options.context() });
+export function catalogDispatchContext<Consumer extends CatalogConsumer = CodingCatalogConsumer>(
+  state: CatalogBindingState<Consumer>,
+): Consumer["context"] {
+  return captureCatalogConsumerContext(state.options.context());
 }
 // `admittedAt` is the instant the invocation was admitted: an offer bounds admission, not the call
 // it admitted. The live authority, the workspace revision, compatibility and the handler's
 // readiness are rechecked against now on every revalidation; the offer's expiry only against the
 // admission, so an effect that starts after a long step or a human decision is never refused merely
 // because the offer that admitted it has since expired (PR #3452, F43/F44).
-export function revalidateCatalogContext(
-  state: CatalogBindingState,
-  expected: CatalogTrustedContext,
-  handler: CatalogBoundHandler,
+export function revalidateCatalogContext<Consumer extends CatalogConsumer = CodingCatalogConsumer>(
+  state: CatalogBindingState<Consumer>,
+  expected: Consumer["context"],
+  handler: CatalogBoundHandler<Consumer>,
   admittedAt: number,
-): CatalogTrustedContext {
-  const current = catalogDispatchContext(state);
+  expectedScope: CatalogDigest,
+): Consumer["context"] {
+  const current = catalogDispatchContext<Consumer>(state);
   const offered = state.offerContext;
   requireDispatch(offered !== undefined, "invalid", "unoffered-tool");
+  const currentScope = catalogScopeDigest(state.input.consumerPort.scope(current));
   requireDispatch(
-    [offered, expected].every(
-      (prior) =>
-        prior.runId === current.runId &&
-        prior.workspaceIdentity === current.workspaceIdentity &&
-        prior.workspaceRoot === current.workspaceRoot &&
-        prior.workspaceRevision === current.workspaceRevision,
-    ),
+    [offered, expected].every((prior) => prior.runId === current.runId) &&
+      expectedScope === currentScope &&
+      state.offerScopeDigest === expectedScope,
     "invalid",
-    "workspace-stale",
+    state.input.consumerPort.staleReason,
   );
   requireDispatch(
     current.authority === expected.authority && current.authority === offered.authority,
@@ -170,21 +173,25 @@ export function revalidateCatalogContext(
     "unoffered-tool",
   );
   try {
-    assertCatalogCompatibility(state);
+    assertCatalogCompatibility<Consumer>(state);
   } catch {
     throw new CatalogDispatchFault("invalid", "recovery-required");
   }
-  requireDispatch(catalogHandlerReadiness(handler) === "ready", "failed", "handler-unavailable");
+  requireDispatch(
+    catalogHandlerReadiness<Consumer>(handler) === "ready",
+    "failed",
+    "handler-unavailable",
+  );
   return current;
 }
-export function captureHandlerAction(
-  handler: CatalogBoundHandler,
+export function captureHandlerAction<Consumer extends CatalogConsumer = CodingCatalogConsumer>(
+  consumer: CatalogConsumerPort<Consumer>,
+  handler: CatalogBoundHandler<Consumer>,
   args: CatalogJsonValue,
   identity: CatalogActionIdentity,
-  executionOverride?: CatalogToolExecutionOverride,
+  executionOverride?: CatalogToolExecutionOverride<Consumer>,
   profile?: CatalogProfile,
-  consumer: CatalogConsumerPort = codingCatalogConsumer,
-): CodingToolActionRequest {
+): Consumer["action"] {
   requireDispatch(handler.binding !== undefined, "failed", "handler-unavailable");
   requireDispatch(
     executionOverride === undefined ||
@@ -208,16 +215,18 @@ export function captureHandlerAction(
   return deepFreeze(parsed);
 }
 
-function withoutProof(request: CodingToolActionRequest): string {
+function withoutProof(request: CatalogConsumer["action"]): string {
   const value = { ...request };
   if ("approvalProof" in value) delete value.approvalProof;
   return canonicalise(value);
 }
-export async function approveCatalogAction(
-  state: CatalogBindingState,
-  request: CodingToolActionRequest,
-  context: CatalogTrustedContext,
-): Promise<CodingToolActionRequest> {
+export async function approveCatalogAction<
+  Consumer extends CatalogConsumer = CodingCatalogConsumer,
+>(
+  state: CatalogBindingState<Consumer>,
+  request: Consumer["action"],
+  context: Consumer["context"],
+): Promise<Consumer["action"]> {
   const preview = state.input.authorityPort.preview(context.authority, request);
   if (preview.ok) return request;
   requireDispatch(preview.reason === "approval-required", "denied", "hard-denial");
@@ -229,9 +238,7 @@ export async function approveCatalogAction(
   const approved = await state.input.approvalPort.request(request, context);
   requireDispatch(approved !== undefined, "denied", "approval-rejected");
   const captured = captureCatalogJson(approved);
-  const parsed = (state.input.consumerPort ?? codingCatalogConsumer).captureApprovedAction(
-    captured,
-  );
+  const parsed = state.input.consumerPort.captureApprovedAction(captured);
   requireDispatch(
     parsed !== undefined && withoutProof(parsed) === withoutProof(request),
     "denied",

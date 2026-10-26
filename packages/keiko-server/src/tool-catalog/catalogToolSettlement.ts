@@ -1,3 +1,5 @@
+import { catalogScopeDigest } from "./catalogToolRequest.js";
+import type { CatalogConsumer, CodingCatalogConsumer } from "./catalogToolPorts.js";
 import {
   catalogJsonBytes,
   captureCatalogJson,
@@ -5,6 +7,7 @@ import {
 } from "@oscharko-dev/keiko-tool-catalog";
 import type {
   CatalogJsonValue,
+  CatalogDigest,
   ToolResultEnvelope,
   ToolResultMetrics,
   ToolResultReason,
@@ -15,7 +18,6 @@ import {
   type ToolInvocationReceipt,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-lifecycle";
 import { DEFAULT_SANDBOX_POLICY } from "@oscharko-dev/keiko-contracts/runtime/tools";
-import type { CodingToolMutationGuard } from "../coding-runtime/codingToolFacadePorts.js";
 import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import { correlationIdOrUnknown } from "../correlation.js";
@@ -36,17 +38,17 @@ import type {
   CatalogHandlerResult,
   CatalogToolBudgetReservation,
   CatalogToolDispatchOutcome,
-  CatalogTrustedContext,
 } from "./catalogToolPorts.js";
 
 type Settlement = Extract<CatalogToolDispatchOutcome, { kind: "settled" }>;
-export class CatalogInvocation {
+export class CatalogInvocation<Consumer extends CatalogConsumer = CodingCatalogConsumer> {
   public readonly invocationId: string;
+  public readonly scopeDigest: CatalogDigest;
   public readonly promise: Promise<Settlement>;
   public readonly controller = new AbortController();
-  public handler: CatalogBoundHandler | undefined;
+  public handler: CatalogBoundHandler<Consumer> | undefined;
   public inputBytes = 0;
-  public continuation: CatalogContinuation | undefined;
+  public continuation: CatalogContinuation<Consumer> | undefined;
   private readonly startedAt: number;
   private readonly settlementId: string;
   private resolve!: (outcome: Settlement) => void;
@@ -62,12 +64,13 @@ export class CatalogInvocation {
   private discarded = false;
 
   public constructor(
-    public readonly state: CatalogBindingState,
-    public readonly context: CatalogTrustedContext,
+    public readonly state: CatalogBindingState<Consumer>,
+    public readonly context: Consumer["context"],
     public readonly identity: CatalogActionIdentity,
   ) {
-    this.invocationId = mintCatalogId(state);
-    this.settlementId = mintCatalogId(state);
+    this.scopeDigest = catalogScopeDigest(state.input.consumerPort.scope(context));
+    this.invocationId = mintCatalogId<Consumer>(state);
+    this.settlementId = mintCatalogId<Consumer>(state);
     this.startedAt = state.options.now();
     this.promise = new Promise((resolve) => {
       this.resolve = resolve;
@@ -163,7 +166,7 @@ export class CatalogInvocation {
       "handler-mismatch",
     );
     emitToolLifecycleEvent(this.state.input.logPort, {
-      ...lifecycleIdentity(this.state, this.context),
+      ...lifecycleIdentity<Consumer>(this.state, this.context),
       op: "tool-catalog.invocation-started",
       invocationId: this.invocationId,
       toolRef: this.handler.descriptor.toolRef,
@@ -172,7 +175,7 @@ export class CatalogInvocation {
       reservationId: this.reservation.reservationId,
     });
   }
-  public beforeEffect(guard: CodingToolMutationGuard, revalidate: () => void): boolean {
+  public beforeEffect(guard: Consumer["guard"], revalidate: () => void): boolean {
     if (this.checkStopped()) return false;
     try {
       revalidate();
@@ -331,7 +334,7 @@ export class CatalogInvocation {
     error: unknown,
   ): void {
     emitToolLifecycleEvent(this.state.input.logPort, {
-      ...lifecycleIdentity(this.state, this.context),
+      ...lifecycleIdentity<Consumer>(this.state, this.context),
       op: "tool-catalog.invocation-settled",
       ...receipt,
       toolRef: result.toolRef,
@@ -368,7 +371,7 @@ export class CatalogInvocation {
     if (this.discarded || this.outcome === undefined || this.handler === undefined) return;
     this.discarded = true;
     emitToolLifecycleEvent(this.state.input.logPort, {
-      ...lifecycleIdentity(this.state, this.context),
+      ...lifecycleIdentity<Consumer>(this.state, this.context),
       op: "tool-catalog.completion-discarded",
       invocationId: this.invocationId,
       toolRef: this.handler.descriptor.toolRef,
@@ -377,7 +380,9 @@ export class CatalogInvocation {
     });
   }
 }
-export function mintCatalogId(state: CatalogBindingState): string {
+export function mintCatalogId<Consumer extends CatalogConsumer = CodingCatalogConsumer>(
+  state: CatalogBindingState<Consumer>,
+): string {
   const id = state.options.mintId();
   requireDispatch(/^[A-Za-z0-9_-]{1,128}$/u.test(id), "invalid", "recovery-required");
   return id;

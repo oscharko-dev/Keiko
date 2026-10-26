@@ -52,6 +52,16 @@ request-keyed weak map; each SDK factory captures only that request's context. N
 current-Pod global exists. Arguments cannot replace routing, credentials, binding,
 authority or MCP metadata. Ordinary URLs in supported field data remain data.
 
+The existing catalog binder is parameterized by consumer context, action and effect
+guard. Its Coding adapter retains workspace identity and the exact native-read
+exception. Other consumers supply their own strict action decoder and private scope
+projection; they need no Coding session or synthetic workspace. The binder captures
+the decoder functions and hashes a bounded scope projection when offering and
+admitting work. That captured scope participates in request identity and continuation
+cursors and is rechecked before effects, including after a newer offer is issued.
+Coding keeps `workspace-stale`; other consumers use the closed `consumer-stale`
+result. Both use the existing invocation records, budgets, settlement and Activity Log.
+
 ### D4 — Catalog and binder remain authoritative
 
 Provider declarations carry canonical descriptors and descriptive read/write hints. A

@@ -1,3 +1,5 @@
+import type { CatalogDigest } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import type { CatalogConsumer, CodingCatalogConsumer } from "./catalogToolPorts.js";
 import { canonicalise } from "@oscharko-dev/keiko-security/hashing";
 import {
   consumeCatalogCursorMatching,
@@ -12,20 +14,20 @@ import type {
   BoundToolInvocation,
   CatalogActionIdentity,
   CatalogToolBudgetReservation,
-  CatalogTrustedContext,
 } from "./catalogToolPorts.js";
 
 /** One invocation may publish one continuation; all stored bindings remain in the existing registry. */
-export class CatalogContinuation {
+export class CatalogContinuation<Consumer extends CatalogConsumer = CodingCatalogConsumer> {
   public pageSequence = 0;
   private requestNonce: string;
   private issued: string | undefined;
   private previousReservationId: string | undefined;
   public constructor(
-    private readonly state: CatalogBindingState,
-    private readonly context: CatalogTrustedContext,
+    private readonly state: CatalogBindingState<Consumer>,
+    private readonly context: Consumer["context"],
     private readonly request: BoundToolInvocation,
     identity: CatalogActionIdentity,
+    private readonly scopeDigest: CatalogDigest,
   ) {
     this.requestNonce = identity.idempotencyKey;
   }
@@ -51,14 +53,9 @@ export class CatalogContinuation {
       "invalid",
       "cursor-invalid",
     );
+    requireDispatch(binding.scopeDigest === this.scopeDigest, "invalid", "cursor-invalid");
     requireDispatch(
-      binding.workspaceIdentity === this.context.workspaceIdentity &&
-        binding.workspaceRevision === this.context.workspaceRevision,
-      "invalid",
-      "cursor-invalid",
-    );
-    requireDispatch(
-      binding.requestDigest === catalogRequestDigest(this.request, this.context, binding.nonce),
+      binding.requestDigest === catalogRequestDigest(this.request, this.scopeDigest, binding.nonce),
       "invalid",
       "cursor-invalid",
     );
@@ -84,9 +81,8 @@ export class CatalogContinuation {
       this.context.runId,
       {
         toolRef: this.request.toolRef,
-        requestDigest: catalogRequestDigest(this.request, this.context, this.requestNonce),
-        workspaceIdentity: this.context.workspaceIdentity,
-        workspaceRevision: this.context.workspaceRevision,
+        requestDigest: catalogRequestDigest(this.request, this.scopeDigest, this.requestNonce),
+        scopeDigest: this.scopeDigest,
         profile: this.state.projection.profile,
         projectionDigest: this.request.projectionDigest,
         expiresAt: new Date(expiry).toISOString(),

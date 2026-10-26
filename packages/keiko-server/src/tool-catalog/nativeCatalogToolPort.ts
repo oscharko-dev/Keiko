@@ -93,6 +93,7 @@ export function createNativeCatalogToolPort(input: NativeCatalogToolPortInput): 
   const binder = createCatalogToolBinder(
     {
       ...input.binder,
+      consumerPort: codingCatalogConsumer,
       projection,
       handlerBindings: input.actions.map((action) => handler(input, action, observer)),
     },
@@ -121,3 +122,4 @@ export function createNativeCatalogToolPort(input: NativeCatalogToolPortInput): 
     },
   };
 }
+import { codingCatalogConsumer } from "./catalogCodingConsumer.js";

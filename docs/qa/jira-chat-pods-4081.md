@@ -512,7 +512,6 @@ Jira/Confluence client-route tests and native HTTP integration assert exactly on
 registered owner outcome and absence of remote content. The observability gate tests
 and native integration passed 24 tests; the real client-route lane passed 7 tests.
 
-
 ## Shared MCP protocol checkpoint — #4089 (partial)
 
 The new `keiko-mcp` package owns official client/server SDK 2.4.0 imports and
@@ -548,7 +547,6 @@ Chat delivery still require implementation and evidence. All 55 complete ACs
 remain open. ADR-0181 records the new host decision; affected existing ADRs and
 package/dependency documentation are updated in the same change.
 
-
 ## Auditor follow-up — #4089 cancellation and terminal evidence
 
 Two real-SDK regressions first failed against `14d8c9695`: a delayed provider
@@ -566,7 +564,6 @@ summary and projects it through the existing reader. Package build, root typeche
 changed lint, error observability and all 97 registry drift tests pass. The existing
 12 binder suites / 200 tests also passed unchanged before binder refactoring.
 No new logging subsystem or error-observability exemption was introduced.
-
 
 ## Binder preparation — #4089 (partial)
 
@@ -586,3 +583,24 @@ tool contract, catalog conformance and error observability pass. The regenerated
 operation inventory reports no violations. The auditor code-reviewed the preceding
 MCP cancellation/terminal-log fixes and confirmed both reported paths addressed;
 that confirmation is not a full host/binder acceptance.
+
+## Shared binder — #4089 (partial)
+
+The production binder now accepts a consumer context/action/effect-guard specification.
+Coding composes its existing adapter explicitly; a non-Coding conversation fixture uses
+chat/actor/binding-generation scope and a distinct lookup action, with no workspace or
+Coding session. Offers, request identities and cursors capture a bounded scope digest.
+Every pre-effect check compares the admitted digest with current scope; replacing the
+offer while a delayed old invocation is pending does not revive its authority. The
+existing invocation registry, approval/budget ports and terminal lifecycle remain shared.
+
+Six new consumer tests cover successful settlement, changed chat/actor/generation,
+re-offer during a delayed invocation, and model-supplied chat routing rejection. The
+201 Coding binder regressions remain required alongside these tests. This consumer does
+not yet invoke the managed MCP host: provider composition and the complete #4089 AC7
+path remain open. No full acceptance criterion is marked complete by this increment.
+
+Focused validation also passes: 97 gateway catalog tests, 97 registry drift tests,
+package build, root typecheck, changed-file lint, governed-tool contract, regenerated
+catalog conformance and error observability. The operation inventory has 606/606
+proofs, 30/30 scenarios and no violations. Full final qualification remains pending.
