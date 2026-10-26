@@ -2573,18 +2573,16 @@ function importedRawTarget(state, symbol) {
   const identity = canonicalDeclaration(compiler, symbol.declarations[0], null);
   if (identity.owner !== state.identity.owner || identity.producer.path !== modulePath) return null;
   if (!privateRawOutputBinding(compiler, identity.producer.path)) return null;
-  const owned = declarationCallable(compiler, identity);
-  if (
-    !ts.isFunctionDeclaration(owned.callable) ||
-    !owned.callable.name ||
-    owned.callable.parent !== owned.source
-  )
-    return null;
+  const { context, source, node } = ownedDeclaration(compiler, identity);
+  if (!ts.isFunctionDeclaration(node) || !node.name || node.parent !== source) return null;
+  if (!runtimeCallable(node)) throw new TypeError("unsupported-responsibility-callable");
   return {
-    ...owned,
+    context,
+    source,
+    callable: node,
     identity,
-    declaration: owned.callable,
-    nodes: collectiveSourceNodes(compiler, owned.source),
+    declaration: node,
+    nodes: collectiveSourceNodes(compiler, source),
     modulePrivate: true,
   };
 }

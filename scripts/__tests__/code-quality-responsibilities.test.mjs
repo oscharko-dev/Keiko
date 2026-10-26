@@ -3275,3 +3275,159 @@ describe("raw canonical JSON decoder fresh semantic qualification (#3918)", () =
     195_000,
   );
 });
+
+function assessmentIgnoredFactorySource(variant) {
+  if (variant === "escape")
+    return (
+      'import { isRecord } from "./helper.js";\n' +
+      "function bind(check: (input: unknown) => boolean): (input: unknown) => boolean { return check; }\n" +
+      "export const ignored = bind(isRecord);\n"
+    );
+  return (
+    'function bind(): (input: unknown) => boolean { return (input: unknown): boolean => typeof input === "object"; }\n' +
+    "export const ignored = bind();\n"
+  );
+}
+
+function assessmentIgnoredFactoryFixture(variant) {
+  const own = createPrivateModuleParserFixture("direct", ["anti-slop/no-runtime-typeof"]);
+  roots.push(own.root);
+  own.put("packages/alpha/src/ignored.ts", assessmentIgnoredFactorySource(variant));
+  for (const name of ["owner", "second"]) {
+    const path = `packages/alpha/src/${name}.ts`;
+    own.put(
+      path,
+      'import { ignored } from "./ignored.js";\n' +
+        readFileSync(join(own.root, path), "utf8").replace(
+          "if (!check(input)",
+          "if (!ignored(input) || !check(input)",
+        ),
+    );
+  }
+  if (variant === "public" || variant === "selected") {
+    const path = "packages/alpha/src/owner.ts";
+    own.put(
+      path,
+      readFileSync(join(own.root, path), "utf8") + 'export { ignored } from "./ignored.js";\n',
+    );
+  }
+  emitSymbolFixture(own.root);
+  return own;
+}
+
+describe("unsupported imported callable responsibility assessment (#3918)", () => {
+  it.each(["private", "public"])(
+    "retains real responsibilities and unmatched factory diagnostics for %s exposure",
+    async (variant) => {
+      const own = assessmentIgnoredFactoryFixture(variant);
+      const report = await executeCodeQualityPolicy(
+        { mode: "enforce", scope: "repository", json: true },
+        own.root,
+      );
+      expect(report.responsibilities.counts).toMatchObject({ ready: 2, qualified: 0, pending: 2 });
+      const slots = report.responsibilities.assessments.flatMap((record) => record.slots);
+      expect(slots.filter((slot) => slot.path === "packages/alpha/src/ignored.ts")).toEqual([]);
+      expect(
+        slots.filter(
+          (slot) =>
+            slot.path === "packages/alpha/src/helper.ts" &&
+            slot.rule === "anti-slop/no-runtime-typeof",
+        ),
+      ).toHaveLength(2);
+      for (const name of ["owner", "second"])
+        expect(
+          slots.some(
+            (slot) =>
+              slot.path === `packages/alpha/src/${name}.ts` &&
+              slot.rule === "anti-slop/no-unknown-parameters",
+          ),
+        ).toBe(true);
+      expect(report.violations).toContainEqual(
+        expect.objectContaining({
+          path: "packages/alpha/src/ignored.ts",
+          rule: "anti-slop/no-runtime-typeof",
+        }),
+      );
+      expect(
+        report.adaptations.some(
+          ({ slot }) =>
+            slot.path === "packages/alpha/src/helper.ts" &&
+            slot.rule === "anti-slop/no-runtime-typeof",
+        ),
+      ).toBe(true);
+      expect(
+        report.adaptations.some(({ slot }) => slot.path === "packages/alpha/src/ignored.ts"),
+      ).toBe(false);
+      expect(report.enforcementOutcome).toBe("failed");
+      expect(report.outcome).toBe("failed");
+      expect(
+        report.responsibilities.assessments.every((record) =>
+          record.proofs.every((proof) => !proof.executed),
+        ),
+      ).toBe(true);
+    },
+    60_000,
+  );
+
+  it("withholds an escaping named helper loan without dropping its native diagnostics", async () => {
+    const own = assessmentIgnoredFactoryFixture("escape");
+    const report = await executeCodeQualityPolicy(
+      { mode: "enforce", scope: "repository", json: true },
+      own.root,
+    );
+    expect(report.responsibilities.counts).toMatchObject({ ready: 2, qualified: 0, pending: 2 });
+    const slots = report.responsibilities.assessments.flatMap((record) => record.slots);
+    expect(slots.filter((slot) => slot.path === "packages/alpha/src/ignored.ts")).toEqual([]);
+    const source = readFileSync(join(own.root, "packages/alpha/src/helper.ts"), "utf8");
+    const start = source.indexOf('typeof input === "object"');
+    const line =
+      source.split("\n").findIndex((text) => text.includes('typeof input === "object"')) + 1;
+    expect(
+      slots.some(
+        (slot) =>
+          slot.path === "packages/alpha/src/helper.ts" &&
+          slot.rule === "anti-slop/no-runtime-typeof" &&
+          slot.start === start,
+      ),
+    ).toBe(false);
+    expect(report.violations).toContainEqual(
+      expect.objectContaining({
+        path: "packages/alpha/src/helper.ts",
+        rule: "anti-slop/no-runtime-typeof",
+        line,
+      }),
+    );
+    expect(
+      report.adaptations.some(
+        ({ finding }) =>
+          finding.path === "packages/alpha/src/helper.ts" &&
+          finding.rule === "anti-slop/no-runtime-typeof" &&
+          finding.line === line,
+      ),
+    ).toBe(false);
+    for (const name of ["owner", "second"])
+      expect(
+        slots.some(
+          (slot) =>
+            slot.path === `packages/alpha/src/${name}.ts` &&
+            slot.rule === "anti-slop/no-unknown-parameters",
+        ),
+      ).toBe(true);
+    expect(report.enforcementOutcome).toBe("failed");
+    expect(report.outcome).toBe("failed");
+  }, 60_000);
+
+  it("does not certify a responsibility directly selecting the unsupported factory", async () => {
+    const own = assessmentIgnoredFactoryFixture("selected");
+    for (const role of ["input", "transform", "output"])
+      own.records[0][role].exportName = "ignored";
+    own.put("scripts/code-quality-policy.json", own.policy);
+    const report = assessPolicyResponsibilities(await collectPolicySubject(own.root), own.policy);
+    const selected = report.assessments.find((record) => record.id === own.records[0].id);
+    expect(selected.structural).not.toBe("ready");
+    expect(selected.reasons).toContain("unresolved-responsibility-facts");
+    expect(selected).not.toHaveProperty("slots");
+    expect(selected).not.toHaveProperty("proofs");
+    expect(report.counts.qualified).toBe(0);
+  }, 30_000);
+});

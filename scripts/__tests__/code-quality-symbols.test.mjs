@@ -4902,3 +4902,146 @@ describe("boolean raw object observation facts (#3918)", () => {
     ).toThrow();
   });
 });
+
+function importedUnsupportedSource(variant) {
+  if (variant === "bodyless")
+    return "export declare function ignored(input: unknown): boolean;\nexport const marker = true;\n";
+  if (variant === "escape")
+    return (
+      'import { isRecord } from "./helper.js";\n' +
+      "function bind(check: (input: unknown) => boolean): (input: unknown) => boolean { return check; }\n" +
+      "export const ignored = bind(isRecord);\n"
+    );
+  return (
+    'function bind(): (input: unknown) => boolean { return (input: unknown): boolean => typeof input === "object"; }\n' +
+    "export const ignored = bind();\n"
+  );
+}
+
+async function importedUnsupportedFixture(variant = "private") {
+  const own = createPrivateModuleParserFixture();
+  fixtures.push(own);
+  own.put("packages/alpha/src/ignored.ts", importedUnsupportedSource(variant));
+  for (const name of ["owner", "second"]) {
+    const path = `packages/alpha/src/${name}.ts`;
+    const source = readFileSync(join(own.root, path), "utf8");
+    own.put(
+      path,
+      'import { ignored } from "./ignored.js";\n' +
+        source.replace("if (!check(input)", "if (!ignored(input) || !check(input)"),
+    );
+  }
+  if (variant === "public") {
+    const path = "packages/alpha/src/owner.ts";
+    own.put(
+      path,
+      readFileSync(join(own.root, path), "utf8") + 'export { ignored } from "./ignored.js";\n',
+    );
+  }
+  emitSymbolFixture(own.root);
+  own.subject = await collectPolicySubject(own.root);
+  own.resolver = createSymbolResolver(own.subject, {}, [
+    { owner: "packages/alpha", paths: ["packages/alpha/src/proof.test.ts"] },
+  ]);
+  own.rawRoots = own.records.map((record) => ({
+    identity: own.resolver.resolveProofExport(record.input).identities[0],
+    index: 0,
+    recordId: record.id,
+  }));
+  return own;
+}
+
+describe("unsupported imported callable eligibility (#3918)", () => {
+  it.each(["private", "public"])(
+    "ignores the %s factory without losing genuine helper or root facts",
+    async (variant) => {
+      const own = await importedUnsupportedFixture(variant);
+      expect(own.resolver.collectiveRawComponents(own.rawRoots)).toEqual([own.rawRoots]);
+      const slots = own.resolver.collectiveRawCheckingSlots(
+        own.rawRoots,
+        "anti-slop/no-unknown-parameters",
+      );
+      expect(slots.filter((slot) => slot.path === "packages/alpha/src/ignored.ts")).toEqual([]);
+      expect(slots.filter((slot) => slot.path === "packages/alpha/src/helper.ts")).toHaveLength(1);
+      for (const name of ["owner", "second"])
+        expect(slots.filter((slot) => slot.path === `packages/alpha/src/${name}.ts`)).toHaveLength(
+          1,
+        );
+      expect(slots.filter((slot) => slot.path.includes("/leaf"))).toHaveLength(2);
+    },
+    30_000,
+  );
+
+  it("keeps direct selected factory rejection separate from indirect exclusion", async () => {
+    const own = await importedUnsupportedFixture("public");
+    const identity = own.resolver.resolveExport({
+      ...own.records[0].input,
+      consumerPath: "src/consumer.ts",
+      exportName: "ignored",
+    }).identities[0];
+    expect(identity.producer.kind).toBe("VariableDeclaration");
+    expect(() => own.resolver.callableSlots(identity)).toThrow(
+      "unsupported-responsibility-callable",
+    );
+    const roots = [{ identity, index: 0, recordId: "selected-factory" }];
+    expect(() => own.resolver.collectiveRawComponents(roots)).toThrow(
+      "unsupported-responsibility-callable",
+    );
+    expect(() =>
+      own.resolver.collectiveRawCheckingSlots(roots, "anti-slop/no-unknown-parameters"),
+    ).toThrow("unsupported-responsibility-callable");
+  }, 30_000);
+
+  it("retains the eligible named bodyless declaration refusal", async () => {
+    const own = await importedUnsupportedFixture("bodyless");
+    expect(() => own.resolver.collectiveRawComponents(own.rawRoots)).toThrow(
+      "unsupported-responsibility-callable",
+    );
+    expect(() =>
+      own.resolver.collectiveRawCheckingSlots(own.rawRoots, "anti-slop/no-unknown-parameters"),
+    ).toThrow("unsupported-responsibility-callable");
+  }, 30_000);
+
+  it.each(["ignored.js", "ignored.d.ts"])(
+    "checks existing %s output provenance before excluding the factory",
+    async (name) => {
+      const own = await importedUnsupportedFixture();
+      const path = join(own.root, "packages/alpha/dist", name);
+      const retained = `${path}.retained`;
+      renameSync(path, retained);
+      symlinkSync(retained, path);
+      expect(() => own.resolver.collectiveRawComponents(own.rawRoots)).toThrow(
+        "unsafe-symbol-source",
+      );
+      expect(() =>
+        own.resolver.collectiveRawCheckingSlots(own.rawRoots, "anti-slop/no-unknown-parameters"),
+      ).toThrow("unsafe-symbol-source");
+    },
+    30_000,
+  );
+
+  it("checks source currentness before excluding the factory", async () => {
+    const own = await importedUnsupportedFixture();
+    const path = "packages/alpha/src/ignored.ts";
+    own.put(path, readFileSync(join(own.root, path), "utf8") + "\n// changed source\n");
+    expect(() => own.resolver.collectiveRawComponents(own.rawRoots)).toThrow(
+      "symbol-subject-changed",
+    );
+    expect(() =>
+      own.resolver.collectiveRawCheckingSlots(own.rawRoots, "anti-slop/no-unknown-parameters"),
+    ).toThrow("symbol-subject-changed");
+  }, 30_000);
+
+  it("withholds a genuine named helper escaping into the ignored factory", async () => {
+    const own = await importedUnsupportedFixture("escape");
+    expect(own.resolver.collectiveRawComponents(own.rawRoots)).toEqual([own.rawRoots]);
+    const slots = own.resolver.collectiveRawCheckingSlots(
+      own.rawRoots,
+      "anti-slop/no-unknown-parameters",
+    );
+    expect(slots.filter((slot) => slot.path === "packages/alpha/src/ignored.ts")).toEqual([]);
+    expect(slots.filter((slot) => slot.path === "packages/alpha/src/helper.ts")).toEqual([]);
+    for (const name of ["owner", "second"])
+      expect(slots.filter((slot) => slot.path === `packages/alpha/src/${name}.ts`)).toHaveLength(1);
+  }, 30_000);
+});
