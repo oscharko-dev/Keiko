@@ -55,9 +55,12 @@ reads each back. Repeated runs locate existing identities/issues and reuse the P
 A marker prevents repeating PAT creation after a lost response. No failed mutation
 is automatically retried. Output contains case names, status codes and counts only.
 
-Restricted identities, independent permission grants, required-field and transition
-screen fixtures, pagination, hostile content and second-project isolation remain
-pending. This basic seed does not yet satisfy #4082 AC5.
+The seed also creates restricted, edit-only and assignable identities with private
+PATs. Explicit permission schemes separate edit, assignment and transition, and
+separate project visibility. It verifies the permission matrix and actual denied
+read/assignment/transition calls, then confirms status and assignee stayed unchanged.
+Required-field and transition-screen fixtures, pagination, hostile content and
+complete isolation journeys remain pending. This basic seed does not yet satisfy #4082 AC5.
 
 ## Verify the actual product HTTPS path
 

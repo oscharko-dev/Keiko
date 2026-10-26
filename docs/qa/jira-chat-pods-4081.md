@@ -448,3 +448,15 @@ three cases. Fixture administration currently uses the private loopback admin pa
 product qualification uses HTTPS. Required permission/custom-field/transition-screen,
 pagination, hostile-content and isolation classes, automated setup, product mutations,
 model/browser qualification and the remaining complete ACs are still pending.
+
+### Permission fixture checkpoint (#4082 AC5, partial)
+
+The reproducible seed now creates four independent non-admin PAT actors and two
+projects. Explicit user grants provide full primary-project access, edit without
+assignment/transition, an assignable account, and browse-only access to the isolated
+project. Five actor/project permission combinations pass. Actual restricted reads
+and assignment return 403; an unavailable transition returns 400. Status and assignee
+are independently compared before/after the denied mutations. Repeated seeding
+reuses the actors, PATs and permission schemes and fails on scheme drift. License
+checks, script lint and formatting pass. Complete mandatory-field/screen, pagination,
+hostile-content and integrated isolation acceptance remain pending.

@@ -1,63 +1,22 @@
-import { existsSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import {
-  basicAuth,
-  checked,
-  labRequest,
-  loadSession,
-  readPrivateFile,
-  requireLicense,
-} from "./lab-client.mjs";
+import { basicAuth, checked, labRequest, loadSession, requireLicense } from "./lab-client.mjs";
 
-async function ensureProject(session) {
+import { ensureFixtureIdentity } from "./seed-identities.mjs";
+import { ensureFixturePermissions, verifyFixtureRestrictions } from "./seed-permissions.mjs";
+
+async function ensureProject(session, key) {
   const auth = basicAuth(session, "admin");
-  const result = await labRequest(session, "GET", "/rest/api/2/project/KEIKO", auth);
+  const result = await labRequest(session, "GET", `/rest/api/2/project/${key}`, auth);
   if (result.status === 200) return;
   if (result.status !== 404) throw new TypeError("Unexpected synthetic project state");
   await checked(session, "create-project", "POST", "/rest/api/2/project", auth, {
-    key: "KEIKO",
-    name: "Keiko synthetic Jira 4081",
+    key,
+    name: `Keiko synthetic ${key}`,
     projectTypeKey: "software",
     lead: "keiko-admin",
     assigneeType: "UNASSIGNED",
   });
-}
-
-async function ensureApiUser(session) {
-  const admin = basicAuth(session, "admin");
-  const result = await labRequest(session, "GET", "/rest/api/2/user?username=keiko-api", admin);
-  if (result.status === 200) return;
-  if (result.status !== 404) throw new TypeError("Unexpected synthetic user state");
-  await checked(session, "create-api-user", "POST", "/rest/api/2/user", admin, {
-    name: "keiko-api",
-    password: readPrivateFile(join(session.directory, "secrets", "api-user-password")),
-    emailAddress: "jira-api@example.invalid",
-    displayName: "Synthetic API user",
-    applicationKeys: ["jira-software"],
-    notification: false,
-  });
-}
-
-async function ensureToken(session) {
-  const path = join(session.directory, "secrets", "api-token");
-  if (existsSync(path)) return `Bearer ${readPrivateFile(path)}`;
-  // A lost PAT response cannot be recovered. Refuse another creation on a repeated invocation.
-  writeFileSync(join(session.directory, "secrets", "pat-creation-started"), "1\n", {
-    mode: 0o600,
-    flag: "wx",
-  });
-  const token = await checked(
-    session,
-    "create-pat",
-    "POST",
-    "/rest/pat/latest/tokens",
-    basicAuth(session, "api"),
-    { name: "Keiko synthetic 4081 session", expirationDuration: 1 },
-  );
-  if (typeof token?.rawToken !== "string" || token.rawToken.length === 0)
-    throw new TypeError("Missing laboratory PAT");
-  writeFileSync(path, token.rawToken, { mode: 0o600, flag: "wx" });
-  return `Bearer ${token.rawToken}`;
 }
 
 async function ensureIssues(session, auth) {
@@ -102,9 +61,13 @@ async function main() {
   if (!process.argv[2]) throw new TypeError("Usage: seed.mjs <private-state-directory>");
   const session = loadSession(process.argv[2]);
   await requireLicense(session);
-  await ensureProject(session);
-  await ensureApiUser(session);
-  const auth = await ensureToken(session);
+  await ensureProject(session, "KEIKO");
+  await ensureProject(session, "ISOLATED");
+  const actors = {};
+  for (const actor of ["api", "restricted", "editor", "assignee"])
+    actors[actor] = await ensureFixtureIdentity(session, actor);
+  await ensureFixturePermissions(session, actors);
+  const auth = actors.api;
   const identity = await checked(session, "pat-identity", "GET", "/rest/api/2/myself", auth);
   if (identity.name !== "keiko-api" || identity.active !== true)
     throw new TypeError("Unexpected synthetic identity");
@@ -118,6 +81,7 @@ async function main() {
   if (permissions.permissions.ADMINISTER.havePermission !== false)
     throw new TypeError("API actor is unexpectedly privileged");
   const keys = await ensureIssues(session, auth);
+  await verifyFixtureRestrictions(session, actors, keys[1]);
   for (const key of keys)
     await checked(session, "verify-created-issue", "GET", `/rest/api/2/issue/${key}`, auth);
   await requireLicense(session);

@@ -24,11 +24,19 @@ export function readPrivateFile(path) {
   return readFileSync(path, "utf8").trim();
 }
 
+export function actorDetails(actor) {
+  const actors = new Set(["admin", "api", "restricted", "editor", "assignee"]);
+  if (!actors.has(actor)) throw new TypeError("Unknown synthetic actor");
+  return {
+    name: `keiko-${actor}`,
+    passwordFile: actor === "api" ? "api-user-password" : `${actor}-password`,
+  };
+}
+
 export function basicAuth(session, actor) {
-  const users = { admin: "keiko-admin", api: "keiko-api" };
-  const files = { admin: "admin-password", api: "api-user-password" };
-  if (!Object.hasOwn(users, actor)) throw new TypeError("Unknown synthetic actor");
-  return `Basic ${Buffer.from(`${users[actor]}:${readPrivateFile(join(session.directory, "secrets", files[actor]))}`).toString("base64")}`;
+  const details = actorDetails(actor);
+  const password = readPrivateFile(join(session.directory, "secrets", details.passwordFile));
+  return `Basic ${Buffer.from(`${details.name}:${password}`).toString("base64")}`;
 }
 
 async function jsonBody(response) {
