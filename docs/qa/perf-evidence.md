@@ -522,6 +522,9 @@ After the op catalog was regenerated at `363d2cb5d` it was measured again: p95 1
 2.08 and 130.3 ms, each below its committed ceiling.
 After the search key redaction and the process-table mark at `37367b1cc` it was measured again:
 p95 1497.9, 2.17, 2.11 and 139.2 ms, each below its committed ceiling.
+After the optional runtime packages were pinned to 1.1.4 at `05bb62655` (the lockfile is part of
+the subject) it was measured again: p95 1551.9, 1.93, 2.32 and 136.6 ms, each below its committed
+ceiling.
 
 The PR lane runs `check:perf-evidence:coding-runtime` and the hermetic ruler tests
 (`test:perf:coding-runtime`). It checks integrity and budgets unconditionally. Set
