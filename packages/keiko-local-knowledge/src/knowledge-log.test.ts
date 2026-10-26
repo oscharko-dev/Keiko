@@ -615,3 +615,79 @@ it("#3918 preserves inherited fallback observations through the registered failu
     resetActivityLogLossCountersForTests();
   }
 });
+
+interface RepeatedKnowledgeFailureProbe {
+  readonly sink: KnowledgeLogSink;
+  readonly event: KnowledgeLogEvent;
+  readonly trace: string[];
+  readonly failure: Error;
+}
+
+function repeatedKnowledgeFailureProbe(): RepeatedKnowledgeFailureProbe {
+  const trace: string[] = [];
+  const failure: Error = Object.freeze(new TypeError("synthetic second failed-operation refusal"));
+  const cause: Error = new TypeError("synthetic primary sink refusal");
+  Object.defineProperty(cause, "code", {
+    get(): string {
+      trace.push("cause");
+      return "ENOSPC";
+    },
+  });
+  let opReads = 0;
+  const event: KnowledgeLogEvent = {
+    category: "indexing",
+    get op(): string {
+      opReads += 1;
+      trace.push(`op:${String(opReads)}`);
+      if (opReads === 2) throw failure;
+      return "knowledge.index.started";
+    },
+  };
+  const sink: KnowledgeLogSink = {
+    write(received): never {
+      trace.push(received === event ? "primary" : "notice");
+      throw cause;
+    },
+  };
+  return { sink, event, trace, failure };
+}
+
+it("#3918 observes a second failed operation before report suppression", (): void => {
+  const probe = repeatedKnowledgeFailureProbe();
+  const original = Object.getOwnPropertyDescriptor(process, "emitWarning");
+  if (original === undefined) throw new TypeError("missing process warning descriptor");
+  let warningReads = 0;
+  try {
+    resetActivityLogLossCountersForTests();
+    Object.defineProperty(process, "emitWarning", {
+      configurable: true,
+      get(): never {
+        warningReads += 1;
+        probe.trace.push("warning");
+        throw new TypeError("synthetic warning getter refusal");
+      },
+    });
+    emitKnowledgeLogEvent(probe.sink, probe.event);
+    let observed: unknown;
+    try {
+      emitKnowledgeLogEvent(probe.sink, probe.event);
+    } catch (error: unknown) {
+      observed = error;
+    }
+    expect(observed).toBe(probe.failure);
+    expect(probe.trace).toEqual([
+      "primary",
+      "op:1",
+      "cause",
+      "notice",
+      "warning",
+      "primary",
+      "op:2",
+    ]);
+    expect(warningReads).toBe(1);
+    expect(activityLogLossCounters()["port-sink-failed"]).toBe(2);
+  } finally {
+    Object.defineProperty(process, "emitWarning", original);
+    resetActivityLogLossCountersForTests();
+  }
+});

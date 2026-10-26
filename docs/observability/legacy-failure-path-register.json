@@ -1406,18 +1406,6 @@
       "count": 1
     },
     {
-      "path": "packages/keiko-local-knowledge/src/knowledge-log.ts",
-      "owner": "reportFailedKnowledgeLogSink",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-local-knowledge/src/knowledge-log.ts",
-      "owner": "warnFailedKnowledgeLogSink",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-local-knowledge/src/knowledge-pods.ts",
       "owner": "connectorPodProjection",
       "kind": "unregistered-catch",

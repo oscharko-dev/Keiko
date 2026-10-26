@@ -22,7 +22,11 @@
 // absolute filesystem paths never reach a field on this event.
 
 import { createHash } from "node:crypto";
-import { securityErrorKind, writeActivityLogPortEvent } from "@oscharko-dev/keiko-security";
+import {
+  reportActivityLogPortFailure,
+  securityErrorKind,
+  writeActivityLogPortEvent,
+} from "@oscharko-dev/keiko-security";
 import {
   activityLogEvent,
   defineActivityLogOperation,
@@ -160,52 +164,29 @@ const KNOWLEDGE_LOG_SINK_FAILED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-function operationDigest(op: string): string {
-  return createHash("sha256").update(op).digest("hex").slice(0, 16);
-}
-
 export function emitKnowledgeLogEvent(
   sink: KnowledgeLogSink | undefined,
   event: KnowledgeLogEvent,
 ): void {
   writeActivityLogPortEvent(sink, event, (failedSink, failedEvent, cause): void => {
-    reportFailedKnowledgeLogSink(failedSink, failedEvent.op, cause);
+    reportActivityLogPortFailure(
+      failedSink,
+      failedEvent.op,
+      cause,
+      REPORTED_FAILED_SINKS,
+      reportFailedKnowledgeLogSink,
+    );
   });
 }
 
+// Builds this package's registered notice; Security owns its delivery and warning fallback.
 function reportFailedKnowledgeLogSink(
-  sink: KnowledgeLogSink,
-  droppedOp: string,
-  cause: unknown,
-): void {
-  if (REPORTED_FAILED_SINKS.has(sink)) return;
-  REPORTED_FAILED_SINKS.add(sink);
-  const errorKind = knowledgeErrorKind(cause);
-  const droppedOpDigest = operationDigest(droppedOp);
-  try {
-    sink.write(
-      activityLogEvent(
-        KNOWLEDGE_LOG_SINK_FAILED_OPERATION,
-        { level: "error", errorKind: "unavailable" },
-        { droppedOpDigest, failureKind: errorKind },
-      ),
-    );
-    return;
-  } catch {
-    // The transport refuses this shape too, so it is the transport that is down — fall through to
-    // the only channel left.
-  }
-  warnFailedKnowledgeLogSink(droppedOpDigest, errorKind);
-}
-
-function warnFailedKnowledgeLogSink(droppedOpDigest: string, errorKind: string): void {
-  try {
-    process.emitWarning("Keiko activity log sink is failing; log lines are being dropped.", {
-      type: "KeikoActivityLog",
-      code: "KEIKO_LOG_SINK_FAILED",
-      detail: `opDigest=${droppedOpDigest} errorKind=${errorKind}`,
-    });
-  } catch {
-    // The process warning channel is the last one there is; a report beyond it does not exist.
-  }
+  droppedOpDigest: string,
+  errorKind: string,
+): KnowledgeLogEvent {
+  return activityLogEvent(
+    KNOWLEDGE_LOG_SINK_FAILED_OPERATION,
+    { level: "error", errorKind: "unavailable" },
+    { droppedOpDigest, failureKind: errorKind },
+  );
 }
