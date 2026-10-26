@@ -150,6 +150,16 @@ result, not a captured Winsock refusal. The next control also provisions inbound
 Keiko's outbound filters, so a failure of the utility itself can be separated from a conflict with
 the exact egress policy. Listener exit state and closed filter-layer classifications are retained.
 
+[Run 40379317902](https://github.com/oscharko-dev/Keiko/actions/runs/40379317902) also times out
+with inbound provisioning and no Keiko egress filters; the listener remains alive. The utility's
+single observed permit is at IPv4 receive/accept in the App-Isolation sublayer. No IPv6 counterpart
+was observed. The next disposable experiment adds a separate Windows Firewall rule through the
+documented [desktop AppContainer rule API](https://learn.microsoft.com/en-us/windows/win32/api/netfw/nf-netfw-inetfwrule3-put_localapppackageid):
+one temporary package SID, the fixture executable, TCP, exact loopback addresses and the listener's
+one port. It removes its fresh rule and verifies absence even after an uncertain add outcome.
+The independent deny, exact outbound restrictions and owner-reaping controls remain required.
+This is not an installed production rule or a relaxation of the ordinary socket proof.
+
 Local protocol validation also ran the complete existing `runtime-gateway.test.ts`: 29 passed,
 eight failed on existing POSIX filesystem fixtures rejected by Windows path canonicalization, and
 25 macOS tests skipped. The new cross-language vector case passes individually. These baseline
