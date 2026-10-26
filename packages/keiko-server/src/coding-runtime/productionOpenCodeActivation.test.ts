@@ -18,6 +18,7 @@ import {
 import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
 import { stageDevLaneFixture, type DevLaneFixture } from "./devLaneFixture/_support.js";
 import type { DevLaneOpenCodeTarget } from "./devLanePortableCodingRuntime.js";
+import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 
 const secureRead: SecureWorkspaceTextReadPort = {
   readText: () => Promise.resolve({ ok: false, reason: "denied" }),
@@ -121,6 +122,7 @@ describe("production OpenCode activation", () => {
     );
     expect(result.ports).toBeUndefined();
     expect(result.unavailableReason).toBe("platform-unqualified");
+    expect(result.runtimeVersion).toBeUndefined();
   });
 
   it("fails closed with runtime-disabled when the kill switch is set, before discovery", () => {
@@ -271,6 +273,12 @@ describe("production OpenCode activation", () => {
     expect(result.ports?.backend).toBeDefined();
     expect(result.ports?.secureWorkspaceTextRead).toBeDefined();
     expect(result.ports?.editorAgentClient).toBeDefined();
+    // #3904 AC4: the version the verified sidecar metadata names, not one this build assumes.
+    expect(result.runtimeVersion).toEqual({
+      opencode: OPENCODE_PINNED_VERSION,
+      pinned: OPENCODE_PINNED_VERSION,
+      origin: "dev-checkout",
+    });
   });
 
   // #3903: the backend reads a native run's repository items through this same host read port, and

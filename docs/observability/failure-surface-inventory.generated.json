@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "bd6ab78218800012ea60f8bb800181981b777854926da90ad21dcf42d76b54a1"
+    "catalogDigest": "ca2ecbb6954f7491bedc52b508d068ea3766d277ca6c184547733b4b965d5b78"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -59,9 +59,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 589,
-    "proofCount": 602,
-    "resolvedProofCount": 602,
+    "operationCount": 590,
+    "proofCount": 603,
+    "resolvedProofCount": 603,
     "failureClassCount": 370,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -335,6 +335,7 @@
         "coding-runtime.history",
         "coding-runtime.history-projection",
         "coding-runtime.history.export",
+        "coding-runtime.history.import",
         "coding-runtime.inbox.action",
         "coding-runtime.inbox.dispatch-failed",
         "coding-runtime.initial-turn.dispatch-failed",
@@ -1484,6 +1485,10 @@
     "coding-runtime.history.export.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingHistoryRoutes.test.ts",
       "packages/keiko-server/src/coding-runtime/codingTaskExport.test.ts"
+    ],
+    "coding-runtime.history.import.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/codingHistoryRoutes.test.ts",
+      "packages/keiko-server/src/coding-runtime/codingTaskImport.test.ts"
     ],
     "coding-runtime.inbox.action.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeInbox.test.ts"

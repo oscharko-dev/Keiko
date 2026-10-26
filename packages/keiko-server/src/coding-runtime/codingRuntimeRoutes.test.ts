@@ -1626,6 +1626,31 @@ describe("coding runtime routes", () => {
     }
   });
 
+  // #3904 AC4: the Workbench shows what runs, so readiness carries only the version the
+  // activation verified, and never one for a runtime that is not available.
+  it("reports the activated runtime's version facts only while the runtime is available", () => {
+    const runtimeVersion = { opencode: "2.0.10", pinned: "2.1.4", origin: "npm-runtime-package" };
+    const read = (overrides: Partial<Record<string, unknown>>): Record<string, unknown> =>
+      handleCodingRuntimeReadiness(
+        context("", {}, "/api/coding-workbench/runtime/readiness?requestedMode=supervised-coding"),
+        runtime({ codingRuntimeOrchestrator: undefined, ...overrides }),
+      ).body as Record<string, unknown>;
+
+    const available = read({
+      codingRuntimeHostQualified: true,
+      codingRuntimeVersion: runtimeVersion,
+    });
+    expect(available.runtimeVersion).toEqual(runtimeVersion);
+    expect(validateCodingWorkbenchRuntimeReadiness(available)).toMatchObject({ ok: true });
+    expect(read({ codingRuntimeHostQualified: true })).not.toHaveProperty("runtimeVersion");
+    const unavailable = read({
+      codingRuntimeHostQualified: false,
+      codingRuntimeVersion: runtimeVersion,
+    });
+    expect(unavailable).not.toHaveProperty("runtimeVersion");
+    expect(validateCodingWorkbenchRuntimeReadiness(unavailable)).toMatchObject({ ok: true });
+  });
+
   it("names the precise unavailable reason exactly while the runtime host is unqualified", () => {
     const unavailable = handleCodingRuntimeReadiness(
       context("", {}, "/api/coding-workbench/runtime/readiness?requestedMode=supervised-coding"),

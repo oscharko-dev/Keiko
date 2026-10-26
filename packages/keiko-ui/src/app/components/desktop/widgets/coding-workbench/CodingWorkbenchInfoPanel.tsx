@@ -12,12 +12,14 @@ import {
 import type {
   CodingWorkbenchContextUsage,
   CodingWorkbenchContextUsageBreakdown,
+  CodingWorkbenchRuntimeVersion,
 } from "@oscharko-dev/keiko-contracts";
 import { TaskWorkspaceManager } from "../../TaskWorkspaceManager";
 import { useOptionalActiveWorkspace } from "../../context/ActiveWorkspaceContext";
 import { Icons } from "../../Icons";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { useCodingWorkbenchTranslate } from "./coding-workbench-i18n";
+import { useCodingWorkbenchVersionFacts } from "./useCodingWorkbenchVersionFacts";
 import styles from "./CodingWorkbenchWindow.module.css";
 
 const InfoIcon = Icons.info;
@@ -300,6 +302,8 @@ function ContextUsagePanel(props: {
 interface InfoPanelProps {
   readonly facts: readonly CodingWorkbenchInfoFact[];
   readonly contextUsage?: CodingWorkbenchContextUsage | undefined;
+  /** The activated runtime's version facts, as readiness reports them (#3904 AC4). */
+  readonly runtimeVersion?: CodingWorkbenchRuntimeVersion | undefined;
 }
 
 export function CodingWorkbenchInfoPanel(props: InfoPanelProps): ReactNode {
@@ -334,6 +338,7 @@ export function CodingWorkbenchInfoPanel(props: InfoPanelProps): ReactNode {
 
 function InformationDetails(props: InfoPanelProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
+  const versions = useCodingWorkbenchVersionFacts(props.runtimeVersion);
   return (
     <details
       className={styles.cmpInfoDetails}
@@ -342,7 +347,7 @@ function InformationDetails(props: InfoPanelProps): ReactNode {
       }
     >
       <summary className={styles.cmpActivitySummary}>{t("codingWorkbench.info.details")}</summary>
-      <InformationFacts facts={props.facts.filter((fact) => !fact.primary)} />
+      <InformationFacts facts={[...props.facts.filter((fact) => !fact.primary), ...versions]} />
       <p className={styles.helpText}>{t("codingWorkbench.controls.help")}</p>
       <TaskWorkspaceLocation />
       <OptionalTaskWorkspaceManager />

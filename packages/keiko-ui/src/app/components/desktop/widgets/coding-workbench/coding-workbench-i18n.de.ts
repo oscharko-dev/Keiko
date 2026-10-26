@@ -289,6 +289,20 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.info.agent": "Agent",
   "codingWorkbench.info.modelReadiness": "Modellbereitschaft",
   "codingWorkbench.info.runtime": "Runtime-Verifikation",
+  "codingWorkbench.info.runtimeVersion": "OpenCode-Runtime",
+  "codingWorkbench.info.runtimeVersion.value": "{version} · {origin}",
+  "codingWorkbench.info.runtimeVersion.pinned":
+    "{version} · {origin} · diese Keiko-Version erwartet {pinned}",
+  "codingWorkbench.info.runtimeOrigin.portable-release": "Keiko-Release",
+  "codingWorkbench.info.runtimeOrigin.npm-runtime-package": "npm-Runtime-Paket",
+  "codingWorkbench.info.runtimeOrigin.dev-checkout": "Entwicklungs-Checkout",
+  "codingWorkbench.info.latestRelease": "Neuestes Keiko-Release",
+  "codingWorkbench.info.latestRelease.checking": "Wird geprüft…",
+  "codingWorkbench.info.latestRelease.current": "{version} ist installiert und aktuell",
+  "codingWorkbench.info.latestRelease.available":
+    "{version} ist verfügbar. Installiere es unter Updates; es bringt seine eigene OpenCode-Runtime mit.",
+  "codingWorkbench.info.latestRelease.unknown":
+    "Unbekannt: Die Update-Prüfung hat die Release-Quelle nicht erreicht",
   "codingWorkbench.info.contextWindow": "Kontextfenster",
   "codingWorkbench.info.context.meter": "Kontextfenster zu {percent} % belegt",
   "codingWorkbench.info.context.used": "Belegter Input",

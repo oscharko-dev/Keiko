@@ -1832,6 +1832,63 @@ describe("Coding Workbench prompt inputs", () => {
       ).toBe(false);
     }
   });
+
+  // #3904 AC4: the version facts name two release versions and a closed source, and only an
+  // available runtime may carry them.
+  it("validates the runtime version facts an available runtime reports", () => {
+    const readiness = {
+      schemaVersion: "1",
+      requestedMode: "supervised-coding",
+      deploymentCeiling: "governed-assist",
+      effectiveMode: "governed-assist",
+      runtimeAvailable: true,
+      runtimeEvidenceClass: "platform-qualified",
+      selectableAgents: ["build"],
+    };
+    for (const runtimeVersion of [
+      { opencode: "2.1.4", pinned: "2.1.4", origin: "portable-release" },
+      { opencode: "2.0.10", pinned: "2.1.4", origin: "npm-runtime-package" },
+      { opencode: "2.2.0-beta.1", pinned: "2.1.4", origin: "dev-checkout" },
+    ]) {
+      expect(validateCodingWorkbenchRuntimeReadiness({ ...readiness, runtimeVersion })).toEqual({
+        ok: true,
+        value: { ...readiness, runtimeVersion },
+      });
+    }
+    const valid = { opencode: "2.1.4", pinned: "2.1.4", origin: "portable-release" };
+    for (const runtimeVersion of [
+      null,
+      "2.1.4",
+      {},
+      { ...valid, origin: "homebrew" },
+      { ...valid, opencode: "latest" },
+      { ...valid, opencode: "^2.1.4" },
+      { ...valid, opencode: "/usr/local/bin/opencode" },
+      { ...valid, pinned: 214 },
+      { ...valid, opencode: `2.1.4-${"x".repeat(33)}` },
+      { ...valid, path: "/opt/keiko" },
+    ]) {
+      expect(
+        validateCodingWorkbenchRuntimeReadiness({ ...readiness, runtimeVersion }).ok,
+        JSON.stringify(runtimeVersion),
+      ).toBe(false);
+    }
+    const unavailable = validateCodingWorkbenchRuntimeReadiness({
+      schemaVersion: "1",
+      requestedMode: "supervised-coding",
+      deploymentCeiling: "governed-assist",
+      effectiveMode: "governed-assist",
+      runtimeAvailable: false,
+      runtimeUnavailableReason: "payload-missing",
+      selectableAgents: ["build"],
+      runtimeVersion: valid,
+    });
+    expect(unavailable.ok).toBe(false);
+    if (!unavailable.ok)
+      expect(unavailable.errors).toContain(
+        "runtimeVersion must be absent when the runtime is unavailable",
+      );
+  });
 });
 
 // ADR-0137 D10 (C02, S15): a start or a follow-up may run as one of the runtime's slash commands, and
