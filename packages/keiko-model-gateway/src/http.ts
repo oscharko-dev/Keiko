@@ -758,24 +758,71 @@ async function enforceOutboundTargetPolicy(
 // The resolver takes no signal, so a lookup that never answers (no network, a resolver that drops
 // the query) would outlive the request's own deadline: the timeout composed into the request ends
 // the fetch, not this wait (#3907 AC10). The wait therefore ends with the request signal, with the
-// same reason a fetch reports when that signal fires. The abandoned lookup settles unobserved; the
-// race already subscribed to it, so its late failure is handled.
+// same reason a fetch reports when that signal fires, and an already cancelled request starts no
+// lookup at all. getaddrinfo cannot be cancelled and holds a libuv threadpool thread until the
+// resolver answers, so the work behind abandoned waits is bounded too: requests for one host share
+// the lookup in flight, and while ABANDONED_DNS_LOOKUP_LIMIT lookups nobody waits for are still
+// pending, a lookup for another host fails at once as a temporary resolver failure.
+const ABANDONED_DNS_LOOKUP_LIMIT = 2;
+
+interface PendingDnsLookup {
+  readonly result: Promise<LookupAddress[]>;
+  waiters: number;
+}
+
+const pendingDnsLookups = new Map<string, PendingDnsLookup>();
+
+function abandonedDnsLookupCount(): number {
+  let count = 0;
+  for (const pending of pendingDnsLookups.values()) if (pending.waiters === 0) count += 1;
+  return count;
+}
+
+function dnsSaturatedError(): Error {
+  return Object.assign(new Error("DNS resolution is saturated by unanswered lookups"), {
+    code: "EAI_AGAIN",
+  });
+}
+
+function joinDnsLookup(hostname: string): PendingDnsLookup {
+  const existing = pendingDnsLookups.get(hostname);
+  if (existing !== undefined) {
+    existing.waiters += 1;
+    return existing;
+  }
+  if (abandonedDnsLookupCount() >= ABANDONED_DNS_LOOKUP_LIMIT) throw dnsSaturatedError();
+  const pending: PendingDnsLookup = {
+    result: dnsLookup(hostname, { all: true, verbatim: true }),
+    waiters: 1,
+  };
+  pendingDnsLookups.set(hostname, pending);
+  const forget = (): void => {
+    if (pendingDnsLookups.get(hostname) === pending) pendingDnsLookups.delete(hostname);
+  };
+  pending.result.then(forget, forget);
+  return pending;
+}
+
 async function boundedDnsLookup(
   hostname: string,
   signal: AbortSignal | undefined,
 ): Promise<LookupAddress[]> {
-  const lookup = dnsLookup(hostname, { all: true, verbatim: true });
-  if (signal === undefined) return lookup;
+  if (signal?.aborted === true) throw abortReason(signal);
+  const pending = joinDnsLookup(hostname);
   let removeAbort = (): void => undefined;
-  const aborted = new Promise<never>((_resolve, reject) => {
-    removeAbort = attachAbortGuard(signal, () => {
-      reject(abortReason(signal));
-    });
-  });
+  const aborted =
+    signal === undefined
+      ? undefined
+      : new Promise<never>((_resolve, reject) => {
+          removeAbort = attachAbortGuard(signal, () => {
+            reject(abortReason(signal));
+          });
+        });
   try {
-    return await Promise.race([lookup, aborted]);
+    return await (aborted === undefined ? pending.result : Promise.race([pending.result, aborted]));
   } finally {
     removeAbort();
+    pending.waiters -= 1;
   }
 }
 

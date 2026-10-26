@@ -1496,7 +1496,10 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   together, at 30, so a run never waits longer for an unreachable network; a source that does not
   answer is `source-failed` and the run starts with the repository's own skills (#3907 AC10). The
   gateway request ends a DNS lookup no resolver answers with the request's own deadline or
-  cancellation, because the resolver itself takes no signal.
+  cancellation, because the resolver itself takes no signal; a cancelled request starts no lookup.
+  The lookup it gave up on cannot be cancelled either, so requests for one host share the lookup in
+  flight, and while two lookups nobody waits for are pending, a lookup for another host fails at
+  once as a temporary resolver failure (`EAI_AGAIN`).
   Evidence: `coding-runtime.remote-skills.admitted` (a registry
   line or one line per source with counts, closed refusal reasons and SHA-256 digests of the source
   and of the copies; never a URL, a name or a body). The staged 2.1.4 executable lists a pulled
