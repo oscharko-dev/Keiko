@@ -1517,3 +1517,45 @@ describe("#3918 contiguous required text inherited getter observations", (): voi
     for (const receiver of getterReceivers) expect(receiver).toBe(probe.input);
   });
 });
+
+for (const [guardName] of GIT_DELIVERY_MEMBERSHIP_CONTROLS) {
+  for (const surface of ["source", "public"]) {
+    it(`${surface} ${guardName} refuses additional nonstring classes without coercion (#3918)`, async (): Promise<void> => {
+      const api =
+        surface === "source"
+          ? await import("./git-delivery.js")
+          : await import("@oscharko-dev/keiko-contracts/runtime/git-delivery");
+      const guard = api[guardName];
+      let observations = 0;
+      const hostile = {
+        [Symbol.toPrimitive](): never {
+          observations += 1;
+          throw new TypeError("fixture primitive conversion must not run");
+        },
+        toString(): never {
+          observations += 1;
+          throw new TypeError("fixture string conversion must not run");
+        },
+        valueOf(): never {
+          observations += 1;
+          throw new TypeError("fixture value conversion must not run");
+        },
+      };
+      const callable = (): never => {
+        observations += 1;
+        throw new TypeError("fixture invocation must not run");
+      };
+      const boxedString: unknown = Object("commit");
+      const rejected: readonly unknown[] = [
+        Symbol("fixture"),
+        1n,
+        {},
+        boxedString,
+        hostile,
+        callable,
+      ];
+      for (const value of rejected) expect(guard(value)).toBe(false);
+      expect(observations).toBe(0);
+    });
+  }
+}

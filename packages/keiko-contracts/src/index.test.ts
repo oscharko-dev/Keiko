@@ -1644,3 +1644,54 @@ it("preserves Atlassian root TYPE callable domains through existing runtime sele
     typeof atlasEnumRuntimeForIndex.isAtlassianConnectorRegistryFailureReason
   >();
 });
+
+import type {
+  isGitDeliveryActionKind as RootGitActionGuard,
+  isGitDeliveryRiskClass as RootGitRiskGuard,
+  isGitDeliveryProviderCapability as RootGitCapabilityGuard,
+  isGitDeliveryBranchMatchKind as RootGitBranchMatchGuard,
+  isGitDeliveryBlockReason as RootGitBlockGuard,
+  isGitDeliveryMergeBlockReason as RootGitMergeBlockGuard,
+  isGitDeliveryMergeStrategyHint as RootGitMergeStrategyGuard,
+  isGitDeliveryAbortableOperation as RootGitAbortGuard,
+  isGitDeliveryRecoveryStrategyHint as RootGitRecoveryGuard,
+  isGitDeliveryExecutionOutcome as RootGitOutcomeGuard,
+  isGitDeliveryExecutionErrorCode as RootGitErrorGuard,
+} from "@oscharko-dev/keiko-contracts";
+import type * as gitEnumRuntimeForIndex from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
+
+it("preserves Git enum root TYPE callable domains through existing runtime selectors (#3918)", (): void => {
+  expectTypeOf<typeof RootGitActionGuard>().toEqualTypeOf<
+    typeof gitEnumRuntimeForIndex.isGitDeliveryActionKind
+  >();
+  expectTypeOf<typeof RootGitRiskGuard>().toEqualTypeOf<
+    typeof gitEnumRuntimeForIndex.isGitDeliveryRiskClass
+  >();
+  expectTypeOf<typeof RootGitCapabilityGuard>().toEqualTypeOf<
+    typeof gitEnumRuntimeForIndex.isGitDeliveryProviderCapability
+  >();
+  expectTypeOf<typeof RootGitBranchMatchGuard>().toEqualTypeOf<
+    typeof gitEnumRuntimeForIndex.isGitDeliveryBranchMatchKind
+  >();
+  expectTypeOf<typeof RootGitBlockGuard>().toEqualTypeOf<
+    typeof gitEnumRuntimeForIndex.isGitDeliveryBlockReason
+  >();
+  expectTypeOf<typeof RootGitMergeBlockGuard>().toEqualTypeOf<
+    typeof gitEnumRuntimeForIndex.isGitDeliveryMergeBlockReason
+  >();
+  expectTypeOf<typeof RootGitMergeStrategyGuard>().toEqualTypeOf<
+    typeof gitEnumRuntimeForIndex.isGitDeliveryMergeStrategyHint
+  >();
+  expectTypeOf<typeof RootGitAbortGuard>().toEqualTypeOf<
+    typeof gitEnumRuntimeForIndex.isGitDeliveryAbortableOperation
+  >();
+  expectTypeOf<typeof RootGitRecoveryGuard>().toEqualTypeOf<
+    typeof gitEnumRuntimeForIndex.isGitDeliveryRecoveryStrategyHint
+  >();
+  expectTypeOf<typeof RootGitOutcomeGuard>().toEqualTypeOf<
+    typeof gitEnumRuntimeForIndex.isGitDeliveryExecutionOutcome
+  >();
+  expectTypeOf<typeof RootGitErrorGuard>().toEqualTypeOf<
+    typeof gitEnumRuntimeForIndex.isGitDeliveryExecutionErrorCode
+  >();
+});

@@ -10,7 +10,7 @@
 // internal helpers come from workflow-handoff (approval shape), git-repository (Git identity),
 // and contract-validation-primitives (physical array members); all are intra-package imports.
 
-import { isPhysicalArrayOf, isUndefinedOr } from "./contract-validation-primitives.js";
+import { isInSet, isPhysicalArrayOf, isUndefinedOr } from "./contract-validation-primitives.js";
 import { isApprovalTokenShape } from "./workflow-handoff.js";
 import { isGitObjectId } from "./git-repository.js";
 
@@ -49,6 +49,9 @@ export const GIT_DELIVERY_ACTION_KINDS: readonly GitDeliveryActionKind[] = [
   "recovery",
 ] as const;
 
+export const isGitDeliveryActionKind: (value: unknown) => value is GitDeliveryActionKind =
+  isInSet(GIT_DELIVERY_ACTION_KINDS);
+
 // ─── Risk taxonomy ────────────────────────────────────────────────────────────
 // AC2: severity is DATA, never inferred from kind names or shell arguments.
 // Read GIT_DELIVERY_RISK_CLASS_SEVERITY[riskClass] to compare severity numerically.
@@ -62,6 +65,9 @@ export const GIT_DELIVERY_RISK_CLASSES: readonly GitDeliveryRiskClass[] = [
   "protected-or-merge",
   "recovery-or-rewrite",
 ] as const;
+
+export const isGitDeliveryRiskClass: (value: unknown) => value is GitDeliveryRiskClass =
+  isInSet(GIT_DELIVERY_RISK_CLASSES);
 
 // Ordinal severity. Higher ordinal = higher risk. Never compare ordinals by action name string.
 // Object.freeze (KEIKO-0879): the `Readonly<Record<...>>` annotation is compile-time only.
@@ -209,6 +215,10 @@ export const GIT_DELIVERY_MERGE_STRATEGY_HINTS: readonly GitDeliveryMergeStrateg
   "provider-default",
 ] as const;
 
+export const isGitDeliveryMergeStrategyHint: (
+  value: unknown,
+) => value is GitDeliveryMergeStrategyHint = isInSet(GIT_DELIVERY_MERGE_STRATEGY_HINTS);
+
 export interface GitDeliveryMergeInputs {
   readonly kind: "merge";
   readonly prExternalId: string;
@@ -227,6 +237,10 @@ export const GIT_DELIVERY_ABORTABLE_OPERATIONS: readonly GitDeliveryAbortableOpe
   "bisect",
 ] as const;
 
+export const isGitDeliveryAbortableOperation: (
+  value: unknown,
+) => value is GitDeliveryAbortableOperation = isInSet(GIT_DELIVERY_ABORTABLE_OPERATIONS);
+
 export interface GitDeliveryAbortInputs {
   readonly kind: "abort";
   readonly operationToAbort: GitDeliveryAbortableOperation;
@@ -242,6 +256,10 @@ export const GIT_DELIVERY_RECOVERY_STRATEGY_HINTS: readonly GitDeliveryRecoveryS
   "stash-and-reset",
   "restore-index",
 ] as const;
+
+export const isGitDeliveryRecoveryStrategyHint: (
+  value: unknown,
+) => value is GitDeliveryRecoveryStrategyHint = isInSet(GIT_DELIVERY_RECOVERY_STRATEGY_HINTS);
 
 // Recovery's elevated-approval requirement is expressed by policyDecision / approvalRequirement on
 // the envelope, NOT by an operator-approval token in the inputs.
@@ -310,6 +328,10 @@ export const GIT_DELIVERY_PROVIDER_CAPABILITIES: readonly GitDeliveryProviderCap
   "protected-branch-delete",
 ] as const;
 
+export const isGitDeliveryProviderCapability: (
+  value: unknown,
+) => value is GitDeliveryProviderCapability = isInSet(GIT_DELIVERY_PROVIDER_CAPABILITIES);
+
 // ─── Typed branch patterns (AC3 — structured data, not parsed strings) ───────────
 // Closed match set: exact, prefix. Glob is intentionally EXCLUDED to keep the leaf parse-free
 // (documented in ADR-0058).
@@ -320,6 +342,9 @@ export const GIT_DELIVERY_BRANCH_MATCH_KINDS: readonly GitDeliveryBranchMatchKin
   "exact",
   "prefix",
 ] as const;
+
+export const isGitDeliveryBranchMatchKind: (value: unknown) => value is GitDeliveryBranchMatchKind =
+  isInSet(GIT_DELIVERY_BRANCH_MATCH_KINDS);
 
 export interface GitDeliveryBranchPattern {
   readonly matchKind: GitDeliveryBranchMatchKind;
@@ -403,6 +428,9 @@ export const GIT_DELIVERY_BLOCK_REASONS: readonly GitDeliveryBlockReason[] = [
   "no-applicable-rule",
 ] as const;
 
+export const isGitDeliveryBlockReason: (value: unknown) => value is GitDeliveryBlockReason =
+  isInSet(GIT_DELIVERY_BLOCK_REASONS);
+
 export type GitDeliveryMergeBlockReason =
   | "checks-failing"
   | "approvals-missing"
@@ -419,6 +447,10 @@ export const GIT_DELIVERY_MERGE_BLOCK_REASONS: readonly GitDeliveryMergeBlockRea
   "merge-queue-position",
   "provider-policy",
 ] as const;
+
+export const isGitDeliveryMergeBlockReason: (
+  value: unknown,
+) => value is GitDeliveryMergeBlockReason = isInSet(GIT_DELIVERY_MERGE_BLOCK_REASONS);
 
 export type GitDeliveryPolicyDecision =
   | { readonly outcome: "allowed" }
@@ -452,6 +484,10 @@ export const GIT_DELIVERY_EXECUTION_OUTCOMES: readonly GitDeliveryExecutionOutco
   "partial",
 ] as const;
 
+export const isGitDeliveryExecutionOutcome: (
+  value: unknown,
+) => value is GitDeliveryExecutionOutcome = isInSet(GIT_DELIVERY_EXECUTION_OUTCOMES);
+
 export type GitDeliveryExecutionErrorCode =
   | "provider-rejected"
   | "network-failure"
@@ -470,6 +506,10 @@ export const GIT_DELIVERY_EXECUTION_ERROR_CODES: readonly GitDeliveryExecutionEr
   "timeout",
   "internal-error",
 ] as const;
+
+export const isGitDeliveryExecutionErrorCode: (
+  value: unknown,
+) => value is GitDeliveryExecutionErrorCode = isInSet(GIT_DELIVERY_EXECUTION_ERROR_CODES);
 
 export interface GitDeliveryPartialDetail {
   readonly attemptedUnitCount: number;
@@ -542,10 +582,6 @@ function isString(value: unknown): value is string {
   return typeof value === "string";
 }
 
-function isGitDeliveryStringMember(value: unknown, values: readonly string[]): boolean {
-  return isString(value) && values.includes(value);
-}
-
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
@@ -593,64 +629,6 @@ export function isGitDeliveryNonEmptyConstraints(
 }
 
 // ─── Exported guards ─────────────────────────────────────────────────────────────
-
-export function isGitDeliveryActionKind(value: unknown): value is GitDeliveryActionKind {
-  return isGitDeliveryStringMember(value, GIT_DELIVERY_ACTION_KINDS);
-}
-
-export function isGitDeliveryRiskClass(value: unknown): value is GitDeliveryRiskClass {
-  return isGitDeliveryStringMember(value, GIT_DELIVERY_RISK_CLASSES);
-}
-
-export function isGitDeliveryProviderCapability(
-  value: unknown,
-): value is GitDeliveryProviderCapability {
-  return isGitDeliveryStringMember(value, GIT_DELIVERY_PROVIDER_CAPABILITIES);
-}
-
-export function isGitDeliveryBranchMatchKind(value: unknown): value is GitDeliveryBranchMatchKind {
-  return isGitDeliveryStringMember(value, GIT_DELIVERY_BRANCH_MATCH_KINDS);
-}
-
-export function isGitDeliveryBlockReason(value: unknown): value is GitDeliveryBlockReason {
-  return isGitDeliveryStringMember(value, GIT_DELIVERY_BLOCK_REASONS);
-}
-
-export function isGitDeliveryMergeBlockReason(
-  value: unknown,
-): value is GitDeliveryMergeBlockReason {
-  return isGitDeliveryStringMember(value, GIT_DELIVERY_MERGE_BLOCK_REASONS);
-}
-
-export function isGitDeliveryMergeStrategyHint(
-  value: unknown,
-): value is GitDeliveryMergeStrategyHint {
-  return isGitDeliveryStringMember(value, GIT_DELIVERY_MERGE_STRATEGY_HINTS);
-}
-
-export function isGitDeliveryAbortableOperation(
-  value: unknown,
-): value is GitDeliveryAbortableOperation {
-  return isGitDeliveryStringMember(value, GIT_DELIVERY_ABORTABLE_OPERATIONS);
-}
-
-export function isGitDeliveryRecoveryStrategyHint(
-  value: unknown,
-): value is GitDeliveryRecoveryStrategyHint {
-  return isGitDeliveryStringMember(value, GIT_DELIVERY_RECOVERY_STRATEGY_HINTS);
-}
-
-export function isGitDeliveryExecutionOutcome(
-  value: unknown,
-): value is GitDeliveryExecutionOutcome {
-  return isGitDeliveryStringMember(value, GIT_DELIVERY_EXECUTION_OUTCOMES);
-}
-
-export function isGitDeliveryExecutionErrorCode(
-  value: unknown,
-): value is GitDeliveryExecutionErrorCode {
-  return isGitDeliveryStringMember(value, GIT_DELIVERY_EXECUTION_ERROR_CODES);
-}
 
 export function isGitDeliveryBranchPattern(value: unknown): value is GitDeliveryBranchPattern {
   return (
