@@ -1289,3 +1289,231 @@ describe.each([
     });
   });
 });
+
+type RequiredTextAction = "branch-create" | "push" | "pr-description-apply";
+
+interface RequiredTextOwner {
+  readonly kind: RequiredTextAction;
+  readonly surface: "source" | "public";
+  readonly parse: typeof parseGitDeliveryResolvedInputs;
+}
+
+const REQUIRED_TEXT_OWNERS: readonly RequiredTextOwner[] = [
+  { kind: "branch-create", surface: "source", parse: parseGitDeliveryResolvedInputs },
+  {
+    kind: "branch-create",
+    surface: "public",
+    parse: g2PublicDelivery.parseGitDeliveryResolvedInputs,
+  },
+  { kind: "push", surface: "source", parse: parseGitDeliveryResolvedInputs },
+  { kind: "push", surface: "public", parse: g2PublicDelivery.parseGitDeliveryResolvedInputs },
+  { kind: "pr-description-apply", surface: "source", parse: parseGitDeliveryResolvedInputs },
+  {
+    kind: "pr-description-apply",
+    surface: "public",
+    parse: g2PublicDelivery.parseGitDeliveryResolvedInputs,
+  },
+];
+
+function requiredTextInput(kind: RequiredTextAction): Record<string, unknown> {
+  if (kind === "branch-create") {
+    return { kind, branchName: " ", baseBranchName: "dev", startPointRefHash: "opaque-ref" };
+  }
+  if (kind === "push") {
+    return {
+      kind,
+      verifiedCommitSha: "a".repeat(40),
+      sourceBranchName: " ",
+      remoteAlias: "origin",
+      remoteBranchName: "feature",
+      forcePush: false,
+      setUpstreamTracking: true,
+    };
+  }
+  return {
+    kind,
+    prExternalId: "42",
+    headBranchName: " ",
+    baseBranchName: "dev",
+    finalBodyByteLength: 0,
+  };
+}
+
+function requiredTextOrder(kind: RequiredTextAction): readonly string[] {
+  if (kind === "branch-create") return ["branchName", "baseBranchName", "startPointRefHash"];
+  if (kind === "push") {
+    return [
+      "verifiedCommitSha",
+      "sourceBranchName",
+      "remoteAlias",
+      "remoteBranchName",
+      "forcePush",
+      "setUpstreamTracking",
+    ];
+  }
+  return ["prExternalId", "headBranchName", "baseBranchName", "finalBodyByteLength"];
+}
+
+interface RequiredTextRefusal {
+  readonly field: string;
+  readonly invalid: string | number;
+  readonly reads: readonly string[];
+}
+
+const BRANCH_TEXT_REFUSALS: readonly RequiredTextRefusal[] = [
+  { field: "branchName", invalid: "", reads: ["branchName"] },
+  { field: "baseBranchName", invalid: 7, reads: ["branchName", "baseBranchName"] },
+  {
+    field: "startPointRefHash",
+    invalid: 0,
+    reads: ["branchName", "baseBranchName", "startPointRefHash"],
+  },
+];
+
+const PUSH_TEXT_REFUSALS: readonly RequiredTextRefusal[] = [
+  { field: "verifiedCommitSha", invalid: "invalid", reads: ["verifiedCommitSha"] },
+  {
+    field: "sourceBranchName",
+    invalid: "",
+    reads: ["verifiedCommitSha", "sourceBranchName"],
+  },
+  {
+    field: "remoteAlias",
+    invalid: 7,
+    reads: ["verifiedCommitSha", "sourceBranchName", "remoteAlias"],
+  },
+  {
+    field: "remoteBranchName",
+    invalid: 0,
+    reads: ["verifiedCommitSha", "sourceBranchName", "remoteAlias", "remoteBranchName"],
+  },
+];
+
+const DESCRIPTION_TEXT_REFUSALS: readonly RequiredTextRefusal[] = [
+  { field: "prExternalId", invalid: "", reads: ["prExternalId"] },
+  { field: "headBranchName", invalid: 7, reads: ["prExternalId", "headBranchName"] },
+  {
+    field: "baseBranchName",
+    invalid: 0,
+    reads: ["prExternalId", "headBranchName", "baseBranchName"],
+  },
+];
+
+function requiredTextRefusals(kind: RequiredTextAction): readonly RequiredTextRefusal[] {
+  if (kind === "branch-create") return BRANCH_TEXT_REFUSALS;
+  return kind === "push" ? PUSH_TEXT_REFUSALS : DESCRIPTION_TEXT_REFUSALS;
+}
+
+interface RequiredTextObservation {
+  readonly input: unknown;
+  readonly reads: readonly string[];
+  readonly receivers: readonly unknown[];
+}
+
+function observeRequiredTextInput(
+  values: Record<string, unknown>,
+  permitted: readonly string[],
+): RequiredTextObservation {
+  const reads: string[] = [];
+  const receivers: unknown[] = [];
+  const input = new Proxy(values, {
+    get(target, key, receiver): unknown {
+      if (typeof key === "string") {
+        reads.push(key);
+        receivers.push(receiver);
+        if (key !== "kind" && !permitted.includes(key))
+          throw new TypeError("later required text field must remain unread");
+      }
+      const member: unknown = Reflect.get(target, key, receiver);
+      return member;
+    },
+  });
+  return { input, reads, receivers };
+}
+
+function inheritedTextInput(
+  kind: RequiredTextAction,
+  failure: Error,
+  getterReceivers: unknown[],
+): Record<string, unknown> {
+  const values = requiredTextInput(kind);
+  let field: "baseBranchName" | "remoteAlias" | "headBranchName";
+  if (kind === "branch-create") {
+    delete values.baseBranchName;
+    field = "baseBranchName";
+  } else if (kind === "push") {
+    delete values.remoteAlias;
+    field = "remoteAlias";
+  } else {
+    delete values.headBranchName;
+    field = "headBranchName";
+  }
+  Object.setPrototypeOf(
+    values,
+    Object.defineProperty({}, field, {
+      get(this: unknown): never {
+        getterReceivers.push(this);
+        throw failure;
+      },
+    }),
+  );
+  return values;
+}
+
+function inheritedTextOrder(kind: RequiredTextAction): readonly string[] {
+  if (kind === "branch-create") return ["branchName", "baseBranchName"];
+  return kind === "push"
+    ? ["verifiedCommitSha", "sourceBranchName", "remoteAlias"]
+    : ["prExternalId", "headBranchName"];
+}
+
+describe("#3918 contiguous required text healthy observations", (): void => {
+  it.each(REQUIRED_TEXT_OWNERS)("$kind through $surface", ({ kind, parse }): void => {
+    const order = requiredTextOrder(kind);
+    const probe = observeRequiredTextInput(requiredTextInput(kind), order);
+    const result = parse(probe.input);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(probe.input);
+    expect(probe.reads).toEqual(["kind", "kind", ...order]);
+    expect(probe.receivers).toHaveLength(probe.reads.length);
+    for (const receiver of probe.receivers) expect(receiver).toBe(probe.input);
+  });
+});
+
+describe("#3918 contiguous required text refusal observations", (): void => {
+  it.each(REQUIRED_TEXT_OWNERS)("$kind through $surface", ({ kind, parse }): void => {
+    for (const refusal of requiredTextRefusals(kind)) {
+      const values = { ...requiredTextInput(kind), [refusal.field]: refusal.invalid };
+      const probe = observeRequiredTextInput(values, refusal.reads);
+      expect(parse(probe.input)).toEqual({
+        ok: false,
+        errors: [`resolvedInputs for kind "${kind}" has invalid fields`],
+      });
+      expect(probe.reads).toEqual(["kind", "kind", ...refusal.reads, "kind"]);
+      expect(probe.receivers).toHaveLength(probe.reads.length);
+      for (const receiver of probe.receivers) expect(receiver).toBe(probe.input);
+    }
+  });
+});
+
+describe("#3918 contiguous required text inherited getter observations", (): void => {
+  it.each(REQUIRED_TEXT_OWNERS)("$kind through $surface", ({ kind, parse }): void => {
+    const failure: Error = Object.freeze(new TypeError("opaque required text inspection"));
+    const getterReceivers: unknown[] = [];
+    const order = inheritedTextOrder(kind);
+    const values = inheritedTextInput(kind, failure, getterReceivers);
+    const probe = observeRequiredTextInput(values, order);
+    let observed: unknown;
+    try {
+      parse(probe.input);
+    } catch (error) {
+      observed = error;
+    }
+    expect(observed).toBe(failure);
+    expect(probe.reads).toEqual(["kind", "kind", ...order]);
+    expect(probe.receivers).toHaveLength(probe.reads.length);
+    for (const receiver of probe.receivers) expect(receiver).toBe(probe.input);
+    expect(getterReceivers).toHaveLength(1);
+    for (const receiver of getterReceivers) expect(receiver).toBe(probe.input);
+  });
+});

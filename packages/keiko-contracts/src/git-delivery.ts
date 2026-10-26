@@ -550,6 +550,22 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
+type RequiredGitDeliveryTextFields =
+  | readonly ["branchName", "baseBranchName", "startPointRefHash"]
+  | readonly ["sourceBranchName", "remoteAlias", "remoteBranchName"]
+  | readonly ["headBranchName", "baseBranchName"]
+  | readonly ["prExternalId", "headBranchName", "baseBranchName"];
+
+function hasRequiredGitDeliveryTextFields(
+  value: Record<string, unknown>,
+  fields: RequiredGitDeliveryTextFields,
+): boolean {
+  for (const field of fields) {
+    if (!isNonEmptyString(value[field])) return false;
+  }
+  return true;
+}
+
 function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
@@ -767,11 +783,11 @@ function isActionPreview(value: unknown): value is GitDeliveryActionPreview {
 function isBranchCreateInputs(
   value: Record<string, unknown>,
 ): value is Record<string, unknown> & Omit<GitDeliveryBranchCreateInputs, "kind"> {
-  return (
-    isNonEmptyString(value.branchName) &&
-    isNonEmptyString(value.baseBranchName) &&
-    isNonEmptyString(value.startPointRefHash)
-  );
+  return hasRequiredGitDeliveryTextFields(value, [
+    "branchName",
+    "baseBranchName",
+    "startPointRefHash",
+  ]);
 }
 
 function isBranchSwitchInputs(
@@ -807,9 +823,11 @@ function isPushInputs(
 ): value is Record<string, unknown> & Omit<GitDeliveryPushInputs, "kind"> {
   return (
     isGitObjectId(value.verifiedCommitSha) &&
-    isNonEmptyString(value.sourceBranchName) &&
-    isNonEmptyString(value.remoteAlias) &&
-    isNonEmptyString(value.remoteBranchName) &&
+    hasRequiredGitDeliveryTextFields(value, [
+      "sourceBranchName",
+      "remoteAlias",
+      "remoteBranchName",
+    ]) &&
     isBoolean(value.forcePush) &&
     isBoolean(value.setUpstreamTracking)
   );
@@ -817,8 +835,7 @@ function isPushInputs(
 
 function hasValidPrMetadata(value: Record<string, unknown>): boolean {
   return (
-    isNonEmptyString(value.headBranchName) &&
-    isNonEmptyString(value.baseBranchName) &&
+    hasRequiredGitDeliveryTextFields(value, ["headBranchName", "baseBranchName"]) &&
     isNonNegativeInteger(value.titleByteLength) &&
     isNonNegativeInteger(value.bodyByteLength)
   );
@@ -852,9 +869,7 @@ function isPrDescriptionApplyInputs(
   value: Record<string, unknown>,
 ): value is Record<string, unknown> & Omit<GitDeliveryPrDescriptionApplyInputs, "kind"> {
   return (
-    isNonEmptyString(value.prExternalId) &&
-    isNonEmptyString(value.headBranchName) &&
-    isNonEmptyString(value.baseBranchName) &&
+    hasRequiredGitDeliveryTextFields(value, ["prExternalId", "headBranchName", "baseBranchName"]) &&
     isNonNegativeInteger(value.finalBodyByteLength)
   );
 }
