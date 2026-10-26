@@ -523,6 +523,19 @@ After the op catalog was regenerated at `363d2cb5d` it was measured again: p95 1
 After the search key redaction and the process-table mark at `37367b1cc` it was measured again:
 p95 1497.9, 2.17, 2.11 and 139.2 ms, each below its committed ceiling.
 
+**Ruler recalibrated, 2026-10-26 (#3897, nightly real-binary journey).** The functional test support
+now scripts the runtime's own `grep`, `read`, `skill` and `edit` tools instead of the mapped
+`keiko_*` tools a native run no longer offers, so the ruler moved again. The recorded environment is
+unchanged, so the shrink-only `--recalibrate` ran at `15af8b5c3`, followed by an independent
+measurement and the freshness check. No ceiling widened; one tightened.
+
+| Metric                | Previous ceiling (2026-10-26) | Fresh calibration ceiling | Committed ceiling | Measured p95 |
+| --------------------- | ----------------------------- | ------------------------- | ----------------- | ------------ |
+| `coldStartMs`         | 1614.3                        | 1798.4                    | 1614.3            | 1512.6       |
+| `readinessMs`         | 3.26                          | 3.59                      | 3.26              | 1.91         |
+| `sseFirstByteMs`      | 4.65                          | 4.48                      | 4.48              | 2.42         |
+| `boundedThroughputMs` | 160.0                         | 179.3                     | 160.0             | 129.6        |
+
 The PR lane runs `check:perf-evidence:coding-runtime` and the hermetic ruler tests
 (`test:perf:coding-runtime`). It checks integrity and budgets unconditionally. Set
 `KEIKO_PERF_EVIDENCE_BASE_REF` to the PR/merge-group base for diff-owned toolchain freshness, as for
