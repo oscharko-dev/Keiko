@@ -400,3 +400,19 @@ Targeted results: package build, root and UI typechecks, changed-source/test lin
 passed **25** tests. The operation catalog has **605/605** proofs and zero violations.
 The accepted HTML finding is fixed; real HTTPS lab qualification and the remaining epic
 criteria are still pending.
+
+### Real HTTPS transport checkpoint (#4082 AC3/AC5, partial)
+
+The committed `scripts/testing/jira-chat-lab` tooling creates a private laboratory
+CA/server certificate and a loopback-only TLS frontend for the existing synthetic Jira.
+It leaves system trust unchanged and forwards only to one fixed loopback backend.
+The production custody, encrypted vault, HTTP adapter and domain verifier were exercised
+against actual Jira 10.3.26: trusted HTTPS returned `ok`, removing CA trust returned
+`tls-failed`, and revoking exact operator admission returned `unreachable`. All three
+probes passed; script lint and formatting passed. The temporary vault was removed.
+
+The independent license preflight found the existing ten-user Data Center test license
+expired. A normal update did not renew it. The probes above are exploratory transport
+checks, not an accepted scenario group: complete live acceptance must run again under a
+valid license with the read/write preflight and all required fixture classes. Fresh-session
+provisioning and the remaining live prerequisites are open. No AC is closed by this checkpoint.
