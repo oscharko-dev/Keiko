@@ -9,9 +9,16 @@
 int gateway_socket_proof(void);
 int gateway_socket_child(int family, UINT16 gateway, UINT16 hostile);
 int gateway_socket_leaf(int family, UINT16 gateway, UINT16 hostile);
+int gateway_journal_tests(void);
+int gateway_peer_tests(void);
+int gateway_peer_client(const char *pipe_name, int anonymous);
+int gateway_identity_tests(void);
+int gateway_identity_child(const char *expected);
+int gateway_identity_leaf(const char *expected);
 
 static int validation_tests(void) {
   struct keiko_gateway_filters filters = {0};
+  struct keiko_gateway_guard_keys keys = {0}, second = {0}, invalid = {0};
   PSID broad = NULL;
   PSID package = NULL;
   PSID capability = NULL;
@@ -36,6 +43,25 @@ static int validation_tests(void) {
   ok = ok && keiko_gateway_filters_open(package, AF_INET, 1983, &filters) ==
                  ERROR_INVALID_PARAMETER && filters.engine == (HANDLE)(ULONG_PTR)1;
   filters.engine = NULL;
+  ok = ok && keiko_gateway_guard_prepare(NULL) == ERROR_INVALID_PARAMETER &&
+       keiko_gateway_guard_prepare(&keys) == ERROR_SUCCESS &&
+       keiko_gateway_guard_prepare(&second) == ERROR_SUCCESS &&
+       memcmp(&keys, &second, sizeof(keys)) != 0 &&
+       keiko_gateway_filters_open_prepared(package, AF_INET, 1983, NULL, NULL, &filters) ==
+         ERROR_INVALID_PARAMETER &&
+       keiko_gateway_filters_open_prepared(package, AF_INET, 1983, NULL, &invalid, &filters) ==
+         ERROR_INVALID_PARAMETER;
+  invalid = keys;
+  invalid.deny[1] = invalid.deny[0];
+  ok = ok && keiko_gateway_filters_open_prepared(package, AF_INET, 1983, NULL, &invalid, &filters) ==
+         ERROR_INVALID_PARAMETER;
+  invalid = keys;
+  invalid.deny[0] = invalid.sublayer;
+  ok = ok && keiko_gateway_filters_open_prepared(package, AF_INET, 1983, NULL, &invalid, &filters) ==
+         ERROR_INVALID_PARAMETER;
+  /* Valid keys and a missing job still fail before opening the filtering engine. */
+  ok = ok && keiko_gateway_filters_open_prepared(package, AF_INET, 1983, NULL, &keys, &filters) ==
+         ERROR_INVALID_PARAMETER && filters.engine == NULL && filters.guard_engine == NULL;
   LocalFree(broad);
   LocalFree(package);
   LocalFree(capability);
@@ -98,6 +124,8 @@ static int guarded_lifecycle_test(UINT16 family) {
   struct keiko_gateway_filters filters = {0};
   struct keiko_gateway_filters recovered = {0};
   struct keiko_gateway_filters before = {0};
+  struct keiko_gateway_filters collision = {0};
+  struct keiko_gateway_guard_keys recorded = {0};
   PSID sid = NULL;
   HANDLE job = NULL;
   JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = {0};
@@ -135,9 +163,20 @@ static int guarded_lifecycle_test(UINT16 family) {
     LocalFree(sid);
     return 1;
   }
-  result = keiko_gateway_filters_open_guarded(sid, family, 1983, job, &filters);
+  /* A broker can commit this record before the first WFP call. Recovery below uses only these
+   * pre-install keys, never IDs learned after installation (the crash window in #3423). */
+  result = keiko_gateway_guard_prepare(&recorded);
+  if (result == ERROR_SUCCESS)
+    result = keiko_gateway_filters_open_prepared(sid, family, 1983, job, &recorded, &filters);
   if (result == ERROR_SUCCESS) {
     before = filters;
+    if (memcmp(&recorded.sublayer, &filters.sublayer, sizeof(GUID)) != 0 ||
+        memcmp(recorded.deny, filters.guard_keys, sizeof(recorded.deny)) != 0 ||
+        keiko_gateway_filters_open_prepared(sid, family, 1984, job, &recorded, &collision) ==
+          ERROR_SUCCESS || collision.engine != NULL || collision.guard_engine != NULL)
+      result = ERROR_INVALID_DATA;
+  }
+  if (result == ERROR_SUCCESS) {
     result = keiko_gateway_filters_close(&filters);
     if (result == ERROR_BUSY) {
       /* Simulate loss of the original broker's volatile handles while the durable denies remain. */
@@ -145,8 +184,8 @@ static int guarded_lifecycle_test(UINT16 family) {
       if (filters.job != NULL) CloseHandle(filters.job);
       filters.guard_engine = NULL;
       filters.job = NULL;
-      result = keiko_gateway_filters_recover_guard(sid, job, &before.sublayer,
-                                                    before.guard_keys, &recovered);
+      result = keiko_gateway_filters_recover_guard(sid, job, &recorded.sublayer,
+                                                    recorded.deny, &recovered);
       if (result == ERROR_SUCCESS && keiko_gateway_filters_close(&recovered) != ERROR_BUSY)
         result = ERROR_INVALID_DATA;
       if (result == ERROR_SUCCESS && !TerminateJobObject(job, 127)) result = GetLastError();
@@ -160,6 +199,14 @@ static int guarded_lifecycle_test(UINT16 family) {
   }
   if (child.hProcess != NULL && WaitForSingleObject(child.hProcess, 0) == WAIT_TIMEOUT)
     (void)TerminateJobObject(job, 127);
+  if (child.hProcess != NULL) (void)WaitForSingleObject(child.hProcess, 5000);
+  /* Also clean a failed proof. Retaining a deny on uncertain reaping is the production contract. */
+  if (collision.engine != NULL || collision.guard_engine != NULL)
+    (void)keiko_gateway_filters_close(&collision);
+  if (recovered.engine != NULL || recovered.guard_engine != NULL)
+    (void)keiko_gateway_filters_close(&recovered);
+  if (filters.engine != NULL || filters.guard_engine != NULL)
+    (void)keiko_gateway_filters_close(&filters);
   if (child.hThread != NULL) CloseHandle(child.hThread);
   if (child.hProcess != NULL) CloseHandle(child.hProcess);
   CloseHandle(job);
@@ -170,7 +217,14 @@ static int guarded_lifecycle_test(UINT16 family) {
 }
 
 int main(int argc, char **argv) {
-  if (argc == 1) return validation_tests();
+  if (argc == 1) {
+    if (validation_tests() != 0 || gateway_journal_tests() != 0) return 1;
+    return gateway_peer_tests() == 0 ? gateway_identity_tests() : 1;
+  }
+  if (argc == 4 && strcmp(argv[1], "--peer-client") == 0)
+    return gateway_peer_client(argv[2], strcmp(argv[3], "1") == 0);
+  if (argc == 3 && strcmp(argv[1], "--identity-child") == 0) return gateway_identity_child(argv[2]);
+  if (argc == 3 && strcmp(argv[1], "--identity-leaf") == 0) return gateway_identity_leaf(argv[2]);
   if (argc == 2 && strcmp(argv[1], "--guard-held") == 0) return guarded_child();
   if (argc == 2 && strcmp(argv[1], "--socket-proof") == 0) return gateway_socket_proof();
   if (argc == 5 && strcmp(argv[1], "--socket-child") == 0) {

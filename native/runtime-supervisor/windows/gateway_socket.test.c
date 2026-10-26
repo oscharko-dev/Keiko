@@ -211,7 +211,7 @@ done:
   return result;
 }
 
-static DWORD grant_execute(wchar_t *path, PSID sid, PSECURITY_DESCRIPTOR *original) {
+DWORD gateway_test_grant_execute(wchar_t *path, PSID sid, PSECURITY_DESCRIPTOR *original) {
   PACL before = NULL, after = NULL;
   EXPLICIT_ACCESSW entry = {0};
   DWORD result = GetNamedSecurityInfoW(path, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
@@ -288,9 +288,9 @@ int gateway_socket_proof(void) {
   result = (DWORD)CreateAppContainerProfile(peer_profile, peer_profile, L"Disposable peer test", NULL, 0, &peer_sid);
   if (FAILED((HRESULT)result)) goto done;
   peer_created = 1;
-  result = grant_execute(executable, sid, &original);
+  result = gateway_test_grant_execute(executable, sid, &original);
   if (result != ERROR_SUCCESS) goto done;
-  result = grant_execute(executable, peer_sid, &intermediate);
+  result = gateway_test_grant_execute(executable, peer_sid, &intermediate);
   if (result != ERROR_SUCCESS) goto done;
   /* Test-only scoped loopback exemption. Preserve and restore the existing configuration.
    * This debug API plus dynamic WFP is NOT a crash-safe production service design. */

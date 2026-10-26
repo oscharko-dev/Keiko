@@ -23,10 +23,49 @@ On Windows with Node 24.18.0 and the installed MSVC toolchain:
 node scripts/testing/test-windows-gateway-filters.mjs
 ```
 
-Compiles the three C files using `/W4 /WX /analyze /MT` and runs input validation. Tests reject null,
+Compiles the native policy, recovery and IPC fixtures using `/W4 /WX /analyze /MT`. Tests reject null,
 broad and capability identities, invalid address families, port zero, missing output storage, and
 attempts to overwrite an active session. The default test makes no WFP calls and changes no network
-filters. It is also invoked by the existing Windows native quality gate.
+filters. The extended default run also uses a fresh HKCU fixture key, local named pipes and a
+temporary AppContainer profile; all are removed after the tests. It is also invoked by the existing
+Windows native quality gate.
+
+### Control-plane foundations, 2026-10-26
+
+These are tested building blocks, not an installed service or production launch approval:
+
+- The WFP owner can prepare its sublayer and deny-filter keys before any filtering-engine call.
+  A broker can flush an authenticated recovery record before installation, closing the previous
+  crash window where recovery keys became available only after persistent policy was installed.
+  The existing guarded lifecycle proof now recovers using those pre-install keys, rejects a second
+  installation with the same keys, and independently reads back the sublayer as well as filters.
+- `gateway_journal.c` encodes bounded, versioned recovery records and flushes them through the
+  Windows registry. Duplicate/partial keys cannot be overwritten; malformed SID lengths, unknown
+  versions, reserved bytes, mismatched tree names and nested deletion targets fail closed. The
+  future service must own and verify the protected registry root and serialize its operations.
+- `gateway_peer.c` derives the local caller from the named pipe, holds its process/token handles,
+  and matches the protected supervisor pathname and file identity, session, user and authentication
+  LUID. Anonymous, AppContainer and below-medium-integrity callers are refused. The service must
+  supply its locked, digest-verified installed image; a client-supplied image is never authority.
+  Request nonce/state validation and server authentication remain separate work.
+- Native local execution passed policy validation, registry encode/decode/create/replay/corruption
+  tests, real named-pipe positive/negative peer tests and exact AppContainer SID inheritance by a
+  root and its descendant. The fixture reaps its tree, restores its executable ACL and deletes its
+  temporary profile. This proves no network isolation.
+
+A profile-free identity experiment did **not** launch on this Windows 11 host (`CreateProcessW`
+reported error 2). The same identity fixture passed with the documented temporary profile lifecycle.
+Production design must therefore account for per-user profile creation and crash recovery; merely
+deriving a SID is not qualified as a replacement. No AppContainer loopback exemption or WFP filter
+was installed during these local tests.
+
+The local package build/typecheck passed. Full service, installer, exact endpoint, crash/reboot,
+non-elevated production launch and actual Workbench acceptance remain outstanding.
+
+Platform contracts used by these components:
+[registry flush durability](https://learn.microsoft.com/en-us/windows/win32/api/winreg/nf-winreg-regflushkey),
+[named-pipe client impersonation](https://learn.microsoft.com/en-us/windows/win32/api/namedpipeapi/nf-namedpipeapi-impersonatenamedpipeclient),
+[per-user AppContainer profiles](https://learn.microsoft.com/en-us/windows/win32/api/userenv/nf-userenv-createappcontainerprofile).
 
 ## Outstanding production work and qualification
 
