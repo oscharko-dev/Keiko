@@ -20,10 +20,6 @@ struct gateway_diagnostics;
 DWORD gateway_diagnostics_start(const wchar_t *executable, struct gateway_diagnostics **owned);
 DWORD gateway_diagnostics_read(struct gateway_diagnostics *owner, PSID sid);
 DWORD gateway_diagnostics_stop(struct gateway_diagnostics *owner);
-struct gateway_firewall_fixture;
-DWORD gateway_firewall_open(PSID sid, const wchar_t *executable, UINT16 family, UINT16 port,
-                             struct gateway_firewall_fixture **owned);
-DWORD gateway_firewall_close(struct gateway_firewall_fixture *owner);
 
 static int bind_target(int family, struct socket_target *target) {
   memset(target, 0, sizeof(*target));
@@ -213,7 +209,7 @@ static DWORD read_server_port(HANDLE output, int family, UINT16 *port) {
 }
 
 static DWORD control_route_probe(PSID sid, const wchar_t *executable, int family, const char *phase,
-                                  PSID_AND_ATTRIBUTES network, int provision_firewall) {
+                                  PSID_AND_ATTRIBUTES network) {
   STARTUPINFOEXW startup = {0};
   PROCESS_INFORMATION child = {0};
   SECURITY_CAPABILITIES capabilities = {0};
@@ -225,7 +221,6 @@ static DWORD control_route_probe(PSID sid, const wchar_t *executable, int family
   DWORD result = ERROR_INVALID_DATA, code = 99;
   UINT16 port = 0;
   int initialized = 0, socket_error = 0;
-  struct gateway_firewall_fixture *firewall = NULL;
   if (command == NULL) return ERROR_OUTOFMEMORY;
   if (!CreatePipe(&output, &inherited[1], &inheritable, 0) ||
       !SetHandleInformation(output, HANDLE_FLAG_INHERIT, 0)) { result = GetLastError(); goto done; }
@@ -264,8 +259,6 @@ static DWORD control_route_probe(PSID sid, const wchar_t *executable, int family
       ResumeThread(child.hThread) == (DWORD)-1) { result = GetLastError(); goto done; }
   CloseHandle(inherited[1]); inherited[1] = NULL;
   result = read_server_port(output, family, &port);
-  if (result == ERROR_SUCCESS && provision_firewall)
-    result = gateway_firewall_open(sid, executable, (UINT16)family, port, &firewall);
   if (result == ERROR_SUCCESS && !connect_target(family, port, &socket_error)) result = ERROR_CONNECTION_REFUSED;
   if (result == ERROR_SUCCESS && (WaitForSingleObject(child.hProcess, 5000) != WAIT_OBJECT_0 ||
       !GetExitCodeProcess(child.hProcess, &code) || code != 0)) result = ERROR_INVALID_DATA;
@@ -287,10 +280,6 @@ done:
   for (size_t index = 0; index < 3; index++)
     if (inherited[index] != NULL && inherited[index] != INVALID_HANDLE_VALUE) CloseHandle(inherited[index]);
   free(command);
-  if (firewall != NULL) {
-    DWORD closed = gateway_firewall_close(firewall);
-    if (closed != ERROR_SUCCESS) result = closed;
-  }
   printf("socket-host-control-route: phase=%s family=%d code=%lu child=%lu winsock=%d\n",
          phase, family, result, code, socket_error);
   return result;
@@ -301,7 +290,7 @@ static DWORD unfiltered_inbound_probe(PSID sid, const wchar_t *executable, int f
   struct gateway_inbound_fixture *owner = NULL;
   DWORD result = gateway_inbound_start(sid, &owner), closed;
   if (result == ERROR_SUCCESS)
-    result = control_route_probe(sid, executable, family, "unfiltered-inbound-firewall", network, 1);
+    result = control_route_probe(sid, executable, family, "unfiltered-inbound-provisioned", network);
   closed = gateway_inbound_stop(owner);
   return closed == ERROR_SUCCESS ? result : closed;
 }
@@ -317,9 +306,18 @@ static DWORD scoped_inbound_probe(PSID sid, const wchar_t *executable, int famil
   HANDLE deny = NULL;
   DWORD result = gateway_diagnostics_start(executable, &diagnostics), closed;
   DWORD observed = 99;
+  /* Establish a real blocked-flow control inside the diagnostic interval, even if the inbound
+   * route subsequently fails. Zero recorded drops then means an unqualified diagnostic. */
+  if (result == ERROR_SUCCESS) {
+    result = run_child(sid, executable, family, gateway, hostile, &observed, network);
+    printf("socket-diagnostic-control: family=%d code=%lu observations=%lu expected-tcp-mask=1\n",
+           family, result, observed);
+    if (result == ERROR_SUCCESS &&
+        (observed > 7 || (observed & 3) != 1 || udp_received(udp) != 0)) result = ERROR_INVALID_DATA;
+  }
   if (result == ERROR_SUCCESS) result = gateway_inbound_start(sid, &owner);
   if (result == ERROR_SUCCESS)
-    result = control_route_probe(sid, executable, family, "inbound-firewall", network, 1);
+    result = control_route_probe(sid, executable, family, "inbound-provisioned", network);
   if (result == ERROR_SUCCESS) {
     result = run_child(sid, executable, family, gateway, hostile, &observed, network);
     printf("socket-inbound-egress: family=%d code=%lu observations=%lu expected-tcp-mask=1\n",
@@ -329,18 +327,18 @@ static DWORD scoped_inbound_probe(PSID sid, const wchar_t *executable, int famil
   }
   if (result == ERROR_SUCCESS) result = gateway_inbound_block(sid, (UINT16)family, &deny);
   if (result == ERROR_SUCCESS &&
-      control_route_probe(sid, executable, family, "independent-deny", network, 1) != ERROR_CONNECTION_REFUSED)
+      control_route_probe(sid, executable, family, "independent-deny", network) != ERROR_CONNECTION_REFUSED)
     result = ERROR_INVALID_DATA;
   if (deny != NULL) {
     closed = FwpmEngineClose0(deny);
     if (closed != ERROR_SUCCESS) result = closed;
   }
   if (result == ERROR_SUCCESS)
-    result = control_route_probe(sid, executable, family, "deny-removed", network, 1);
+    result = control_route_probe(sid, executable, family, "deny-removed", network);
   closed = gateway_inbound_stop(owner);
   if (closed != ERROR_SUCCESS) result = closed;
   if (result == ERROR_SUCCESS &&
-      control_route_probe(sid, executable, family, "inbound-owner-reaped", network, 1) != ERROR_CONNECTION_REFUSED)
+      control_route_probe(sid, executable, family, "inbound-owner-reaped", network) != ERROR_CONNECTION_REFUSED)
     result = ERROR_INVALID_DATA;
   if (diagnostics != NULL) {
     closed = gateway_diagnostics_read(diagnostics, sid);
@@ -595,7 +593,7 @@ int gateway_socket_proof(int inbound_experiment) {
           result = ERROR_INVALID_DATA;
       }
       if (result == ERROR_SUCCESS) {
-        DWORD route = control_route_probe(sid, executable, family, "unfiltered", network_pointer, 0);
+        DWORD route = control_route_probe(sid, executable, family, "unfiltered", network_pointer);
         DWORD expected = inbound_experiment ? ERROR_CONNECTION_REFUSED : ERROR_SUCCESS;
         if (route != expected) control_result = ERROR_INVALID_DATA;
         if (inbound_experiment) {
@@ -636,7 +634,7 @@ int gateway_socket_proof(int inbound_experiment) {
           if (received != 0 || peer_received != 0) result = ERROR_INVALID_DATA;
         }
         if (result == ERROR_SUCCESS) {
-          DWORD route = control_route_probe(sid, executable, family, "filtered", network_pointer, 0);
+          DWORD route = control_route_probe(sid, executable, family, "filtered", network_pointer);
           DWORD expected = inbound_experiment ? ERROR_CONNECTION_REFUSED : ERROR_SUCCESS;
           if (route != expected) control_result = ERROR_INVALID_DATA;
           if (inbound_experiment) {

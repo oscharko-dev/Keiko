@@ -32,10 +32,20 @@ DWORD gateway_diagnostics_stop(struct gateway_diagnostics *owner) {
 DWORD gateway_diagnostics_start(const wchar_t *executable, struct gateway_diagnostics **owned) {
   struct gateway_diagnostics *owner;
   FWP_VALUE0 enabled = {0};
-  DWORD result;
-  if (owned == NULL || *owned != NULL) return ERROR_INVALID_PARAMETER;
+  wchar_t *expanded;
+  DWORD result, length;
+  if (executable == NULL || owned == NULL || *owned != NULL) return ERROR_INVALID_PARAMETER;
   owner = calloc(1, sizeof(*owner));
   if (owner == NULL) return ERROR_OUTOFMEMORY;
+  expanded = calloc(32768, sizeof(wchar_t));
+  if (expanded == NULL) { free(owner); return ERROR_OUTOFMEMORY; }
+  /* The hosted runner launches from an 8.3 TEMP spelling. Bind the diagnostic to the expanded
+   * image identity so a spelling difference cannot silently omit the fixture's own drops. */
+  length = GetLongPathNameW(executable, expanded, 32768);
+  result = length == 0 ? GetLastError() : length >= 32768 ? ERROR_BUFFER_OVERFLOW : ERROR_SUCCESS;
+  if (result == ERROR_SUCCESS) result = FwpmGetAppIdFromFileName0(expanded, &owner->app);
+  free(expanded);
+  if (result != ERROR_SUCCESS) { (void)gateway_diagnostics_stop(owner); return result; }
   result = FwpmEngineOpen0(NULL, RPC_C_AUTHN_WINNT, NULL, NULL, &owner->engine);
   if (result == ERROR_SUCCESS)
     result = FwpmEngineGetOption0(owner->engine, FWPM_ENGINE_COLLECT_NET_EVENTS, &owner->previous);
@@ -44,7 +54,6 @@ DWORD gateway_diagnostics_start(const wchar_t *executable, struct gateway_diagno
     enabled.uint32 = 1;
     result = FwpmEngineSetOption0(owner->engine, FWPM_ENGINE_COLLECT_NET_EVENTS, &enabled);
   }
-  if (result == ERROR_SUCCESS) result = FwpmGetAppIdFromFileName0(executable, &owner->app);
   if (result == ERROR_SUCCESS) {
     GetSystemTimeAsFileTime(&owner->started);
     *owned = owner;

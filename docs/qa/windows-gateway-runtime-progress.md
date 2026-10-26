@@ -158,7 +158,19 @@ documented [desktop AppContainer rule API](https://learn.microsoft.com/en-us/win
 one temporary package SID, the fixture executable, TCP, exact loopback addresses and the listener's
 one port. It removes its fresh rule and verifies absence even after an uncertain add outcome.
 The independent deny, exact outbound restrictions and owner-reaping controls remain required.
-This is not an installed production rule or a relaxation of the ordinary socket proof.
+This was not an installed production rule or a relaxation of the ordinary socket proof.
+
+[Run 40381384956](https://github.com/oscharko-dev/Keiko/actions/runs/40381384956) rejected that
+experiment with `E_INVALIDARG` in both address families; its rule cleanup checks passed. Microsoft's
+[`INetFwRules::Add` contract](https://learn.microsoft.com/en-us/windows/win32/api/netfw/nf-netfw-inetfwrules-add)
+explicitly excludes adding a rule with `LocalAppPackageId`, despite that property existing on the
+rule interface. The unsupported experiment and its COM dependencies have been removed. This does
+not establish a working inbound route.
+
+The bounded WFP diagnostic now expands the runner's short image pathname before constructing its
+event query, and exercises an independently verified blocked outbound flow inside the collection
+interval before probing inbound access. This positive control distinguishes an empty diagnostic
+from evidence about the failing inbound route. Its runner result remains pending.
 
 Local protocol validation also ran the complete existing `runtime-gateway.test.ts`: 29 passed,
 eight failed on existing POSIX filesystem fixtures rejected by Windows path canonicalization, and

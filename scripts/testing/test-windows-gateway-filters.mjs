@@ -81,7 +81,6 @@ if (
     join(root, "native/runtime-supervisor/windows/gateway_socket.test.c"),
     join(root, "native/runtime-supervisor/windows/gateway_inbound.test.c"),
     join(root, "native/runtime-supervisor/windows/gateway_diagnostics.test.c"),
-    join(root, "native/runtime-supervisor/windows/gateway_firewall.test.c"),
     "/link",
     "/DEPENDENTLOADFLAG:0x800",
     "fwpuclnt.lib",
@@ -89,9 +88,6 @@ if (
     "advapi32.lib",
     "ws2_32.lib",
     "userenv.lib",
-    "ole32.lib",
-    "oleaut32.lib",
-    "uuid.lib",
   ];
   const built = spawnSync(windowsToolFromPath(env.PATH, "cl.exe"), args, {
     env,
