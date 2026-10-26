@@ -101,3 +101,14 @@ The separate running-editor smoke is not green; its menu-selection and desktop-h
 reproduce with the original stylesheet. See the complete
 [SonarCloud review record](../../../qa/sonarcloud-blocker-medium-2026-10-24.json) for the actual gate
 outcomes and limitations. No failure or rule was suppressed to produce these artifacts.
+
+## Merge into PR #4064 — 2026-10-24
+
+The producers bind `package.json`, `package-lock.json` and `packages/keiko-ui/package.json`, which
+the merge of `dev` into PR #4064 changes (its own dependency and package updates). The same four
+original producers were rerun on the merged tree on Node 24.22.0 (macOS arm64) and all passed:
+component fidelity with zero gated differences and no missing selectors, editor token fidelity with
+all 14 reference captures, the seven-mode accessibility proof with zero serious/critical violations
+and zero unresolved incomplete findings, and all 108 running-app captures with zero page errors,
+unexpected API requests, missing selectors, crashed windows or unavailable workspace-trust states.
+No gate, fixture or rule was changed.

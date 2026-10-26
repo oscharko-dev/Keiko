@@ -17,6 +17,7 @@ import {
   seedThenPack,
   seedVendoredRegistry,
 } from "../installable-package-smoke.mjs";
+import { customerShapeRipgrepEnvironment } from "../lib/customer-shape-ripgrep.mjs";
 import {
   CUSTOMER_SHAPE_API_KEY,
   CUSTOMER_SHAPE_MODEL,
@@ -131,6 +132,9 @@ function lifecycle(project, stateDir, port, configPath, pairingSecret) {
     KEIKO_DEFAULT_API_KEY: CUSTOMER_SHAPE_API_KEY,
     KEIKO_CODING_APP_SESSION_LAUNCHER_SECRET: pairingSecret,
     KEIKO_CODING_DEPLOYMENT_CEILING: "autonomous-delivery",
+    // OpenCode's glob and grep need ripgrep and the installed tree carries none (#3897): hand the
+    // runtime the provisioned, digest-verified executable instead of letting it try to download.
+    ...customerShapeRipgrepEnvironment(),
   };
   return (action) =>
     run(process.execPath, [bin, action, ...args, ...(action === "start" ? ["--no-open"] : [])], {
@@ -625,4 +629,6 @@ async function main() {
   }
 }
 
+// Fail before the expensive pack and install when the pinned ripgrep is not provisioned.
+customerShapeRipgrepEnvironment();
 await main();

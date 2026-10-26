@@ -1,4 +1,5 @@
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
@@ -19,6 +20,9 @@ import {
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
 
+import type { ProcessTable } from "./darwinProcessTable.js";
+import { RuntimeDescendantTracker } from "./darwinRuntimeDescendants.js";
+import type { SandboxMembership } from "./darwinSandboxMembership.js";
 import {
   createDevLaneRuntimeProcessBackend as createProductionDevLaneRuntimeProcessBackend,
   type DevLaneRuntimeChildProcess,
@@ -151,6 +155,36 @@ function gatewayConfinement(): ReturnType<typeof createRuntimeGatewayConfinement
   });
 }
 
+// The production macOS profile: the native workspace policy, whose run gets a sandbox member.
+function nativeConfinement(fixture: Fixture): ReturnType<typeof createRuntimeGatewayConfinement> {
+  const privateStateRoot = join(dirname(fixture.cwd), "state");
+  mkdirSync(privateStateRoot, { recursive: true, mode: 0o700 });
+  return createRuntimeGatewayConfinement({
+    gatewayUrl: "http://127.0.0.1:1983/api/coding-sidecar/gateway",
+    runId: "run-2475",
+    treeBindingId: "f".repeat(64),
+    envelopeDigest: "a".repeat(64),
+    runtimeArtifactDigest: "b".repeat(64),
+    modelProfileDigest: "c".repeat(64),
+    profile: "keiko-native",
+    filesystem: {
+      workspaceRoot: fixture.cwd,
+      workspaceAccess: "read-write",
+      privateStateRoot,
+      runtimeReadRoot: fixture.runtimeRoot,
+    },
+  });
+}
+
+/** The live processes whose command line carries `marker`, read from outside any sandbox. */
+function processesCarrying(marker: string): readonly number[] {
+  const listing = spawnSync("/bin/ps", ["-axo", "pid=,command="], { encoding: "utf8" });
+  return listing.stdout
+    .split("\n")
+    .filter((line) => line.includes(marker))
+    .map((line) => Number.parseInt(line.trim(), 10));
+}
+
 function launchRequest(fixture: Fixture, executable?: string): RuntimeSupervisorLaunchRequest {
   return {
     runId: "run-2475",
@@ -208,6 +242,64 @@ describe("dev-lane runtime process backend", () => {
     expect(activityLog.events).toContainEqual(
       expect.objectContaining({ op: "runtime.confinement.spawned", correlationId: request.runId }),
     );
+  });
+
+  // #3897 lab (T7): the agent's shell answered "command not found: npm" because the child saw only
+  // the attested Git directory. The native profile keeps the launcher's allowlisted PATH behind
+  // that directory; the gateway profile still sees Git alone.
+  it("gives a native-profile child the launcher's PATH behind the attested Git directory", () => {
+    const fixture = stageFixture();
+    const privateStateRoot = join(dirname(fixture.cwd), "state", "run-2475");
+    mkdirSync(privateStateRoot, { recursive: true, mode: 0o700 });
+    const nativePolicy = createRuntimeGatewayConfinement({
+      gatewayUrl: "http://127.0.0.1:1983/api/coding-sidecar/gateway",
+      runId: "run-2475",
+      treeBindingId: "f".repeat(64),
+      envelopeDigest: "a".repeat(64),
+      runtimeArtifactDigest: "b".repeat(64),
+      modelProfileDigest: "c".repeat(64),
+      profile: "keiko-native",
+      filesystem: {
+        workspaceRoot: fixture.cwd,
+        workspaceAccess: "read-write",
+        privateStateRoot,
+        runtimeReadRoot: fixture.runtimeRoot,
+      },
+    });
+    const request = {
+      ...launchRequest(fixture),
+      env: { PATH: "/opt/toolchain/bin:/usr/bin", OPENCODE_DISABLE_PROJECT_CONFIG: "true" },
+    };
+    const spawnWith = (policy: ReturnType<typeof gatewayConfinement>): string => {
+      const spawn = vi.fn<DevLaneRuntimeSpawn>(() => fakeChild(4711));
+      const activityLog = createBufferedServerLogSink();
+      const supervisor = createRuntimeProcessSupervisor({
+        backend: createDevLaneRuntimeProcessBackend({
+          identity: IDENTITY,
+          runtimeRoot: fixture.runtimeRoot,
+          gatewayConfinement: policy,
+          activityLog,
+          spawnRuntime: spawn,
+        }),
+        qualifications: [request.qualification],
+        planSandbox: (sandboxRequest): ReturnType<typeof planLongLivedRuntimeSandbox> =>
+          planLongLivedRuntimeSandbox(
+            sandboxRequest,
+            { bubblewrap: false, unshare: false, seatbelt: true, docker: false, podman: false },
+            "darwin",
+          ),
+      });
+      expect(supervisor.spawnOwnedTree(request)).toMatchObject({ ok: true });
+      expect(
+        activityLog.events.filter((event) => event.op === "runtime.confinement.failed"),
+      ).toEqual([]);
+      return spawn.mock.calls[0]?.[2].env.PATH ?? "";
+    };
+    const nativePath = spawnWith(nativePolicy).split(":");
+    expect(nativePath.slice(1)).toEqual(["/opt/toolchain/bin", "/usr/bin"]);
+    expect(nativePath[0]?.startsWith("/")).toBe(true);
+    const gatewayPath = spawnWith(gatewayConfinement()).split(":");
+    expect(gatewayPath).toEqual([nativePath[0]]);
   });
 
   it("does not mistake a live child's error event for a completed process tree", async () => {
@@ -391,12 +483,55 @@ describe("dev-lane runtime process backend", () => {
     child.settle(0);
   });
 
-  it("leaves Linux on its existing lifetime and refuses an unqualified stdin lease", () => {
+  it.each(["clean", "forced", "nonzero", "pipe-error"] as const)(
+    "uses Linux stdin lifetime and refuses uncertain %s reaping at wait and reconciliation",
+    async (outcome) => {
+      const fixture = stageFixture();
+      const stdin = new PassThrough();
+      const child = { ...fakeChild(4711, true), stdin };
+      const killProcessGroup = vi.fn();
+      const backend = createDevLaneRuntimeProcessBackend({
+        identity: LINUX_IDENTITY,
+        platform: "linux",
+        runtimeRoot: fixture.runtimeRoot,
+        gatewayConfinement: gatewayConfinement(),
+        spawnRuntime: () => child,
+        killProcessGroup,
+        activityLog: createBufferedServerLogSink(),
+        probeAvailability: () => ({
+          bubblewrap: true,
+          unshare: false,
+          seatbelt: false,
+          docker: false,
+          podman: false,
+        }),
+      });
+      const tree = backend.spawnOwnedTree({
+        ...launchRequest(fixture),
+        parentLifetime: "stdin-eof",
+      });
+      expect(backend.supportsStdinLifetime).toBe(true);
+      backend.signalTree(tree, "graceful");
+      backend.signalTree(tree, "graceful");
+      expect(stdin.writableEnded).toBe(true);
+      expect(killProcessGroup).not.toHaveBeenCalled();
+      if (outcome === "forced") backend.signalTree(tree, "force");
+      if (outcome === "pipe-error") stdin.emit("error", new Error("fixture-lease-failed"));
+      const waiting = backend.waitForCompleteTreeExit(tree, 100);
+      child.settle(outcome === "nonzero" ? 1 : 0);
+      expect(await waiting).toBe(outcome === "clean");
+      expect(await backend.waitForCompleteTreeExit(tree, 100)).toBe(outcome === "clean");
+      expect(await backend.reconcileTreeExit(tree)).toBe(outcome === "clean");
+      expect(killProcessGroup).toHaveBeenCalledTimes(outcome === "forced" ? 1 : 0);
+    },
+  );
+
+  it("refuses a stdin lease when platform and runtime identity disagree", () => {
     const fixture = stageFixture();
     const spawnRuntime = vi.fn(() => fakeChild(4711, true));
     const backend = createDevLaneRuntimeProcessBackend({
       identity: LINUX_IDENTITY,
-      platform: "linux",
+      platform: "darwin",
       runtimeRoot: fixture.runtimeRoot,
       gatewayConfinement: gatewayConfinement(),
       spawnRuntime,
@@ -456,6 +591,140 @@ describe("dev-lane runtime process backend", () => {
   });
 
   // The activity line exposes the bounded child-executable policy without logging either path.
+  // #3899 AC2: the original service starts its shell children in their own process groups, so a
+  // crashed service's children outlive the group kill unless the recorded descendants are ended.
+  describe("macOS descendants of the service", () => {
+    function descendantBackend(
+      processes: Set<number>,
+      keep: (pid: number) => boolean,
+      member: boolean,
+    ): {
+      readonly backend: RuntimeProcessBackend;
+      readonly child: FakeChild;
+      readonly signals: string[];
+      readonly fixture: Fixture;
+    } {
+      const fixture = stageFixture();
+      const child = fakeChild(4711);
+      const signals: string[] = [];
+      const backend = createDevLaneRuntimeProcessBackend({
+        identity: IDENTITY,
+        gatewayConfinement: gatewayConfinement(),
+        runtimeRoot: fixture.runtimeRoot,
+        spawnRuntime: () => child,
+        killProcessGroup: () => undefined,
+        trackDescendants: (options) => {
+          // The kernel's answer for the run's sandbox instance, and its member's broadcast.
+          const membership: SandboxMembership | undefined = member
+            ? {
+                self: () =>
+                  Promise.resolve({
+                    pid: 4799,
+                    uniqueId: "47990",
+                    parentPid: options.rootPid,
+                    parentUniqueId: "47110",
+                  }),
+                occupied: () => Promise.resolve(processes.size > 0),
+                members: (pids) =>
+                  Promise.resolve(
+                    pids
+                      .filter((pid) => processes.has(pid))
+                      .map((pid) => ({ pid, uniqueId: String(pid * 10) })),
+                  ),
+                killAll: (): Promise<void> => {
+                  signals.push("kill-all");
+                  for (const pid of [...processes]) if (!keep(pid)) processes.delete(pid);
+                  return Promise.resolve();
+                },
+                close: (): void => undefined,
+              }
+            : undefined;
+          return new RuntimeDescendantTracker({
+            ...options,
+            ...(membership === undefined ? {} : { membership }),
+            // The host's table: the run's processes, forked after the run's root.
+            readTable: (): Promise<ProcessTable> =>
+              Promise.resolve({
+                records: [...processes].map((pid) => ({
+                  pid,
+                  zombie: false,
+                  uniqueId: String(pid * 10),
+                  parentUniqueId: "47110",
+                })),
+                goneCount: 0,
+                foreignUserCount: 0,
+                unidentifiedCount: 0,
+                lateCount: 0,
+              }),
+            settleMs: 0,
+          });
+        },
+      });
+      return { backend, child, signals, fixture };
+    }
+
+    async function crash(
+      keep: (pid: number) => boolean,
+      member = true,
+    ): Promise<{ readonly complete: boolean; readonly signals: readonly string[] }> {
+      const processes = new Set<number>();
+      const { backend, child, signals, fixture } = descendantBackend(processes, keep, member);
+      const tree = backend.spawnOwnedTree(launchRequest(fixture), SANDBOX);
+      // The service has crashed; its child lives on under launchd.
+      processes.add(4800);
+      const wait = backend.waitForCompleteTreeExit(tree, 5_000);
+      child.settle(null);
+      return { complete: await wait, signals };
+    }
+
+    it("ends the processes of a crashed service's sandbox before the tree counts as ended", async () => {
+      await expect(crash(() => false)).resolves.toEqual({
+        complete: true,
+        signals: ["kill-all"],
+      });
+    });
+
+    it("keeps the tree unproven while a process of the run never ends", async () => {
+      const result = await crash(() => true);
+      expect(result.complete).toBe(false);
+      expect(result.signals).toHaveLength(50);
+    });
+
+    // Without the member nothing proves the end, and no host signal may stand in for it.
+    it("keeps a tree without a sandbox member unproven and signals nothing", async () => {
+      await expect(crash(() => false, false)).resolves.toEqual({
+        complete: false,
+        signals: [],
+      });
+    });
+
+    it("never records a Linux tree, whose namespace launcher owns its own descendants", () => {
+      const fixture = stageFixture();
+      const trackDescendants = vi.fn();
+      const backend = createProductionDevLaneRuntimeProcessBackend({
+        identity: LINUX_IDENTITY,
+        gatewayConfinement: gatewayConfinement(),
+        runtimeRoot: fixture.runtimeRoot,
+        platform: "linux",
+        probeAvailability: () => ({
+          bubblewrap: true,
+          unshare: true,
+          seatbelt: false,
+          docker: false,
+          podman: false,
+        }),
+        spawnRuntime: () => fakeChild(4711, true),
+        killProcessGroup: () => undefined,
+        trackDescendants,
+      });
+      backend.spawnOwnedTree({
+        ...launchRequest(fixture),
+        qualification: { ...LINUX_IDENTITY, releaseReceipt: `sha256:${"0".repeat(64)}` },
+      });
+      expect(trackDescendants).not.toHaveBeenCalled();
+    });
+  });
+
   it("records the runtime-and-attested-git executable boundary (#3390)", () => {
     const fixture = stageFixture();
     const activityLog = createBufferedServerLogSink();
@@ -756,13 +1025,138 @@ describe("dev-lane runtime process backend", () => {
     const fixture = stageFixture();
     const backend = createDevLaneRuntimeProcessBackend({
       identity: IDENTITY,
-      gatewayConfinement: gatewayConfinement(),
+      gatewayConfinement: nativeConfinement(fixture),
       runtimeRoot: fixture.runtimeRoot,
     });
     const tree = backend.spawnOwnedTree(launchRequest(fixture), SANDBOX);
     await expect(backend.waitForCompleteTreeExit(tree, 10_000)).resolves.toBe(true);
     await expect(backend.reconcileTreeExit(tree)).resolves.toBe(true);
   });
+
+  // PR #4064 review (#3899 AC2, #3901 AC3), on the real kernel: a process the run detached with
+  // `setsid`, outside its workspace, before any sample, is still the run's and is ended; a process
+  // started in the workspace from outside the run is never signalled.
+  it.skipIf(process.platform !== "darwin")(
+    "ends a detached process of the run and never one started beside it",
+    async () => {
+      const fixture = stageFixture();
+      const marker = `3901.${String(process.pid)}`;
+      writeFileSync(
+        fixture.executable,
+        `#!/bin/sh\n/usr/bin/perl -e 'use POSIX; if (fork() == 0) { POSIX::setsid(); chdir "/"; exec "/bin/sleep", "${marker}1" } sleep 1'\nexit 0\n`,
+      );
+      const foreign = spawn("/bin/sleep", [`${marker}2`], {
+        cwd: fixture.cwd,
+        detached: true,
+        stdio: "ignore",
+      });
+      foreign.unref();
+      try {
+        const sink = createBufferedServerLogSink();
+        const backend = createDevLaneRuntimeProcessBackend({
+          identity: IDENTITY,
+          gatewayConfinement: nativeConfinement(fixture),
+          runtimeRoot: fixture.runtimeRoot,
+          activityLog: sink,
+        });
+        const tree = backend.spawnOwnedTree(launchRequest(fixture), SANDBOX);
+        await expect(backend.waitForCompleteTreeExit(tree, 15_000)).resolves.toBe(true);
+        expect(processesCarrying(`${marker}1`)).toEqual([]);
+        expect(processesCarrying(`${marker}2`)).toEqual([foreign.pid]);
+        const swept = sink.events.find((event) => event.op === "coding-runtime.descendants.swept");
+        expect(swept?.extra).toMatchObject({ outcome: "reaped", roundCount: 1 });
+      } finally {
+        foreign.kill("SIGKILL");
+      }
+    },
+    30_000,
+  );
+
+  // PR #4064 review (4371619368, 4371860462), on the real kernel: a detached process of the run keeps
+  // forking a child and exiting, so its PID changes all the time, the pattern that defeated process
+  // listings. The kernel's broadcast reaches whatever process of the run exists, and the end is the
+  // kernel's answer that none does.
+  it.skipIf(process.platform !== "darwin")(
+    "ends a run whose detached process keeps forking and exiting",
+    async () => {
+      const fixture = stageFixture();
+      const marker = `3899.${String(process.pid)}`;
+      writeFileSync(
+        fixture.executable,
+        `#!/bin/sh\n/usr/bin/perl -e 'use POSIX; if (fork() == 0) { POSIX::setsid(); for (1..500) { select(undef, undef, undef, 0.02); exit 0 if fork() } exec "/bin/sleep", "${marker}7" } # ${marker}7'\nexit 0\n`,
+      );
+      const sink = createBufferedServerLogSink();
+      const backend = createDevLaneRuntimeProcessBackend({
+        identity: IDENTITY,
+        gatewayConfinement: nativeConfinement(fixture),
+        runtimeRoot: fixture.runtimeRoot,
+        activityLog: sink,
+      });
+      try {
+        const tree = backend.spawnOwnedTree(launchRequest(fixture), SANDBOX);
+        await expect(backend.waitForCompleteTreeExit(tree, 20_000)).resolves.toBe(true);
+        expect(processesCarrying(`${marker}7`)).toEqual([]);
+        const swept = sink.events.find((event) => event.op === "coding-runtime.descendants.swept");
+        expect(swept?.extra).toMatchObject({ outcome: "reaped" });
+        expect(Number(swept?.extra?.roundCount)).toBeGreaterThanOrEqual(1);
+      } finally {
+        for (const pid of processesCarrying(`${marker}7`)) process.kill(pid, "SIGKILL");
+      }
+    },
+    40_000,
+  );
+
+  // PR #4064 review (4372402175, 4373090489), on the real kernel: a parent outside every sandbox
+  // holds an exited child unreaped for the whole sweep. XNU counts that zombie in the member's
+  // broadcast check, so the sweep proves the end by kernel identity instead: an empty run settles
+  // clean, and a run with a detached process is reaped, never left as survivors.
+  it.skipIf(process.platform !== "darwin")(
+    "proves a run's end while an unrelated zombie of the same user exists",
+    async () => {
+      const holder = spawn(
+        "/usr/bin/perl",
+        ["-e", '$| = 1; my $c = fork(); if ($c == 0) { exit 0 } print "$c\\n"; sleep 60'],
+        { stdio: ["ignore", "pipe", "ignore"] },
+      );
+      const marker = `3901.${String(process.pid)}`;
+      try {
+        await new Promise<void>((resolve) => {
+          holder.stdout.once("data", () => {
+            resolve();
+          });
+        });
+        for (const [script, outcome] of [
+          ["#!/bin/sh\nexit 0\n", "clean"],
+          [
+            `#!/bin/sh\n/usr/bin/perl -e 'use POSIX; if (fork() == 0) { POSIX::setsid(); exec "/bin/sleep", "${marker}9" } exit 0'\nexit 0\n`,
+            "reaped",
+          ],
+        ] as const) {
+          const fixture = stageFixture();
+          writeFileSync(fixture.executable, script);
+          const sink = createBufferedServerLogSink();
+          const backend = createDevLaneRuntimeProcessBackend({
+            identity: IDENTITY,
+            gatewayConfinement: nativeConfinement(fixture),
+            runtimeRoot: fixture.runtimeRoot,
+            activityLog: sink,
+          });
+          const tree = backend.spawnOwnedTree(launchRequest(fixture), SANDBOX);
+          await expect(backend.waitForCompleteTreeExit(tree, 20_000), outcome).resolves.toBe(true);
+          const swept = sink.events.find(
+            (event) => event.op === "coding-runtime.descendants.swept",
+          );
+          expect(swept?.extra, outcome).toMatchObject({ outcome });
+          expect(Number(swept?.extra?.identityProofCount), outcome).toBeGreaterThanOrEqual(1);
+          expect(processesCarrying(`${marker}9`)).toEqual([]);
+        }
+      } finally {
+        holder.kill("SIGKILL");
+        for (const pid of processesCarrying(`${marker}9`)) process.kill(pid, "SIGKILL");
+      }
+    },
+    60_000,
+  );
 });
 
 // LIVE OS-level proof through the production backend (#2951). runtime-gateway.test.ts proves the

@@ -49,6 +49,15 @@ targetRules = ["generic-api-key"]
 regexTarget = "line"
 regexes = ['''idempotencyKey: "idempotency-1",''']
 
+[[allowlists]]
+description = "PR #4064: the synthetic MCP relay credential of exactly the admitted minimum length in one immutable checkpoint of the relay test. It is a generated test value that proves the relay scrubs a reflected credential, not a credential of any service; the generic-api-key rule matches its entropy. Later commits assemble it at run time. Only this exact historical fixture line in this one commit is exempt."
+condition = "AND"
+commits = ["84dddde8921ef6b0b80b0d7a69df5bc648790e42"]
+paths = ['''^packages/keiko-server/src/mcp/mcpCredentialRelay\.test\.ts$''']
+targetRules = ["generic-api-key"]
+regexTarget = "line"
+regexes = ['''const SHORTEST_SECRET = "k3Y9-qL2_wX7\.pB4";''']
+
 [extend]
 useDefault = true
 

@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, unlinkSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { ServerLogEvent } from "../observability/index.js";
@@ -10,6 +10,7 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
+import * as backendModule from "./productionOpenCodeBackend.js";
 import {
   productionOpenCodeLoopbackEndpoints,
   resolveProductionOpenCodeActivation,
@@ -270,6 +271,50 @@ describe("production OpenCode activation", () => {
     expect(result.ports?.backend).toBeDefined();
     expect(result.ports?.secureWorkspaceTextRead).toBeDefined();
     expect(result.ports?.editorAgentClient).toBeDefined();
+  });
+
+  // #3903: the backend reads a native run's repository items through this same host read port, and
+  // the operator's switch reaches it as a decision, never as the raw value.
+  it.each([
+    [undefined, true],
+    ["true", true],
+    [" TRUE ", true],
+    ["false", false],
+    ["maybe", false],
+    ["", false],
+  ])("hands the backend the repository items switch %j as %s", (value, expected) => {
+    const staged = devLaneFixture();
+    const create = vi.spyOn(backendModule, "createProductionOpenCodeBackend");
+    const result = resolveProductionOpenCodeActivation(
+      activationInput({
+        ...staged.env,
+        KEIKO_UI_PORT: "1983",
+        ...(value === undefined ? {} : { KEIKO_CODING_REPOSITORY_ITEMS_ENABLED: value }),
+      }),
+    );
+
+    expect(result.ports).toBeDefined();
+    const backendInput = create.mock.calls.at(-1)?.[0];
+    expect(backendInput?.repositoryItemsEnabled).toBe(expected);
+    expect(backendInput?.secureWorkspaceTextRead).toBe(result.ports?.secureWorkspaceTextRead);
+  });
+
+  // #3903 AC2: the operator's plugin registry is read from Keiko's own state directory, at each
+  // native run's prepare, never from the workspace.
+  it("hands the backend the operator plugin registry of the runtime state directory", () => {
+    const staged = devLaneFixture();
+    const stateDir = join(staged.root, "runtime-state");
+    mkdirSync(stateDir, { recursive: true });
+    const create = vi.spyOn(backendModule, "createProductionOpenCodeBackend");
+    resolveProductionOpenCodeActivation(
+      activationInput({ ...staged.env, KEIKO_UI_PORT: "1983" }, { stateDir }),
+    );
+    const registry = create.mock.calls.at(-1)?.[0].operatorPluginRegistry;
+    expect(registry?.()).toEqual({ state: "absent", plugins: [] });
+    writeFileSync(join(stateDir, "opencode-plugins.json"), '{"schemaVersion":1,"plugins":[]}', {
+      mode: 0o600,
+    });
+    expect(registry?.()).toEqual({ state: "loaded", plugins: [] });
   });
 
   it("activates the staged Windows dev lane through the production composition", () => {

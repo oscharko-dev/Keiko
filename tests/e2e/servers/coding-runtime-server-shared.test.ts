@@ -74,16 +74,10 @@ describe("nextScriptedTurn question-skip ceiling (KEIKO-0902)", () => {
     process.env.KEIKO_2483_GATEWAY_OBSERVATION_PATH = outputPath;
     const observe = gatewayObserver();
     if (observe === undefined) throw new Error("Expected gateway observer");
+    const binding = { ...DIGESTS, profile: { id: "opencode", version: 1 } };
     const request = {
       maxOutputTokens: 4096,
-      toolCatalog: {
-        offered: {
-          binding: {
-            ...DIGESTS,
-            profile: { id: "opencode", version: 1 },
-          },
-        },
-      },
+      toolCatalog: { kind: "bound", offered: { binding } },
     } as GatewayRequestStub;
     try {
       observe(request);
@@ -98,14 +92,8 @@ describe("nextScriptedTurn question-skip ceiling (KEIKO-0902)", () => {
         observe({
           ...request,
           toolCatalog: {
-            ...request.toolCatalog,
-            offered: {
-              ...request.toolCatalog?.offered,
-              binding: {
-                ...request.toolCatalog?.offered.binding,
-                handlerSetDigest: "d".repeat(64),
-              },
-            },
+            kind: "bound",
+            offered: { binding: { ...binding, handlerSetDigest: "d".repeat(64) } },
           },
         } as GatewayRequestStub);
       }).toThrow("catalog binding changed");

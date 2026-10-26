@@ -2,6 +2,7 @@ import {
   isVerifiedCommitResult,
   type VerifiedCommitResult,
 } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
+import type { GovernedSyncHead } from "./governedSyncHeads.js";
 import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { isAbsolute, relative, sep } from "node:path";
@@ -100,6 +101,8 @@ type LaunchResolutionInput = Parameters<CodingRuntimeLaunchResolver["resolve"]>[
 export interface ProductionWorkspaceAuthorityInput {
   /** Retained last successful runtime receipt; latest proposals never replace HEAD provenance. */
   readonly verifiedCommitResult?: (runId: string) => VerifiedCommitResult | undefined;
+  /** The last head a governed fast-forward of the run wrote (governedSyncHeads.ts, #3902 AC2). */
+  readonly governedSyncHead?: (runId: string) => GovernedSyncHead | undefined;
   readonly workspaceLifecycle: Pick<WorkspaceLifecycleService, "getActive">;
   readonly managedTaskWorkspaceRoot: string;
   readonly deploymentCeiling: CodingWorkbenchMode;
@@ -433,6 +436,7 @@ function trustedHeadMatches(
   if (head === undefined || instance.lastVerifiedHead !== head) return false;
   if (digest(head) === context.branchHeadDigest) return true;
   if (context.runId === undefined) return false;
+  if (governedSyncHeadMatches(input, context, head)) return true;
   const receipt = input.verifiedCommitResult?.(context.runId);
   if (!isVerifiedCommitResult(receipt) || receipt.status !== "succeeded") return false;
   return [
@@ -441,6 +445,22 @@ function trustedHeadMatches(
     receipt.workspaceDigest === digest(context.workspaceRoot),
     receipt.issueBindingDigest === context.issueBinding?.bindingDigest,
   ].every(Boolean);
+}
+
+// #3902 AC2: a head a governed fast-forward of this very run wrote in this very workspace, held to
+// the same three facts as the verified commit's receipt above.
+function governedSyncHeadMatches(
+  input: ProductionWorkspaceAuthorityInput,
+  context: CodingRuntimeTrustedContext,
+  head: string,
+): boolean {
+  const synced = context.runId === undefined ? undefined : input.governedSyncHead?.(context.runId);
+  return (
+    synced !== undefined &&
+    synced.runId === context.runId &&
+    synced.headSha === head &&
+    synced.workspaceDigest === digest(context.workspaceRoot)
+  );
 }
 
 export function trustedManagedWorkspaceRoot(root: string): boolean {

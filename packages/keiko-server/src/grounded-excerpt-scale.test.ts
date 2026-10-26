@@ -74,6 +74,9 @@ async function retrieve(
 }
 
 describe("real retrieval omission and cache scale", () => {
+  // Retrieves a corpus larger than the retained omission capacity: about 2.5 s on a developer
+  // machine and up to the 15-second default in a 4-core coverage shard, so it takes the scale
+  // budget of its sibling in grounded-large-omission-review.test.ts.
   it("keeps exact full omission totals when a live byte tail exceeds retained detail capacity", async () => {
     const count = MAX_OMITTED_CONTEXT_ENTRIES + 1_024;
     const input = request(corpus(count), count);
@@ -94,7 +97,7 @@ describe("real retrieval omission and cache scale", () => {
       omittedBudgetExhaustedCount: connectedContextOmittedCounts(pack)["budget-exhausted"],
       omittedDetailsClipped: true,
     });
-  });
+  }, 45_000);
 
   it("reuses a produced truncated pack with its exact read and omitted sets", async () => {
     const input = request(corpus(64), 64);

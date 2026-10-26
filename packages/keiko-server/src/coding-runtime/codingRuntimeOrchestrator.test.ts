@@ -1,5 +1,9 @@
 import { createInMemoryUiStore } from "../store/index.js";
 import { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
+import {
+  createCodingSessionContinuity,
+  type CodingSessionContinuity,
+} from "./codingSessionContinuity.js";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -65,6 +69,8 @@ import { DatabaseSync } from "node:sqlite";
 import { runMigrations } from "../store/schema.js";
 import { createCodingRuntimeDescriptionJobStore } from "./codingRuntimeDescriptionJobStore.js";
 import {
+  CodingRuntimeAgentUnsupportedError,
+  CodingRuntimeInputsUnsupportedError,
   CodingRuntimeLaunchRejectedError,
   CodingRuntimeLaunchResolutionError,
 } from "./launchFailure.js";
@@ -75,6 +81,7 @@ import {
   UNREPAIRABLE_EDIT_REFUSAL_BOUND,
 } from "./codingRuntimeRefusalEscalation.js";
 import type { CodingToolEditOutcome } from "./codingToolFacadePorts.js";
+import { createCodingToolNativeSettlementFacet } from "./codingToolNativeEffect.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "../diagnostics-log.js";
 import type { ServerLogEvent, ServerLogSink } from "@oscharko-dev/keiko-activity-log";
@@ -84,6 +91,7 @@ import type {
   CodingWorkbenchIssueBindingFailure,
   MemoryId,
   SkillDiscoveryResultV1,
+  WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
 import { validateSkillDiscoveryResultV1 } from "@oscharko-dev/keiko-contracts/runtime/coding-skill-discovery";
 import type { CodingWorkbenchTurnFailureCode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
@@ -166,7 +174,8 @@ function optionalOrchestratorDeps(input: {
   readonly activityLog?: ServerLogSink | undefined;
   readonly issueIntake?: CodingRuntimeIssueIntake | undefined;
   readonly projectMemory?: CodingRuntimeProjectMemoryPort | undefined;
-  readonly repositoryInstructions?: CodingRuntimeRepositoryInstructionsPort | undefined;
+  readonly repositoryInstructions?:
+    Pick<CodingRuntimeRepositoryInstructionsPort, "loadForRun"> | undefined;
   readonly terminalFacts?: CodingRuntimeTerminalFacts | undefined;
   readonly runEffort?: ((runId: string) => CodingRuntimeHostRunEffort | undefined) | undefined;
 }): Partial<OptionalOrchestratorDeps> {
@@ -269,12 +278,16 @@ function fixture(
   snapshotStore?: CodingRuntimeSnapshotStore,
   projectMemory?: CodingRuntimeProjectMemoryPort,
   history?: CodingRuntimeHistory,
-  repositoryInstructions?: CodingRuntimeRepositoryInstructionsPort,
+  repositoryInstructions?: Pick<CodingRuntimeRepositoryInstructionsPort, "loadForRun">,
   terminalFacts?: CodingRuntimeTerminalFacts,
   runEffort?: (runId: string) => CodingRuntimeHostRunEffort | undefined,
   // #3873 review: the workspace the global active pointer resolves to, overridable so a test can
   // switch it while a run starts.
   activeRoot: () => string = (): string => "/workspace",
+  // S02/S03 (#3904): the native session continuity the orchestrator declares to and reads from.
+  sessionContinuity?: CodingSessionContinuity,
+  // #3903 AC4: the persisted task workspaces, the inventory a fork's provisioning source is read from.
+  workspaceInventory?: readonly WorkspaceInstance[],
 ) {
   const rows = new Map<string, CodingRuntimeSnapshot>(seededRows.map((row) => [row.runId, row]));
   const listPrunableSettled = vi.fn((): readonly string[] => []);
@@ -316,10 +329,11 @@ function fixture(
     },
     transition: (id, change) => {
       const current = rowFor(rows, id);
+      // Like the production store: a settled transition keeps a settlement time it is given.
       const terminalAt = new Set(["succeeded", "failed", "cancelled", "taken-over"]).has(
         change.state,
       )
-        ? change.updatedAt
+        ? (change.terminalAt ?? change.updatedAt)
         : undefined;
       // `pauseReason` is WRITTEN, never merged — the production store does the same, so that
       // leaving `paused` drops the reason from the row itself. A fixture that let the spread of
@@ -491,6 +505,7 @@ function fixture(
           },
           binding: { activeRoot: activeRoot() },
         }),
+        listAll: () => workspaceInventory ?? [],
       } as never,
       launchResolver,
       taskDispatcher,
@@ -511,6 +526,7 @@ function fixture(
         runEffort,
       }),
       ...(history === undefined ? {} : { history }),
+      ...(sessionContinuity === undefined ? {} : { sessionContinuity }),
       now: clock ?? ((): Date => new Date("2026-01-01T00:00:00.000Z")),
       newRunId: newRunId ?? ((): string => `run-${String(rows.size + 1)}`),
     },
@@ -2074,6 +2090,116 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("running");
   });
 
+  // #3897: a native OpenCode action ask names no supervised action kind; the closed `native-*`
+  // label marks it. The run pauses for the human like any ask, and the verdict travels through the
+  // permission port alone: no Keiko authority is minted or declined for a native action.
+  it("pauses for a native action ask and settles it through the permission port only", async () => {
+    const captured = captureActivityLog();
+    const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
+    await f.orchestrator.start(start);
+    await f.orchestrator.ingest(taskSubmitted());
+    const nativeAsk = (requestId: string, eventId: string) => ({
+      schemaVersion: "1" as const,
+      eventId,
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      kind: "permission-requested" as const,
+      permissionRequest: {
+        requestId,
+        kind: "command-execution" as const,
+        actionClass: "command-execution" as const,
+        reasonCode: "approval-required",
+        scopeLabel: "workspace-scope",
+        risk: "high" as const,
+        policyReason: "approval-required" as const,
+        commandLabel: "native-shell",
+        nativePermission: "shell",
+        expiresAt: "2026-01-01T00:01:00.000Z",
+      },
+    });
+    const waiting = await f.orchestrator.ingest(nativeAsk("permission-91", "event-native-1"));
+    expect(successfulSnapshot(waiting).state).toBe("awaiting-approval");
+    expect(successfulSnapshot(waiting).pendingPermission).toMatchObject({
+      requestId: "permission-91",
+      commandLabel: "native-shell",
+    });
+    expect(successfulSnapshot(waiting).pendingPermission?.actionKind).toBeUndefined();
+    const approved = await f.orchestrator.decideApproval("run-1", {
+      requestId: "permission-91",
+      decision: "approved",
+      expectedRevision: 5,
+    });
+    expect(approved.ok).toBe(true);
+    expect(f.permissionPort.resolve).toHaveBeenCalledWith({
+      runId: "run-1",
+      requestId: "permission-91",
+      decision: "approved",
+    });
+    expect(f.approvalAuthority.issue).not.toHaveBeenCalled();
+    expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("running");
+
+    const second = await f.orchestrator.ingest(nativeAsk("permission-92", "event-native-2"));
+    const denied = await f.orchestrator.decideApproval("run-1", {
+      requestId: "permission-92",
+      decision: "denied",
+      expectedRevision: successfulSnapshot(second).revision,
+    });
+    expect(denied.ok).toBe(true);
+    expect(f.permissionPort.resolve).toHaveBeenLastCalledWith({
+      runId: "run-1",
+      requestId: "permission-92",
+      decision: "denied",
+    });
+    expect(f.manager.declineApproval).not.toHaveBeenCalled();
+    expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("running");
+    expect(linesWithOp(captured, "coding-runtime.event.dropped")).toEqual([]);
+    expect(
+      captured.records.filter((record) => record.op === "coding-runtime.approval.waiting"),
+    ).toHaveLength(2);
+  });
+
+  // #3897 lab (T7): an ask with neither an action kind nor the native label could not be
+  // challenged and vanished, while the asking tool waited out its whole decision window. The
+  // refusal now leaves the same dropped line as a foreign-run event, with its own reason.
+  it("records an ask it cannot challenge instead of dropping it silently", async () => {
+    const captured = captureActivityLog();
+    const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
+    await f.orchestrator.start(start);
+    await f.orchestrator.ingest(taskSubmitted());
+    const refused = await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "event-unchallengeable",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      kind: "permission-requested",
+      permissionRequest: {
+        requestId: "permission-9",
+        kind: "command-execution",
+        actionClass: "command-execution",
+        reasonCode: "approval-required",
+        commandLabel: "typecheck",
+        expiresAt: "2026-01-01T00:01:00.000Z",
+      },
+    });
+    expect(refused).toMatchObject({ ok: false, failureCode: "invalid-intent" });
+    const dropped = captured.records.find(
+      (candidate) => candidate.op === "coding-runtime.event.dropped",
+    );
+    if (dropped === undefined) throw new Error("expected event.dropped line");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.event.dropped.emitted-line",
+        formatActivityLogProofLine(dropped),
+      ),
+    ).toMatchObject({
+      eventKind: "permission-requested",
+      eventRunId: "run-1",
+      liveRunId: "run-1",
+      reason: "challenge-invalid",
+    });
+    expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("running");
+  });
+
   // A settle that does not match the decision the run is actually waiting on must not release it:
   // the wait belongs to one tool call, and releasing it on a foreign settle would resume a run whose
   // blocker is still in place. Recorded rather than silently dropped, so the log shows the mismatch.
@@ -2574,6 +2700,407 @@ describe("CodingRuntimeOrchestrator", () => {
       ok: false,
       failureCode: "authority-resolution-failed",
       runId: "run-1",
+    });
+  });
+
+  describe("primary agent selection (#3897)", () => {
+    it.each(["build", "plan"] as const)(
+      "hands the requested %s agent to the first turn and leaves a start without one untouched",
+      async (agent) => {
+        const withAgent = fixture();
+        await withAgent.orchestrator.start({ ...start, agent });
+        expect(
+          firstTaskDispatchRequest(withAgent.taskDispatcher.dispatch.mock.calls),
+        ).toMatchObject({ agent, taskIntent: start.taskIntent });
+
+        const without = fixture();
+        await without.orchestrator.start(start);
+        expect(
+          firstTaskDispatchRequest(without.taskDispatcher.dispatch.mock.calls),
+        ).not.toHaveProperty("agent");
+      },
+    );
+
+    it("refuses a start that names a foreign agent before any run exists", async () => {
+      const f = fixture();
+
+      expect(await f.orchestrator.start({ ...start, agent: "general" })).toMatchObject({
+        ok: false,
+        failureCode: "invalid-intent",
+      });
+      expect(f.launchResolver.resolve).not.toHaveBeenCalled();
+      expect(f.taskDispatcher.dispatch).not.toHaveBeenCalled();
+    });
+
+    it("passes the requested agent to the launch resolver so an unsupported one is refused before launch", async () => {
+      const f = fixture();
+
+      await f.orchestrator.start({ ...start, agent: "plan" });
+
+      expect(f.launchResolver.resolve).toHaveBeenCalledWith(
+        expect.objectContaining({ agent: "plan" }),
+      );
+      const bare = fixture();
+      await bare.orchestrator.start(start);
+      expect(bare.launchResolver.resolve.mock.calls[0]?.[0]).not.toHaveProperty("agent");
+    });
+
+    it("answers a start whose runtime cannot honour the agent with invalid-intent and a closed diagnostic", async () => {
+      const captured = captureDiagnostics();
+      const f = fixture(undefined, undefined, [], captured.diagnostics);
+      f.launchResolver.resolve.mockImplementationOnce(() => {
+        throw new CodingRuntimeAgentUnsupportedError("plan");
+      });
+
+      expect(await f.orchestrator.start({ ...start, agent: "plan" })).toEqual({
+        ok: false,
+        failureCode: "invalid-intent",
+        runId: "run-1",
+      });
+      expect(f.taskDispatcher.dispatch).not.toHaveBeenCalled();
+      expect(captured.records).toContainEqual(
+        expect.objectContaining({
+          operation: "coding-runtime.start",
+          message: "runtime-start-failed",
+          code: "stage=start:reason=launch-resolution:agent-unsupported",
+        }),
+      );
+    });
+
+    it("hands a follow-up's agent to the dispatch and omits the key when none was named", async () => {
+      const f = fixture();
+      await f.orchestrator.start(start);
+
+      const planned = await f.orchestrator.submitFollowUp("run-1", {
+        requestId: "follow-up-plan",
+        expectedRevision: 4,
+        taskIntent: "outline the change first",
+        agent: "plan",
+      });
+      expect(successfulSnapshot(planned).revision).toBe(5);
+      expect(f.taskDispatcher.dispatch).toHaveBeenLastCalledWith({
+        runId: "run-1",
+        requestId: "follow-up-plan",
+        expectedRevision: 4,
+        taskIntent: "outline the change first",
+        agent: "plan",
+      });
+
+      await f.orchestrator.submitFollowUp("run-1", {
+        requestId: "follow-up-plain",
+        expectedRevision: 5,
+        taskIntent: "now implement it",
+      });
+      expect(f.taskDispatcher.dispatch.mock.lastCall?.[0]).not.toHaveProperty("agent");
+    });
+
+    it.each(["general", "", "Plan", 1, null])(
+      "refuses a follow-up that names the foreign agent %j and dispatches nothing",
+      async (agent) => {
+        const f = fixture();
+        await f.orchestrator.start(start);
+        f.taskDispatcher.dispatch.mockClear();
+
+        await expect(
+          f.orchestrator.submitFollowUp("run-1", {
+            requestId: "follow-up-foreign",
+            expectedRevision: 4,
+            taskIntent: "continue",
+            agent,
+          }),
+        ).resolves.toEqual({ ok: false, failureCode: "invalid-intent" });
+        expect(f.taskDispatcher.dispatch).not.toHaveBeenCalled();
+        expect(f.orchestrator.status().revision).toBe(4);
+      },
+    );
+
+    it("reports a follow-up whose agent the run cannot honour as invalid-intent and lets the request retry", async () => {
+      const f = fixture();
+      await f.orchestrator.start(start);
+      f.taskDispatcher.dispatch
+        .mockResolvedValueOnce({ ok: false, reason: "agent-unsupported" })
+        .mockResolvedValueOnce({ ok: true, completion: Promise.resolve("succeeded") });
+
+      await expect(
+        f.orchestrator.submitFollowUp("run-1", {
+          requestId: "follow-up-unsupported",
+          expectedRevision: 4,
+          taskIntent: "plan only",
+          agent: "plan",
+        }),
+      ).resolves.toEqual({ ok: false, failureCode: "invalid-intent" });
+      expect(f.orchestrator.status().revision).toBe(4);
+      await expect(
+        f.orchestrator.submitFollowUp("run-1", {
+          requestId: "follow-up-unsupported",
+          expectedRevision: 4,
+          taskIntent: "build instead",
+        }),
+      ).resolves.toMatchObject({ ok: true, snapshot: { revision: 5 } });
+    });
+
+    it("hands a paused run's follow-up agent to the replacement dispatch", async () => {
+      const f = fixture();
+      await f.orchestrator.start(start);
+      await f.orchestrator.ingest({
+        schemaVersion: "1",
+        eventId: "event-agent-pause-0",
+        runId: "run-1",
+        occurredAt: "2026-01-01T00:00:00.000Z",
+        kind: "task-submitted",
+      });
+      const paused = await f.orchestrator.pause("run-1", { requestId: "run-1" });
+
+      await f.orchestrator.submitFollowUp("run-1", {
+        requestId: "follow-up-paused-plan",
+        expectedRevision: successfulSnapshot(paused).revision,
+        taskIntent: "switch to planning",
+        agent: "plan",
+      });
+
+      expect(f.taskDispatcher.replace).toHaveBeenLastCalledWith(
+        expect.objectContaining({ requestId: "follow-up-paused-plan", agent: "plan" }),
+      );
+    });
+  });
+
+  // C02 / S15 (ADR-0137 D10): the first prompt of a start may carry `@` references and a slash command.
+  describe("the first prompt's references and slash command", () => {
+    const references = [{ path: "src/app.ts" }, { path: "docs/My Notes.md" }];
+
+    it("hands the references and the command to the first turn, and nothing when a start names none", async () => {
+      const f = fixture();
+      await f.orchestrator.start({ ...start, references });
+      expect(firstTaskDispatchRequest(f.taskDispatcher.dispatch.mock.calls)).toMatchObject({
+        references,
+        taskIntent: start.taskIntent,
+      });
+
+      const commanded = fixture();
+      await commanded.orchestrator.start({ ...start, command: { name: "review" } });
+      expect(firstTaskDispatchRequest(commanded.taskDispatcher.dispatch.mock.calls)).toMatchObject({
+        command: { name: "review" },
+        taskIntent: start.taskIntent,
+      });
+
+      const bare = fixture();
+      await bare.orchestrator.start(start);
+      const bareRequest = firstTaskDispatchRequest(bare.taskDispatcher.dispatch.mock.calls);
+      expect(bareRequest).not.toHaveProperty("references");
+      expect(bareRequest).not.toHaveProperty("command");
+    });
+
+    it("passes both to the launch resolver so a runtime without them is refused before launch", async () => {
+      const f = fixture();
+
+      await f.orchestrator.start({ ...start, references, command: { name: "init" } });
+
+      expect(f.launchResolver.resolve).toHaveBeenCalledWith(
+        expect.objectContaining({ references, command: { name: "init" } }),
+      );
+      const bare = fixture();
+      await bare.orchestrator.start(start);
+      expect(bare.launchResolver.resolve.mock.calls[0]?.[0]).not.toHaveProperty("references");
+      expect(bare.launchResolver.resolve.mock.calls[0]?.[0]).not.toHaveProperty("command");
+    });
+
+    it("answers a start whose runtime cannot take them with invalid-intent and a closed diagnostic", async () => {
+      const captured = captureDiagnostics();
+      const f = fixture(undefined, undefined, [], captured.diagnostics);
+      f.launchResolver.resolve.mockImplementationOnce(() => {
+        throw new CodingRuntimeInputsUnsupportedError();
+      });
+
+      expect(await f.orchestrator.start({ ...start, references })).toEqual({
+        ok: false,
+        failureCode: "invalid-intent",
+        runId: "run-1",
+      });
+      expect(f.taskDispatcher.dispatch).not.toHaveBeenCalled();
+      expect(captured.records).toContainEqual(
+        expect.objectContaining({
+          operation: "coding-runtime.start",
+          code: "stage=start:reason=launch-resolution:inputs-unsupported",
+        }),
+      );
+      expect(JSON.stringify(captured.records)).not.toContain("src/app.ts");
+    });
+
+    it("refuses the start with the request's own cause when the first prompt's inputs are refused", async () => {
+      const captured = captureDiagnostics();
+      const f = fixture(undefined, undefined, [], captured.diagnostics);
+      f.taskDispatcher.dispatch.mockResolvedValueOnce({ ok: false, reason: "inputs-refused" });
+
+      const result = await f.orchestrator.start({ ...start, references });
+
+      // The run that was minted for the prompt is stopped, never carried on without its files.
+      expect(successfulSnapshot(result)).toMatchObject({
+        state: "failed",
+        failureCode: "invalid-intent",
+      });
+      expect(f.manager.stop).toHaveBeenCalledOnce();
+      expect(captured.records).toContainEqual(
+        expect.objectContaining({
+          operation: "coding-runtime.start",
+          code: "stage=start:reason=initial-turn-inputs-refused",
+        }),
+      );
+      expect(JSON.stringify(captured.records)).not.toContain("src/app.ts");
+    });
+
+    it("keeps an ordinary refused first dispatch a runtime failure", async () => {
+      const f = fixture();
+      f.taskDispatcher.dispatch.mockResolvedValueOnce({ ok: false });
+
+      expect(successfulSnapshot(await f.orchestrator.start(start))).toMatchObject({
+        state: "failed",
+        failureCode: "runtime-failed",
+      });
+    });
+
+    it("builds no initial context for a command start, so nothing is recorded as included that the model never sees", async () => {
+      const getContextForRun = vi.fn<CodingRuntimeProjectMemoryPort["getContextForRun"]>(() =>
+        Promise.resolve({ text: "memory", includedMemoryIds: [] }),
+      );
+      const loadForRun = vi.fn<CodingRuntimeRepositoryInstructionsPort["loadForRun"]>(() =>
+        Promise.resolve("instructions"),
+      );
+      const f = fixture(
+        undefined,
+        undefined,
+        [],
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { getContextForRun },
+        undefined,
+        { loadForRun },
+      );
+
+      await f.orchestrator.start({ ...start, taskIntent: "", command: { name: "review" } });
+
+      expect(loadForRun).not.toHaveBeenCalled();
+      expect(getContextForRun).not.toHaveBeenCalled();
+      const request = firstTaskDispatchRequest(f.taskDispatcher.dispatch.mock.calls);
+      expect(request).not.toHaveProperty("initialContext");
+      expect(request).toMatchObject({ taskIntent: "", command: { name: "review" } });
+    });
+
+    it("still builds the initial context for a start whose first prompt only references files", async () => {
+      const loadForRun = vi.fn<CodingRuntimeRepositoryInstructionsPort["loadForRun"]>(() =>
+        Promise.resolve("instructions"),
+      );
+      const f = fixture(
+        undefined,
+        undefined,
+        [],
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { loadForRun },
+      );
+
+      await f.orchestrator.start({ ...start, references });
+
+      expect(loadForRun).toHaveBeenCalledOnce();
+      expect(firstTaskDispatchRequest(f.taskDispatcher.dispatch.mock.calls)).toMatchObject({
+        initialContext: expect.stringContaining("instructions") as unknown,
+        references,
+      });
+    });
+
+    it("lists the commands of the live run through its dispatcher and of no other", async () => {
+      const f = fixture();
+      const commands = vi.fn(() => Promise.resolve([{ name: "init" }, { name: "review" }]));
+      Object.assign(f.taskDispatcher, { commands });
+      await f.orchestrator.start(start);
+
+      await expect(f.orchestrator.listCommands("run-1", "corr-0123456789")).resolves.toEqual([
+        { name: "init" },
+        { name: "review" },
+      ]);
+      expect(commands).toHaveBeenCalledExactlyOnceWith("run-1", "corr-0123456789");
+      await expect(f.orchestrator.listCommands("run-9")).resolves.toBeUndefined();
+    });
+
+    it("lists the pending messages of the live run through its dispatcher and of no other", async () => {
+      const f = fixture();
+      const items = [{ itemId: "msg_item_1", delivery: "steer", preview: "Use the new logger" }];
+      const inbox = vi.fn(() => Promise.resolve(items));
+      Object.assign(f.taskDispatcher, { inbox });
+      await f.orchestrator.start(start);
+
+      await expect(f.orchestrator.listInbox("run-1", "corr-0123456789")).resolves.toEqual(items);
+      expect(inbox).toHaveBeenCalledExactlyOnceWith("run-1", "corr-0123456789");
+      await expect(f.orchestrator.listInbox("run-9")).resolves.toBeUndefined();
+    });
+
+    it("withdraws a pending message at the observed revision, advances it once and refuses the replay", async () => {
+      const f = fixture();
+      const inboxAction = vi.fn(() => Promise.resolve({ ok: true as const, outcome: "cancelled" }));
+      Object.assign(f.taskDispatcher, { inboxAction });
+      await f.orchestrator.start(start);
+      const body = {
+        requestId: "inbox-1",
+        expectedRevision: 4,
+        action: "cancel",
+        itemId: "msg_item_1",
+      };
+
+      const withdrawn = await f.orchestrator.submitInboxAction("run-1", body, "corr-0123456789");
+
+      expect(successfulSnapshot(withdrawn).revision).toBe(5);
+      expect(inboxAction).toHaveBeenCalledExactlyOnceWith({
+        runId: "run-1",
+        requestId: "inbox-1",
+        expectedRevision: 4,
+        action: "cancel",
+        itemId: "msg_item_1",
+        correlationId: "corr-0123456789",
+      });
+      await expect(f.orchestrator.submitInboxAction("run-1", body)).resolves.toEqual({
+        ok: false,
+        failureCode: "invalid-intent",
+      });
+      expect(inboxAction).toHaveBeenCalledOnce();
+      expect(f.taskDispatcher.dispatch).toHaveBeenCalledOnce();
+    });
+
+    it("hands a follow-up's command to the dispatch and omits the key when none was named", async () => {
+      const f = fixture();
+      await f.orchestrator.start(start);
+
+      const commanded = await f.orchestrator.submitFollowUp("run-1", {
+        requestId: "follow-up-command",
+        expectedRevision: 4,
+        taskIntent: "",
+        command: { name: "review" },
+      });
+
+      expect(successfulSnapshot(commanded).revision).toBe(5);
+      expect(f.taskDispatcher.dispatch).toHaveBeenLastCalledWith({
+        runId: "run-1",
+        requestId: "follow-up-command",
+        expectedRevision: 4,
+        taskIntent: "",
+        command: { name: "review" },
+      });
+      await f.orchestrator.submitFollowUp("run-1", {
+        requestId: "follow-up-plain",
+        expectedRevision: 5,
+        taskIntent: "now implement it",
+      });
+      expect(f.taskDispatcher.dispatch.mock.lastCall?.[0]).not.toHaveProperty("command");
     });
   });
 
@@ -6632,6 +7159,43 @@ describe("history initialization diagnostics", () => {
       );
       expect(JSON.stringify(captured.records)).not.toContain("PRIVATE_");
       expect(f.manager.start).not.toHaveBeenCalled();
+      expect(f.manager.stop).toHaveBeenCalledWith("history-start-run", "failed");
+      expect(f.orchestrator.snapshot()).toMatchObject({ state: "failed" });
+    } finally {
+      store.close();
+    }
+  });
+
+  it("leaves the minted run recovery-required when its release cannot be proven", async () => {
+    const store = createInMemoryUiStore();
+    try {
+      const history = new CodingRuntimeHistory(store, () => "operator", undefined);
+      vi.spyOn(history, "begin").mockImplementation(() => {
+        throw new TypeError("history failed");
+      });
+      const f = fixture(
+        undefined,
+        undefined,
+        [],
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        () => "history-start-run",
+        undefined,
+        undefined,
+        history,
+      );
+      f.manager.stop.mockResolvedValueOnce({
+        ok: false,
+        failureCode: "runtime-reap-unproven",
+        retryable: false,
+      });
+      await f.orchestrator.start(start);
+      expect(f.manager.start).not.toHaveBeenCalled();
+      expect(f.manager.stop).toHaveBeenCalledWith("history-start-run", "failed");
+      expect(f.orchestrator.snapshot()).toMatchObject({ state: "recovery-required" });
     } finally {
       store.close();
     }
@@ -6909,6 +7473,21 @@ describe("terminal run cause (F9, #3873)", () => {
     expect(facts.envelopeDurationExhausted.mock.invocationCallOrder[0]).toBeLessThan(stopOrder);
   });
 
+  // #3897 review: the runtime ends a turn when a person refuses its native question. The run was
+  // cancelled by that person, not broken: it settles cancelled through stopping, with no failure.
+  it("settles a turn a person ended as cancelled through stopping, never as a runtime failure", async () => {
+    const { f, records } = settledWith("cancelled", undefined);
+    await f.orchestrator.start(start);
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot(RUN_ID)?.state).toBe("cancelled");
+    });
+    expect(f.orchestrator.getSnapshot(RUN_ID)?.failureCode).toBeUndefined();
+    const settled = records.filter((event) => event.op === "coding-runtime.run.settled");
+    expect(settled.map((event) => event.extra?.state)).toEqual(["cancelled"]);
+    expect(settledLine(records)).toMatchObject({ errorKind: "cancelled" });
+    expect(settledLine(records).extra).not.toHaveProperty("failureCode");
+  });
+
   it.each(["succeeded", "cancelled"] as const)(
     "never names a bound or model-call cause for a %s task outcome",
     async (outcome) => {
@@ -7088,6 +7667,64 @@ describe("run effort roll-up (#3873)", () => {
       verificationCount: 1,
       operatorDecisionCount: 1,
       operatorWaitMs: 60_000,
+    };
+    expect(settled.extra).toMatchObject({ runId: "run-1", state: "succeeded", ...rollUp });
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.run.settled.emitted-line",
+        formatActivityLogProofLine(settled),
+      ),
+    ).toMatchObject(rollUp);
+    expect(JSON.stringify(log.records)).not.toContain(start.taskIntent);
+  });
+
+  // #3873, #3897 review: native tools run in the original runtime, outside the facade, and used to
+  // roll up as zero. The runtime's terminal calls reach the same registry once per call identity.
+  it("rolls the native tool calls the runtime executed up onto the settled line, once each", async () => {
+    const clock = controlledClock();
+    const host = createCodingRuntimeRunEffortRegistry({ nowMs: clock.now });
+    const native = createCodingToolNativeSettlementFacet((action, status) => {
+      host.toolSettled("run-1", action, status);
+    });
+    const log = captureActivityLog();
+    const f = fixture(
+      undefined,
+      () => new Date(clock.now()),
+      [],
+      undefined,
+      log.activityLog,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      host.read,
+    );
+    const finish = deferredTask(f);
+    await f.orchestrator.start(start);
+    const call = (callId: string, tool: string, state: "succeeded" | "failed"): void => {
+      native.settled({ messageId: "msg_1", callId, tool, state });
+    };
+    call("call_read_1", "read", "succeeded");
+    call("call_edit_1", "edit", "succeeded");
+    call("call_read_2", "read", "succeeded");
+    // A reconnect reports the same calls again; an edit that failed did not apply.
+    call("call_read_1", "read", "succeeded");
+    call("call_edit_1", "edit", "succeeded");
+    call("call_edit_2", "edit", "failed");
+    clock.advance(10_000);
+    finish("succeeded");
+
+    const settled = await settledRunLine(f, log.records, "succeeded");
+    const rollUp = {
+      toolInvocationCount: 4,
+      workspaceReadCount: 2,
+      editCount: 1,
+      editRefusedCount: 1,
     };
     expect(settled.extra).toMatchObject({ runId: "run-1", state: "succeeded", ...rollUp });
     expect(
@@ -7538,8 +8175,11 @@ describe("verification truth at task settlement", () => {
       expect.objectContaining({
         runId: "run-1",
         taskIntent: VERIFICATION_CONTINUATION_INTENT,
+        // It continues the human's request, so an undo reaches back to it (r4368344091).
+        origin: "verification-continuation",
       }),
     );
+    expect(f.taskDispatcher.dispatch.mock.calls[0]?.[0]).not.toHaveProperty("origin");
     const continued = requireLoggedEvent(
       log.records.find(
         (line) =>
@@ -7665,5 +8305,492 @@ describe("verification truth at task settlement", () => {
     });
     expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1 + VERIFICATION_CONTINUATION_MAX);
     expect(f.manager.stop).toHaveBeenCalledWith("run-1", "failed");
+  });
+});
+
+// S02/S03 (#3904): a start that continues a task asks its run to resume the task's saved session, a
+// start that forks one asks for a fork; whether the history is still replayed as context follows
+// from what the run's runtime reports it actually did.
+describe("native session continuity requested by a start", () => {
+  const PLAN = {
+    boundary: { kind: "turn", ordinal: 1, userTurnCount: 3 },
+    inheritedCount: 2,
+    sourceCount: 6,
+  } as const;
+  const FORKED_TASK = {
+    id: "task-forked",
+    title: "Forked",
+    projectPath: ACTIVE_REPOSITORY_ROOT,
+    modelId: "coding",
+    branch: "keiko/task/one",
+    workspaceId: "workspace-1",
+    taskId: "task-1",
+    status: "active",
+    createdAt: 1,
+    updatedAt: 1,
+  } as const;
+
+  interface World {
+    readonly store: ReturnType<typeof createInMemoryUiStore>;
+    readonly history: CodingRuntimeHistory;
+    /** The history's spied methods, held apart so an assertion never reads one off the instance. */
+    readonly spies: {
+      readonly admits: ReturnType<typeof vi.spyOn>;
+      readonly admitsForkSource: ReturnType<typeof vi.spyOn>;
+      readonly begin: ReturnType<typeof vi.spyOn>;
+      readonly beginFork: ReturnType<typeof vi.spyOn>;
+      readonly initialContext: ReturnType<typeof vi.spyOn>;
+    };
+    readonly continuity: ReturnType<typeof createCodingSessionContinuity>;
+    readonly f: ReturnType<typeof fixture>;
+  }
+
+  function world(
+    options: {
+      admitted?: boolean;
+      plan?: typeof PLAN | undefined;
+      inventory?: readonly WorkspaceInstance[];
+    } = {},
+  ): World {
+    const store = createInMemoryUiStore();
+    const history = new CodingRuntimeHistory(store, () => "operator", undefined);
+    const admits = vi.spyOn(history, "admits").mockReturnValue(options.admitted ?? true);
+    const admitsForkSource = vi
+      .spyOn(history, "admitsForkSource")
+      .mockReturnValue(options.admitted ?? true);
+    vi.spyOn(history, "planFork").mockReturnValue("plan" in options ? options.plan : PLAN);
+    vi.spyOn(history, "previousRunId").mockReturnValue("run-prior");
+    const begin = vi.spyOn(history, "begin").mockImplementation(() => undefined);
+    const beginFork = vi
+      .spyOn(history, "beginFork")
+      .mockReturnValue({ task: FORKED_TASK, ...PLAN });
+    const initialContext = vi.spyOn(history, "initialContext").mockReturnValue("HISTORY-CONTEXT");
+    const continuity = createCodingSessionContinuity({ taskOfRun: () => undefined });
+    const f = fixture(
+      undefined,
+      undefined,
+      [settledRow("run-prior", "2025-12-31T00:00:00.000Z", 3)],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      history,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      continuity,
+      options.inventory,
+    );
+    return {
+      store,
+      history,
+      spies: { admits, admitsForkSource, begin, beginFork, initialContext },
+      continuity,
+      f,
+    };
+  }
+
+  /** The runtime reporting what it did, as the composition does while it prepares the run. */
+  function runtimeSettles(w: World, outcome: Parameters<typeof w.continuity.settle>[1]): void {
+    w.f.manager.start.mockImplementationOnce((request) => {
+      w.continuity.settle(request.runId, outcome);
+      return { ok: true, runId: request.runId, status: "ready" };
+    });
+  }
+
+  const fork = { fork: { taskId: "task-source", beforeMessageId: "message-2" } } as const;
+
+  it("declares a fork of the source task with its boundary and begins the task from a copy of it", async () => {
+    const w = world();
+    vi.spyOn(w.history, "forRun").mockReturnValue(FORKED_TASK);
+
+    const started = await w.f.orchestrator.start({ ...start, ...fork });
+
+    expect(started).toMatchObject({ ok: true });
+    expect(w.spies.admitsForkSource).toHaveBeenCalledWith(
+      "task-source",
+      expect.anything(),
+      undefined,
+    );
+    expect(w.spies.beginFork).toHaveBeenCalledOnce();
+    expect(w.spies.begin).not.toHaveBeenCalled();
+    expect(w.continuity.take("run-2")).toEqual({
+      kind: "fork",
+      sourceTaskId: "task-source",
+      boundary: PLAN.boundary,
+    });
+    // The run belongs to the NEW task, which is the conversation the browser follows.
+    expect(started).toMatchObject({ snapshot: { conversationId: "task-forked" } });
+  });
+
+  // #3903 AC4, #3902 AC3: a task of the workspace the active one was provisioned from.
+  it("names the active workspace's provisioning source to the fork's admission and its start", async () => {
+    const source = {
+      workspaceId: "workspace-0",
+      repositoryId: ACTIVE_REPOSITORY_ID,
+      taskBranch: "dev",
+      baseBranch: "main",
+      lifecycleState: "paused",
+    } as WorkspaceInstance;
+    const target = {
+      workspaceId: "workspace-1",
+      repositoryId: ACTIVE_REPOSITORY_ID,
+      taskBranch: "keiko/task/one",
+      baseBranch: "dev",
+      lifecycleState: "active",
+    } as WorkspaceInstance;
+    const w = world({ inventory: [source, target] });
+    vi.spyOn(w.history, "forRun").mockReturnValue(FORKED_TASK);
+
+    expect(await w.f.orchestrator.start({ ...start, ...fork })).toMatchObject({ ok: true });
+
+    expect(w.spies.admitsForkSource).toHaveBeenCalledWith("task-source", expect.anything(), source);
+    expect(w.spies.beginFork).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      "run-2",
+      source,
+    );
+  });
+
+  it("declares a resume of the task a start continues", async () => {
+    const w = world();
+
+    await w.f.orchestrator.start({ ...start, conversationId: "task-prior" });
+
+    expect(w.spies.begin).toHaveBeenCalledOnce();
+    expect(w.continuity.take("run-2")).toEqual({ kind: "resume", taskId: "task-prior" });
+  });
+
+  it("declares nothing for a start that continues nothing", async () => {
+    const w = world();
+
+    await w.f.orchestrator.start(start);
+
+    expect(w.continuity.take("run-2")).toBeUndefined();
+  });
+
+  it.each([
+    ["a resumed", { kind: "resumed" }],
+    ["a forked", { kind: "forked" }],
+  ] as const)(
+    "does not replay the history as context for %s run: its runtime holds it",
+    async (_name, outcome) => {
+      const w = world();
+      runtimeSettles(w, outcome);
+
+      await w.f.orchestrator.start({ ...start, conversationId: "task-prior" });
+
+      expect(w.spies.initialContext).not.toHaveBeenCalled();
+      expect(
+        firstTaskDispatchRequest(w.f.taskDispatcher.dispatch.mock.calls).initialContext,
+      ).toBeUndefined();
+    },
+  );
+
+  it.each([
+    ["a fresh fallback", { kind: "fresh", reason: "version-changed" }],
+    ["no report at all", undefined],
+  ] as const)("replays the history as context after %s, as before", async (_name, outcome) => {
+    const w = world();
+    if (outcome !== undefined) runtimeSettles(w, outcome);
+
+    await w.f.orchestrator.start({ ...start, conversationId: "task-prior" });
+
+    expect(w.spies.initialContext).toHaveBeenCalledOnce();
+    expect(
+      firstTaskDispatchRequest(w.f.taskDispatcher.dispatch.mock.calls).initialContext,
+    ).toContain("HISTORY-CONTEXT");
+  });
+
+  it("replays the inherited conversation of a fork whose runtime could not fork it", async () => {
+    const w = world();
+    runtimeSettles(w, { kind: "fresh", reason: "no-retained-state" });
+
+    await w.f.orchestrator.start({ ...start, ...fork });
+
+    expect(
+      firstTaskDispatchRequest(w.f.taskDispatcher.dispatch.mock.calls).initialContext,
+    ).toContain("HISTORY-CONTEXT");
+  });
+
+  it.each([
+    ["a source that is not a task of the active workspace", { admitted: false }],
+    ["a fork point that is not one of the source's user turns", { plan: undefined }],
+  ])("refuses a fork of %s before any run exists", async (_name, options) => {
+    const w = world(options);
+
+    const started = await w.f.orchestrator.start({ ...start, ...fork });
+
+    expect(started).toMatchObject({ ok: false, failureCode: "invalid-intent" });
+    expect(w.f.manager.start).not.toHaveBeenCalled();
+    expect(w.spies.beginFork).not.toHaveBeenCalled();
+    expect(w.f.rows.has("run-2")).toBe(false);
+    expect(w.continuity.take("run-2")).toBeUndefined();
+  });
+
+  it("refuses a fork when there is no Coding History to fork", async () => {
+    const f = fixture();
+
+    const started = await f.orchestrator.start({ ...start, ...fork });
+
+    expect(started).toMatchObject({ ok: false });
+    expect(f.manager.start).not.toHaveBeenCalled();
+  });
+
+  it("fails the start when the fork cannot be begun, naming the history", async () => {
+    const w = world();
+    vi.spyOn(w.history, "beginFork").mockImplementation(() => {
+      throw new Error("Coding task cannot be forked.");
+    });
+
+    const started = await w.f.orchestrator.start({ ...start, ...fork });
+
+    // The run exists only to end: it failed before any runtime was asked for and declared nothing.
+    expect(started).toMatchObject({
+      ok: true,
+      snapshot: { state: "failed", failureCode: "runtime-failed" },
+    });
+    expect(w.f.manager.start).not.toHaveBeenCalled();
+    expect(w.continuity.take("run-2")).toBeUndefined();
+  });
+});
+
+// #3904 AC3 (owner decision 2026-10-24): a native run that succeeded with an undoable newest turn
+// keeps its runtime, authority revoked, for the post-completion undo window.
+describe("post-completion undo window", () => {
+  const COUNTS = { fileCount: 1, additions: 2, deletions: 1 } as const;
+
+  interface HeldRun {
+    readonly f: ReturnType<typeof fixture>;
+    readonly log: ReturnType<typeof captureActivityLog>;
+    readonly hold: ReturnType<typeof vi.fn>;
+    readonly revert: ReturnType<typeof vi.fn>;
+    readonly commitRevert: ReturnType<typeof vi.fn>;
+    readonly finish: (outcome: "succeeded" | "failed") => void;
+  }
+
+  function heldRun(changed = 1): HeldRun {
+    const log = captureActivityLog();
+    // Every reading of the clock is one second later, so a rewritten settlement time would show.
+    let tick = 0;
+    const clock = (): Date => new Date(Date.parse("2026-01-01T00:00:00.000Z") + 1_000 * tick++);
+    const f = fixture(undefined, clock, [], undefined, log.activityLog);
+    let finish: (outcome: "succeeded" | "failed") => void = () => undefined;
+    f.taskDispatcher.dispatch.mockResolvedValueOnce({
+      ok: true,
+      completion: new Promise<"succeeded" | "failed">((resolve) => {
+        finish = resolve;
+      }),
+    });
+    const hold = vi.fn((_runId: string, _outcome: "succeeded" | "failed") =>
+      Promise.resolve({ ok: true as const, status: "held" as const }),
+    );
+    // A hold preserves the truthful outcome, like the stop it replaces.
+    const stoppedResult = f.manager.result.getMockImplementation();
+    f.manager.result.mockImplementation((runId) =>
+      hold.mock.calls.length > 0
+        ? {
+            status: hold.mock.calls.at(-1)?.[1] ?? "succeeded",
+            exitCode: null,
+            output: { byteCount: 0, lineCount: 0, sha256: "a".repeat(64), truncated: false },
+            error: { byteCount: 0, lineCount: 0, sha256: "b".repeat(64), truncated: false },
+          }
+        : stoppedResult?.(runId),
+    );
+    const revert = vi.fn(() => Promise.resolve({ ok: true as const, ...COUNTS }));
+    const commitRevert = vi.fn(() => Promise.resolve("committed" as const));
+    Object.assign(f.manager, { hold });
+    Object.assign(f.taskDispatcher, {
+      revert,
+      commitRevert,
+      revertState: vi.fn(() => Promise.resolve({ staged: false, ...COUNTS, fileCount: changed })),
+    });
+    return {
+      f,
+      log,
+      hold,
+      revert,
+      commitRevert,
+      finish: (outcome): void => {
+        finish(outcome);
+      },
+    };
+  }
+
+  async function settled(run: HeldRun, state: "succeeded" | "failed"): Promise<number> {
+    await vi.waitFor(() => {
+      expect(run.f.orchestrator.getSnapshot("run-1")?.state).toBe(state);
+    });
+    return run.f.orchestrator.getSnapshot("run-1")?.revision ?? -1;
+  }
+
+  function windowLines(run: HeldRun): readonly (Record<string, unknown> | undefined)[] {
+    return run.log.records
+      .filter((event) => event.op === "coding-runtime.undo-window")
+      .map((event) => event.extra);
+  }
+
+  it("holds a succeeded run's runtime instead of stopping it and opens the window", async () => {
+    const run = heldRun();
+    await run.f.orchestrator.start(start);
+    run.finish("succeeded");
+    await settled(run, "succeeded");
+
+    expect(run.hold).toHaveBeenCalledWith("run-1", "succeeded");
+    expect(run.f.manager.stop).not.toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(windowLines(run)).toMatchObject([{ runId: "run-1", event: "opened" }]);
+    });
+    await expect(run.f.orchestrator.revertState("run-1")).resolves.toMatchObject(COUNTS);
+  });
+
+  it("undoes the settled turn at its revision, advances that revision and keeps its settlement time", async () => {
+    const run = heldRun();
+    await run.f.orchestrator.start(start);
+    run.finish("succeeded");
+    const revision = await settled(run, "succeeded");
+    const terminalAt = run.f.rows.get("run-1")?.terminalAt;
+    expect(terminalAt).toBeDefined();
+
+    await expect(
+      run.f.orchestrator.submitRevert("run-1", {
+        requestId: "req-undo-1",
+        expectedRevision: revision,
+        action: "undo",
+      }),
+    ).resolves.toMatchObject({ ok: true });
+
+    expect(run.revert).toHaveBeenCalledOnce();
+    expect(run.f.rows.get("run-1")).toMatchObject({
+      state: "succeeded",
+      revision: revision + 1,
+      terminalAt,
+    });
+    // A second request at the revision the undo consumed reverts nothing.
+    await expect(
+      run.f.orchestrator.submitRevert("run-1", {
+        requestId: "req-undo-2",
+        expectedRevision: revision,
+        action: "undo",
+      }),
+    ).resolves.toEqual({ ok: false, failureCode: "invalid-intent" });
+    expect(run.revert).toHaveBeenCalledOnce();
+  });
+
+  // r4368730403: the held runtime is not stopped, so a task-workspace selection was refused with
+  // LOCK_CONTENTION until the next run started; the selection now ends the window first.
+  it("admits a workspace selection by ending the held window, while a live run still blocks it", async () => {
+    const run = heldRun();
+    run.f.manager.health.mockImplementation(() =>
+      run.f.manager.stop.mock.calls.length > 0
+        ? { status: "stopped" }
+        : { status: "ready", activeRunId: "run-1" },
+    );
+    await run.f.orchestrator.start(start);
+
+    await expect(run.f.orchestrator.admitWorkspaceSelection()).resolves.toBe(false);
+    expect(run.f.manager.stop).not.toHaveBeenCalled();
+    run.finish("succeeded");
+    await settled(run, "succeeded");
+    await vi.waitFor(() => {
+      expect(windowLines(run)).toMatchObject([{ event: "opened" }]);
+    });
+    expect(run.f.orchestrator.blocksWorkspaceSelection()).toBe(true);
+
+    await expect(run.f.orchestrator.admitWorkspaceSelection()).resolves.toBe(true);
+    expect(run.commitRevert).toHaveBeenCalledWith("run-1");
+    expect(run.f.manager.stop).toHaveBeenCalledWith("run-1", "succeeded");
+    expect(windowLines(run).at(-1)).toMatchObject({
+      event: "closed",
+      reason: "workspace-selected",
+      stopped: true,
+    });
+    expect(run.f.orchestrator.blocksWorkspaceSelection()).toBe(false);
+    // The prior run's undo ended with its runtime: nothing it holds can touch the next workspace.
+    await expect(run.f.orchestrator.revertState("run-1")).resolves.toBeUndefined();
+  });
+
+  it("closes the window before the next run starts: commits a staged undo, then stops the held runtime", async () => {
+    const run = heldRun();
+    await run.f.orchestrator.start(start);
+    run.finish("succeeded");
+    await settled(run, "succeeded");
+
+    await run.f.orchestrator.start(start);
+
+    expect(run.commitRevert).toHaveBeenCalledWith("run-1");
+    expect(run.f.manager.stop).toHaveBeenCalledWith("run-1", "succeeded");
+    const stopOrder = run.f.manager.stop.mock.invocationCallOrder[0] ?? 0;
+    const startOrder = run.f.manager.start.mock.invocationCallOrder[1] ?? 0;
+    expect(stopOrder).toBeLessThan(startOrder);
+    expect(windowLines(run).at(-1)).toMatchObject({
+      event: "closed",
+      reason: "next-run",
+      stagedRevert: "committed",
+      stopped: true,
+    });
+    await expect(run.f.orchestrator.revertState("run-1")).resolves.toBeUndefined();
+  });
+
+  it("stops the runtime as before when the settled turn changed nothing", async () => {
+    const run = heldRun(0);
+    await run.f.orchestrator.start(start);
+    run.finish("succeeded");
+    await settled(run, "succeeded");
+
+    expect(run.hold).not.toHaveBeenCalled();
+    expect(run.f.manager.stop).toHaveBeenCalledWith("run-1", "succeeded");
+    expect(windowLines(run)).toEqual([]);
+  });
+
+  it("stops a failed runtime when it offers no usable snapshot", async () => {
+    const run = heldRun(0);
+    await run.f.orchestrator.start(start);
+    run.finish("failed");
+    await settled(run, "failed");
+
+    expect(run.hold).not.toHaveBeenCalled();
+    expect(run.f.manager.stop).toHaveBeenCalledWith("run-1", "failed");
+  });
+
+  it("retains usable native snapshots after failure without changing the failed outcome", async () => {
+    const run = heldRun();
+    await run.f.orchestrator.start(start);
+    run.finish("failed");
+    const revision = await settled(run, "failed");
+    expect(run.hold).toHaveBeenCalledWith("run-1", "failed");
+    expect(run.f.manager.stop).not.toHaveBeenCalled();
+    await expect(run.f.orchestrator.revertState("run-1")).resolves.toMatchObject(COUNTS);
+    const terminalAt = run.f.rows.get("run-1")?.terminalAt;
+    for (const [index, action] of ["undo", "restore"].entries()) {
+      await expect(
+        run.f.orchestrator.submitRevert("run-1", {
+          requestId: `req-failed-${action}`,
+          expectedRevision: revision + index,
+          action,
+        }),
+      ).resolves.toMatchObject({ ok: true });
+      expect(run.f.rows.get("run-1")).toMatchObject({ state: "failed", terminalAt });
+    }
+    await run.f.orchestrator.shutdown();
+    await expect(run.f.orchestrator.revertState("run-1")).resolves.toBeUndefined();
+  });
+
+  it("closes the window at shutdown", async () => {
+    const run = heldRun();
+    await run.f.orchestrator.start(start);
+    run.finish("succeeded");
+    await settled(run, "succeeded");
+
+    await run.f.orchestrator.shutdown();
+
+    expect(run.f.manager.stop).toHaveBeenCalledWith("run-1", "succeeded");
+    expect(windowLines(run).at(-1)).toMatchObject({ event: "closed", reason: "shutdown" });
   });
 });

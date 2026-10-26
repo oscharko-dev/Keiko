@@ -1083,6 +1083,90 @@ describe("productive runtime status/diff/stage lane", () => {
     expect(persisted).toMatchObject({ phase: "stage-propose", state: "ready", pathCount: 2 });
   });
 
+  // #3902 AC2 (PR #4064 review 4372101954): an unstage proposal carries the head, base and staged tree
+  // it reviewed to the index effect. A change that lands after the service's own check, while the
+  // effect runs, is never accepted as the effect's new snapshot: in every mode, after an approval.
+  it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
+    "binds the unstage effect to the reviewed head, base and staged tree in %s",
+    async (mode) => {
+      // The clock is read again inside the governed mutation, after the service's own drift check
+      // and before the index effect; the head moves exactly there, as in the review's scheduling hook.
+      let index: string | undefined;
+      const gitService = new RuntimeGitService({
+        ...options,
+        execution: {
+          ...options.execution,
+          now: (): number => {
+            if (index === undefined && new Error().stack?.includes("runGitMutation") === true) {
+              const moved = git([
+                "commit-tree",
+                "--no-gpg-sign",
+                "-p",
+                "HEAD",
+                "-m",
+                "x",
+                "HEAD^{tree}",
+              ]);
+              git(["update-ref", "refs/heads/codex/task", moved]);
+              index = git(["ls-files", "--stage"]);
+            }
+            return now;
+          },
+        },
+        mode: (): typeof mode => mode,
+        invalidateVerification: (): void => {
+          service.invalidate();
+        },
+      });
+      const request = {
+        action: "git",
+        idempotencyKey: `unstage-${mode}`,
+        operation: "unstage",
+        paths: ["code.js"],
+      } as const;
+      const proposed = await gitService.execute(
+        { ...request, actionId: "unstage-propose", phase: "propose" },
+        { check: () => true },
+      );
+      if (proposed.kind !== "unstage") throw new Error("unstage proposal unavailable");
+      const proposal = gitService.review(proposed.proposalId);
+      expect(proposal?.command).toMatchObject({
+        kind: "unstage",
+        pathspecs: ["code.js"],
+        verified: {
+          headSha: proposal?.binding.headSha,
+          baseSha: proposal?.binding.baseSha,
+          stagedTreeDigest: proposal?.binding.stagedTreeDigest,
+          branchName: "codex/task",
+          baseRef: "dev",
+        },
+      });
+      if (mode === "governed-assist")
+        expect(gitService.issueApproval(proposed.proposalId)).toBeDefined();
+      const lease =
+        mode === "governed-assist" ? gitService.consumeApproval(proposed.proposalId) : undefined;
+      const result = await gitService.execute(
+        {
+          ...request,
+          actionId: "unstage-execute",
+          phase: "execute",
+          proposalId: proposed.proposalId,
+        },
+        {
+          check: (): boolean => true,
+          ...(lease === undefined ? {} : { stageApproval: lease }),
+        },
+      );
+      expect(index).toBeDefined();
+      // Never a success: the effect refused, and the governed mutation reports the moved head.
+      expect(result).toMatchObject({ kind: "unstage" });
+      expect(["failed", "recovery-required"]).toContain(
+        result.kind === "unstage" ? result.status : undefined,
+      );
+      expect(git(["ls-files", "--stage"])).toBe(index);
+    },
+  );
+
   it("does not admit missing paths as already-staged no-ops", async () => {
     const index = git(["write-tree"]);
     const gitService = new RuntimeGitService({

@@ -38,6 +38,11 @@ export {
   REDACTION_PLACEHOLDER,
   redactSecretLiterals,
 } from "./redaction.js";
+export {
+  createSecretSpellingStreamRedactor,
+  SecretSpellingOverflowError,
+  type SecretSpellingStreamRedactor,
+} from "./redaction-spelling.js";
 
 export { assertValidRunId } from "./runid.js";
 

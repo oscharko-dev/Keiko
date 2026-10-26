@@ -276,7 +276,8 @@ function copyExternalSurface(record, destination, relativePath = "") {
 
 export function workspacePackInvocation(npmExecutable, platform = process.platform) {
   return {
-    args: ["pack", "--silent", "--ignore-scripts"],
+    // The outer npm lifecycle must not redirect or dry-run this required private archive.
+    args: ["pack", "--silent", "--ignore-scripts", "--pack-destination", ".", "--dry-run=false"],
     command: shellCommandForTrustedExecutable(npmExecutable, platform),
     // SECURITY-SHELL-OK: Windows requires a shell for the trusted npm.cmd executable; argv is static.
     shell: platform === "win32",

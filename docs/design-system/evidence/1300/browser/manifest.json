@@ -65,11 +65,11 @@
     },
     {
       "path": "package-lock.json",
-      "sha256": "7757795074efefa786302d5386dba831ba5aa3482ffbf32d2d13cb850f90f99d"
+      "sha256": "713ae5d2354b61a496b2e84c070d9d98ef44af1921f8a83323d4ed32ef067f18"
     },
     {
       "path": "package.json",
-      "sha256": "27b01b39aa41194bbe34ce1d7debeff253cb11a61687b18d234f960f0eca74d3"
+      "sha256": "da47e4a9ed78a7e2d391acd081fbb342682915e7ad09b20b9914eb9c6c9485c1"
     },
     {
       "path": "packages/keiko-ui/design-tokens.mjs",
@@ -81,7 +81,7 @@
     },
     {
       "path": "packages/keiko-ui/package.json",
-      "sha256": "eaae166c711d047279abd27afea691e348ee8beea7d063f7545bc9ce0b33ea9e"
+      "sha256": "5ac600f24ea787409869e089a69090db4b90a81d944edd9e8808717ed65a58b5"
     },
     {
       "path": "packages/keiko-ui/read-stylesheet.mjs",
@@ -121,7 +121,7 @@
     }
   ],
   "postCssSha256": "6c8f21880aea2f6ab15c371bd7541e5fd3494f2bdfe37408153d9e4691663562",
-  "renderedCssBundleSha256": "3699fef885a25dcd2af730cea57fc187c81bbc48a5c1c46c1b233b9b2d54b2da",
+  "renderedCssBundleSha256": "d5c2d9c84561ff371aad668b24a431f92089bf1e699f8f34bc9f05a7e7dd07c3",
   "appPath": "packages/keiko-ui/out",
   "route": "/",
   "shotCount": 108,

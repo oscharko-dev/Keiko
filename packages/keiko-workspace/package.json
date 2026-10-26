@@ -43,6 +43,10 @@
       "types": "./dist/codeIntelligenceSurface.d.ts",
       "import": "./dist/codeIntelligenceSurface.js"
     },
+    "./source-redaction": {
+      "types": "./dist/sourceRedaction.d.ts",
+      "default": "./dist/sourceRedaction.js"
+    },
     "./coding-repository-search": {
       "types": "./dist/codingRepositorySearch.d.ts",
       "default": "./dist/codingRepositorySearch.js"

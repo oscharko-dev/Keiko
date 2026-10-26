@@ -1562,6 +1562,63 @@ function installedTargetFixture(): string {
   return root;
 }
 
+// The governed verifier's container backend on macOS is Linux, while the native coding runtime's
+// shell runs on the host and uses the same installed tree: a Linux install replaced the host's
+// native bindings and broke every later native npm/Vitest command (PR #4064 review, 6390703192).
+describe("dependency bootstrap for a workspace shared with a host-native runtime", () => {
+  const DARWIN = { os: "darwin", cpu: "arm64" } as const;
+
+  it("refuses an install for another platform before npm can rewrite the shared tree", async () => {
+    const root = installedTargetFixture();
+    const rec = recordingSpawn();
+    const result = await runDependencyBootstrap(
+      { kind: "install", lockfile: "absent" },
+      {
+        ...bootstrapDepsFor(root, rec.fn),
+        dependencyInstallTarget: installTarget(),
+        sharedHostPlatform: DARWIN,
+      },
+    );
+    expect(result.summary).toMatchObject({ state: "refused" });
+    expect(result.summary.detail).toContain("native shell");
+    expect(rec.calls()).toEqual([]);
+  });
+
+  it.each([
+    ["the host's own platform", DARWIN, installTarget({ os: "darwin", libc: "none" })],
+    ["no host-native consumer", undefined, installTarget()],
+  ] as const)("still installs for %s", async (_name, host, target) => {
+    const root = installedTargetFixture();
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { exitCode: 0 });
+    const result = await runDependencyBootstrap(
+      { kind: "install", lockfile: "absent" },
+      {
+        ...bootstrapDepsFor(root, rec.fn),
+        dependencyInstallTarget: target,
+        ...(host === undefined ? {} : { sharedHostPlatform: host }),
+      },
+    );
+    expect(result.summary.state).toBe("installed");
+    expect(rec.calls()).toHaveLength(1);
+  });
+
+  it("refuses a CPU mismatch on the same operating system", async () => {
+    const root = installedTargetFixture();
+    const rec = recordingSpawn();
+    const result = await runDependencyBootstrap(
+      { kind: "install", lockfile: "absent" },
+      {
+        ...bootstrapDepsFor(root, rec.fn),
+        dependencyInstallTarget: installTarget({ os: "darwin", cpu: "x64", libc: "none" }),
+        sharedHostPlatform: DARWIN,
+      },
+    );
+    expect(result.summary.state).toBe("refused");
+    expect(rec.calls()).toEqual([]);
+  });
+});
+
 describe("dependency bootstrap execution target", () => {
   it("selects optional native packages for the measured execution platform", async () => {
     const root = installedTargetFixture();

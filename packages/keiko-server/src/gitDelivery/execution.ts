@@ -522,6 +522,22 @@ async function restampManagedTaskWorkspaceHead(
   // `succeeded` is the whole gate: a dispatch the authority guard refused is recorded as
   // `blocked`/`authority-denied` by `authorityDeniedGitDeliveryLifecycle`, so it can never reach here.
   if (command.kind !== "commit" || lifecycle.outcome.status !== "succeeded") return;
+  await recordKeikoWrittenHead(deps, workspace, seams, logging);
+}
+
+/**
+ * Records the head a Git effect KEIKO ITSELF just performed and that succeeded has written as the
+ * managed workspace's verified head: a governed commit above, and the fast-forward a governed pull
+ * of the run's own branch moves it to (runtimeGitService.ts, #3902 AC2). Like the commit's, a
+ * fast-forward Keiko made is not drift: it is a head Keiko wrote, after the run's authority was
+ * proven immediately before it. Every bound and failure path below applies unchanged.
+ */
+export async function recordKeikoWrittenHead(
+  deps: GitDeliveryMutationDeps,
+  workspace: WorkspaceInfo,
+  seams: GitDeliveryExecutionSeams,
+  logging: WorkspaceRootAccessDenialLogging,
+): Promise<void> {
   const managedWorktreePath = managedTaskWorktreeRoot(deps, workspace, logging);
   if (managedWorktreePath === undefined) return;
   const deadline = restampDeadline(

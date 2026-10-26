@@ -3,7 +3,13 @@ import type { CodingToolReplacementChangeset } from "./codingToolReplacementEdit
 import type { VerifiedCommitBlockingPaths } from "../gitDelivery/verifiedCommitTypes.js";
 import type { CodingRuntimeDeliveryResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery";
 import type { CodingRuntimeCiResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-ci";
-import { parseRuntimeGitRequest, type RuntimeGitRequest } from "./codingRuntimeGitIpc.js";
+import {
+  isRuntimeGitSyncOperation,
+  parseRuntimeGitRequest,
+  type RuntimeGitRequest,
+  type RuntimeGitSyncOperation,
+} from "./codingRuntimeGitIpc.js";
+import { gitOperationRequirement } from "./gitOperationRequirements.js";
 import {
   captureCodingRepositoryRequest,
   isValidCodingRepositoryGlob,
@@ -257,8 +263,13 @@ export function codingToolRequiredActionClasses(
   if (request.action !== "git") return Object.freeze([...STATIC_REQUIRED_CLASSES[request.action]]);
   if (request.operation === "ci")
     return Object.freeze(["workspace-read", "connector-access", "network-egress"]);
+  // #3902 AC2: the Git sync owner's own requirement for the operation (gitOperationRequirements.ts).
+  if (isRuntimeGitSyncOperation(request.operation))
+    return Object.freeze([...gitOperationRequirement(request.operation).actionClasses]);
   const effect =
-    request.operation === "write" || request.operation === "stage"
+    request.operation === "write" ||
+    request.operation === "stage" ||
+    request.operation === "unstage"
       ? "workspace-write"
       : "workspace-read";
   return Object.freeze([effect]);
@@ -898,12 +909,35 @@ function gitRequest(value: Record<string, unknown>): CodingToolActionRequest | u
   const identity = requestIdentity(value);
   if (identity === undefined) return undefined;
   if (value.operation === "ci") return ciRequest(value, identity);
+  if (isRuntimeGitSyncOperation(value.operation))
+    return syncRequest(value, identity, value.operation);
   const operation = value.operation;
   const simple = operation === "read" || operation === "write";
   if (!simple) return parseRuntimeGitRequest(value, identity);
   return hasExactKeys(value, ["action", "actionId", "idempotencyKey", "operation"])
     ? { ...identity, action: "git", operation }
     : undefined;
+}
+
+// #3902 AC2: a fetch or fast-forward pull carries no argument of its own; like a CI observation it
+// may redeem the operator's approval of this exact call.
+function syncRequest(
+  value: Record<string, unknown>,
+  identity: CodingToolRequestIdentity,
+  operation: RuntimeGitSyncOperation,
+): CodingToolActionRequest | undefined {
+  const approvalProof = optionalApprovalProof(value);
+  if (
+    approvalProof.kind === "invalid" ||
+    !hasAllowedKeys(value, ["action", "actionId", "idempotencyKey", "operation", "approvalProof"])
+  )
+    return undefined;
+  return {
+    ...identity,
+    action: "git",
+    operation,
+    ...(approvalProof.kind === "present" ? { approvalProof: approvalProof.proof } : {}),
+  };
 }
 
 // #3388: the CI-observation tool's one optional argument. `forceFresh` stays a plain boolean

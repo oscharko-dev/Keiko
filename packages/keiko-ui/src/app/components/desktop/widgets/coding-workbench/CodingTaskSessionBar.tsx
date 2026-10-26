@@ -4,13 +4,37 @@ import type { CodingTaskSession } from "./useCodingTaskSession";
 import { transcriptShows, type ShownRun } from "./codingWorkbenchRestoredRun";
 import { useCodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import { SafeMarkdownBoundary } from "../../SafeMarkdown";
+import { CODING_WORKBENCH_RICH_CONTENT } from "./CodingWorkbenchRichContent";
 import { Icons } from "../../Icons";
 import styles from "./CodingHistory.module.css";
+
+const BranchIcon = Icons.branch;
 
 interface SessionBarProps {
   readonly session: CodingTaskSession;
   readonly active: boolean;
   readonly onHistory: () => void;
+}
+
+// #3903 AC4: continue the task as a fork in a workspace provisioned from its own.
+function continueActions(
+  session: CodingTaskSession,
+  locked: boolean,
+  t: ReturnType<typeof useCodingWorkbenchTranslate>,
+): readonly SessionAction[] {
+  return session.forkTargets.map((target) => ({
+    label: t("codingWorkbench.history.continueIn", { workspace: target.name }),
+    icon: Icons.branch,
+    run: (): void => void session.continueIn(target),
+    disabled: locked || session.detail === null || session.fork !== null,
+  }));
+}
+
+interface SessionAction {
+  readonly label: string;
+  readonly icon: (typeof Icons)[keyof typeof Icons];
+  readonly run: () => void;
+  readonly disabled: boolean;
 }
 
 function TaskSessionActions({ session, active, onHistory }: SessionBarProps): ReactNode {
@@ -23,6 +47,15 @@ function TaskSessionActions({ session, active, onHistory }: SessionBarProps): Re
       run: onHistory,
       disabled: false,
     },
+    {
+      label: t("codingWorkbench.history.fork"),
+      icon: Icons.branch,
+      run: (): void => {
+        session.beginFork();
+      },
+      disabled: locked || session.detail === null || session.fork !== null,
+    },
+    ...continueActions(session, locked, t),
     {
       label: t("codingWorkbench.history.finish"),
       icon: Icons.check,
@@ -81,9 +114,12 @@ export function CodingTaskSessionBar(props: SessionBarProps): ReactNode {
 export function CodingTaskTranscript({
   session,
   shownRun,
+  onFork,
 }: {
   readonly session: CodingTaskSession;
   readonly shownRun: ShownRun | undefined;
+  /** Forks the task just before a user message; absent while a run is active. */
+  readonly onFork?: ((messageId: string) => void) | undefined;
 }): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const messages =
@@ -101,7 +137,23 @@ export function CodingTaskTranscript({
                 : "codingWorkbench.history.agent",
             )}
           </strong>
-          <SafeMarkdownBoundary source={message.content} diagnosticMessageId={message.id} />
+          <SafeMarkdownBoundary
+            source={message.content}
+            diagnosticMessageId={message.id}
+            richContent={message.role === "user" ? undefined : CODING_WORKBENCH_RICH_CONTENT}
+          />
+          {message.role === "user" && onFork !== undefined ? (
+            <button
+              type="button"
+              className={styles.cmpMessageFork}
+              onClick={(): void => {
+                onFork(message.id);
+              }}
+            >
+              <BranchIcon />
+              {t("codingWorkbench.history.forkFrom")}
+            </button>
+          ) : null}
         </article>
       ))}
     </section>

@@ -75,6 +75,7 @@ production ZIP contains:
 - the exact supported Node.js runtime;
 - the exact review-approved OpenCode payload and its redistribution evidence;
 - the secure workspace-read helper;
+- the pinned ripgrep executable and its MIT license, which the OpenCode search tools run;
 - the target's complete runtime supervision backend;
 - a platform-anchored activation attestation; and
 - on macOS, the Endpoint Security System Extension and its activation manager.
@@ -99,6 +100,29 @@ environment and is verified offline against Sigstore's embedded public trust roo
 repository, workflow, source commit, target, backend, and component digests on a fresh runner and at
 point of use. Linux has no evaluation or unconfined fallback: missing namespace support or any stale,
 partial, differently targeted, or differently attested evidence keeps the runtime unavailable.
+
+**Amended 2026-10-23 — pinned ripgrep, never a run-time download (#3897).** OpenCode's `glob` and
+`grep` tools and its file finder run ripgrep, which the runtime would otherwise resolve from `PATH`
+and then download from GitHub on first use. The runtime lane is loopback-only below Full access and
+customers sit behind firewalls, so an unprovisioned payload would lose search silently. Every
+production ZIP therefore ships the identical upstream ripgrep 15.1.0 at `runtime/native/rg`
+(`rg.exe` on Windows) with its MIT text at `runtime/licenses/ripgrep/LICENSE-MIT`. The approval table
+(`packages/keiko-server/src/coding-runtime/ripgrepRuntime.ts`) pins, per target, the upstream archive
+URL and SHA-256, the extracted executable's SHA-256 and the license digest, exactly as ADR-0164 D3
+pins USearch; `npm run provision:ripgrep` fetches and verifies it, and portable staging verifies it
+again. The manifest records it in a closed `nativeTools` section (never a second `nativeAddons`
+entry, which every signing and qualification consumer pins to exactly one), duplicated in the
+activation manifest and `reviewedBinding`. Platform signing covers the executable with the rest of
+the payload and rebinds `shippedSha256` while `unsignedSha256` keeps the upstream identity. A staged
+payload is smoked by actually running the executable outside `PATH` and the user's configuration.
+Launch verifies the executable against the same pinned digest (or the activation-bound signed one)
+through the same verifier before the runtime may use it, and puts only that verified directory on
+the child `PATH` (and, for the native macOS profile, on the matching Seatbelt read allowlist). A
+ripgrep that does not verify never blocks the run: search is degraded, the closed reason is recorded
+by `coding-runtime.ripgrep.resolved`, and no path is logged. The npm runtime packages of ADR-0140 D2a
+ship the same unmodified executable at the same paths (amended 2026-10-24), verified against the
+same pinned digest at every launch. Details:
+[`docs/qa/ripgrep-runtime-evidence.md`](../qa/ripgrep-runtime-evidence.md).
 
 There are exactly three pre-signing lanes, and a lane is a declaration the artifact carries in its
 own manifest, never an argument a caller supplies:
@@ -301,6 +325,16 @@ discovery rejects zero, multiple, unapproved, stale, or tampered payloads. OpenC
 provider credential and no unrestricted provider endpoint. All model traffic is capability-bound
 to Keiko's loopback Model Gateway; the gateway remains the only package permitted to load provider
 SDKs and credentials.
+
+OpenCode knows exactly one provider, the gateway-bound `keiko-runtime`, and one model. Which
+upstream serves it (LiteLLM, Azure or a later one) is the gateway's concern and invisible to the
+runtime. Because the pinned 2.1.4 runtime otherwise lists OpenCode's hosted free models and
+discovers local model servers such as Ollama on their default loopback ports, every launch binds
+the producer's own provider policy (`provider.use` denied for `*`, allowed for `keiko-runtime`) on
+the server-owned configuration layer and sets `OPENCODE_DISABLE_FREE_MODELS` and
+`OPENCODE_DISABLE_MODELS_FETCH`. The runtime's catalog then lists the gateway model alone (real
+binary under the Seatbelt profile), and `coding-runtime.provider-policy.bound` records the binding
+of every prepared run.
 
 Codex subscription activation remains disabled for this release. No missing OpenCode prerequisite
 falls back to Codex, a globally installed executable, `PATH`, npm, a network download, or a
@@ -573,3 +607,6 @@ done exactly that; an evaluation runtime is not such a fact and stays in the det
 | 1.3     | 2026-09-10 | Closed the Linux launch-path binding for Issue #3451: receipt schema v2 and production discovery now bind and rehash the launcher, Node.js executable, and USearch addon in addition to the existing activation, helper, and sidecar evidence. |
 | 1.4     | 2026-09-10 | Allowed stable Windows and macOS payloads to use ADR-0121 D7 platform-neutral release trust without claiming native qualification; dispatch artifacts remain unpublishable. |
 | 1.5     | 2026-09-14 | Recorded the ADR-0177 rehearsal identity for the Linux receipt: `@refs/heads/dev` signatures verify only in the Linux signing tool's rehearsal lane, never in production discovery. |
+| 1.6     | 2026-10-23 | Pinned OpenCode 2.1.4 and introduced the one version boundary (`opencodeRuntimeVersions.ts`, #3908): every producer-derived identity (tag, commit, raw schema digest, structural protocol-surface digest) is resolved from the discovered runtime's approved version, the already published npm runtime packages keep their own previous identity until packages built from the current pin replace them, and D6 continues to forbid any fallback outside the approved set. |
+| 1.7     | 2026-10-23 | Shipped the pinned ripgrep 15.1.0 executable and MIT license in every production ZIP (`nativeTools`, `runtime/native/rg`), so the OpenCode search tools never download at run time (#3897). |
+| 1.8     | 2026-10-24 | D6: the runtime knows one provider. Every launch binds the producer's gateway-only provider policy on the server-owned layer and disables OpenCode's hosted free models and the models.dev catalog fetch, after the original 2.1.4 executable was shown to list free models and a local Ollama beside the gateway model (#3905, parity row S11). |

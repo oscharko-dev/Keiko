@@ -2230,6 +2230,25 @@ export function isCodingWorkbenchProbePending(config: GatewayConfig, modelId: st
   );
 }
 
+/**
+ * Whether the server is renewing this chat model's tool-call proof right now (#3905): the proof
+ * lapsed or was withdrawn, so the model still claims tool calling and awaits a new probe, and the
+ * automatic Workbench verification of it is open. This is what the models wire reports as
+ * `toolCallingRenewalPending`, so a browser can keep a human choice pending instead of replacing it.
+ * It is false for a model the server never renews (no LiteLLM token counter), a refuted or never
+ * concluded proof, a model nobody proved yet, and a model that is already eligible.
+ */
+export function isToolCallingRenewalPending(config: GatewayConfig, modelId: string): boolean {
+  const model = listConfiguredCapabilities(config).find((candidate) => candidate.id === modelId);
+  const provider = config.providers.find((candidate) => candidate.modelId === modelId);
+  return (
+    model !== undefined &&
+    provider?.tokenCounter === "litellm" &&
+    codingWorkbenchModelEligibility(model) === "tool-calling-unverified" &&
+    isCodingWorkbenchProbePending(config, modelId)
+  );
+}
+
 /** Whether any model the Workbench could still elect has its verification open. */
 export function isAnyCodingWorkbenchProbePending(config: GatewayConfig): boolean {
   return config.providers.some((provider) =>

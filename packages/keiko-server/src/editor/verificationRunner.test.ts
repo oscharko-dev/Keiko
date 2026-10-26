@@ -1028,6 +1028,33 @@ describe("VerificationRunnerManager — runToReport's dependency-bootstrap and s
     expect(failureOutput).toEqual(outputs);
   });
 
+  it("hands a native run's host platform to the execute port, and none for a run without one", async () => {
+    const observed: unknown[] = [];
+    const port: VerificationExecutePort = (args) => {
+      observed.push(args.sharedHostPlatform);
+      return Promise.resolve({
+        report: report(["targeted-test"]),
+        probe: { available: true, backend: "test-backend" },
+      });
+    };
+    const manager = makeManager({ execute: port });
+    const host = { os: "darwin", cpu: "arm64" } as const;
+
+    await manager.runToReport(
+      {
+        ...input({ kinds: ["targeted-test"], targetPath: "src/a.test.ts" }),
+        sharedHostPlatform: host,
+      },
+      new AbortController().signal,
+    );
+    await manager.runToReport(
+      input({ kinds: ["targeted-test"], targetPath: "src/a.test.ts" }),
+      new AbortController().signal,
+    );
+
+    expect(observed).toEqual([host, undefined]);
+  });
+
   it("caps failureOutput at 8 entries even when the port pushes more through onStepOutput", async () => {
     // MAX_FAILURE_OUTPUTS (verificationRunner.ts) is 8 and module-private; pinned by its observable
     // effect rather than by importing it.

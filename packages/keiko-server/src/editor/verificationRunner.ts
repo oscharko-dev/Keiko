@@ -259,6 +259,8 @@ export interface VerificationRunInput {
   readonly requestId?: string | undefined;
   // Server-minted request correlation. Never accepted from the parsed client payload.
   readonly correlationId?: string | undefined;
+  // Server-owned: the native coding runtime's platform when it shares the workspace's dependencies.
+  readonly sharedHostPlatform?: ExecuteVerificationArgs["sharedHostPlatform"];
 }
 
 export interface VerificationRunStart {
@@ -548,7 +550,12 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     this.emitRunStarted(runId, input, startedAtMs);
     this.emitStepsStarted(runId, plan);
     try {
-      const { execution, failureOutput } = await this.executeAgentPlan(plan, resolved, entry);
+      const { execution, failureOutput } = await this.executeAgentPlan(
+        plan,
+        resolved,
+        entry,
+        input.sharedHostPlatform,
+      );
       const { report } = execution;
       this.recordDependencyBootstrap(entry.correlationId, report);
       this.emitStepCompletions(runId, report);
@@ -603,10 +610,12 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     plan: VerificationPlan,
     resolved: ResolvedVerificationWorkspace,
     entry: InFlightRun,
+    sharedHostPlatform: VerificationRunInput["sharedHostPlatform"],
   ): Promise<AgentExecution> {
     const failureOutput: VerificationStepOutput[] = [];
     const execution = await this.executePort({
       ...this.buildExecuteArgs(plan, resolved, entry),
+      ...(sharedHostPlatform === undefined ? {} : { sharedHostPlatform }),
       onStepOutput: (output): void => {
         if (failureOutput.length < MAX_FAILURE_OUTPUTS) failureOutput.push(output);
       },

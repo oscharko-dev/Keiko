@@ -16,6 +16,7 @@ import type {
   OpenCodeProviderTokenUsage,
   OpenCodeReconciliationEvent,
 } from "./opencodeReconciler.js";
+import { isAdmissibleOpenCodeToolName, openCodeToolLogLabel } from "./opencodeNativeTools.js";
 import {
   OPENCODE_GOVERNED_ACTION_PERMISSION,
   OPENCODE_TOOL_SOURCE_DEFINITIONS,
@@ -59,7 +60,11 @@ export interface OpenCodeSseDecoder {
 
 export interface OpenCodeLiveControl {
   readonly sessionId: string;
-  readonly state: "activity" | "terminal";
+  /**
+   * `interrupted` is the V2 runtime ending an execution at a human's refusal (a dismissed question):
+   * it is not a verdict, and no idle message follows it.
+   */
+  readonly state: "activity" | "interrupted" | "terminal";
 }
 
 interface NormalizedSseData extends Record<string, unknown> {
@@ -150,13 +155,36 @@ export function isOpenCodeFacadeDispatchedTool(tool: string): boolean {
   return APPROVED_PRODUCTIVE_TOOLS.has(tool);
 }
 
-const APPROVED_MODEL_VISIBLE_RUNTIME_TOOLS = new Set<string>([
+/**
+ * The plan surfaces (#2480): a completed carrier part projects as a governed plan snapshot and
+ * none of them ever surfaces as productive tool activity, in any tool profile. OpenCode 2.1.4
+ * registers a single plan tool whose id and permission action are `todowrite`, only under its
+ * opt-in experimental switch (`opencodeNativeQualification.real.test.ts`); the shorter name an
+ * earlier capture recorded stays admitted (#3897).
+ */
+export const OPENCODE_PLAN_CARRIER_TOOLS: ReadonlySet<string> = new Set(["todowrite", "todo"]);
+export const OPENCODE_PLAN_SURFACE_TOOLS: ReadonlySet<string> = new Set([
+  ...OPENCODE_PLAN_CARRIER_TOOLS,
+  "todoread",
+]);
+
+const APPROVED_MAPPED_RUNTIME_TOOLS = new Set<string>([
   "question",
   // #2480: plan carrier only — its admitted parts feed the governed plan projection and it
   // never reaches the productive tool facade.
   "todowrite",
   ...APPROVED_PRODUCTIVE_TOOLS,
 ]);
+
+/**
+ * A tool name the runtime may report in an event or history part: one of the mapped `keiko_*`
+ * tools, or, in the native profile (#3897), any admissible OpenCode tool id (native, MCP or
+ * plugin). The shape bound keeps the vocabulary closed enough for body-free evidence; the
+ * body-free label of an extension tool is `extension` (`openCodeToolLogLabel`).
+ */
+function isApprovedRuntimeTool(value: unknown): value is string {
+  return APPROVED_MAPPED_RUNTIME_TOOLS.has(value as string) || isAdmissibleOpenCodeToolName(value);
+}
 
 export function validateOpenCodeHealth(value: unknown): OpenCodeProtocolResult<OpenCodeHealth> {
   return exactRecord(value, ["healthy", "version"]) &&
@@ -239,8 +267,7 @@ function frameDataFailure(data: NormalizedSseData): OpenCodeProtocolFailure | un
     return "frame-invalid";
   if (
     data.type === "session.next.tool.called" &&
-    (!nonEmpty(data.properties.tool) ||
-      !APPROVED_MODEL_VISIBLE_RUNTIME_TOOLS.has(data.properties.tool))
+    (!nonEmpty(data.properties.tool) || !isApprovedRuntimeTool(data.properties.tool))
   )
     return "event-unknown";
   return undefined;
@@ -375,11 +402,20 @@ function projectGovernedPermissionByKind(
   if (
     metadata.actionKind === "verification-command" ||
     metadata.actionKind === "ci-observe" ||
-    metadata.actionKind === "connector-read"
+    metadata.actionKind === "connector-read" ||
+    metadata.actionKind === "git-fetch" ||
+    metadata.actionKind === "git-pull"
   ) {
     return projectGovernedCommandPermission(properties, metadata);
   }
   return undefined;
+}
+
+// The risk a governed command ask states (supervisedCodingPolicy.ts states the same): a fetch moves
+// only remote-tracking refs, a pull the worktree (#3902 AC2); the bounded commands are low.
+function governedCommandRisk(actionKind: string): string {
+  if (actionKind === "git-fetch") return "medium";
+  return actionKind === "git-pull" ? "high" : "low";
 }
 
 function projectGovernedEditPermission(
@@ -430,7 +466,7 @@ function projectGovernedCommandPermission(
       "command-execution",
       "command-execution",
       actionKind,
-      "low",
+      governedCommandRisk(actionKind),
     ) ||
     !validCommandApproval(properties, metadata)
   ) {
@@ -465,6 +501,9 @@ function validCommandApproval(
 function validGovernedCommandTarget(actionKind: unknown, commandLabel: string): boolean {
   if (actionKind === "verification-command") return GOVERNED_VERIFIERS.has(commandLabel);
   if (actionKind === "ci-observe") return commandLabel === "ci";
+  // #3902 AC2: a governed fetch or pull is approved as its own operation.
+  if (actionKind === "git-fetch") return commandLabel === "fetch";
+  if (actionKind === "git-pull") return commandLabel === "pull";
   return actionKind === "connector-read" && boundedApprovalIdentity(commandLabel);
 }
 
@@ -1165,9 +1204,8 @@ function closedLabel(value: unknown, labels: ReadonlySet<string>): string {
 
 function approvedToolLabel(value: unknown): string {
   if (value === undefined) return "none";
-  return typeof value === "string" && APPROVED_MODEL_VISIBLE_RUNTIME_TOOLS.has(value)
-    ? value
-    : "unapproved";
+  if (typeof value === "string" && APPROVED_MAPPED_RUNTIME_TOOLS.has(value)) return value;
+  return isAdmissibleOpenCodeToolName(value) ? openCodeToolLogLabel(value) : "unapproved";
 }
 
 function messagePartUpdated(data: Record<string, unknown>, aggregateId: string): boolean {
@@ -1282,7 +1320,7 @@ function toolPartGate(part: Record<string, unknown>): OpenCodeHistoryPartGate | 
     !nonEmpty(part.tool)
   )
     return "shape";
-  if (!APPROVED_MODEL_VISIBLE_RUNTIME_TOOLS.has(part.tool)) return "tool-unapproved";
+  if (!isApprovedRuntimeTool(part.tool)) return "tool-unapproved";
   if ((part.metadata !== undefined && !isRecord(part.metadata)) || !isRecord(part.state)) {
     return "shape";
   }
@@ -1630,7 +1668,7 @@ function toolEvent(type: string, data: Record<string, unknown>): boolean {
     nonEmpty(data.callID) &&
     nonEmpty(data.provider) &&
     (type !== "session.next.tool.called" ||
-      (nonEmpty(data.tool) && APPROVED_MODEL_VISIBLE_RUNTIME_TOOLS.has(data.tool)))
+      (nonEmpty(data.tool) && isApprovedRuntimeTool(data.tool)))
   );
 }
 
@@ -1671,13 +1709,18 @@ function classifiedToolEvent(
 ): "question" | "tool" | undefined {
   if (!toolEvent(type, data)) return undefined;
   if (type === "session.next.tool.called" && data.tool === "question") return "question";
-  if (
-    type === "session.next.tool.called" &&
-    (!nonEmpty(data.tool) || !APPROVED_PRODUCTIVE_TOOLS.has(data.tool))
-  )
-    return undefined;
+  if (type === "session.next.tool.called" && !productiveToolCall(data.tool)) return undefined;
   return "tool";
 }
+/** A plan surface is never a productive tool call, whatever profile admitted its name (#2480). */
+function productiveToolCall(tool: unknown): boolean {
+  return (
+    nonEmpty(tool) &&
+    !OPENCODE_PLAN_SURFACE_TOOLS.has(tool) &&
+    (APPROVED_PRODUCTIVE_TOOLS.has(tool) || isAdmissibleOpenCodeToolName(tool))
+  );
+}
+
 function digest(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
 }

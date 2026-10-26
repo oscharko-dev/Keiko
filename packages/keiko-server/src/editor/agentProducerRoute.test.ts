@@ -16,6 +16,7 @@
 // content-free producer summary, because "wholeWord"/"regex" acceptance is exactly the kind of
 // per-call detail the producer's aggregate response deliberately does not expose.
 
+import { boundGatewayToolCatalog } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import type { Server } from "node:http";
@@ -276,13 +277,14 @@ function toolCallThenStop(toolName: string, args: Record<string, unknown>): Mode
     call: (request: GatewayCallRequest): Promise<NormalizedResponse> => {
       call += 1;
       if (call === 1) {
+        const bound = boundGatewayToolCatalog(request.toolCatalog);
         const invocation =
-          request.toolCatalog === undefined
+          bound === undefined
             ? undefined
             : createToolInvocationNormalizer({
-                catalog: request.toolCatalog.catalog,
-                projection: request.toolCatalog.projection,
-                offered: request.toolCatalog.offered,
+                catalog: bound.catalog,
+                projection: bound.projection,
+                offered: bound.offered,
               }).bindAlias(toolName, args, 0);
         return Promise.resolve({
           modelId: "producer-test-model",

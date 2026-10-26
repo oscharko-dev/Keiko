@@ -34,6 +34,7 @@
 import {
   CLIENT_DIAGNOSTIC_LOSS_COUNT_KEYS,
   CLIENT_DIAGNOSTIC_LOSS_COUNT_MAX,
+  CLIENT_STAGE_DURATION_MS_MAX,
   type ClientBindingOutcome,
   type ClientBindingReferenceShape,
   type ClientBindingSurface,
@@ -374,11 +375,17 @@ export function reportClientDiagnostic(message: string, meta?: ClientDiagnosticM
   writer(message, meta);
 }
 
-/** One instant adoption/selection decision, not the duration of a held model or network request. */
+/**
+ * One adoption/selection decision. A selection decision is instant and keeps `durationMs` 0; an
+ * adoption passes the catalog read it waited for (request sent to catalog adopted), which is the
+ * background refresh latency. The duration is never the time a model was held, and a value outside
+ * the closed stage bound is clamped, not refused.
+ */
 export function reportModelCatalogStage(
   stage: "gateway catalog adoption" | "model selection availability",
   modelCatalog: ClientModelCatalogEvidence,
   parentCorrelationId?: string,
+  durationMs = 0,
 ): void {
   const correlationId = newClientCorrelationId();
   reportClientDiagnostic("Model catalog decision started.", {
@@ -389,7 +396,15 @@ export function reportModelCatalogStage(
   reportClientDiagnostic("Model catalog decision settled.", {
     correlationId,
     parentCorrelationId,
-    stageReport: { stage, phase: "settled", ordinal: 1, durationMs: 0, modelCatalog },
+    stageReport: {
+      stage,
+      phase: "settled",
+      ordinal: 1,
+      durationMs: Number.isFinite(durationMs)
+        ? Math.min(CLIENT_STAGE_DURATION_MS_MAX, Math.max(0, Math.round(durationMs)))
+        : 0,
+      modelCatalog,
+    },
   });
 }
 

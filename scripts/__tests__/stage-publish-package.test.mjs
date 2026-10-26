@@ -1,9 +1,12 @@
+import { Buffer } from "node:buffer";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -18,6 +21,8 @@ import {
   stagedVendorDirectory,
   workspacePackInvocation,
 } from "../stage-publish-package.mjs";
+
+import { resolveHostExecutable } from "../lib/host-executable.mjs";
 
 const roots = [];
 
@@ -157,11 +162,43 @@ afterEach(() => {
 describe("staged publish package", () => {
   it("keeps dynamic Windows pack destinations out of shell-visible arguments", () => {
     expect(workspacePackInvocation(String.raw`C:\Program Files\nodejs\npm.cmd`, "win32")).toEqual({
-      args: ["pack", "--silent", "--ignore-scripts"],
+      args: ["pack", "--silent", "--ignore-scripts", "--pack-destination", ".", "--dry-run=false"],
       command: String.raw`"C:\Program Files\nodejs\npm.cmd"`,
       shell: true,
     });
   });
+
+  it.each(["destination", "dry-run", "both"])(
+    "owns its real npm archive despite inherited %s lifecycle settings",
+    (setting) => {
+      const packageRoot = mkdtempSync(join(tmpdir(), "keiko pack output & test "));
+      const redirected = mkdtempSync(join(tmpdir(), "keiko parent pack output "));
+      roots.push(packageRoot, redirected);
+      writeJson(join(packageRoot, "package.json"), {
+        name: "keiko-pack-output-test",
+        version: "1.0.0",
+        files: ["index.js"],
+      });
+      writeFileSync(join(packageRoot, "index.js"), "export {};\n");
+      const env = { ...process.env };
+      delete env.npm_config_pack_destination;
+      delete env.npm_config_dry_run;
+      if (setting !== "dry-run") env.npm_config_pack_destination = redirected;
+      if (setting !== "destination") env.npm_config_dry_run = "true";
+      const invocation = workspacePackInvocation(resolveHostExecutable("npm"));
+      const result = spawnSync(invocation.command, invocation.args, {
+        cwd: packageRoot,
+        encoding: "utf8",
+        shell: invocation.shell,
+        env,
+      });
+      expect(result.status).toBe(0);
+      const archive = join(packageRoot, "keiko-pack-output-test-1.0.0.tgz");
+      expect(existsSync(archive)).toBe(true);
+      expect(readFileSync(archive).subarray(0, 2)).toEqual(Buffer.from([0x1f, 0x8b]));
+      expect(readdirSync(redirected)).toEqual([]);
+    },
+  );
 
   it("stages workspace archives below a temporary root containing spaces", () => {
     const root = fixture();

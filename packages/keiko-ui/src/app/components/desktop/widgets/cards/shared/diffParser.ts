@@ -35,8 +35,11 @@ export const MAX_DIFF_FILES = GIT_EDITOR_DIFF_MAX_FILES;
 // --- helpers ----------------------------------------------------------------
 
 // The placeholder path for a file whose record opens before its name is known: a hunk with no file
-// header at all, or a `--- /dev/null` whose `+++ b/<path>` has not arrived yet.
-const UNKNOWN_PATH = "(unknown)";
+// header at all, or a `--- /dev/null` whose `+++ b/<path>` has not arrived yet. Exported so a
+// surface that renders model-written diffs can name such a file in its own words instead of
+// showing this parser placeholder.
+export const UNKNOWN_DIFF_PATH = "(unknown)";
+const UNKNOWN_PATH = UNKNOWN_DIFF_PATH;
 
 function stripGitPrefix(p: string): string {
   if (p.startsWith("a/") || p.startsWith("b/")) return p.slice(2);

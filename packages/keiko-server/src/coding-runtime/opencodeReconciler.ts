@@ -89,6 +89,8 @@ export interface OpenCodeReconcilerStaging {
 export interface OpenCodeReconciler {
   ingest(events: readonly OpenCodeReconciliationEvent[]): OpenCodeReconciliationResult;
   prepare(events: readonly OpenCodeReconciliationEvent[]): OpenCodeReconciliationPreparation;
+  /** Release only projections whose governing sink has returned an applied or duplicate receipt. */
+  acknowledge(projections: readonly OpenCodeProjection[]): void;
   checkpoints(): Readonly<Record<string, number>>;
   staging(): Readonly<OpenCodeReconcilerStaging>;
 }
@@ -106,6 +108,7 @@ interface ReconcilerStore {
   readonly identities: Map<string, string>;
   readonly digests: Set<string>;
   readonly staged: OpenCodeReconciliationEvent[];
+  readonly acknowledged: Set<string>;
   stagedBytes: number;
   lastObservationAt: number;
   revision: number;
@@ -115,6 +118,7 @@ interface PreparedReconciliationState {
   readonly identities: Map<string, string>;
   readonly digests: Set<string>;
   readonly staged: OpenCodeReconciliationEvent[];
+  readonly acknowledged: Set<string>;
   readonly projections: OpenCodeProjection[];
   stagedBytes: number;
   lastObservationAt: number;
@@ -135,6 +139,7 @@ export function createOpenCodeReconciler(
     identities: new Map(),
     digests: new Set(),
     staged: [],
+    acknowledged: new Set(),
     stagedBytes: 0,
     lastObservationAt: Number.NEGATIVE_INFINITY,
     revision: 0,
@@ -150,6 +155,9 @@ export function createOpenCodeReconciler(
       return { ok: true, applied: prepared.applied, projections: prepared.projections };
     },
     prepare,
+    acknowledge(projections): void {
+      acknowledgeProjections(store, projections);
+    },
     checkpoints(): Readonly<Record<string, number>> {
       return Object.freeze(Object.fromEntries(store.checkpoint));
     },
@@ -166,6 +174,19 @@ export function createOpenCodeReconciler(
       });
     },
   };
+}
+
+function acknowledgeProjections(
+  store: ReconcilerStore,
+  projections: readonly OpenCodeProjection[],
+): void {
+  for (const projection of projections) {
+    const identity = eventIdentity(projection);
+    if (store.identities.get(identity) !== projection.digest || store.acknowledged.has(identity))
+      continue;
+    store.acknowledged.add(identity);
+    store.revision += 1;
+  }
 }
 
 function prepareReconciliation(
@@ -199,6 +220,7 @@ function transactionalState(store: ReconcilerStore): PreparedReconciliationState
     identities: new Map(store.identities),
     digests: new Set(store.digests),
     staged: [...store.staged],
+    acknowledged: new Set(store.acknowledged),
     projections: [],
     stagedBytes: store.stagedBytes,
     lastObservationAt: store.lastObservationAt,
@@ -220,7 +242,14 @@ function stageEvent(
   if (sequence !== "next") return sequence === "historical" ? undefined : sequence;
   if (state.digests.has(event.digest)) return undefined;
   const size = eventBytes(event);
-  const evicted = makeRoom(state.staged, store.maxEvents, store.maxBytes, state.stagedBytes, size);
+  const evicted = makeRoom(
+    state.staged,
+    state.acknowledged,
+    store.maxEvents,
+    store.maxBytes,
+    state.stagedBytes,
+    size,
+  );
   if (evicted === undefined) return { ok: false, reason: "staging-overflow" };
   releaseEvictedIndexes(state, evicted);
   if (!makeCheckpointRoom(state, event.aggregateId, store.maxEvents))
@@ -266,6 +295,7 @@ function commitPreparedState(store: ReconcilerStore, state: PreparedReconciliati
   replaceMap(store.checkpoint, state.checkpoint);
   replaceMap(store.identities, state.identities);
   replaceSet(store.digests, state.digests);
+  replaceSet(store.acknowledged, state.acknowledged);
   store.staged.splice(0, store.staged.length, ...state.staged);
   store.stagedBytes = state.stagedBytes;
   store.lastObservationAt = state.lastObservationAt;
@@ -278,6 +308,7 @@ function releaseEvictedIndexes(
 ): void {
   for (const event of evicted) {
     state.identities.delete(eventIdentity(event));
+    state.acknowledged.delete(eventIdentity(event));
     state.digests.delete(event.digest);
   }
 }
@@ -310,6 +341,7 @@ function replaceSet<T>(target: Set<T>, source: ReadonlySet<T>): void {
 }
 function makeRoom(
   staged: OpenCodeReconciliationEvent[],
+  acknowledged: ReadonlySet<string>,
   maxEvents: number,
   maxBytes: number,
   currentBytes: number,
@@ -318,7 +350,9 @@ function makeRoom(
   let bytes = currentBytes;
   const evicted: OpenCodeReconciliationEvent[] = [];
   while (staged.length >= maxEvents || bytes + incomingBytes > maxBytes) {
-    const index = staged.findIndex((event) => event.kind === "observation");
+    const index = staged.findIndex(
+      (event) => event.kind === "observation" || acknowledged.has(eventIdentity(event)),
+    );
     if (index < 0) return undefined;
     const removed = staged.splice(index, 1)[0];
     if (removed === undefined) return undefined;

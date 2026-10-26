@@ -396,7 +396,7 @@ reparenting and `setsid`; an unprivileged descendant cannot select another resou
 The job is loaded from a private temporary definition with `KeepAlive` disabled and
 `ProcessType=Interactive`, then removed after the helper exits. This is the human-requested UI
 lifecycle: launchd's `Background` class is intended for work not directly requested by the user
-and throttles CPU and I/O. The scheduling class does not change the lifecycle's startup or stop
+and throttles CPU and I/O (Darwin priority band 4). The scheduling class does not change the lifecycle's startup or stop
 deadlines, resource-coalition ownership or authority. Admission first checks that the target GUI
 domain is available under a bounded read-only launchctl query. It is not installed as a persistent
 LaunchAgent. A same-user socket checks the
@@ -1055,6 +1055,7 @@ Security review for implementation under this ADR must cover:
 | 1.0     | 2026-07-05 | Accepted the portable managed-install and release-asset authority. |
 | 1.1     | 2026-09-10 | Added `linux-x64` as the fourth release-blocking archive for Issue #3451 so the production packaging model matches the qualified runtime target set. |
 | 1.2     | 2026-09-14 | Amended D8 for the ADR-0177 `dev` release rehearsal: rehearsal attestations name `refs/heads/dev`, and every documented verifier binds the signer workflow and the stable tag. |
+| 1.3     | 2026-10-24 | The macOS application job declares the `Interactive` process type instead of `Background`, which throttled the app's runtime below its startup grant on a busy machine. |
 
 ## Amendment history
 

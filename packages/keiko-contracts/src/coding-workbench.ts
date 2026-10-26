@@ -147,6 +147,9 @@ export const CODING_WORKBENCH_PERMISSION_REQUEST_KINDS: readonly CodingWorkbench
 export type CodingWorkbenchSupervisedActionKind =
   | "file-edit"
   | "git-stage"
+  | "git-unstage"
+  | "git-fetch"
+  | "git-pull"
   | "verification-command"
   | "ci-observe"
   | "connector-read"
@@ -163,6 +166,9 @@ export const CODING_WORKBENCH_SUPERVISED_ACTION_KINDS: readonly CodingWorkbenchS
   Object.freeze([
     "file-edit",
     "git-stage",
+    "git-unstage",
+    "git-fetch",
+    "git-pull",
     "verification-command",
     "ci-observe",
     "connector-read",
@@ -558,6 +564,18 @@ export interface CodingWorkbenchSidecarGatewayRunMetadata {
   readonly maxOutputTokens: number;
   readonly maxInputMessages: number;
   readonly maxRequestBytes: number;
+  /**
+   * The admitted model's declared image input (`ModelCapability.supportsImageInput`), carried from
+   * the same projection to both the native runtime's provider binding and the sidecar gateway's
+   * content-part admission so they cannot disagree (#3897 S14). Absent means text only.
+   */
+  readonly supportsImageInput?: boolean | undefined;
+  /**
+   * The admitted model's PDF document input (`ModelCapability.supportsDocumentInput`, the
+   * capability the `document_input` readiness probe verifies), carried the same way to the native
+   * provider binding and to the gateway's document-part admission (#3906). Absent means no PDFs.
+   */
+  readonly supportsDocumentInput?: boolean | undefined;
 }
 
 export interface CodingWorkbenchSidecarGatewayProjection {
@@ -639,7 +657,34 @@ export interface CodingWorkbenchPermissionRequest {
   readonly policyReason?: CodingWorkbenchSupervisedPolicyReason | undefined;
   readonly connectorScopes?: readonly CodingWorkbenchConnectorScope[] | undefined;
   readonly commandLabel?: string | undefined;
+  /**
+   * The OpenCode permission a native policy ask waits on (`edit`, `shell`, `webfetch`, …): the
+   * explicit discriminator of a native ask, present for every native action, not only commands.
+   */
+  readonly nativePermission?: string | undefined;
   readonly expiresAt: string;
+}
+
+/**
+ * A native OpenCode policy ask (#3897) is the one permission request that names no supervised
+ * action kind: the runtime's own action is evaluated by the server-owned native policy, and the
+ * ask carries that action's OpenCode permission name. Commands additionally carry the closed
+ * `native-*` command label. The orchestrator pauses the run for it and settles it through the
+ * permission port alone; no Keiko authority is minted for it, and the Workbench enables Approve
+ * only once the authenticated review channel shows the action's own resources.
+ */
+export const CODING_WORKBENCH_NATIVE_ACTION_LABEL_PREFIX = "native-";
+
+export function isNativeActionPermissionRequest(
+  request:
+    | Pick<CodingWorkbenchPermissionRequest, "actionKind" | "nativePermission" | "commandLabel">
+    | undefined,
+): boolean {
+  return (
+    request?.actionKind === undefined &&
+    typeof request?.nativePermission === "string" &&
+    request.nativePermission.length > 0
+  );
 }
 
 /** Body-free verifier step outcomes, never test or assertion counts. */
@@ -874,10 +919,19 @@ export function isCodingWorkbenchActionAllowedForMode(
   return decideCodingWorkbenchActionForMode(mode, actionClass, connectorScopes).allowed;
 }
 
+const COMMAND_EXECUTION_ACTION_KINDS: ReadonlySet<CodingWorkbenchSupervisedActionKind> = new Set([
+  "verification-command",
+  "ci-observe",
+  "connector-read",
+  "git-fetch",
+  "git-pull",
+]);
+
 export function permissionKindForSupervisedCodingAction(
   actionKind: CodingWorkbenchSupervisedActionKind,
 ): CodingWorkbenchPermissionRequestKind {
-  if (actionKind === "file-edit" || actionKind === "git-stage") return "workspace-write";
+  if (actionKind === "file-edit" || actionKind === "git-stage" || actionKind === "git-unstage")
+    return "workspace-write";
   // ci-observe and connector-read carry the same bounded, non-mutating, single-command risk as
   // verification-command (3941816393) -- unlike research they must NOT map to "network-egress":
   // that kind couples the Workbench prompt to the research destination review channel
@@ -885,13 +939,10 @@ export function permissionKindForSupervisedCodingAction(
   // these two actions and would leave Approve permanently unbound. They also must never map to
   // "connector-access": that permission kind is hard-denied at every mode by
   // unavailableRuntimeActionEvent (codingRuntimeManager.ts), which would make them unreachable.
-  if (
-    actionKind === "verification-command" ||
-    actionKind === "ci-observe" ||
-    actionKind === "connector-read"
-  ) {
-    return "command-execution";
-  }
+  // git-fetch and git-pull (#3902 AC2) are the same single, fixed-argv Git command on the same ask
+  // lane; their delivery-scope decision is the Git sync owner's (runBoundAuthority.ts), and
+  // "delivery-substrate" here would be hard-denied by that same function before anyone could answer.
+  if (COMMAND_EXECUTION_ACTION_KINDS.has(actionKind)) return "command-execution";
   if (actionKind === "research") return "network-egress";
   if (actionKind === "connector-write" || actionKind === "external-write") {
     return "connector-access";
@@ -905,6 +956,7 @@ export function supervisedCodingActionRequiresApproval(
   return (
     actionKind !== "file-edit" &&
     actionKind !== "git-stage" &&
+    actionKind !== "git-unstage" &&
     actionKind !== "verification-command"
   );
 }

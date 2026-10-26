@@ -22,6 +22,11 @@ import { planIsolatedRun } from "./plan.js";
 import { probeBackends } from "./probe.js";
 import type { IsolatedRunDecision, IsolatedRunPlan } from "./types.js";
 
+import {
+  LINUX_GATEWAY_SERVICE_ENV,
+  parseRuntimeLoopbackServiceEndpoint,
+} from "./runtime-service.js";
+
 interface ChildRun {
   readonly status: number;
   readonly stdout: string;
@@ -118,6 +123,18 @@ const NAMESPACE_SNIPPET = [
   "socket.on('timeout', () => { socket.destroy(); process.exit(5); });",
 ].join("");
 
+const RUNTIME_SERVICE_SNIPPET = [
+  "const http = require('node:http');",
+  "if (process.env.KEIKO_LINUX_GATEWAY_SERVICE || process.env.NODE_CHANNEL_FD) process.exit(41);",
+  "const server = http.createServer(async (req, res) => {",
+  "  if (req.headers.authorization !== 'Basic fixture-service') { res.writeHead(401).end(); return; }",
+  "  let size = 0; for await (const bytes of req) size += bytes.length;",
+  "  res.end(String(size));",
+  "});",
+  "process.stdin.once('end', () => server.close()); process.stdin.resume();",
+  "server.listen(0, '127.0.0.1', () => process.stdout.write('server listening on http://127.0.0.1:' + server.address().port + '\\n'));",
+].join("");
+
 const MISSING_TARGET_PATH = join(process.cwd(), "missing-linux-gateway-proof-target");
 const DIRECT_NODE_PROOF_ARG_COUNTS = new Map<string, number>([
   [ROUND_TRIP_SNIPPET, 3],
@@ -126,6 +143,7 @@ const DIRECT_NODE_PROOF_ARG_COUNTS = new Map<string, number>([
 const LAUNCHER_NODE_PROOF_ARG_COUNTS = new Map<string, number>([
   ...DIRECT_NODE_PROOF_ARG_COUNTS,
   [HELD_ROUND_TRIP_SNIPPET, 5],
+  [RUNTIME_SERVICE_SNIPPET, 2],
 ]);
 
 function hasAllowedNodeProofArgs(
@@ -358,6 +376,64 @@ function requireWrapped(
   return decision;
 }
 
+async function stopServiceChild(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const stopped = new Promise<void>((resolve) => {
+    child.once("close", () => {
+      resolve();
+    });
+  });
+  const timeout = setTimeout(() => {
+    child.kill("SIGKILL");
+  }, 3000);
+  if (child.stdin === null) throw new Error("fixture-service-lifetime-missing");
+  child.stdin.end();
+  await stopped;
+  clearTimeout(timeout);
+  expect(child.exitCode).toBe(0);
+  expect(child.signalCode).toBeNull();
+}
+
+async function startServiceChild(
+  gatewayPort: number,
+  backend: "bubblewrap" | "unshare",
+): Promise<{ child: ChildProcess; endpoint: string }> {
+  const wrapped = requireWrapped(
+    planIsolatedRun(
+      {
+        command: process.execPath,
+        args: ["-e", RUNTIME_SERVICE_SNIPPET],
+        cwd: process.cwd(),
+        network: { mode: "gateway", host: "127.0.0.1", port: gatewayPort },
+      },
+      { ...probeBackends(), ...(backend === "unshare" ? { bubblewrap: false } : {}) },
+      "linux",
+    ),
+  );
+  const child = spawn(process.execPath, validateProofChildArgs(wrapped.command, wrapped.args), {
+    env: { ...process.env, [LINUX_GATEWAY_SERVICE_ENV]: "1" },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  let output = "";
+  child.stdout.on("data", (bytes: Buffer) => {
+    output += bytes.toString("utf8");
+  });
+  try {
+    await vi.waitFor(
+      () => {
+        expect(parseRuntimeLoopbackServiceEndpoint(output)).toBeDefined();
+      },
+      { timeout: 10000 },
+    );
+    const endpoint = parseRuntimeLoopbackServiceEndpoint(output);
+    if (endpoint === undefined) throw new Error("fixture-service-endpoint-missing");
+    return { child, endpoint };
+  } catch (error) {
+    await stopServiceChild(child);
+    throw error;
+  }
+}
+
 describe("Linux gateway launcher validation", () => {
   it("constrains proof children to the real launcher and closed Node snippets", () => {
     const directArgs = ["-e", ROUND_TRIP_SNIPPET, "1983"] as const;
@@ -510,6 +586,21 @@ describe("Linux namespace command compilation", () => {
     args: ["serve"],
   };
 
+  it.each(["bubblewrap", "unshare"] as const)(
+    "owns the service process subtree in a %s PID namespace",
+    (backend) => {
+      vi.stubEnv(LINUX_GATEWAY_SERVICE_ENV, "1");
+      try {
+        const [, args] = buildLinuxGatewayNamespaceCommand({ ...config, backend });
+        expect(args).toContain(backend === "bubblewrap" ? "--unshare-pid" : "--pid");
+        if (backend === "unshare") expect(args).toContain("--fork");
+        expect(args).not.toContain("--as-pid-1");
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+
   it("uses a parent-bound bubblewrap network namespace", () => {
     const [command, args] = buildLinuxGatewayNamespaceCommand(config);
     expect(command).toBe("bwrap");
@@ -581,6 +672,34 @@ describe("Linux namespace relay lifecycle", () => {
 
 describe("real OS-level gateway confinement (Linux namespace bridge, #3422)", () => {
   const platformIsLinux = process.platform === "linux";
+
+  it.skipIf(!platformIsLinux).each(["bubblewrap", "unshare"] as const)(
+    "forwards authenticated %s service requests without losing bytes during IPC transfer",
+    async (backend) => {
+      const gateway = await listenEphemeral();
+      const service = await startServiceChild(gateway.port, backend);
+      try {
+        expect((await fetch(service.endpoint)).status).toBe(401);
+        const body = "x".repeat(256 * 1024);
+        const replies = await Promise.all(
+          Array.from({ length: 5 }, async () => {
+            const response = await fetch(service.endpoint, {
+              method: "POST",
+              headers: { Authorization: "Basic fixture-service" },
+              body,
+            });
+            return await response.text();
+          }),
+        );
+        expect(replies).toEqual(Array.from({ length: 5 }, () => String(body.length)));
+      } finally {
+        await stopServiceChild(service.child);
+        await close(gateway.server);
+      }
+      await expect(fetch(service.endpoint)).rejects.toThrow();
+    },
+    20000,
+  );
 
   it.skipIf(!platformIsLinux)(
     "passes the anonymous bridge through the unshare fallback",

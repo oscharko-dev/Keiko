@@ -50,10 +50,17 @@ function gatewayFilesystemIsAdmissible(
   gateway: NetworkGatewayPolicy | undefined,
   platform: NodeJS.Platform,
 ): boolean {
+  // The native profile is only ever confined by an accepted filesystem: no filesystem means the
+  // host would be exposed, so it is refused on every platform (#3897).
+  if (plan.gatewayProfile === "keiko-native" && plan.gatewayFilesystem === undefined) return false;
   if (plan.gatewayFilesystem === undefined) return true;
+  // Only macOS confines a gateway filesystem (Seatbelt). The native profile has no qualified Linux
+  // boundary (#3897 audit: a bubblewrap mount plan still let a shell read a workspace `.env`), and
+  // the gateway profile's Linux bridge launcher has no filesystem.
+  const platformConfines = platform === "darwin";
   return (
     gateway !== undefined &&
-    platform === "darwin" &&
+    platformConfines &&
     copyRuntimeGatewayFilesystem(plan.gatewayFilesystem) !== undefined
   );
 }
@@ -142,7 +149,9 @@ function planGatewayRun(
   platform: NodeJS.Platform,
 ): IsolatedRunDecision {
   const backend = selectGatewayBackend(platform, availability);
-  const wrapped = buildWrappedCommand(backend, plan);
+  // The native profile is qualified on macOS only; elsewhere it is refused before any wrapper.
+  const qualified = plan.gatewayProfile !== "keiko-native" || platform === "darwin";
+  const wrapped = qualified ? buildWrappedCommand(backend, plan) : undefined;
   if (backend === "none" || wrapped === undefined) {
     return {
       kind: "fail-closed",
@@ -156,7 +165,11 @@ function planGatewayRun(
     args: wrapped.args,
     attestation: {
       backend,
-      networkEnforced: true,
+      // The native profile (#3897) enforces loopback-only egress below Full access; at Full access
+      // egress is inherited and governed per action, not by the process wrapper.
+      networkEnforced:
+        plan.gatewayProfile !== "keiko-native" ||
+        (plan.gatewayEgress ?? "loopback-only") === "loopback-only",
       filesystemEnforced: plan.gatewayFilesystem !== undefined,
       platform,
     },

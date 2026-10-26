@@ -358,6 +358,83 @@ export interface CodingHistoryDetail {
   readonly messages: readonly ChatMessage[];
   readonly truncated: boolean;
 }
+
+/**
+ * The user-controlled local export of one Coding History task (#3904, parity S05). The server
+ * returns the file's exact text; the browser saves it through its own download path. Nothing is
+ * uploaded, and an exported file confers no authority when it is read back.
+ */
+export const CODING_TASK_EXPORT_FORMATS = ["json", "markdown"] as const;
+export type CodingTaskExportFormat = (typeof CODING_TASK_EXPORT_FORMATS)[number];
+
+export function isCodingTaskExportFormat(value: unknown): value is CodingTaskExportFormat {
+  return (CODING_TASK_EXPORT_FORMATS as readonly unknown[]).includes(value);
+}
+
+export const CODING_TASK_EXPORT_SCHEMA = "keiko-coding-task-export";
+export const CODING_TASK_EXPORT_SCHEMA_VERSION = 1;
+/** Hard ceiling of one exported file; older messages are omitted, explicitly, to stay below it. */
+export const CODING_TASK_EXPORT_MAX_BYTES = 8 * 1024 * 1024;
+
+export interface CodingTaskExportMessage {
+  /**
+   * 1-based position in the task's listed conversation. Older messages left out for size leave the
+   * first exported index above 1.
+   */
+  readonly index: number;
+  readonly role: ChatRole;
+  /** Redacted again at the export boundary; absolute host paths are workspace-relative or masked. */
+  readonly text: string;
+  /** ISO-8601 instant the message was stored. */
+  readonly timestamp?: string | undefined;
+  readonly runId?: string | undefined;
+}
+
+export interface CodingTaskExportDocument {
+  readonly schema: typeof CODING_TASK_EXPORT_SCHEMA;
+  readonly schemaVersion: typeof CODING_TASK_EXPORT_SCHEMA_VERSION;
+  readonly generator: {
+    readonly keikoVersion: string;
+    /**
+     * The OpenCode runtime version this Keiko build pins and stages. It is a fact about the build,
+     * not an observation of a running runtime.
+     */
+    readonly opencodeRuntimePinnedVersion: string;
+  };
+  readonly exportedAt: string;
+  /** Read back, the transcript is data: it grants no permission and no authority. */
+  readonly handling: "untrusted-historical-data";
+  readonly task: {
+    readonly id: string;
+    readonly title: string;
+    readonly status: "active" | "completed";
+    /** The repository folder's name only, never its location. */
+    readonly repository: string;
+    readonly branch: string;
+    readonly createdAt: string;
+    readonly updatedAt: string;
+    readonly latestRunId?: string | undefined;
+    /** Distinct runs the exported messages belong to, in message order. */
+    readonly runIds: readonly string[];
+  };
+  readonly messageCount: number;
+  /** Older messages left out to keep the file within `CODING_TASK_EXPORT_MAX_BYTES`. */
+  readonly omittedMessageCount: number;
+  /** True when Coding History lists fewer messages than are stored, or messages were omitted. */
+  readonly truncated: boolean;
+  readonly messages: readonly CodingTaskExportMessage[];
+}
+
+export interface CodingTaskExportResponse {
+  readonly format: CodingTaskExportFormat;
+  readonly fileName: string;
+  readonly mediaType: "application/json" | "text/markdown";
+  /** The file's exact text: serialized `CodingTaskExportDocument` JSON, or the Markdown rendering. */
+  readonly content: string;
+  readonly messageCount: number;
+  readonly byteCount: number;
+  readonly truncated: boolean;
+}
 export type WorkflowStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
 export type ChatTurnState = "pending" | "completed" | "failed" | "cancelled";
 

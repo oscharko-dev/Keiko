@@ -66,6 +66,15 @@ export interface BugInvestigationInput {
   readonly modelId: string;
   // Per-workflow resource limits. Defaults to DEFAULT_BUG_WORKFLOW_LIMITS.
   readonly limits?: Partial<BugWorkflowLimits> | undefined;
+  // The fix a human reviewed in the dry run, exactly as its report showed it (#4025 AC4). With
+  // `apply`, the workflow validates and writes this diff through the same guards and never calls
+  // the model; without `apply` it is ignored. Only the server's gated apply route sets it.
+  readonly reviewedPatch?: ReviewedBugPatch | undefined;
+}
+
+export interface ReviewedBugPatch {
+  readonly diff: string;
+  readonly hypothesis: Hypothesis;
 }
 
 export interface BugInvestigationDeps {

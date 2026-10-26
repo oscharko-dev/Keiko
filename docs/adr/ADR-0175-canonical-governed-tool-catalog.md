@@ -100,8 +100,9 @@ Initial identity reservations (all version 1):
 | Managed path discovery/ranged read/changeset/verification | `keiko.workspace.discover`, `keiko.workspace.read`, `keiko.changeset.edit`, `keiko.verification.run` | Existing managed aliases in `managed-opencode@1` |
 | Managed research/skill/child | `keiko.research.fetch`, `keiko.skill.invoke`, `keiko.child.run` | Absent from offers unless bound, ready and authorized |
 | Local content search | `keiko.repo.search` | #3414 alone owns `keiko_repository_search`; H1 owns no alias |
-| Managed Git status/diff/stage and delivery proposal (propose-phase only; the model never commits, pushes or opens a pull request directly) | `keiko.git.status`, `keiko.git.diff`, `keiko.git.stage`, `keiko.git.commit`, `keiko.git.push`, `keiko.git.pullrequest` | New `keiko_git_status`/`keiko_git_diff`/`keiko_git_stage`/`keiko_git_commit`/`keiko_git_push`/`keiko_pull_request` aliases in `managed-opencode@1` (#3386/#3387) |
+| Managed Git status/diff/stage (with `unstage: true`, #3902 AC2) and delivery proposal (propose-phase only; the model never commits, pushes or opens a pull request directly) | `keiko.git.status`, `keiko.git.diff`, `keiko.git.stage`, `keiko.git.commit`, `keiko.git.push`, `keiko.git.pullrequest` | New `keiko_git_status`/`keiko_git_diff`/`keiko_git_stage`/`keiko_git_commit`/`keiko_git_push`/`keiko_pull_request` aliases in `managed-opencode@1` (#3386/#3387) |
 | Shared approved-proposal redemption and CI observation | `keiko.git.execute`, `keiko.ci.status` | New `keiko_git_execute`/`keiko_ci_status` aliases in `managed-opencode@1`; execution redemption is gated on the existing VerifiedCommitService/draft-delivery approval channel, never on model authority alone (#3386/#3387/#3388) |
+| Governed fetch and fast-forward pull (#3902 AC2) | `keiko.git.sync` | New `keiko_git_sync` alias in `managed-opencode@1`; the Git sync owner decides and executes it (ADR-0138 D3 item 5), below Full access only after the operator approves the exact call |
 | Read-only child read | `keiko.child.workspace.read` | New `keiko_child_workspace_read`; old `read_file` only in expiring old-digest profile |
 | Editor | `keiko.editor.sessions`, `keiko.editor.snapshot`, `keiko.editor.navigate`, `keiko.editor.symbol`, `keiko.editor.search`, `keiko.editor.git`, `keiko.editor.edit`, `keiko.editor.changeset`, `keiko.editor.verify` | Existing nine aliases in versioned Editor profile; active subset is separately governed |
 
@@ -112,7 +113,12 @@ not a Keiko tool or compatibility exception. The clean-cut V2 integration (#3561
 planning stays in the agent conversation rather than an invented replacement tool. Qualification
 still requires the complete governed read, edit, verification, and delivery inventory and its
 real-model evidence. Arbitrary sidecar tool definitions remain transport data and cannot register
-a descriptor, handler, effect or authority. Codex remains disabled.
+a descriptor, handler, effect or authority. The native OpenCode profile (ADR-0137 D10) registers
+exactly Keiko's delivery tools (the Git, CI and verification entries above) through a generated
+plugin built from the unchanged `managed-opencode@1` tool source: their definitions reach the
+gateway as the same transport data as OpenCode's own, no descriptor, alias or digest changes, and
+authority remains the facade request each call makes against the existing descriptors, handlers and
+approval channel, never the advertisement. Codex remains disabled.
 
 ### D3 — Digest inputs and compatibility
 
@@ -688,6 +694,8 @@ request, as its description states.
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.8 | 2026-10-23 | The native OpenCode profile registers Keiko's Git, CI and verification tools through a generated plugin so a native run delivers through the existing facade, approval channel and verified-commit path (ADR-0137 D10, #3897); D2 holds unchanged, since the tools are the `managed-opencode@1` entries' own source, no descriptor, alias or digest moves, and an advertisement still binds no handler, effect or authority. |
+| 1.7 | 2026-10-23 | The native OpenCode profile (ADR-0137 D10, #3897) advertises the runtime's own tools to the provider as a bounded `native` advertisement forwarded verbatim and bound by name only; D2 holds unchanged, since no runtime-supplied definition registers a handler, effect or authority, and the governed catalog keeps serving the mapped profiles and every other product surface. |
 | 1.6 | 2026-09-12 | Semantic reranking of the governed repository search runs above the handler on the evidence lane's redacted excerpts, moves neither the catalog revision nor the projection digest, and discloses a body-free provenance whose non-lexical rankings must name their index and whose unplaced orders stay lexical; whole-request cancellation is terminal (#3416, PR #3452). |
 | 1.5 | 2026-09-11 | Approved-skill discovery: the catalog owns only the `keiko.skill.discover` descriptor over the server-approved skill catalog, with one readiness decision, atomic invalidation and a closed, body-free projection (#3417, PR #3452). |
 | 1.4 | 2026-09-11 | Lineage entries are owner-issued: receipts carry evidence refs bound to the integration PR at the entry's source commit, which must resolve, precede the checked commit and still hold the producer; the self-issued first entry was withdrawn. |

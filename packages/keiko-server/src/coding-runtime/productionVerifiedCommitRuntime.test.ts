@@ -126,11 +126,37 @@ describe("server-built delivery approval requests", () => {
   it("states the scope and policy reason on the stage approval", () => {
     const events: CodingWorkbenchRuntimeEvent[] = [];
     const service = {
-      review: () => ({ runId: "run-stage", expiresAtMs: EXPIRES_AT_MS }),
+      review: () => ({
+        runId: "run-stage",
+        expiresAtMs: EXPIRES_AT_MS,
+        command: { kind: "stage" },
+      }),
     } as unknown as RuntimeGitService;
     requestRuntimeStageApproval(service, "stage-1", (event) => void events.push(event));
     expect(events[0]?.permissionRequest).toMatchObject({
       actionKind: "git-stage",
+      reasonCode: "stage-approval-required",
+      scopeLabel: "workspace-scope",
+      policyReason: "approval-required",
+    });
+  });
+
+  // #3902 AC2: the operator approves what the proposal does, so an unstage proposal is never
+  // presented as staging.
+  it("names an unstage proposal as unstaging on its approval", () => {
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const service = {
+      review: () => ({
+        runId: "run-unstage",
+        expiresAtMs: EXPIRES_AT_MS,
+        command: { kind: "unstage" },
+      }),
+    } as unknown as RuntimeGitService;
+    requestRuntimeStageApproval(service, "unstage-1", (event) => void events.push(event));
+    expect(events[0]?.permissionRequest).toMatchObject({
+      requestId: "unstage-1",
+      actionKind: "git-unstage",
+      reasonCode: "unstage-approval-required",
       scopeLabel: "workspace-scope",
       policyReason: "approval-required",
     });

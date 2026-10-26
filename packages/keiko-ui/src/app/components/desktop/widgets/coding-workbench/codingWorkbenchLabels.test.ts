@@ -306,6 +306,9 @@ describe("eventDetail auxiliary outcome", () => {
     ["model-turn-failed", "codingWorkbench.event.failure.model-turn-failed"],
     ["verification-not-evidenced", "codingWorkbench.event.failure.verification-not-evidenced"],
     ["runtime-failed", "codingWorkbench.event.failure.runtime"],
+    // ADR-0137 D10: a start the server refused before its first turn, because a file the first
+    // prompt referenced or the slash command it opened with was not accepted.
+    ["invalid-intent", "codingWorkbench.event.failure.invalid-intent"],
   ] as const)("renders a run that failed with %s as %s", (failureCode, key) => {
     const settled = runtimeEvent({ kind: "status", state: "failed", failureCode });
     expect(eventTitle(settled, t)).toBe("codingWorkbench.event.runFailed");

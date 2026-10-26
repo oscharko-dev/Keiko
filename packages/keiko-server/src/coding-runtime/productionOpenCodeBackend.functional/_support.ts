@@ -79,7 +79,18 @@ export const FUNCTIONAL_PLAN_STEP_READ = "PLAN_STEP_READ_2480";
 export const FUNCTIONAL_PLAN_STEP_VERIFY = "PLAN_STEP_VERIFY_2480";
 
 export interface ScriptState {
-  mode: "productive" | "productive-search" | "out-of-scope" | "discovery" | "research";
+  mode:
+    | "productive"
+    | "productive-search"
+    | "out-of-scope"
+    | "discovery"
+    | "research"
+    | "lifecycle"
+    | "lifecycle-continue"
+    | "probe"
+    | "index"
+    | "sync"
+    | "websearch";
   calls: number;
   readonly old: string;
   readonly next: string;
@@ -97,6 +108,8 @@ export interface ScriptState {
   readonly observeSkillDiscovery?: (proof: SkillDiscoveryConsumptionProof) => void;
   /** Keeps a completed verification turn cancellable for browser journeys that prove Stop. */
   readonly holdAfterVerification?: boolean;
+  /** The one shell command a `probe` turn runs through the runtime's own shell tool. */
+  probeCommand?: string;
   verificationIssued?: boolean;
 }
 
@@ -284,15 +297,28 @@ export interface FunctionalBffDepsInput {
 }
 
 /**
+ * Hermetic state for one composed server: its directories and the fixture provider profile as the
+ * server's own gateway configuration file, which `buildUiHandlerDeps` loads like any other.
+ */
+function prepareFunctionalState(stateRoot: string): void {
+  for (const dir of ["state", "ui-db", "evidence"]) {
+    mkdirSync(join(stateRoot, dir), { recursive: true, mode: 0o700 });
+  }
+  writeFileSync(
+    join(stateRoot, "ui-db", "keiko.config.json"),
+    `${JSON.stringify(functionalGatewayConfig(), null, 2)}\n`,
+    { encoding: "utf8", mode: 0o600 },
+  );
+}
+
+/**
  * Boots the real BFF dependency composition (`buildUiHandlerDeps`) against hermetic tmp state and
- * replaces exactly two seams: the gateway config (fixture profile) and the OpenAI-compatible chat
- * factories (scripted model). Everything else — routes, control plane, orchestrator, evidence,
- * stores — is the production wiring.
+ * replaces exactly two seams: the provider transport of the readiness probes and the
+ * OpenAI-compatible chat factories (scripted model). Everything else — gateway configuration,
+ * routes, control plane, orchestrator, evidence, stores — is the production wiring.
  */
 export function functionalBffDeps(input: FunctionalBffDepsInput): UiHandlerDeps {
-  for (const dir of ["state", "ui-db", "evidence"]) {
-    mkdirSync(join(input.stateRoot, dir), { recursive: true, mode: 0o700 });
-  }
+  prepareFunctionalState(input.stateRoot);
   const deps = buildUiHandlerDeps({
     configPath: undefined,
     evidenceDir: join(input.stateRoot, "evidence"),
@@ -301,6 +327,7 @@ export function functionalBffDeps(input: FunctionalBffDepsInput): UiHandlerDeps 
       KEIKO_STATE_DIR: join(input.stateRoot, "state"),
     },
     uiDbPath: join(input.stateRoot, "ui-db", "keiko-ui.db"),
+    gatewayReadinessFetch: functionalReadinessFetch,
     workspaceLifecycle: input.workspaceLifecycle,
     codingRuntimeResolver: input.codingRuntimeResolver,
     codingRuntimeDeploymentCeiling: "autonomous-delivery",
@@ -327,6 +354,8 @@ export interface DiscoveryBffDepsInput {
   readonly script: ScriptState;
   readonly uiPort: number;
   readonly launcherSessionSecret?: string | undefined;
+  /** The launcher environment an operator adds, e.g. an explicit OpenSSL configuration. */
+  readonly operatorEnv?: Readonly<Record<string, string>> | undefined;
   readonly observeGatewayRequest?: ((request: GatewayRequest) => void) | undefined;
 }
 
@@ -338,14 +367,7 @@ export interface DiscoveryBffDepsInput {
  * the model seam (scripted gateway responses) and the task-workspace fixture are replaced.
  */
 export function productionDiscoveryBffDeps(input: DiscoveryBffDepsInput): UiHandlerDeps {
-  for (const dir of ["state", "ui-db", "evidence"]) {
-    mkdirSync(join(input.stateRoot, dir), { recursive: true, mode: 0o700 });
-  }
-  writeFileSync(
-    join(input.stateRoot, "ui-db", "keiko.config.json"),
-    `${JSON.stringify(functionalGatewayConfig(), null, 2)}\n`,
-    { encoding: "utf8", mode: 0o600 },
-  );
+  prepareFunctionalState(input.stateRoot);
   const env: NodeJS.ProcessEnv = {
     PATH: process.env.PATH ?? "",
     KEIKO_STATE_DIR: join(input.stateRoot, "state"),
@@ -355,12 +377,14 @@ export function productionDiscoveryBffDeps(input: DiscoveryBffDepsInput): UiHand
     ...(input.launcherSessionSecret === undefined
       ? {}
       : { [SESSION_PAIRING_LAUNCHER_SECRET_ENV]: input.launcherSessionSecret }),
+    ...input.operatorEnv,
   };
   const deps = buildUiHandlerDeps({
     configPath: undefined,
     evidenceDir: join(input.stateRoot, "evidence"),
     env,
     uiDbPath: join(input.stateRoot, "ui-db", "keiko-ui.db"),
+    gatewayReadinessFetch: functionalReadinessFetch,
     ...(input.store === undefined ? {} : { store: input.store }),
     ...(input.codingRuntimeSnapshotStore === undefined
       ? {}
@@ -392,11 +416,11 @@ function withScriptedModelSeams(
     observeGatewayRequest?.(request);
     return Promise.resolve(scriptedResponse(script, scriptedTranscript(request)));
   };
+  // The configuration stays the composed server's own: it loaded the same file, and its runtime
+  // holder carries the readiness probe's fresh evidence that admits a new run (ADR-0171). Replacing
+  // either with a copy leaves that evidence unreadable, and the Workbench would wait forever.
   return {
     ...deps,
-    config: functionalGatewayConfig(),
-    configPresent: true,
-    gatewayConfig: undefined,
     codingSidecarGatewayChatFactory: () => chat,
     codingSidecarGatewayChatStreamFactory: () =>
       async function* (request: GatewayRequest): AsyncIterable<GatewayStreamChunk> {
@@ -727,6 +751,8 @@ function scriptedResponseFor(script: ScriptState, transcript: string): Normalize
   if (script.mode === "productive-search")
     return productiveSearchResponse(step, script, transcript);
   if (script.mode === "research") return researchScriptedResponse(step, transcript, script);
+  const driven = processResponse(script, transcript);
+  if (driven !== undefined) return driven;
   if (script.mode === "out-of-scope") {
     return step === 0
       ? tool("keiko_changeset_edit", {
@@ -756,6 +782,143 @@ function scriptedResponseFor(script: ScriptState, transcript: string): Normalize
     return step === 1 ? tool("question", question()) : normal();
   }
   return productiveResponse(step, script);
+}
+
+/** The background child a lifecycle turn starts through the runtime's own shell tool. */
+export const FUNCTIONAL_LIFECYCLE_BACKGROUND_COMMAND = "sleep 3899.2";
+/** A process the command itself detaches (`&`): launchd adopts it at once (#3901 AC3). */
+export const FUNCTIONAL_LIFECYCLE_DETACHED_COMMAND = "sleep 3899.3";
+/** The foreground child that keeps a lifecycle turn busy until it is cancelled or killed. */
+export const FUNCTIONAL_LIFECYCLE_FOREGROUND_COMMAND = "sleep 3899.1";
+const TITLE_GENERATION_PREFIX = "Generate a title for this conversation:";
+
+// #3899 AC2, #3901 AC3: a background job, a process the command detaches itself and a foreground
+// child of the original service, so cancellation, a crash and shutdown each have a live process
+// tree to reap. A continued task answers plainly.
+// The runtime's own title request carries no tools and never advances the turn.
+function lifecycleResponse(script: ScriptState, transcript: string): NormalizedResponse {
+  if (script.mode === "lifecycle-continue" || transcript.includes(TITLE_GENERATION_PREFIX))
+    return normal();
+  const replies = toolReplyCount(transcript);
+  if (replies === 0)
+    return tool("shell", { command: FUNCTIONAL_LIFECYCLE_BACKGROUND_COMMAND, background: true });
+  if (replies === 1)
+    return tool("shell", {
+      command: `${FUNCTIONAL_LIFECYCLE_DETACHED_COMMAND} > /dev/null 2>&1 &`,
+    });
+  return replies === 2
+    ? tool("shell", { command: FUNCTIONAL_LIFECYCLE_FOREGROUND_COMMAND, timeout: 0 })
+    : normal();
+}
+
+/** The modes that drive the runtime's own processes (#3899 AC2, #3901 AC3/AC4, #3902 AC2). */
+function processResponse(script: ScriptState, transcript: string): NormalizedResponse | undefined {
+  if (script.mode === "lifecycle" || script.mode === "lifecycle-continue")
+    return lifecycleResponse(script, transcript);
+  if (script.mode === "index") return indexResponse(transcript);
+  if (script.mode === "sync") return syncResponse(transcript);
+  if (script.mode === "websearch") return webSearchResponse(transcript);
+  return script.mode === "probe" ? probeResponse(script, transcript) : undefined;
+}
+
+/** The query a web search journey asks the original `websearch` tool. */
+export const FUNCTIONAL_WEBSEARCH_QUERY = "keiko governed search fixture";
+
+// #3903 AC3: the original runtime searches once with its own `websearch` tool and answers.
+function webSearchResponse(transcript: string): NormalizedResponse {
+  if (transcript.includes(TITLE_GENERATION_PREFIX)) return normal();
+  return toolReplyCount(transcript) === 0
+    ? tool("websearch", { query: FUNCTIONAL_WEBSEARCH_QUERY })
+    : normal();
+}
+
+/** Printed by the agent's shell once it has fetched and fast-forwarded through Keiko. */
+export const FUNCTIONAL_SYNC_HEAD_MARKER = "sync.head=";
+
+// #3902 AC2: the original runtime tries its shell's own fetch first (refused in every mode), then
+// fetches and fast-forwards through `keiko_git_sync`, and reads the commit it now stands on with its
+// own Git. Each step answers the previous tool result, as a model does.
+function syncResponse(transcript: string): NormalizedResponse {
+  if (transcript.includes(TITLE_GENERATION_PREFIX)) return normal();
+  const steps: readonly (() => NormalizedResponse)[] = [
+    (): NormalizedResponse => tool("shell", { command: "git fetch origin" }),
+    (): NormalizedResponse => tool("keiko_git_sync", { pull: false }),
+    (): NormalizedResponse => tool("keiko_git_sync", { pull: true }),
+    (): NormalizedResponse =>
+      tool("shell", {
+        command: `printf '${FUNCTIONAL_SYNC_HEAD_MARKER}%s\\n' "$(git log -1 --format=%s)"`,
+      }),
+  ];
+  return steps[toolReplyCount(transcript)]?.() ?? normal();
+}
+
+/** The file an index journey changes, stages and gives back to the worktree. */
+export const FUNCTIONAL_INDEX_PATH = "src/example.ts";
+/** Printed by the agent's shell while the change is staged and once it is not. */
+export const FUNCTIONAL_INDEX_STAGED_MARKER = "index.staged=";
+export const FUNCTIONAL_INDEX_AFTER_MARKER = "index.after=";
+
+// The last proposal id of `prefix` the runtime returned to the model (`stage-<n>`, `unstage-<n>`),
+// read from a `proposalId` field only: a tool-call id such as `tool-keiko_git_stage-2` is not one.
+function lastProposalId(transcript: string, prefix: "stage" | "unstage"): string | undefined {
+  const ids = [...transcript.matchAll(/proposalId\\*":\\*"((?:un)?stage-\d{1,39})/gu)]
+    .map((match) => match[1])
+    .filter((id) => id?.startsWith(`${prefix}-`) === true);
+  return ids.at(-1);
+}
+
+// #3902 AC2: the original runtime changes a file with its own shell, stages it through Keiko's
+// proposal and redemption, reads the index with its own Git, gives the staged change back to the
+// worktree through `keiko_git_stage` with `unstage: true` and reads the index again. Each step answers the previous
+// tool result, as a model does.
+function indexResponse(transcript: string): NormalizedResponse {
+  if (transcript.includes(TITLE_GENERATION_PREFIX)) return normal();
+  const readIndex = (marker: string): NormalizedResponse =>
+    tool("shell", {
+      command: `printf '${marker}%s\\n' "$(git diff --cached --name-only | tr '\\n' ',')"`,
+    });
+  const steps: readonly (() => NormalizedResponse)[] = [
+    (): NormalizedResponse =>
+      tool("shell", { command: `printf 'staged by the agent\\n' >> ${FUNCTIONAL_INDEX_PATH}` }),
+    (): NormalizedResponse =>
+      tool("keiko_git_stage", { paths: [FUNCTIONAL_INDEX_PATH], unstage: false }),
+    (): NormalizedResponse =>
+      tool("keiko_git_execute", {
+        kind: "stage",
+        proposalId: lastProposalId(transcript, "stage") ?? "stage-0",
+      }),
+    (): NormalizedResponse => readIndex(FUNCTIONAL_INDEX_STAGED_MARKER),
+    (): NormalizedResponse =>
+      tool("keiko_git_stage", { paths: [FUNCTIONAL_INDEX_PATH], unstage: true }),
+    (): NormalizedResponse =>
+      tool("keiko_git_execute", {
+        kind: "unstage",
+        proposalId: lastProposalId(transcript, "unstage") ?? "unstage-0",
+      }),
+    (): NormalizedResponse => readIndex(FUNCTIONAL_INDEX_AFTER_MARKER),
+  ];
+  return steps[toolReplyCount(transcript)]?.() ?? normal();
+}
+
+// #3901 AC4: one shell command observes the boundary from inside the run; its output returns to
+// the model, where the test reads it.
+function probeResponse(script: ScriptState, transcript: string): NormalizedResponse {
+  if (transcript.includes(TITLE_GENERATION_PREFIX) || script.probeCommand === undefined)
+    return normal();
+  return toolReplyCount(transcript) === 0
+    ? tool("shell", { command: script.probeCommand, timeout: 60_000 })
+    : normal();
+}
+
+function toolReplyCount(transcript: string): number {
+  const messages: unknown = transcript === "" ? [] : JSON.parse(transcript);
+  if (!Array.isArray(messages)) return 0;
+  return messages.filter(
+    (message: unknown) =>
+      typeof message === "object" &&
+      message !== null &&
+      (message as { readonly role?: unknown }).role === "tool",
+  ).length;
 }
 
 function productiveResponse(step: number, script: ScriptState): NormalizedResponse {
@@ -885,7 +1048,12 @@ function tool(
     | "keiko_skill_discover"
     | "keiko_skill"
     | "keiko_child_agent"
-    | "question",
+    | "keiko_git_stage"
+    | "keiko_git_execute"
+    | "keiko_git_sync"
+    | "question"
+    | "shell"
+    | "websearch",
   args: Record<string, unknown>,
   callId?: string,
 ): NormalizedResponse {
@@ -900,10 +1068,32 @@ function tool(
   };
 }
 
+const FUNCTIONAL_PROVIDER_ORIGIN = "https://provider.invalid";
+
+/**
+ * The provider transport of the gateway's readiness probes. A new run is admitted only after a
+ * fresh basic-chat success (ADR-0171), and that probe calls the provider directly, past the
+ * scripted chat seam; the fixture provider answers it the way a working endpoint would. Any other
+ * destination fails like an unreachable host, so the probe can never pass for a different provider.
+ */
+function functionalReadinessFetch(input: string | URL | Request): Promise<Response> {
+  const url = new URL(input instanceof Request ? input.url : input);
+  if (url.origin !== FUNCTIONAL_PROVIDER_ORIGIN)
+    return Promise.reject(new TypeError("functional-readiness-destination-unknown"));
+  return Promise.resolve(
+    Response.json({
+      id: "chatcmpl-functional-readiness",
+      object: "chat.completion",
+      choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: "OK" } }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    }),
+  );
+}
+
 export function functionalGatewayConfig(): GatewayConfig {
   const provider = {
     modelId: "functional-model",
-    baseUrl: "https://provider.invalid/v1",
+    baseUrl: `${FUNCTIONAL_PROVIDER_ORIGIN}/v1`,
     apiKey: "functional-provider-secret",
     apiKeyHeaderName: "api-key",
     endpointStyle: "azure-openai-deployment" as const,

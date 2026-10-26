@@ -3,7 +3,13 @@ import { redact } from "@oscharko-dev/keiko-security";
 import { isEcosystemSourceFile, workspaceLanguageForPath } from "./ecosystems.js";
 import { WorkspaceReadError } from "./errors.js";
 
-/** Evidence retains language syntax; metadata and non-source files keep plain-text protection. */
+/**
+ * Evidence retains language syntax; metadata and non-source files keep plain-text protection. The
+ * one model-safe projection of workspace text: discovery, search and import reads use it here, and
+ * a consumer that receives workspace text from another read boundary (the Coding runtime's secure
+ * read helper, say) imports it through the `./source-redaction` subpath instead of a second copy.
+ * Throws `WorkspaceReadError` when no safe projection is available, so callers fail closed.
+ */
 export function redactWorkspaceSource(
   text: string,
   scopePath: string,

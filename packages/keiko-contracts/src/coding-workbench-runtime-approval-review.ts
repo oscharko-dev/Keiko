@@ -52,9 +52,24 @@ export type CodingWorkbenchRuntimeApprovalReviewSession =
  * evidence. Patch content and file bodies are not part of this contract. A verified commit also
  * carries its bounded intended message for human review; that message stays on this channel.
  */
+/**
+ * The native OpenCode action a pending approval would run (#3897): the permission OpenCode
+ * evaluated and the resources it named (a command line, URLs, or paths). MODEL-SELECTED text,
+ * shown so the human decides about the real action; rendered as text, never markup or evidence.
+ */
+export interface CodingWorkbenchNativeActionReview {
+  readonly permission: string;
+  readonly resources: readonly string[];
+}
+
+export const CODING_WORKBENCH_NATIVE_ACTION_REVIEW_MAX_RESOURCES = 64;
+export const CODING_WORKBENCH_NATIVE_ACTION_REVIEW_RESOURCE_MAX_CHARS = 2_048;
+
 export interface CodingWorkbenchRuntimePendingApprovalReview {
   /** Binds the review to the exact pending permission the operator is deciding about. */
   readonly requestId: string;
+  /** Present only for a native OpenCode action; edits carry their paths in `paths` as well. */
+  readonly nativeAction?: CodingWorkbenchNativeActionReview;
   /** Workspace-relative, deduplicated, in the order the changeset declared them. */
   readonly paths: readonly string[];
   /** True when the changeset declared more files than `paths` carries. */
@@ -128,6 +143,7 @@ function validatePendingApprovalReview(value: unknown, errors: string[]): void {
         "deletedLines",
         "verifiedCommit",
         "draftDelivery",
+        "nativeAction",
       ],
       "pendingApprovalReview",
     ),
@@ -138,7 +154,8 @@ function validatePendingApprovalReview(value: unknown, errors: string[]): void {
     errors,
     CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS,
   );
-  if (value.draftDelivery === undefined) validateReviewPaths(value.paths, errors);
+  if (value.nativeAction !== undefined) validateNativeActionReview(value, errors);
+  else if (value.draftDelivery === undefined) validateReviewPaths(value.paths, errors);
   else validateDraftReview(value, errors);
   if (typeof value.pathsTruncated !== "boolean") {
     errors.push("pendingApprovalReview.pathsTruncated must be a boolean");
@@ -148,6 +165,36 @@ function validatePendingApprovalReview(value: unknown, errors: string[]): void {
   validateReviewCount(value.deletedLines, "deletedLines", errors);
   validateReviewFileCountConsistency(value, errors);
   if (value.verifiedCommit !== undefined) validateCommitReview(value, errors);
+}
+
+function validateNativeActionReview(pending: Record<string, unknown>, errors: string[]): void {
+  const value = pending.nativeAction;
+  if (!isRecord(value)) {
+    errors.push("nativeAction must be an object");
+    return;
+  }
+  errors.push(...exactKeys(value, ["permission", "resources"], "nativeAction"));
+  validateSafeId(value.permission, "nativeAction.permission", errors, 64);
+  if (
+    !Array.isArray(value.resources) ||
+    value.resources.length > CODING_WORKBENCH_NATIVE_ACTION_REVIEW_MAX_RESOURCES ||
+    !value.resources.every((resource) =>
+      validateUntrustedDisplayText(
+        resource,
+        CODING_WORKBENCH_NATIVE_ACTION_REVIEW_RESOURCE_MAX_CHARS,
+        { minChars: 0 },
+      ),
+    )
+  )
+    errors.push("nativeAction.resources must be a bounded array of display text");
+  if (pending.draftDelivery !== undefined || pending.verifiedCommit !== undefined)
+    errors.push("a native action review cannot carry delivery or commit authority");
+  if (!Array.isArray(pending.paths)) {
+    errors.push("pendingApprovalReview.paths must be an array");
+    return;
+  }
+  // Edit asks also carry their contained paths; other native actions carry none.
+  if (pending.paths.length > 0) validateReviewPaths(pending.paths, errors);
 }
 
 function validateCommitReview(pending: Record<string, unknown>, errors: string[]): void {

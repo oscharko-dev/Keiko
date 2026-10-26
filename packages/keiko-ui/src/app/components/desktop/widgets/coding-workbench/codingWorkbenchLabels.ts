@@ -402,7 +402,9 @@ export function eventDetail(
 // The run failures with a sentence of their own. F9 (#3873): the internal-error sentence belongs
 // to `runtime-failed` alone; a run that ended on one of its bounds or on a model call names that
 // cause instead. F5 (#3873): a run whose edits were refused again and again names its refusal
-// class and the next step, never the generic sentence.
+// class and the next step, never the generic sentence. A start the server refused before its first
+// turn (`invalid-intent`: a file the first prompt referenced, or a slash command, was not accepted)
+// names what to check.
 const RUN_FAILURE_MESSAGES: ReadonlyMap<string, CodingWorkbenchMessageKey> = new Map<
   CodingWorkbenchRuntimeFailureCode,
   CodingWorkbenchMessageKey
@@ -416,6 +418,7 @@ const RUN_FAILURE_MESSAGES: ReadonlyMap<string, CodingWorkbenchMessageKey> = new
   ["verification-not-evidenced", "codingWorkbench.event.failure.verification-not-evidenced"],
   ["edits-blocked", "codingWorkbench.event.failure.edits-blocked"],
   ["edit-retries-exhausted", "codingWorkbench.event.failure.edit-retries-exhausted"],
+  ["invalid-intent", "codingWorkbench.event.failure.invalid-intent"],
 ]);
 
 // F9 (#3873): a run that settles `cancelled` was stopped, which is not a failure, so its terminal

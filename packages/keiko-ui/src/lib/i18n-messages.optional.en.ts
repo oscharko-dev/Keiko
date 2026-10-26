@@ -146,6 +146,12 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "agentLauncher.sourceFilePlaceholder": "src/file.ts",
   "agentLauncher.browseSourceFile": "Browse source file",
   "agentLauncher.selectRepositoryFirst": "Select a repository before browsing source files.",
+  "agentLauncher.skill": "Skill",
+  "agentLauncher.skillNone": "No skill",
+  "agentLauncher.skillNote":
+    "Optional. A private Markdown skill guides every model call of this run. It grants no additional authority.",
+  "agentLauncher.skillUnavailable":
+    "Private skills could not be loaded. The run starts without a skill.",
   "agentLauncher.observedBehavior": "Observed behavior",
   "agentLauncher.observedBehaviorPlaceholder": "Describe the observed bug.",
   "agentLauncher.failingOutput": "Failing output",

@@ -413,6 +413,25 @@ export async function rebindArchive(stageRoot, manifest, archiveAdapter = window
   });
 }
 
+// The pinned ripgrep executable is a PE file in the payload, so the same PE-inventory Authenticode
+// signing covers it; the manifest then states what happened to it.
+function markNativeToolsVerified(manifest) {
+  if (manifest.nativeTools === undefined) return;
+  if (!Array.isArray(manifest.nativeTools) || manifest.nativeTools.length !== 1) {
+    fail("manifest must contain exactly one native tool");
+  }
+  manifest.nativeTools[0].signing = {
+    signatureKind: "authenticode",
+    verificationStatus: "verified-production",
+    signatureVerified: true,
+    notarizationRequired: false,
+    notarizationVerified: false,
+  };
+  manifest.releaseImpact.reviewedBinding.nativeTools = globalThis.structuredClone(
+    manifest.nativeTools,
+  );
+}
+
 function markNativeHelpersVerified(manifest) {
   if (!Array.isArray(manifest.nativeHelpers) || manifest.nativeHelpers.length !== 2) {
     fail("manifest must contain the complete native helper set");
@@ -539,6 +558,7 @@ export function bindRuntimeAttestation(stageRoot, manifest) {
   manifest.releaseImpact.reviewedBinding.nativeAddons = globalThis.structuredClone(
     manifest.nativeAddons,
   );
+  markNativeToolsVerified(manifest);
   bindRuntimeAttestationSbom(stageRoot, manifest, attestation);
   manifest.releaseImpact.reviewedBinding.runtimeAttestation =
     globalThis.structuredClone(attestation);

@@ -124,9 +124,12 @@ describe("real-binary #3390 evidence", () => {
         ...value,
         limits: {
           ...value.limits,
+          // The admitted prompt budget binds the geometry; since the coding run envelope is
+          // 4 MiB (#3897) the request byte ceiling no longer does, so shrinking it alone would
+          // describe the same geometry and is not a malformed artifact.
           admission: {
             ...value.limits.admission,
-            maxRequestBytes: value.limits.admission.maxRequestBytes - 1_024,
+            maxPromptTokens: value.limits.admission.maxPromptTokens - 1_024,
           },
         },
       }),

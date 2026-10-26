@@ -134,6 +134,8 @@ jobs:
         run: node native/secure-workspace-read/test-protocol.mjs
       - name: Provision the pinned USearch native addon
         run: npm run provision:usearch
+      - name: Provision the pinned ripgrep runtime
+        run: npm run provision:ripgrep
       - name: Prepare approved sidecar payloads
         run: node scripts/prepare-approved-sidecar-payloads.mjs --target ${{ matrix.platform_target }}
       - name: Stage stable unsigned runtime for Keiko release trust
@@ -147,6 +149,8 @@ jobs:
         run: node scripts/run-portable-assets-stage.mjs --target ${{ matrix.platform_target }} --evaluation
       - name: Functionally smoke the staged USearch addon
         run: node scripts/smoke-portable-usearch.mjs .portable-runtime/staging/${{ matrix.platform_target }} ${{ matrix.platform_target }}
+      - name: Functionally smoke the staged ripgrep executable
+        run: node scripts/smoke-portable-ripgrep.mjs .portable-runtime/staging/${{ matrix.platform_target }} ${{ matrix.platform_target }}
       - name: Smoke test the staged artifact
         run: npm run smoke:portable-launch-setup -- --stage-root .portable-runtime/staging --stage-target ${{ matrix.platform_target }}
       - name: Functionally smoke the unsigned secure-read helper
@@ -193,6 +197,8 @@ jobs:
         run: npm run check:portable-approvals
       - name: Provision the pinned USearch native addon
         run: npm run provision:usearch
+      - name: Provision the pinned ripgrep runtime
+        run: npm run provision:ripgrep
       - name: Prepare approved sidecar payloads
         run: node scripts/prepare-approved-sidecar-payloads.mjs --target linux-x64
       - name: Stage unsigned runtime for manual smoke
@@ -203,6 +209,8 @@ jobs:
         run: node scripts/run-portable-assets-stage.mjs --target linux-x64 --evaluation
       - name: Functionally smoke the staged USearch addon
         run: node scripts/smoke-portable-usearch.mjs .portable-runtime/staging/linux-x64 linux-x64
+      - name: Functionally smoke the staged ripgrep executable
+        run: node scripts/smoke-portable-ripgrep.mjs .portable-runtime/staging/linux-x64 linux-x64
       - name: Smoke test the staged artifact
         run: npm run smoke:portable-launch-setup -- --stage-root .portable-runtime/staging --stage-target linux-x64
       - name: Functionally smoke the unsigned secure-read helper
@@ -276,12 +284,16 @@ jobs:
         run: ./scripts/check-linux-portable-launcher.sh
       - name: Provision the pinned USearch native addon
         run: npm run provision:usearch
+      - name: Provision the pinned ripgrep runtime
+        run: npm run provision:ripgrep
       - name: Prepare approved sidecar payloads
         run: node scripts/prepare-approved-sidecar-payloads.mjs --target linux-x64
       - name: Stage stable runtime for Keiko release trust
         run: node scripts/run-portable-assets-stage.mjs --target linux-x64 --release
       - name: Functionally smoke the staged USearch addon
         run: node scripts/smoke-portable-usearch.mjs .portable-runtime/staging/linux-x64 linux-x64
+      - name: Functionally smoke the staged ripgrep executable
+        run: node scripts/smoke-portable-ripgrep.mjs .portable-runtime/staging/linux-x64 linux-x64
       - name: Smoke test the staged artifact
         run: npm run smoke:portable-launch-setup -- --stage-root .portable-runtime/staging --stage-target linux-x64
       - name: Functionally smoke the secure-read helper

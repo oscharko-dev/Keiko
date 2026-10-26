@@ -1422,13 +1422,20 @@ export type {
   CodingWorkbenchRuntimeApprovalDecision,
   CodingWorkbenchRuntimeApprovalDecisionRequest,
   CodingWorkbenchContextCompaction,
+  CodingWorkbenchAgent,
+  CodingWorkbenchBuiltInAgent,
   CodingWorkbenchContextUsage,
   CodingWorkbenchContextUsageBreakdown,
   CodingWorkbenchContextUsageSource,
+  CodingWorkbenchPromptDelivery,
+  CodingWorkbenchPromptReference,
   CodingWorkbenchRuntimeEvidenceClass,
+  CodingWorkbenchRuntimeFollowUpRequest,
+  CodingWorkbenchRuntimeForkRequest,
   CodingWorkbenchRuntimePendingPermission,
   CodingWorkbenchRuntimePreference,
   CodingWorkbenchRuntimeProjectMemoryRequest,
+  CodingWorkbenchRuntimePromptInputs,
   CodingWorkbenchRuntimeReadiness,
   CodingWorkbenchRuntimeReadinessRequest,
   CodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
@@ -1448,6 +1455,7 @@ export type {
   CodingWorkbenchRuntimeUnavailableReason,
 } from "./coding-workbench-runtime-api.js";
 export type {
+  CODING_WORKBENCH_AGENTS,
   CODING_WORKBENCH_GATEWAY_EVENT_KINDS,
   CODING_WORKBENCH_ISSUE_NUMBER_MAX,
   CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS,
@@ -1458,6 +1466,9 @@ export type {
   CODING_WORKBENCH_RUNTIME_SSE_CURSOR_MAX_CHARS,
   CODING_WORKBENCH_RUNTIME_SSE_EVENT_KINDS,
   CODING_WORKBENCH_RUNTIME_UNAVAILABLE_REASONS,
+  DEFAULT_CODING_WORKBENCH_AGENT,
+  isCodingWorkbenchAgent,
+  isCodingWorkbenchBuiltInAgent,
   parseCodingWorkbenchRuntimeApprovalDecisionRequest,
   parseCodingWorkbenchRuntimeReadinessRequest,
   parseCodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
@@ -1498,6 +1509,7 @@ export type {
   validateCodingWorkbenchRuntimeQuestionsResponse,
 } from "./coding-workbench-runtime-questions.js";
 export type {
+  CodingWorkbenchNativeActionReview,
   CodingWorkbenchRuntimeApprovalReviewChannelPayload,
   CodingWorkbenchRuntimeApprovalReviewSession,
   CodingWorkbenchRuntimePendingApprovalReview,
@@ -2077,6 +2089,7 @@ export type {
   CompletionModelSelection,
   ChatMessage,
   ChatMessageContentPart,
+  ChatMessageFileContentPart,
   ChatMessageImageUrlContentPart,
   ChatMessageTextContentPart,
   ToolDefinition,
@@ -2140,6 +2153,7 @@ export type {
   isAsYouTypeCompletionModel,
   isCodingWorkbenchReadinessCandidate,
   isCodingWorkbenchModel,
+  isCodingWorkbenchProofRenewing,
   listCodingWorkbenchReadinessCandidates,
   selectCodingWorkbenchReadinessCandidate,
   isVoiceCapability,
@@ -4734,6 +4748,7 @@ export type {
   isWorkspaceCleanupMode,
   isWorkspaceSurface,
   isWorkspaceEventType,
+  taskWorkspaceProvisioningSource,
   validateWorkspaceEvent,
   validateWorkspaceInstance,
   validateWorkspaceBinding,
@@ -5202,6 +5217,8 @@ export type {
   CodingRuntimeGitStatus,
   CodingRuntimeGitDiff,
   CodingRuntimeGitStage,
+  CodingRuntimeGitUnstage,
+  CodingRuntimeGitSync,
 } from "./coding-runtime-git.js";
 
 export type {
@@ -5242,3 +5259,22 @@ export type {
   isGitJourneyRemoteFacts,
   isJourneyOutcome,
 } from "./git-journey-validation.js";
+
+export type {
+  CodingWorkbenchMcpAuthorizationRefusal,
+  CodingWorkbenchMcpAuthorizationRequest,
+  CodingWorkbenchMcpAuthorizationStart,
+  CodingWorkbenchMcpAuthorizationState,
+  CodingWorkbenchMcpAuthorizationStatus,
+  CodingWorkbenchMcpServer,
+  CodingWorkbenchMcpServerStatus,
+  CodingWorkbenchRuntimeMcpChannelPayload,
+  McpLocalTransport,
+  McpRemoteOAuth,
+  McpRemoteSecretHeader,
+  McpRemoteTransport,
+  McpServerDefinition,
+  McpServerRegistryParse,
+  McpServerRegistryRefusal,
+  McpToolRisk,
+} from "./mcp-servers.js";

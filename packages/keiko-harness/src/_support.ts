@@ -18,9 +18,10 @@ import {
   lookupCatalogTool,
   catalogJsonBytes,
 } from "@oscharko-dev/keiko-tool-catalog";
-import type {
-  CatalogToolPort,
-  GatewayToolCatalogAdvertisement,
+import {
+  boundGatewayToolCatalog,
+  type CatalogToolPort,
+  type GatewayToolCatalogAdvertisement,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 import {
   bindHarnessCatalog,
@@ -120,13 +121,14 @@ export function scriptedModel(script: readonly (NormalizedResponse | Error)[]): 
           return Promise.reject(item);
         }
         const selected = item ?? response();
+        const bound = boundGatewayToolCatalog(request.toolCatalog);
         const normalizer =
-          request.toolCatalog === undefined
+          bound === undefined
             ? undefined
             : createToolInvocationNormalizer({
-                catalog: request.toolCatalog.catalog,
-                projection: request.toolCatalog.projection,
-                offered: request.toolCatalog.offered,
+                catalog: bound.catalog,
+                projection: bound.projection,
+                offered: bound.offered,
               });
         return Promise.resolve({
           ...selected,

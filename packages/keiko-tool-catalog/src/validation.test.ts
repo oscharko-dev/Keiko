@@ -8,6 +8,7 @@ import {
 } from "./schema.js";
 import { createToolDescriptor, createToolCatalog, compileToolProjection } from "./index.js";
 import { declaration, profile } from "./__fixtures__/catalog.js";
+import { GATEWAY_NATIVE_ADVERTISEMENT_CAPTURE_BYTES } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 
 function nested(depth: number): unknown {
   let value: unknown = "leaf";
@@ -91,8 +92,11 @@ describe("bounded hostile declaration capture", () => {
     expect(() =>
       copyCatalogJson(["x".repeat(65536), "x".repeat(65536), "x".repeat(65536), "x".repeat(65536)]),
     ).toThrow("input-bound");
-    for (const limit of [0, -1, NaN, Infinity, 1.5, 262145])
+    // A whole native advertisement has its own capture budget, the largest a copy may ask for.
+    const ceiling = GATEWAY_NATIVE_ADVERTISEMENT_CAPTURE_BYTES;
+    for (const limit of [0, -1, NaN, Infinity, 1.5, ceiling + 1])
       expect(() => copyCatalogJson({}, limit)).toThrow("input-bound");
+    expect(copyCatalogJson({}, ceiling)).toEqual({});
     expect(catalogBytes(copyCatalogJson({ text: "é" }))).toBe(13);
   });
   it("contains foreign reflective failures without leaking declaration bodies", () => {

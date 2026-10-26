@@ -29,6 +29,7 @@ import {
   GIT_MUTATION_COMMAND_RULES,
   type GitCommitExecRequest,
   type GitStageExecRequest,
+  type GitUnstageExecRequest,
   type GitLocalMutationAdapter,
   type GitMutationArgvPlan,
 } from "./git-mutation-adapter.js";
@@ -58,7 +59,12 @@ import {
   readGitTreeDigest,
 } from "./git-worktree-snapshot-node.js";
 import { isSafeGitRefName } from "./git-worktree-adapter.js";
-import { stageExactFiles, gitStageAttributesSupported } from "./git-stage-node.js";
+import {
+  stageExactFiles,
+  gitStageAttributesSupported,
+  unstageExactFiles,
+  type GitStageEffectContext,
+} from "./git-stage-node.js";
 import { gitCommitMessageDigest } from "./git-index-identity.js";
 
 export interface NodeGitMutationAdapterDeps {
@@ -291,21 +297,46 @@ async function execStage(
     )
       return failureFromExit(0, 0);
     if (ctx.signal.aborted || ctx.beforeIndexUpdate?.() === false) return failureFromExit(0, 0);
-    const succeeded = await stageExactFiles(
-      {
-        workspaceRoot: ctx.runDeps.workspace.root,
-        fs: workspaceFsOf(ctx.runDeps),
-        check: () => verifiedFactsMatch(ctx, request),
-        authorized: () => !ctx.signal.aborted && ctx.beforeIndexUpdate?.() !== false,
-        run: (argv, stdin, indexPath) =>
-          runOne(indexPath === undefined ? ctx : withIndexPath(ctx, indexPath), argv, stdin),
-      },
-      request,
-    );
+    const succeeded = await stageExactFiles(verifiedIndexEffect(ctx, request), request);
     return succeeded ? executionResult("succeeded", 0) : failureFromExit(0, 0);
   } catch (error) {
     return failureFromThrow(error, 0, 0);
   }
+}
+
+// #3902 AC2 (PR #4064 review): an unstaging reviewed against a head, base and staged tree changes the
+// index only while all three still hold, checked inside the same index transaction as staging and
+// again, together with the run's authority, just before the reviewed index replaces the live one.
+// A thrown failure (a Git read, the index lock, an authority lapse at the swap) propagates to the
+// orchestrator's adapter boundary, which reports the step as failed; the index stays as it was.
+async function execUnstage(
+  ctx: RunContext,
+  request: GitUnstageExecRequest,
+): Promise<GitDeliveryExecutionResult> {
+  if (request.verified === undefined) return execPlan(ctx, () => buildUnstageArgv(request));
+  if (!(await verifiedFactsMatch(ctx, request))) return failureFromExit(0, 0);
+  if (ctx.signal.aborted || ctx.beforeIndexUpdate?.() === false) return failureFromExit(0, 0);
+  const succeeded = await unstageExactFiles(
+    verifiedIndexEffect(ctx, request),
+    buildUnstageArgv(request),
+  );
+  return succeeded ? executionResult("succeeded", 0) : failureFromExit(0, 0);
+}
+
+// The index effect of a verified staging or unstaging: the reviewed facts, the run's authority, and
+// Git runs that may target the transaction's private index copy.
+function verifiedIndexEffect(
+  ctx: RunContext,
+  request: Pick<GitCommitExecRequest, "verified">,
+): GitStageEffectContext {
+  return {
+    workspaceRoot: ctx.runDeps.workspace.root,
+    fs: workspaceFsOf(ctx.runDeps),
+    check: () => verifiedFactsMatch(ctx, request),
+    authorized: () => !ctx.signal.aborted && ctx.beforeIndexUpdate?.() !== false,
+    run: (argv, stdin, indexPath) =>
+      runOne(indexPath === undefined ? ctx : withIndexPath(ctx, indexPath), argv, stdin),
+  };
 }
 
 function withIndexPath(ctx: RunContext, indexPath: string): RunContext {
@@ -584,7 +615,7 @@ export function createNodeGitMutationAdapter(
     createBranch: (req) => execPlan(ctx, () => buildBranchCreateArgv(req)),
     switchBranch: (req) => execPlan(ctx, () => buildBranchSwitchArgv(req)),
     stage: (req) => execStage(ctx, req),
-    unstage: (req) => execPlan(ctx, () => buildUnstageArgv(req)),
+    unstage: (req) => execUnstage(ctx, req),
     commit: (req) => execCommit(ctx, req),
     abort: (req) => execPlan(ctx, () => buildAbortArgv(req)),
     recover: (req) => execPlan(ctx, () => buildRecoveryArgv(req)),

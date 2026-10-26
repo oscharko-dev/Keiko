@@ -27,6 +27,7 @@ analysis for authorization, persistence, migrations, updater, supply-chain and w
 ```bash
 npm install                # install all workspaces from the single root lockfile
 npm run provision:usearch  # ONCE per checkout — see AGENTS.md §2
+npm run provision:ripgrep  # coding-runtime search tool; needed by customer-shape, portable staging + npm runtime package build — AGENTS.md §2
 npm run build              # compile TypeScript outputs
 npm run typecheck          # strict type-checking for src + tests
 npm run lint               # ESLint, zero-warning policy
@@ -492,9 +493,10 @@ effective input budget and image reserve. This evidence survives generation time
 cancellation; the successful-turn compaction manifest remains separate. These are local estimates,
 not provider-measured usage, and no conversation or image content is recorded.
 
-Gateway admission additionally records `imageCount`, the selected `imageAccounting` rule,
-`imageReserveTokens`, `localPromptTokens`, `fallbackPromptTokens`, and, when present,
-`reportedPromptTokens` plus schema-adjusted `providerPromptTokens`. A positive reported count
+Gateway admission additionally records `imageCount`, optional `documentCount`, the selected
+`imageAccounting` rule, `imageReserveTokens`, `localPromptTokens`, `fallbackPromptTokens`, and,
+when present, `reportedPromptTokens` plus schema-adjusted `providerPromptTokens`. PDF document
+parts take the same per-part media reserve as images. A positive reported count
 replaces the image reserve even when the local text/tool/schema floor determines the final total;
 a zero count retains the reserve. The recorded candidates make those decisions distinguishable.
 

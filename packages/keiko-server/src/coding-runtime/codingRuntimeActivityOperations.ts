@@ -27,6 +27,7 @@ export const CODING_RUNTIME_TOOL_RESULT_OPERATION = defineActivityLogOperation({
         "skill-discover",
         "child-agent",
         "git-stage",
+        "git-unstage",
         "commit",
         "push",
         "pull-request",
@@ -108,7 +109,7 @@ const RUNTIME_CONFINEMENT_DIAGNOSTIC_KINDS = [
 // `frames` whenever none of its stack frames anchor to a known workspace package. `required: true`
 // would demand a field the production sink itself omits whenever there is nothing to report, so a
 // persisted line could never satisfy its own contract.
-const RUNTIME_CONFINEMENT_FAILURE_TRACE_FIELDS = {
+export const CODING_RUNTIME_FAILURE_TRACE_FIELDS = {
   frames: {
     type: "string-array",
     dataClass: "opaque-id",
@@ -175,7 +176,7 @@ const RUNTIME_CONFINEMENT_FAILED_FIELDS = {
     required: false,
     values: RUNTIME_CONFINEMENT_DIAGNOSTIC_KINDS,
   },
-  ...RUNTIME_CONFINEMENT_FAILURE_TRACE_FIELDS,
+  ...CODING_RUNTIME_FAILURE_TRACE_FIELDS,
 } as const;
 
 export const RUNTIME_CONFINEMENT_FAILED_OPERATION = defineActivityLogOperation({
@@ -253,13 +254,19 @@ export const RUNTIME_CONFINEMENT_SPAWNED_OPERATION = defineActivityLogOperation(
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["keiko-gateway"],
+      values: ["keiko-gateway", "keiko-native"],
     },
     childExecutablePolicy: {
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["namespace-inherited", "runtime-and-attested-git-only"],
+      values: ["namespace-inherited", "runtime-and-attested-git-only", "toolchain-inherited"],
+    },
+    egressDisposition: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["inherited", "loopback-only"],
     },
     parentLifetime: {
       type: "string",
@@ -283,13 +290,13 @@ export const RUNTIME_CONFINEMENT_SPAWNED_OPERATION = defineActivityLogOperation(
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["native-root-union-v1"],
+      values: ["native-root-union-v1", "native-workspace-rw-v1"],
     },
     workspaceAccess: {
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["read-only-outside-private-state"],
+      values: ["read-only-outside-private-state", "read-write"],
     },
     privateStateAccess: {
       type: "string",

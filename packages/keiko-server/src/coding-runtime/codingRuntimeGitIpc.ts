@@ -3,17 +3,41 @@ import {
   isCodingRuntimeGitPath,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
-import type { CodingToolRequestIdentity } from "./codingToolIpc.js";
+import type { CodingToolApprovalProof, CodingToolRequestIdentity } from "./codingToolIpc.js";
 export type RuntimeGitRequest = CodingToolRequestIdentity & { readonly action: "git" } & (
     | { readonly operation: "status" }
+    // #3902 AC2: one fetch, or one fast-forward pull from the upstream, through the Git sync owner;
+    // a narrower mode redeems the operator's approval of this exact call.
+    | { readonly operation: "fetch"; readonly approvalProof?: CodingToolApprovalProof | undefined }
+    | { readonly operation: "pull"; readonly approvalProof?: CodingToolApprovalProof | undefined }
     | {
         readonly operation: "diff";
         readonly scope: "working-tree" | "index";
         readonly paths: readonly string[];
       }
-    | { readonly operation: "stage"; readonly phase: "propose"; readonly paths: readonly string[] }
-    | { readonly operation: "stage"; readonly phase: "execute"; readonly proposalId: string }
+    | {
+        readonly operation: RuntimeGitIndexOperation;
+        readonly phase: "propose";
+        readonly paths: readonly string[];
+      }
+    | {
+        readonly operation: RuntimeGitIndexOperation;
+        readonly phase: "execute";
+        readonly proposalId: string;
+      }
   );
+/** The proposals that change the index: staging and, its inverse, unstaging (#3902 AC2). */
+export type RuntimeGitIndexOperation = "stage" | "unstage";
+/** The remote synchronizations the runtime may ask the Git sync owner for (#3902 AC2). */
+export type RuntimeGitSyncOperation = "fetch" | "pull";
+
+export function isRuntimeGitSyncOperation(value: unknown): value is RuntimeGitSyncOperation {
+  return value === "fetch" || value === "pull";
+}
+const PROPOSAL_ID: Readonly<Record<RuntimeGitIndexOperation, RegExp>> = {
+  stage: /^stage-\d{1,39}$/u,
+  unstage: /^unstage-\d{1,39}$/u,
+};
 const BASE_KEYS = ["action", "actionId", "idempotencyKey", "operation"];
 function exact(value: Record<string, unknown>, extra: readonly string[]): boolean {
   const keys = [...BASE_KEYS, ...extra];
@@ -51,22 +75,24 @@ function parseValidatedRuntimeGitRequest(
   if (value.operation === "status")
     return exact(value, []) ? { ...base, operation: "status" } : undefined;
   if (value.operation === "diff") return diffRequest(value, base);
-  if (value.operation !== "stage") return undefined;
+  if (value.operation !== "stage" && value.operation !== "unstage") return undefined;
+  const operation = value.operation;
   if (value.phase === "propose" && exact(value, ["phase", "paths"]) && runtimeGitPaths(value.paths))
-    return { ...base, operation: "stage", phase: "propose", paths: value.paths };
-  return stageExecution(value, base);
+    return { ...base, operation, phase: "propose", paths: value.paths };
+  return indexExecution(value, base, operation);
 }
-function stageExecution(
+function indexExecution(
   value: Record<string, unknown>,
   base: CodingToolRequestIdentity & { readonly action: "git" },
+  operation: RuntimeGitIndexOperation,
 ): RuntimeGitRequest | undefined {
   if (
     value.phase === "execute" &&
     exact(value, ["phase", "proposalId"]) &&
     typeof value.proposalId === "string" &&
-    /^stage-\d{1,39}$/u.test(value.proposalId)
+    PROPOSAL_ID[operation].test(value.proposalId)
   )
-    return { ...base, operation: "stage", phase: "execute", proposalId: value.proposalId };
+    return { ...base, operation, phase: "execute", proposalId: value.proposalId };
   return undefined;
 }
 function diffRequest(

@@ -80,6 +80,8 @@ import type {
   CodingToolFacade,
   CodingToolFacadeOptions,
   CodingToolMutationGuard,
+  CodingToolNativeVerificationHooks,
+  CodingToolNativeVerificationResult,
   CodingVerificationBlockedReason,
   CodingVerificationExecutedObserver,
 } from "./codingToolFacadePorts.js";
@@ -749,6 +751,7 @@ export function createProductionManagedWorktreeToolFacade(
       ...(input.observeEditOutcome === undefined
         ? {}
         : { observeEditOutcome: input.observeEditOutcome }),
+      nativeVerification: nativeVerificationHooks(input),
     },
   );
   const acceptedInitialization = acceptedInitializationFacet(input, readEdit);
@@ -940,7 +943,10 @@ function requestStageReview(
   input: ProductionManagedWorktreeToolInput,
   result: import("@oscharko-dev/keiko-contracts").CodingRuntimeGitResult,
 ): void {
-  if (result.kind === "stage" && result.status === "approval-required")
+  if (
+    (result.kind === "stage" || result.kind === "unstage") &&
+    result.status === "approval-required"
+  )
     input.requestStageApproval?.(result.proposalId);
 }
 
@@ -951,8 +957,13 @@ async function releaseStageProposal(
 ): Promise<
   import("@oscharko-dev/keiko-contracts").CodingRuntimeGitResult | "declined" | undefined
 > {
-  if (result.kind !== "stage" || result.status !== "approval-required") return result;
+  if (
+    (result.kind !== "stage" && result.kind !== "unstage") ||
+    result.status !== "approval-required"
+  )
+    return result;
   requestStageReview(input, result);
+  const actionKind = result.kind === "stage" ? "git-stage" : "git-unstage";
   const service = input.runtimeGitService;
   if (service === undefined) return undefined;
   const outcome = await waitForRuntimeProposalApproval(
@@ -960,10 +971,10 @@ async function releaseStageProposal(
     result.proposalId,
     signal,
     (error) => {
-      recordProposalApprovalResolutionFailure(input, "git-stage", result.proposalId, error);
+      recordProposalApprovalResolutionFailure(input, actionKind, result.proposalId, error);
     },
   );
-  recordProposalApprovalWait(input, "git-stage", result.proposalId, outcome);
+  recordProposalApprovalWait(input, actionKind, result.proposalId, outcome);
   if (outcome === "denied") return "declined";
   return outcome === "approved" ? { ...result, status: "ready", reason: "none" } : undefined;
 }
@@ -1155,7 +1166,7 @@ function recordPolicyAuthorizedProposal(
 
 function recordProposalApprovalWait(
   input: ProductionManagedWorktreeToolInput,
-  actionKind: "git-stage" | "commit" | "push" | "pull-request",
+  actionKind: "git-stage" | "git-unstage" | "commit" | "push" | "pull-request",
   proposalId: string,
   outcome: ProposalApprovalWaitOutcome,
 ): void {
@@ -1187,7 +1198,7 @@ function recordProposalApprovalWait(
 
 export function recordProposalApprovalResolutionFailure(
   input: Pick<ProductionManagedWorktreeToolInput, "activityLog" | "authorityRef" | "diagnostics">,
-  actionKind: "git-stage" | "commit" | "push" | "pull-request",
+  actionKind: "git-stage" | "git-unstage" | "commit" | "push" | "pull-request",
   proposalId: string,
   error: unknown,
 ): void {
@@ -2301,13 +2312,28 @@ function verificationRunInput(
 ): VerificationRunInput {
   const correlationId = verificationCorrelationId(input);
   recordVerificationTarget(input, request, kind);
+  const sharedHostPlatform = input.toolProfile === "native" ? nativeHostPlatform() : undefined;
   return {
     projectId: input.workspaceRoot,
     kinds: [kind],
     requestId: request.actionId,
     ...(request.targetPath === undefined ? {} : { targetPath: request.targetPath }),
     ...(correlationId === undefined ? {} : { correlationId }),
+    ...(sharedHostPlatform === undefined ? {} : { sharedHostPlatform }),
   };
+}
+
+/**
+ * The native runtime's shell runs on this host and uses the workspace's installed dependencies, so
+ * the governed verifier must not replace them with another platform's (its container backend on
+ * macOS is Linux): the bootstrap then refuses that install instead (`install-target-foreign`).
+ */
+function nativeHostPlatform(): VerificationRunInput["sharedHostPlatform"] {
+  const os = process.platform;
+  const cpu = process.arch;
+  return (os === "darwin" || os === "linux" || os === "win32") && (cpu === "arm64" || cpu === "x64")
+    ? { os, cpu }
+    : undefined;
 }
 
 function recordVerificationTarget(
@@ -2479,6 +2505,67 @@ function publishVerification(
   };
   if (!validateCodingWorkbenchRuntimeEvent(event).ok) {
     throw new Error("runtime-verification-event-invalid");
+  }
+  input.onRuntimeEvent(event);
+}
+
+/**
+ * Native verification commands reach the same verification owner as the governed verifier (#3897
+ * review, #3901): the edit revision and admission observer are captured when the policy admits the
+ * command, and its exit status becomes the same summary event, so the run's ledger, its settlement
+ * and the Workbench's verification card treat both alike.
+ */
+function nativeVerificationHooks(
+  input: ProductionManagedWorktreeToolInput,
+): CodingToolNativeVerificationHooks {
+  let sequence = 0;
+  return {
+    revision: input.verificationRevision,
+    admitted: input.verificationAdmitted,
+    blocked: input.verificationBlocked,
+    publish: (result): void => {
+      sequence += 1;
+      publishNativeVerification(input, sequence, result);
+    },
+  };
+}
+
+function publishNativeVerification(
+  input: ProductionManagedWorktreeToolInput,
+  sequence: number,
+  result: CodingToolNativeVerificationResult,
+): void {
+  const targetDigest = codingVerificationTargetDigest(result.kind);
+  result.executed?.(targetDigest);
+  const status = result.passed ? "passed" : "failed";
+  const passedCount = result.passed ? 1 : 0;
+  const failedCount = result.passed ? 0 : 1;
+  const event: CodingWorkbenchRuntimeEvent = {
+    schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
+    eventId: `event-runtime-verification-${String(sequence)}`,
+    runId: input.authorityRef.runId,
+    occurredAt: new Date().toISOString(),
+    kind: "verification-summarized",
+    verificationKind: "verification-command",
+    ...(result.editRevision === undefined ? {} : { verificationEditRevision: result.editRevision }),
+    verificationStatus: status,
+    verificationSummary: {
+      verifierId: result.kind,
+      status,
+      passedCount,
+      failedCount,
+      skippedCount: 0,
+      durationMs: result.durationMs,
+    },
+    passedCount,
+    failedCount,
+    skippedCount: 0,
+    failureLocationCount: 0,
+    failureLocationsTruncated: false,
+    verificationTargetDigest: targetDigest,
+  };
+  if (!validateCodingWorkbenchRuntimeEvent(event).ok) {
+    throw new Error("runtime-native-verification-event-invalid");
   }
   input.onRuntimeEvent(event);
 }

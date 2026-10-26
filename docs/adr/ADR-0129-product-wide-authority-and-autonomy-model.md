@@ -112,6 +112,11 @@ Invalid or expired authority, workspace escape, denied sensitive paths, secret e
 (including stored connector credentials and tokens), unsupported actions, exhausted budgets, and
 platform restrictions fail closed in every mode, on every surface.
 
+A directory the operator explicitly accepted as a read-only external reference for native coding
+runs (`KEIKO_CODING_EXTERNAL_READ_ROOTS`, ADR-0137) is not workspace escape: it is named before
+the run, bound into the kernel read allowlist, and each read there is an `external-file` action of
+the run's mode. Writing there, and every directory that was not accepted, stays a hard denial.
+
 ### D4 — Delivery follows the governing deployment contract
 
 Product delivery and authority widening remain separately governed delivery actions. For Keiko

@@ -44,6 +44,7 @@ import {
   safeArchiveEntryPath,
   sha256File,
   portableManifestValidationFailuresForDeclaredLane,
+  ripgrepApprovalForPortableTarget,
   validatePortableCandidateManifest,
   validatePortableEvaluationManifest,
   validatePortableManifest,
@@ -59,6 +60,7 @@ import {
   buildWindowsGenerationLauncher,
   isCrossDeviceError,
   moveStagedDirectory,
+  ripgrepToolManifestEntry,
   stageWindowsPortableRootFiles,
 } from "../stage-portable-runtime.mjs";
 import {
@@ -74,6 +76,10 @@ import {
   usearchRuntimeApproval,
   usearchRuntimeTargetKey,
 } from "../../packages/keiko-local-knowledge/src/retrieval/usearch-runtime-manifest.ts";
+import {
+  RIPGREP_PORTABLE_LICENSE_PATH,
+  ripgrepPortableExecutablePath,
+} from "../../packages/keiko-server/src/coding-runtime/ripgrepRuntime.ts";
 import { runtimeActivationManifest } from "../runtime-activation-manifest.mjs";
 import { validatePortableTargetRoot } from "../portable-launch-setup-stage.mjs";
 
@@ -676,6 +682,13 @@ function syncReviewedBinding(candidate) {
       JSON.stringify(candidate.nativeAddons),
     );
   }
+  // Pinned third-party tools (ripgrep) are bound exactly like the addon: a production candidate
+  // must not carry a tool it never reviewed.
+  if (Array.isArray(candidate.nativeTools)) {
+    candidate.releaseImpact.reviewedBinding.nativeTools = JSON.parse(
+      JSON.stringify(candidate.nativeTools),
+    );
+  }
   if (candidate.runtimeAttestation === undefined) {
     delete candidate.releaseImpact.reviewedBinding.runtimeAttestation;
   } else {
@@ -814,6 +827,13 @@ function syncNativeHelperVerification(candidate, target) {
     helper.signing.signatureVerified = candidate.security.signatureVerified;
     helper.signing.notarizationRequired = candidate.security.notarizationRequired;
     helper.signing.notarizationVerified = candidate.security.notarizationVerified;
+  }
+  for (const tool of candidate.nativeTools ?? []) {
+    tool.signing.signatureKind = target.signatureKind;
+    tool.signing.verificationStatus = candidate.security.verificationStatus;
+    tool.signing.signatureVerified = candidate.security.signatureVerified;
+    tool.signing.notarizationRequired = candidate.security.notarizationRequired;
+    tool.signing.notarizationVerified = candidate.security.notarizationVerified;
   }
   if (candidate.runtimeAttestation !== undefined) {
     candidate.runtimeAttestation.signing.signatureKind = target.signatureKind;
@@ -1203,6 +1223,7 @@ async function assembleStageForTest(
       buildSecureReadHelper: writeSecureReadHelperFixture,
       preparePackageSurface: preparePackageSurfaceForTest,
       sealMacosAppBundle: writeMacosSealFixture,
+      stageRipgrepTool: writeRipgrepToolFixture,
       stageUsearchAddon: writeUsearchAddonFixture,
       verifyMacosAppBundleSeal: verifyMacosSealFixture,
     },
@@ -1276,6 +1297,37 @@ function writeUsearchAddonFixture(target, resourceRoot, { evaluation = false } =
       },
     },
   ];
+}
+
+// The hook mirrors the real `stageRipgrepTool` signature. The entry itself comes from the producer's
+// own builder, so the identity, the digests and the signing lane are the producer's, and only the
+// bytes on disk are a fixture.
+function writeRipgrepToolFixture(target, resourceRoot, { evaluation = false } = {}) {
+  const approved = ripgrepApprovalForPortableTarget(target);
+  if (approved === undefined) throw new Error("missing ripgrep fixture approval");
+  const executablePath = ripgrepPortableExecutablePath(approved.targetKey);
+  const destination = join(resourceRoot, ...executablePath.split("/"));
+  const licenseDestination = join(resourceRoot, ...RIPGREP_PORTABLE_LICENSE_PATH.split("/"));
+  mkdirSync(dirname(destination), { recursive: true });
+  mkdirSync(dirname(licenseDestination), { recursive: true });
+  writeFileSync(destination, "fixture ripgrep");
+  writeFileSync(licenseDestination, "fixture ripgrep license");
+  return [
+    ripgrepToolManifestEntry(
+      target,
+      approved,
+      { destination, executablePath, licensePath: RIPGREP_PORTABLE_LICENSE_PATH },
+      evaluation,
+    ),
+  ];
+}
+
+function withRipgrepTool(candidate) {
+  const target = portableTarget(candidate.artifact.platformTarget);
+  candidate.nativeTools = writeRipgrepToolFixture(target, tempDir());
+  syncNativeHelperVerification(candidate, target);
+  syncReviewedBinding(candidate);
+  return candidate;
 }
 
 function writeRuntimeSupervisorFixture(target, destination) {
@@ -1387,6 +1439,233 @@ describe("portable native helper manifest", () => {
     );
 
     expect(validatePortableCandidateManifest(candidate)).toEqual([]);
+  });
+});
+
+describe("portable native tool manifest", () => {
+  it("keeps manifests produced before the tool shipped parseable but requires it from a producer", () => {
+    const legacy = manifest();
+    expect(validatePortableManifest(legacy)).toEqual([]);
+    expect(validatePortableManifest(legacy, { requireNativeTools: true })).toContain(
+      "nativeTools: must contain the pinned ripgrep tool for newly produced artifacts",
+    );
+    expect(validatePortableManifest(withRipgrepTool(legacy), { requireNativeTools: true })).toEqual(
+      [],
+    );
+  });
+
+  it.each(PORTABLE_TARGETS.map((target) => target.platformTarget))(
+    "accepts exactly the pinned ripgrep tool in the production lane for %s",
+    (platformTarget) => {
+      const candidate = withRipgrepTool(setManifestTargetCopy(platformTarget));
+      expect(validatePortableManifest(candidate, { requireNativeTools: true })).toEqual([]);
+    },
+  );
+
+  it("keeps the tool explicitly unverified in the staging lane and refuses a signed claim", () => {
+    const candidate = manifest();
+    setVerificationState(candidate, {
+      verificationChecks: windowsVerificationChecks({
+        publisherChainVerified: false,
+        timestampVerified: false,
+      }),
+      verificationPolicy: "staging",
+      verificationReasonCodes: ["staging-unverified"],
+      verificationStatus: "unverified-staging",
+    });
+    addSidecarRuntime(candidate, "windows-x64", {
+      signing: stagingSidecarSigning(portableTarget("windows-x64")),
+    });
+    candidate.release.releaseId = 0;
+    candidate.artifact.assetId = 0;
+    withRipgrepTool(candidate);
+    candidate.releaseImpact.reviewedBinding.releaseId = 0;
+    expect(validatePortableStagingManifest(candidate, { requireNativeTools: true })).toEqual([]);
+
+    candidate.nativeTools[0].signing.verificationStatus = "verified-production";
+    candidate.nativeTools[0].signing.signatureVerified = true;
+    syncReviewedBinding(candidate);
+    candidate.releaseImpact.reviewedBinding.releaseId = 0;
+    expect(validatePortableStagingManifest(candidate).join("\n")).toContain(
+      "nativeTools[0].signing: must remain explicitly unverified during staging",
+    );
+  });
+
+  it("holds the tool to the evaluation lane exactly like the other native components", () => {
+    const candidate = withRipgrepTool(evaluationManifest());
+    expect(validatePortableEvaluationManifest(candidate, { requireNativeTools: true })).toEqual([]);
+    candidate.nativeTools[0].signing.verificationStatus = "unverified-staging";
+    syncReviewedBinding(candidate);
+    candidate.releaseImpact.reviewedBinding.releaseId = 0;
+    expect(validatePortableEvaluationManifest(candidate).join("\n")).toContain(
+      "nativeTools[0].signing: must remain explicitly unverified during evaluation",
+    );
+  });
+
+  it.each([
+    [
+      "an unsigned tool in the production lane",
+      (tool) => {
+        tool.signing.verificationStatus = "unverified-staging";
+        tool.signing.signatureVerified = false;
+      },
+      "nativeTools[0].signing: must be verified for production",
+    ],
+    ["a foreign name", (tool) => (tool.name = "grep"), "nativeTools[0].name: must be ripgrep"],
+    [
+      "a foreign kind",
+      (tool) => (tool.kind = "node-native-addon"),
+      "nativeTools[0].kind: must be native-tool",
+    ],
+    [
+      "a different release",
+      (tool) => (tool.version = "15.0.0"),
+      "nativeTools[0].version: must be 15.1.0",
+    ],
+    [
+      "another platform",
+      (tool) => (tool.platformTarget = "linux-x64"),
+      "nativeTools[0].platformTarget: must be windows-x64",
+    ],
+    [
+      "another architecture",
+      (tool) => (tool.architecture = "arm64"),
+      "nativeTools[0].architecture: must be x64",
+    ],
+    [
+      "a foreign executable path",
+      (tool) => (tool.executablePath = "runtime/native/usearch.node"),
+      "nativeTools[0].executablePath: must be runtime/native/rg.exe",
+    ],
+    [
+      "a traversing executable path",
+      (tool) => (tool.executablePath = "../rg.exe"),
+      "nativeTools[0].executablePath: must be runtime/native/rg.exe",
+    ],
+    [
+      "a foreign license path",
+      (tool) => (tool.licensePath = "runtime/licenses/rg/LICENSE"),
+      "nativeTools[0].licensePath: must be runtime/licenses/ripgrep/LICENSE-MIT",
+    ],
+    [
+      "a foreign SBOM reference",
+      (tool) => (tool.sbomBomRef = "pkg:generic/rg"),
+      "nativeTools[0].sbomBomRef: must be pkg:github/burntsushi/ripgrep@15.1.0?platform=windows-x64",
+    ],
+    [
+      "a different source commit",
+      (tool) => (tool.source.commitSha = "0".repeat(40)),
+      "nativeTools[0].source.commitSha: must be af60c2de9d85e7f3d81c78601669468cf02dabab",
+    ],
+    [
+      "a different archive URL",
+      (tool) => (tool.source.archiveUrl = "https://example.test/rg.zip"),
+      "nativeTools[0].source.archiveUrl: must be https://github.com/BurntSushi/ripgrep/releases/download/15.1.0/ripgrep-15.1.0-x86_64-pc-windows-msvc.zip",
+    ],
+    [
+      "a different archive digest",
+      (tool) => (tool.source.archiveSha256 = DIGEST_A),
+      "nativeTools[0].source.archiveSha256: must be 124510b94b6baa3380d051fdf4650eaa80a302c876d611e9dba0b2e18d87493a",
+    ],
+    [
+      "a different upstream executable digest",
+      (tool) => (tool.source.binarySha256 = DIGEST_A),
+      "nativeTools[0].source.binarySha256: must be decdd4992f3f1b9a5ef9898f1b40ab16886d579d6516b4efd3d5eaa19364e408",
+    ],
+    [
+      "a different license digest",
+      (tool) => (tool.source.licenseSha256 = DIGEST_A),
+      "nativeTools[0].source.licenseSha256: must be 970813655a1bf777d2ead189cef71ab73ab92ce04dc864027d61a45de03e6728",
+    ],
+    [
+      "a relabelled unsigned digest",
+      (tool) => (tool.unsignedSha256 = DIGEST_A),
+      "nativeTools[0].unsignedSha256: must be decdd4992f3f1b9a5ef9898f1b40ab16886d579d6516b4efd3d5eaa19364e408",
+    ],
+    [
+      "a malformed shipped digest",
+      (tool) => (tool.shippedSha256 = "not-a-digest"),
+      "nativeTools[0].shippedSha256: must be a SHA-256 digest",
+    ],
+    [
+      "an empty executable",
+      (tool) => (tool.sizeBytes = 0),
+      "nativeTools[0].sizeBytes: must be greater than 0",
+    ],
+    [
+      "an undeclared key",
+      (tool) => (tool.homepage = "https://example.test"),
+      "nativeTools[0].homepage: is not allowed",
+    ],
+    [
+      "an undeclared source key",
+      (tool) => (tool.source.mirror = "https://example.test"),
+      "nativeTools[0].source.mirror: is not allowed",
+    ],
+    [
+      "a missing signing section",
+      (tool) => delete tool.signing,
+      "nativeTools[0].signing: is required",
+    ],
+  ])("refuses %s", (_label, mutate, expected) => {
+    const candidate = withRipgrepTool(manifest());
+    mutate(candidate.nativeTools[0]);
+    syncReviewedBinding(candidate);
+    expect(validatePortableManifest(candidate).join("\n")).toContain(expected);
+  });
+
+  it.each([
+    [
+      "two tools",
+      (candidate) => (candidate.nativeTools = [candidate.nativeTools[0], candidate.nativeTools[0]]),
+    ],
+    ["no tools", (candidate) => (candidate.nativeTools = [])],
+    ["a non-array", (candidate) => (candidate.nativeTools = { name: "ripgrep" })],
+    ["a null section", (candidate) => (candidate.nativeTools = null)],
+  ])("refuses a tool section that is %s", (_label, mutate) => {
+    const candidate = withRipgrepTool(manifest());
+    mutate(candidate);
+    expect(validatePortableManifest(candidate)).toContain(
+      "nativeTools: must contain exactly one tool when present",
+    );
+  });
+
+  it("refuses a tool entry that is not an object", () => {
+    const candidate = withRipgrepTool(manifest());
+    candidate.nativeTools = ["ripgrep"];
+    expect(validatePortableManifest(candidate)).toContain("nativeTools[0]: must be an object");
+  });
+
+  it("binds the tool in the reviewed binding so a release cannot ship an unreviewed executable", () => {
+    const candidate = withRipgrepTool(manifest());
+    candidate.releaseImpact.reviewedBinding.nativeTools[0].shippedSha256 = DIGEST_A;
+    expect(validatePortableManifest(candidate).join("\n")).toContain("nativeTools");
+    delete candidate.releaseImpact.reviewedBinding.nativeTools;
+    expect(validatePortableManifest(candidate).join("\n")).toContain("nativeTools");
+    syncReviewedBinding(candidate);
+    expect(validatePortableManifest(candidate)).toEqual([]);
+  });
+
+  it("reports the tool in the signing verification summary only when the manifest carries one", () => {
+    const candidate = manifest();
+    expect(Object.keys(portableVerificationSummaryForManifest(candidate))).not.toContain(
+      "nativeTools",
+    );
+    withRipgrepTool(candidate);
+    const [summary] = portableVerificationSummaryForManifest(candidate).nativeTools;
+    expect(summary).toEqual({
+      name: "ripgrep",
+      version: "15.1.0",
+      platformTarget: "windows-x64",
+      architecture: "x64",
+      executablePath: "runtime/native/rg.exe",
+      shippedSha256: candidate.nativeTools[0].shippedSha256,
+      signingStatus: "verified-production",
+      signatureKind: "authenticode",
+      signatureVerified: true,
+      notarizationRequired: false,
+      notarizationVerified: false,
+    });
   });
 });
 
@@ -2685,6 +2964,21 @@ describe("portable qualification producers", () => {
       .map((key) => key.replaceAll('"', ""))
       .sort();
     expect(declared).toEqual(emitted);
+  });
+});
+
+describe("portable qualification producers and the pinned tool section", () => {
+  it("emits the tool section into the activation manifest only for a manifest that carries tools", () => {
+    // Complements the pin above, which fixes the closed key set for a manifest without tools. The
+    // section is the single optional key a producer accepts, so its name is pinned here too.
+    const candidate = setManifestTargetCopy("macos-arm64");
+    const closedKeys = Object.keys(runtimeActivationManifest(candidate)).sort();
+    const withTools = Object.keys(runtimeActivationManifest(withRipgrepTool(candidate))).sort();
+    expect(withTools).toEqual([...closedKeys, "nativeTools"].sort());
+    for (const producer of ["macos", "windows"]) {
+      const source = readFileSync(`scripts/qualify-${producer}-runtime-release.mjs`, "utf8");
+      expect(source).toContain('key !== "nativeTools"');
+    }
   });
 });
 

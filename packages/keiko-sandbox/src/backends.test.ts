@@ -8,7 +8,10 @@ import {
   SEATBELT_DENY_EGRESS_PROFILE,
   type WrappedCommand,
 } from "./backends.js";
-import { executionRootSeatbeltProfile } from "./seatbelt-execution-root.js";
+import {
+  executionRootSeatbeltProfile,
+  OWN_PROCESS_TARGETS_SEATBELT_RULE,
+} from "./seatbelt-execution-root.js";
 import type { IsolatedRunPlan, NetworkGatewayPolicy } from "./types.js";
 
 const plan: IsolatedRunPlan = {
@@ -215,6 +218,7 @@ describe("buildWrappedCommand", () => {
       "(deny file-read* file-write* network* mach-lookup appleevent-send lsopen)",
     );
     expect(profile).toContain('(subpath "/work/root\\"quoted")');
+    expect(profile).toContain(OWN_PROCESS_TARGETS_SEATBELT_RULE);
     expect(profile).not.toContain("localhost");
     expect(profile).not.toContain('(subpath "/Users")');
     const home = "/Users/test-owner";
@@ -354,11 +358,281 @@ describe("buildGatewaySeatbeltCommand child process policy (#3390 live run)", ()
     expect(profile).not.toContain("(allow process-exec)");
     for (const denied of ["network*", "mach-lookup", "appleevent-send", "lsopen"])
       expect(profile).toContain(`(deny ${denied})`);
+    // #3897 review (P1): the gateway profile also starts from `allow default`, so it carries the
+    // same own-process rule as the native and execution-root profiles, exactly once.
+    expect(profile?.split(OWN_PROCESS_TARGETS_SEATBELT_RULE)).toHaveLength(2);
   });
 
   it("rejects a relative runtime executable before compiling the profile", () => {
     expect(() =>
       buildGatewaySeatbeltCommand(gateway, "opencode", ["serve"], "/qualified/apple/git"),
     ).toThrow("gateway-seatbelt-command-not-absolute");
+  });
+
+  // #3897: the native profile runs the agent's own toolchains like standalone OpenCode; at Full
+  // access the wrapper also leaves egress inherited. What it always enforces is the filesystem
+  // boundary and the service escapes. The pins below keep the original inherited-exec,
+  // inherited-egress shape for `inherited` and add the kernel read allowlist.
+  const nativeFilesystem = {
+    workspaceRoot: "/accepted/workspace",
+    workspaceAccess: "read-write" as const,
+    privateStateRoot: "/private/state",
+    runtimeReadRoot: "/immutable/runtime",
+    deniedReadRoots: ["/Users/owner/.ssh", "/Users/owner/Library/Application Support/Keiko"],
+    toolchainReadRoots: ["/opt/homebrew"],
+  };
+
+  function nativeProfile(egress?: "inherited" | "loopback-only"): string {
+    return (
+      buildGatewaySeatbeltCommand(
+        gateway,
+        "/trusted/opencode",
+        ["serve"],
+        "/qualified/apple/git",
+        nativeFilesystem,
+        "keiko-native",
+        egress,
+      ).args[1] ?? ""
+    );
+  }
+
+  it("compiles the native profile with inherited exec and egress at Full access", () => {
+    const wrapped = buildGatewaySeatbeltCommand(
+      gateway,
+      "/trusted/opencode",
+      ["serve"],
+      "/qualified/apple/git",
+      nativeFilesystem,
+      "keiko-native",
+      "inherited",
+    );
+    const profile = wrapped.args[1] ?? "";
+    expect(wrapped.command).toBe("/usr/bin/sandbox-exec");
+    expect(profile).not.toContain("(deny network*)");
+    expect(profile).not.toContain("(deny process-exec)");
+    expect(profile).not.toContain("(deny mach-lookup)");
+    for (const denied of ["appleevent-send", "lsopen"])
+      expect(profile).toContain(`(deny ${denied})`);
+    expect(profile).toContain('(subpath "/accepted/workspace")');
+    expect(profile).toContain('(deny file-read* file-write* (subpath "/Users/owner/.ssh")');
+    // The workspace and the private state root are re-allowed after the denied roots, so Keiko's
+    // own state directory may contain both (managed task workspaces do live there) while every
+    // other file of that directory stays unreadable (#3897).
+    expect(
+      profile.lastIndexOf(
+        '(allow file-read* file-write* (subpath "/accepted/workspace") (subpath "/private/state"))',
+      ),
+    ).toBeGreaterThan(profile.lastIndexOf('(deny file-read* file-write* (subpath "/Users'));
+  });
+
+  // Strengthens the former `(deny file-write*)` pin: reads are denied by default as well, so the
+  // process can open only the admitted roots (finding A, #3897).
+  it("denies reads and writes by default and admits only the explicit roots", () => {
+    const profile = nativeProfile("inherited");
+    expect(profile.indexOf("(deny file-read* file-write*)")).toBeGreaterThan(
+      profile.indexOf("(allow default)"),
+    );
+    expect(profile).toContain('(subpath "/opt/homebrew")');
+    expect(profile).toContain('(subpath "/immutable/runtime")');
+    expect(profile).not.toContain('(subpath "/Users")');
+    expect(profile).not.toContain('(subpath "/System/Volumes/Data")');
+    // Credential names are denied LAST, after the workspace re-allow, so a `.env` inside the
+    // workspace cannot be reopened by any earlier rule.
+    expect(profile.lastIndexOf("(deny file-read* file-write* ")).toBeGreaterThan(
+      profile.lastIndexOf("(allow file-read* file-write* (subpath"),
+    );
+    expect(profile.endsWith("))")).toBe(true);
+  });
+
+  it("confines network to loopback below Full access and fails closed without a disposition", () => {
+    const loopback =
+      '(deny network*)(allow network-outbound (remote ip "localhost:*"))' +
+      '(allow network-inbound (local ip "localhost:*"))' +
+      '(allow network-bind (local ip "localhost:*"))';
+    expect(nativeProfile("loopback-only").endsWith(loopback)).toBe(true);
+    // An absent disposition is the restrictive one; only an explicit `inherited` opens egress.
+    expect(nativeProfile()).toBe(nativeProfile("loopback-only"));
+    expect(nativeProfile("inherited")).not.toContain("(deny network*)");
+    expect(nativeProfile("loopback-only")).not.toContain("remote unix-socket");
+  });
+
+  it("refuses a native profile without a writable filesystem", () => {
+    expect(() =>
+      buildGatewaySeatbeltCommand(
+        gateway,
+        "/trusted/opencode",
+        ["serve"],
+        "/git",
+        undefined,
+        "keiko-native",
+      ),
+    ).toThrow("native-seatbelt-filesystem-invalid");
+    expect(() =>
+      buildGatewaySeatbeltCommand(
+        gateway,
+        "/trusted/opencode",
+        ["serve"],
+        "/git",
+        { ...nativeFilesystem, workspaceAccess: "read-only" },
+        "keiko-native",
+      ),
+    ).toThrow("native-seatbelt-filesystem-invalid");
+  });
+
+  it("refuses toolchain roots that would open a top-level directory", () => {
+    for (const toolchainReadRoots of [["/Users"], ["/"], ["relative/root"]])
+      expect(() =>
+        buildGatewaySeatbeltCommand(
+          gateway,
+          "/trusted/opencode",
+          [],
+          "/git",
+          { ...nativeFilesystem, toolchainReadRoots },
+          "keiko-native",
+        ),
+      ).toThrow("native-seatbelt-filesystem-invalid");
+  });
+});
+
+// #3900 AC5: an operator-accepted external reference is a read-only root; the denied roots and the
+// credential names stay unreadable inside it, and it can never open a top-level directory or
+// overlap the workspace or the private state.
+describe("native accepted external read roots (#3900 AC5)", () => {
+  const gateway: NetworkGatewayPolicy = { mode: "gateway", host: "127.0.0.1", port: 1983 };
+  const filesystem = {
+    workspaceRoot: "/accepted/workspace",
+    workspaceAccess: "read-write" as const,
+    privateStateRoot: "/private/state",
+    runtimeReadRoot: "/immutable/runtime",
+    deniedReadRoots: ["/Users/owner/.ssh"],
+  };
+  const profileWith = (externalReadRoots: readonly string[]): string =>
+    buildGatewaySeatbeltCommand(
+      gateway,
+      "/trusted/opencode",
+      [],
+      "/git",
+      { ...filesystem, externalReadRoots },
+      "keiko-native",
+    ).args[1] ?? "";
+
+  it("reads an accepted root, never writes it, and keeps the denials after it", () => {
+    const profile = profileWith(["/Users/owner/reference/docs"]);
+    const allowed = profile.indexOf('(subpath "/Users/owner/reference/docs")');
+    expect(allowed).toBeGreaterThan(-1);
+    expect(profile.slice(0, allowed)).toContain("(allow file-read*");
+    const writes = profile.match(/\(allow file-write\*[^)]*(?:\([^)]*\)[^)]*)*\)/gu) ?? [];
+    expect(writes.join("")).not.toContain("/Users/owner/reference/docs");
+    expect(
+      profile.indexOf('(deny file-read* file-write* (subpath "/Users/owner/.ssh"))'),
+    ).toBeGreaterThan(allowed);
+  });
+
+  it("refuses a top-level, relative, overlapping or excess root", () => {
+    for (const externalReadRoots of [
+      ["/Users"],
+      ["/Users/owner"],
+      ["relative/root"],
+      ["/accepted/workspace/sub"],
+      ["/accepted"],
+      ["/private/state/x/y"],
+      Array.from({ length: 9 }, (_, index) => `/Users/owner/ref/r${String(index)}`),
+    ])
+      expect(() => profileWith(externalReadRoots), externalReadRoots.join()).toThrow(
+        "native-seatbelt-filesystem-invalid",
+      );
+  });
+});
+
+describe("native Git metadata read roots (#3897 review)", () => {
+  const gateway: NetworkGatewayPolicy = { mode: "gateway", host: "127.0.0.1", port: 1983 };
+  const filesystem = {
+    workspaceRoot: "/accepted/workspace",
+    workspaceAccess: "read-write" as const,
+    privateStateRoot: "/private/state",
+    runtimeReadRoot: "/immutable/runtime",
+    deniedReadRoots: ["/Users/owner/Library/Application Support/Keiko"],
+  };
+
+  function profile(gitMetadataReadRoots: unknown): string {
+    return (
+      buildGatewaySeatbeltCommand(
+        gateway,
+        "/trusted/opencode",
+        ["serve"],
+        "/git",
+        { ...filesystem, gitMetadataReadRoots } as never,
+        "keiko-native",
+      ).args[1] ?? ""
+    );
+  }
+
+  it("opens a proven common Git directory read-only, after the denied roots, before credentials", () => {
+    const rules = profile(["/Users/owner/Library/Application Support/Keiko/repos/app/.git"]);
+    const allow =
+      '(allow file-read* (subpath "/Users/owner/Library/Application Support/Keiko/repos/app/.git"))';
+    expect(rules).toContain(allow);
+    const deniedRoots =
+      '(deny file-read* file-write* (subpath "/Users/owner/Library/Application Support/Keiko"))';
+    expect(rules.indexOf(allow)).toBeGreaterThan(rules.indexOf(deniedRoots));
+    // The credential names are denied by the last rule, inside the Git directory too.
+    expect(rules.indexOf(allow)).toBeLessThan(rules.lastIndexOf("(deny file-read"));
+    expect(rules).not.toMatch(/file-write\*[^)]*repos\/app\/\.git/u);
+    expect(rules).toContain('(literal "/Users/owner/Library/Application Support/Keiko/repos/app")');
+    // The repository's own working tree is a node the runtime resolves, never a readable subtree.
+    expect(rules).not.toContain(
+      '(subpath "/Users/owner/Library/Application Support/Keiko/repos/app")',
+    );
+  });
+
+  it("adds nothing when no Git metadata root is named", () => {
+    expect(profile(undefined)).not.toContain("repos/app");
+  });
+
+  it.each([
+    ["a top-level directory", ["/Users"]],
+    ["the workspace itself", ["/accepted/workspace"]],
+    ["a directory inside the workspace", ["/accepted/workspace/.git"]],
+    ["an ancestor of the workspace", ["/accepted"]],
+    ["the private state", ["/private/state/git"]],
+    ["a relative path", ["repo/.git"]],
+    ["too many roots", ["/a/1/.git", "/a/2/.git", "/a/3/.git", "/a/4/.git", "/a/5/.git"]],
+  ])("refuses %s as a Git metadata root", (_label, roots) => {
+    expect(() => profile(roots)).toThrow("native-seatbelt-filesystem-invalid");
+  });
+});
+
+describe("Linux native profile (#3897): refused until a Linux boundary is qualified", () => {
+  const gateway: NetworkGatewayPolicy = { mode: "gateway", host: "127.0.0.1", port: 1983 };
+  const nativePlan: IsolatedRunPlan = {
+    command: "/opt/keiko/runtime/opencode",
+    args: ["serve"],
+    cwd: "/work/ws",
+    network: gateway,
+    gatewayProfile: "keiko-native",
+    gatewayFilesystem: {
+      workspaceRoot: "/work/ws",
+      workspaceAccess: "read-write",
+      privateStateRoot: "/state/run-1",
+      runtimeReadRoot: "/opt/keiko/runtime",
+    },
+  };
+
+  // The PR audit executed the previous bubblewrap mount plan in a Linux container: a shell child
+  // read a workspace `.env`, and below Full access the runtime could not reach the gateway. Both
+  // Linux wrappers therefore refuse a native run instead of launching a weaker boundary.
+  it("refuses a native run under bubblewrap and under unshare, in both egress dispositions", () => {
+    for (const backend of ["bubblewrap", "unshare"] as const) {
+      for (const gatewayEgress of ["loopback-only", "inherited"] as const) {
+        expect(() => buildWrappedCommand(backend, { ...nativePlan, gatewayEgress })).toThrow(
+          "native-linux-backend-unqualified",
+        );
+      }
+    }
+  });
+
+  it("still wraps the qualified gateway profile under bubblewrap", () => {
+    const { gatewayProfile: _native, gatewayFilesystem: _filesystem, ...gatewayPlan } = nativePlan;
+    expect(() => buildWrappedCommand("bubblewrap", gatewayPlan)).not.toThrow();
   });
 });

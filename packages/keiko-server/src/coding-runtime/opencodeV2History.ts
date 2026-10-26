@@ -1,8 +1,8 @@
 import type { CodingHistoryMessage } from "./codingRuntimeHistory.js";
 import { createHash } from "node:crypto";
 
+import type { VerificationKind } from "@oscharko-dev/keiko-contracts";
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import { CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import {
   activityLogEvent,
   defineActivityLogOperation,
@@ -21,6 +21,9 @@ import type {
 } from "./opencodeReconciler.js";
 import {
   createOpenCodeV2LiveText,
+  fittingUtf8Prefix,
+  MAX_LIVE_REASONING_UTF8_BYTES,
+  MAX_LIVE_TEXT_UTF8_BYTES,
   type LiveTextKind,
   type OpenCodeV2LiveText,
 } from "./opencodeV2LiveText.js";
@@ -29,8 +32,21 @@ import {
   openCodeVisibleToolNames,
   OPENCODE_MODEL_VISIBLE_TOOL_NAMES,
 } from "./opencodeToolSchemas.js";
+import {
+  isAdmissibleOpenCodeToolName,
+  isOpenCodeCodeModeExecutionFailure,
+} from "./opencodeNativeTools.js";
+import { openCodeNativeVerificationKind } from "./opencodeNativePolicy.js";
+import { OPENCODE_PLAN_CARRIER_TOOLS } from "./opencodeProtocol.js";
+import { openCodePlanCarrierSignal } from "./opencodeSafeActivity.js";
 
 const HISTORY_TOOLS: ReadonlySet<string> = new Set(OPENCODE_MODEL_VISIBLE_TOOL_NAMES);
+
+/** The native profile (#3897) reports OpenCode's own tool ids, bounded by shape, not by list. */
+function historyToolAdmitted(name: string, profile: OpenCodeToolProfile): boolean {
+  if (profile === "native") return isAdmissibleOpenCodeToolName(name);
+  return HISTORY_TOOLS.has(name) || (profile === "code-mode" && name === "execute");
+}
 const NATIVE_RETRY_FIELDS: ReadonlySet<string> = new Set(["attempt", "at", "error"]);
 
 const HISTORY_PROJECTION_OPERATION = defineActivityLogOperation({
@@ -64,6 +80,9 @@ const HISTORY_PROJECTION_OPERATION = defineActivityLogOperation({
     liveDeltaCount: { type: "integer", dataClass: "count", required: false },
     liveDroppedCount: { type: "integer", dataClass: "count", required: false },
     liveDivergedCount: { type: "integer", dataClass: "count", required: false },
+    // The idle messages of this pass that did not end the run's work because a subagent launched in
+    // the background had not yet reported back (`backgroundChildren`); a count, absent when none.
+    heldIdleCount: { type: "integer", dataClass: "count", required: false },
   },
   causal: "correlation",
   lifecycle: "state",
@@ -113,6 +132,13 @@ interface HistoryActivity {
    * resets (#3873 review). Absent for a projection that is not fed by the event stream.
    */
   readonly takeMergedEventCount?: (() => number) | undefined;
+  /**
+   * The text a user message is presented by when it is a slash command's (`opencodeCommands.ts`):
+   * the runtime stores the command's expanded template as that message. `isNew` says the history had
+   * not shown the message before this read. Absent presents every user message by its own text.
+   */
+  readonly userMessageDisplay?:
+    ((messageId: string, isNew: boolean) => string | undefined) | undefined;
 }
 
 interface Candidate {
@@ -123,6 +149,8 @@ interface Candidate {
   readonly signal?: CodingSafeActivitySignal | undefined;
   readonly emptyText?: true;
   readonly nativeRetryState?: true;
+  // An idle message that ended the session's execution but not the run's work (see `BackgroundChildren`).
+  readonly heldIdle?: true;
   // A text part's own text as the runtime persisted it. Coding History is built from this, never from
   // the live text the timeline shows while the part streams: partial answers are not captured.
   readonly capturedText?: string;
@@ -134,6 +162,7 @@ interface PendingProjection {
   readonly signals: ReadonlyMap<string, CodingSafeActivitySignal>;
   readonly emptyTextCount: number;
   readonly nativeRetrySignalCount: number;
+  readonly heldIdleCount: number;
 }
 
 interface KnownCandidate {
@@ -147,59 +176,156 @@ export class OpenCodeV2HistoryError extends Error {
   }
 }
 
-const MESSAGE_FIELDS: Readonly<Record<string, readonly string[]>> = {
-  user: ["id", "metadata", "time", "text", "files", "agents", "skills", "type"],
+// The exact top-level fields each message type may carry, from the upstream `Session.Message.*`
+// schemas (`additionalProperties: false`). A type lists one field set per admitted runtime layout:
+// a message is admitted when its fields fit one set completely, so the layouts never mix.
+type FieldLayouts = readonly (readonly string[])[];
+
+/** A table keyed by untrusted text answers for its own entries only, never `constructor`. */
+function ownEntry<Value>(table: Readonly<Record<string, Value>>, key: string): Value | undefined {
+  return Object.hasOwn(table, key) ? table[key] : undefined;
+}
+
+const ASSISTANT_FIELDS = [
+  "id",
+  "metadata",
+  "time",
+  "type",
+  "agent",
+  "model",
+  "content",
+  "snapshot",
+  "finish",
+  "rawFinish",
+  "cost",
+  "tokens",
+  "error",
+  "retry",
+];
+
+const COMPACTION_ENVELOPE_FIELDS = ["id", "metadata", "time", "type", "status", "reason"];
+
+type CompactionLayout = "current" | "legacy";
+
+// `Session.Message.Compaction.{Running,Completed,Failed}`, per runtime layout and status. The
+// current layout is OpenCode 2.1.4: the provider replay state is `native` and no tail is reported.
+// The legacy layout is the 2.0.10 npm runtime's: it carried the retained tail text (`recent`) and
+// its provider state (`providerState`, `providerContext`). Summary, error and provider bodies are
+// checked for shape only and never projected.
+const COMPACTION_LAYOUT_FIELDS: Readonly<
+  Record<CompactionLayout, Readonly<Record<string, readonly string[]>>>
+> = {
+  current: {
+    running: [...COMPACTION_ENVELOPE_FIELDS, "summary"],
+    completed: [...COMPACTION_ENVELOPE_FIELDS, "summary", "model", "native", "cost", "tokens"],
+    failed: [...COMPACTION_ENVELOPE_FIELDS, "error", "cost", "tokens"],
+  },
+  legacy: {
+    running: [...COMPACTION_ENVELOPE_FIELDS, "summary", "recent"],
+    completed: [
+      ...COMPACTION_ENVELOPE_FIELDS,
+      "summary",
+      "recent",
+      "model",
+      "providerState",
+      "providerContext",
+      "cost",
+      "tokens",
+    ],
+    failed: [...COMPACTION_ENVELOPE_FIELDS, "error", "cost", "tokens"],
+  },
+};
+
+const MESSAGE_FIELDS: Readonly<Record<string, FieldLayouts>> = {
+  user: [["id", "metadata", "time", "text", "files", "agents", "skills", "type"]],
   assistant: [
-    "id",
-    "metadata",
-    "time",
-    "type",
-    "agent",
-    "model",
-    "content",
-    "snapshot",
-    "finish",
-    "rawFinish",
-    "providerState",
-    "cost",
-    "tokens",
-    "error",
-    "retry",
+    // OpenCode 2.1.4 renamed the provider replay state of a message to `native`.
+    [...ASSISTANT_FIELDS, "native"],
+    [...ASSISTANT_FIELDS, "providerState"],
   ],
-  idle: ["id", "metadata", "time", "type", "outcome"],
-  system: ["id", "metadata", "time", "type", "text", "description"],
-  synthetic: ["id", "metadata", "time", "type", "text", "description"],
-  shell: ["id", "metadata", "time", "type", "shellID", "command", "status", "exit", "output"],
-  skill: ["id", "metadata", "time", "type", "skill", "name", "text"],
-  "agent-switched": ["id", "metadata", "time", "type", "agent", "previous"],
-  "model-switched": ["id", "metadata", "time", "type", "model", "previous"],
+  idle: [["id", "metadata", "time", "type", "outcome", "error"]],
+  system: [["id", "metadata", "time", "type", "text", "description"]],
+  synthetic: [["id", "metadata", "time", "type", "text", "description"]],
+  shell: [["id", "metadata", "time", "type", "shellID", "command", "status", "exit", "output"]],
+  skill: [["id", "metadata", "time", "type", "skill", "name", "text"]],
+  "agent-switched": [["id", "metadata", "time", "type", "agent", "previous"]],
+  "model-switched": [["id", "metadata", "time", "type", "model", "previous"]],
   "location-switched": [
-    "id",
-    "metadata",
-    "time",
-    "type",
-    "projectID",
-    "subpath",
-    "location",
-    "previous",
+    ["id", "metadata", "time", "type", "projectID", "subpath", "location", "previous"],
   ],
+  // The union of every layout and status: the per-status layouts are enforced where the message is
+  // decoded (`compactionLayout`), so an unknown field is named here before any layout is chosen.
   compaction: [
-    "id",
-    "metadata",
-    "time",
-    "type",
-    "status",
-    "reason",
-    "model",
-    "providerState",
-    "summary",
-    "recent",
-    "providerContext",
-    "cost",
-    "tokens",
-    "error",
+    [
+      ...new Set(
+        Object.values(COMPACTION_LAYOUT_FIELDS).flatMap((statuses) =>
+          Object.values(statuses).flat(),
+        ),
+      ),
+    ],
   ],
 };
+
+const STRUCTURED_ERROR_FIELDS: ReadonlySet<string> = new Set([
+  "type",
+  "message",
+  "status",
+  "response",
+  "retryAfterMs",
+]);
+
+/**
+ * OpenCode 2.1.4 ends a failed turn with an idle message carrying `Session.StructuredError`
+ * (`type`, `message`, optional HTTP `status`, `response.body`, `retryAfterMs`); 2.0.10 had no such
+ * field. The shape is checked strictly, and nothing of it is projected: the terminal failure stays
+ * body-free (#3897 review).
+ */
+function assertIdleErrorShape(value: unknown): void {
+  if (value !== undefined && !isStructuredError(value))
+    throw new OpenCodeV2HistoryError("reason=event-unknown:role=idle:error-shape=unsupported");
+}
+
+/**
+ * `Session.StructuredError`, the one error shape every 2.1.4 message uses (a failed compaction
+ * carries it as well as an idle message). 2.0.10's error was the `type`, `message` and `status`
+ * subset of it, so one check serves both layouts.
+ */
+function isStructuredError(value: unknown): boolean {
+  const error = record(value);
+  return (
+    error !== undefined &&
+    hasStructuredErrorIdentity(error) &&
+    hasStructuredErrorResponse(error.response)
+  );
+}
+
+function hasStructuredErrorIdentity(error: Readonly<Record<string, unknown>>): boolean {
+  return (
+    Object.keys(error).every((key) => STRUCTURED_ERROR_FIELDS.has(key)) &&
+    typeof error.type === "string" &&
+    typeof error.message === "string" &&
+    (error.status === undefined || isHttpStatus(error.status)) &&
+    (error.retryAfterMs === undefined || isNonNegativeInteger(error.retryAfterMs))
+  );
+}
+
+function hasStructuredErrorResponse(value: unknown): boolean {
+  if (value === undefined) return true;
+  const response = record(value);
+  return (
+    response !== undefined &&
+    typeof response.body === "string" &&
+    Object.keys(response).every((key) => key === "body")
+  );
+}
+
+function isHttpStatus(value: unknown): boolean {
+  return Number.isInteger(value) && (value as number) >= 100 && (value as number) <= 599;
+}
+
+function isNonNegativeInteger(value: unknown): boolean {
+  return Number.isInteger(value) && (value as number) >= 0;
+}
 
 export interface OpenCodeV2HistoryProjection {
   project(
@@ -232,15 +358,33 @@ function record(value: unknown): Readonly<Record<string, unknown>> | undefined {
     : undefined;
 }
 
+// The fields no admitted layout allows: none when the message fits one layout completely, otherwise
+// those of the closest layout (the first on a tie), which is what the safe code counts and digests.
+function unknownFields(
+  message: Readonly<Record<string, unknown>>,
+  layouts: FieldLayouts,
+): readonly string[] {
+  let closest: readonly string[] | undefined;
+  for (const allowed of layouts) {
+    const extra = Object.keys(message).filter((key) => !allowed.includes(key));
+    if (closest === undefined || extra.length < closest.length) closest = extra;
+    if (extra.length === 0) break;
+  }
+  return closest ?? [];
+}
+
 function assertMessageShape(message: Readonly<Record<string, unknown>>): void {
   const role = message.type;
   if (typeof role !== "string")
     throw new OpenCodeV2HistoryError("reason=event-unknown:type=unsupported");
-  const allowed = MESSAGE_FIELDS[role];
-  if (allowed === undefined)
+  const layouts = ownEntry(MESSAGE_FIELDS, role);
+  if (layouts === undefined)
     throw new OpenCodeV2HistoryError("reason=event-unknown:type=unsupported");
-  const extra = Object.keys(message).filter((key) => !allowed.includes(key));
-  if (extra.length === 0) return;
+  const extra = unknownFields(message, layouts);
+  if (extra.length === 0) {
+    if (role === "idle") assertIdleErrorShape(message.error);
+    return;
+  }
   throw new OpenCodeV2HistoryError(
     `reason=event-unknown:eventSha256=${digest(message).slice(0, 16)}:role=${role}:extraCount=${String(extra.length)}:extraKeySha256=${digest(
       extra.slice().sort((left, right) => {
@@ -299,7 +443,8 @@ function textCandidate(
   occurredAt: string,
   capturedText: string = text,
 ): Candidate {
-  if (Buffer.byteLength(text, "utf8") > 65_536) throw new Error("opencode-v2-text-oversized");
+  if (Buffer.byteLength(text, "utf8") > MAX_LIVE_TEXT_UTF8_BYTES)
+    throw new Error("opencode-v2-text-oversized");
   const key = `${id}:text:${String(index)}`;
   // V2 starts streaming with an empty part. Reconcile its identity, but publish no empty text.
   if (text.length === 0) {
@@ -316,22 +461,15 @@ function textCandidate(
   };
 }
 
-// #3878: the live timeline shows at most CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES of a
-// message's reasoning, so a reasoning part is read up to twice that and no further: a long reasoner
-// neither fails the history read like an oversized answer nor costs a digest of its whole text on
-// every pull. The prefix grows with the part until the bound and then stays fixed.
-const MAX_PROJECTED_REASONING_UTF8_BYTES = 2 * CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES;
-
-function projectedReasoning(text: string): string {
-  if (Buffer.byteLength(text, "utf8") <= MAX_PROJECTED_REASONING_UTF8_BYTES) return text;
-  let used = 0;
-  let end = 0;
-  for (const character of text) {
-    used += Buffer.byteLength(character, "utf8");
-    if (used > MAX_PROJECTED_REASONING_UTF8_BYTES) break;
-    end += character.length;
-  }
-  return text.slice(0, end);
+// A part is read up to a bound and no further, cut at a whole character, so a long part neither
+// fails the history read nor costs a digest of its whole text on every pull. The prefix grows with the
+// part until the bound and then stays fixed, and it is the very prefix the live overlay keeps
+// (`opencodeV2LiveText.ts`). #3878: the live timeline shows at most
+// CODING_SAFE_ACTIVITY_MAX_REASONING_UTF8_BYTES of a message's reasoning, so a reasoning part is
+// read up to twice that (`MAX_LIVE_REASONING_UTF8_BYTES`). An answer part is read up to the part
+// bound (`MAX_LIVE_TEXT_UTF8_BYTES`), which the history of the answer used to refuse outright.
+function boundedPartText(text: string, maxBytes: number): string {
+  return Buffer.byteLength(text, "utf8") <= maxBytes ? text : fittingUtf8Prefix(text, maxBytes);
 }
 
 // OpenCode records the model's reasoning (`reasoning_content`) as a `reasoning` content part. It
@@ -344,7 +482,7 @@ function reasoningCandidate(
   occurredAt: string,
 ): Candidate {
   const key = `${id}:reasoning:${String(index)}`;
-  const shown = projectedReasoning(text);
+  const shown = boundedPartText(text, MAX_LIVE_REASONING_UTF8_BYTES);
   if (shown.length === 0) return candidate(key, "observation", shown);
   return candidate(key, "observation", shown, {
     kind: "reasoning",
@@ -393,13 +531,16 @@ function toolState(
   profile: OpenCodeToolProfile,
 ): CodingSafeActivitySignal & { kind: "tool" } {
   const state = record(part.state);
-  const status = state?.status;
   if (state === undefined) throw new Error("opencode-v2-tool-state-invalid");
   const { id, name } = toolIdentity(part);
   assertToolInput(part, state);
-  if (!HISTORY_TOOLS.has(name) && !(profile === "code-mode" && name === "execute"))
-    throw new Error("opencode-v2-tool-invalid");
-  const mapped = displayToolState(status);
+  if (!historyToolAdmitted(name, profile)) throw new Error("opencode-v2-tool-invalid");
+  const exitCode = name === "shell" ? shellExitCode(state) : undefined;
+  const exitStatusCheck = exitCode === undefined ? undefined : shellLineCheck(state);
+  // The runtime completes a shell call whatever its command returned (`metadata.exit`); a command
+  // that exited non-zero failed, which the timeline and the run's evidence both say (#3901).
+  const mapped =
+    exitCode !== undefined && exitCode !== 0 ? "failed" : displayToolState(name, state);
   return {
     kind: "tool",
     messageId,
@@ -407,12 +548,38 @@ function toolState(
     tool: name,
     state: mapped,
     occurredAt: toolOccurredAt(part),
+    ...(exitCode === undefined ? {} : { exitCode }),
+    ...(exitStatusCheck === undefined ? {} : { exitStatusCheck }),
   };
 }
 
-function displayToolState(status: unknown): "pending" | "running" | "succeeded" | "failed" {
+/**
+ * The project check a finished shell call's exit status speaks for (#3897 review). The permission
+ * check sees the line split into its commands, without the operators between them; the finished
+ * part still holds the whole line, so only it can show that no later command decided the status.
+ */
+function shellLineCheck(state: Readonly<Record<string, unknown>>): VerificationKind | undefined {
+  const command = record(state.input)?.command;
+  return typeof command === "string" ? openCodeNativeVerificationKind([command]) : undefined;
+}
+
+/** A completed shell call's own exit status; a job moved to the background reports none. */
+function shellExitCode(state: Readonly<Record<string, unknown>>): number | undefined {
+  if (state.status !== "completed") return undefined;
+  const exit = record(state.metadata)?.exit;
+  return typeof exit === "number" && Number.isInteger(exit) ? exit : undefined;
+}
+
+// A completed part is a succeeded tool, except a Code Mode `execute` whose program failed: the
+// producer returns that as a completed part carrying its own `metadata.error` flag (#3897).
+function displayToolState(
+  name: string,
+  state: Readonly<Record<string, unknown>>,
+): "pending" | "running" | "succeeded" | "failed" {
+  const status = state.status;
   if (status === "streaming") return "pending";
-  if (status === "completed") return "succeeded";
+  if (status === "completed")
+    return isOpenCodeCodeModeExecutionFailure(name, state) ? "failed" : "succeeded";
   if (status === "error") return "failed";
   if (status === "running") return "running";
   throw new Error("opencode-v2-tool-state-invalid");
@@ -536,7 +703,11 @@ function assistantPartCandidates(
 ): readonly Candidate[] {
   const part = record(value);
   if (part?.type === "text" && typeof part.text === "string") {
-    const shown = shownPartText(context, messageId, "text", part.text);
+    // The timeline shows an answer up to the part bound; Coding History keeps the part whole.
+    const shown = boundedPartText(
+      shownPartText(context, messageId, "text", part.text),
+      MAX_LIVE_TEXT_UTF8_BYTES,
+    );
     return [textCandidate(messageId, index, shown, occurredAt, part.text)];
   }
   if (part?.type === "reasoning" && typeof part.text === "string") {
@@ -545,75 +716,68 @@ function assistantPartCandidates(
   }
   if (part?.type !== "tool") return [];
   const signal = toolState(part, messageId, context.toolProfile);
-  return [candidate(`${messageId}:tool:${String(index)}`, "tool", part, signal)];
+  return [
+    candidate(
+      `${messageId}:tool:${String(index)}`,
+      "tool",
+      part,
+      toolOrPlanSignal(part, messageId, signal),
+    ),
+  ];
 }
 
-const NATIVE_COMPACTION_COMMON_FIELDS = ["id", "metadata", "time", "type", "status", "reason"];
-// Admitted pinned V2 lifecycle variants. Optional provider/usage payloads are not decoded.
-// Summary/error bodies are checked only for shape, never projected.
-const NATIVE_COMPACTION_FIELDS: Readonly<Record<string, readonly string[]>> = {
-  running: [...NATIVE_COMPACTION_COMMON_FIELDS, "summary", "recent"],
-  completed: [
-    ...NATIVE_COMPACTION_COMMON_FIELDS,
-    "summary",
-    "recent",
-    "model",
-    "providerState",
-    "providerContext",
-    "cost",
-    "tokens",
-  ],
-  failed: [...NATIVE_COMPACTION_COMMON_FIELDS, "error", "cost", "tokens"],
-};
-
-function assertNativeCompactionShape(message: Readonly<Record<string, unknown>>): void {
-  const allowed =
-    typeof message.status === "string" ? NATIVE_COMPACTION_FIELDS[message.status] : undefined;
-  if (
-    allowed === undefined ||
-    (message.reason !== "auto" && message.reason !== "manual") ||
-    Object.keys(message).some((key) => !allowed.includes(key))
-  ) {
-    throw new OpenCodeV2HistoryError("reason=compaction-shape-invalid");
-  }
+// The plan tool is the governed plan snapshot and never productive tool activity (#2480): a
+// completed part shows its step list, a part that has not completed (or failed) shows nothing, and
+// a completed list that cannot be read stays visible as the tool it is rather than being lost.
+function toolOrPlanSignal(
+  part: Readonly<Record<string, unknown>>,
+  messageId: string,
+  tool: CodingSafeActivitySignal & { kind: "tool" },
+): CodingSafeActivitySignal | undefined {
+  const state = record(part.state);
+  if (!OPENCODE_PLAN_CARRIER_TOOLS.has(toolIdentity(part).name) || state === undefined) return tool;
+  const plan = openCodePlanCarrierSignal(messageId, state, tool.occurredAt);
+  if (plan.kind === "value") return plan.value;
+  return plan.kind === "skip" ? undefined : tool;
 }
 
-function nativeCompactionRecent(message: Readonly<Record<string, unknown>>): string {
-  const recent = message.recent;
-  if (typeof message.summary !== "string" || typeof recent !== "string") {
-    throw new OpenCodeV2HistoryError("reason=compaction-shape-invalid");
-  }
-  return recent;
+/**
+ * The layout a compaction message fits, strictly: its fields all belong to its status in that layout
+ * and the fields the decoder reads are present with their schema types. `undefined` when no admitted
+ * layout fits, so a message mixing the two, or missing a required field, is refused.
+ */
+function compactionLayout(
+  message: Readonly<Record<string, unknown>>,
+): CompactionLayout | undefined {
+  const { status, reason } = message;
+  if (typeof status !== "string" || (reason !== "auto" && reason !== "manual")) return undefined;
+  const layouts: readonly CompactionLayout[] = ["current", "legacy"];
+  return layouts.find((layout) => compactionFitsLayout(message, status, layout));
 }
 
-function validNativeCompactionErrorStatus(status: unknown): boolean {
+function compactionFitsLayout(
+  message: Readonly<Record<string, unknown>>,
+  status: string,
+  layout: CompactionLayout,
+): boolean {
+  const allowed = ownEntry(COMPACTION_LAYOUT_FIELDS[layout], status);
+  if (allowed === undefined || Object.keys(message).some((key) => !allowed.includes(key)))
+    return false;
+  if (status === "failed") return isStructuredError(message.error);
   return (
-    status === undefined ||
-    (typeof status === "number" && Number.isInteger(status) && status >= 100 && status <= 599)
+    typeof message.summary === "string" &&
+    (layout === "current" || typeof message.recent === "string")
   );
-}
-
-function assertNativeCompactionError(message: Readonly<Record<string, unknown>>): void {
-  const error = record(message.error);
-  if (
-    error === undefined ||
-    typeof error.type !== "string" ||
-    typeof error.message !== "string" ||
-    !validNativeCompactionErrorStatus(error.status) ||
-    Object.keys(error).some((key) => !["type", "message", "status"].includes(key))
-  ) {
-    throw new OpenCodeV2HistoryError("reason=compaction-shape-invalid");
-  }
 }
 
 function nativeCompactionActivity(
   message: Readonly<Record<string, unknown>>,
   id: string,
 ): OpenCodeCompactionActivity {
-  assertNativeCompactionShape(message);
+  const layout = compactionLayout(message);
+  if (layout === undefined) throw new OpenCodeV2HistoryError("reason=compaction-shape-invalid");
   const compactionIdSha256 = createHash("sha256").update(id, "utf8").digest("hex");
   if (message.status === "failed") {
-    assertNativeCompactionError(message);
     return {
       event: "failed",
       compactionIdSha256,
@@ -621,16 +785,14 @@ function nativeCompactionActivity(
       finishReason: "error",
     };
   }
-  const recent = nativeCompactionRecent(message);
   if (message.status === "completed") return { event: "completed", compactionIdSha256 };
   const auto = message.reason === "auto";
-  if (recent === "") return { event: "started", compactionIdSha256, auto, retainedTail: false };
-  return {
-    event: "tail-retained",
-    compactionIdSha256,
-    auto,
-    retainedTail: true,
-  };
+  // Only the 2.0.10 runtime reports the tail it retained (`recent`, empty until it chose one);
+  // 2.1.4 reports none, and a tail it did not report is not invented.
+  if (layout === "legacy" && message.recent !== "") {
+    return { event: "tail-retained", compactionIdSha256, auto, retainedTail: true };
+  }
+  return { event: "started", compactionIdSha256, auto, retainedTail: false };
 }
 
 function nativeCompactionCandidate(
@@ -650,6 +812,8 @@ function messageCandidates(
   parentMessageId: string | undefined,
   live: OpenCodeV2LiveText,
   toolProfile: OpenCodeToolProfile,
+  children: BackgroundChildren,
+  userDisplay?: string,
 ): readonly Candidate[] {
   assertMessageShape(message);
   const id = messageId(message);
@@ -666,20 +830,71 @@ function messageCandidates(
         messageId: id,
         occurredAt,
       }),
-      textCandidate(id, 0, visibleUserText(message), occurredAt),
+      textCandidate(id, 0, userDisplay ?? visibleUserText(message), occurredAt),
     ];
   }
   if (message.type === "compaction") return [nativeCompactionCandidate(message, id)];
-  if (message.type === "idle") {
-    return [
-      candidate(
-        `${id}:idle`,
-        message.outcome === "succeeded" ? "terminal" : "terminal-failure",
-        message.outcome,
-      ),
-    ];
-  }
+  if (message.type === "idle") return [idleCandidate(id, message.outcome, children)];
   return [candidate(`${id}:other`, "observation", message.type)];
+}
+
+/**
+ * What the runtime tells a parent about a subagent it launched in the background
+ * (https://opencode.ai/v2/docs/tools/#subagent): the launching tool call returns at once, the parent
+ * goes idle while the child keeps working, and when the child ends the runtime appends a synthetic
+ * message naming it (completed, failed or cancelled) and runs the parent again to read it. A parent's
+ * idle message is therefore the end of the run's work only when every background child it launched
+ * has reported back; before that it ends the parent's execution and nothing more. The rule reads the
+ * parent's own history, so it holds across a reconnect and needs no timing: a child launched but not
+ * yet reported is "owed", and an owed child is a launch (a completed `subagent` call with
+ * `background: true` that names its child session) without a synthetic message carrying that child's
+ * id. A failed idle message is a verdict whatever is owed.
+ */
+interface BackgroundChildren {
+  readonly launched: Set<string>;
+  readonly reported: Set<string>;
+}
+
+const BACKGROUND_CHILD_SESSION_ID = /^ses_[A-Za-z0-9_-]{1,251}$/u;
+
+function backgroundLaunch(part: unknown): string | undefined {
+  const tool = record(part);
+  if (tool?.type !== "tool" || tool.name !== "subagent") return undefined;
+  const state = record(tool.state);
+  if (state?.status !== "completed" || record(state.input)?.background !== true) return undefined;
+  return backgroundChildId(record(state.metadata)?.sessionID);
+}
+
+function backgroundChildId(value: unknown): string | undefined {
+  return typeof value === "string" && BACKGROUND_CHILD_SESSION_ID.test(value) ? value : undefined;
+}
+
+function backgroundReport(message: Readonly<Record<string, unknown>>): string | undefined {
+  const metadata = record(message.metadata);
+  if (message.type !== "synthetic" || metadata?.source !== "subagent") return undefined;
+  return backgroundChildId(metadata.childID);
+}
+
+function observeBackgroundChildren(
+  message: Readonly<Record<string, unknown>>,
+  children: BackgroundChildren,
+): void {
+  const reported = backgroundReport(message);
+  if (reported !== undefined) children.reported.add(reported);
+  if (message.type !== "assistant" || !Array.isArray(message.content)) return;
+  for (const part of message.content as readonly unknown[]) {
+    const launched = backgroundLaunch(part);
+    if (launched !== undefined) children.launched.add(launched);
+  }
+}
+
+function idleCandidate(id: string, outcome: unknown, children: BackgroundChildren): Candidate {
+  const key = `${id}:idle`;
+  if (outcome !== "succeeded") return candidate(key, "terminal-failure", outcome);
+  const owed = [...children.launched].some((child) => !children.reported.has(child));
+  return owed
+    ? { ...candidate(key, "observation", outcome), heldIdle: true }
+    : candidate(key, "terminal", outcome);
 }
 
 function allCandidates(
@@ -688,13 +903,23 @@ function allCandidates(
   live: OpenCodeV2LiveText,
   known: ReadonlyMap<string, KnownCandidate>,
   toolProfile: OpenCodeToolProfile,
+  activity?: HistoryActivity,
 ): readonly Candidate[] {
   const result: Candidate[] = [candidate(`${sessionId}:created`, "observation", sessionId)];
+  const children: BackgroundChildren = { launched: new Set(), reported: new Set() };
   let parentMessageId: string | undefined;
   for (const message of messages) {
     if (message.type === "user") parentMessageId = messageId(message);
+    observeBackgroundChildren(message, children);
+    const userDisplay =
+      message.type === "user"
+        ? activity?.userMessageDisplay?.(
+            messageId(message),
+            !known.has(`${messageId(message)}:message`),
+          )
+        : undefined;
     result.push(
-      ...messageCandidates(message, parentMessageId, live, toolProfile),
+      ...messageCandidates(message, parentMessageId, live, toolProfile, children, userDisplay),
       ...changedNativeRetryCandidates(message, parentMessageId, known),
     );
   }
@@ -746,6 +971,7 @@ function makePending(
   const signals = new Map<string, CodingSafeActivitySignal>();
   let emptyTextCount = 0;
   let nativeRetrySignalCount = 0;
+  let heldIdleCount = 0;
   for (const item of candidates) {
     const previous = known.get(item.key);
     if (previous?.digest === item.digest) continue;
@@ -768,11 +994,12 @@ function makePending(
     });
     if (item.emptyText) emptyTextCount += 1;
     nativeRetrySignalCount += Number(item.nativeRetryState === true);
+    heldIdleCount += Number(item.heldIdle === true);
     const signal = incrementalSignal(item, previous);
     if (signal !== undefined) signals.set(`${sessionId}\u0000${String(sequence)}`, signal);
     if (events.length === 256) break;
   }
-  return { nextKnown, events, signals, emptyTextCount, nativeRetrySignalCount };
+  return { nextKnown, events, signals, emptyTextCount, nativeRetrySignalCount, heldIdleCount };
 }
 
 function historyEventDigest(item: Candidate, sessionId: string, sequence: number): string {
@@ -856,6 +1083,7 @@ function recordHistoryProjection(
         liveDeltaCount: counts.applied,
         liveDroppedCount: counts.dropped,
         liveDivergedCount: counts.diverged,
+        ...(pending.heldIdleCount === 0 ? {} : { heldIdleCount: pending.heldIdleCount }),
       },
     ),
   );
@@ -875,6 +1103,55 @@ function conversationCapture(
 }
 
 /** A pull repeats unchanged candidates until the adapter commits its checkpoint. */
+/**
+ * The files one finished assistant step changed, as the runtime's own snapshot of the workspace
+ * names them (`snapshot.files`), and the tool calls of that step (#3901). The snapshot covers the
+ * whole workspace, so a shell command's or a child session's writes are in it as much as an edit
+ * tool's. Paths stay in memory for the verification evidence and never reach a log.
+ */
+export interface OpenCodeV2StepChange {
+  readonly messageId: string;
+  readonly files: readonly string[];
+  readonly callIds: readonly string[];
+  /** The list was longer than the bound, or held something other than a path. */
+  readonly truncated: boolean;
+}
+
+/** The most changed files of one step that are compared one by one. */
+export const OPENCODE_V2_STEP_CHANGE_FILES_MAX = 10_000;
+
+export function openCodeV2StepChanges(
+  messages: readonly Readonly<Record<string, unknown>>[],
+): readonly OpenCodeV2StepChange[] {
+  return messages.flatMap((message) => {
+    const change = stepChange(message);
+    return change === undefined ? [] : [change];
+  });
+}
+
+function stepChange(message: Readonly<Record<string, unknown>>): OpenCodeV2StepChange | undefined {
+  if (message.type !== "assistant" || message.finish === undefined) return undefined;
+  const files = record(message.snapshot)?.files;
+  if (typeof message.id !== "string" || !Array.isArray(files) || files.length === 0)
+    return undefined;
+  const bounded = (files as readonly unknown[]).slice(0, OPENCODE_V2_STEP_CHANGE_FILES_MAX);
+  const paths = bounded.filter((file): file is string => typeof file === "string");
+  return {
+    messageId: message.id,
+    files: paths,
+    callIds: stepCallIds(message.content),
+    truncated: files.length > bounded.length || paths.length < bounded.length,
+  };
+}
+
+function stepCallIds(content: unknown): readonly string[] {
+  if (!Array.isArray(content)) return [];
+  return (content as readonly unknown[]).flatMap((part) => {
+    const tool = record(part);
+    return tool?.type === "tool" && typeof tool.id === "string" ? [tool.id] : [];
+  });
+}
+
 export function createOpenCodeV2HistoryProjection(
   activity?: HistoryActivity,
 ): OpenCodeV2HistoryProjection {
@@ -898,7 +1175,7 @@ export function createOpenCodeV2HistoryProjection(
         throw new Error("opencode-v2-checkpoint-invalid");
       }
       if (pending === undefined) {
-        const candidates = allCandidates(sessionId, messages, live, known, toolProfile);
+        const candidates = allCandidates(sessionId, messages, live, known, toolProfile, activity);
         pending = makePending(sessionId, position, known, candidates);
         capture(candidates);
         recordHistoryProjection(activity, pending, live);

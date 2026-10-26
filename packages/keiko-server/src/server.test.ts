@@ -761,6 +761,29 @@ describe("unknown API routes", () => {
     }
   });
 
+  // #3903 AC3: the MCP relay is no CSRF exemption -- the run's binding sends X-Keiko-CSRF itself,
+  // and the relay authenticates its own capability before any request reaches a server.
+  it("requires X-Keiko-CSRF and the run's relay capability on the MCP relay route", async () => {
+    const path = "/api/coding-sidecar/mcp/AAAAAAAAAAAAAAAAAAAAAA";
+    const withoutGuard = await fetch(`${baseUrl()}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    expect(withoutGuard.status).toBe(403);
+    expect(await withoutGuard.json()).toMatchObject({ error: { code: "FORBIDDEN_CSRF" } });
+    const withoutCapability = await fetch(`${baseUrl()}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1" },
+      body: "{}",
+    });
+    expect(withoutCapability.status).toBe(401);
+    const stream = await fetch(`${baseUrl()}${path}`, {
+      headers: { Accept: "text/event-stream", "X-Keiko-Mcp-Relay": "x".repeat(43) },
+    });
+    expect(stream.status).toBe(401);
+  });
+
   it("rejects a hostile clone Origin even with the mutation guard and a presented cookie", async () => {
     const response = await fetchRawWithInit("/api/repositories/clone", {
       method: "POST",

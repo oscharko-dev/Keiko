@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { countContextTokens } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 
-import { countGatewayPromptTokens } from "./prompt-token-accounting.js";
+import {
+  countGatewayPromptTokens,
+  openAiCompatiblePromptMessage,
+} from "./prompt-token-accounting.js";
 
 describe("countGatewayPromptTokens", () => {
   it("does not lose the dense-text floor when JSON escapes multiline content", () => {
@@ -85,4 +88,28 @@ it("scales the unmeasured image allowance to a small model without counting enco
   expect(countGatewayPromptTokens(input, undefined, { contextWindow: 131072 }) - text).toBe(8192);
   expect(countGatewayPromptTokens(input) - text).toBe(8192);
   expect(countGatewayPromptTokens(input, undefined, { contextWindow: NaN }) - text).toBe(8192);
+});
+
+// #3906: a PDF document part is media like an image: forwarded unchanged and never counted as text.
+it("forwards a PDF document part unchanged and charges it the media allowance, not its bytes", () => {
+  const document = {
+    type: "file" as const,
+    file: {
+      filename: "spec.pdf",
+      file_data: "data:application/pdf;base64," + "A".repeat(1_000_000),
+    },
+  };
+  const message = {
+    role: "user" as const,
+    content: "summarize",
+    contentParts: [{ type: "text" as const, text: "summarize" }, document],
+  };
+  expect(openAiCompatiblePromptMessage(message).content).toEqual([
+    { type: "text", text: "summarize" },
+    document,
+  ]);
+  const input = { messages: [message] };
+  const text = countGatewayPromptTokens(input, undefined, { imageTokensMeasured: true });
+  expect(text).toBeLessThan(1_000);
+  expect(countGatewayPromptTokens(input, undefined, { contextWindow: 131072 }) - text).toBe(8192);
 });

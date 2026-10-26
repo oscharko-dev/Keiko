@@ -3,8 +3,10 @@
 # The `Scan dependency lockfiles` gate stays fail-closed: every entry below is an explicit,
 # time-boxed decision with a recorded reason, not a blanket suppression. `ignoreUntil` forces the
 # entry back through this gate on that date, so a stale waiver cannot outlive its justification.
-# Nothing here weakens the scan for shipped dependencies — only build-time-only findings that have
-# no upstream fix may be recorded, and each must state why it cannot reach a user.
+# Nothing here weakens the scan for shipped dependencies — only build-time-only findings may be
+# recorded: ones with no upstream fix, or whose patched release cannot be adopted without a separately
+# governed gate change (that entry names the change and its follow-up). Each must state why it cannot
+# reach a user.
 #
 # Each entry is bound to one advisory id, never to a package: a `[[PackageOverrides]]` rule would
 # also hide every present and future advisory of that package, and osv-scanner cannot express
@@ -13,7 +15,10 @@
 # History: the GHSA-mh99-v99m-4gvg brace-expansion waiver (recorded during #2696, PR #2700) was
 # removed when its own revisit condition arrived: upstream shipped patched releases on both
 # affected lines and the lockfile moved to 1.1.18/5.0.9, so the id-wide suppression would only
-# have hidden a reintroduced vulnerable release from the one gate positioned to catch it.
+# have hidden a reintroduced vulnerable release from the one gate positioned to catch it. The
+# fallow GHSA-h4fr-cmh5-qr62 and GHSA-jfwm-3p3c-6hx5 waivers (#3898) were removed on their revisit
+# condition: the owner decided the duplication gate (generated files excluded, the rest frozen in a
+# shrink-only baseline, `scripts/check-semantic-duplication.mjs`) and fallow moved to 3.35.0.
 
 [[IgnoredVulns]]
 id = "GHSA-vfj7-8cjw-p6xm"

@@ -441,6 +441,88 @@ variance of the new kernel. The two workload metrics that the change could plaus
 cold start and the bounded throughput, both tightened. The next ordinary re-measurement on this
 reference uses `--recalibrate` and its shrink-only ratchet again.
 
+**Reference re-established, 2026-10-23 (epic #3897, PR #4064).** Two inputs of the recorded
+environment moved, so neither `--recalibrate` nor `--recalibrate-runtime` could match the
+2026-10-07 calibration. First, the approved runtime moved from OpenCode 2.0.10 to 2.1.4 (new
+payload digest), which `--recalibrate-runtime` permits on its own. Second, the secure-read helper
+digest changed (`8fabdaf2…` to `1c758e0c…`), because `dev` commit `040bcc685` (#3895, 2026-10-09)
+changed `native/secure-workspace-read/secure_workspace_read.c` without re-measuring. Both modes
+therefore refuse with `recalibration-reference-environment-differs`, and the committed calibration
+was already unreachable on `dev`. Host, kernel 27.0.0, cores, memory, CPU model digest and the
+Node 24.18.0 / npm 11.16.0 pair are unchanged. Measured with the step 2 procedure (fresh
+`--calibrate`, an independent measurement, the freshness check), then the shrink-only ratchet was
+applied against the previously reviewed budget, so no ceiling widened.
+
+| Metric                | Previous ceiling (2026-10-07) | Fresh calibration ceiling | Committed ceiling | Measured p95 |
+| --------------------- | ----------------------------- | ------------------------- | ----------------- | ------------ |
+| `coldStartMs`         | 1562.4                        | 1519.1                    | 1519.1            | 1426.4       |
+| `readinessMs`         | 3.26                          | 8.99                      | 3.26              | 1.81         |
+| `sseFirstByteMs`      | 4.65                          | 4.78                      | 4.65              | 2.18         |
+| `boundedThroughputMs` | 98.4                          | 115.7                     | 98.4              | 79.9         |
+
+The fresh calibration's own ranges are wider for three metrics. The committed budget keeps the
+previously reviewed ceiling for those three and takes the tighter cold-start ceiling. Every measured
+p95 is below its committed ceiling, so the move hides no regression.
+
+**Reference re-established, 2026-10-25 (owner decision, PR #4064, #3907 AC7).** The functional
+test support (`productionOpenCodeBackend.functional/_support.ts`, a ruler input) gained the #3899,
+#3901 and #3902 real-binary journeys, so the ruler moved and the evidence had to be measured again.
+The host, kernel 27.0.0, cores, memory, CPU model digest, Node 24.18.0 / npm 11.16.0, Apple Git
+2.54.0, OpenCode 2.1.4 and the secure-read helper digest are unchanged. The shrink-only
+`--recalibrate` was run first and could not settle: its candidate exceeded the reviewed
+cold-start and throughput ceilings. The owner decided to re-establish the reference once the
+change was profiled.
+
+Profiling first measured the previous reference revision (`5b77de7bc`) and the head under identical
+conditions, then bisected the 192 first-parent commits with an eight-sample bench. Three changes
+accounted for the increase:
+
+- `49bec8b28` lets native Git read a linked task worktree's proven metadata (#3902). OpenCode's
+  git-backed snapshots, which native undo needs (#3904), and its project detection (#3902 AC1) now
+  run, where before they failed with "not a git repository". This adds about 48 ms to the end of a
+  run and 80 ms to its start.
+- `1f4562c55` keeps a succeeded run's undo for a bounded window (#3904), about 15 ms.
+- The macOS process sweep and a 200 ms native plugin readiness poll. Both were reduced in this pull
+  request (`387a71e61`): the sweep asks the kernel instead of listing processes, and the poll asks
+  every 10 ms within the same 10-second bound. Together this saves about 30 ms at the end of each
+  run and 80 ms at its start.
+
+The step 2 procedure produced a fresh `--calibrate`, an independent measurement and the freshness
+check. Readiness and the first SSE byte have no profiled cause to rise, so both keep their
+previously reviewed ceilings. Cold start and bounded throughput take the fresh calibration
+ceilings, which are wider.
+
+| Metric                | Previous ceiling (2026-10-23) | Fresh calibration ceiling | Committed ceiling | Measured p95 |
+| --------------------- | ----------------------------- | ------------------------- | ----------------- | ------------ |
+| `coldStartMs`         | 1519.1                        | 1771.7                    | 1771.7            | 1591.1       |
+| `readinessMs`         | 3.26                          | 3.75                      | 3.26              | 1.97         |
+| `sseFirstByteMs`      | 4.65                          | 6.34                      | 4.65              | 2.21         |
+| `boundedThroughputMs` | 98.4                          | 177.9                     | 177.9             | 135.8        |
+
+The measured p95 of cold start and bounded throughput rose by 4.7 % and 38 % over the previous
+ceilings. Both rises are the profiled feature work above; neither is an unexplained regression.
+
+**Ruler recalibrated, 2026-10-26 (PR #4064, #3902 AC2, #3903 AC3).** The functional test support
+gained the governed fetch/pull and web search journeys, so the ruler moved again. The recorded
+environment is unchanged, so the shrink-only `--recalibrate` ran at `1049404b6`, followed by an
+independent measurement and the freshness check. No ceiling widened; two tightened.
+
+| Metric                | Previous ceiling (2026-10-25) | Fresh calibration ceiling | Committed ceiling | Measured p95 |
+| --------------------- | ----------------------------- | ------------------------- | ----------------- | ------------ |
+| `coldStartMs`         | 1771.7                        | 1614.3                    | 1614.3            | 1481.0       |
+| `readinessMs`         | 3.26                          | 3.59                      | 3.26              | 1.92         |
+| `sseFirstByteMs`      | 4.65                          | 4.91                      | 4.65              | 2.11         |
+| `boundedThroughputMs` | 177.9                         | 160.0                     | 160.0             | 128.4        |
+
+The committed candidate was measured again after the Sonar repair at `4428bcb19` against this
+calibration: p95 1525.4, 1.89, 2.37 and 140.6 ms, each below its committed ceiling.
+After the await-in-loop review at `1ddc81669` it was measured again: p95 1565.8, 2.00, 2.19
+and 154.6 ms, each below its committed ceiling.
+After the op catalog was regenerated at `363d2cb5d` it was measured again: p95 1566.3, 1.89,
+2.08 and 130.3 ms, each below its committed ceiling.
+After the search key redaction and the process-table mark at `37367b1cc` it was measured again:
+p95 1497.9, 2.17, 2.11 and 139.2 ms, each below its committed ceiling.
+
 The PR lane runs `check:perf-evidence:coding-runtime` and the hermetic ruler tests
 (`test:perf:coding-runtime`). It checks integrity and budgets unconditionally. Set
 `KEIKO_PERF_EVIDENCE_BASE_REF` to the PR/merge-group base for diff-owned toolchain freshness, as for

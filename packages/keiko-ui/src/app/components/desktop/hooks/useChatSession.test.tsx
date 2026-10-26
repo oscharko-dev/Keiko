@@ -6627,6 +6627,30 @@ describe("actual model selection lifecycle evidence", () => {
     expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("PRIVATE-");
   });
 
+  it("records the actual catalog read latency on the adoption stage, not a fabricated zero", async () => {
+    const { unmount } = await mountSelectionReview([model()]);
+    const diagnostic = vi.fn();
+    setClientDiagnosticWriter(diagnostic);
+    vi.mocked(fetchModels).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          setTimeout(() => resolve({ models: [model(), model({ id: "chat-b" })] }), 250);
+        }),
+    );
+    act(() => window.dispatchEvent(new Event("focus")));
+    await act(() => vi.advanceTimersByTimeAsync(250));
+    const adoptions = diagnostic.mock.calls
+      .map(([, meta]) => meta)
+      .filter(
+        (meta) =>
+          meta?.stageReport?.stage === "gateway catalog adoption" &&
+          meta.stageReport.phase === "settled",
+      );
+    expect(adoptions).toHaveLength(1);
+    expect(adoptions[0]?.stageReport.durationMs).toBe(250);
+    unmount();
+  });
+
   it("records an automatic ready fallback with elected provenance", async () => {
     const { result } = await mountSelectionReview([model(), model({ id: "chat-b" })]);
     const diagnostic = vi.fn();

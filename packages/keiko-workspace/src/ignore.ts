@@ -7,102 +7,18 @@
 // These policy rules are separate from repoSearchMatchers' filename query matcher. A glob
 // grammar alone does not establish a backtracking bound for its translated regex.
 
+import {
+  CREDENTIAL_PATH_DENY_PATTERNS,
+  ENV_EXAMPLE_BASENAME,
+  TOOL_STATE_PATH_DENY_PATTERNS,
+} from "@oscharko-dev/keiko-contracts/sensitive-path-patterns";
 import { memoizeByStringKey, PATH_MEMO_MAX_ENTRIES } from "./boundedMemo.js";
 
+// The pattern names live in keiko-contracts (the leaf both this predicate and the native sandbox
+// profile read), so the kernel-enforced credential subset can never drift from `isDenied`.
 export const DEFAULT_DENY_PATTERNS: readonly string[] = Object.freeze([
-  // secrets
-  ".env",
-  ".env.*",
-  "*.pem",
-  "*.key",
-  "id_rsa",
-  "id_ed25519",
-  "id_ecdsa",
-  "id_dsa",
-  "*.p12",
-  "*.pfx",
-  ".npmrc",
-  // credential directories & stores — Epic #532 makes any folder on the machine connectable, so
-  // the deny gate must keep well-known secret locations out of every tree listing, excerpt, and
-  // grounded answer even when the user points a Files window at their home directory.
-  ".ssh",
-  ".aws",
-  ".gnupg",
-  ".kube",
-  ".azure",
-  ".docker",
-  ".netrc",
-  ".pgpass",
-  ".git-credentials",
-  "Keychains",
-  "*.keychain",
-  "*.keychain-db",
-  "*.keystore",
-  "*.jks",
-  // Epic #532 security audit (H1/M1): additional well-known credential stores reachable when a
-  // user connects their home directory. `.config` is the XDG base whose subdirectories (gcloud
-  // ADC, many per-app tokens) consistently hold secrets; the rest are exact credential locations.
-  ".config",
-  ".terraform",
-  ".terraform.d",
-  ".vault-token",
-  ".cargo",
-  ".pypirc",
-  ".m2",
-  ".password-store",
-  "id_ecdsa_sk",
-  "id_ed25519_sk",
-  // Epic #532 security audit (H1): full-machine browse makes pure-credential FILES reachable in
-  // otherwise-allowed locations (not just credential dirs). These filenames hold secrets or secret
-  // state by convention, so they are denied outright — never listed, previewed, or grounded. Secrets
-  // that are merely content-shaped elsewhere are caught by the redaction layer instead.
-  "*.tfstate",
-  "*.tfstate.backup",
-  "kubeconfig",
-  ".rclone.conf",
-  "wp-config.php",
-  ".htpasswd",
-  ".bash_history",
-  ".zsh_history",
-  ".sh_history",
-  ".mysql_history",
-  ".psql_history",
-  ".python_history",
-  ".node_repl_history",
-  ".irb_history",
-  "service-account*.json",
-  // Epic #177 post-closure audit: additional pure-credential FILES denied outright. These filenames
-  // hold secrets by convention (cloud storage keys, OAuth tokens, VCS/registry/shell credentials,
-  // IaC variables); secret-shaped content in otherwise-allowed files is still scrubbed by the
-  // redaction layer as defence-in-depth.
-  ".s3cfg",
-  ".boto",
-  ".dockercfg",
-  ".gitconfig",
-  ".envrc",
-  "*.tfvars",
-  "*.tfvars.json",
-  ".terraformrc",
-  // deps
-  "node_modules",
-  // Keiko runtime/evidence state. These files are internal product artifacts, not repository
-  // source, and must never be discoverable through connected repository grounding.
-  ".keiko",
-  "keiko.config.json",
-  // Local tool and IDE runtime state. These directories can contain prompts, transcripts,
-  // worktrees, extension caches, shelves, and machine-local metadata; they are not source context.
-  ".codex",
-  ".claude",
-  ".playwright-mcp",
-  ".idea",
-  // caches
-  ".cache",
-  ".next",
-  ".turbo",
-  // vcs
-  ".git",
-  // os
-  ".DS_Store",
+  ...CREDENTIAL_PATH_DENY_PATTERNS,
+  ...TOOL_STATE_PATH_DENY_PATTERNS,
 ]);
 // Note: `*.log` is intentionally NOT denied — connected-context search must cover every text
 // format, including log files. Secret-shaped strings inside any matched content are still scrubbed
@@ -128,7 +44,7 @@ function segments(relPath: string): readonly string[] {
     .filter((part) => part.length > 0);
 }
 
-const EXAMPLE_ENV = ".env.example";
+const EXAMPLE_ENV = ENV_EXAMPLE_BASENAME;
 
 // Always-on security check. Denied if ANY path segment matches a deny pattern (a denied
 // directory denies everything under it). `.env.example` is the single documented exception.
@@ -155,6 +71,33 @@ function isDeniedUncached(relPath: string): boolean {
     }
   }
   return false;
+}
+
+// The one owner-approved exception to the tool-state entry `.claude` (#3903, owner decision of
+// 2026-10-24): a repository's Claude-compatible skills, `.claude/skills/<name>/SKILL.md`, the
+// directory that lists them and each skill directory's own name in that listing. It is no exception to `isDenied` itself: a caller that wants it names it
+// (the coding runtime's repository-item admission does), the grammar is exact (case included, so a
+// case variant stays denied), the skill name is a plain lowercase name that the deny list does not
+// match, and nothing else under `.claude` (settings, transcripts, worktrees, a skill's sibling
+// files) is covered.
+const CLAUDE_SKILLS_DIRECTORY = ".claude/skills";
+const CLAUDE_SKILL_NAME = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u;
+const CLAUDE_SKILL_NAME_MAX_CHARS = 64;
+
+/** `.claude/skills`, a skill directory listed in it, or that skill's `SKILL.md`; nothing else. */
+export function isRepositoryClaudeSkillPath(relPath: string): boolean {
+  if (relPath === CLAUDE_SKILLS_DIRECTORY) return true;
+  const parts = relPath.split("/");
+  const name = parts[2] ?? "";
+  const shaped = parts.length === 3 || (parts.length === 4 && parts[3] === "SKILL.md");
+  return (
+    shaped &&
+    parts[0] === ".claude" &&
+    parts[1] === "skills" &&
+    name.length <= CLAUDE_SKILL_NAME_MAX_CHARS &&
+    CLAUDE_SKILL_NAME.test(name) &&
+    !isDenied(name)
+  );
 }
 
 // ─── .gitignore subset ──────────────────────────────────────────────────────────

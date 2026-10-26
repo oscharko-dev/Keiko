@@ -93,8 +93,10 @@ export const APPROVED_EVIDENCE_SEGMENTS = new Set<string>([
   "decision",
   "script",
   "trust",
-  // Runtime Git stage labels carry only a closed operation name and decimal proposal id.
+  // Runtime Git stage and unstage labels carry only a closed operation name and decimal proposal
+  // id (#3902 AC2: `git-unstage`, `unstage-<n>`).
   "stage",
+  "unstage",
   "git",
   "accepted",
   "artifact",
@@ -231,6 +233,8 @@ export const APPROVED_EVIDENCE_SEGMENTS = new Set<string>([
   "commit",
   "push",
   "pull",
+  // #3902 AC2: the `git-fetch` action kind's own segment (`git-pull` reuses "pull").
+  "fetch",
   "merge",
   // "request", "system", "mutation": NOT part of the original 184-entry table, added because a
   // real, currently-reachable producer needs them as standalone segments, not just as part of a
@@ -351,6 +355,13 @@ export const APPROVED_EVIDENCE_LITERALS = new Set<string>([
   // its own either, so this evidence label has been silently rejected since the action class was
   // introduced. Added as a literal, verified clean against hasDisallowedEvidenceContent.
   "network-egress",
+  // #3897: closed labels of the native OpenCode policy's approval asks. The card names the class
+  // of native action the agent waits on; the action's resources ride the approval-review channel.
+  "native-read",
+  "native-edit",
+  "native-shell",
+  "native-egress",
+  "native-execute",
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {

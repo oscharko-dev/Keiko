@@ -288,6 +288,28 @@ async function readFixtureObservation(kind, launchId) {
   }
 }
 
+// Darwin's background band (MAXPRI_THROTTLE). A root launchd places there is throttled in CPU and
+// I/O, so on a busy machine it cannot even load its modules within the startup grant.
+const DARWIN_BACKGROUND_PRIORITY = 4;
+
+function schedulingPriority(pid) {
+  return Number(
+    execFileSync("/bin/ps", ["-o", "pri=", "-p", String(pid)], {
+      encoding: "utf8",
+      env: {},
+    }).trim(),
+  );
+}
+
+/** Darwin only: the app root must not run in the throttled background band. */
+function assertForegroundRoot(rootPid) {
+  if (process.platform !== "darwin") return;
+  assert(
+    schedulingPriority(rootPid) > DARWIN_BACKGROUND_PRIORITY,
+    "the app root runs in Darwin's background band",
+  );
+}
+
 async function startupObservation(launchId, reader) {
   return {
     classification: "native-fixture-startup-failure",
@@ -385,6 +407,8 @@ async function initialStart(launcher, helper, hash) {
   assert(ready);
   initialOwner.stdio[3].write(commitPacket(launchId));
   assert.equal((await appResponse(reader)).kind, 5);
+  // After the commit is acknowledged, so the synchronous `ps` lookup never spends commit time.
+  assertForegroundRoot(started.payload.readUInt32LE(0));
   initialOwner.stdio[3].end();
   return { launchId, ...(await awaitState("1.0.0", launchId)) };
 }

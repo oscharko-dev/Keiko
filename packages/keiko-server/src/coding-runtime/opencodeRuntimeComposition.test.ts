@@ -15,21 +15,31 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi, type Mock } from "vitest";
 import { planLongLivedRuntimeSandbox } from "@oscharko-dev/keiko-sandbox";
 
 import { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
+import {
+  createCodingSessionContinuity,
+  type CodingSessionContinuity,
+} from "./codingSessionContinuity.js";
+import { retainedSessionKey, type RetainedSessionStore } from "./opencodeSessionRetention.js";
 import { EditorAgentAuthorityRegistry } from "../editor/agentAuthorityRegistry.js";
 import { createInMemoryRuntimeCapabilityStore } from "./runtimeCapabilityStore.js";
-import type { CodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts";
+import type {
+  CodingWorkbenchRuntimeEvent,
+  McpServerDefinition,
+} from "@oscharko-dev/keiko-contracts";
 import { EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS } from "@oscharko-dev/keiko-contracts/runtime/tools";
@@ -87,6 +97,23 @@ import {
   type SecureWorkspaceTextReadProcess,
 } from "./secureWorkspaceTextReadProcess.js";
 import type { SecureWorkspaceNativeFileIO } from "./secureWorkspaceTextRead.js";
+import type { CodingRuntimeRepositoryItemsPort } from "./codingRuntimeRepositoryItems.js";
+import type { OperatorPluginsPort } from "./opencodeOperatorPlugins.js";
+import type { RemoteSkillsPort } from "./opencodeRemoteSkills.js";
+import type { McpOAuthIssuerPort } from "./opencodeRuntimeComposition.js";
+
+const ISSUER = "https://login.example.test";
+const METADATA_URL = `${ISSUER}/.well-known/oauth-authorization-server`;
+const OAUTH_SERVER: McpServerDefinition = {
+  name: "issues",
+  description: undefined,
+  enabled: true,
+  transport: { kind: "remote", url: "https://issues.example.test/mcp", oauth: { issuer: ISSUER } },
+  tools: { find: "read" },
+};
+import { NATIVE_SESSION_LOCATION_MAX } from "./opencodeNativeSessionTree.js";
+import type { NativeWorktreeProvisionPort } from "./opencodeNativeWorktree.js";
+import type { OpenCodeAgentModelCatalog } from "./opencodeNativeAgentModels.js";
 import { createProductionAcceptedInitializationAuthority } from "./productionCodingRuntimeResolver.js";
 import {
   catalogRuntimeFixture,
@@ -100,20 +127,16 @@ import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 import { dirname } from "node:path";
 import { createCodingToolFacade } from "./codingToolFacade.js";
+import { createCodingToolNativeSettlementFacet } from "./codingToolNativeEffect.js";
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
-import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js";
+import {
+  createCodingSafeActivityProjection,
+  type CodingSafeActivitySignal,
+} from "./codingSafeActivityProjection.js";
 import type {
   CodingRuntimeManager,
-  OpenCodeLifecycleAdapter,
   OpenCodeLifecyclePrepareRequest,
-  OpenCodeLifecyclePrepareResult,
 } from "./codingRuntimeManager.js";
-import {
-  inspectOpenCodeServiceHostDisk,
-  OPENCODE_SERVICE_HOST_DISK_EVIDENCE,
-  type OpenCodeServiceHostDiskReceipt,
-} from "./opencodeServiceHostArtifact.js";
-import { attestPortableSidecarTreeSync } from "@oscharko-dev/keiko-security/portable-tree-attestation";
 import type { CodingHistoryMessage } from "./codingRuntimeHistory.js";
 import {
   createGeneratedOpenCodeV2Plugins,
@@ -131,7 +154,18 @@ import {
 } from "./opencodeProtocol.js";
 import { capturedGeneratedV2Ask } from "./opencodeFunctionalHarness/_governedTools.js";
 import { createOpenCodeV2HistoryProjection } from "./opencodeV2History.js";
+import type {
+  AdmittedPromptInputs,
+  PromptInputsAdmission,
+  PromptInputsRequest,
+} from "./opencodePromptInputs.js";
+import { OPENCODE_NATIVE_REQUIRED_PLUGINS } from "./opencodeNativePluginReadiness.js";
 import { CODING_TOOL_MAX_BODY_BYTES } from "./codingToolIpc.js";
+import {
+  OPENCODE_PROMPT_FILE_MAX_BYTES,
+  openCodeV2PromptFileData,
+} from "./opencodeV2HttpClient.js";
+import { openCodePlanDirectory } from "./opencodeLaunchProfile.js";
 
 const generatedToolSources = vi.hoisted(() => ({ passes: 0, utf8Bytes: 0 }));
 
@@ -168,13 +202,13 @@ const TOOL_CAPABILITY = "t".repeat(43);
 // `toolFacadeUrl` from in production, fixed here since this suite never binds a real BFF port.
 const TOOL_FACADE_ORIGIN = "http://127.0.0.1:4391/api/coding-sidecar/tool";
 const FIXTURE_RUN_ID = "run-2254";
-const OPENCODE_VERSION = "2.0.10";
+const OPENCODE_VERSION = "2.1.4";
 const FIXED_SESSION_TITLE = "Keiko governed runtime";
-const OPENCODE_SCHEMA_SHA256 = "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec";
-// Captured structural projection from OpenCode 2.0.10's actual OpenAPI document.
+const OPENCODE_SCHEMA_SHA256 = "4a01890f5810d71dca59ee39d9fb101c95f3bdf46332986a0bab0fa3885b68b9";
+// Captured structural projection from OpenCode 2.1.4's actual OpenAPI document.
 const OPENAPI: unknown = JSON.parse(
   readFileSync(
-    new URL("./opencodeProtocolSurface.opencode-2.0.10.fixture.json", import.meta.url),
+    new URL("./opencodeProtocolSurface.opencode-2.1.4.fixture.json", import.meta.url),
     "utf8",
   ),
 );
@@ -187,10 +221,6 @@ function materializedV2PluginPaths(runRoot: string): readonly string[] {
 }
 
 interface OpenCodeRuntimeComposition {
-  readonly prepareServiceHost: (
-    request: OpenCodeLifecyclePrepareRequest,
-    receipt: Extract<OpenCodeServiceHostDiskReceipt, { readonly ok: true }>,
-  ) => Promise<OpenCodeLifecyclePrepareResult>;
   readonly manager: CodingRuntimeManager;
   readonly toolBridge: {
     readonly url: string;
@@ -210,8 +240,87 @@ interface OpenCodeRuntimeComposition {
     }>;
   };
   readonly runPort: {
-    readonly submitTask: (runId: string, text: string, initialContext?: string) => Promise<boolean>;
+    readonly submitTask: (
+      runId: string,
+      text: string,
+      initialContext?: string,
+      // A built-in, or a custom primary agent the runtime lists (#3903 AC1).
+      agent?: string,
+      inputs?: AdmittedPromptInputs,
+      origin?: "verification-continuation",
+    ) => Promise<boolean>;
+    /** What a prompt may carry besides its text, and the operations that honour it (ADR-0137 D10). */
+    readonly promptInputs?:
+      | { readonly delivery: boolean; readonly references: boolean; readonly commands?: boolean }
+      | undefined;
+    readonly admitPromptInputs?:
+      ((runId: string, request: PromptInputsRequest) => PromptInputsAdmission) | undefined;
+    readonly deliverPrompt?:
+      ((runId: string, text: string, inputs: AdmittedPromptInputs) => Promise<boolean>) | undefined;
+    /** The run's slash commands and the confirmation of a turn's command (C02, ADR-0137 D10). */
+    readonly listCommands?:
+      | ((
+          runId: string,
+          correlationId?: string,
+        ) => Promise<
+          readonly { readonly name: string; readonly description?: string }[] | undefined
+        >)
+      | undefined;
+    readonly admitCommand?:
+      ((runId: string, inputs: AdmittedPromptInputs) => Promise<PromptInputsAdmission>) | undefined;
+    /** The messages sent into the running turn that the runtime has not taken yet (S07). */
+    readonly listInbox?:
+      | ((
+          runId: string,
+          correlationId?: string,
+        ) => Promise<
+          | readonly {
+              readonly itemId: string;
+              readonly delivery: "queue" | "steer";
+              readonly preview: string;
+            }[]
+          | undefined
+        >)
+      | undefined;
+    readonly actOnInbox?:
+      | ((
+          runId: string,
+          input: { readonly action: "cancel" | "promote"; readonly itemId: string },
+          correlationId?: string,
+        ) => Promise<
+          | { readonly ok: true; readonly outcome: string }
+          | { readonly ok: false; readonly reason: string }
+        >)
+      | undefined;
+    readonly selectableAgents?: readonly ("build" | "plan")[] | undefined;
     readonly abortTask: (runId: string) => Promise<boolean>;
+    /** Undo and restore of the newest turn; offered by the native profile only (B3, S04). */
+    readonly revertTurn?:
+      | ((
+          runId: string,
+          action: "restore" | "undo",
+          correlationId?: string,
+        ) => Promise<
+          | {
+              readonly ok: true;
+              readonly fileCount: number;
+              readonly additions: number;
+              readonly deletions: number;
+            }
+          | { readonly ok: false; readonly reason: string }
+        >)
+      | undefined;
+    readonly revertState?:
+      | ((runId: string) => Promise<
+          | {
+              readonly staged: boolean;
+              readonly fileCount: number;
+              readonly additions: number;
+              readonly deletions: number;
+            }
+          | undefined
+        >)
+      | undefined;
     readonly waitForTerminal: (runId: string, signal: AbortSignal) => Promise<boolean>;
     readonly listQuestions: (runId: string) => Promise<readonly TestQuestionRequest[]>;
     readonly answerQuestion: (
@@ -239,6 +348,12 @@ interface TestQuestionRequest {
 }
 
 interface OpenCodeRuntimeCompositionModule {
+  readonly nativeSessionDescendsFromRun: (
+    sessions: readonly Readonly<Record<string, unknown>>[],
+    sessionID: string,
+    primaryId: string,
+    workspaceRoot: string,
+  ) => boolean;
   readonly toolBridgeRequestDeadlineMs: (
     configuredDeadlineMs: number,
     body: string | undefined,
@@ -246,7 +361,8 @@ interface OpenCodeRuntimeCompositionModule {
   createOpenCodeRuntimeComposition(input: {
     readonly activityLog?: ServerLogSink;
     readonly canSpawnRuntime?: (request: Parameters<CodingRuntimeManager["start"]>[0]) => boolean;
-    readonly toolProfile?: "direct" | "code-mode" | undefined;
+    readonly toolProfile?: "direct" | "code-mode" | "native" | undefined;
+    readonly processEnv?: NodeJS.ProcessEnv | undefined;
     readonly portable: {
       readonly verification: PortableSidecarRuntimeVerification & {
         readonly protocolSchemaRawSha256: string;
@@ -257,11 +373,7 @@ interface OpenCodeRuntimeCompositionModule {
       readonly target: "macos-arm64";
     };
     readonly stateBaseRoot: string;
-    readonly contextGeometry: {
-      readonly contextWindowTokens: number;
-      readonly maxInputTokens: number;
-      readonly maxOutputTokens: number;
-    };
+    readonly contextGeometry: FixtureContextGeometry;
     readonly capabilities: {
       readonly modelGatewayCapability: string;
       readonly toolFacadeCapability: string;
@@ -283,7 +395,7 @@ interface OpenCodeRuntimeCompositionModule {
       ) => Promise<OpenCodeGovernedSinkReceipt>;
     };
     readonly safeActivity?: {
-      readonly arm: (sessionId?: string, profile?: "direct" | "code-mode") => void;
+      readonly arm: (sessionId?: string, profile?: "direct" | "code-mode" | "native") => void;
       readonly beginTool?: (input: {
         readonly actionId: string;
         readonly tool: string;
@@ -391,6 +503,92 @@ function v2Json(value: unknown): Response {
   });
 }
 
+/**
+ * The producer's receipt for a prompt: it echoes the message id the body carried (the pinned
+ * `Session.Inbox.User`), which the client reconciles against the id it sent; a prompt without an id
+ * keeps the empty receipt it always had.
+ */
+function promptReceipt(path: string, body: BodyInit | null | undefined): Record<string, unknown> {
+  const sent: unknown = typeof body === "string" ? JSON.parse(body) : undefined;
+  const id = typeof sent === "object" && sent !== null ? (sent as { id?: unknown }).id : undefined;
+  return typeof id === "string" ? { id, sessionID: path.split("/")[3] ?? "", type: "user" } : {};
+}
+
+const NATIVE_MESSAGE_ID = /^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/u;
+
+/** A turn's prompt as the producer receives it: the input carries its own native message id. */
+function turnPrompt(fields: Readonly<Record<string, unknown>>): Record<string, unknown> {
+  return { ...fields, id: expect.stringMatching(NATIVE_MESSAGE_ID) as unknown };
+}
+
+function parsedBodies(bodies: readonly string[]): unknown[] {
+  return bodies.map((body) => JSON.parse(body) as unknown);
+}
+
+/** The producer's side of a turn prompt, as `runControl.promptAcknowledgement` scripts it. */
+function storedTurnPrompt(
+  runControl: NonNullable<StartBridgeControl["runControl"]>,
+  path: string,
+  body: string,
+): Promise<Response> {
+  const acknowledgement = runControl.promptAcknowledgement?.() ?? "deliver";
+  if (acknowledgement === "refuse") return Promise.resolve(new Response("", { status: 400 }));
+  const receipt = promptReceipt(path, body);
+  const stored = runControl.promptBodies.some(
+    (held) => receipt.id !== undefined && promptReceipt(path, held).id === receipt.id,
+  );
+  if (!stored) runControl.promptBodies.push(body);
+  if (acknowledgement === "lose") return Promise.reject(new TypeError("fetch failed"));
+  return Promise.resolve(v2Envelope(receipt));
+}
+
+/**
+ * The producer's session inbox, derived from the delivered prompts the fixture stored: every
+ * prompt that carried a `delivery` is pending until the test withdraws it (`DELETE`) or marks it
+ * delivered, and a `PATCH` changes its delivery, as the pinned producer does (204 for each).
+ */
+function inboxResponse(
+  inbox: NonNullable<NonNullable<StartBridgeControl["runControl"]>["inbox"]>,
+  promptBodies: readonly string[],
+  path: string,
+  init: RequestInit | undefined,
+): Response {
+  const method = init?.method ?? "GET";
+  const scripted = inbox.respond?.();
+  if (scripted !== undefined) return scripted;
+  inbox.requests.push({
+    method,
+    path,
+    ...(typeof init?.body === "string" ? { body: init.body } : {}),
+  });
+  const entryId = path.split("/")[5] ?? "";
+  if (method === "DELETE") {
+    inbox.withdrawn.add(entryId);
+    return new Response(null, { status: 204 });
+  }
+  if (method === "PATCH") {
+    inbox.promoted.add(entryId);
+    return new Response(null, { status: 204 });
+  }
+  const pending = promptBodies.flatMap((body) => {
+    const parsed = JSON.parse(body) as { id?: string; delivery?: "queue" | "steer"; text: string };
+    const id = parsed.id;
+    if (id === undefined || parsed.delivery === undefined) return [];
+    if (inbox.withdrawn.has(id) || inbox.delivered.has(id)) return [];
+    return [
+      {
+        id,
+        sessionID: "ses_tool",
+        time: { created: 1 },
+        type: "user",
+        payload: { text: parsed.text },
+        delivery: inbox.promoted.has(id) ? "steer" : parsed.delivery,
+      },
+    ];
+  });
+  return v2Envelope([...inbox.runtimeOwned, ...pending]);
+}
+
 function v2Envelope(value: unknown): Response {
   return v2Json({ data: value });
 }
@@ -477,6 +675,8 @@ type ReadinessChallengePhase = "before-prompt" | "prompt-pending" | "aborted";
 
 interface StartBridgeControl {
   readonly resolveWorkspaceRootAccess?: (() => WorkspaceRootAccess | undefined) | undefined;
+  /** Extra sessions the runtime's session list reports (native child sessions, #3897). */
+  readonly childSessions?: readonly Record<string, unknown>[];
   readonly workspaceRoot?: string;
   readonly gatewayUrl?: string;
   readonly signal?: AbortSignal;
@@ -487,7 +687,11 @@ interface StartBridgeControl {
     readonly afterCreated?: () => void;
   };
   readonly toolFacadeCapability?: string;
-  readonly readToolProfile?: () => "direct" | "code-mode";
+  readonly readToolProfile?: () => "direct" | "code-mode" | "native";
+  /** The media the run's model declares (#3906 AC1); absent declares text only. */
+  readonly media?: { readonly imageInput?: boolean; readonly documentInput?: boolean };
+  /** What `plugin.list` reports; absent reports Keiko's generated plugins active. */
+  readonly pluginEntries?: (launch: RuntimeSupervisorLaunchRequest | undefined) => unknown[];
   readonly canSpawnRuntime?: (request: Parameters<CodingRuntimeManager["start"]>[0]) => boolean;
   readonly onSpawn?: (() => void) | undefined;
   readonly stdinLifetime?: {
@@ -496,6 +700,22 @@ interface StartBridgeControl {
     readonly pipe: PassThrough;
   };
   readonly activityLog?: ServerLogSink;
+  /** The repository items admission the composition is handed (#3903). */
+  readonly repositoryItems?: CodingRuntimeRepositoryItemsPort;
+  /** The operator plugin admission the composition is handed (#3903 AC2). */
+  readonly operatorPlugins?: OperatorPluginsPort;
+  /** The operator's remote skill sources the composition pulls (#3903 AC3). */
+  readonly remoteSkills?: RemoteSkillsPort;
+  /** The operator's MCP registry and the issuer validation of its OAuth servers (#3903 AC3). */
+  readonly mcpServers?: () => readonly McpServerDefinition[];
+  readonly mcpOAuthIssuer?: McpOAuthIssuerPort;
+  /** The native AGENTS.md copy the composition is handed (#3900 AC3). */
+  readonly repositoryInstructions?: InstructionsCopyPort;
+  /** The managed owner for an approved Code Mode `worktree_create` (#3903 AC4). */
+  readonly nativeWorktrees?: NativeWorktreeProvisionPort;
+  /** #3900 AC4 / #3903 AC1: the run's configuration documents and the gateway's further models. */
+  readonly configDocuments?: () => Promise<readonly Readonly<Record<string, unknown>>[]>;
+  readonly agentModelCatalog?: () => OpenCodeAgentModelCatalog | undefined;
   readonly startTimeoutMs?: number;
   readonly shutdownTimeoutMs?: number;
   readonly onRelease?: (runId: string) => void;
@@ -517,10 +737,77 @@ interface StartBridgeControl {
   readonly mode?: "governed-assist" | "supervised-coding" | "autonomous-delivery";
   /** The gateway route refused the readiness challenge's model request (#3603). */
   readonly gatewayRefused?: boolean;
+  /** Native session continuity (S02/S03, #3904): the shared service and what the runtime holds. */
+  readonly continuity?: FixtureContinuity;
   readonly runControl?: {
     readonly promptBodies: string[];
+    /**
+     * How the producer answers each turn prompt: `deliver` (the default) stores it and returns its
+     * receipt, `lose` stores it and then loses the reply, `refuse` answers 400 and stores nothing. A
+     * prompt whose id is already stored is answered with its receipt and not stored twice, as the
+     * pinned producer deduplicates a resent input.
+     */
+    readonly promptAcknowledgement?: () => "deliver" | "lose" | "refuse";
+    /** Each `POST /api/session/{id}/agent`, with how many prompts had been posted before it. */
+    readonly agentRequests?: {
+      readonly path: string;
+      readonly body: string;
+      readonly promptsBefore: number;
+    }[];
+    readonly agentResponse?: () => Response;
+    /** `GET /api/agent`: the agents the runtime lists for the run's workspace (#3903 AC1). */
+    readonly agentListing?: readonly Readonly<Record<string, unknown>>[];
+    /** The slash command routes of a native run (C02): the listing and the session command. */
+    readonly commands?: {
+      /** Each `GET /api/command` and `POST /api/session/{id}/command`, in arrival order. */
+      readonly requests: {
+        readonly method: string;
+        readonly path: string;
+        readonly body?: string;
+      }[];
+      /** What `GET /api/command` answers. */
+      listing: unknown[];
+      /** What `GET /api/command` fails with, when it should not answer the listing. */
+      listingResponse?: (() => Response) | undefined;
+      /** What `POST .../command` answers; the runtime's 204 by default. */
+      commandResponse?: (() => Response) | undefined;
+    };
+    /** The session inbox routes of a native run (S07): listing, withdrawal and delivery change. */
+    readonly inbox?: {
+      readonly requests: {
+        readonly method: string;
+        readonly path: string;
+        readonly body?: string;
+      }[];
+      /** Entries the runtime queued on its own; listed first, never the operator's. */
+      readonly runtimeOwned: unknown[];
+      /** Ids a `DELETE` withdrew. */
+      readonly withdrawn: Set<string>;
+      /** Ids a `PATCH` changed to `steer`. */
+      readonly promoted: Set<string>;
+      /** Ids the running turn already took: no longer pending. */
+      readonly delivered: Set<string>;
+      /** Answers every inbox request with this instead, when the producer should fail. */
+      respond?: (() => Response) | undefined;
+    };
+    /** The session diff and revert routes of a native run (B3, S04). */
+    readonly revert?: {
+      readonly requests: {
+        readonly method: string;
+        readonly path: string;
+        readonly body?: string;
+      }[];
+      /** What `GET .../diff` answers. */
+      diff: unknown[];
+      /** The session's messages in order; the runtime answers them newest first (`order=desc`). */
+      messages: unknown[];
+      /** What `POST .../revert/stage` answers. */
+      staged: unknown;
+    };
     readonly abortSessions: string[];
     readonly statusResponses: unknown[];
+    /** What `GET /api/shell` lists (#3901 AC3); absent lists no running job. */
+    readonly shellResponses?: () => unknown[];
     readonly statusResponseForReadinessPhase?: (phase: ReadinessChallengePhase) => unknown;
     readonly questionResponses?: unknown[];
     readonly onQuestionListFetch?: () => Promise<void> | void;
@@ -540,6 +827,139 @@ interface StartBridgeControl {
     runtime: OpenCodeRuntimeComposition,
     runRoot: string,
   ) => void | Promise<void>;
+}
+
+/**
+ * What the fake runtime holds for a continued run: the sessions its list reports (mutated by the
+ * creation, fork and removal routes), the messages every session answers (oldest first) and the
+ * session-level requests it was asked, in arrival order.
+ */
+interface FixtureContinuity {
+  readonly service: CodingSessionContinuity;
+  readonly workspaceId: string;
+  /** False leaves every session route to the fixture's own. */
+  readonly serveSessions: boolean;
+  readonly sessions: string[];
+  messages: readonly Record<string, unknown>[];
+  readonly requests: { readonly method: string; readonly path: string; readonly body?: string }[];
+  /** The id a fork gets; `ses_tool` is the one session the rest of the fixture answers for. */
+  readonly forkedSessionId?: string;
+  /** The runtime answers the session listing with a server error: it cannot be asked at all. */
+  readonly listFails?: boolean;
+}
+
+function optionalSessionContinuity(control: StartBridgeControl | undefined): {
+  readonly sessionContinuity?: {
+    readonly service: CodingSessionContinuity;
+    readonly workspaceId: string;
+  };
+} {
+  return control?.continuity === undefined
+    ? {}
+    : {
+        sessionContinuity: {
+          service: control.continuity.service,
+          workspaceId: control.continuity.workspaceId,
+        },
+      };
+}
+
+interface ContinuityRoute {
+  readonly method: string;
+  readonly pattern: RegExp;
+  /** Whether the request is one of the session-level routes this change adds, which are recorded. */
+  readonly recorded: boolean;
+  readonly respond: (
+    held: FixtureContinuity,
+    match: RegExpExecArray,
+    body: string | undefined,
+    session: (id: string) => Record<string, unknown>,
+  ) => Response;
+}
+
+const SESSION_ID_PATTERN = "(ses_[A-Za-z0-9_]+)";
+
+/** The routes of a continued run's runtime: list, create, remove, fork and the messages. */
+const CONTINUITY_ROUTES: readonly ContinuityRoute[] = [
+  {
+    method: "GET",
+    pattern: /^\/api\/session$/u,
+    recorded: false,
+    respond: (held, _match, _body, session): Response =>
+      held.listFails === true
+        ? new Response("{}", { status: 500 })
+        : v2Envelope(held.sessions.map(session)),
+  },
+  {
+    method: "POST",
+    pattern: /^\/api\/session$/u,
+    recorded: true,
+    respond: (held, _match, _body, session): Response => {
+      const id = `ses_scratch_${String(held.requests.length)}`;
+      held.sessions.push(id);
+      return v2Envelope(session(id));
+    },
+  },
+  {
+    method: "DELETE",
+    pattern: new RegExp(`^/api/session/${SESSION_ID_PATTERN}$`, "u"),
+    recorded: true,
+    respond: (held, match): Response => {
+      const index = held.sessions.indexOf(match[1] ?? "");
+      if (index >= 0) held.sessions.splice(index, 1);
+      return new Response(null, { status: 204 });
+    },
+  },
+  {
+    method: "POST",
+    pattern: new RegExp(`^/api/session/${SESSION_ID_PATTERN}/fork$`, "u"),
+    recorded: true,
+    respond: (held, match, body, session): Response => {
+      const before = (JSON.parse(body ?? "{}") as { before?: string }).before;
+      const id = held.forkedSessionId ?? "ses_tool";
+      held.sessions.push(id);
+      const boundary =
+        before === undefined
+          ? { type: "through", messageID: "msg_last" }
+          : { type: "before", messageID: before };
+      return v2Envelope({ ...session(id), fork: { sessionID: match[1], boundary } });
+    },
+  },
+  {
+    method: "GET",
+    pattern: new RegExp(`^/api/session/${SESSION_ID_PATTERN}/message$`, "u"),
+    recorded: false,
+    respond: (held): Response => v2Envelope([...held.messages].reverse()),
+  },
+];
+
+function continuityRoute(
+  method: string,
+  path: string,
+): { readonly route: ContinuityRoute; readonly match: RegExpExecArray } | undefined {
+  for (const route of CONTINUITY_ROUTES) {
+    const match = route.method === method ? route.pattern.exec(path) : null;
+    if (match !== null) return { route, match };
+  }
+  return undefined;
+}
+
+/** The session routes of a continued run's runtime; `undefined` leaves the route to the fixture. */
+function continuityResponse(
+  held: FixtureContinuity | undefined,
+  path: string,
+  init: RequestInit | undefined,
+  directory: string,
+): Response | undefined {
+  if (held?.serveSessions !== true) return undefined;
+  const method = init?.method ?? "GET";
+  const body = typeof init?.body === "string" ? init.body : undefined;
+  const found = continuityRoute(method, path);
+  if (found === undefined) return undefined;
+  if (found.route.recorded) {
+    held.requests.push({ method, path, ...(body === undefined ? {} : { body }) });
+  }
+  return found.route.respond(held, found.match, body, (id) => ({ id, location: { directory } }));
 }
 
 function optionalSpawnGuard(control: StartBridgeControl | undefined): {
@@ -598,6 +1018,63 @@ function optionalActivityLog(control: StartBridgeControl | undefined): {
   return control?.activityLog === undefined ? {} : { activityLog: control.activityLog };
 }
 
+/** The composition's native AGENTS.md copy port (#3900 AC3), as the backend binds it. */
+interface InstructionsCopyPort {
+  readonly materializeForRun: (request: {
+    readonly runId: string;
+    readonly targetPath: string;
+    readonly signal?: AbortSignal | undefined;
+  }) => Promise<boolean>;
+}
+
+function optionalRepositoryItems(control: StartBridgeControl | undefined): {
+  readonly repositoryItems?: CodingRuntimeRepositoryItemsPort;
+} {
+  return control?.repositoryItems === undefined ? {} : { repositoryItems: control.repositoryItems };
+}
+
+function optionalMcp(control: StartBridgeControl | undefined): {
+  readonly mcpServers?: () => readonly McpServerDefinition[];
+  readonly mcpOAuthIssuer?: McpOAuthIssuerPort;
+} {
+  return {
+    ...(control?.mcpServers === undefined ? {} : { mcpServers: control.mcpServers }),
+    ...(control?.mcpOAuthIssuer === undefined ? {} : { mcpOAuthIssuer: control.mcpOAuthIssuer }),
+  };
+}
+
+function optionalOperatorPlugins(control: StartBridgeControl | undefined): {
+  readonly operatorPlugins?: OperatorPluginsPort;
+  readonly remoteSkills?: RemoteSkillsPort;
+} {
+  return {
+    ...(control?.operatorPlugins === undefined ? {} : { operatorPlugins: control.operatorPlugins }),
+    ...(control?.remoteSkills === undefined ? {} : { remoteSkills: control.remoteSkills }),
+  };
+}
+
+function optionalRepositoryInstructions(control: StartBridgeControl | undefined): {
+  readonly repositoryInstructions?: InstructionsCopyPort;
+} {
+  return control?.repositoryInstructions === undefined
+    ? {}
+    : { repositoryInstructions: control.repositoryInstructions };
+}
+
+function optionalNativeWorktrees(control: StartBridgeControl | undefined): {
+  readonly nativeWorktrees?: NativeWorktreeProvisionPort;
+  readonly configDocuments?: () => Promise<readonly Readonly<Record<string, unknown>>[]>;
+  readonly agentModelCatalog?: () => OpenCodeAgentModelCatalog | undefined;
+} {
+  return {
+    ...(control?.nativeWorktrees === undefined ? {} : { nativeWorktrees: control.nativeWorktrees }),
+    ...(control?.configDocuments === undefined ? {} : { configDocuments: control.configDocuments }),
+    ...(control?.agentModelCatalog === undefined
+      ? {}
+      : { agentModelCatalog: control.agentModelCatalog }),
+  };
+}
+
 function optionalToolResultCorrelation(control: StartBridgeControl | undefined): {
   readonly toolResultCorrelationId?: string;
 } {
@@ -645,9 +1122,13 @@ function fixtureToolCapability(control: StartBridgeControl | undefined): string 
 function fixtureToolFacade(facade: CodingToolFacade): CodingToolFacade {
   const nativeTextRead = facade.nativeTextRead;
   const acceptedInitialization = facade.acceptedInitialization;
+  const nativeEffect = facade.nativeEffect;
+  const nativeSettlement = facade.nativeSettlement;
   return {
     ...(acceptedInitialization === undefined ? {} : { acceptedInitialization }),
     ...(nativeTextRead === undefined ? {} : { nativeTextRead }),
+    ...(nativeEffect === undefined ? {} : { nativeEffect }),
+    ...(nativeSettlement === undefined ? {} : { nativeSettlement }),
     execute: (input) =>
       input.body === '{"action":"permission-event","requestId":"keiko-readiness"}'
         ? Promise.resolve({ status: "observed", evidence: [] })
@@ -671,6 +1152,31 @@ function fixturePreparation(
     verification,
     timeoutMs: 100,
   };
+}
+
+/**
+ * The `plugin.list` entries the pinned producer reports for Keiko's generated plugins (shape
+ * observed on 2.1.4: id, local source path, server feature, active state), beside a built-in one.
+ */
+function fixturePlugins(
+  launch: RuntimeSupervisorLaunchRequest | undefined,
+  status: "active" | "failed" = "active",
+): unknown[] {
+  const directory = join(launch?.env.OPENCODE_CONFIG_DIR ?? "", "plugins");
+  return [
+    {
+      id: "opencode.tool.read",
+      source: { type: "builtin" },
+      features: { server: true },
+      state: { status: "active" },
+    },
+    ...OPENCODE_NATIVE_REQUIRED_PLUGINS.map((plugin) => ({
+      id: plugin.id,
+      source: { type: "local", path: join(directory, plugin.file) },
+      features: { server: true },
+      state: status === "active" ? { status } : { status, error: "fixture" },
+    })),
+  ];
 }
 
 /** Exact Info.location.directory shape qualified by original pinned native HTTP create/get. */
@@ -700,6 +1206,24 @@ function fixtureSignal(control: StartBridgeControl | undefined): AbortSignal | u
   return control?.signal;
 }
 
+interface FixtureContextGeometry {
+  readonly contextWindowTokens: number;
+  readonly maxInputTokens: number;
+  readonly maxOutputTokens: number;
+  readonly imageInput?: boolean;
+  readonly documentInput?: boolean;
+}
+
+/** The fixture's model window, with the media its control declares (#3906 AC1). */
+function fixtureContextGeometry(control: StartBridgeControl | undefined): FixtureContextGeometry {
+  return {
+    contextWindowTokens: 65_536,
+    maxInputTokens: 61_440,
+    maxOutputTokens: 4_096,
+    ...control?.media,
+  };
+}
+
 async function startBridgeFixture(
   facade: CodingToolFacade,
   toolBridge: { readonly requestDeadlineMs: number; readonly maxInFlight: number } = {
@@ -710,6 +1234,7 @@ async function startBridgeFixture(
 ): Promise<{
   readonly runtime: OpenCodeRuntimeComposition;
   readonly preparation: OpenCodeLifecyclePrepareRequest;
+  readonly stateBaseRoot: string;
   stop(): Promise<void>;
 }> {
   const root = tempDir("keiko-opencode-tool-bridge-");
@@ -804,25 +1329,89 @@ async function startBridgeFixture(
         ),
       );
     }
+    const continued = continuityResponse(
+      control?.continuity,
+      path,
+      init,
+      capturedLaunch?.cwd ?? "",
+    );
+    if (continued !== undefined) return Promise.resolve(continued);
+    if (path === "/api/session/ses_tool/message" && control?.runControl?.revert !== undefined) {
+      return Promise.resolve(v2Envelope([...control.runControl.revert.messages].reverse()));
+    }
+    if (path === "/api/session/ses_tool/diff") {
+      control?.runControl?.revert?.requests.push({ method: init?.method ?? "GET", path });
+      return Promise.resolve(v2Envelope(control?.runControl?.revert?.diff ?? []));
+    }
+    if (path.startsWith("/api/session/ses_tool/revert")) {
+      control?.runControl?.revert?.requests.push({
+        method: init?.method ?? "GET",
+        path,
+        ...(typeof init?.body === "string" ? { body: init.body } : {}),
+      });
+      return Promise.resolve(
+        path.endsWith("/stage")
+          ? v2Envelope(control?.runControl?.revert?.staged ?? {})
+          : new Response(null, { status: 204 }),
+      );
+    }
     if (path === "/api/session/ses_tool/message") {
       control?.historyCalls?.push({});
       if (control?.historyResponseFactory !== undefined)
         return control.historyResponseFactory(init?.signal ?? undefined);
       return control?.historyResponse ?? Promise.resolve(v2Envelope([]));
     }
+    if (
+      path.startsWith("/api/session/ses_tool/inbox") &&
+      control?.runControl?.inbox !== undefined
+    ) {
+      return Promise.resolve(
+        inboxResponse(control.runControl.inbox, control.runControl.promptBodies, path, init),
+      );
+    }
+    if (path === "/api/command" || path.endsWith("/command")) {
+      const commands = control?.runControl?.commands;
+      commands?.requests.push({
+        method: init?.method ?? "GET",
+        path,
+        ...(typeof init?.body === "string" ? { body: init.body } : {}),
+      });
+      return Promise.resolve(
+        path === "/api/command"
+          ? (commands?.listingResponse?.() ?? v2Envelope(commands?.listing ?? []))
+          : (commands?.commandResponse?.() ?? new Response(null, { status: 204 })),
+      );
+    }
     if (path.endsWith("/prompt")) {
       control?.sessionLocation?.stages?.push("prompt");
       if (typeof init?.body === "string" && init.body.includes("runtime readiness handshake")) {
         readinessChallengePhase = "prompt-pending";
-      } else if (typeof init?.body === "string") {
-        control?.runControl?.promptBodies.push(init.body);
+      } else if (typeof init?.body === "string" && control?.runControl !== undefined) {
+        return storedTurnPrompt(control.runControl, path, init.body);
       }
-      return Promise.resolve(v2Envelope({}));
+      return Promise.resolve(v2Envelope(promptReceipt(path, init?.body)));
+    }
+    if (path === "/api/agent" && control?.runControl?.agentListing !== undefined) {
+      return Promise.resolve(v2Envelope(control.runControl.agentListing));
+    }
+    if (path.endsWith("/agent")) {
+      control?.runControl?.agentRequests?.push({
+        path,
+        body: typeof init?.body === "string" ? init.body : "",
+        promptsBefore: control.runControl.promptBodies.length,
+      });
+      return Promise.resolve(
+        control?.runControl?.agentResponse?.() ?? new Response(null, { status: 204 }),
+      );
     }
     if (path.endsWith("/interrupt")) {
       if (readinessChallengePhase === "prompt-pending") readinessChallengePhase = "aborted";
       else control?.runControl?.abortSessions.push(path.split("/")[3] ?? "");
       return Promise.resolve(v2Envelope({}));
+    }
+    // #3901 AC3: the background shell jobs the runtime lists; none unless the control names some.
+    if (path === "/api/shell") {
+      return Promise.resolve(v2Envelope(control?.runControl?.shellResponses?.() ?? []));
     }
     if (path === "/api/session/active") {
       const statuses = control?.runControl?.statusResponses;
@@ -845,6 +1434,11 @@ async function startBridgeFixture(
         ...(typeof init?.body === "string" ? { body: init.body } : {}),
       });
       return Promise.resolve(v2Envelope({}));
+    }
+    if (path === "/api/plugin") {
+      return Promise.resolve(
+        v2Envelope(control?.pluginEntries?.(capturedLaunch) ?? fixturePlugins(capturedLaunch)),
+      );
     }
     if (path === "/api/permission/request") {
       const responses = control?.runControl?.permissionResponses;
@@ -869,21 +1463,21 @@ async function startBridgeFixture(
       return Promise.resolve(
         v2Envelope([
           fixtureNativeSession("ses_tool", capturedLaunch?.cwd ?? "", "echoed", control),
+          ...(control?.childSessions ?? []),
         ]),
       );
     return Promise.resolve(new Response("", { status: 404 }));
   }) as unknown as typeof globalThis.fetch;
   const runtime = (await compositionModule()).createOpenCodeRuntimeComposition({
-    get toolProfile(): "direct" | "code-mode" | undefined {
+    get toolProfile(): "direct" | "code-mode" | "native" | undefined {
       return control?.readToolProfile?.();
     },
+    // #3897: the host environment is offered to every profile; only the native profile's
+    // allowlist copies anything from it, so a mapped launch must still carry no PATH.
+    processEnv: { PATH: "/host/toolchain/bin", HOME: "/host/home" },
     portable: { verification: portable.verification, resourceRoot, target: "macos-arm64" },
     stateBaseRoot: join(root, "state"),
-    contextGeometry: {
-      contextWindowTokens: 65_536,
-      maxInputTokens: 61_440,
-      maxOutputTokens: 4_096,
-    },
+    contextGeometry: fixtureContextGeometry(control),
     capabilities: {
       modelGatewayCapability: MODEL_CAPABILITY,
       toolFacadeCapability: fixtureToolCapability(control),
@@ -902,9 +1496,15 @@ async function startBridgeFixture(
     ...optionalQuestionObservations(control),
     ...optionalDiagnostics(control),
     ...optionalActivityLog(control),
+    ...optionalRepositoryItems(control),
+    ...optionalOperatorPlugins(control),
+    ...optionalMcp(control),
+    ...optionalRepositoryInstructions(control),
+    ...optionalNativeWorktrees(control),
     ...optionalToolResultCorrelation(control),
     ...optionalRuntimeEvents(control),
     ...optionalSpawnGuard(control),
+    ...optionalSessionContinuity(control),
     gatewayReadiness: {
       waitForObservedRequest: (): Promise<boolean> =>
         Promise.resolve(control?.gatewayRefused !== true),
@@ -963,6 +1563,7 @@ async function startBridgeFixture(
   return {
     runtime,
     preparation,
+    stateBaseRoot: join(root, "state"),
     stop: async (): Promise<void> => {
       await runtime.manager.stop(FIXTURE_RUN_ID);
     },
@@ -1125,7 +1726,7 @@ describe("unmounted OpenCode runtime composition", () => {
   // eslint-disable-next-line complexity -- this audit fixture keeps lifecycle evidence co-located.
   it("prepares secret-safe state before spawn, proves the private runtime, and disposes only after reap", async () => {
     expect(OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256).toBe(
-      "726109518aba483675a0be0a0b162221c7a50a24ef2de4539cb7fd0ea929ff9b",
+      "941a87888e62c1b22bc9b4c6a8b7fbc6baacaa1c52dd47aa384248fc4fe8c857",
     );
     const root = tempDir("keiko-opencode-composition-");
     const workspaceRoot = join(root, "workspace");
@@ -1241,6 +1842,7 @@ describe("unmounted OpenCode runtime composition", () => {
       if (path === "/api/session/ses_1/message") return Promise.resolve(v2Envelope([]));
       if (path.endsWith("/prompt")) return Promise.resolve(v2Envelope({}));
       if (path.endsWith("/interrupt")) return Promise.resolve(v2Envelope({}));
+      if (path === "/api/shell") return Promise.resolve(v2Envelope([]));
       if (path === "/api/session/active") {
         observePoll?.();
         return Promise.resolve(
@@ -1380,6 +1982,9 @@ describe("unmounted OpenCode runtime composition", () => {
     expect(launch?.args).toEqual(["serve", "--hostname", "127.0.0.1", "--port", "0"]);
     const runRoot = join(stateBaseRoot, "run-1");
     expect(launch?.env.OPENCODE_DISABLE_PROJECT_CONFIG).toBe("true");
+    expect(launch?.env.PATH).toBeUndefined();
+    expect(launch?.env.HOME).not.toBe("/host/home");
+    expect(launch?.env.JAVA_TOOL_OPTIONS).toBe(`'-Djava.io.tmpdir=${join(runRoot, "tmp")}'`);
     expect(launch?.env.OPENCODE_CONFIG_DIR).toBe(join(runRoot, "config", "opencode"));
     expect(
       fetchMock.mock.calls.some(([url]) => url instanceof URL && url.pathname === "/openapi.json"),
@@ -2161,8 +2766,8 @@ describe("private OpenCode run control", () => {
     expect(runControl.statusResponses).toEqual([{}]);
     await expect(fixture.runtime.runPort.abortTask(FIXTURE_RUN_ID)).resolves.toBe(true);
     expect(runControl.abortSessions).toEqual(["ses_tool"]);
-    expect(runControl.promptBodies).toEqual([
-      JSON.stringify({
+    expect(parsedBodies(runControl.promptBodies)).toEqual([
+      turnPrompt({
         text: `${initialContext}\n\n${prompt}`,
         metadata: {
           keikoContextPresentationV1: {
@@ -2482,6 +3087,1796 @@ describe("private OpenCode run control", () => {
     } finally {
       await fixture.stop();
     }
+  });
+
+  // PR #4064 (P1): a run's session tree is its primary session and the subagent sessions the
+  // original runtime opened under it. The run is over only when none of them runs, and a native
+  // question of any of them reaches the human.
+  describe("the native session tree (PR #4064)", () => {
+    const nativeForm = (id: string, sessionID: string): Record<string, unknown> => ({
+      id,
+      sessionID,
+      title: "Choice",
+      fields: [
+        {
+          key: "choice",
+          title: "Choice",
+          description: `Which one? (${id})`,
+          type: "string",
+          options: [{ label: "Blue", value: "blue", description: "First" }],
+        },
+      ],
+    });
+
+    async function withChildren(
+      control: {
+        readonly runControl: NonNullable<
+          NonNullable<Parameters<typeof startBridgeFixture>[2]>["runControl"]
+        >;
+        readonly historyResponseFactory?: () => Promise<Response>;
+      },
+      body: (
+        fixture: Awaited<ReturnType<typeof startBridgeFixture>>,
+        activityLog: ReturnType<typeof createBufferedServerLogSink>,
+      ) => Promise<void>,
+    ): Promise<void> {
+      const activityLog = createBufferedServerLogSink();
+      const childSessions: Record<string, unknown>[] = [];
+      const fixture = await startBridgeFixture(facade, undefined, {
+        ...control,
+        childSessions,
+        activityLog,
+      });
+      const workspaceRoot = fixture.preparation.env.KEIKO_CODING_WORKSPACE_ROOT ?? "";
+      childSessions.push(
+        { id: "ses_child", parentID: "ses_tool", location: { directory: workspaceRoot } },
+        { id: "ses_elsewhere", parentID: "ses_tool", location: { directory: "/elsewhere" } },
+        { id: "ses_foreign", location: { directory: workspaceRoot } },
+      );
+      try {
+        await body(fixture, activityLog);
+      } finally {
+        await fixture.stop();
+      }
+    }
+
+    it("lists, answers and rejects the questions of an admitted child, and no foreign session's", async () => {
+      const questionRequests: { method: string; path: string; body?: string }[] = [];
+      await withChildren(
+        {
+          runControl: {
+            promptBodies: [],
+            abortSessions: [],
+            statusResponses: [{}],
+            questionResponses: [
+              [
+                nativeForm("frm_primary", "ses_tool"),
+                nativeForm("frm_child", "ses_child"),
+                nativeForm("frm_elsewhere", "ses_elsewhere"),
+                nativeForm("frm_foreign", "ses_foreign"),
+              ],
+            ],
+            questionRequests,
+          },
+        },
+        async ({ runtime }, activityLog) => {
+          const port = runtime.runPort;
+          const listed = await port.listQuestions(FIXTURE_RUN_ID);
+          expect(listed.map(({ id, sessionID }) => [id, sessionID])).toEqual([
+            ["que_primary", "ses_tool"],
+            ["que_child", "ses_child"],
+          ]);
+          await expect(port.answerQuestion(FIXTURE_RUN_ID, "que_child", [["Blue"]])).resolves.toBe(
+            true,
+          );
+          await expect(port.rejectQuestion(FIXTURE_RUN_ID, "que_child")).resolves.toBe(true);
+          // Another session's form is refused whichever way it is reached.
+          for (const id of ["que_elsewhere", "que_foreign"]) {
+            await expect(port.answerQuestion(FIXTURE_RUN_ID, id, [["Blue"]])).resolves.toBe(false);
+            await expect(port.rejectQuestion(FIXTURE_RUN_ID, id)).resolves.toBe(false);
+          }
+          expect(questionRequests).toEqual([
+            {
+              method: "POST",
+              path: "/api/session/ses_child/form/frm_child/reply",
+              body: '{"answer":{"choice":"blue"}}',
+            },
+            { method: "DELETE", path: "/api/session/ses_child/form/frm_child" },
+          ]);
+          const routed = activityLog.events.filter(
+            (event) => event.op === "coding-runtime.native-question.routed",
+          );
+          expect(routed.map((event) => event.extra)).toEqual([
+            expect.objectContaining({ action: "list", childFormCount: 1, formCount: 4 }),
+            expect.objectContaining({
+              action: "answer",
+              outcome: "answered",
+              sessionRelation: "child",
+            }),
+            expect.objectContaining({
+              action: "reject",
+              outcome: "rejected",
+              sessionRelation: "child",
+            }),
+            ...Array.from({ length: 4 }, (): unknown =>
+              expect.objectContaining({ outcome: "refused", refusal: "foreign-session" }),
+            ),
+          ]);
+          expect(routed.every((event) => event.correlationId === FIXTURE_RUN_ID)).toBe(true);
+          expect(JSON.stringify(routed)).not.toMatch(/ses_|frm_|que_|Which one/u);
+        },
+      );
+    });
+
+    it("keeps the run open while an owned child runs, and settles once it ended", async () => {
+      let history: readonly Readonly<Record<string, unknown>>[] = completedTurnHistory().slice(
+        0,
+        1,
+      );
+      const statusResponses: unknown[] = [{ ses_child: { type: "busy" } }];
+      await withChildren(
+        {
+          runControl: { promptBodies: [], abortSessions: [], statusResponses },
+          historyResponseFactory: () => Promise.resolve(v2Envelope(history.slice().reverse())),
+        },
+        async ({ runtime }, activityLog) => {
+          await expect(runtime.runPort.submitTask(FIXTURE_RUN_ID, "bounded task")).resolves.toBe(
+            true,
+          );
+          // The primary finished its turn; its subagent still runs.
+          history = completedTurnHistory();
+          let settled = false;
+          const terminal = runtime.runPort
+            .waitForTerminal(FIXTURE_RUN_ID, AbortSignal.timeout(10_000))
+            .finally(() => {
+              settled = true;
+            });
+          await new Promise<void>((resolve) => setTimeout(resolve, 700));
+          expect(settled).toBe(false);
+          statusResponses[0] = {};
+          await expect(terminal).resolves.toBe(true);
+          const phases = activityLog.events
+            .filter((event) => event.op === "coding-runtime.native-session-tree.observed")
+            .map((event) => event.extra?.phase);
+          expect(phases).toEqual(["held", "released"]);
+        },
+      );
+    });
+
+    // #3901 AC3: a background shell job the turn started keeps the run open until it ended.
+    it("keeps the run open while its background shell job runs, and settles once it ended", async () => {
+      let history: readonly Readonly<Record<string, unknown>>[] = completedTurnHistory().slice(
+        0,
+        1,
+      );
+      let shells: unknown[] = [];
+      await withChildren(
+        {
+          runControl: {
+            promptBodies: [],
+            abortSessions: [],
+            statusResponses: [{}],
+            shellResponses: () => shells,
+          },
+          historyResponseFactory: () => Promise.resolve(v2Envelope(history.slice().reverse())),
+        },
+        async ({ runtime }, activityLog) => {
+          await expect(runtime.runPort.submitTask(FIXTURE_RUN_ID, "bounded task")).resolves.toBe(
+            true,
+          );
+          // The primary finished its turn; the job it started in the background still runs.
+          shells = [{ id: "sh_job", status: "running", metadata: { sessionID: "ses_tool" } }];
+          history = completedTurnHistory();
+          let settled = false;
+          const terminal = runtime.runPort
+            .waitForTerminal(FIXTURE_RUN_ID, AbortSignal.timeout(10_000))
+            .finally(() => {
+              settled = true;
+            });
+          await new Promise<void>((resolve) => setTimeout(resolve, 700));
+          expect(settled).toBe(false);
+          shells = [];
+          await expect(terminal).resolves.toBe(true);
+          const lines = activityLog.events
+            .filter((event) => event.op === "coding-runtime.native-session-tree.observed")
+            .map((event) => event.extra);
+          expect(lines).toEqual([
+            expect.objectContaining({ phase: "held", activeShellCount: 1 }),
+            expect.objectContaining({ phase: "released" }),
+          ]);
+        },
+      );
+    });
+
+    it("is not kept open by an active session that is not the run's", async () => {
+      let history: readonly Readonly<Record<string, unknown>>[] = completedTurnHistory().slice(
+        0,
+        1,
+      );
+      await withChildren(
+        {
+          runControl: {
+            promptBodies: [],
+            abortSessions: [],
+            statusResponses: [{ ses_foreign: { type: "busy" } }],
+          },
+          historyResponseFactory: () => Promise.resolve(v2Envelope(history.slice().reverse())),
+        },
+        async ({ runtime }) => {
+          await expect(runtime.runPort.submitTask(FIXTURE_RUN_ID, "bounded task")).resolves.toBe(
+            true,
+          );
+          history = completedTurnHistory();
+          await expect(
+            runtime.runPort.waitForTerminal(FIXTURE_RUN_ID, AbortSignal.timeout(5_000)),
+          ).resolves.toBe(true);
+        },
+      );
+    });
+
+    it("interrupts the owned children when a turn is stopped, and no other session", async () => {
+      const abortSessions: string[] = [];
+      const statusResponses: unknown[] = [{}];
+      await withChildren(
+        { runControl: { promptBodies: [], abortSessions, statusResponses } },
+        async ({ runtime }, activityLog) => {
+          // The child runs on the first read; it and the primary are quiet on the next two.
+          statusResponses.splice(
+            0,
+            1,
+            { ses_child: { type: "busy" }, ses_foreign: { type: "busy" } },
+            {},
+            {},
+          );
+          await expect(runtime.runPort.abortTask(FIXTURE_RUN_ID)).resolves.toBe(true);
+          expect(abortSessions).toEqual(["ses_tool", "ses_child"]);
+          expect(
+            activityLog.events
+              .filter((event) => event.op === "coding-runtime.native-session-tree.observed")
+              .map((event) => event.extra),
+          ).toEqual([expect.objectContaining({ phase: "interrupted", activeChildCount: 1 })]);
+        },
+      );
+    });
+  });
+});
+
+describe("native policy asks on the tool bridge (#3897 review)", () => {
+  const completed = {
+    status: "completed" as const,
+    evidence: [],
+    read: { text: "fixture", byteCount: 7, digest: "f".repeat(64) },
+  };
+  const authorized = { authorization: `Bearer ${TOOL_CAPABILITY}` };
+  const nativeAsk = (
+    sessionID: string,
+    permission = "read",
+    source?: { readonly messageID: string; readonly id: string },
+  ): string =>
+    JSON.stringify({
+      action: "native-policy",
+      runId: FIXTURE_RUN_ID,
+      sessionID,
+      permission,
+      resources: ["src/index.ts"],
+      configured: "allow",
+      ...(source === undefined ? {} : { source: { type: "tool", ...source } }),
+    });
+  type NativeAdmit = NonNullable<CodingToolFacade["nativeEffect"]>["admit"];
+  const CHARGED = { ok: true, charge: "charged" } as const;
+  const admitWith = (result: ReturnType<NativeAdmit>): Mock<NativeAdmit> =>
+    vi.fn<NativeAdmit>(() => result);
+  const facadeWith = (
+    admit: NativeAdmit | undefined,
+    nativeSettlement?: CodingToolFacade["nativeSettlement"],
+  ): CodingToolFacade => ({
+    execute: vi.fn(() => Promise.resolve(completed)),
+    ...(admit === undefined ? {} : { nativeEffect: { admit } }),
+    ...(nativeSettlement === undefined ? {} : { nativeSettlement }),
+  });
+
+  it("releases an allowed effect only after the facade's live authority owner admits it", async () => {
+    const admit = admitWith(CHARGED);
+    const fixture = await startBridgeFixture(facadeWith(admit), undefined, {
+      mode: "supervised-coding",
+    });
+    try {
+      const response = await fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: nativeAsk("ses_tool"),
+      });
+      expect(response).toMatchObject({ status: 200, body: '{"effect":"allow"}' });
+      expect(admit).toHaveBeenCalledOnce();
+      const admitted = admit.mock.calls[0]?.[0];
+      expect(admitted).toMatchObject({
+        actionClass: "workspace-read",
+        capability: TOOL_CAPABILITY,
+      });
+      // A check that names no tool invocation (no `source`) carries no invocation identity.
+      expect(admitted?.invocation).toBeUndefined();
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  // #3903 AC4: the run's own session may move inside the workspace; the tree records each directory,
+  // and once it holds its bound, a move to yet another one is refused rather than lost track of.
+  it("admits the run's own session move inside the workspace up to the tree's bound", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-bridge-move-")));
+    const workspaceRoot = join(root, "workspace");
+    for (let index = 0; index <= NATIVE_SESSION_LOCATION_MAX; index += 1)
+      mkdirSync(join(workspaceRoot, `d${String(index)}`), { recursive: true });
+    const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+      mode: "governed-assist",
+      workspaceRoot,
+    });
+    const move = (
+      name: string,
+      targetSessionID?: string,
+    ): ReturnType<typeof fixture.runtime.toolBridge.handle> =>
+      fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: JSON.stringify({
+          action: "native-policy",
+          runId: FIXTURE_RUN_ID,
+          sessionID: "ses_tool",
+          permission: "opencode_session_move",
+          resources: [join(workspaceRoot, name)],
+          configured: "ask",
+          ...(targetSessionID === undefined ? {} : { targetSessionID }),
+        }),
+      });
+    try {
+      for (let index = 0; index < NATIVE_SESSION_LOCATION_MAX; index += 1)
+        await expect(move(`d${String(index)}`)).resolves.toMatchObject({
+          status: 200,
+          body: '{"effect":"allow"}',
+        });
+      // A directory the tree already follows stays admitted; one more is refused.
+      await expect(move("d0")).resolves.toMatchObject({ body: '{"effect":"allow"}' });
+      const refused = await move(`d${String(NATIVE_SESSION_LOCATION_MAX)}`);
+      expect(refused.body).toContain("bound of working directories");
+      expect((await move("d0", "ses_other")).body).toContain("only its own working directory");
+    } finally {
+      await fixture.stop();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // #3903 AC4: an approved Code Mode `worktree_create` becomes a managed task workspace; the
+  // producer's own unmanaged worktree call never runs, not even after the human approved it.
+  describe("Code Mode worktree creation through the managed owner (#3903 AC4)", () => {
+    const worktreeAsk = (name: string): string =>
+      JSON.stringify({
+        action: "native-policy",
+        runId: FIXTURE_RUN_ID,
+        sessionID: "ses_tool",
+        permission: "opencode_worktree_create",
+        resources: [name],
+        configured: "ask",
+        source: { type: "tool", messageID: "msg_worktree", id: "call_worktree" },
+      });
+    const provisioned = vi.fn<NativeWorktreeProvisionPort["provision"]>(() =>
+      Promise.resolve({
+        ok: true,
+        taskId: "feature-x",
+        branch: "keiko/task/feature-x-0a1b2c3d",
+        created: true,
+      }),
+    );
+
+    async function askedHuman(events: readonly CodingWorkbenchRuntimeEvent[]): Promise<string> {
+      await vi.waitFor(() => {
+        expect(events.some((event) => event.kind === "permission-requested")).toBe(true);
+      });
+      const permission = events.find(
+        (event) => event.kind === "permission-requested",
+      )?.permissionRequest;
+      if (permission === undefined || Array.isArray(permission))
+        throw new Error("expected a permission request");
+      return permission.requestId;
+    }
+
+    async function decidedWorktree(
+      reply: "once" | "reject",
+      nativeWorktrees: NativeWorktreeProvisionPort | undefined,
+    ): Promise<{
+      readonly body: Readonly<Record<string, unknown>>;
+      readonly decided: Readonly<Record<string, unknown>> | undefined;
+    }> {
+      const runtimeEvents: CodingWorkbenchRuntimeEvent[] = [];
+      const activityLog = createBufferedServerLogSink();
+      const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+        mode: "autonomous-delivery",
+        runtimeEvents,
+        activityLog,
+        ...(nativeWorktrees === undefined ? {} : { nativeWorktrees }),
+      });
+      try {
+        const answer = fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers(authorized),
+          body: worktreeAsk("feature-x"),
+        });
+        const requestId = await askedHuman(runtimeEvents);
+        await expect(
+          fixture.runtime.runPort.replyPermission(FIXTURE_RUN_ID, requestId, reply),
+        ).resolves.toBe(true);
+        const response = await answer;
+        const decided = activityLog.events.find(
+          (event) => event.op === "coding-runtime.native-policy.decided",
+        )?.extra;
+        return { body: JSON.parse(response.body) as Readonly<Record<string, unknown>>, decided };
+      } finally {
+        await fixture.stop();
+      }
+    }
+
+    it("asks the human even in Full access, provisions the approved one and blocks the producer's call", async () => {
+      provisioned.mockClear();
+      const { body, decided } = await decidedWorktree("once", { provision: provisioned });
+      expect(body).toMatchObject({
+        effect: "deny",
+        message: expect.stringContaining(
+          'created the managed task workspace "feature-x"',
+        ) as string,
+      });
+      expect(provisioned).toHaveBeenCalledExactlyOnceWith({
+        runId: FIXTURE_RUN_ID,
+        workspaceRoot: expect.any(String) as string,
+        name: "feature-x",
+        correlationId: FIXTURE_RUN_ID,
+      });
+      expect(decided).toMatchObject({
+        permission: "opencode_worktree_create",
+        effect: "ask",
+        outcome: "approved",
+        worktree: "provisioned",
+      });
+    });
+
+    it("provisions nothing when the human declines", async () => {
+      provisioned.mockClear();
+      const { body, decided } = await decidedWorktree("reject", { provision: provisioned });
+      expect(body).toMatchObject({ effect: "deny" });
+      expect(provisioned).not.toHaveBeenCalled();
+      expect(decided).not.toHaveProperty("worktree");
+    });
+
+    it("refuses an approved request the managed owner fails without an answer, and records why", async () => {
+      const failing = vi.fn<NativeWorktreeProvisionPort["provision"]>(() =>
+        Promise.reject(new Error("disk")),
+      );
+      const { body, decided } = await decidedWorktree("once", { provision: failing });
+      expect(body).toMatchObject({
+        effect: "deny",
+        message: expect.stringContaining("could not be created") as string,
+      });
+      expect(decided).toMatchObject({ outcome: "approved", worktree: "provision-failed" });
+    });
+
+    it("refuses an approved request when no managed owner is composed", async () => {
+      const { body, decided } = await decidedWorktree("once", undefined);
+      expect(body).toMatchObject({
+        effect: "deny",
+        message: expect.stringContaining("not available here") as string,
+      });
+      expect(decided).toMatchObject({ outcome: "approved", worktree: "unavailable" });
+    });
+  });
+
+  it("hands the measured size of an edit's diff to the authority owner with its invocation", async () => {
+    const admit = admitWith(CHARGED);
+    const fixture = await startBridgeFixture(facadeWith(admit), undefined, {
+      mode: "autonomous-delivery",
+    });
+    try {
+      const ask = JSON.parse(
+        nativeAsk("ses_tool", "edit", { messageID: "msg_1", id: "call_1" }),
+      ) as Readonly<Record<string, unknown>>;
+      const response = await fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: JSON.stringify({ ...ask, patchBytes: 4_097 }),
+      });
+      expect(response).toMatchObject({ status: 200, body: '{"effect":"allow"}' });
+      expect(admit.mock.calls[0]?.[0]).toMatchObject({
+        actionClass: "workspace-write",
+        patchBytes: 4_097,
+        invocation: { sessionId: "ses_tool", messageId: "msg_1", callId: "call_1" },
+      });
+      const malformed = await fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: JSON.stringify({ ...ask, patchBytes: -1 }),
+      });
+      // An unmeasurable diff is no policy ask: it is never allowed and never reaches the owner.
+      expect(malformed.body).not.toContain('"effect":"allow"');
+      expect(admit).toHaveBeenCalledOnce();
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("refuses the effect when the authority owner refuses it or is absent from the wiring", async () => {
+    const admit = admitWith({ ok: false, reason: "authority-budget-exceeded" });
+    const refused = await startBridgeFixture(facadeWith(admit), undefined, {
+      mode: "supervised-coding",
+    });
+    try {
+      const response = await refused.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: nativeAsk("ses_tool"),
+      });
+      expect(response.status).toBe(200);
+      expect(JSON.parse(response.body)).toMatchObject({ effect: "deny" });
+      expect(JSON.stringify(response)).not.toContain("src/index.ts");
+    } finally {
+      await refused.stop();
+    }
+    const unwired = await startBridgeFixture(facadeWith(undefined), undefined, {
+      mode: "autonomous-delivery",
+    });
+    try {
+      const response = await unwired.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: nativeAsk("ses_tool"),
+      });
+      expect(JSON.parse(response.body)).toMatchObject({ effect: "deny" });
+    } finally {
+      await unwired.stop();
+    }
+  });
+
+  it("cancels an already-aborted ask without consulting authority", async () => {
+    const admit = admitWith(CHARGED);
+    const fixture = await startBridgeFixture(facadeWith(admit), undefined, {
+      mode: "autonomous-delivery",
+    });
+    try {
+      const response = await fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: nativeAsk("ses_tool"),
+        signal: AbortSignal.abort(),
+      });
+      expect(JSON.parse(response.body)).toMatchObject({ effect: "deny" });
+      expect(admit).not.toHaveBeenCalled();
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("binds a native child session to its parent run and refuses a foreign session", async () => {
+    const admit = admitWith(CHARGED);
+    const childSessions: Record<string, unknown>[] = [];
+    const fixture = await startBridgeFixture(facadeWith(admit), undefined, {
+      mode: "autonomous-delivery",
+      childSessions,
+    });
+    const workspaceRoot = fixture.preparation.env.KEIKO_CODING_WORKSPACE_ROOT ?? "";
+    expect(workspaceRoot).not.toBe("");
+    childSessions.push(
+      { id: "ses_child", parentID: "ses_tool", location: { directory: workspaceRoot } },
+      { id: "ses_grandchild", parentID: "ses_child", location: { directory: workspaceRoot } },
+      { id: "ses_elsewhere", parentID: "ses_tool", location: { directory: "/elsewhere" } },
+      { id: "ses_foreign", location: { directory: workspaceRoot } },
+    );
+    try {
+      for (const [sessionID, status] of [
+        ["ses_grandchild", 200],
+        ["ses_child", 200],
+        ["ses_elsewhere", 403],
+        ["ses_foreign", 403],
+        ["ses_unknown", 403],
+      ] as const) {
+        const response = await fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers(authorized),
+          body: nativeAsk(sessionID),
+        });
+        expect(response.status, sessionID).toBe(status);
+      }
+      expect(admit).toHaveBeenCalledTimes(2);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("refuses a child session whose ancestry cannot be read and records a correlated diagnostic", async () => {
+    const diagnostics = persistedDiagnostics();
+    const admit = admitWith(CHARGED);
+    let failList = false;
+    const childSessions = new Proxy<Record<string, unknown>[]>([], {
+      get(target, property, receiver): unknown {
+        if (failList && property === Symbol.iterator) throw new TypeError("PRIVATE_list_failure");
+        return Reflect.get(target, property, receiver) as unknown;
+      },
+    });
+    const fixture = await startBridgeFixture(facadeWith(admit), undefined, {
+      mode: "autonomous-delivery",
+      childSessions,
+      diagnostics: diagnostics.sink,
+    });
+    try {
+      failList = true;
+      const response = await fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: nativeAsk("ses_child"),
+      });
+      expect(response.status).toBe(403);
+      expect(admit).not.toHaveBeenCalled();
+      const record = expectPersistedDiagnostic(
+        diagnostics.read(),
+        "opencode-runtime-composition.native-session-ancestry",
+      );
+      expect(record).toMatchObject({ diagnosticSummary: "native-session-ancestry-failed" });
+      expect(JSON.stringify(record)).not.toContain("PRIVATE_list_failure");
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("decides with the narrower mode after a narrowing resume (#3897 audit)", async () => {
+    const admit = admitWith(CHARGED);
+    const fixture = await startBridgeFixture(facadeWith(admit), undefined, {
+      mode: "autonomous-delivery",
+    });
+    const fetchAsk = (): string =>
+      JSON.stringify({
+        action: "native-policy",
+        runId: FIXTURE_RUN_ID,
+        sessionID: "ses_tool",
+        permission: "webfetch",
+        resources: ["https://example.invalid/doc"],
+        configured: "ask",
+      });
+    try {
+      const before = await fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: fetchAsk(),
+      });
+      expect(JSON.parse(before.body)).toMatchObject({ effect: "allow" });
+      expect(fixture.runtime.manager.pause(FIXTURE_RUN_ID)).toMatchObject({ ok: true });
+      expect(fixture.runtime.manager.resume(FIXTURE_RUN_ID, "supervised-coding")).toMatchObject({
+        ok: true,
+        effectiveMode: "supervised-coding",
+      });
+      const after = await fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: fetchAsk(),
+      });
+      expect(JSON.parse(after.body)).toMatchObject({ effect: "deny" });
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  // #3897 review (P1): a native tree launched in Full access keeps the inherited egress the kernel
+  // bound at launch, so narrowing it below Full access in place would acknowledge authority the
+  // tree still holds. The resume is refused and recorded; narrowing below Full stays in place.
+  it("refuses to narrow a native Full access tree in place and records why", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+      mode: "autonomous-delivery",
+      readToolProfile: () => "native",
+      activityLog,
+    });
+    try {
+      expect(fixture.runtime.manager.pause(FIXTURE_RUN_ID)).toMatchObject({ ok: true });
+      for (const narrower of ["supervised-coding", "governed-assist"] as const)
+        expect(fixture.runtime.manager.resume(FIXTURE_RUN_ID, narrower)).toEqual({
+          ok: false,
+          failureCode: "authority-resolution-failed",
+          retryable: false,
+        });
+      const refused = activityLog.events.filter(
+        (event) => event.op === "coding-runtime.native-narrowing.refused",
+      );
+      expect(refused.map((event) => event.extra)).toEqual([
+        expect.objectContaining({
+          runId: FIXTURE_RUN_ID,
+          launchMode: "autonomous-delivery",
+          requestedMode: "supervised-coding",
+        }),
+        expect.objectContaining({
+          runId: FIXTURE_RUN_ID,
+          launchMode: "autonomous-delivery",
+          requestedMode: "governed-assist",
+        }),
+      ]);
+      expect(refused[0]).toMatchObject({ level: "warn", correlationId: FIXTURE_RUN_ID });
+      expectActivityLogProof(
+        "coding-runtime.native-narrowing.refused.emitted-line",
+        formatActivityLogProofLine(refused[0] ?? {}),
+      );
+      // Resuming in the launch mode is not a narrowing and resumes the paused run.
+      expect(fixture.runtime.manager.resume(FIXTURE_RUN_ID, "autonomous-delivery")).toMatchObject({
+        ok: true,
+      });
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("control: a native tree launched below Full access narrows in place", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+      mode: "supervised-coding",
+      readToolProfile: () => "native",
+      activityLog,
+    });
+    try {
+      expect(fixture.runtime.manager.pause(FIXTURE_RUN_ID)).toMatchObject({ ok: true });
+      expect(fixture.runtime.manager.resume(FIXTURE_RUN_ID, "governed-assist")).toMatchObject({
+        ok: true,
+        effectiveMode: "governed-assist",
+      });
+      expect(
+        activityLog.events.some((event) => event.op === "coding-runtime.native-narrowing.refused"),
+      ).toBe(false);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  // #3900 AC3: Keiko's bounded copy of the workspace's AGENTS.md is written before the launch, into
+  // the producer's global instruction slot, and refreshed before every turn.
+  describe("repository instructions copy", () => {
+    function recordingInstructions(
+      order: string[],
+      changed: boolean[],
+    ): {
+      readonly port: InstructionsCopyPort;
+      readonly targets: string[];
+    } {
+      const targets: string[] = [];
+      return {
+        targets,
+        port: {
+          materializeForRun: (request): Promise<boolean> => {
+            order.push("materialize");
+            targets.push(request.targetPath);
+            return Promise.resolve(changed.shift() ?? false);
+          },
+        },
+      };
+    }
+
+    it("writes the copy before the native child starts and refreshes it before each turn", async () => {
+      const order: string[] = [];
+      const { port, targets } = recordingInstructions(order, [true, true]);
+      const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+        mode: "supervised-coding",
+        readToolProfile: () => "native",
+        repositoryInstructions: port,
+        onSpawn: () => order.push("spawn"),
+      });
+      try {
+        expect(order).toEqual(["materialize", "spawn"]);
+        await expect(
+          fixture.runtime.runPort.submitTask(FIXTURE_RUN_ID, "bounded task"),
+        ).resolves.toBe(true);
+        expect(order).toEqual(["materialize", "spawn", "materialize"]);
+        expect(targets).toHaveLength(2);
+        expect(new Set(targets).size).toBe(1);
+        expect(targets[0]?.endsWith(join("config", "opencode", "AGENTS.md"))).toBe(true);
+      } finally {
+        await fixture.stop();
+      }
+    });
+
+    it.each(["direct", "code-mode"] as const)(
+      "never writes a copy on the mapped %s profile",
+      async (profile) => {
+        const order: string[] = [];
+        const { port } = recordingInstructions(order, []);
+        const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+          readToolProfile: () => profile,
+          repositoryInstructions: port,
+        });
+        try {
+          expect(order).toEqual([]);
+        } finally {
+          await fixture.stop();
+        }
+      },
+    );
+  });
+
+  // #3903: the native profile admits the workspace's Markdown agents, commands and skills into the
+  // run's private discovery directory, after Keiko's own generated document is there and before the
+  // first launch; the mapped profiles never reach the admission.
+  describe("repository items admission", () => {
+    interface AdmissionCall {
+      readonly runId: string;
+      readonly discoveryRoot: string;
+      readonly generatedConfigPresent: boolean;
+    }
+
+    function recordingPort(order: string[]): {
+      readonly port: CodingRuntimeRepositoryItemsPort;
+      readonly calls: AdmissionCall[];
+    } {
+      const calls: AdmissionCall[] = [];
+      return {
+        calls,
+        port: {
+          admitForRun: (request): Promise<void> => {
+            order.push("admit");
+            calls.push({
+              runId: request.runId,
+              discoveryRoot: request.discoveryRoot,
+              generatedConfigPresent: existsSync(join(request.discoveryRoot, "opencode.json")),
+            });
+            return Promise.resolve();
+          },
+        },
+      };
+    }
+
+    it("admits once per native launch, into the discovery directory, before the child is spawned", async () => {
+      const order: string[] = [];
+      const { port, calls } = recordingPort(order);
+      const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+        mode: "supervised-coding",
+        readToolProfile: () => "native",
+        repositoryItems: port,
+        onSpawn: () => order.push("spawn"),
+      });
+      try {
+        expect(calls).toHaveLength(1);
+        const [call] = calls;
+        expect(call?.runId).toBe(FIXTURE_RUN_ID);
+        expect(call?.discoveryRoot.endsWith(join(FIXTURE_RUN_ID, "config", "opencode"))).toBe(true);
+        expect(call?.generatedConfigPresent).toBe(true);
+        expect(order).toEqual(["admit", "spawn"]);
+      } finally {
+        await fixture.stop();
+      }
+    });
+
+    it.each(["direct", "code-mode"] as const)(
+      "never reaches the admission on the mapped %s profile",
+      async (profile) => {
+        const { port, calls } = recordingPort([]);
+        const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+          readToolProfile: () => profile,
+          repositoryItems: port,
+        });
+        try {
+          expect(calls).toHaveLength(0);
+        } finally {
+          await fixture.stop();
+        }
+      },
+    );
+  });
+
+  // #3903 AC2: the operator's plugins are admitted into the discovery directory before the first
+  // launch, with the run's launch mode, which alone decides whether operator code may load.
+  it.each([
+    ["native", "autonomous-delivery", 1],
+    ["native", "supervised-coding", 1],
+    ["direct", "autonomous-delivery", 0],
+  ] as const)(
+    "hands the %s profile's operator plugin and remote skill admissions the %s launch mode before the spawn",
+    async (profile, mode, expected) => {
+      const order: string[] = [];
+      const calls: { readonly mode: string | undefined; readonly discoveryRoot: string }[] = [];
+      const admission = (name: string): OperatorPluginsPort & RemoteSkillsPort => ({
+        admitForRun: (request: {
+          readonly mode: string | undefined;
+          readonly discoveryRoot: string;
+        }): Promise<void> => {
+          order.push(name);
+          calls.push({ mode: request.mode, discoveryRoot: request.discoveryRoot });
+          return Promise.resolve();
+        },
+      });
+      const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+        mode,
+        readToolProfile: () => profile,
+        operatorPlugins: admission("plugins"),
+        remoteSkills: admission("skills"),
+        onSpawn: () => order.push("spawn"),
+      });
+      try {
+        expect(calls).toHaveLength(expected * 2);
+        if (expected === 0) return;
+        expect(calls.map((call) => call.mode)).toEqual([mode, mode]);
+        expect(calls[0]?.discoveryRoot.endsWith(join(FIXTURE_RUN_ID, "config", "opencode"))).toBe(
+          true,
+        );
+        expect(order).toEqual(["plugins", "skills", "spawn"]);
+      } finally {
+        await fixture.stop();
+      }
+    },
+  );
+
+  // #3903 AC3: a remote server with an operator-named issuer is validated before the launch and
+  // bound to the validated metadata document; one whose issuer did not validate is left out.
+  it.each([
+    [true, { ok: true, metadataUrl: METADATA_URL, authorizationEndpoint: `${ISSUER}/authorize` }],
+    [false, { ok: false, reason: "issuer-mismatch" }],
+  ] as const)(
+    "validates the issuer of a remote MCP server before the launch (admitted %s)",
+    async (admitted, validation) => {
+      const calls: unknown[][] = [];
+      const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+        mode: "autonomous-delivery",
+        readToolProfile: () => "native",
+        mcpServers: () => [OAUTH_SERVER],
+        mcpOAuthIssuer: (...call) => {
+          calls.push(call.slice(0, 3));
+          return Promise.resolve(validation);
+        },
+      });
+      try {
+        expect(calls).toEqual([["issues", { issuer: ISSUER }, FIXTURE_RUN_ID]]);
+        const binding = JSON.parse(fixture.preparation.env.OPENCODE_CONFIG_CONTENT ?? "null") as {
+          readonly mcp?: { readonly servers?: Readonly<Record<string, unknown>> };
+        };
+        expect(binding.mcp?.servers?.issues).toEqual(
+          admitted
+            ? {
+                type: "remote",
+                url: "https://issues.example.test/mcp",
+                oauth: { auth_server_metadata_url: METADATA_URL },
+              }
+            : undefined,
+        );
+      } finally {
+        await fixture.stop();
+      }
+    },
+  );
+
+  // #3897 (parity row C07): the producer runs a built-in formatter after its own edits without any
+  // permission, so the launch mode decides whether it may, and the choice is recorded body-free.
+  it.each([
+    ["autonomous-delivery", true, "enabled"],
+    ["supervised-coding", false, "disabled-supervised-mode"],
+    ["governed-assist", false, "disabled-ask-mode"],
+  ] as const)(
+    "binds the native built-in formatter to the %s launch mode and records the decision",
+    async (mode, formatter, disposition) => {
+      const activityLog = createBufferedServerLogSink();
+      const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+        mode,
+        readToolProfile: () => "native",
+        activityLog,
+      });
+      try {
+        const binding = JSON.parse(fixture.preparation.env.OPENCODE_CONFIG_CONTENT ?? "null") as {
+          readonly formatter?: unknown;
+        };
+        expect(binding.formatter).toBe(formatter);
+        const bound = activityLog.events.filter(
+          (event) => event.op === "coding-runtime.native-formatter.bound",
+        );
+        expect(bound).toHaveLength(1);
+        expect(bound[0]).toMatchObject({ correlationId: FIXTURE_RUN_ID });
+        expect(bound[0]?.extra).toMatchObject({
+          runId: FIXTURE_RUN_ID,
+          disposition,
+          launchMode: mode,
+        });
+        expectActivityLogProof(
+          "coding-runtime.native-formatter.bound.emitted-line",
+          formatActivityLogProofLine(bound[0] ?? {}),
+        );
+      } finally {
+        await fixture.stop();
+      }
+    },
+  );
+
+  // #3903 AC1: the further gateway models and the configured per-agent overrides reach the binding,
+  // and one body-free line records their counts.
+  it("binds the agents' gateway models and records the offered and configured counts", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+      mode: "autonomous-delivery",
+      readToolProfile: () => "native",
+      activityLog,
+      configDocuments: () =>
+        Promise.resolve([
+          { agents: { explore: { model: "gemma-small" }, general: { model: "openai/gpt-x" } } },
+        ]),
+      agentModelCatalog: () => ({
+        runModelId: "gemma-large",
+        models: {
+          "gemma-small": {
+            contextWindowTokens: 16_384,
+            maxInputTokens: 12_000,
+            maxOutputTokens: 2_048,
+          },
+        },
+      }),
+    });
+    try {
+      const binding = JSON.parse(fixture.preparation.env.OPENCODE_CONFIG_CONTENT ?? "null") as {
+        readonly agents?: unknown;
+        readonly providers: Record<string, { readonly models: Record<string, unknown> }>;
+      };
+      expect(binding.agents).toEqual({ explore: { model: "keiko-runtime/gemma-small" } });
+      expect(Object.keys(binding.providers["keiko-runtime"]?.models ?? {}).sort()).toEqual([
+        "coding",
+        "gemma-small",
+      ]);
+      const [bound] = activityLog.events.filter(
+        (event) => event.op === "coding-runtime.agent-models.bound",
+      );
+      expect(
+        expectActivityLogProof(
+          "coding-runtime.agent-models.bound.emitted-line",
+          formatActivityLogProofLine(bound ?? {}),
+        ),
+      ).toMatchObject({
+        correlationId: FIXTURE_RUN_ID,
+        offeredModelCount: 1,
+        configuredAgentCount: 1,
+        refusedAgentCount: 1,
+      });
+      expect(JSON.stringify(bound)).not.toContain("gemma-small");
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  // Parity row S11: every profile binds the producer's provider policy and keeps the hosted free
+  // models off, so the runtime knows no model route but the Model Gateway. The line is read from
+  // the configuration and environment the run was actually given.
+  it.each(["native", "direct"] as const)(
+    "records that a %s launch admits only the gateway-bound provider",
+    async (toolProfile) => {
+      const activityLog = createBufferedServerLogSink();
+      const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+        mode: "governed-assist",
+        readToolProfile: () => toolProfile,
+        activityLog,
+      });
+      try {
+        expect(fixture.preparation.env.OPENCODE_DISABLE_FREE_MODELS).toBe("1");
+        const bound = activityLog.events.filter(
+          (event) => event.op === "coding-runtime.provider-policy.bound",
+        );
+        expect(bound).toHaveLength(1);
+        expect(bound[0]).toMatchObject({ correlationId: FIXTURE_RUN_ID });
+        expect(bound[0]?.extra).toMatchObject({
+          runId: FIXTURE_RUN_ID,
+          providerPolicy: "gateway-only",
+          freeModels: "disabled",
+          modelsFetch: "disabled",
+          toolProfile,
+        });
+        expectActivityLogProof(
+          "coding-runtime.provider-policy.bound.emitted-line",
+          formatActivityLogProofLine(bound[0] ?? {}),
+        );
+      } finally {
+        await fixture.stop();
+      }
+    },
+  );
+
+  it("control: a mapped launch carries no formatter setting and records no decision", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+      mode: "autonomous-delivery",
+      readToolProfile: () => "direct",
+      activityLog,
+    });
+    try {
+      expect(fixture.preparation.env).not.toHaveProperty("OPENCODE_CONFIG_CONTENT");
+      expect(
+        activityLog.events.some((event) => event.op === "coding-runtime.native-formatter.bound"),
+      ).toBe(false);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  // The formatter's setting is part of the launch configuration and cannot follow a narrowing.
+  // The only launch mode that enables it is one whose resume cannot narrow in place, so a tree that
+  // may format can never be acknowledged as Ask for approval while it still would.
+  it("refuses to narrow a formatter-enabled tree in place to a mode that forbids the formatter", async () => {
+    const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+      mode: "autonomous-delivery",
+      readToolProfile: () => "native",
+      activityLog: createBufferedServerLogSink(),
+    });
+    try {
+      const binding = JSON.parse(fixture.preparation.env.OPENCODE_CONFIG_CONTENT ?? "null") as {
+        readonly formatter?: unknown;
+      };
+      expect(binding.formatter).toBe(true);
+      expect(fixture.runtime.manager.pause(FIXTURE_RUN_ID)).toMatchObject({ ok: true });
+      expect(fixture.runtime.manager.resume(FIXTURE_RUN_ID, "governed-assist")).toEqual({
+        ok: false,
+        failureCode: "authority-resolution-failed",
+        retryable: false,
+      });
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  const SOURCE = { messageID: "msg_assistant_1", id: "call_read_1" } as const;
+  const handleAsk = (
+    fixture: Awaited<ReturnType<typeof startBridgeFixture>>,
+    body: string,
+  ): Promise<{ readonly status: number; readonly body: string }> =>
+    fixture.runtime.toolBridge.handle({ method: "POST", headers: new Headers(authorized), body });
+
+  it("hands the authority owner the original invocation identity of a tool-sourced check (#3897 review)", async () => {
+    const admit = admitWith(CHARGED);
+    const childSessions: Record<string, unknown>[] = [];
+    const fixture = await startBridgeFixture(facadeWith(admit), undefined, {
+      mode: "autonomous-delivery",
+      childSessions,
+    });
+    const workspaceRoot = fixture.preparation.env.KEIKO_CODING_WORKSPACE_ROOT ?? "";
+    childSessions.push({
+      id: "ses_child",
+      parentID: "ses_tool",
+      location: { directory: workspaceRoot },
+    });
+    try {
+      // Two checks of one tool call (an edit and the directory it touches) name one invocation.
+      await handleAsk(fixture, nativeAsk("ses_tool", "read", SOURCE));
+      await handleAsk(fixture, nativeAsk("ses_tool", "edit", SOURCE));
+      // The same message and call ids in a child session are the child's own invocation.
+      await handleAsk(fixture, nativeAsk("ses_child", "read", SOURCE));
+      expect(admit.mock.calls.map(([input]) => input.invocation)).toEqual([
+        { sessionId: "ses_tool", messageId: "msg_assistant_1", callId: "call_read_1" },
+        { sessionId: "ses_tool", messageId: "msg_assistant_1", callId: "call_read_1" },
+        { sessionId: "ses_child", messageId: "msg_assistant_1", callId: "call_read_1" },
+      ]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("records how a check was charged and why the authority refused one, without a path (#3897 review)", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const answers = [
+      { ok: true, charge: "charged" },
+      { ok: true, charge: "already-charged" },
+      { ok: false, reason: "authority-budget-exceeded" },
+      { ok: false, reason: "workspace-drift" },
+    ] as const;
+    let asked = 0;
+    const admit = vi.fn<NativeAdmit>(() => {
+      const answer = answers[asked] ?? CHARGED;
+      asked += 1;
+      return answer;
+    });
+    const fixture = await startBridgeFixture(facadeWith(admit), undefined, {
+      mode: "supervised-coding",
+      activityLog,
+    });
+    try {
+      for (const callId of ["call_1", "call_1", "call_2", "call_3"])
+        await handleAsk(fixture, nativeAsk("ses_tool", "read", { messageID: "msg_1", id: callId }));
+      const decided = activityLog.events
+        .filter((event) => event.op === "coding-runtime.native-policy.decided")
+        .map((event) => event.extra);
+      expect(decided).toMatchObject([
+        { outcome: "allowed", invocationCharge: "charged" },
+        { outcome: "allowed", invocationCharge: "already-charged" },
+        { outcome: "authority-refused", authorityReason: "authority-budget-exceeded" },
+        { outcome: "authority-refused", authorityReason: "drift" },
+      ]);
+      expect(decided[2]).not.toHaveProperty("invocationCharge");
+      expect(decided[0]).not.toHaveProperty("authorityReason");
+      expect(JSON.stringify(decided)).not.toContain("src/index.ts");
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("tells the run evidence owner which call a refusal ended, and no call that was admitted", async () => {
+    const refused = vi.fn();
+    const nativeSettlement = { refused, settled: vi.fn() } as unknown as NonNullable<
+      CodingToolFacade["nativeSettlement"]
+    >;
+    const admit = vi.fn<NativeAdmit>((input) =>
+      input.invocation?.callId === "call_exhausted"
+        ? { ok: false, reason: "authority-budget-exceeded" }
+        : CHARGED,
+    );
+    const fixture = await startBridgeFixture(facadeWith(admit, nativeSettlement), undefined, {
+      mode: "supervised-coding",
+    });
+    const source = (id: string): { readonly messageID: string; readonly id: string } => ({
+      messageID: "msg_1",
+      id,
+    });
+    try {
+      await handleAsk(fixture, nativeAsk("ses_tool", "read", source("call_ok")));
+      expect(refused).not.toHaveBeenCalled();
+      // Refused by policy (internet below Full access), by the authority owner, and a check with no
+      // tool source (nothing to tell: no call can be named).
+      await handleAsk(fixture, nativeAsk("ses_tool", "webfetch", source("call_policy")));
+      await handleAsk(fixture, nativeAsk("ses_tool", "read", source("call_exhausted")));
+      await handleAsk(fixture, nativeAsk("ses_tool", "webfetch"));
+      expect(refused.mock.calls).toEqual([
+        [{ messageId: "msg_1", callId: "call_policy" }],
+        [{ messageId: "msg_1", callId: "call_exhausted" }],
+      ]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  // #3901: an admitted project check is remembered by its call, so its exit status can become the
+  // run's verification evidence; any other shell line is no check.
+  it("tells the run evidence owner which admitted shell call is a project check (#3901)", async () => {
+    const verificationAdmitted = vi.fn();
+    const nativeSettlement = {
+      refused: vi.fn(),
+      settled: vi.fn(),
+      verificationAdmitted,
+      verificationDenied: vi.fn(),
+    } as unknown as NonNullable<CodingToolFacade["nativeSettlement"]>;
+    const fixture = await startBridgeFixture(
+      facadeWith(admitWith(CHARGED), nativeSettlement),
+      undefined,
+      {
+        mode: "autonomous-delivery",
+      },
+    );
+    const shellAsk = (id: string, resources: readonly string[]): string =>
+      JSON.stringify({
+        action: "native-policy",
+        runId: FIXTURE_RUN_ID,
+        sessionID: "ses_tool",
+        permission: "shell",
+        resources,
+        configured: "allow",
+        source: { type: "tool", messageID: "msg_1", id },
+      });
+    try {
+      await handleAsk(fixture, shellAsk("call_test", ["cd packages/app", "npm test"]));
+      await handleAsk(fixture, shellAsk("call_typecheck", ["npm run typecheck"]));
+      await handleAsk(fixture, shellAsk("call_listing", ["ls -la"]));
+      await handleAsk(fixture, shellAsk("call_masked", ["npm test", "true"]));
+      expect(verificationAdmitted.mock.calls).toEqual([
+        [{ messageId: "msg_1", callId: "call_test" }, "test"],
+        [{ messageId: "msg_1", callId: "call_typecheck" }, "typecheck"],
+      ]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("proves ancestry only through a bounded parent chain inside the workspace", async () => {
+    const { nativeSessionDescendsFromRun } = await compositionModule();
+    const ws = "/ws";
+    const at = (id: string, parentID?: string, directory = ws): Record<string, unknown> => ({
+      id,
+      ...(parentID === undefined ? {} : { parentID }),
+      location: { directory },
+    });
+    expect(nativeSessionDescendsFromRun([at("c", "p")], "c", "p", ws)).toBe(true);
+    expect(nativeSessionDescendsFromRun([at("c", "p"), at("g", "c")], "g", "p", ws)).toBe(true);
+    expect(nativeSessionDescendsFromRun([at("c", "p", "/other")], "c", "p", ws)).toBe(false);
+    expect(nativeSessionDescendsFromRun([at("c")], "c", "p", ws)).toBe(false);
+    expect(nativeSessionDescendsFromRun([at("c", "c")], "c", "p", ws)).toBe(false);
+    expect(nativeSessionDescendsFromRun([at("a", "b"), at("b", "a")], "a", "p", ws)).toBe(false);
+    const deep = Array.from({ length: 10 }, (_, i) =>
+      at(`s${String(i)}`, i === 0 ? "p" : `s${String(i - 1)}`),
+    );
+    expect(nativeSessionDescendsFromRun(deep, "s9", "p", ws)).toBe(false);
+    expect(nativeSessionDescendsFromRun(deep, "s6", "p", ws)).toBe(true);
+  });
+});
+
+describe("native tool evidence from the runtime's own history (#3873, #3897 review)", () => {
+  const completed = {
+    status: "completed" as const,
+    evidence: [],
+    read: { text: "fixture", byteCount: 7, digest: "f".repeat(64) },
+  };
+  const authorized = { authorization: `Bearer ${TOOL_CAPABILITY}` };
+  const TOOL_ERROR = { type: "ToolError", message: "PRIVATE_TOOL_ERROR" };
+  const part = (
+    callId: string,
+    name: string,
+    status: "running" | "completed" | "error",
+  ): Record<string, unknown> => ({
+    type: "tool",
+    id: callId,
+    name,
+    executed: true,
+    native: {},
+    time: { created: 5, ran: 6, ...(status === "running" ? {} : { completed: 7 }) },
+    state: {
+      status,
+      input: { filePath: "PRIVATE_PATH" },
+      ...(status === "completed" ? { content: [{ type: "text", text: "PRIVATE_OUTPUT" }] } : {}),
+      ...(status === "error" ? { error: TOOL_ERROR } : {}),
+    },
+  });
+  // The history endpoint lists newest first.
+  const history = (
+    content: readonly Record<string, unknown>[],
+  ): readonly Readonly<Record<string, unknown>>[] =>
+    [
+      { id: "msg_user", type: "user", time: { created: 1 }, text: "Task" },
+      { id: "msg_assistant", type: "assistant", time: { created: 2 }, content },
+    ].reverse();
+  const frame = (type: string, number: number): Uint8Array =>
+    new TextEncoder().encode(
+      `data: ${JSON.stringify({
+        id: `evt_native_${String(number)}`,
+        type,
+        data: { sessionID: "ses_tool", assistantMessageID: "msg_assistant", ordinal: 0 },
+      })}\n\n`,
+    );
+  const policyAsk = (permission: string, callId: string): string =>
+    JSON.stringify({
+      action: "native-policy",
+      runId: FIXTURE_RUN_ID,
+      sessionID: "ses_tool",
+      permission,
+      resources: ["https://example.invalid/doc"],
+      source: { type: "tool", messageID: "msg_assistant", id: callId },
+      configured: "ask",
+    });
+
+  async function runHistory(
+    profile: "native" | "direct",
+  ): Promise<{ readonly settled: [string | undefined, string][] }> {
+    const settled: [string | undefined, string][] = [];
+    const nativeSettlement = createCodingToolNativeSettlementFacet((action, status) => {
+      settled.push([action, status]);
+    });
+    const historyCalls: Readonly<Record<string, number>>[] = [];
+    const streams: ReadableStreamDefaultController<Uint8Array>[] = [];
+    // A mapped profile's history only admits Keiko's own tool names.
+    const tool = (native: string): string =>
+      profile === "native" ? native : "keiko_workspace_read";
+    let content: readonly Record<string, unknown>[] = [
+      part("call_read_1", tool("read"), "completed"),
+      part("call_edit_1", tool("edit"), "completed"),
+    ];
+    const fixture = await startBridgeFixture(
+      {
+        execute: vi.fn(() => Promise.resolve(completed)),
+        nativeEffect: { admit: () => ({ ok: true, charge: "charged" }) },
+        nativeSettlement,
+      },
+      undefined,
+      {
+        mode: "supervised-coding",
+        readToolProfile: () => profile,
+        historyCalls,
+        onSseStart: (controller): void => {
+          streams.push(controller);
+        },
+        historyResponseFactory: () => Promise.resolve(v2Envelope(history(content))),
+      },
+    );
+    try {
+      const stream = streams[0];
+      if (stream === undefined) throw new Error("expected the event stream");
+      let hints = 0;
+      const reread = async (): Promise<void> => {
+        const reads = historyCalls.length;
+        hints += 1;
+        stream.enqueue(frame("session.step.ended", hints));
+        await vi.waitFor(() => {
+          expect(historyCalls.length).toBeGreaterThan(reads);
+        });
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      };
+      await reread();
+      // The policy refused the fetch (internet is a Full access capability): the runtime ends it as a
+      // failed call, the later calls run, and one is still running when the history is read.
+      await fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: policyAsk("webfetch", "call_fetch_1"),
+      });
+      content = [
+        ...content,
+        part("call_fetch_1", tool("webfetch"), "error"),
+        part("call_read_2", tool("read"), "completed"),
+        part("call_shell_1", tool("shell"), "running"),
+      ];
+      await reread();
+      // A reconnect or a repeated history read reports the same calls again.
+      await reread();
+      await reread();
+      return { settled };
+    } finally {
+      await fixture.stop();
+    }
+  }
+
+  it("records what a native edit wrote, so an undo never overwrites a human edit made after it", async () => {
+    const settled: string[] = [];
+    const streams: ReadableStreamDefaultController<Uint8Array>[] = [];
+    const revert = {
+      requests: [] as { method: string; path: string; body?: string }[],
+      diff: [
+        { file: "a.txt", patch: "", additions: 1, deletions: 1, status: "modified" },
+      ] as unknown[],
+      messages: [] as unknown[],
+      staged: {
+        messageID: "msg_user",
+        files: [{ file: "a.txt", patch: "", additions: 1, deletions: 1, status: "modified" }],
+      } as unknown,
+    };
+    const fixture = await startBridgeFixture(
+      {
+        execute: vi.fn(() => Promise.resolve(completed)),
+        nativeEffect: { admit: () => ({ ok: true, charge: "charged" }) },
+        nativeSettlement: createCodingToolNativeSettlementFacet((action) => {
+          settled.push(String(action));
+        }),
+      },
+      undefined,
+      {
+        mode: "autonomous-delivery",
+        readToolProfile: () => "native",
+        onSseStart: (controller): void => {
+          streams.push(controller);
+        },
+        runControl: { promptBodies: [], abortSessions: [], statusResponses: [{}], revert },
+      },
+    );
+    try {
+      const workspaceRoot = fixture.preparation.env.KEIKO_CODING_WORKSPACE_ROOT ?? "";
+      const file = join(workspaceRoot, "a.txt");
+      writeFileSync(file, "as the native edit wrote it\n");
+      const ask = await fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: JSON.stringify({
+          action: "native-policy",
+          runId: FIXTURE_RUN_ID,
+          sessionID: "ses_tool",
+          permission: "edit",
+          resources: ["a.txt"],
+          source: { type: "tool", messageID: "msg_assistant", id: "call_edit_1" },
+          configured: "allow",
+        }),
+      });
+      expect(ask.body).toBe('{"effect":"allow"}');
+      revert.messages = [...history([part("call_edit_1", "edit", "completed")])].reverse();
+      streams[0]?.enqueue(frame("session.step.ended", 1));
+      await vi.waitFor(() => {
+        expect(settled).toEqual(["edit"]);
+      });
+      const port = fixture.runtime.runPort;
+      // Healthy control first: with the file as the native edit wrote it, the undo stages, and the
+      // undo waits for the edit's image, so the human edit below lands after it was taken.
+      await expect(port.revertTurn?.(FIXTURE_RUN_ID, "undo")).resolves.toMatchObject({ ok: true });
+      await expect(port.revertTurn?.(FIXTURE_RUN_ID, "restore")).resolves.toMatchObject({
+        ok: true,
+      });
+      revert.requests.length = 0;
+      writeFileSync(file, "a human edit after it\n");
+      await expect(port.revertTurn?.(FIXTURE_RUN_ID, "undo")).resolves.toEqual({
+        ok: false,
+        reason: "workspace-changed",
+      });
+      expect(revert.requests.map(({ path }) => path)).not.toContain(
+        "/api/session/ses_tool/revert/stage",
+      );
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("counts each completed native call once, a policy refusal as a refusal, and a running call not at all", async () => {
+    const { settled } = await runHistory("native");
+    expect(settled).toEqual([
+      ["read", "completed"],
+      ["edit", "completed"],
+      ["egress", "denied"],
+      ["read", "completed"],
+    ]);
+  });
+
+  function shellHistory(exitCode: number, finished: boolean): readonly Record<string, unknown>[] {
+    return history([
+      {
+        ...part("call_shell_evidence", "shell", finished ? "completed" : "running"),
+        state: {
+          status: finished ? "completed" : "running",
+          input: { command: "npm test" },
+          ...(finished
+            ? { content: [{ type: "text", text: "Synthetic check" }], metadata: { exit: exitCode } }
+            : {}),
+        },
+      },
+    ]);
+  }
+
+  it.each([0, 7])(
+    "projects a native shell terminal state without run-only exit evidence (%i)",
+    async (exitCode) => {
+      const projection = createCodingSafeActivityProjection({ now: () => Date.parse(RUNTIME_NOW) });
+      projection.open({
+        runId: FIXTURE_RUN_ID,
+        workspaceId: "workspace-shell-evidence",
+        authorityExpiresAt: new Date(Date.parse(RUNTIME_NOW) + 60_000).toISOString(),
+        workspaceIsCurrent: () => true,
+      });
+      const ingest = vi.fn((signal: CodingSafeActivitySignal) =>
+        projection.ingest(FIXTURE_RUN_ID, signal),
+      );
+      const nativeSettlement = createCodingToolNativeSettlementFacet(undefined);
+      const settled = vi.spyOn(nativeSettlement, "settled");
+      const streams: ReadableStreamDefaultController<Uint8Array>[] = [];
+      let finished = false;
+      const fixture = await startBridgeFixture(
+        { execute: vi.fn(() => Promise.resolve(completed)), nativeSettlement },
+        undefined,
+        {
+          mode: "autonomous-delivery",
+          readToolProfile: () => "native",
+          safeActivity: {
+            arm: vi.fn(),
+            clear: vi.fn(),
+            ingest,
+            recordDrops: vi.fn(),
+            settleTool: vi.fn(),
+          },
+          onSseStart: (controller): void => {
+            streams.push(controller);
+          },
+          historyResponseFactory: () =>
+            Promise.resolve(v2Envelope(shellHistory(exitCode, finished))),
+        },
+      );
+      try {
+        const toolState = (): string | undefined => {
+          const feed = projection.currentContent()?.feed;
+          return feed?.availability === "available"
+            ? feed.turns.flatMap((turn) => turn.tools)[0]?.state
+            : undefined;
+        };
+        await vi.waitFor(() => {
+          expect(toolState()).toBe("running");
+        });
+        finished = true;
+        streams[0]?.enqueue(frame("session.step.ended", 1));
+        await vi.waitFor(() => {
+          expect(toolState()).toBe(exitCode === 0 ? "succeeded" : "failed");
+        });
+        expect(settled).toHaveBeenCalledWith(
+          expect.objectContaining({ exitCode, exitStatusCheck: "test" }),
+        );
+        const terminal = ingest.mock.calls
+          .map(([signal]) => signal)
+          .find(
+            (signal) =>
+              signal.kind === "tool" && (signal.state === "succeeded" || signal.state === "failed"),
+          );
+        expect(terminal).toBeDefined();
+        expect(terminal).not.toHaveProperty("exitCode");
+        expect(terminal).not.toHaveProperty("exitStatusCheck");
+      } finally {
+        await fixture.stop();
+      }
+    },
+  );
+
+  // #3901: the plan agent's notes are planning, not an edit a check must cover, and a child
+  // session's edit settles on the child, whose history the run does not read.
+  it("counts workspace edits, not plan notes, and a child's edit from its admission", async () => {
+    const edits: string[] = [];
+    const nativeSettlement = createCodingToolNativeSettlementFacet(undefined, {
+      observeEditOutcome: (outcome): void => {
+        edits.push(outcome.kind);
+      },
+    });
+    const historyCalls: Readonly<Record<string, number>>[] = [];
+    const streams: ReadableStreamDefaultController<Uint8Array>[] = [];
+    const childSessions: Record<string, unknown>[] = [];
+    let content: readonly Record<string, unknown>[] = [];
+    const fixture = await startBridgeFixture(
+      {
+        execute: vi.fn(() => Promise.resolve(completed)),
+        nativeEffect: { admit: () => ({ ok: true, charge: "charged" }) },
+        nativeSettlement,
+      },
+      undefined,
+      {
+        mode: "autonomous-delivery",
+        readToolProfile: () => "native",
+        historyCalls,
+        childSessions,
+        onSseStart: (controller): void => {
+          streams.push(controller);
+        },
+        historyResponseFactory: () => Promise.resolve(v2Envelope(history(content))),
+      },
+    );
+    try {
+      const workspaceRoot = fixture.preparation.env.KEIKO_CODING_WORKSPACE_ROOT ?? "";
+      childSessions.push({
+        id: "ses_child",
+        parentID: "ses_tool",
+        location: { directory: workspaceRoot },
+      });
+      const plan = openCodePlanDirectory(join(fixture.stateBaseRoot, FIXTURE_RUN_ID));
+      const editAsk = async (
+        callId: string,
+        resource: string,
+        sessionID = "ses_tool",
+      ): Promise<Awaited<ReturnType<typeof fixture.runtime.toolBridge.handle>>> =>
+        fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers(authorized),
+          body: JSON.stringify({
+            action: "native-policy",
+            runId: FIXTURE_RUN_ID,
+            sessionID,
+            permission: "edit",
+            resources: [resource],
+            source: { type: "tool", messageID: "msg_assistant", id: callId },
+            configured: "ask",
+          }),
+        });
+      expect((await editAsk("call_plan", join(plan, "feature.md"))).status).toBe(200);
+      expect((await editAsk("call_edit", "src/a.ts")).status).toBe(200);
+      expect(edits, "an admitted edit of the run's own session waits for its settlement").toEqual(
+        [],
+      );
+      expect((await editAsk("call_child", "src/b.ts", "ses_child")).status).toBe(200);
+      expect(edits, "a child's workspace edit counts from its admission").toEqual(["applied"]);
+      content = [part("call_plan", "edit", "completed"), part("call_edit", "edit", "completed")];
+      const stream = streams[0];
+      if (stream === undefined) throw new Error("expected the event stream");
+      const reads = historyCalls.length;
+      stream.enqueue(frame("session.step.ended", 1));
+      await vi.waitFor(() => {
+        expect(historyCalls.length).toBeGreaterThan(reads);
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(edits, "the workspace edit counts; the plan note does not").toEqual([
+        "applied",
+        "applied",
+      ]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  // #3901: a shell command's (or a child's) writes reach no tool settlement; the runtime's snapshot of
+  // the finished step names them, so they become the run's edit and a check must follow them.
+  it("counts a step's unreported workspace changes as the run's edit, once per step", async () => {
+    const edits: string[] = [];
+    const activityLog = createBufferedServerLogSink();
+    const nativeSettlement = createCodingToolNativeSettlementFacet(undefined, {
+      observeEditOutcome: (outcome): void => {
+        edits.push(outcome.kind);
+      },
+    });
+    const historyCalls: Readonly<Record<string, number>>[] = [];
+    const streams: ReadableStreamDefaultController<Uint8Array>[] = [];
+    let steps: readonly Record<string, unknown>[] = [];
+    const step = (
+      id: string,
+      created: number,
+      content: readonly Record<string, unknown>[],
+      files: readonly string[],
+    ): Record<string, unknown> => ({
+      id,
+      type: "assistant",
+      time: { created },
+      content,
+      finish: "tool-calls",
+      snapshot: { start: "a".repeat(40), end: "b".repeat(40), files },
+    });
+    const fixture = await startBridgeFixture(
+      {
+        execute: vi.fn(() => Promise.resolve(completed)),
+        nativeEffect: { admit: () => ({ ok: true, charge: "charged" }) },
+        nativeSettlement,
+      },
+      undefined,
+      {
+        mode: "autonomous-delivery",
+        readToolProfile: () => "native",
+        historyCalls,
+        activityLog,
+        onSseStart: (controller): void => {
+          streams.push(controller);
+        },
+        historyResponseFactory: () =>
+          Promise.resolve(
+            v2Envelope(
+              [{ id: "msg_user", type: "user", time: { created: 1 }, text: "Task" }, ...steps]
+                .slice()
+                .reverse(),
+            ),
+          ),
+      },
+    );
+    const ask = (
+      permission: string,
+      messageID: string,
+      callId: string,
+      resource: string,
+    ): Promise<Awaited<ReturnType<typeof fixture.runtime.toolBridge.handle>>> =>
+      fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: JSON.stringify({
+          action: "native-policy",
+          runId: FIXTURE_RUN_ID,
+          sessionID: "ses_tool",
+          permission,
+          resources: [resource],
+          source: { type: "tool", messageID, id: callId },
+          configured: "ask",
+        }),
+      });
+    try {
+      const stream = streams[0];
+      if (stream === undefined) throw new Error("expected the event stream");
+      let hints = 0;
+      const reread = async (): Promise<void> => {
+        const reads = historyCalls.length;
+        hints += 1;
+        stream.enqueue(frame("session.step.ended", hints));
+        await vi.waitFor(() => {
+          expect(historyCalls.length).toBeGreaterThan(reads);
+        });
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      };
+      expect((await ask("edit", "msg_step_edit", "call_edit", "src/a.ts")).status).toBe(200);
+      expect((await ask("shell", "msg_step_test", "call_test", "npm test")).status).toBe(200);
+      steps = [
+        step("msg_step_shell", 2, [part("call_shell", "shell", "completed")], ["gen/new.txt"]),
+        step("msg_step_edit", 3, [part("call_edit", "edit", "completed")], ["src/a.ts"]),
+        step("msg_step_test", 4, [part("call_test", "shell", "completed")], ["coverage.json"]),
+      ];
+      await reread();
+      await reread();
+      // The shell step's write is the run's edit, the native edit counts once through its own
+      // settlement, and the check step's own output is no edit; a second read changes nothing.
+      expect(edits).toEqual(["applied", "applied"]);
+      const lines = activityLog.events.filter(
+        (event) => event.op === "coding-runtime.native-step.changed",
+      );
+      expect(lines.map((event) => event.extra)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ outcome: "counted", fileCount: 1, uncoveredCount: 1 }),
+          expect.objectContaining({ outcome: "covered", fileCount: 1, uncoveredCount: 0 }),
+          expect.objectContaining({ outcome: "verification-only", uncoveredCount: 0 }),
+        ]),
+      );
+      expect(lines).toHaveLength(3);
+      expect(JSON.stringify(lines)).not.toMatch(/gen\/new|src\/a\.ts|coverage/u);
+      expectActivityLogProof(
+        "coding-runtime.native-step.changed.emitted-line",
+        formatActivityLogProofLine(lines[0] ?? {}),
+      );
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("control: a mapped profile's calls reach the run's effort through the facade, never through its history", async () => {
+    const { settled } = await runHistory("direct");
+    expect(settled).toEqual([]);
   });
 });
 
@@ -2919,6 +5314,56 @@ describe("private OpenCode tool bridge", () => {
       });
     } finally {
       await fixture.stop();
+    }
+  });
+
+  // #3897 review (P1): the native profile keeps every built-in agent's own permission rules, so the
+  // policy hook is what governs the run. A native run whose governing plugin the producer reports
+  // failed never becomes ready, before any session or prompt; a mapped run never depends on it.
+  it("refuses a native start whose governing plugin the producer reports failed", async () => {
+    let pluginLists = 0;
+    const sessionCreateCalls: string[] = [];
+    const fixture = await startBridgeFixture(
+      { execute: vi.fn(() => Promise.resolve(completed)) },
+      undefined,
+      {
+        readToolProfile: () => "native",
+        sessionCreateCalls,
+        pluginEntries: (launch): unknown[] => {
+          pluginLists += 1;
+          return fixturePlugins(launch, "failed");
+        },
+        startTimeoutMs: 60_000,
+        expectedStart: { ok: false, failureCode: "runtime-profile-open", retryable: false },
+      },
+    );
+    try {
+      expect(pluginLists).toBe(1);
+      expect(sessionCreateCalls).toEqual([]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("control: a native start with its governing plugins active readies; a mapped one never asks", async () => {
+    for (const profile of ["native", "direct"] as const) {
+      let pluginLists = 0;
+      const fixture = await startBridgeFixture(
+        { execute: vi.fn(() => Promise.resolve(completed)) },
+        undefined,
+        {
+          readToolProfile: () => profile,
+          pluginEntries: (launch): unknown[] => {
+            pluginLists += 1;
+            return fixturePlugins(launch);
+          },
+        },
+      );
+      try {
+        expect(pluginLists).toBe(profile === "native" ? 1 : 0);
+      } finally {
+        await fixture.stop();
+      }
     }
   });
 
@@ -5139,6 +7584,1599 @@ it.each(["synchronous", "asynchronous"] as const)(
   },
 );
 
+describe("primary agent selection on the run port (#3897)", () => {
+  const agentFacade: CodingToolFacade = {
+    execute: () => Promise.resolve({ status: "observed", evidence: [] }),
+  };
+
+  // A submitted turn stays armed until it settles; an already-aborted wait settles it as not
+  // productive, which frees the run for the next submission without scripting a runtime history.
+  async function settleTurn(port: OpenCodeRuntimeComposition["runPort"]): Promise<void> {
+    await port.waitForTerminal(FIXTURE_RUN_ID, AbortSignal.abort());
+  }
+
+  function agentControl(
+    extra: Partial<StartBridgeControl> = {},
+    agentListing?: readonly Readonly<Record<string, unknown>>[],
+  ): {
+    readonly control: StartBridgeControl;
+    readonly agentRequests: NonNullable<
+      NonNullable<StartBridgeControl["runControl"]>["agentRequests"]
+    >;
+    readonly promptBodies: string[];
+    readonly activityLog: ReturnType<typeof createBufferedServerLogSink>;
+    readonly diagnostics: Parameters<ServerDiagnosticSink["record"]>[0][];
+  } {
+    const agentRequests: NonNullable<
+      NonNullable<StartBridgeControl["runControl"]>["agentRequests"]
+    > = [];
+    const promptBodies: string[] = [];
+    const diagnostics: Parameters<ServerDiagnosticSink["record"]>[0][] = [];
+    const activityLog = createBufferedServerLogSink();
+    return {
+      agentRequests,
+      promptBodies,
+      activityLog,
+      diagnostics,
+      control: {
+        activityLog,
+        diagnostics: {
+          record: (record): void => {
+            diagnostics.push(record);
+          },
+        },
+        runControl: {
+          promptBodies,
+          abortSessions: [],
+          statusResponses: [{}],
+          agentRequests,
+          ...(agentListing === undefined ? {} : { agentListing }),
+        },
+        ...extra,
+      },
+    };
+  }
+
+  it("lists plan only where the native service runs its own agent policy", async () => {
+    for (const [profile, expected] of [
+      ["native", ["build", "plan"]],
+      ["direct", ["build"]],
+      ["code-mode", ["build"]],
+    ] as const) {
+      const { control } = agentControl({ readToolProfile: () => profile });
+      const fixture = await startBridgeFixture(agentFacade, undefined, control);
+      try {
+        expect(fixture.runtime.runPort.selectableAgents).toEqual(expected);
+      } finally {
+        await fixture.stop();
+      }
+    }
+  });
+
+  // #3903 AC1: a custom primary agent is switched to only while the runtime lists it as primary; an
+  // unlisted name, a subagent and a failed listing send no switch and no prompt.
+  it("switches to a custom primary agent the runtime lists, and to nothing it does not list", async () => {
+    const listing = [
+      { id: "build", mode: "primary", hidden: false },
+      { id: "reviewer", mode: "primary", hidden: false, description: "Reviews the change" },
+      { id: "helper", mode: "subagent", hidden: false },
+      { id: "summary", mode: "primary", hidden: true },
+    ];
+    const { control, agentRequests, promptBodies, activityLog } = agentControl(
+      { readToolProfile: () => "native" },
+      listing,
+    );
+    const fixture = await startBridgeFixture(agentFacade, undefined, control);
+    try {
+      const port = fixture.runtime.runPort;
+      for (const unlisted of ["helper", "ghost"]) {
+        await expect(
+          port.submitTask(FIXTURE_RUN_ID, "review it", undefined, unlisted),
+          unlisted,
+        ).resolves.toBe(false);
+      }
+      expect(agentRequests).toEqual([]);
+      expect(promptBodies).toEqual([]);
+      await expect(
+        port.submitTask(FIXTURE_RUN_ID, "review it", undefined, "reviewer"),
+      ).resolves.toBe(true);
+      expect(agentRequests).toEqual([
+        { path: "/api/session/ses_tool/agent", body: '{"agent":"reviewer"}', promptsBefore: 0 },
+      ]);
+      const [line] = activityLog.events.filter(
+        (event) => event.op === "coding-runtime.agent.selected",
+      );
+      expect(
+        expectActivityLogProof(
+          "coding-runtime.agent.selected.emitted-line",
+          formatActivityLogProofLine(line ?? {}),
+        ),
+      ).toMatchObject({ agent: "custom", previousAgent: "build" });
+      expect(JSON.stringify(activityLog.events)).not.toContain("reviewer");
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("switches the session agent once, before the prompt, and not again for the same agent", async () => {
+    const { control, agentRequests, promptBodies, activityLog } = agentControl({
+      readToolProfile: () => "native",
+    });
+    const fixture = await startBridgeFixture(agentFacade, undefined, control);
+    try {
+      const port = fixture.runtime.runPort;
+      await expect(port.submitTask(FIXTURE_RUN_ID, "outline it", undefined, "plan")).resolves.toBe(
+        true,
+      );
+      expect(agentRequests).toEqual([
+        { path: "/api/session/ses_tool/agent", body: '{"agent":"plan"}', promptsBefore: 0 },
+      ]);
+      expect(parsedBodies(promptBodies)).toEqual([turnPrompt({ text: "outline it" })]);
+      await settleTurn(port);
+
+      // Same agent again, and an absent agent: the session already runs plan, so nothing is re-sent.
+      await expect(port.submitTask(FIXTURE_RUN_ID, "refine it", undefined, "plan")).resolves.toBe(
+        true,
+      );
+      await settleTurn(port);
+      await expect(port.submitTask(FIXTURE_RUN_ID, "and again")).resolves.toBe(true);
+      await settleTurn(port);
+      expect(agentRequests).toHaveLength(1);
+      expect(promptBodies).toHaveLength(3);
+
+      // Back to the default agent is a switch of its own, again before its prompt.
+      await expect(port.submitTask(FIXTURE_RUN_ID, "now build", undefined, "build")).resolves.toBe(
+        true,
+      );
+      expect(agentRequests.map(({ body, promptsBefore }) => ({ body, promptsBefore }))).toEqual([
+        { body: '{"agent":"plan"}', promptsBefore: 0 },
+        { body: '{"agent":"build"}', promptsBefore: 3 },
+      ]);
+
+      const lines = activityLog.events
+        .filter((event) => event.op === "coding-runtime.agent.selected")
+        .map((event) =>
+          expectActivityLogProof(
+            "coding-runtime.agent.selected.emitted-line",
+            formatActivityLogProofLine(event),
+          ),
+        );
+      expect(lines).toMatchObject([
+        {
+          correlationId: FIXTURE_RUN_ID,
+          runId: FIXTURE_RUN_ID,
+          agent: "plan",
+          previousAgent: "build",
+        },
+        {
+          correlationId: FIXTURE_RUN_ID,
+          runId: FIXTURE_RUN_ID,
+          agent: "build",
+          previousAgent: "plan",
+        },
+      ]);
+      expect(JSON.stringify(lines)).not.toMatch(/outline it|refine it|now build/u);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  // r4368344091: Keiko's verification continuation is marked on its message, so an undo reaches
+  // back to the human's request; an operator's turn carries no origin.
+  it("marks Keiko's verification continuation on its prompt and an operator's turn not", async () => {
+    const { control, promptBodies } = agentControl({ readToolProfile: () => "native" });
+    const fixture = await startBridgeFixture(agentFacade, undefined, control);
+    try {
+      const port = fixture.runtime.runPort;
+      await expect(port.submitTask(FIXTURE_RUN_ID, "human task")).resolves.toBe(true);
+      await settleTurn(port);
+      await expect(
+        port.submitTask(
+          FIXTURE_RUN_ID,
+          "Verify.",
+          undefined,
+          undefined,
+          undefined,
+          "verification-continuation",
+        ),
+      ).resolves.toBe(true);
+      expect(parsedBodies(promptBodies)).toEqual([
+        turnPrompt({ text: "human task" }),
+        turnPrompt({
+          text: "Verify.",
+          metadata: { keikoTurnOriginV1: "verification-continuation" },
+        }),
+      ]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("issues no switch and leaves the prompt flow untouched when no agent is requested", async () => {
+    const { control, agentRequests, promptBodies, activityLog } = agentControl({
+      readToolProfile: () => "native",
+    });
+    const fixture = await startBridgeFixture(agentFacade, undefined, control);
+    try {
+      const port = fixture.runtime.runPort;
+      await expect(port.submitTask(FIXTURE_RUN_ID, "plain task")).resolves.toBe(true);
+      await settleTurn(port);
+      // The default agent is what a fresh run already runs: naming it is not a switch either.
+      await expect(
+        port.submitTask(FIXTURE_RUN_ID, "explicit build", undefined, "build"),
+      ).resolves.toBe(true);
+      expect(agentRequests).toEqual([]);
+      expect(parsedBodies(promptBodies)).toEqual([
+        turnPrompt({ text: "plain task" }),
+        turnPrompt({ text: "explicit build" }),
+      ]);
+      expect(activityLog.events.some((event) => event.op === "coding-runtime.agent.selected")).toBe(
+        false,
+      );
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("fails the submission truthfully when the switch is refused: no prompt, no assumed agent", async () => {
+    let refuse = true;
+    const { control, agentRequests, promptBodies, diagnostics, activityLog } = agentControl({
+      readToolProfile: () => "native",
+    });
+    const runControl = {
+      ...control.runControl,
+      promptBodies,
+      abortSessions: [],
+      statusResponses: [{}],
+      agentRequests,
+      agentResponse: (): Response =>
+        refuse
+          ? new Response(JSON.stringify({ _tag: "AgentNotFoundError", agentID: "plan" }), {
+              status: 404,
+              headers: { "content-type": "application/json" },
+            })
+          : new Response(null, { status: 204 }),
+    };
+    const fixture = await startBridgeFixture(agentFacade, undefined, { ...control, runControl });
+    try {
+      const port = fixture.runtime.runPort;
+      await expect(
+        port.submitTask(FIXTURE_RUN_ID, "PRIVATE_PLAN_TASK", undefined, "plan"),
+      ).resolves.toBe(false);
+      expect(promptBodies).toEqual([]);
+      expect(activityLog.events.some((event) => event.op === "coding-runtime.agent.selected")).toBe(
+        false,
+      );
+      expect(diagnostics).toEqual([
+        expect.objectContaining({
+          correlationId: FIXTURE_RUN_ID,
+          operation: "coding-runtime.opencode-composition",
+          source: "opencode.turn",
+          message: "runtime-turn-failed",
+          code: expect.stringMatching(/^stage=agent:/u) as unknown,
+        }),
+      ]);
+      expect(JSON.stringify(diagnostics)).not.toContain("PRIVATE_PLAN_TASK");
+
+      // The refused switch was not remembered: the retry sends it again and then the prompt.
+      refuse = false;
+      await expect(port.submitTask(FIXTURE_RUN_ID, "retry", undefined, "plan")).resolves.toBe(true);
+      expect(agentRequests.map(({ body }) => body)).toEqual([
+        '{"agent":"plan"}',
+        '{"agent":"plan"}',
+      ]);
+      expect(parsedBodies(promptBodies)).toEqual([turnPrompt({ text: "retry" })]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it.each(["direct", "code-mode"] as const)(
+    "refuses a plan request on the governed %s profile before any request leaves, and still runs build",
+    async (profile) => {
+      const { control, agentRequests, promptBodies, diagnostics } = agentControl({
+        readToolProfile: () => profile,
+      });
+      const fixture = await startBridgeFixture(agentFacade, undefined, control);
+      try {
+        const port = fixture.runtime.runPort;
+        await expect(
+          port.submitTask(FIXTURE_RUN_ID, "read-only please", undefined, "plan"),
+        ).resolves.toBe(false);
+        expect(agentRequests).toEqual([]);
+        expect(promptBodies).toEqual([]);
+        expect(diagnostics).toEqual([
+          expect.objectContaining({
+            correlationId: FIXTURE_RUN_ID,
+            code: expect.stringMatching(/^stage=agent-unsupported:/u) as unknown,
+          }),
+        ]);
+        expect(JSON.stringify(diagnostics)).not.toContain("read-only please");
+
+        await expect(port.submitTask(FIXTURE_RUN_ID, "build it", undefined, "build")).resolves.toBe(
+          true,
+        );
+        expect(agentRequests).toEqual([]);
+        expect(parsedBodies(promptBodies)).toEqual([turnPrompt({ text: "build it" })]);
+      } finally {
+        await fixture.stop();
+      }
+    },
+  );
+});
+
+// A lost acknowledgement of a turn's prompt does not end a turn the runtime may already run: the
+// prompt is resent once under the same native id, which the producer answers from what it stored.
+describe("turn prompt acknowledgement on the run port (#3897 review)", () => {
+  const promptFacade: CodingToolFacade = {
+    execute: () => Promise.resolve({ status: "observed", evidence: [] }),
+  };
+
+  function acknowledgementControl(answers: readonly ("deliver" | "lose" | "refuse")[]): {
+    readonly control: StartBridgeControl;
+    readonly promptBodies: string[];
+    readonly diagnostics: Parameters<ServerDiagnosticSink["record"]>[0][];
+    readonly posts: () => number;
+  } {
+    const promptBodies: string[] = [];
+    const diagnostics: Parameters<ServerDiagnosticSink["record"]>[0][] = [];
+    let posts = 0;
+    return {
+      promptBodies,
+      diagnostics,
+      posts: () => posts,
+      control: {
+        diagnostics: {
+          record: (record): void => {
+            diagnostics.push(record);
+          },
+        },
+        runControl: {
+          promptBodies,
+          abortSessions: [],
+          statusResponses: [{}],
+          promptAcknowledgement: () => answers[posts++] ?? "deliver",
+        },
+      },
+    };
+  }
+
+  function failureStages(diagnostics: Parameters<ServerDiagnosticSink["record"]>[0][]): string[] {
+    return diagnostics.map((record) => /^stage=([a-z-]+):/u.exec(record.code ?? "")?.[1] ?? "");
+  }
+
+  it("resends a prompt whose acknowledgement was lost once, under the same id, and runs the turn", async () => {
+    const { control, promptBodies, diagnostics, posts } = acknowledgementControl(["lose"]);
+    const fixture = await startBridgeFixture(promptFacade, undefined, control);
+    try {
+      await expect(
+        fixture.runtime.runPort.submitTask(FIXTURE_RUN_ID, "PRIVATE_FIRST_TASK"),
+      ).resolves.toBe(true);
+      expect(posts()).toBe(2);
+      // The producer holds one input: the resend carried the id of the post it had stored.
+      expect(parsedBodies(promptBodies)).toEqual([turnPrompt({ text: "PRIVATE_FIRST_TASK" })]);
+      expect(failureStages(diagnostics)).toEqual(["submit-resent"]);
+      expect(diagnostics[0]).toMatchObject({
+        correlationId: FIXTURE_RUN_ID,
+        errorClass: "TypeError",
+      });
+      expect(JSON.stringify(diagnostics)).not.toContain("PRIVATE_FIRST_TASK");
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("fails the turn when the resent prompt's acknowledgement is lost too, and frees the run", async () => {
+    const { control, promptBodies, diagnostics, posts } = acknowledgementControl(["lose", "lose"]);
+    const fixture = await startBridgeFixture(promptFacade, undefined, control);
+    try {
+      const port = fixture.runtime.runPort;
+      await expect(port.submitTask(FIXTURE_RUN_ID, "first task")).resolves.toBe(false);
+      expect(posts()).toBe(2);
+      expect(failureStages(diagnostics)).toEqual(["submit-resent", "submit"]);
+      // One resend, never a loop; the cancelled turn leaves the run free for the next submission.
+      await expect(port.submitTask(FIXTURE_RUN_ID, "second task")).resolves.toBe(true);
+      expect(posts()).toBe(3);
+      expect(parsedBodies(promptBodies)).toEqual([
+        turnPrompt({ text: "first task" }),
+        turnPrompt({ text: "second task" }),
+      ]);
+      const [first, second] = parsedBodies(promptBodies) as { id: string }[];
+      expect(first?.id).not.toBe(second?.id);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("never resends a prompt the runtime refused", async () => {
+    const { control, promptBodies, diagnostics, posts } = acknowledgementControl(["refuse"]);
+    const fixture = await startBridgeFixture(promptFacade, undefined, control);
+    try {
+      await expect(fixture.runtime.runPort.submitTask(FIXTURE_RUN_ID, "first task")).resolves.toBe(
+        false,
+      );
+      expect(posts()).toBe(1);
+      expect(promptBodies).toEqual([]);
+      expect(failureStages(diagnostics)).toEqual(["submit"]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+});
+
+// B3, S04: undo and restore of the newest turn on a live native run. The logic is pinned in
+// opencodeRevert.test.ts and against the pinned binary in opencodeNativeRevert.real.test.ts; this
+// suite pins the composition's wiring: which profile offers it, how it reaches the runtime, and that
+// a staged undo blocks the next turn.
+describe("turn revert on the run port (B3, S04)", () => {
+  const revertFacade: CodingToolFacade = {
+    execute: () => Promise.resolve({ status: "observed", evidence: [] }),
+  };
+  const TURN = [
+    { id: "msg_old_user", time: { created: 1 }, text: "older", type: "user" },
+    { id: "msg_old_idle", time: { created: 2 }, type: "idle", outcome: "succeeded" },
+    { id: "msg_turn_user", time: { created: 3 }, text: "newest", type: "user" },
+    { id: "msg_turn_idle", time: { created: 4 }, type: "idle", outcome: "succeeded" },
+  ];
+  const CHANGED = [
+    { file: "a.txt", patch: "SECRET-PATCH", additions: 3, deletions: 1, status: "modified" },
+  ];
+
+  function revertControl(profile: "native" | "direct" | "code-mode" = "native"): {
+    readonly control: StartBridgeControl;
+    readonly revert: NonNullable<NonNullable<StartBridgeControl["runControl"]>["revert"]>;
+    readonly promptBodies: string[];
+    readonly activityLog: ReturnType<typeof createBufferedServerLogSink>;
+  } {
+    const promptBodies: string[] = [];
+    const activityLog = createBufferedServerLogSink();
+    const revert = {
+      requests: [] as { method: string; path: string; body?: string }[],
+      diff: CHANGED as unknown[],
+      messages: [] as unknown[],
+      staged: { messageID: "msg_turn_user", files: CHANGED } as unknown,
+    };
+    return {
+      revert,
+      promptBodies,
+      activityLog,
+      control: {
+        activityLog,
+        readToolProfile: () => profile,
+        runControl: { promptBodies, abortSessions: [], statusResponses: [{}], revert },
+      },
+    };
+  }
+
+  it("offers undo and restore on the native profile only, whose runtime records snapshots", async () => {
+    for (const [profile, offered] of [
+      ["native", true],
+      ["direct", false],
+      ["code-mode", false],
+    ] as const) {
+      const { control } = revertControl(profile);
+      const fixture = await startBridgeFixture(revertFacade, undefined, control);
+      try {
+        const port = fixture.runtime.runPort;
+        expect(port.revertTurn !== undefined, profile).toBe(offered);
+        expect(port.revertState !== undefined, profile).toBe(offered);
+      } finally {
+        await fixture.stop();
+      }
+    }
+  });
+
+  it("counts the newest turn's files through the runtime's session diff, without its patch", async () => {
+    const { control, revert, activityLog } = revertControl();
+    const fixture = await startBridgeFixture(revertFacade, undefined, control);
+    try {
+      await expect(fixture.runtime.runPort.revertState?.(FIXTURE_RUN_ID)).resolves.toEqual({
+        staged: false,
+        fileCount: 1,
+        additions: 3,
+        deletions: 1,
+      });
+      expect(revert.requests).toEqual([{ method: "GET", path: "/api/session/ses_tool/diff" }]);
+      expect(JSON.stringify(activityLog.events)).not.toContain("SECRET-PATCH");
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("keeps held undo available after monitor quiescence while productive turns stay closed", async () => {
+    const { control, revert, promptBodies } = revertControl();
+    const fixture = await startBridgeFixture(revertFacade, undefined, control);
+    try {
+      const port = fixture.runtime.runPort;
+      revert.messages = TURN;
+      await port.waitForTerminal(FIXTURE_RUN_ID, AbortSignal.abort());
+      await expect(fixture.runtime.manager.hold?.(FIXTURE_RUN_ID)).resolves.toEqual({
+        ok: true,
+        status: "held",
+      });
+      await expect(port.submitTask(FIXTURE_RUN_ID, "no new productive turn")).resolves.toBe(false);
+      expect(promptBodies).toEqual([]);
+      await expect(port.revertState?.(FIXTURE_RUN_ID)).resolves.toMatchObject({ fileCount: 1 });
+      await expect(port.revertTurn?.(FIXTURE_RUN_ID, "undo")).resolves.toMatchObject({ ok: true });
+      revert.messages = [];
+      await expect(port.revertTurn?.(FIXTURE_RUN_ID, "restore")).resolves.toMatchObject({
+        ok: true,
+      });
+      await fixture.runtime.manager.stop(FIXTURE_RUN_ID);
+      await expect(port.revertState?.(FIXTURE_RUN_ID)).resolves.toBeUndefined();
+      await expect(port.revertTurn?.(FIXTURE_RUN_ID, "undo")).resolves.toMatchObject({
+        ok: false,
+        reason: "run-unavailable",
+      });
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("stages an undo at the newest turn, blocks the next turn until it is restored, then runs it", async () => {
+    const { control, revert, promptBodies, activityLog } = revertControl();
+    const fixture = await startBridgeFixture(revertFacade, undefined, control);
+    try {
+      const port = fixture.runtime.runPort;
+      revert.messages = TURN;
+      // The turn settles through the run port, which records the files as the turn left them.
+      await port.waitForTerminal(FIXTURE_RUN_ID, AbortSignal.abort());
+      await vi.waitFor(() => {
+        expect(revert.requests).toEqual([{ method: "GET", path: "/api/session/ses_tool/diff" }]);
+      });
+      revert.requests.length = 0;
+      await expect(port.revertTurn?.(FIXTURE_RUN_ID, "undo", "corr-revert-0001")).resolves.toEqual({
+        ok: true,
+        fileCount: 1,
+        additions: 3,
+        deletions: 1,
+      });
+      expect(revert.requests.map(({ method, path }) => `${method} ${path}`)).toEqual([
+        "GET /api/session/ses_tool/diff",
+        "POST /api/session/ses_tool/revert/stage",
+      ]);
+      expect(revert.requests[1]?.body).toBe(
+        JSON.stringify({ messageID: "msg_turn_user", files: true }),
+      );
+
+      // The staged undo refuses a new turn: nothing is posted, and the refusal is on the log.
+      await expect(port.submitTask(FIXTURE_RUN_ID, "SECRET-NEXT-TASK")).resolves.toBe(false);
+      expect(promptBodies).toEqual([]);
+      expect(
+        activityLog.events.filter((event) => event.op.startsWith("coding-runtime.revert.")),
+      ).toMatchObject([
+        { op: "coding-runtime.revert.applied", correlationId: "corr-revert-0001" },
+        {
+          op: "coding-runtime.revert.refused",
+          level: "warn",
+          correlationId: FIXTURE_RUN_ID,
+          extra: { runId: FIXTURE_RUN_ID, operation: "submit", reason: "turn-blocked" },
+        },
+      ]);
+      expect(JSON.stringify(activityLog.events)).not.toContain("SECRET-NEXT-TASK");
+
+      revert.messages = [];
+      await expect(port.revertTurn?.(FIXTURE_RUN_ID, "restore")).resolves.toMatchObject({
+        ok: true,
+        fileCount: 1,
+      });
+      expect(revert.requests.at(-1)).toEqual({
+        method: "DELETE",
+        path: "/api/session/ses_tool/revert",
+      });
+      await expect(port.submitTask(FIXTURE_RUN_ID, "the next task")).resolves.toBe(true);
+      expect(parsedBodies(promptBodies)).toEqual([turnPrompt({ text: "the next task" })]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("refuses to undo a settled turn whose files changed after it settled", async () => {
+    const { control, revert } = revertControl();
+    const fixture = await startBridgeFixture(revertFacade, undefined, control);
+    try {
+      const port = fixture.runtime.runPort;
+      const workspaceRoot = fixture.preparation.env.KEIKO_CODING_WORKSPACE_ROOT ?? "";
+      writeFileSync(join(workspaceRoot, "a.txt"), "as the turn left it\n");
+      revert.messages = TURN;
+      await port.waitForTerminal(FIXTURE_RUN_ID, AbortSignal.abort());
+      // Healthy control: while the file is as the turn left it, undo and restore both apply.
+      await expect(port.revertTurn?.(FIXTURE_RUN_ID, "undo")).resolves.toMatchObject({ ok: true });
+      revert.messages = [];
+      await expect(port.revertTurn?.(FIXTURE_RUN_ID, "restore")).resolves.toMatchObject({
+        ok: true,
+      });
+      revert.messages = TURN;
+      revert.requests.length = 0;
+      writeFileSync(join(workspaceRoot, "a.txt"), "a human edit after the turn\n");
+      await expect(port.revertTurn?.(FIXTURE_RUN_ID, "undo")).resolves.toEqual({
+        ok: false,
+        reason: "workspace-changed",
+      });
+      expect(revert.requests.map(({ path }) => path)).not.toContain(
+        "/api/session/ses_tool/revert/stage",
+      );
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("does not stop a turn in flight whose changed files none of its own native edits wrote", async () => {
+    const { control, revert } = revertControl();
+    const runControl = control.runControl;
+    if (runControl === undefined) throw new Error("expected run control");
+    const fixture = await startBridgeFixture(revertFacade, undefined, control);
+    try {
+      const port = fixture.runtime.runPort;
+      runControl.statusResponses.splice(0, runControl.statusResponses.length, { ses_tool: {} }, {});
+      revert.messages = TURN;
+      // Nothing proves who changed the file while the turn runs: the undo is refused, unstopped.
+      await expect(port.revertTurn?.(FIXTURE_RUN_ID, "undo")).resolves.toEqual({
+        ok: false,
+        reason: "workspace-changed",
+      });
+      expect(runControl.abortSessions).toEqual([]);
+      expect(revert.requests.map(({ path }) => path)).not.toContain(
+        "/api/session/ses_tool/revert/stage",
+      );
+    } finally {
+      await fixture.stop();
+    }
+  });
+});
+
+// S07 (ADR-0137 D10): the messages sent into the running turn that the runtime has not taken yet.
+describe("pending messages on the run port (S07)", () => {
+  const facadeStub: CodingToolFacade = {
+    execute: () => Promise.resolve({ status: "observed", evidence: [] }),
+  };
+  const SECRET = "PRIVATE-OPERATOR-TEXT";
+
+  async function inboxFixture(profile: "native" | "direct" | "code-mode" = "native"): Promise<{
+    readonly fixture: Awaited<ReturnType<typeof startBridgeFixture>>;
+    readonly port: OpenCodeRuntimeComposition["runPort"];
+    readonly promptBodies: string[];
+    readonly inbox: NonNullable<NonNullable<StartBridgeControl["runControl"]>["inbox"]>;
+    readonly runControl: NonNullable<StartBridgeControl["runControl"]>;
+    /** The session history the fixture answers; a test completes the turn by replacing `value`. */
+    readonly history: { value: readonly Readonly<Record<string, unknown>>[] };
+    readonly activityLog: ReturnType<typeof createBufferedServerLogSink>;
+  }> {
+    const workspace = realpathSync(tempDir("keiko-inbox-workspace-"));
+    const promptBodies: string[] = [];
+    const activityLog = createBufferedServerLogSink();
+    const inbox = {
+      requests: [],
+      runtimeOwned: [],
+      withdrawn: new Set<string>(),
+      promoted: new Set<string>(),
+      delivered: new Set<string>(),
+    };
+    const history = { value: completedTurnHistory().slice(0, 1) };
+    const runControl = {
+      promptBodies,
+      abortSessions: [],
+      statusResponses: [{}, { ses_tool: { type: "busy" } }] as unknown[],
+      inbox,
+    };
+    const fixture = await startBridgeFixture(facadeStub, undefined, {
+      activityLog,
+      workspaceRoot: workspace,
+      readToolProfile: () => profile,
+      runControl,
+      historyResponseFactory: () => Promise.resolve(v2Envelope(history.value.slice().reverse())),
+    });
+    return {
+      fixture,
+      port: fixture.runtime.runPort,
+      promptBodies,
+      inbox,
+      runControl,
+      history,
+      activityLog,
+    };
+  }
+
+  /**
+   * Interrupts the turn in flight the way the settlement tests do: the runtime has been asked to stop,
+   * and the turn ends once its history shows it complete and the session reports quiet.
+   */
+  async function interrupt(
+    fixtureState: Awaited<ReturnType<typeof inboxFixture>>,
+  ): Promise<boolean> {
+    const { port, runControl, history } = fixtureState;
+    const terminal = port.waitForTerminal(FIXTURE_RUN_ID, AbortSignal.timeout(5_000));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const aborting = port.abortTask(FIXTURE_RUN_ID);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    history.value = completedTurnHistory();
+    runControl.statusResponses.push({});
+    const stopped = await aborting;
+    await terminal;
+    return stopped;
+  }
+
+  async function deliver(
+    port: OpenCodeRuntimeComposition["runPort"],
+    requestId: string,
+    text: string,
+    delivery: "queue" | "steer",
+  ): Promise<void> {
+    const admitted = port.admitPromptInputs?.(FIXTURE_RUN_ID, { delivery, requestId });
+    if (admitted?.ok !== true) throw new Error("expected the delivery to be admitted");
+    await expect(port.deliverPrompt?.(FIXTURE_RUN_ID, text, admitted.inputs)).resolves.toBe(true);
+  }
+
+  const idOf = (body: string | undefined): string =>
+    (JSON.parse(body ?? "{}") as { id?: string }).id ?? "";
+
+  const inboxLines = (log: ReturnType<typeof createBufferedServerLogSink>): unknown[] =>
+    log.events
+      .filter((event) => event.op === "coding-runtime.inbox.action")
+      .map((event) => {
+        const { completeness: _completeness, loss: _loss, ...extra } = event.extra ?? {};
+        return extra;
+      });
+
+  it("lists the delivered messages with the operator's own preview, steered before queued", async () => {
+    const { fixture, port, promptBodies, inbox, activityLog } = await inboxFixture();
+    try {
+      await expect(port.submitTask(FIXTURE_RUN_ID, "first task")).resolves.toBe(true);
+      await deliver(port, "req-queued", `  ${SECRET}\n  later  `, "queue");
+      await deliver(port, "req-steered", "use the new logger", "steer");
+      // The runtime queued something of its own: it is not the operator's and is never listed.
+      inbox.runtimeOwned.push({
+        id: "msg_runtime_owned",
+        sessionID: "ses_tool",
+        time: { created: 1 },
+        type: "synthetic",
+        payload: { text: "RUNTIME-OWNED-TEXT" },
+        delivery: "steer",
+      });
+
+      const items = await port.listInbox?.(FIXTURE_RUN_ID, "corr-0123456789");
+
+      expect(items).toEqual([
+        { itemId: idOf(promptBodies[2]), delivery: "steer", preview: "use the new logger" },
+        { itemId: idOf(promptBodies[1]), delivery: "queue", preview: `${SECRET} later` },
+      ]);
+      expect(inbox.requests.map(({ method, path }) => `${method} ${path}`)).toEqual([
+        "GET /api/session/ses_tool/inbox",
+      ]);
+      expect(inboxLines(activityLog)).toEqual([
+        {
+          runId: FIXTURE_RUN_ID,
+          action: "list",
+          outcome: "listed",
+          itemCount: 2,
+          ignoredCount: 1,
+        },
+      ]);
+      expect(JSON.stringify(activityLog.events)).not.toMatch(
+        /PRIVATE-OPERATOR-TEXT|RUNTIME-OWNED-TEXT|use the new logger|msg_/u,
+      );
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("offers nothing while no turn is in flight and on a profile that takes no delivery", async () => {
+    const idle = await inboxFixture();
+    const mapped = await inboxFixture("direct");
+    try {
+      await expect(idle.port.listInbox?.(FIXTURE_RUN_ID)).resolves.toBeUndefined();
+      await expect(mapped.port.submitTask(FIXTURE_RUN_ID, "first task")).resolves.toBe(true);
+      await expect(mapped.port.listInbox?.(FIXTURE_RUN_ID)).resolves.toBeUndefined();
+
+      expect(idle.inbox.requests).toEqual([]);
+      expect(mapped.inbox.requests).toEqual([]);
+      expect(inboxLines(idle.activityLog)).toEqual([
+        { runId: FIXTURE_RUN_ID, action: "list", outcome: "turn-not-running" },
+      ]);
+      expect(inboxLines(mapped.activityLog)).toEqual([
+        { runId: FIXTURE_RUN_ID, action: "list", outcome: "unsupported" },
+      ]);
+    } finally {
+      await idle.fixture.stop();
+      await mapped.fixture.stop();
+    }
+  });
+
+  it("withdraws a queued message from the runtime, and lists and withdraws it no more", async () => {
+    const { fixture, port, promptBodies, inbox, activityLog } = await inboxFixture();
+    try {
+      await port.submitTask(FIXTURE_RUN_ID, "first task");
+      await deliver(port, "req-1", "first queued", "queue");
+      await deliver(port, "req-2", "second queued", "queue");
+      const [first, second] = [idOf(promptBodies[1]), idOf(promptBodies[2])];
+
+      await expect(
+        port.actOnInbox?.(FIXTURE_RUN_ID, { action: "cancel", itemId: first }, "corr-0123456789"),
+      ).resolves.toEqual({ ok: true, outcome: "cancelled" });
+
+      expect(inbox.withdrawn).toEqual(new Set([first]));
+      expect((await port.listInbox?.(FIXTURE_RUN_ID))?.map((item) => item.itemId)).toEqual([
+        second,
+      ]);
+      await expect(
+        port.actOnInbox?.(FIXTURE_RUN_ID, { action: "cancel", itemId: first }),
+      ).resolves.toEqual({ ok: true, outcome: "already-cancelled" });
+      expect(inbox.requests.filter(({ method }) => method === "DELETE")).toHaveLength(1);
+      expect(inboxLines(activityLog)).toMatchObject([
+        { action: "cancel", outcome: "cancelled" },
+        { action: "list", outcome: "listed", itemCount: 1 },
+        { action: "cancel", outcome: "already-cancelled" },
+      ]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("promotes a queued message with the closed steer body and lists it as sent now", async () => {
+    const { fixture, port, promptBodies, inbox } = await inboxFixture();
+    try {
+      await port.submitTask(FIXTURE_RUN_ID, "first task");
+      await deliver(port, "req-1", "queued", "queue");
+      const queued = idOf(promptBodies[1]);
+
+      await expect(
+        port.actOnInbox?.(FIXTURE_RUN_ID, { action: "promote", itemId: queued }),
+      ).resolves.toEqual({ ok: true, outcome: "promoted" });
+
+      const patch = inbox.requests.find(({ method }) => method === "PATCH");
+      expect(patch).toEqual({
+        method: "PATCH",
+        path: `/api/session/ses_tool/inbox/${queued}`,
+        body: JSON.stringify({ delivery: "steer" }),
+      });
+      await expect(port.listInbox?.(FIXTURE_RUN_ID)).resolves.toEqual([
+        { itemId: queued, delivery: "steer", preview: "queued" },
+      ]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("says a message the turn already took was delivered and changes nothing", async () => {
+    const { fixture, port, promptBodies, inbox } = await inboxFixture();
+    try {
+      await port.submitTask(FIXTURE_RUN_ID, "first task");
+      await deliver(port, "req-1", "steered", "steer");
+      const steered = idOf(promptBodies[1]);
+      inbox.delivered.add(steered);
+
+      await expect(
+        port.actOnInbox?.(FIXTURE_RUN_ID, { action: "cancel", itemId: steered }),
+      ).resolves.toEqual({ ok: true, outcome: "already-delivered" });
+      await expect(
+        port.actOnInbox?.(FIXTURE_RUN_ID, { action: "promote", itemId: steered }),
+      ).resolves.toEqual({ ok: true, outcome: "already-delivered" });
+
+      expect(inbox.requests.map(({ method }) => method)).toEqual(["GET", "GET"]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("refuses an id Keiko did not mint for the run, even one the runtime itself lists", async () => {
+    const { fixture, port, inbox } = await inboxFixture();
+    try {
+      await port.submitTask(FIXTURE_RUN_ID, "first task");
+      inbox.runtimeOwned.push({
+        id: "msg_runtime_owned",
+        sessionID: "ses_tool",
+        time: { created: 1 },
+        type: "user",
+        payload: { text: "typed in another client" },
+        delivery: "queue",
+      });
+
+      for (const action of ["cancel", "promote"] as const) {
+        await expect(
+          port.actOnInbox?.(FIXTURE_RUN_ID, { action, itemId: "msg_runtime_owned" }),
+        ).resolves.toEqual({ ok: false, reason: "unknown-item" });
+      }
+
+      expect(inbox.requests).toEqual([]);
+      expect(inbox.withdrawn.size).toBe(0);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("withdraws every pending message when the turn is interrupted, so none leaks into the next turn", async () => {
+    const state = await inboxFixture();
+    const { fixture, port, promptBodies, inbox, runControl, activityLog } = state;
+    try {
+      await port.submitTask(FIXTURE_RUN_ID, "first task");
+      await deliver(port, "req-1", "queued one", "queue");
+      await deliver(port, "req-2", "steered two", "steer");
+      const pending = [idOf(promptBodies[1]), idOf(promptBodies[2])];
+
+      await expect(interrupt(state)).resolves.toBe(true);
+
+      expect(runControl.abortSessions).toEqual(["ses_tool"]);
+      expect(inbox.withdrawn).toEqual(new Set(pending));
+      expect(inboxLines(activityLog)).toEqual([
+        { runId: FIXTURE_RUN_ID, action: "withdraw", outcome: "withdrawn", itemCount: 2 },
+      ]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("settles an interrupt whose withdrawal failed: the failure is evidence, not a failed stop", async () => {
+    const state = await inboxFixture();
+    const { fixture, port, promptBodies, inbox, activityLog } = state;
+    try {
+      await port.submitTask(FIXTURE_RUN_ID, "first task");
+      await deliver(port, "req-1", "queued one", "queue");
+      inbox.respond = (): Response => new Response("", { status: 503 });
+
+      await expect(interrupt(state)).resolves.toBe(true);
+
+      expect(promptBodies).toHaveLength(2);
+      expect(inboxLines(activityLog)).toMatchObject([{ action: "withdraw", outcome: "failed" }]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+});
+
+// ADR-0137 D10: a message that joins the running turn and the workspace files a prompt references.
+describe("prompt inputs on the run port (ADR-0137 D10)", () => {
+  const facadeStub: CodingToolFacade = {
+    execute: () => Promise.resolve({ status: "observed", evidence: [] }),
+  };
+
+  async function inputsFixture(
+    profile: "native" | "direct" | "code-mode" = "native",
+    media?: StartBridgeControl["media"],
+  ): Promise<{
+    readonly fixture: Awaited<ReturnType<typeof startBridgeFixture>>;
+    readonly port: OpenCodeRuntimeComposition["runPort"];
+    readonly workspace: string;
+    readonly promptBodies: string[];
+    readonly activityLog: ReturnType<typeof createBufferedServerLogSink>;
+    readonly diagnostics: Parameters<ServerDiagnosticSink["record"]>[0][];
+  }> {
+    const workspace = realpathSync(tempDir("keiko-prompt-inputs-workspace-"));
+    writeFileSync(join(workspace, "notes.md"), "NOTES-CANARY\n");
+    writeFileSync(join(workspace, ".env"), "TOKEN=SENSITIVE-CANARY\n");
+    const promptBodies: string[] = [];
+    const diagnostics: Parameters<ServerDiagnosticSink["record"]>[0][] = [];
+    const activityLog = createBufferedServerLogSink();
+    const fixture = await startBridgeFixture(facadeStub, undefined, {
+      activityLog,
+      workspaceRoot: workspace,
+      readToolProfile: () => profile,
+      diagnostics: { record: (record): void => void diagnostics.push(record) },
+      runControl: { promptBodies, abortSessions: [], statusResponses: [{}] },
+      ...(media === undefined ? {} : { media }),
+    });
+    return {
+      fixture,
+      port: fixture.runtime.runPort,
+      workspace,
+      promptBodies,
+      activityLog,
+      diagnostics,
+    };
+  }
+
+  const settle = (port: OpenCodeRuntimeComposition["runPort"]): Promise<boolean> =>
+    port.waitForTerminal(FIXTURE_RUN_ID, AbortSignal.abort());
+
+  const inputLines = (log: ReturnType<typeof createBufferedServerLogSink>): unknown[] =>
+    log.events
+      .filter((event) => event.op === "coding-runtime.prompt-inputs.settled")
+      .map((event) => event.extra);
+
+  it("offers delivery, references and slash commands on the native service only", async () => {
+    for (const [profile, expected] of [
+      ["native", { delivery: true, references: true, commands: true, mentions: true }],
+      ["direct", { delivery: false, references: false, commands: false, mentions: false }],
+      ["code-mode", { delivery: false, references: false, commands: false, mentions: false }],
+    ] as const) {
+      const { fixture, port } = await inputsFixture(profile);
+      try {
+        expect(port.promptInputs).toEqual(expected);
+      } finally {
+        await fixture.stop();
+      }
+    }
+  });
+
+  // #3906 AC1: the run's own launch geometry decides which media its prompt may attach.
+  it("attaches an image only when the run's model declares image input", async () => {
+    const png = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      Buffer.from("IMAGE-CANARY"),
+    ]);
+    for (const [media, expected] of [
+      [{ imageInput: true }, "admitted"],
+      [undefined, "reference-media-unsupported"],
+    ] as const) {
+      const { fixture, port, workspace } = await inputsFixture("native", media);
+      writeFileSync(join(workspace, "screen.png"), png);
+      try {
+        const admitted = port.admitPromptInputs?.(FIXTURE_RUN_ID, {
+          references: [{ path: "screen.png" }],
+        });
+        if (expected === "admitted") {
+          expect(admitted).toMatchObject({
+            ok: true,
+            inputs: {
+              files: [{ uri: openCodeV2PromptFileData(png, "image/png"), name: "screen.png" }],
+              fileBytes: png.length,
+            },
+          });
+        } else {
+          expect(admitted).toEqual({ ok: false, reason: expected });
+        }
+      } finally {
+        await fixture.stop();
+      }
+    }
+  });
+
+  it("delivers a steering message to the session of the turn in flight without arming another", async () => {
+    const { fixture, port, promptBodies, activityLog } = await inputsFixture();
+    try {
+      await expect(port.submitTask(FIXTURE_RUN_ID, "first task")).resolves.toBe(true);
+      const admitted = port.admitPromptInputs?.(FIXTURE_RUN_ID, {
+        delivery: "steer",
+        references: [{ path: "notes.md" }],
+      });
+      if (admitted?.ok !== true) throw new Error("expected the delivery to be admitted");
+
+      await expect(
+        port.deliverPrompt?.(FIXTURE_RUN_ID, "also read @notes.md", admitted.inputs),
+      ).resolves.toBe(true);
+
+      // Both inputs carry the producer's supported message id (ADR-0137 D10), which is what makes a
+      // resend of either one the same input; only the delivery names how it joins the turn.
+      expect(promptBodies).toHaveLength(2);
+      expect(JSON.parse(promptBodies[0] ?? "null")).toEqual(turnPrompt({ text: "first task" }));
+      expect(JSON.parse(promptBodies[1] ?? "null")).toEqual({
+        text: "also read @notes.md",
+        id: expect.stringMatching(NATIVE_MESSAGE_ID) as unknown,
+        files: [{ uri: openCodeV2PromptFileData(Buffer.from("NOTES-CANARY\n")), name: "notes.md" }],
+        delivery: "steer",
+      });
+      expect(inputLines(activityLog)).toMatchObject([
+        {
+          runId: FIXTURE_RUN_ID,
+          outcome: "accepted",
+          delivery: "steer",
+          referenceCount: 1,
+          attachedBytes: "NOTES-CANARY\n".length,
+          inputBinding: "bound",
+        },
+      ]);
+      // The turn the message joined is still the one in flight: a second turn cannot be armed,
+      // and settling it is the first turn's own settlement.
+      await expect(port.submitTask(FIXTURE_RUN_ID, "second turn")).resolves.toBe(false);
+      await expect(settle(port)).resolves.toBe(false);
+      expect(JSON.stringify(inputLines(activityLog))).not.toMatch(
+        /NOTES-CANARY|notes\.md|also read/u,
+      );
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("queues a message behind the turn in flight with the closed delivery and nothing else", async () => {
+    const { fixture, port, promptBodies } = await inputsFixture();
+    try {
+      await expect(port.submitTask(FIXTURE_RUN_ID, "first task")).resolves.toBe(true);
+      const admitted = port.admitPromptInputs?.(FIXTURE_RUN_ID, { delivery: "queue" });
+      if (admitted?.ok !== true) throw new Error("expected the delivery to be admitted");
+      await expect(
+        port.deliverPrompt?.(FIXTURE_RUN_ID, "after this turn", admitted.inputs),
+      ).resolves.toBe(true);
+      expect(JSON.parse(promptBodies[1] ?? "null")).toEqual({
+        text: "after this turn",
+        id: expect.stringMatching(NATIVE_MESSAGE_ID) as unknown,
+        delivery: "queue",
+      });
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("refuses a delivery when no turn is in flight, recording a closed reason and sending nothing", async () => {
+    const { fixture, port, promptBodies, activityLog } = await inputsFixture();
+    try {
+      expect(port.admitPromptInputs?.(FIXTURE_RUN_ID, { delivery: "steer" })).toEqual({
+        ok: false,
+        reason: "turn-not-running",
+      });
+      await expect(port.submitTask(FIXTURE_RUN_ID, "first task")).resolves.toBe(true);
+      await settle(port);
+      expect(port.admitPromptInputs?.(FIXTURE_RUN_ID, { delivery: "queue" })).toEqual({
+        ok: false,
+        reason: "turn-not-running",
+      });
+      expect(port.admitPromptInputs?.("unknown-run", { delivery: "queue" })).toEqual({
+        ok: false,
+        reason: "run-unavailable",
+      });
+      expect(parsedBodies(promptBodies)).toEqual([turnPrompt({ text: "first task" })]);
+      expect(inputLines(activityLog)).toMatchObject([
+        { outcome: "refused", delivery: "steer", reason: "turn-not-running" },
+        { outcome: "refused", delivery: "queue", reason: "turn-not-running" },
+        { outcome: "refused", delivery: "queue", reason: "run-unavailable" },
+      ]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  // ADR-0137 D10 (C02): the runtime's slash commands. The run port lists them, confirms a turn's command
+  // against the listing, and posts the turn as `session.command` instead of a prompt.
+  describe("slash commands on the run port (C02)", () => {
+    const facadeStub: CodingToolFacade = {
+      execute: () => Promise.resolve({ status: "observed", evidence: [] }),
+    };
+    const LISTING = [
+      { name: "init", description: "guided AGENTS.md setup" },
+      { name: "review", description: "review changes [commit|branch|pr], defaults to uncommitted" },
+    ];
+
+    async function commandsFixture(
+      profile: "native" | "direct" | "code-mode" = "native",
+      listing: unknown[] = LISTING,
+    ): Promise<{
+      readonly fixture: Awaited<ReturnType<typeof startBridgeFixture>>;
+      readonly port: OpenCodeRuntimeComposition["runPort"];
+      readonly workspace: string;
+      readonly promptBodies: string[];
+      readonly commands: NonNullable<NonNullable<StartBridgeControl["runControl"]>["commands"]>;
+      readonly activityLog: ReturnType<typeof createBufferedServerLogSink>;
+      readonly diagnostics: Parameters<ServerDiagnosticSink["record"]>[0][];
+    }> {
+      const workspace = realpathSync(tempDir("keiko-commands-workspace-"));
+      writeFileSync(join(workspace, "notes.md"), "NOTES-CANARY\n");
+      const promptBodies: string[] = [];
+      const diagnostics: Parameters<ServerDiagnosticSink["record"]>[0][] = [];
+      const activityLog = createBufferedServerLogSink();
+      const commands = { requests: [], listing };
+      const fixture = await startBridgeFixture(facadeStub, undefined, {
+        activityLog,
+        workspaceRoot: workspace,
+        readToolProfile: () => profile,
+        diagnostics: { record: (record): void => void diagnostics.push(record) },
+        runControl: { promptBodies, abortSessions: [], statusResponses: [{}], commands },
+      });
+      return {
+        fixture,
+        port: fixture.runtime.runPort,
+        workspace,
+        promptBodies,
+        commands,
+        activityLog,
+        diagnostics,
+      };
+    }
+
+    const lines = (log: ReturnType<typeof createBufferedServerLogSink>, op: string): unknown[] =>
+      log.events.filter((event) => event.op === op).map((event) => event.extra);
+
+    const admitted = (
+      port: OpenCodeRuntimeComposition["runPort"],
+      extra: Record<string, unknown> = {},
+    ): AdmittedPromptInputs => {
+      const inputs = port.admitPromptInputs?.(FIXTURE_RUN_ID, {
+        command: { name: "review", argumentBytes: 4 },
+        ...extra,
+      });
+      if (inputs?.ok !== true) throw new Error("expected the command inputs to be admitted");
+      return inputs.inputs;
+    };
+
+    it("lists the commands the runtime reports and records the counts alone", async () => {
+      const { fixture, port, commands, activityLog } = await commandsFixture();
+      try {
+        await expect(port.listCommands?.(FIXTURE_RUN_ID, "corr-0123456789")).resolves.toEqual(
+          LISTING,
+        );
+
+        expect(commands.requests).toEqual([{ method: "GET", path: "/api/command" }]);
+        expect(lines(activityLog, "coding-runtime.commands.listed")).toMatchObject([
+          { runId: FIXTURE_RUN_ID, outcome: "listed", commandCount: 2, skippedCount: 0 },
+        ]);
+        expect(JSON.stringify(activityLog.events)).not.toMatch(/AGENTS\.md|uncommitted/u);
+      } finally {
+        await fixture.stop();
+      }
+    });
+
+    it("confirms a turn's command against the listing before anything is reserved or sent", async () => {
+      const { fixture, port, commands, promptBodies, activityLog } = await commandsFixture();
+      try {
+        const inputs = admitted(port);
+        await expect(port.admitCommand?.(FIXTURE_RUN_ID, inputs)).resolves.toEqual({
+          ok: true,
+          inputs,
+        });
+        const unknown = admitted(port, { command: { name: "nope", argumentBytes: 0 } });
+        await expect(port.admitCommand?.(FIXTURE_RUN_ID, unknown)).resolves.toEqual({
+          ok: false,
+          reason: "command-unknown",
+        });
+
+        expect(commands.requests.map(({ path }) => path)).toEqual(["/api/command", "/api/command"]);
+        expect(promptBodies).toEqual([]);
+        expect(lines(activityLog, "coding-runtime.prompt-inputs.settled")).toMatchObject([
+          { outcome: "refused", reason: "command-unknown", command: "other" },
+        ]);
+        expect(JSON.stringify(activityLog.events)).not.toContain("nope");
+      } finally {
+        await fixture.stop();
+      }
+    });
+
+    it("posts the turn as the session command with the text after it and no prompt", async () => {
+      const { fixture, port, commands, promptBodies, activityLog } = await commandsFixture();
+      try {
+        const inputs = admitted(port);
+
+        await expect(
+          port.submitTask(FIXTURE_RUN_ID, "main", undefined, undefined, inputs),
+        ).resolves.toBe(true);
+
+        expect(commands.requests).toEqual([
+          {
+            method: "POST",
+            path: "/api/session/ses_tool/command",
+            body: JSON.stringify({ name: "review", text: "main" }),
+          },
+        ]);
+        expect(promptBodies, "a command turn is not also posted as a prompt").toEqual([]);
+        expect(lines(activityLog, "coding-runtime.prompt-inputs.settled")).toMatchObject([
+          {
+            outcome: "accepted",
+            command: "review",
+            commandArgumentBytes: 4,
+            delivery: "none",
+            referenceCount: 0,
+          },
+        ]);
+        expect(JSON.stringify(activityLog.events)).not.toContain("main");
+      } finally {
+        await fixture.stop();
+      }
+    });
+
+    it("sends a bare command with an empty text and the admitted attachments with the command", async () => {
+      const { fixture, port, commands } = await commandsFixture();
+      try {
+        const bare = admitted(port, { command: { name: "init", argumentBytes: 0 } });
+        await expect(port.submitTask(FIXTURE_RUN_ID, "", undefined, undefined, bare)).resolves.toBe(
+          true,
+        );
+        await settleRun(port);
+        const withFile = admitted(port, { references: [{ path: "notes.md" }] });
+        await expect(
+          port.submitTask(FIXTURE_RUN_ID, "the notes", undefined, undefined, withFile),
+        ).resolves.toBe(true);
+
+        expect(commands.requests.map(({ body }) => body)).toEqual([
+          JSON.stringify({ name: "init", text: "" }),
+          JSON.stringify({
+            name: "review",
+            text: "the notes",
+            files: [
+              { uri: openCodeV2PromptFileData(Buffer.from("NOTES-CANARY\n")), name: "notes.md" },
+            ],
+          }),
+        ]);
+      } finally {
+        await fixture.stop();
+      }
+    });
+
+    it("drops the initial context of a command turn instead of hiding it in the arguments", async () => {
+      const { fixture, port, commands, promptBodies } = await commandsFixture();
+      try {
+        await expect(
+          port.submitTask(
+            FIXTURE_RUN_ID,
+            "main",
+            "REPOSITORY-INSTRUCTIONS-CANARY",
+            undefined,
+            admitted(port),
+          ),
+        ).resolves.toBe(true);
+
+        expect(commands.requests[0]?.body).toBe(JSON.stringify({ name: "review", text: "main" }));
+        expect(JSON.stringify([commands.requests, promptBodies])).not.toContain("CANARY");
+      } finally {
+        await fixture.stop();
+      }
+    });
+
+    it("fails the turn and records the refusal when the runtime rejects the command", async () => {
+      const { fixture, port, commands, promptBodies, activityLog, diagnostics } =
+        await commandsFixture();
+      try {
+        commands.commandResponse = (): Response =>
+          new Response(JSON.stringify({ _tag: "CommandExecutionError" }), {
+            status: 500,
+            headers: { "content-type": "application/json" },
+          });
+
+        await expect(
+          port.submitTask(FIXTURE_RUN_ID, "main", undefined, undefined, admitted(port)),
+        ).resolves.toBe(false);
+
+        expect(promptBodies).toEqual([]);
+        expect(lines(activityLog, "coding-runtime.prompt-inputs.settled")).toMatchObject([
+          { outcome: "refused", reason: "command-refused", command: "review" },
+        ]);
+        expect(
+          activityLog.events.find((event) => event.extra?.reason === "command-refused"),
+        ).toMatchObject({
+          level: "warn",
+          errorKind: expect.any(String) as unknown,
+        });
+        expect(diagnostics).not.toHaveLength(0);
+        expect(JSON.stringify([diagnostics, activityLog.events])).not.toContain("main");
+        // The failed turn is not left armed: an ordinary turn is accepted afterwards.
+        commands.commandResponse = undefined;
+        await expect(port.submitTask(FIXTURE_RUN_ID, "an ordinary turn")).resolves.toBe(true);
+      } finally {
+        await fixture.stop();
+      }
+    });
+
+    it("reports an unreachable listing as a failed listing and refuses the command it could not confirm", async () => {
+      const { fixture, port, commands, activityLog } = await commandsFixture();
+      try {
+        commands.listingResponse = (): Response => new Response("", { status: 500 });
+
+        await expect(port.listCommands?.(FIXTURE_RUN_ID)).resolves.toBeUndefined();
+        await expect(port.admitCommand?.(FIXTURE_RUN_ID, admitted(port))).resolves.toEqual({
+          ok: false,
+          reason: "command-unavailable",
+        });
+
+        expect(lines(activityLog, "coding-runtime.commands.listed")).toMatchObject([
+          { outcome: "failed" },
+        ]);
+        expect(lines(activityLog, "coding-runtime.prompt-inputs.settled")).toMatchObject([
+          { outcome: "refused", reason: "command-unavailable" },
+        ]);
+      } finally {
+        await fixture.stop();
+      }
+    });
+
+    it.each(["direct", "code-mode"] as const)(
+      "offers no command on the governed %s profile and sends none",
+      async (profile) => {
+        const { fixture, port, commands, promptBodies, activityLog } =
+          await commandsFixture(profile);
+        try {
+          await expect(port.listCommands?.(FIXTURE_RUN_ID)).resolves.toBeUndefined();
+          expect(
+            port.admitPromptInputs?.(FIXTURE_RUN_ID, {
+              command: { name: "review", argumentBytes: 0 },
+            }),
+          ).toEqual({ ok: false, reason: "commands-unsupported" });
+
+          expect(commands.requests).toEqual([]);
+          expect(promptBodies).toEqual([]);
+          expect(lines(activityLog, "coding-runtime.commands.listed")).toMatchObject([
+            { outcome: "unsupported" },
+          ]);
+          expect(lines(activityLog, "coding-runtime.prompt-inputs.settled")).toMatchObject([
+            { outcome: "refused", reason: "commands-unsupported" },
+          ]);
+        } finally {
+          await fixture.stop();
+        }
+      },
+    );
+
+    it("offers nothing for a run that is not live", async () => {
+      const { fixture, port, commands } = await commandsFixture();
+      try {
+        await expect(port.listCommands?.("unknown-run")).resolves.toBeUndefined();
+        expect(commands.requests).toEqual([]);
+      } finally {
+        await fixture.stop();
+      }
+    });
+  });
+
+  const settleRun = (port: OpenCodeRuntimeComposition["runPort"]): Promise<boolean> =>
+    port.waitForTerminal(FIXTURE_RUN_ID, AbortSignal.abort());
+
+  it.each(["direct", "code-mode"] as const)(
+    "refuses a delivery and references on the governed %s profile, like a plan request",
+    async (profile) => {
+      const { fixture, port, promptBodies, activityLog } = await inputsFixture(profile);
+      try {
+        await expect(port.submitTask(FIXTURE_RUN_ID, "first task")).resolves.toBe(true);
+        expect(port.admitPromptInputs?.(FIXTURE_RUN_ID, { delivery: "steer" })).toEqual({
+          ok: false,
+          reason: "delivery-unsupported",
+        });
+        expect(
+          port.admitPromptInputs?.(FIXTURE_RUN_ID, { references: [{ path: "notes.md" }] }),
+        ).toEqual({ ok: false, reason: "references-unsupported" });
+        expect(parsedBodies(promptBodies)).toEqual([turnPrompt({ text: "first task" })]);
+        expect(inputLines(activityLog)).toMatchObject([
+          { reason: "delivery-unsupported" },
+          { reason: "references-unsupported" },
+        ]);
+      } finally {
+        await fixture.stop();
+      }
+    },
+  );
+
+  it("attaches referenced files to the prompt of a new turn and counts them against the run", async () => {
+    const { fixture, port, promptBodies } = await inputsFixture();
+    try {
+      const admitted = port.admitPromptInputs?.(FIXTURE_RUN_ID, {
+        references: [{ path: "notes.md" }],
+      });
+      if (admitted?.ok !== true) throw new Error("expected the references to be admitted");
+      await expect(
+        port.submitTask(
+          FIXTURE_RUN_ID,
+          "summarize @notes.md",
+          undefined,
+          undefined,
+          admitted.inputs,
+        ),
+      ).resolves.toBe(true);
+      expect(parsedBodies(promptBodies)).toEqual([
+        turnPrompt({
+          text: "summarize @notes.md",
+          files: [
+            { uri: openCodeV2PromptFileData(Buffer.from("NOTES-CANARY\n")), name: "notes.md" },
+          ],
+        }),
+      ]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  // PR #4064 review: a turn prompt whose acknowledgement was lost may already hold its files in the
+  // producer's history, so they count against the run before any acknowledgement arrives.
+  describe("the run's attachment budget across uncertain turn prompts", () => {
+    const FULL = ["full-a.txt", "full-b.txt", "full-c.txt"];
+
+    async function budgetFixture(answers: readonly ("deliver" | "lose" | "refuse")[]): Promise<{
+      readonly fixture: Awaited<ReturnType<typeof startBridgeFixture>>;
+      readonly port: OpenCodeRuntimeComposition["runPort"];
+      readonly activityLog: ReturnType<typeof createBufferedServerLogSink>;
+    }> {
+      const workspace = realpathSync(tempDir("keiko-prompt-budget-workspace-"));
+      for (const name of FULL) {
+        writeFileSync(join(workspace, name), "x".repeat(OPENCODE_PROMPT_FILE_MAX_BYTES));
+      }
+      let posts = 0;
+      const activityLog = createBufferedServerLogSink();
+      const fixture = await startBridgeFixture(facadeStub, undefined, {
+        activityLog,
+        workspaceRoot: workspace,
+        readToolProfile: () => "native",
+        runControl: {
+          promptBodies: [],
+          abortSessions: [],
+          statusResponses: [{}],
+          promptAcknowledgement: () => answers[posts++] ?? "deliver",
+        },
+      });
+      return { fixture, port: fixture.runtime.runPort, activityLog };
+    }
+
+    async function admittedTurns(
+      port: OpenCodeRuntimeComposition["runPort"],
+      turns: number,
+    ): Promise<boolean[]> {
+      const admitted: boolean[] = [];
+      for (let index = 0; index < turns; index += 1) {
+        const admission = port.admitPromptInputs?.(FIXTURE_RUN_ID, {
+          references: FULL.map((path) => ({ path })),
+        });
+        admitted.push(admission?.ok === true);
+        if (admission?.ok === true) {
+          await port.submitTask(
+            FIXTURE_RUN_ID,
+            "read them",
+            undefined,
+            undefined,
+            admission.inputs,
+          );
+        }
+      }
+      return admitted;
+    }
+
+    it("counts the files of turns whose prompt and resend both lost their acknowledgement", async () => {
+      const lost = Array.from({ length: 12 }, () => "lose" as const);
+      const { fixture, port, activityLog } = await budgetFixture(lost);
+      try {
+        await expect(admittedTurns(port, 6)).resolves.toEqual([
+          true,
+          true,
+          true,
+          true,
+          true,
+          false,
+        ]);
+        expect(inputLines(activityLog).at(-1)).toMatchObject({
+          outcome: "refused",
+          reason: "references-run-budget",
+        });
+      } finally {
+        await fixture.stop();
+      }
+    });
+
+    it("returns the files of turns the runtime refused before taking them", async () => {
+      const refused = Array.from({ length: 6 }, () => "refuse" as const);
+      const { fixture, port } = await budgetFixture(refused);
+      try {
+        await expect(admittedTurns(port, 6)).resolves.toEqual([true, true, true, true, true, true]);
+      } finally {
+        await fixture.stop();
+      }
+    });
+  });
+
+  it("never starts a turn for a delivery: submitTask refuses it and arms nothing", async () => {
+    const { fixture, port, promptBodies } = await inputsFixture();
+    try {
+      await expect(port.submitTask(FIXTURE_RUN_ID, "first task")).resolves.toBe(true);
+      const admitted = port.admitPromptInputs?.(FIXTURE_RUN_ID, { delivery: "steer" });
+      if (admitted?.ok !== true) throw new Error("expected the delivery to be admitted");
+      await settle(port);
+      await expect(
+        port.submitTask(FIXTURE_RUN_ID, "as a turn", undefined, undefined, admitted.inputs),
+      ).resolves.toBe(false);
+      expect(parsedBodies(promptBodies)).toEqual([turnPrompt({ text: "first task" })]);
+      // Nothing was armed by the refusal: an ordinary turn is still accepted.
+      await expect(port.submitTask(FIXTURE_RUN_ID, "an ordinary turn")).resolves.toBe(true);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("refuses a hostile reference before anything is sent and logs the closed reason, not the path", async () => {
+    const { fixture, port, promptBodies, activityLog, workspace } = await inputsFixture();
+    try {
+      symlinkSync("/etc/hosts", join(workspace, "hosts-link"));
+      for (const [path, reason] of [
+        ["../outside.txt", "reference-invalid"],
+        ["/etc/hosts", "reference-invalid"],
+        [".env", "reference-sensitive"],
+        ["hosts-link", "reference-outside-workspace"],
+        ["missing.md", "reference-unreadable"],
+      ] as const) {
+        expect(port.admitPromptInputs?.(FIXTURE_RUN_ID, { references: [{ path }] })).toEqual({
+          ok: false,
+          reason,
+        });
+      }
+      expect(promptBodies).toEqual([]);
+      expect(inputLines(activityLog)).toHaveLength(5);
+      expect(JSON.stringify(inputLines(activityLog))).not.toMatch(
+        /\/etc\/hosts|hosts-link|\.env|outside\.txt|missing\.md|SENSITIVE/u,
+      );
+    } finally {
+      await fixture.stop();
+    }
+  });
+});
+
 it.each(["direct", "code-mode"] as const)(
   "materializes the selected %s profile into the real native config and plugin sources",
   async (profile) => {
@@ -5167,167 +9205,6 @@ it.each(["direct", "code-mode"] as const)(
     }
   },
 );
-
-async function preparationReceipt(): Promise<
-  Extract<OpenCodeServiceHostDiskReceipt, { readonly ok: true }>
-> {
-  const payloadRoot = tempDir("keiko-host-composition-bytes-");
-  mkdirSync(join(payloadRoot, "runtime"));
-  mkdirSync(join(payloadRoot, "evidence"));
-  for (const [path] of OPENCODE_SERVICE_HOST_DISK_EVIDENCE)
-    writeFileSync(join(payloadRoot, path), "inactive byte fixture");
-  const measured = attestPortableSidecarTreeSync(
-    payloadRoot,
-    "runtime/node",
-    Date.now() + 5000,
-    undefined,
-    OPENCODE_SERVICE_HOST_DISK_EVIDENCE.map(([path]) => path),
-  );
-  const base = (
-    JSON.parse(
-      readFileSync(
-        new URL(
-          "../../../keiko-contracts/src/opencode-service-host.private-qualified.fixture.json",
-          import.meta.url,
-        ),
-        "utf8",
-      ),
-    ) as { readonly approval: Record<string, unknown> }
-  ).approval;
-  const approval = {
-    ...base,
-    payloadTreeSha256: measured.treeSha256,
-    ...Object.fromEntries(
-      OPENCODE_SERVICE_HOST_DISK_EVIDENCE.map(([path, field]) => [
-        field,
-        measured.selectedFileSha256ByPath?.[path],
-      ]),
-    ),
-  };
-  const receipt = await inspectOpenCodeServiceHostDisk(
-    {
-      payloadRoot,
-      target: "macos-arm64",
-      approval,
-      trustedSupplement: { "macos-arm64": approval },
-    },
-    { deadline: Date.now() + 5000 },
-  );
-  if (!receipt.ok) throw new Error("Expected supplementary byte receipt");
-  return receipt;
-}
-
-async function stoppedPreparationFixture(
-  profile: "direct" | "code-mode" = "direct",
-): ReturnType<typeof startBridgeFixture> {
-  const fixture = await startBridgeFixture(
-    { execute: () => Promise.resolve({ status: "observed", evidence: [] }) },
-    undefined,
-    {
-      gatewayUrl: "http://127.0.0.1:4391/api/coding-sidecar/gateway",
-      readToolProfile: () => profile,
-    },
-  );
-  await fixture.stop();
-  return fixture;
-}
-
-describe("inactive fixed-host preparation at existing captured composition", () => {
-  it("derives fixed packet config/capabilities/root from the actual accepted CLI producer values", async () => {
-    const fixture = await stoppedPreparationFixture();
-    const receipt = await preparationReceipt();
-    const result = await fixture.runtime.prepareServiceHost(fixture.preparation, receipt);
-    expect(result.ok).toBe(true);
-    if (!result.ok || result.serviceHost === undefined)
-      throw new Error("Expected inactive host preparation");
-    const { binding, packet } = result.serviceHost;
-    const root = result.env?.OPENCODE_CONFIG_DIR;
-    if (root === undefined) throw new Error("Expected captured config root");
-    const config = readFileSync(join(root, "opencode.json"));
-    expect(binding.configDigest).toBe(createHash("sha256").update(config).digest("hex"));
-    expect(binding.workspace).toBe(fixture.preparation.env.KEIKO_CODING_WORKSPACE_ROOT);
-    expect(binding.mode).toBe(fixture.preparation.env.KEIKO_CODING_MODE);
-    expect(binding.password).toBe(result.env?.OPENCODE_SERVER_PASSWORD);
-    expect(binding.providerCapability).toBe(MODEL_CAPABILITY);
-    expect(binding.facadeCapability).toBe(TOOL_CAPABILITY);
-    expect(binding.facadeURL).toBe(fixture.runtime.toolBridge.url);
-    expect(JSON.parse(packet)).toEqual(binding);
-    await expect(
-      fixture.runtime.runPort.submitTask(fixture.preparation.runId, "must remain inactive"),
-    ).resolves.toBe(false);
-    await expect(fixture.runtime.prepareServiceHost(fixture.preparation, receipt)).resolves.toEqual(
-      { ok: false, reason: "host-preparation-unqualified" },
-    );
-  });
-
-  it("fails host readiness before reading startup or opening an adapter through the same lifecycle owner", async () => {
-    const managerModule = await import("./codingRuntimeManager.js");
-    const original = managerModule.createCodingRuntimeManager;
-    let lifecycle: OpenCodeLifecycleAdapter | undefined;
-    vi.spyOn(managerModule, "createCodingRuntimeManager").mockImplementation((input) => {
-      lifecycle = input.openCodeLifecycleAdapter;
-      return original(input);
-    });
-    const fixture = await stoppedPreparationFixture();
-    const result = await fixture.runtime.prepareServiceHost(
-      fixture.preparation,
-      await preparationReceipt(),
-    );
-    expect(result.ok).toBe(true);
-    let reads = 0;
-    if (lifecycle === undefined) throw new Error("Expected actual lifecycle owner");
-    await expect(
-      lifecycle.handshake({
-        runId: fixture.preparation.runId,
-        timeoutMs: 100,
-        startupOutput: {
-          nextLine: (): Promise<string> => {
-            reads += 1;
-            return Promise.reject(new Error("must not read"));
-          },
-        },
-        onPermission: (): void => undefined,
-      }),
-    ).resolves.toEqual({ ok: false, reason: "host-readiness-unqualified" });
-    expect(reads).toBe(0);
-  });
-
-  it.each(["direct", "code-mode"] as const)(
-    "binds the captured %s profile to the same config digest without admitting readiness",
-    async (toolProfile) => {
-      const fixture = await stoppedPreparationFixture(toolProfile);
-      const result = await fixture.runtime.prepareServiceHost(
-        fixture.preparation,
-        await preparationReceipt(),
-      );
-      expect(result.ok).toBe(true);
-      if (!result.ok || result.serviceHost === undefined)
-        throw new Error("Expected inactive preparation");
-      expect(result.serviceHost.binding).toMatchObject({ toolProfile });
-      const config = readFileSync(
-        join(result.serviceHost.binding.stateRoot, "config", "opencode", "opencode.json"),
-      );
-      expect(result.serviceHost.binding.configDigest).toBe(
-        createHash("sha256").update(config).digest("hex"),
-      );
-      expect(JSON.parse(result.serviceHost.packet)).toEqual(result.serviceHost.binding);
-      await expect(
-        fixture.runtime.runPort.submitTask(fixture.preparation.runId, "still inactive"),
-      ).resolves.toBe(false);
-    },
-  );
-
-  it("rejects a copied receipt without blocking later preparation from the owned receipt", async () => {
-    const receipt = await preparationReceipt();
-    const direct = await stoppedPreparationFixture();
-    await expect(
-      direct.runtime.prepareServiceHost(direct.preparation, { ...receipt }),
-    ).resolves.toEqual({ ok: false, reason: "config-materialization-failed" });
-    await expect(
-      direct.runtime.prepareServiceHost(direct.preparation, receipt),
-    ).resolves.toMatchObject({ ok: true });
-  });
-});
 
 describe("accepted original native session Location binding", () => {
   it.each([
@@ -5632,38 +9509,6 @@ it("settles an original read's rejected physical process before a fresh parent i
     f.registry.dispose();
     await fixture.stop();
   }
-});
-
-it("captures the host profile once and keeps it aligned with materialized config after input mutation", async () => {
-  let toolProfile: "direct" | "code-mode" = "code-mode";
-  let reads = 0;
-  const fixture = await startBridgeFixture(
-    { execute: () => Promise.resolve({ status: "observed", evidence: [] }) },
-    undefined,
-    {
-      gatewayUrl: "http://127.0.0.1:4391/api/coding-sidecar/gateway",
-      readToolProfile: () => {
-        reads += 1;
-        return toolProfile;
-      },
-    },
-  );
-  await fixture.stop();
-  toolProfile = "direct";
-  const result = await fixture.runtime.prepareServiceHost(
-    fixture.preparation,
-    await preparationReceipt(),
-  );
-  expect(result.ok).toBe(true);
-  if (!result.ok || result.serviceHost === undefined)
-    throw new Error("Expected captured host profile");
-  expect(result.serviceHost.binding.toolProfile).toBe("code-mode");
-  expect(reads).toBe(1);
-  const config = readFileSync(
-    join(result.serviceHost.binding.stateRoot, "config", "opencode", "opencode.json"),
-    "utf8",
-  );
-  expect(config.includes('{"action":"execute","resource":"*","effect":"allow"}')).toBe(true);
 });
 
 function initialBridgeAuthority(): ReturnType<typeof catalogRuntimeFixture> & {
@@ -6432,94 +10277,6 @@ describe.skipIf(process.platform !== "darwin")(
   },
 );
 
-function initialTransportPacket(
-  phase: string,
-  extra: Readonly<Record<string, unknown>> = {},
-): string {
-  return JSON.stringify({
-    action: "native-initialization",
-    phase,
-    runId: FIXTURE_RUN_ID,
-    ...extra,
-  });
-}
-
-async function initialTransportFixture(
-  effect?: SecureWorkspaceNativeFileIO["readBytes"],
-  requestDeadlineMs = 5000,
-): Promise<{
-  producer: ReturnType<typeof initialBridgeProducer>;
-  log: ReturnType<typeof createBufferedServerLogSink>;
-  setRoot: (root: string) => void;
-  fixture: Awaited<ReturnType<typeof startBridgeFixture>>;
-  call: (
-    phase: string,
-    extra?: Readonly<Record<string, unknown>>,
-  ) => ReturnType<OpenCodeRuntimeComposition["toolBridge"]["handle"]>;
-}> {
-  const producer = initialBridgeProducer(effect);
-  const log = createBufferedServerLogSink();
-  let currentRoot = producer.runtime.root;
-  const fixture = await startBridgeFixture(
-    producer.facade,
-    { maxInFlight: 1, requestDeadlineMs },
-    {
-      ...producer.control,
-      activityLog: log,
-      gatewayUrl: "http://127.0.0.1:4391/api/coding-sidecar/gateway",
-      resolveWorkspaceRootAccess: () => ({
-        kind: "managed-task",
-        canonicalRoot: currentRoot,
-        repositoryRoot: producer.runtime.root,
-        fs: nodeWorkspaceFs,
-      }),
-    },
-  );
-  await fixture.stop();
-  const prepared = await fixture.runtime.prepareServiceHost(
-    fixture.preparation,
-    await preparationReceipt(),
-  );
-  expect(prepared.ok).toBe(true);
-  return {
-    producer,
-    log,
-    setRoot: (root): void => {
-      currentRoot = root;
-    },
-    fixture,
-    call: (phase, extra) =>
-      fixture.runtime.toolBridge.handle({
-        method: "POST",
-        headers: new Headers({
-          authorization: `Bearer ${producer.runtime.minted.toolFacadeCapability}`,
-        }),
-        body: initialTransportPacket(phase, extra),
-      }),
-  };
-}
-
-it("binds same-route initial bytes to the actual accepted callback without charging a model tool", async () => {
-  const { producer, fixture, call } = await initialTransportFixture();
-  try {
-    const begin = await call("begin");
-    expect(begin.status).toBe(200);
-    const value = JSON.parse(begin.body) as { scopeId: string };
-    expect(value.scopeId).toBeTypeOf("string");
-    const result = await call("readBytes", { scopeId: value.scopeId, relativePath: "AGENTS.md" });
-    expect(result.status).toBe(200);
-    expect((result as unknown as { nativeBytes?: Uint8Array }).nativeBytes).toBeInstanceOf(
-      Uint8Array,
-    );
-    expect(producer.read).toHaveBeenCalledOnce();
-    expect(producer.runtime.authority.state().state).toBe("starting");
-    expect(await call("end", { scopeId: value.scopeId })).toMatchObject({ status: 200 });
-  } finally {
-    await fixture.stop();
-    producer.registry.dispose();
-  }
-});
-
 function optionalRootAccess(control: StartBridgeControl | undefined): {
   readonly resolveWorkspaceRootAccess?: (() => WorkspaceRootAccess | undefined) | undefined;
 } {
@@ -6527,304 +10284,6 @@ function optionalRootAccess(control: StartBridgeControl | undefined): {
     ? {}
     : { resolveWorkspaceRootAccess: control.resolveWorkspaceRootAccess };
 }
-
-it("persists real transport lifecycle without content, paths or authority bytes", async () => {
-  const f = await initialTransportFixture();
-  try {
-    const started = await f.call("begin");
-    const { scopeId } = JSON.parse(started.body) as { scopeId: string };
-    await f.call("end", { scopeId });
-    const events = f.log.events.filter(
-      (event) => event.op === "coding-runtime.initialization-transport",
-    );
-    expect(events).toHaveLength(2);
-    const line = formatActivityLogProofLine(events[0] ?? {});
-    expectActivityLogProof("coding-runtime.initialization-transport.emitted-line", line);
-    expect(events.map((event) => event.extra?.stage)).toEqual(["begin", "end"]);
-    expect(events.map((event) => event.extra?.outcome)).toEqual(["accepted", "completed"]);
-    expect(line).not.toContain(f.producer.runtime.root);
-    expect(line).not.toContain(scopeId);
-    expect(line).not.toContain(f.producer.runtime.minted.toolFacadeCapability);
-  } finally {
-    await f.fixture.stop();
-    f.producer.registry.dispose();
-  }
-});
-
-it("rejects copied scopes, duplicate begin, extra selectors and calls after initial end", async () => {
-  const f = await initialTransportFixture();
-  try {
-    const started = await f.call("begin");
-    const { scopeId } = JSON.parse(started.body) as { scopeId: string };
-    expect((await f.call("begin")).status).toBe(409);
-    expect(
-      (await f.call("readBytes", { scopeId: "0".repeat(36), relativePath: "AGENTS.md" })).status,
-    ).toBe(409);
-    expect(
-      (await f.call("readBytes", { scopeId, relativePath: "AGENTS.md", purpose: "native-tool-io" }))
-        .status,
-    ).toBe(400);
-    expect(f.producer.read).not.toHaveBeenCalled();
-    expect((await f.call("end", { scopeId })).status).toBe(200);
-    expect((await f.call("readBytes", { scopeId, relativePath: "AGENTS.md" })).status).toBe(409);
-    expect((await f.call("begin")).status).toBe(409);
-  } finally {
-    await f.fixture.stop();
-    f.producer.registry.dispose();
-  }
-});
-
-it("requires actual prepared host and current accepted root before initial callback", async () => {
-  const f = initialBridgeProducer();
-  const fixture = await startBridgeFixture(f.facade, undefined, f.control);
-  try {
-    const result = await fixture.runtime.toolBridge.handle({
-      method: "POST",
-      headers: new Headers({ authorization: `Bearer ${f.runtime.minted.toolFacadeCapability}` }),
-      body: initialTransportPacket("begin"),
-    });
-    expect(result.status).toBe(409);
-    expect(f.read).not.toHaveBeenCalled();
-  } finally {
-    await fixture.stop();
-    f.registry.dispose();
-  }
-});
-
-it("rejects current-root drift before IO and after an outstanding real producer resolves", async () => {
-  let release!: (value: Awaited<ReturnType<SecureWorkspaceNativeFileIO["readBytes"]>>) => void;
-  const held = new Promise<Awaited<ReturnType<SecureWorkspaceNativeFileIO["readBytes"]>>>(
-    (resolve) => {
-      release = resolve;
-    },
-  );
-  const f = await initialTransportFixture(() => held);
-  try {
-    const { scopeId } = JSON.parse((await f.call("begin")).body) as { scopeId: string };
-    const pending = f.call("readBytes", { scopeId, relativePath: "AGENTS.md" });
-    await vi.waitFor(() => {
-      expect(f.producer.read).toHaveBeenCalledOnce();
-    });
-    f.setRoot(join(f.producer.runtime.root, "changed"));
-    release({ ok: true, bytes: f.producer.bytes, info: f.producer.info });
-    const result = await pending;
-    expect(result.status).toBe(409);
-    expect(f.producer.bytes.every((byte) => byte === 0)).toBe(true);
-    expect((await f.call("stat", { scopeId, relativePath: "AGENTS.md" })).status).toBe(409);
-    expect(f.producer.read).toHaveBeenCalledOnce();
-  } finally {
-    release({ ok: true, bytes: f.producer.bytes, info: f.producer.info });
-    await f.fixture.stop();
-    f.producer.registry.dispose();
-  }
-});
-
-it("removes transport authority when the actual accepted starting mint is revoked", async () => {
-  const f = await initialTransportFixture();
-  try {
-    const { scopeId } = JSON.parse((await f.call("begin")).body) as { scopeId: string };
-    f.producer.runtime.authorityRegistry.revoke(f.producer.runtime.minted.authorityRef);
-    expect((await f.call("readBytes", { scopeId, relativePath: "AGENTS.md" })).status).toBe(409);
-    expect(f.producer.read).not.toHaveBeenCalled();
-    expect((await f.call("end", { scopeId })).status).toBe(409);
-  } finally {
-    await f.fixture.stop();
-    f.producer.registry.dispose();
-  }
-});
-
-it("preserves original technical read failure as an unavailable private result", async () => {
-  const f = await initialTransportFixture(() =>
-    Promise.resolve({ ok: false, reason: "process-failed" }),
-  );
-  try {
-    const { scopeId } = JSON.parse((await f.call("begin")).body) as { scopeId: string };
-    const result = await f.call("readBytes", { scopeId, relativePath: "AGENTS.md" });
-    expect(JSON.parse(result.body)).toEqual({ ok: false, reason: "process-failed" });
-    expect((await f.call("end", { scopeId })).status).toBe(200);
-  } finally {
-    await f.fixture.stop();
-    f.producer.registry.dispose();
-  }
-});
-
-it("cancels promptly while holding the SAME physical gate until the actual raw IO settles", async () => {
-  let release!: (value: Awaited<ReturnType<SecureWorkspaceNativeFileIO["readBytes"]>>) => void;
-  const held = new Promise<Awaited<ReturnType<SecureWorkspaceNativeFileIO["readBytes"]>>>(
-    (resolve) => {
-      release = resolve;
-    },
-  );
-  const f = await initialTransportFixture(() => held);
-  const controller = new AbortController();
-  try {
-    const { scopeId } = JSON.parse((await f.call("begin")).body) as { scopeId: string };
-    const pending = f.fixture.runtime.toolBridge.handle({
-      method: "POST",
-      headers: new Headers({
-        authorization: `Bearer ${f.producer.runtime.minted.toolFacadeCapability}`,
-      }),
-      body: initialTransportPacket("readBytes", { scopeId, relativePath: "AGENTS.md" }),
-      signal: controller.signal,
-    });
-    await vi.waitFor(() => {
-      expect(f.producer.read).toHaveBeenCalledOnce();
-    });
-    controller.abort();
-    expect(JSON.parse((await pending).body)).toMatchObject({ ok: false, reason: "cancelled" });
-    const busy = await f.fixture.runtime.toolBridge.handle({
-      method: "POST",
-      headers: new Headers({
-        authorization: `Bearer ${f.producer.runtime.minted.toolFacadeCapability}`,
-      }),
-      body: "{}",
-    });
-    expect(busy.status).toBe(429);
-    release({ ok: true, bytes: f.producer.bytes, info: f.producer.info });
-    await vi.waitFor(async () => {
-      expect(
-        (
-          await f.fixture.runtime.toolBridge.handle({
-            method: "POST",
-            headers: new Headers({
-              authorization: `Bearer ${f.producer.runtime.minted.toolFacadeCapability}`,
-            }),
-            body: "{}",
-          })
-        ).status,
-      ).not.toBe(429);
-    });
-    expect(f.producer.bytes.every((byte) => byte === 0)).toBe(true);
-  } finally {
-    release({ ok: true, bytes: f.producer.bytes, info: f.producer.info });
-    await f.fixture.stop();
-    f.producer.registry.dispose();
-  }
-});
-
-it.each(["accessor", "inherited", "symbol", "extra", "nested-accessor"])(
-  "captures closed initial packets without evaluating %s input",
-  async (kind) => {
-    const { copyNativeInitializationPacket } = await import("./opencodeRuntimeComposition.js");
-    const value: Record<PropertyKey, unknown> = {
-      action: "native-initialization",
-      phase: "begin",
-      runId: FIXTURE_RUN_ID,
-    };
-    const get = vi.fn(() => FIXTURE_RUN_ID);
-    if (kind === "accessor") Object.defineProperty(value, "runId", { get });
-    if (kind === "inherited") Object.setPrototypeOf(value, { inherited: true });
-    if (kind === "symbol") value[Symbol("selector")] = true;
-    if (kind === "extra") value.authority = "untrusted";
-    if (kind === "nested-accessor") {
-      value.phase = "readBytes";
-      value.scopeId = "0".repeat(36);
-      value.relativePath = "AGENTS.md";
-      value.range = Object.defineProperty({ length: 1 }, "offset", { get });
-    }
-    expect(copyNativeInitializationPacket(value)).toBeUndefined();
-    expect(get).not.toHaveBeenCalled();
-  },
-);
-
-it.each(["expired", "ready", "running"] as const)(
-  "refuses initial transport when actual accepted authority is %s",
-  async (state) => {
-    const f = await initialTransportFixture();
-    try {
-      if (state === "expired")
-        vi.setSystemTime(new Date(Date.parse(f.producer.runtime.trusted.expiresAt) + 1));
-      else {
-        expect(f.producer.runtime.authority.transition(FIXTURE_RUN_ID, "ready", RUNTIME_NOW)).toBe(
-          true,
-        );
-        if (state === "running")
-          expect(
-            f.producer.runtime.authority.transition(FIXTURE_RUN_ID, "running", RUNTIME_NOW),
-          ).toBe(true);
-      }
-      expect((await f.call("begin")).status).toBe(409);
-      expect(f.producer.read).not.toHaveBeenCalled();
-    } finally {
-      await f.fixture.stop();
-      f.producer.registry.dispose();
-    }
-  },
-);
-
-it("refuses an initial begin when the actual accepted root no longer matches preparation", async () => {
-  const f = await initialTransportFixture();
-  try {
-    f.setRoot(join(f.producer.runtime.root, "other"));
-    expect((await f.call("begin")).status).toBe(409);
-    expect(f.producer.read).not.toHaveBeenCalled();
-  } finally {
-    await f.fixture.stop();
-    f.producer.registry.dispose();
-  }
-});
-
-it("reports transport deadline while retaining actual outstanding IO and refusing a new scope", async () => {
-  let release!: (value: Awaited<ReturnType<SecureWorkspaceNativeFileIO["readBytes"]>>) => void;
-  const held = new Promise<Awaited<ReturnType<SecureWorkspaceNativeFileIO["readBytes"]>>>(
-    (resolve) => {
-      release = resolve;
-    },
-  );
-  const f = await initialTransportFixture(() => held, 100);
-  try {
-    const { scopeId } = JSON.parse((await f.call("begin")).body) as { scopeId: string };
-    const result = await f.call("readBytes", { scopeId, relativePath: "AGENTS.md" });
-    expect(JSON.parse(result.body)).toEqual({ ok: false, reason: "timeout" });
-    expect((await f.call("begin")).status).toBe(409);
-    expect(f.producer.read).toHaveBeenCalledOnce();
-    const ordinary = await f.fixture.runtime.toolBridge.handle({
-      method: "POST",
-      headers: new Headers({
-        authorization: `Bearer ${f.producer.runtime.minted.toolFacadeCapability}`,
-      }),
-      body: "{}",
-    });
-    expect(ordinary.status).toBe(429);
-  } finally {
-    release({ ok: true, bytes: f.producer.bytes, info: f.producer.info });
-    await f.fixture.stop();
-    f.producer.registry.dispose();
-  }
-});
-
-it("settles initial end honestly when its actual lifecycle writer fails", async () => {
-  const f = await initialTransportFixture();
-  try {
-    const { scopeId } = JSON.parse((await f.call("begin")).body) as { scopeId: string };
-    const write = f.log.write.bind(f.log);
-    vi.spyOn(f.log, "write").mockImplementation((event) => {
-      if (event.op === "coding-runtime.initialization-transport" && event.extra?.stage === "end")
-        throw new Error("PRIVATE_INITIAL_END_WRITER_FAILURE");
-      write(event);
-    });
-    const pending = f.call("end", { scopeId });
-    let result: Awaited<ReturnType<typeof f.call>> | undefined;
-    void pending.then((value) => {
-      result = value;
-    });
-    await vi.waitFor(
-      () => {
-        expect(result).toBeDefined();
-      },
-      { timeout: 100 },
-    );
-    expect(JSON.parse((await pending).body)).toEqual({
-      ok: false,
-      reason: "initialization-failed",
-    });
-    expect((await f.call("begin")).status).toBe(409);
-    expect(f.log.lines().join("\n")).not.toContain("PRIVATE_INITIAL_END_WRITER_FAILURE");
-  } finally {
-    await f.fixture.stop();
-    f.producer.registry.dispose();
-  }
-});
 
 function originalReadTransportBody(
   phase: string,
@@ -6988,24 +10447,6 @@ it.each(["session", "unknown-run", "root", "cancelled"] as const)(
   },
 );
 
-it("keeps native Read unavailable in a genuinely prepared STARTING service host", async () => {
-  const f = await initialTransportFixture();
-  try {
-    const response = await f.fixture.runtime.toolBridge.handle({
-      method: "POST",
-      headers: new Headers({
-        authorization: `Bearer ${f.producer.runtime.minted.toolFacadeCapability}`,
-      }),
-      body: originalReadTransportBody("begin", originalReadTransportBegin()),
-    });
-    expect(JSON.parse(response.body)).toMatchObject({ ok: false, reason: "dispatch-refused" });
-    expect(f.producer.read).not.toHaveBeenCalled();
-  } finally {
-    await f.fixture.stop();
-    f.producer.registry.dispose();
-  }
-});
-
 it("does not return a parent admitted while the accepted root changed across await", async () => {
   const f = nativeBridgeFixture("PRIVATE_POSTAWAIT_ROOT", undefined, 1, false, FIXTURE_RUN_ID);
   const owned = f.facade.nativeTextRead;
@@ -7157,3 +10598,353 @@ function observeNativeReadBytes(
     },
   };
 }
+
+// S02/S03 (#3904, ADR-0137 D10): the run that continues a task's retained session. The composition
+// seeds the run's private database from the task's entry before the runtime starts, binds the
+// started runtime to the retained (or forked) session, proves the gateway route in a scratch
+// session, shows only what the run adds, and retains the database of a run that settled normally.
+describe.each(["native", "direct", "code-mode"] as const)("%s session continuity", (profile) => {
+  const TASK = "task-continued";
+
+  interface StoreCalls {
+    readonly checkouts: Parameters<RetainedSessionStore["checkout"]>[0][];
+    readonly retains: Parameters<RetainedSessionStore["retain"]>[0][];
+    readonly removed: string[];
+    readonly seededDirectoryExisted: boolean[];
+  }
+
+  function continuedWorld(
+    options: {
+      sessions?: string[];
+      retainedSessionId?: string;
+      checkout?: ReturnType<RetainedSessionStore["checkout"]>;
+      retain?: ReturnType<RetainedSessionStore["retain"]>;
+      messages?: readonly Record<string, unknown>[];
+      forkedSessionId?: string;
+      /** False leaves every session route to the fixture's own, as for a run that continues nothing. */
+      serveSessions?: boolean;
+      listFails?: boolean;
+    } = {},
+  ): { readonly continuity: FixtureContinuity; readonly calls: StoreCalls } {
+    const calls: StoreCalls = {
+      checkouts: [],
+      retains: [],
+      removed: [],
+      seededDirectoryExisted: [],
+    };
+    const store: RetainedSessionStore = {
+      checkout: (input) => {
+        calls.checkouts.push(input);
+        calls.seededDirectoryExisted.push(existsSync(dirname(input.destinationDatabase)));
+        return (
+          options.checkout ?? {
+            ok: true,
+            sessionId: options.retainedSessionId ?? "ses_tool",
+            databaseBytes: 4096,
+            messageCount: 4,
+            ageMs: 60_000,
+          }
+        );
+      },
+      retain: (input) => {
+        calls.retains.push(input);
+        return (
+          options.retain ?? {
+            ok: true,
+            databaseBytes: 4096,
+            messageCount: 6,
+            entryCount: 1,
+            prunedCount: 0,
+          }
+        );
+      },
+      remove: (taskId) => {
+        calls.removed.push(taskId);
+      },
+      prune: () => ({ expired: 0, orphaned: 0, invalid: 0, quota: 0, entryCount: 0 }),
+    };
+    const service = createCodingSessionContinuity({
+      store,
+      taskOfRun: (runId) => (runId === FIXTURE_RUN_ID ? TASK : undefined),
+    });
+    return {
+      calls,
+      continuity: {
+        service,
+        workspaceId: "workspace-continued",
+        serveSessions: options.serveSessions ?? true,
+        sessions: options.sessions ?? [options.retainedSessionId ?? "ses_tool"],
+        // Messages of an earlier run that the history projection could not even parse: if the run
+        // projected them it would fail its readiness, so a started run proves they were left out.
+        messages: options.messages ?? [
+          { id: "msg_earlier_1", type: "earlier-run-user-turn" },
+          { id: "msg_earlier_2", type: "earlier-run-answer" },
+        ],
+        requests: [],
+        ...(options.listFails === true ? { listFails: true } : {}),
+        ...(options.forkedSessionId === undefined
+          ? {}
+          : { forkedSessionId: options.forkedSessionId }),
+      },
+    };
+  }
+
+  function continuityLines(
+    log: ReturnType<typeof createBufferedServerLogSink>,
+  ): Record<string, unknown>[] {
+    return log.events
+      .filter((event) => event.op === "coding-runtime.session-continuity")
+      .map((event) => ({ ...event, ...(event.extra as Record<string, unknown>) }));
+  }
+
+  const tools = { readToolProfile: (): typeof profile => profile } as const;
+  const facade = (): CodingToolFacade => ({
+    execute: () => Promise.resolve({ status: "observed", evidence: [] }),
+  });
+
+  it("resumes the retained session: seeded before the start, proved in a scratch session, shown from what the run adds", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const governedEvents: OpenCodeReconciliationEvent[] = [];
+    const world = continuedWorld();
+    world.continuity.service.declare(FIXTURE_RUN_ID, { kind: "resume", taskId: TASK });
+
+    const fixture = await startBridgeFixture(facade(), undefined, {
+      ...tools,
+      continuity: world.continuity,
+      activityLog,
+      governedEvents,
+    });
+    try {
+      // Seeded into the run's own private state, after that state exists and before the runtime ran.
+      expect(world.calls.checkouts).toHaveLength(1);
+      const [checkout] = world.calls.checkouts;
+      expect(
+        checkout?.destinationDatabase.endsWith(join(FIXTURE_RUN_ID, "state", "opencode.db")),
+      ).toBe(true);
+      expect(world.calls.seededDirectoryExisted).toEqual([true]);
+      expect(checkout?.binding).toMatchObject({
+        taskId: TASK,
+        runtimeVersion: OPENCODE_VERSION,
+        maxInputTokens: 61_440,
+      });
+      expect(checkout?.directory).toBe(fixture.preparation.env.KEIKO_CODING_WORKSPACE_ROOT);
+
+      // The handshake runs in a scratch session that is removed again: the run holds one session,
+      // no new session was created for the work, and the continued one carries no handshake turn.
+      expect(world.continuity.requests.map(({ method, path }) => `${method} ${path}`)).toEqual([
+        "POST /api/session",
+        "DELETE /api/session/ses_scratch_1",
+      ]);
+      expect(world.continuity.sessions).toEqual(["ses_tool"]);
+
+      // Only the readiness creation event: the earlier run's messages were never projected.
+      expect(governedEvents).toHaveLength(1);
+
+      expect(world.continuity.service.outcome(FIXTURE_RUN_ID)).toEqual({ kind: "resumed" });
+      const [line] = continuityLines(activityLog);
+      expect(line).toMatchObject({
+        action: "resume",
+        outcome: "resumed",
+        taskDigest: retainedSessionKey(TASK),
+        databaseBytes: 4096,
+        messageCount: 2,
+        ageMs: 60_000,
+        correlationId: FIXTURE_RUN_ID,
+      });
+      const written = activityLog.events.find(
+        (event) => event.op === "coding-runtime.session-continuity",
+      );
+      expectActivityLogProof(
+        "coding-runtime.session-continuity.emitted-line",
+        formatActivityLogProofLine(written ?? {}),
+      );
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("forks the retained session through its end and removes the source from the run's database", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const world = continuedWorld({
+      retainedSessionId: "ses_source",
+      forkedSessionId: "ses_tool",
+    });
+    world.continuity.service.declare(FIXTURE_RUN_ID, {
+      kind: "fork",
+      sourceTaskId: "task-source",
+      boundary: { kind: "end" },
+    });
+
+    const fixture = await startBridgeFixture(facade(), undefined, {
+      ...tools,
+      continuity: world.continuity,
+      activityLog,
+    });
+    try {
+      expect(world.calls.checkouts[0]?.binding.taskId).toBe("task-source");
+      expect(
+        world.continuity.requests.slice(0, 2).map(({ method, path }) => `${method} ${path}`),
+      ).toEqual(["POST /api/session/ses_source/fork", "DELETE /api/session/ses_source"]);
+      expect(world.continuity.requests[0]?.body).toBe("{}");
+      expect(world.continuity.sessions).toEqual(["ses_tool"]);
+      expect(world.continuity.service.outcome(FIXTURE_RUN_ID)).toEqual({ kind: "forked" });
+      expect(continuityLines(activityLog)).toMatchObject([
+        {
+          action: "fork",
+          outcome: "forked",
+          boundary: "end",
+          taskDigest: retainedSessionKey(TASK),
+          sourceTaskDigest: retainedSessionKey("task-source"),
+        },
+      ]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("starts a fresh session with the task's history when the entry is refused, and says why", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const sessionCreateCalls: string[] = [];
+    const world = continuedWorld({
+      checkout: { ok: false, reason: "version-changed", removed: true },
+      serveSessions: false,
+    });
+    world.continuity.service.declare(FIXTURE_RUN_ID, { kind: "resume", taskId: TASK });
+
+    const fixture = await startBridgeFixture(facade(), undefined, {
+      ...tools,
+      continuity: world.continuity,
+      activityLog,
+      sessionCreateCalls,
+    });
+    try {
+      // The fixture's own routes answered: a new session was created, as for any fresh run.
+      expect(sessionCreateCalls).toEqual(["ses_tool"]);
+      expect(world.continuity.requests).toEqual([]);
+      expect(world.continuity.service.outcome(FIXTURE_RUN_ID)).toEqual({
+        kind: "fresh",
+        reason: "version-changed",
+      });
+      expect(continuityLines(activityLog)).toMatchObject([
+        { action: "resume", outcome: "refused", reason: "version-changed", level: "warn" },
+      ]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("fails the run's readiness when the runtime does not hold exactly the retained session", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const world = continuedWorld({ sessions: ["ses_tool", "ses_unexpected"] });
+    world.continuity.service.declare(FIXTURE_RUN_ID, { kind: "resume", taskId: TASK });
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+
+    const fixture = await startBridgeFixture(facade(), undefined, {
+      ...tools,
+      continuity: world.continuity,
+      activityLog,
+      diagnostics,
+      expectedStart: { ok: false, failureCode: "protocol-schema-mismatch", retryable: false },
+    });
+
+    // The failed binding, then the disposal of the run that never started: it retains nothing.
+    expect(continuityLines(activityLog)).toMatchObject([
+      { action: "resume", outcome: "failed", reason: "session-mismatch" },
+      { action: "retain", outcome: "skipped", reason: "no-session" },
+    ]);
+    // An entry the runtime does not see the way its manifest says is never used again.
+    expect(world.calls.removed).toContain(TASK);
+    expect(fixture.runtime.manager.health().status).toBe("stopped");
+  });
+
+  it("records a runtime that cannot be asked for its sessions with its error and fails the readiness", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const world = continuedWorld({ listFails: true });
+    world.continuity.service.declare(FIXTURE_RUN_ID, { kind: "resume", taskId: TASK });
+
+    const fixture = await startBridgeFixture(facade(), undefined, {
+      ...tools,
+      continuity: world.continuity,
+      activityLog,
+      expectedStart: { ok: false, failureCode: "protocol-schema-mismatch", retryable: false },
+    });
+
+    // Not a mismatch the retained entry caused, so the line carries the failure's frames.
+    const [failed] = continuityLines(activityLog);
+    expect(failed).toMatchObject({
+      action: "resume",
+      outcome: "failed",
+      reason: "session-mismatch",
+    });
+    expect(Array.isArray(failed?.frames)).toBe(true);
+    expect(fixture.runtime.manager.health().status).toBe("stopped");
+  });
+
+  it("retains the database of a run that succeeded, and only of one that did", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const world = continuedWorld();
+    world.continuity.service.declare(FIXTURE_RUN_ID, { kind: "resume", taskId: TASK });
+    const fixture = await startBridgeFixture(facade(), undefined, {
+      ...tools,
+      continuity: world.continuity,
+      activityLog,
+    });
+    const database = world.calls.checkouts[0]?.destinationDatabase ?? "";
+
+    await fixture.runtime.manager.stop(FIXTURE_RUN_ID, "succeeded");
+
+    expect(world.calls.retains).toHaveLength(1);
+    expect(world.calls.retains[0]).toMatchObject({
+      binding: { taskId: TASK, runtimeVersion: OPENCODE_VERSION },
+      sessionId: "ses_tool",
+      sourceDatabase: database,
+    });
+    expect(world.calls.removed).toEqual([]);
+    expect(continuityLines(activityLog).at(-1)).toMatchObject({
+      action: "retain",
+      outcome: "retained",
+      taskDigest: retainedSessionKey(TASK),
+      databaseBytes: 4096,
+      messageCount: 6,
+    });
+  });
+
+  it.each(["failed", "cancelled"] as const)(
+    "passes the reaped %s run through the existing retention audit",
+    async (status) => {
+      const activityLog = createBufferedServerLogSink();
+      const world = continuedWorld();
+      world.continuity.service.declare(FIXTURE_RUN_ID, { kind: "resume", taskId: TASK });
+      const fixture = await startBridgeFixture(facade(), undefined, {
+        ...tools,
+        continuity: world.continuity,
+        activityLog,
+      });
+
+      await fixture.runtime.manager.stop(FIXTURE_RUN_ID, status);
+
+      expect(world.calls.retains).toHaveLength(1);
+      expect(world.calls.retains[0]).toMatchObject({ sessionId: "ses_tool" });
+      expect(world.calls.removed).toEqual([]);
+      expect(continuityLines(activityLog).at(-1)).toMatchObject({
+        action: "retain",
+        outcome: "retained",
+      });
+    },
+  );
+
+  it("retains the database of a run that continued nothing, so the next run of its task can resume it", async () => {
+    const world = continuedWorld({ serveSessions: false });
+    const fixture = await startBridgeFixture(facade(), undefined, {
+      ...tools,
+      continuity: world.continuity,
+    });
+
+    await fixture.runtime.manager.stop(FIXTURE_RUN_ID, "succeeded");
+
+    expect(world.calls.checkouts).toEqual([]);
+    expect(world.calls.retains).toMatchObject([
+      { binding: { taskId: TASK }, sessionId: "ses_tool" },
+    ]);
+  });
+});

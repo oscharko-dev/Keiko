@@ -1,4 +1,15 @@
-import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
+import {
+  answerNativeWebSearch,
+  parseNativeWebSearchRequest,
+  type NativeWebSearch,
+  type NativeWebSearchRequest,
+} from "./nativeWebSearch.js";
+import { createHash, timingSafeEqual } from "node:crypto";
+import {
+  openCodeAgentModelBinding,
+  type OpenCodeAgentModelBinding,
+  type OpenCodeAgentModelCatalog,
+} from "./opencodeNativeAgentModels.js";
 import {
   DEFAULT_SANDBOX_POLICY,
   GOVERNED_TOOL_SETTLEMENT_GRACE_MS,
@@ -19,7 +30,11 @@ import { DatabaseSync } from "node:sqlite";
 import type {
   CodingWorkbenchRuntimeEvent,
   UpdatePortableTarget,
+  CodingWorkbenchActionClass,
+  McpServerDefinition,
+  VerificationKind,
 } from "@oscharko-dev/keiko-contracts";
+import type { McpRemoteOAuth } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 import {
   encodeSecureWorkspaceNativeResponse,
   encodeSecureWorkspaceNativeDirectory,
@@ -37,12 +52,15 @@ import type { PortableSidecarRuntimeVerification } from "../update-portable-side
 import {
   createCodingRuntimeManager,
   type CodingRuntimeManager,
+  type CodingRuntimePauseResult,
   type CodingRuntimeManagerDeps,
   type OpenCodeLifecycleAdapter,
+  type OpenCodeLifecycleSettlement,
   type OpenCodeLifecycleHandshakeRequest,
   type OpenCodeLifecyclePrepareRequest,
   type OpenCodeLifecyclePrepareResult,
 } from "./codingRuntimeManager.js";
+import type { CodingRuntimeTurnOrigin } from "./codingRuntimeRevert.js";
 import type { CodingToolApprovalBridge } from "./codingToolApprovalBridge.js";
 import {
   CODING_TOOL_MAX_BODY_BYTES,
@@ -67,6 +85,7 @@ import type {
   CodingToolNativeReadFileIO,
   CodingToolNativeReadFilePacket,
   CodingToolNativeInvocationRefusal,
+  CodingToolNativeEffectAdmission,
 } from "./codingToolFacadePorts.js";
 import {
   codingToolEditPresentation,
@@ -84,31 +103,161 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import type { OpenCodeQuestionRequest } from "./opencodeHttpClient.js";
 import {
+  classifyOpenCodeV2PromptFailure,
   createOpenCodeV2HttpClient,
   parseOpenCodeV2ChildEndpoint,
   type OpenCodeV2HttpClient,
+  type OpenCodeV2PromptInputs,
 } from "./opencodeV2HttpClient.js";
-import { createOpenCodeV2HistoryProjection, OpenCodeV2HistoryError } from "./opencodeV2History.js";
+import { createOpenCodeNativeMessageIdMinter } from "./opencodeNativeMessageId.js";
+import {
+  createOpenCodeV2HistoryProjection,
+  OpenCodeV2HistoryError,
+  openCodeV2StepChanges,
+  type OpenCodeV2StepChange,
+} from "./opencodeV2History.js";
 import { recordContextPresentation } from "./codingRuntimeHistory.js";
+import {
+  recordSessionContinuity,
+  type CodingSessionContinuity,
+} from "./codingSessionContinuity.js";
+import {
+  bindContinuedSession,
+  retainSettledRun,
+  runtimeDatabasePath,
+  seedContinuation,
+  withoutBaseline,
+  type RunContinuation,
+  type SessionContinuationContext,
+} from "./opencodeSessionContinuation.js";
+import { isAgentAdmitted, openCodeSelectableAgents } from "./opencodeAgents.js";
+import {
+  acceptPromptInputs,
+  createOpenCodePromptInputsRunPort,
+  recordPromptInputs,
+  releasePromptInputs,
+  reservePromptInputs,
+  runtimePromptInputs,
+  openCodePromptInputs,
+  type AdmittedPromptInputs,
+  type OpenCodePromptInputsRunPort,
+  type PromptMediaInputs,
+} from "./opencodePromptInputs.js";
+import { createOpenCodeInboxRunPort, type OpenCodeInboxRunPort } from "./opencodeInbox.js";
+import {
+  commandDisplayText,
+  createOpenCodeCommandPresentation,
+  createOpenCodeCommandsRunPort,
+  recordCommandPostRefused,
+  type OpenCodeCommandPresentation,
+  type OpenCodeCommandsRunPort,
+} from "./opencodeCommands.js";
+import {
+  beginOpenCodeTurnImages,
+  createOpenCodeRevertRunPort,
+  noteOpenCodeEditTargets,
+  openCodeNativeCallKey,
+  openCodeRevertBlocksTurn,
+  recordOpenCodeEditSettled,
+  recordOpenCodeTurnImage,
+  recordRevertTurnBlocked,
+  type OpenCodeAgentImages,
+  type OpenCodeRevertRun,
+  type OpenCodeRevertRunPort,
+  type OpenCodeStagedRevert,
+} from "./opencodeRevert.js";
+import {
+  DEFAULT_CODING_WORKBENCH_AGENT,
+  type CodingWorkbenchAgent,
+  type CodingWorkbenchBuiltInAgent,
+  isCodingWorkbenchBuiltInAgent,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
+import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
   createOpenCodeV2ApprovalRequests,
   type OpenCodeV2ApprovalDecision,
   type OpenCodeV2ApprovalOutcome,
   type ToolBridgeApprovalRejection,
 } from "./opencodeV2ApprovalRequests.js";
+import { openCodeRuntimeVersionPin } from "./opencodeRuntimeVersions.js";
+import {
+  decideOpenCodeNativePolicy,
+  openCodeNativeEditFiles,
+  openCodeNativeVerificationKind,
+  parseOpenCodeNativePolicyRequest,
+  recordOpenCodeNativePolicyDecision,
+  type OpenCodeNativeActionClassification,
+  type OpenCodeNativeAuthorityEvidence,
+  type OpenCodeNativePolicyDecision,
+  type OpenCodeNativePolicyOutcome,
+  type OpenCodeNativeSessionRelation,
+  type OpenCodeNativePolicyRequest,
+  type OpenCodeNativeMcpGrants,
+} from "./opencodeNativePolicy.js";
+import {
+  mcpServersNeedingIssuerValidation,
+  openCodeNativeMcpAdmission,
+  type AdmittedMcpOAuthServer,
+  type OpenCodeNativeMcpAdmission,
+  type OpenCodeNativeMcpRelayEndpoint,
+} from "./opencodeNativeMcp.js";
+import { bindNativeMcpRelays, type OpenCodeMcpRelayInput } from "./opencodeNativeMcpRelay.js";
+import type { McpOAuthIssuerValidation } from "../mcp/mcpOAuthIssuer.js";
+import type { McpOAuthCredentialStore } from "../mcp/mcpOAuthCredentialStore.js";
+import { harvestMcpCredentials, seedMcpCredentials } from "./opencodeNativeMcpCredentials.js";
+import {
+  createOpenCodeMcpAuthorizationRunPort,
+  type OpenCodeMcpAuthorizationRunPort,
+} from "./opencodeNativeMcpAuthorization.js";
+import {
+  OPENCODE_CODE_MODE_SESSION_MOVE,
+  OPENCODE_CODE_MODE_WORKTREE_CREATE,
+  OPENCODE_NATIVE_POLICY_ACTION,
+} from "./opencodeNativePolicyPlugin.js";
+import {
+  nativeWorktreeAnswer,
+  type NativeWorktreeDisposition,
+  type NativeWorktreeProvisionPort,
+  type NativeWorktreeProvisionResult,
+} from "./opencodeNativeWorktree.js";
+import { awaitOpenCodeNativePlugins } from "./opencodeNativePluginReadiness.js";
+import { createNativeQuestionPort, type NativeQuestionPort } from "./opencodeNativeQuestions.js";
+import {
+  admitNativeSessionLocation,
+  classifyNativeSession,
+  createNativeTreeStatusPort,
+  interruptNativeTree,
+  type NativeSessionTreeRun,
+} from "./opencodeNativeSessionTree.js";
+import { openCodeNativeEgress } from "./opencodeNativeEgress.js";
+import {
+  OPENCODE_NATIVE_FORMATTER_DISPOSITIONS,
+  type OpenCodeNativeFormatterDisposition,
+} from "./opencodeNativeFormatter.js";
 import type { SidecarPermissionEvent } from "./codingSidecarEventParser.js";
-import { answerOpenCodeV2Form, projectOpenCodeV2Form, v2FormId } from "./opencodeV2Questions.js";
 import {
   buildOpenCodeLaunchProfile,
+  OPENCODE_GATEWAY_PROVIDER_POLICIES,
   OPENCODE_RUNTIME_READINESS_PROMPT,
+  openCodeConfigDirectory,
+  openCodePlanDirectory,
+  openCodeRepositoryInstructionsPath,
 } from "./opencodeLaunchProfile.js";
-import type { OpenCodeContextGeometry } from "./opencodeLaunchProfile.js";
+import type {
+  OpenCodeContextGeometry,
+  OpenCodeLaunchProfileResult,
+} from "./opencodeLaunchProfile.js";
+import type { CodingRuntimeRepositoryItemsPort } from "./codingRuntimeRepositoryItems.js";
+import type { OperatorPluginsPort } from "./opencodeOperatorPlugins.js";
+import type { RemoteSkillsPort } from "./opencodeRemoteSkills.js";
+import type { CodingRuntimeRepositoryInstructionsCopyRequest } from "./codingRuntimeRepositoryInstructions.js";
 import {
   createGeneratedOpenCodeV2Plugins,
   createOpenCodeRuntimeAdapter,
   type OpenCodeGovernedSinkReceipt,
   type OpenCodeRuntimeAdapter,
   type OpenCodeSyncHint,
+  type OpenCodeTurnOutcome,
 } from "./opencodeRuntimeAdapter.js";
 import {
   OPENCODE_HISTORY_RESPONSE_MAX_BYTES,
@@ -120,14 +269,9 @@ import {
 } from "./opencodeProtocolSurface.js";
 import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
 import type { RuntimeProcessSupervisor } from "./runtimeProcessSupervisor.js";
-import {
-  type OpenCodeToolProfile,
-  openCodeVisibleToolNames,
-  OPENCODE_PINNED_VERSION,
-} from "./opencodeToolSchemas.js";
+import { type OpenCodeToolProfile, openCodeVisibleToolNames } from "./opencodeToolSchemas.js";
 import { recordGovernedToolModelContent } from "./governedToolModelContent.js";
 import { processServerLogSink } from "../process-log-sink.js";
-import { CodingRuntimeQuestionAnswerRejectedError } from "./codingRuntimeQuestionPort.js";
 import {
   openCodeCatalogAliasFor,
   openCodeCatalogSettlementBudgetMs,
@@ -163,14 +307,162 @@ const SIDECAR_SESSION_BOUND_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+// A custom primary agent (#3903 AC1) is recorded by its kind, never by its repository-authored name.
+const CODING_WORKBENCH_AGENT_VALUES = ["build", "plan", "custom"] as const;
+
+const CODING_WORKBENCH_MODE_VALUES = [
+  "governed-assist",
+  "supervised-coding",
+  "autonomous-delivery",
+] as const;
+
+const NATIVE_NARROWING_REFUSED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.native-narrowing.refused",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.opencodeRuntimeComposition.recordNativeNarrowingRefused",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    launchMode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["autonomous-delivery", "unknown"],
+    },
+    requestedMode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: CODING_WORKBENCH_MODE_VALUES,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-runtime-native-policy"],
+  proofIds: ["coding-runtime.native-narrowing.refused.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const NATIVE_FORMATTER_BOUND_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.native-formatter.bound",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.opencodeRuntimeComposition.recordNativeFormatterBound",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    disposition: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: OPENCODE_NATIVE_FORMATTER_DISPOSITIONS,
+    },
+    launchMode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [...CODING_WORKBENCH_MODE_VALUES, "unknown"],
+    },
+    // #3900 AC4: the configured formatter entries the binding carries, and those refused.
+    configuredEntryCount: { type: "integer", dataClass: "count", required: false },
+    refusedEntryCount: { type: "integer", dataClass: "count", required: false },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-runtime-native-policy"],
+  proofIds: ["coding-runtime.native-formatter.bound.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const PROVIDER_POLICY_BOUND_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.provider-policy.bound",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.opencodeRuntimeComposition.recordProviderPolicyBound",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    providerPolicy: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["gateway-only", "absent"],
+    },
+    freeModels: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["disabled", "enabled"],
+    },
+    modelsFetch: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["disabled", "enabled"],
+    },
+    jvmTemporaryScope: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["run-private"],
+    },
+    toolProfile: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["native", "direct", "code-mode"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-runtime-native-policy"],
+  proofIds: ["coding-runtime.provider-policy.bound.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const AGENT_SELECTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.agent.selected",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.opencodeRuntimeComposition.recordAgentSelected",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    agent: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: CODING_WORKBENCH_AGENT_VALUES,
+    },
+    previousAgent: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: CODING_WORKBENCH_AGENT_VALUES,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-runtime-agent-selection"],
+  proofIds: ["coding-runtime.agent.selected.emitted-line"],
+  releaseImpact: "patch",
+});
+
 function v2Record(value: unknown): Readonly<Record<string, unknown>> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Readonly<Record<string, unknown>>)
     : undefined;
 }
 
-const PINNED_RAW_SCHEMA_SHA256 = "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec";
-const DIGEST = /^[a-f0-9]{64}$/u;
 const ABORT_SETTLEMENT_TIMEOUT_MS = 30_000;
 const INITIAL_TURN_BASELINE_STABILIZATION_MS = 500;
 const HISTORY_SYNC_MIN_INTERVAL_MS = 100;
@@ -187,15 +479,103 @@ interface VerifiedPortableInput {
 /** Terminal states for a tool action's safe-activity settlement (#2386). */
 type OpenCodeToolSettlementState = "succeeded" | "failed" | "denied" | "cancelled";
 
-import {
-  prepareOpenCodeServiceHostLaunch,
-  type OpenCodeServiceHostDiskReceipt,
-  type PreparedOpenCodeServiceHostLaunch,
-} from "./opencodeServiceHostArtifact.js";
+/** Validates one remote MCP server's expected issuer; never rejects (`mcpOAuthIssuer.ts`). */
+export type McpOAuthIssuerPort = (
+  server: string,
+  oauth: McpRemoteOAuth,
+  correlationId: string,
+  signal: AbortSignal | undefined,
+) => Promise<McpOAuthIssuerValidation>;
 
 export interface OpenCodeRuntimeCompositionInput {
   /** Captured server-only observation profile. Absent retains the direct native history contract. */
   readonly toolProfile?: OpenCodeToolProfile | undefined;
+  /**
+   * The host environment the manager may copy the launch's allowlisted names from (#3897). The
+   * mapped profiles allowlist nothing, so they keep launching with an empty inheritance; the native
+   * profile inherits the launcher's PATH and locale so the agent's shell finds the project's
+   * toolchains the way it does standalone. Absent keeps the empty environment.
+   */
+  readonly processEnv?: NodeJS.ProcessEnv | undefined;
+  /**
+   * Admits the workspace's custom agents, commands and skills as sanitized copies in the run's
+   * private discovery directory (#3903). Native profile only: the mapped profiles ignore it, and
+   * absent leaves the discovery directory exactly as Keiko generated it.
+   */
+  readonly repositoryItems?: CodingRuntimeRepositoryItemsPort | undefined;
+  /**
+   * Admits the operator's digest-pinned plugins for a run launched in Full access (#3903 AC2).
+   * Native profile only; absent loads none of them.
+   */
+  readonly operatorPlugins?: OperatorPluginsPort | undefined;
+  /**
+   * Pulls the operator's remote skill sources for a run launched in Full access (#3903 AC3,
+   * `opencodeRemoteSkills.ts`). Native profile only; absent pulls none.
+   */
+  readonly remoteSkills?: RemoteSkillsPort | undefined;
+  /**
+   * Native profile only: writes Keiko's bounded copy of the workspace's AGENTS.md into the
+   * producer's own global instruction slot (#3900 AC3); true when the copy changed.
+   */
+  readonly repositoryInstructions?:
+    | {
+        readonly materializeForRun: (
+          request: Omit<CodingRuntimeRepositoryInstructionsCopyRequest, "isRunWorkspace">,
+        ) => Promise<boolean>;
+      }
+    | undefined;
+  /**
+   * Native profile only: Keiko's managed task-workspace owner for an approved Code Mode
+   * `worktree_create` (#3903 AC4); absent refuses every such request.
+   */
+  readonly nativeWorktrees?: NativeWorktreeProvisionPort | undefined;
+  /**
+   * Native profile only: the web search integration the operator admitted (nativeWebSearch.ts,
+   * #3903 AC3); absent, the policy refuses `websearch` and the provider has nothing to call.
+   */
+  readonly nativeWebSearch?: NativeWebSearch | undefined;
+  /**
+   * Native profile only: the user's global and the project's OpenCode configuration documents for
+   * one run, in merge order (#3900 AC4, `opencodeConfigDocuments.ts`), read before its launch
+   * profile is built. Absent reads none.
+   */
+  readonly configDocuments?:
+    | ((request: {
+        readonly runId: string;
+        readonly signal?: AbortSignal | undefined;
+      }) => Promise<readonly Readonly<Record<string, unknown>>[]>)
+    | undefined;
+  /**
+   * Native profile only: the gateway's coding-capable models a run's agents may use beside its own
+   * (#3903 AC1, `opencodeNativeAgentModels.ts`). Absent declares the run's model alone.
+   */
+  readonly agentModelCatalog?: (() => OpenCodeAgentModelCatalog | undefined) | undefined;
+  /**
+   * Native profile only: the run's accepted external references (#3900 AC5), the roots its kernel
+   * allowlist reads; the launch profile hands them to the policy, which decides each read.
+   */
+  readonly externalReadRoots?: readonly string[] | undefined;
+  /**
+   * The operator's MCP server registry, read once per native run at launch (#3903,
+   * `mcpServerRegistry.ts`); absent admits no MCP server.
+   */
+  readonly mcpServers?: ((correlationId: string) => readonly McpServerDefinition[]) | undefined;
+  /**
+   * Validates a remote MCP server's operator-named OAuth issuer before a native launch (#3903 AC3,
+   * `mcpOAuthIssuer.ts`); absent, no server with OAuth is admitted.
+   */
+  readonly mcpOAuthIssuer?: McpOAuthIssuerPort | undefined;
+  /**
+   * Keeps an admitted MCP server's OAuth credential between native runs (#3903 AC3,
+   * `mcpOAuthCredentialStore.ts`); absent, every run authorizes anew.
+   */
+  readonly mcpCredentials?: McpOAuthCredentialStore | undefined;
+  /**
+   * Keiko's MCP relay (#3903 AC3, `opencodeNativeMcpRelay.ts`): a remote server with credential
+   * headers is reached through it, and the run never holds the credential; absent, such a server
+   * is not admitted.
+   */
+  readonly mcpRelay?: OpenCodeMcpRelayInput | undefined;
   readonly portable: VerifiedPortableInput;
   readonly stateBaseRoot: string;
   readonly contextGeometry: OpenCodeContextGeometry;
@@ -287,6 +667,19 @@ export interface OpenCodeRuntimeCompositionInput {
     | "markRuntimeRecoveryRequired"
     | "releaseRuntimeAfterReap"
   >;
+  /**
+   * Native session continuity (S02/S03, #3904): the shared service through which the orchestrator
+   * asks a run to resume or fork a task's retained session and reads what happened, and the
+   * workspace identity a retained entry is bound to. Absent keeps every run on a fresh session.
+   */
+  readonly sessionContinuity?:
+    | {
+        readonly service: CodingSessionContinuity;
+        readonly workspaceId: string;
+        /** The workspace the run's own one was provisioned from (#3903 AC4); see the context. */
+        readonly forkSource?: SessionContinuationContext["forkSource"];
+      }
+    | undefined;
 }
 
 type SafeToolSettlement = NonNullable<
@@ -336,20 +729,76 @@ export interface OpenCodeToolBridgeResponse {
 }
 
 export interface OpenCodeRuntimeComposition {
-  /** Inactive trusted preparation only; host readiness remains separately unqualified. */
-  readonly prepareServiceHost: (
-    request: OpenCodeLifecyclePrepareRequest,
-    receipt: Extract<OpenCodeServiceHostDiskReceipt, { readonly ok: true }>,
-  ) => Promise<OpenCodeLifecyclePrepareResult>;
   readonly manager: CodingRuntimeManager;
   readonly toolBridge: OpenCodeToolBridge;
   readonly runPort: OpenCodeRunPort;
 }
 
 export interface OpenCodeRunPort {
-  readonly submitTask: (runId: string, text: string, initialContext?: string) => Promise<boolean>;
+  /**
+   * `agent` selects the primary agent for this and the following turns (`build` or `plan`);
+   * absent keeps the run's current agent, `build` until a switch succeeded. A switch is issued
+   * once, before the prompt, and only when the agent differs from the run's current one. A refused
+   * or failed switch fails the submission: the prompt is never sent under another agent.
+   */
+  readonly submitTask: (
+    runId: string,
+    text: string,
+    initialContext?: string,
+    agent?: CodingWorkbenchAgent,
+    inputs?: AdmittedPromptInputs,
+    origin?: CodingRuntimeTurnOrigin,
+  ) => Promise<boolean>;
+  /**
+   * What a prompt may carry besides its text on this composition's tool profile, and the two
+   * operations that honour it (`opencodePromptInputs.ts`): admission before anything is reserved,
+   * and the delivery of a `steer` / `queue` message to the turn in flight. Absent means the
+   * default: no delivery, no references.
+   */
+  readonly promptInputs?: OpenCodePromptInputsRunPort["promptInputs"] | undefined;
+  readonly admitPromptInputs?: OpenCodePromptInputsRunPort["admitPromptInputs"] | undefined;
+  readonly deliverPrompt?: OpenCodePromptInputsRunPort["deliverPrompt"] | undefined;
+  /**
+   * The run's slash commands (`opencodeCommands.ts`): the listing the Workbench's `/` menu reads, and
+   * the confirmation, before a turn is reserved, that the runtime lists the command it names. A
+   * turn that runs as a command is submitted through `submitTask` with the command in its inputs.
+   */
+  readonly listCommands?: OpenCodeCommandsRunPort["listCommands"] | undefined;
+  /**
+   * A native run's MCP servers and the human's authorization of one that uses OAuth (#3903 AC3,
+   * `opencodeNativeMcpAuthorization.ts`). Absent for the mapped profiles.
+   */
+  readonly mcpAuthorization?: OpenCodeMcpAuthorizationRunPort | undefined;
+  /** The run's subagents and skills for the `@` and `$` menus (S15, #3906). */
+  readonly listMentions?: OpenCodeCommandsRunPort["listMentions"] | undefined;
+  readonly admitCommand?: OpenCodeCommandsRunPort["admitCommand"] | undefined;
+  /**
+   * The messages an operator sent into the running turn that the runtime has not handed to the model
+   * yet (`opencodeInbox.ts`): the listing, and the withdrawal or promotion of one. Only a profile
+   * that takes a delivery offers them; an interrupt withdraws what is still pending.
+   */
+  readonly listInbox?: OpenCodeInboxRunPort["listInbox"] | undefined;
+  readonly actOnInbox?: OpenCodeInboxRunPort["actOnInbox"] | undefined;
+  /**
+   * The primary agents this composition's tool profile can honour (`openCodeSelectableAgents`):
+   * `plan` exists only on the native profile. A request for another agent is refused here.
+   */
+  readonly selectableAgents?: readonly CodingWorkbenchBuiltInAgent[] | undefined;
   readonly abortTask: (runId: string) => Promise<boolean>;
-  readonly waitForTerminal: (runId: string, signal: AbortSignal) => Promise<boolean>;
+  /**
+   * Undo and restore of the run's newest turn (B3, S04, `opencodeRevert.ts`): an undo stops the
+   * turn in flight, restores the files it changed and keeps the runtime's revert staged; a restore
+   * re-applies them. While an undo is staged no new turn is accepted. Only the native profile
+   * records snapshots, so only it offers these; absent means the run cannot be undone.
+   */
+  readonly revertTurn?: OpenCodeRevertRunPort["revertTurn"] | undefined;
+  readonly revertState?: OpenCodeRevertRunPort["revertState"] | undefined;
+  readonly commitStagedRevert?: OpenCodeRevertRunPort["commitStagedRevert"] | undefined;
+  /**
+   * How the armed turn ended (`OpenCodeTurnOutcome`): `true` succeeded, `false` failed or was
+   * abandoned, `"interrupted"` the runtime ended it at a human's refusal of a question.
+   */
+  readonly waitForTerminal: (runId: string, signal: AbortSignal) => Promise<OpenCodeTurnOutcome>;
   readonly listQuestions: (runId: string) => Promise<readonly OpenCodeQuestionRequest[]>;
   readonly answerQuestion: (
     runId: string,
@@ -365,11 +814,20 @@ export interface OpenCodeRunPort {
 }
 
 interface PreparedRun {
-  serviceHostPrepared?: true;
-  nativeInitialization?: NativeInitializationAttachment;
   readonly runId: string;
   readonly runRoot: string;
   readonly workspaceRoot: string;
+  /**
+   * The run's effective autonomy mode: the launch environment's, narrowed when the operator resumes
+   * the run with a narrower mode (#3897 audit). Native policy decisions always read this value.
+   */
+  mode: string | undefined;
+  /** The mode the tree was launched with; its kernel egress was bound then and cannot narrow. */
+  readonly launchMode: string | undefined;
+  /** The MCP tools and servers this run's binding admitted (`opencodeNativeMcp.ts`). */
+  mcp?: OpenCodeNativeMcpGrants | undefined;
+  /** The admitted servers that authorize through OAuth, with their validated issuer (#3903 AC3). */
+  mcpOAuth?: ReadonlyMap<string, AdmittedMcpOAuthServer> | undefined;
   readonly password: string;
   readonly configDigest: string;
   readonly verification: PortableSidecarRuntimeVerification;
@@ -378,8 +836,43 @@ interface PreparedRun {
   runtimeAdapter?: OpenCodeRuntimeAdapter | undefined;
   client?: OpenCodeV2HttpClient | undefined;
   sessionId?: string | undefined;
+  /** Native child sessions (subagents) proven to descend from the run's session (#3897). */
+  childSessionIds?: Set<string> | undefined;
+  /** The directories the run's sessions were admitted to move to (#3903 AC4). */
+  sessionLocations?: Set<string> | undefined;
+  /** What the last question list line counted (`opencodeNativeQuestions.ts`; a line per change). */
+  questionList?: { signature?: string | undefined } | undefined;
+  /**
+   * The primary agent the session runs its next turn under, as of the last successful
+   * `session.switchAgent`; absent is the launch profile's default agent, `build` (#3897).
+   */
+  agent?: CodingWorkbenchAgent | undefined;
+  /** What the references of this run's accepted prompts added up to (`opencodePromptInputs.ts`). */
+  promptFileBytes?: number | undefined;
+  /** The media the run's model accepts as prompt attachments (`opencodePromptInputs.ts`). */
+  media?: PromptMediaInputs | undefined;
+  /** How a slash command's turn is shown in the history (`opencodeCommands.ts`). */
+  readonly commandPresentation: OpenCodeCommandPresentation;
+  /** The retained session this run's database was seeded with (`opencodeSessionContinuation.ts`). */
+  continuation?: RunContinuation | undefined;
+  /** The undo staged in the runtime, when there is one (`opencodeRevert.ts`). */
+  revert?: OpenCodeStagedRevert | undefined;
+  /** The newest settled turn's files as it left them (`recordOpenCodeTurnImage`). */
+  turnImage?: OpenCodeRevertRun["turnImage"];
+  /** What the newest turn's own native edits wrote (`recordOpenCodeEditSettled`). */
+  agentImages?: OpenCodeAgentImages | undefined;
+  /** Admitted plan-note edits awaiting their settlement (`noteAdmittedEditEvidence`). */
+  planNoteEdits?: Set<string> | undefined;
+  /** Workspace files each admitted native edit named, by call (`observeNativeStepChanges`). */
+  editTargetsByCall?: Map<string, readonly string[]> | undefined;
+  /** Calls the policy admitted as project checks (`observeNativeStepChanges`). */
+  verificationCalls?: Set<string> | undefined;
+  /** Assistant steps whose changed files were already weighed (`observeNativeStepChanges`). */
+  seenStepChanges?: Set<string> | undefined;
   initialTurnBaselineStable: boolean;
   ready: boolean;
+  /** A qualified native client retained for operator undo after productive monitoring stops. */
+  revertReady: boolean;
 }
 
 interface ReadyRun extends PreparedRun {
@@ -416,15 +909,45 @@ export function createOpenCodeRuntimeComposition(
       renderedResults: renderedResultLog(input),
       resolveWorkspaceRootAccess: input.resolveWorkspaceRootAccess,
       activityLog: input.activityLog ?? processServerLogSink(),
+      ...(input.nativeWorktrees === undefined ? {} : { nativeWorktrees: input.nativeWorktrees }),
+      ...(input.externalReadRoots === undefined
+        ? {}
+        : { externalReadRoots: input.externalReadRoots }),
+      ...(input.nativeWebSearch === undefined ? {} : { nativeWebSearch: input.nativeWebSearch }),
     },
     input.toolBridge,
     input.toolFacadeOrigin,
     { approvals, runs },
   );
   const lifecycle = lifecycleAdapter(input, bridge, runs);
-  const manager = createCodingRuntimeManager({
+  const manager = withNativeModeNarrowing(
+    runs,
+    compositionManager(input, lifecycle),
+    toolProfile === "native",
+    input.activityLog,
+  );
+  return {
+    manager,
+    toolBridge: bridge.publicPort,
+    runPort: createRunPort(runs, input.diagnostics, input.activityLog, approvals, {
+      selectableAgents: openCodeSelectableAgents(toolProfile),
+      snapshots: toolProfile === "native",
+      mcpAuthorization: toolProfile === "native",
+      mcpCredentials: input.mcpCredentials,
+      promptInputs: openCodePromptInputs(toolProfile),
+      refreshInstructions: (run) =>
+        refreshRepositoryInstructions(input, run.runId, run.runRoot, undefined),
+    }),
+  };
+}
+
+function compositionManager(
+  input: OpenCodeRuntimeCompositionInput,
+  lifecycle: ReturnType<typeof lifecycleAdapter>,
+): CodingRuntimeManager {
+  return createCodingRuntimeManager({
     supervisor: input.supervisor,
-    processEnv: {},
+    processEnv: input.processEnv ?? {},
     diagnostics: input.diagnostics,
     openCodeLifecycleAdapter: lifecycle,
     portableRuntimeResolver: () => input.portable,
@@ -439,11 +962,99 @@ export function createOpenCodeRuntimeComposition(
       : { codingToolApprovals: input.codingToolApprovals }),
     ...input.authorityLifecycle,
   });
+}
+
+/**
+ * A resume may narrow the run's mode (Supervised workspace to Ask for approval, say); the manager
+ * records it, and the native policy must decide with it from the next action on, not with the launch
+ * mode. Widening is refused by the manager itself. A native tree launched in Full access keeps the
+ * inherited egress the kernel bound at launch, which no later policy can take back (a shell or a
+ * Code Mode `fetch` would keep Internet access), so a resume that narrows it below Full access is
+ * refused instead of acknowledged with authority the tree still holds (#3897 review).
+ */
+function withNativeModeNarrowing(
+  runs: ReadonlyMap<string, PreparedRun>,
+  manager: CodingRuntimeManager,
+  native: boolean,
+  activityLog: ServerLogSink | undefined,
+): CodingRuntimeManager {
+  const resume = manager.resume.bind(manager);
+  manager.resume = (runId, requestedMode): CodingRuntimePauseResult => {
+    const run = runs.get(runId);
+    if (native && run !== undefined && narrowsLaunchEgress(run.launchMode, requestedMode)) {
+      recordNativeNarrowingRefused(activityLog, runId, run.launchMode, requestedMode);
+      return { ok: false, failureCode: "authority-resolution-failed", retryable: false };
+    }
+    const result = resume(runId, requestedMode);
+    if (result.ok && result.effectiveMode !== undefined && run !== undefined)
+      run.mode = result.effectiveMode;
+    return result;
+  };
+  return manager;
+}
+
+function narrowsLaunchEgress(
+  launchMode: string | undefined,
+  requestedMode: CodingWorkbenchMode | undefined,
+): requestedMode is CodingWorkbenchMode {
+  return (
+    requestedMode !== undefined &&
+    openCodeNativeEgress(launchMode) === "inherited" &&
+    openCodeNativeEgress(requestedMode) !== "inherited"
+  );
+}
+
+function recordNativeNarrowingRefused(
+  activityLog: ServerLogSink | undefined,
+  runId: string,
+  launchMode: string | undefined,
+  requestedMode: CodingWorkbenchMode,
+): void {
+  (activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      NATIVE_NARROWING_REFUSED_OPERATION,
+      { level: "warn", correlationId: runId },
+      {
+        runId,
+        launchMode: launchMode === "autonomous-delivery" ? launchMode : "unknown",
+        requestedMode,
+      },
+    ),
+  );
+}
+
+/** What the tool profile decides about a run's port. */
+interface RunPortProfile {
+  readonly selectableAgents: readonly CodingWorkbenchBuiltInAgent[];
+  /** Native runs record turn images for undo. */
+  readonly snapshots: boolean;
+  /** Native runs offer their MCP servers' OAuth authorization (#3903 AC3). */
+  readonly mcpAuthorization: boolean;
+  /** Where an authorized MCP server's credential is kept between runs. */
+  readonly mcpCredentials: McpOAuthCredentialStore | undefined;
+  readonly promptInputs: OpenCodePromptInputsRunPort["promptInputs"];
+  /** Refreshes a native run's AGENTS.md copy before a turn (#3900 AC3); true when it changed. */
+  readonly refreshInstructions: (run: ReadyRun) => Promise<boolean>;
+}
+
+// #3903 AC3: a native run's MCP authorization; a completed one keeps its credential at once.
+function nativeMcpAuthorization(
+  readyRun: ReadyRunLookup,
+  activityLog: ServerLogSink | undefined,
+  profile: RunPortProfile,
+): Pick<OpenCodeRunPort, "mcpAuthorization"> {
+  if (!profile.mcpAuthorization) return {};
   return {
-    prepareServiceHost: (request, receipt) => prepare(input, bridge, runs, request, receipt),
-    manager,
-    toolBridge: bridge.publicPort,
-    runPort: createRunPort(runs, input.diagnostics, input.activityLog, approvals),
+    mcpAuthorization: createOpenCodeMcpAuthorizationRunPort({
+      readyRun,
+      activityLog,
+      onAuthorized: (authorized): void => {
+        const run = readyRun(authorized.runId);
+        if (run === undefined) return;
+        const database = runtimeDatabasePath(run.runRoot);
+        harvestMcpCredentials(run, database, profile.mcpCredentials, activityLog, false);
+      },
+    }),
   };
 }
 
@@ -452,56 +1063,363 @@ function createRunPort(
   diagnostics: ServerDiagnosticSink | undefined,
   activityLog: ServerLogSink | undefined,
   approvals: ReturnType<typeof createOpenCodeV2ApprovalRequests>,
+  profile: RunPortProfile,
 ): OpenCodeRunPort {
+  const { selectableAgents, snapshots, promptInputs, refreshInstructions } = profile;
   const readyRun = (runId: string): ReadyRun | undefined => {
     const run = runs.get(runId);
     return isReadyRun(run) ? run : undefined;
   };
+  const revertRun = revertReadyRun(runs);
+  const { ports: deliveryPorts, withdrawPendingInbox } = createDeliveryPorts(
+    readyRun,
+    promptInputs,
+    diagnostics,
+    activityLog,
+  );
+  const abortTask = createAbortTask(readyRun, activityLog, withdrawPendingInbox);
   return {
-    submitTask: createSubmitTask(readyRun, diagnostics, activityLog),
-    abortTask: createAbortTask(readyRun),
-    waitForTerminal: async (runId, signal): Promise<boolean> => {
+    submitTask: createSubmitTask(
+      readyRun,
+      { diagnostics, activityLog, refreshInstructions },
+      selectableAgents,
+    ),
+    selectableAgents,
+    ...createOpenCodeCommandsRunPort({ readyRun, capabilities: promptInputs, activityLog }),
+    ...nativeMcpAuthorization(readyRun, activityLog, profile),
+    ...deliveryPorts,
+    abortTask,
+    ...(snapshots
+      ? createOpenCodeRevertRunPort({ readyRun: revertRun, abortTask, activityLog })
+      : {}),
+    waitForTerminal: async (runId, signal): Promise<OpenCodeTurnOutcome> => {
       const run = readyRun(runId);
       if (run === undefined) return false;
       const outcome = await run.runtimeAdapter.waitForTerminal(signal);
-      if (!outcome && !signal.aborted) recordOpenCodeTurnFailure(diagnostics, run, "terminal");
+      if (outcome === false && !signal.aborted)
+        recordOpenCodeTurnFailure(diagnostics, run, "terminal");
+      // What an undo of this turn must find unchanged, recorded as the turn settled.
+      if (snapshots) recordOpenCodeTurnImage(run, activityLog);
       return outcome;
     },
     replyPermission: createReplyPermission(readyRun, diagnostics, approvals),
-    ...createQuestionRunPort(readyRun, diagnostics),
+    ...createQuestionRunPort(readyRun, diagnostics, activityLog),
   };
+}
+
+/**
+ * The messages an operator sends into a running turn: their admission and delivery
+ * (`opencodePromptInputs.ts`) and the list the Workbench shows of the ones the runtime has not taken
+ * yet (`opencodeInbox.ts`), both over the one delivery ledger. The interrupt's withdrawal of what is
+ * still pending is returned separately: it belongs to the abort, not to the run port's surface.
+ */
+// The run an undo may act on: its client is bound and its turn images are recorded.
+function revertReadyRun(runs: Map<string, PreparedRun>): ReadyRunLookup {
+  return (runId) => {
+    const run = runs.get(runId);
+    return run?.revertReady === true && hasRunClient(run) ? run : undefined;
+  };
+}
+
+function createDeliveryPorts(
+  readyRun: ReadyRunLookup,
+  promptInputs: OpenCodePromptInputsRunPort["promptInputs"],
+  diagnostics: ServerDiagnosticSink | undefined,
+  activityLog: ServerLogSink | undefined,
+): {
+  readonly ports: Pick<
+    OpenCodeRunPort,
+    "promptInputs" | "admitPromptInputs" | "deliverPrompt" | "listInbox" | "actOnInbox"
+  >;
+  readonly withdrawPendingInbox: OpenCodeInboxRunPort["withdrawPendingInbox"];
+} {
+  const { nativeInput, withdrawNativeInput, ...prompts } = createOpenCodePromptInputsRunPort({
+    readyRun,
+    capabilities: promptInputs,
+    activityLog,
+    recordPostFailure: (runId, error): void => {
+      // The message was not accepted; the turn it was meant to join is untouched and keeps running.
+      const run = readyRun(runId);
+      if (run !== undefined) recordOpenCodeTurnFailure(diagnostics, run, "submit", error);
+    },
+  });
+  const { withdrawPendingInbox, ...inbox } = createOpenCodeInboxRunPort({
+    readyRun,
+    capabilities: promptInputs,
+    activityLog,
+    nativeInput,
+    withdrawNativeInput,
+  });
+  return { ports: { ...prompts, ...inbox }, withdrawPendingInbox };
 }
 
 function createSubmitTask(
   readyRun: ReadyRunLookup,
-  diagnostics: ServerDiagnosticSink | undefined,
-  activityLog: ServerLogSink | undefined,
+  sinks: {
+    readonly diagnostics: ServerDiagnosticSink | undefined;
+    readonly activityLog: ServerLogSink | undefined;
+    readonly refreshInstructions: (run: ReadyRun) => Promise<boolean>;
+  },
+  selectableAgents: readonly CodingWorkbenchBuiltInAgent[],
 ): OpenCodeRunPort["submitTask"] {
-  return async (runId, text, initialContext): Promise<boolean> => {
+  const { diagnostics, activityLog } = sinks;
+  return async (runId, text, initialContext, agent, inputs, origin): Promise<boolean> => {
     const run = readyRun(runId);
-    if (run === undefined) return false;
-    if (!(await synchronizeTurnBaseline(run))) return false;
-    if (!run.runtimeAdapter.armTurn()) return false;
-    try {
-      await run.client.prompt(
-        run.sessionId,
-        initialContext === undefined ? text : `${initialContext}\n\n${text}`,
-        undefined,
-        initialContext === undefined
-          ? undefined
-          : {
-              displayText: text,
-              hiddenContextSha256: createHash("sha256").update(initialContext).digest("hex"),
-            },
-      );
-      if (initialContext !== undefined) recordContextPresentation(activityLog, runId);
-      return run.ready;
-    } catch (error) {
-      recordOpenCodeTurnFailure(diagnostics, run, "submit", error);
-      run.runtimeAdapter.cancelTurn();
+    // A delivery joins the turn in flight (`deliverPrompt`); it never starts or arms one.
+    if (run === undefined || inputs?.delivery !== undefined) return false;
+    // A staged undo is finalized by the runtime on the next prompt, which rewrites the history the
+    // reconciliation reads append-only; the human restores the undo or stops the run first.
+    if (openCodeRevertBlocksTurn(run)) {
+      recordRevertTurnBlocked(activityLog, runId);
       return false;
     }
+    // Before the baseline is read and the turn armed: a refused agent leaves nothing to undo, and
+    // the switch message the runtime records is part of the baseline the turn is measured from.
+    if (!(await selectPrimaryAgent(run, agent, selectableAgents, diagnostics, activityLog))) {
+      return false;
+    }
+    if (!(await synchronizeTurnBaseline(run))) return false;
+    await refreshedInstructions(run, sinks.refreshInstructions);
+    if (!run.runtimeAdapter.armTurn()) return false;
+    // A new turn: what an undo must find unchanged is recorded afresh from here on. Keiko's own
+    // continuation of the human's request keeps that request's images: its undo reaches back to it.
+    if (origin === undefined) beginOpenCodeTurnImages(run);
+    return postTurnPrompt(run, text, initialContext, inputs, diagnostics, activityLog, origin);
   };
+}
+
+/**
+ * Runs the turn as one of the runtime's slash commands (`POST /api/session/{sessionID}/command`).
+ * The runtime expands its own template around `text` and keeps no caller-supplied message id, and
+ * the command body has no field to hide a context in: a command turn is dispatched without an initial
+ * context (the orchestrator builds none for it). Its effects pass the run's native policy like any
+ * other turn's.
+ */
+async function postTurnCommand(
+  run: ReadyRun,
+  name: string,
+  text: string,
+  inputs: AdmittedPromptInputs,
+  diagnostics: ServerDiagnosticSink | undefined,
+  activityLog: ServerLogSink | undefined,
+): Promise<boolean> {
+  if (!reserveTurnInputs(run, inputs, activityLog)) return false;
+  run.commandPresentation.arm(commandDisplayText(name, text));
+  try {
+    await run.client.command(run.sessionId, name, text, undefined, runtimePromptInputs(inputs));
+    acceptPromptInputs(activityLog, run, inputs);
+    return run.ready;
+  } catch (error) {
+    releaseUnsentTurnInputs(run, inputs, 1, error);
+    run.commandPresentation.disarm();
+    recordOpenCodeTurnFailure(diagnostics, run, "submit", error);
+    recordCommandPostRefused(activityLog, run.runId, inputs, error);
+    run.runtimeAdapter.cancelTurn();
+    return false;
+  }
+}
+
+/**
+ * Charges the turn's files to the run before its prompt is sent: once the request has left, the
+ * producer may hold them whether or not the acknowledgement arrives (#4064 review). A prompt admitted
+ * meanwhile can have left too little of the budget; this turn is then refused, with one body-free
+ * line, and cancelled like any other turn whose prompt was not sent.
+ */
+function reserveTurnInputs(
+  run: ReadyRun,
+  inputs: AdmittedPromptInputs | undefined,
+  activityLog: ServerLogSink | undefined,
+): boolean {
+  if (inputs === undefined || reservePromptInputs(run, inputs)) return true;
+  recordPromptInputs(activityLog, run.runId, inputs, {
+    outcome: "refused",
+    reason: "references-run-budget",
+  });
+  run.runtimeAdapter.cancelTurn();
+  return false;
+}
+
+/**
+ * Returns the reservation only when the failure proves the producer holds nothing: its first and
+ * only attempt was refused before it was taken. A refusal of a resent attempt may follow one that
+ * was stored, so the files stay charged.
+ */
+function releaseUnsentTurnInputs(
+  run: ReadyRun,
+  inputs: AdmittedPromptInputs | undefined,
+  attempts: number,
+  error: unknown,
+): void {
+  if (inputs === undefined || attempts !== 1) return;
+  if (classifyOpenCodeV2PromptFailure(error) === "not-submitted") releasePromptInputs(run, inputs);
+}
+
+// What separates a turn's hidden context from the operator's own text in the sent prompt.
+const PROMPT_CONTEXT_SEPARATOR = "\n\n";
+
+/** The sent turn's own id, origin and inputs; a hidden context moves the mentions by its length. */
+function turnPromptInputs(
+  id: string,
+  inputs: AdmittedPromptInputs | undefined,
+  initialContext: string | undefined,
+  origin: CodingRuntimeTurnOrigin | undefined,
+): OpenCodeV2PromptInputs {
+  const offset =
+    initialContext === undefined ? 0 : initialContext.length + PROMPT_CONTEXT_SEPARATOR.length;
+  return {
+    id,
+    ...(origin === undefined ? {} : { origin }),
+    ...runtimePromptInputs(inputs, offset),
+  };
+}
+
+async function postTurnPrompt(
+  run: ReadyRun,
+  text: string,
+  initialContext: string | undefined,
+  inputs: AdmittedPromptInputs | undefined,
+  diagnostics: ServerDiagnosticSink | undefined,
+  activityLog: ServerLogSink | undefined,
+  origin?: CodingRuntimeTurnOrigin,
+): Promise<boolean> {
+  // A turn that is not a command must never take a command's presentation.
+  run.commandPresentation.disarm();
+  if (inputs?.command !== undefined) {
+    return postTurnCommand(run, inputs.command.name, text, inputs, diagnostics, activityLog);
+  }
+  if (!reserveTurnInputs(run, inputs, activityLog)) return false;
+  // One id for the turn's input: a resend after a lost acknowledgement is the same input, never a
+  // second one, so a lost reply does not end a turn the runtime already started (#3897 review).
+  const id = mintTurnMessageId();
+  let attempts = 0;
+  const post = (): Promise<void> => {
+    attempts += 1;
+    return run.client.prompt(
+      run.sessionId,
+      initialContext === undefined ? text : `${initialContext}${PROMPT_CONTEXT_SEPARATOR}${text}`,
+      undefined,
+      initialContext === undefined
+        ? undefined
+        : {
+            displayText: text,
+            hiddenContextSha256: createHash("sha256").update(initialContext).digest("hex"),
+          },
+      turnPromptInputs(id, inputs, initialContext, origin),
+    );
+  };
+  try {
+    await postOnceMore(post, diagnostics, run);
+    if (initialContext !== undefined) recordContextPresentation(activityLog, run.runId);
+    if (inputs !== undefined) acceptPromptInputs(activityLog, run, inputs);
+    return run.ready;
+  } catch (error) {
+    releaseUnsentTurnInputs(run, inputs, attempts, error);
+    recordOpenCodeTurnFailure(diagnostics, run, "submit", error);
+    run.runtimeAdapter.cancelTurn();
+    return false;
+  }
+}
+
+/** The turn prompts' ascending native ids, shared by every run of this process. */
+const mintTurnMessageId = createOpenCodeNativeMessageIdMinter();
+
+/**
+ * Posts a turn's prompt; a failure after which the runtime may hold the input is resent once with
+ * the same id, which the runtime answers with the receipt it holds. A receipt under another id
+ * means the input is held under that one: the turn runs. A definite refusal fails the turn.
+ */
+async function postOnceMore(
+  post: () => Promise<void>,
+  diagnostics: ServerDiagnosticSink | undefined,
+  run: ReadyRun,
+): Promise<void> {
+  try {
+    await post();
+    return;
+  } catch (error) {
+    const failure = classifyOpenCodeV2PromptFailure(error);
+    if (failure === "not-submitted") throw error;
+    if (failure === "receipt-mismatch") return;
+    recordOpenCodeTurnFailure(diagnostics, run, "submit-resent", error);
+  }
+  try {
+    await post();
+  } catch (error) {
+    if (classifyOpenCodeV2PromptFailure(error) !== "receipt-mismatch") throw error;
+  }
+}
+
+/**
+ * Makes the session run the requested primary agent (#3897). `true` means the next prompt runs under
+ * it, or that none was asked for. An agent this composition cannot honour (`plan` on a mapped
+ * profile) or a switch the runtime refuses returns `false` with a body-free diagnostic, never a
+ * silent fallback to the default: a read-only request must not run as an editing agent. The agent
+ * is remembered only after the runtime confirmed the switch, so a failed one is simply re-sent.
+ */
+async function selectPrimaryAgent(
+  run: ReadyRun,
+  requested: CodingWorkbenchAgent | undefined,
+  selectableAgents: readonly CodingWorkbenchBuiltInAgent[],
+  diagnostics: ServerDiagnosticSink | undefined,
+  activityLog: ServerLogSink | undefined,
+): Promise<boolean> {
+  if (!isAgentAdmitted(selectableAgents, requested)) {
+    recordOpenCodeTurnFailure(diagnostics, run, "agent-unsupported");
+    return false;
+  }
+  const current = run.agent ?? DEFAULT_CODING_WORKBENCH_AGENT;
+  if (requested === undefined || requested === current) return true;
+  if (!(await customAgentListed(run, requested, diagnostics))) return false;
+  try {
+    await run.client.switchAgent(run.sessionId, requested);
+  } catch (error) {
+    recordOpenCodeTurnFailure(diagnostics, run, "agent", error);
+    return false;
+  }
+  run.agent = requested;
+  recordAgentSelected(activityLog, run.runId, requested, current);
+  return true;
+}
+
+/**
+ * A built-in agent needs no listing. A custom primary agent must be one the runtime lists for the
+ * run's workspace right now (#3903 AC1): the runtime would switch to any name it is given, so this
+ * is what keeps an unlisted or since-removed agent out. A listing that fails refuses the switch.
+ */
+async function customAgentListed(
+  run: ReadyRun,
+  requested: CodingWorkbenchAgent,
+  diagnostics: ServerDiagnosticSink | undefined,
+): Promise<boolean> {
+  if (isCodingWorkbenchBuiltInAgent(requested)) return true;
+  try {
+    const listed = await run.client.primaryAgents(run.workspaceRoot);
+    if (listed.some((agent) => agent.name === requested)) return true;
+    recordOpenCodeTurnFailure(diagnostics, run, "agent-unsupported");
+    return false;
+  } catch (error) {
+    recordOpenCodeTurnFailure(diagnostics, run, "agent", error);
+    return false;
+  }
+}
+
+function agentKind(agent: CodingWorkbenchAgent): (typeof CODING_WORKBENCH_AGENT_VALUES)[number] {
+  return isCodingWorkbenchBuiltInAgent(agent) ? agent : "custom";
+}
+
+function recordAgentSelected(
+  activityLog: ServerLogSink | undefined,
+  runId: string,
+  agent: CodingWorkbenchAgent,
+  previousAgent: CodingWorkbenchAgent,
+): void {
+  activityLog?.write(
+    activityLogEvent(
+      AGENT_SELECTED_OPERATION,
+      { correlationId: runId },
+      { runId, agent: agentKind(agent), previousAgent: agentKind(previousAgent) },
+    ),
+  );
 }
 
 function createReplyPermission(
@@ -537,7 +1455,14 @@ function createReplyPermission(
   };
 }
 
-type OpenCodeTurnFailureStage = "permission" | "question" | "submit" | "terminal";
+type OpenCodeTurnFailureStage =
+  | "agent"
+  | "agent-unsupported"
+  | "permission"
+  | "question"
+  | "submit"
+  | "submit-resent"
+  | "terminal";
 
 function recordOpenCodeTurnFailure(
   diagnostics: ServerDiagnosticSink | undefined,
@@ -647,23 +1572,36 @@ async function synchronizeTurnBaseline(run: ReadyRun): Promise<boolean> {
   return true;
 }
 
-function createAbortTask(readyRun: ReadyRunLookup): OpenCodeRunPort["abortTask"] {
+function createAbortTask(
+  readyRun: ReadyRunLookup,
+  activityLog: ServerLogSink | undefined,
+  withdrawPendingInbox: OpenCodeInboxRunPort["withdrawPendingInbox"],
+): OpenCodeRunPort["abortTask"] {
   return async (runId): Promise<boolean> => {
     const run = readyRun(runId);
     if (run === undefined) return false;
     try {
-      await run.client.interrupt(run.sessionId);
-      const settled = await fixedV2SessionIsTerminal(
-        run.client,
-        run.sessionId,
-        AbortSignal.timeout(ABORT_SETTLEMENT_TIMEOUT_MS),
-      );
-      if (settled) {
+      // The whole native session tree: a background child keeps running when only the parent is
+      // interrupted, and its end would start another turn of the parent (`interruptNativeTree`).
+      const stopped = await interruptNativeTree(run.client, nativeSessionTree(run, run.sessionId), {
+        signal: AbortSignal.timeout(ABORT_SETTLEMENT_TIMEOUT_MS),
+        pause: readinessPollDelay,
+        runId: run.runId,
+        activityLog,
+      });
+      if (stopped.settled) {
         await run.runtimeAdapter.waitForTerminal(AbortSignal.timeout(ABORT_SETTLEMENT_TIMEOUT_MS));
+        // The runtime keeps the messages it had not taken through an interrupt and would hand them
+        // to the model with the next prompt, a turn the operator never meant them for.
+        await withdrawPendingInbox(
+          runId,
+          undefined,
+          AbortSignal.timeout(ABORT_SETTLEMENT_TIMEOUT_MS),
+        );
       } else {
         run.runtimeAdapter.cancelTurn();
       }
-      return settled && run.ready;
+      return stopped.settled && run.ready;
     } catch {
       run.runtimeAdapter.cancelTurn();
       return false;
@@ -674,89 +1612,46 @@ function createAbortTask(readyRun: ReadyRunLookup): OpenCodeRunPort["abortTask"]
 function createQuestionRunPort(
   readyRun: ReadyRunLookup,
   diagnostics: ServerDiagnosticSink | undefined,
+  activityLog: ServerLogSink | undefined,
 ): QuestionRunPort {
+  // The run's questions are its own session's and its owned children's (`opencodeNativeQuestions.ts`).
+  const portOf = (run: ReadyRun): NativeQuestionPort => {
+    run.questionList ??= {};
+    return createNativeQuestionPort({
+      runId: run.runId,
+      client: run.client,
+      tree: nativeSessionTree(run, run.sessionId),
+      open: () => run.ready,
+      activityLog,
+      onFailure: (error) => {
+        recordOpenCodeTurnFailure(diagnostics, run, "question", error);
+      },
+      listed: run.questionList,
+    });
+  };
   return {
     listQuestions: async (runId): Promise<readonly OpenCodeQuestionRequest[]> => {
       const run = readyRun(runId);
-      if (run === undefined) return [];
-      try {
-        return (await run.client.forms())
-          .filter((form) => form.sessionID === run.sessionId)
-          .map(projectOpenCodeV2Form);
-      } catch (error) {
-        recordOpenCodeTurnFailure(diagnostics, run, "question", error);
-        throw error;
-      }
+      return run === undefined ? [] : portOf(run).list();
     },
     answerQuestion: async (runId, requestId, answers): Promise<boolean> => {
       const run = readyRun(runId);
-      if (run === undefined) return false;
-      try {
-        const formId = v2FormId(requestId);
-        const pending = (await run.client.forms()).find(
-          (form) => form.id === formId && form.sessionID === run.sessionId,
-        );
-        if (pending === undefined || !run.ready) return false;
-        const question = projectOpenCodeV2Form(pending);
-        if (!answersMatchQuestions(question, answers))
-          throw new CodingRuntimeQuestionAnswerRejectedError();
-        await run.client.replyForm(
-          run.sessionId,
-          String(pending.id),
-          answerOpenCodeV2Form(pending, answers),
-        );
-        return run.ready;
-      } catch (error) {
-        if (error instanceof CodingRuntimeQuestionAnswerRejectedError) throw error;
-        recordOpenCodeTurnFailure(diagnostics, run, "question", error);
-        throw error;
-      }
+      return run === undefined ? false : portOf(run).answer(requestId, answers);
     },
-    rejectQuestion: createRejectQuestion(readyRun, diagnostics),
+    rejectQuestion: async (runId, requestId): Promise<boolean> => {
+      const run = readyRun(runId);
+      return run === undefined ? false : portOf(run).reject(requestId);
+    },
   };
-}
-
-function createRejectQuestion(
-  readyRun: ReadyRunLookup,
-  diagnostics: ServerDiagnosticSink | undefined,
-): QuestionRunPort["rejectQuestion"] {
-  return async (runId, requestId): Promise<boolean> => {
-    const run = readyRun(runId);
-    if (run === undefined) return false;
-    try {
-      const formId = v2FormId(requestId);
-      const owned = (await run.client.forms()).some(
-        (form) => form.id === formId && form.sessionID === run.sessionId,
-      );
-      if (!owned || formId === undefined) return false;
-      await run.client.cancelForm(run.sessionId, formId);
-      return run.ready;
-    } catch (error) {
-      recordOpenCodeTurnFailure(diagnostics, run, "question", error);
-      throw error;
-    }
-  };
-}
-
-function answersMatchQuestions(
-  request: OpenCodeQuestionRequest,
-  answers: readonly (readonly string[])[],
-): boolean {
-  if (answers.length !== request.questions.length) return false;
-  return answers.every((answer, index) => {
-    const question = request.questions[index];
-    if (question === undefined || (question.multiple !== true && answer.length > 1)) return false;
-    const labels = new Set(question.options.map((option) => option.label));
-    return answer.every((selection) => question.custom === true || labels.has(selection));
-  });
 }
 
 function isReadyRun(run: PreparedRun | undefined): run is ReadyRun {
+  return run?.ready === true && hasRunClient(run);
+}
+
+function hasRunClient(run: PreparedRun): run is ReadyRun {
   return (
-    run?.ready === true &&
-    run.client !== undefined &&
-    run.runtimeAdapter !== undefined &&
-    run.sessionId !== undefined
+    run.client !== undefined && run.runtimeAdapter !== undefined && run.sessionId !== undefined
   );
 }
 
@@ -770,15 +1665,23 @@ function lifecycleAdapter(
     handshake: (request) => handshake(input, bridge, runs, request),
     monitor: ({ runId, onFailure }): (() => void) | undefined => {
       const run = runs.get(runId);
-      const dispose = run?.runtimeAdapter?.monitor(onFailure);
+      if (run === undefined) return undefined;
+      const dispose = run.runtimeAdapter?.monitor(() => {
+        run.ready = false;
+        run.revertReady = false;
+        onFailure();
+      });
       return dispose === undefined
         ? undefined
         : (): void => {
-            if (run !== undefined) run.ready = false;
+            // Holding a completed run quiesces productive work, retaining only its qualified
+            // operator revert client. Failure and disposal invalidate that client separately.
+            run.ready = false;
             dispose();
           };
     },
-    dispose: (runId, signal): Promise<boolean> => disposeRun(input, bridge, runs, runId, signal),
+    dispose: (runId, signal, settlement): Promise<boolean> =>
+      disposeRun(input, bridge, runs, runId, signal, settlement),
   };
 }
 
@@ -788,18 +1691,26 @@ async function disposeRun(
   runs: Map<string, PreparedRun>,
   runId: string,
   signal?: AbortSignal,
+  settlement?: OpenCodeLifecycleSettlement,
 ): Promise<boolean> {
   const run = runs.get(runId);
-  if (run !== undefined) run.ready = false;
+  if (run !== undefined) {
+    run.ready = false;
+    run.revertReady = false;
+  }
   try {
     const drained = bridge.close(signal);
     input.safeActivity?.clear();
     input.gatewayReadiness.clear(runId);
+    // The run's relayed MCP exchanges end with it, before its runtime is reaped.
+    input.mcpRelay?.relay.releaseRun(runId);
     if (!(await drained)) return false;
     if (run === undefined) return true;
     if (!currentDisposal(runs, run, signal)) return false;
     await run.runtimeAdapter?.close();
     if (!currentDisposal(runs, run, signal)) return false;
+    keepMcpCredentials(input, run);
+    retainOnDispose(input, run, settlement);
     rmSync(run.runRoot, { recursive: true, force: true });
     runs.delete(runId);
     return true;
@@ -807,6 +1718,37 @@ async function disposeRun(
     recordCompositionDisposalFailure(input.diagnostics, runId, "run-dispose", error);
     return false;
   }
+}
+
+// The reaped runtime's MCP credentials are kept and removed before its database is retained.
+function keepMcpCredentials(input: OpenCodeRuntimeCompositionInput, run: PreparedRun): void {
+  if ((run.mcpOAuth?.size ?? 0) === 0) return;
+  const database = runtimeDatabasePath(run.runRoot);
+  harvestMcpCredentials(run, database, input.mcpCredentials, input.activityLog, true);
+}
+
+/**
+ * The runtime is reaped, so its database is quiescent. A run that settled normally leaves it as its
+ * task's retained entry before the private state is removed (`retainSettledRun`); any other run
+ * removes the task's now-stale entry. Never throws.
+ */
+function retainOnDispose(
+  input: OpenCodeRuntimeCompositionInput,
+  run: PreparedRun,
+  settlement: OpenCodeLifecycleSettlement | undefined,
+): void {
+  const context = continuationContext(input);
+  if (context === undefined) return;
+  retainSettledRun(
+    context,
+    {
+      runId: run.runId,
+      runRoot: run.runRoot,
+      workspaceRoot: run.workspaceRoot,
+      sessionId: run.sessionId,
+    },
+    settlement?.terminalStatus,
+  );
 }
 
 function disposalCancelled(signal: AbortSignal | undefined): boolean {
@@ -878,47 +1820,413 @@ async function materializePrepare(
   runs: Map<string, PreparedRun>,
   request: OpenCodeLifecyclePrepareRequest,
   runRoot: string,
-  serviceHost?: Extract<OpenCodeServiceHostDiskReceipt, { readonly ok: true }>,
 ): Promise<OpenCodeLifecyclePrepareResult> {
   createPrivateState(runRoot);
+  const continuation = seedRun(input, request, runRoot);
   await bridge.start();
+  const mcpChecks = await nativeMcpChecks(input, request);
+  const documents =
+    input.toolProfile === "native"
+      ? await input.configDocuments?.({ runId: request.runId, signal: request.signal })
+      : undefined;
+  const agentModels = nativeAgentModels(input, documents);
+  const { profile, mcp } = runLaunchProfile(input, request, runRoot, mcpChecks, {
+    documents,
+    agentModels,
+  });
+  const config = profile.config;
+  materialize(runRoot, config, createGeneratedOpenCodeV2Plugins(input.toolProfile));
+  await admitRepositoryItems(input, request, runRoot);
+  await admitOperatorPlugins(input, request, runRoot);
+  await admitRemoteSkills(input, request, runRoot);
+  await refreshRepositoryInstructions(input, request.runId, runRoot, request.signal);
+  const password = profile.env.OPENCODE_SERVER_PASSWORD;
+  if (password === undefined) throw new Error("password-missing");
+  const configDigest = createHash("sha256").update(config, "utf8").digest("hex");
+  const result = preparedLaunch(
+    input,
+    bridge,
+    preparedEnvironment(profile.env, request.env, runRoot),
+  );
+  persistPreparedRun(runs, request, runRoot, password, configDigest, {
+    continuation,
+    mcp,
+    media: promptMedia(input),
+  });
+  recordNativeFormatterBound(
+    input.activityLog,
+    request,
+    profile.formatter,
+    profile.formatterEntries,
+  );
+  recordAgentModelsBound(input.activityLog, request, agentModels);
+  recordProviderPolicyBound(input.activityLog, request, profile, input.toolProfile ?? "direct");
+  return result;
+}
+
+/** The run's launch profile, with the MCP servers the operator's registry admits for it. */
+function runLaunchProfile(
+  input: OpenCodeRuntimeCompositionInput,
+  request: OpenCodeLifecyclePrepareRequest,
+  runRoot: string,
+  mcpChecks: NativeMcpChecks,
+  configured: {
+    readonly documents: readonly Readonly<Record<string, unknown>>[] | undefined;
+    readonly agentModels: OpenCodeAgentModelBinding | undefined;
+  },
+): {
+  readonly profile: Extract<OpenCodeLaunchProfileResult, { readonly ok: true }>;
+  readonly mcp: OpenCodeNativeMcpAdmission | undefined;
+} {
+  const mcp = nativeMcpAdmission(input, request, runRoot, mcpChecks);
   const profile = buildOpenCodeLaunchProfile({
     executable: request.executablePath,
     stateRoot: runRoot,
     contextGeometry: input.contextGeometry,
     toolProfile: input.toolProfile,
+    mode: request.env.KEIKO_CODING_MODE,
+    ...(configured.documents === undefined ? {} : { formatterDocuments: configured.documents }),
+    ...(configured.agentModels === undefined ? {} : { agentModels: configured.agentModels }),
+    ...(mcp === undefined ? {} : { mcp: mcp.config }),
+    ...(input.toolProfile === "native" && input.externalReadRoots !== undefined
+      ? { externalReadRoots: input.externalReadRoots }
+      : {}),
   });
   if (!profile.ok) throw new Error("profile-invalid");
-  const config = profile.config;
-  materialize(runRoot, config, createGeneratedOpenCodeV2Plugins(input.toolProfile));
-  const password = profile.env.OPENCODE_SERVER_PASSWORD;
-  if (password === undefined) throw new Error("password-missing");
-  const configDigest = createHash("sha256").update(config, "utf8").digest("hex");
-  const result = {
+  return { profile, mcp };
+}
+
+/** What a native run's MCP servers were checked against before the launch (#3903 AC3). */
+interface NativeMcpChecks {
+  readonly validations: ReadonlyMap<string, McpOAuthIssuerValidation>;
+  readonly relays: ReadonlyMap<string, OpenCodeNativeMcpRelayEndpoint>;
+}
+
+/** A native run's MCP servers from the operator's registry; none for a mapped profile. */
+function nativeMcpAdmission(
+  input: OpenCodeRuntimeCompositionInput,
+  request: OpenCodeLifecyclePrepareRequest,
+  runRoot: string,
+  checks: NativeMcpChecks,
+): OpenCodeNativeMcpAdmission | undefined {
+  if (input.toolProfile !== "native" || input.mcpServers === undefined) return undefined;
+  return openCodeNativeMcpAdmission({
+    servers: input.mcpServers(request.runId),
+    mode: request.env.KEIKO_CODING_MODE,
+    home: join(runRoot, "home"),
+    validations: checks.validations,
+    relays: checks.relays,
+  });
+}
+
+async function nativeMcpChecks(
+  input: OpenCodeRuntimeCompositionInput,
+  request: OpenCodeLifecyclePrepareRequest,
+): Promise<NativeMcpChecks> {
+  return {
+    validations: await mcpIssuerValidations(input, request),
+    relays: nativeMcpRelays(input, request),
+  };
+}
+
+/** The relays a native run's servers with credential headers are reached through. */
+function nativeMcpRelays(
+  input: OpenCodeRuntimeCompositionInput,
+  request: OpenCodeLifecyclePrepareRequest,
+): ReadonlyMap<string, OpenCodeNativeMcpRelayEndpoint> {
+  if (input.toolProfile !== "native" || input.mcpServers === undefined) return new Map();
+  return bindNativeMcpRelays({
+    servers: input.mcpServers(request.runId),
+    mode: request.env.KEIKO_CODING_MODE,
+    runId: request.runId,
+    relay: input.mcpRelay,
+    activityLog: input.activityLog,
+  });
+}
+
+/**
+ * The issuer of every remote server the run would use with OAuth, validated before the launch
+ * (#3903 AC3). The checks run concurrently and each records its own lines; a server whose issuer
+ * did not validate, or that no validator could check, is left out of the binding.
+ */
+async function mcpIssuerValidations(
+  input: OpenCodeRuntimeCompositionInput,
+  request: OpenCodeLifecyclePrepareRequest,
+): Promise<ReadonlyMap<string, McpOAuthIssuerValidation>> {
+  if (input.toolProfile !== "native" || input.mcpServers === undefined) return new Map();
+  const validate = input.mcpOAuthIssuer;
+  const servers = mcpServersNeedingIssuerValidation(
+    input.mcpServers(request.runId),
+    request.env.KEIKO_CODING_MODE,
+  );
+  if (validate === undefined || servers.length === 0) return new Map();
+  const checked = await Promise.all(
+    servers.map(
+      async (server) =>
+        [
+          server.name,
+          await validate(server.name, server.transport.oauth, request.runId, request.signal),
+        ] as const,
+    ),
+  );
+  return new Map(checked);
+}
+
+/** JVMs on Darwin ignore TMPDIR for their OS-derived default. Keep their temp files inside the
+ * already-created private state without widening the process's writable roots. */
+function preparedEnvironment(
+  profile: Readonly<Record<string, string>>,
+  inherited: Readonly<Record<string, string>>,
+  runRoot: string,
+): Readonly<Record<string, string>> {
+  const temporary = join(runRoot, "tmp");
+  // These are JVM environment-option quotes, not a shell command; retain literal path characters.
+  const javaTemporary = "'-Djava.io.tmpdir=" + temporary.replaceAll("'", "'\"'\"'") + "'";
+  return {
+    ...profile,
+    JAVA_TOOL_OPTIONS: [inherited.JAVA_TOOL_OPTIONS, javaTemporary].filter(Boolean).join(" "),
+  };
+}
+
+/** The prepared launch: the profile's environment plus the run's two capabilities. */
+function preparedLaunch(
+  input: OpenCodeRuntimeCompositionInput,
+  bridge: ToolBridgeController,
+  env: Readonly<Record<string, string>>,
+): {
+  readonly ok: true;
+  readonly parentLifetime: "stdin-eof";
+  readonly env: Readonly<Record<string, string>>;
+} {
+  return {
     ok: true,
     parentLifetime: "stdin-eof",
     env: {
-      ...profile.env,
+      ...env,
       KEIKO_MODEL_GATEWAY_CAPABILITY: input.capabilities.modelGatewayCapability,
       KEIKO_TOOL_FACADE_URL: bridge.publicPort.url,
       KEIKO_TOOL_FACADE_CAPABILITY: input.capabilities.toolFacadeCapability,
     },
-  } as const;
-  const program =
-    serviceHost === undefined
-      ? undefined
-      : prepareCompositionServiceHost(
-          serviceHost,
-          request,
-          runRoot,
-          configDigest,
-          result.env,
-          input.toolProfile ?? "direct",
-        );
-  if (serviceHost !== undefined && program === undefined)
-    throw new Error("host-preparation-invalid");
-  persistPreparedRun(runs, request, runRoot, password, configDigest, program);
-  return { ...result, ...(program === undefined ? {} : { serviceHost: program }) };
+  };
+}
+
+/**
+ * Keiko's bounded copy of the workspace's AGENTS.md in the producer's own global instruction slot
+ * (#3900 AC3): before the launch, and again before each turn so an edit, a new file (`/init`) or a
+ * removal reaches the next turn. The producer's instruction plugin watches that path from launch;
+ * after a change the turn waits out its 100 ms debounce, so the change is loaded before the prompt.
+ */
+async function refreshRepositoryInstructions(
+  input: OpenCodeRuntimeCompositionInput,
+  runId: string,
+  runRoot: string,
+  signal: AbortSignal | undefined,
+): Promise<boolean> {
+  if (input.toolProfile !== "native" || input.repositoryInstructions === undefined) return false;
+  return input.repositoryInstructions.materializeForRun({
+    runId,
+    targetPath: openCodeRepositoryInstructionsPath(runRoot),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+const REPOSITORY_INSTRUCTIONS_REFRESH_MS = 250;
+
+/** Refreshes the copy before a turn and, after a change, waits out the producer's file watcher. */
+async function refreshedInstructions(
+  run: ReadyRun,
+  refresh: (run: ReadyRun) => Promise<boolean>,
+): Promise<void> {
+  if (!(await refresh(run))) return;
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, REPOSITORY_INSTRUCTIONS_REFRESH_MS);
+  });
+}
+
+// The copies join the discovery directory before the first launch, so the config digest stays the
+// digest of Keiko's own generated document; the admission line carries the copies' own. The port
+// never rejects: a run starts without the repository's items rather than failing because of them.
+async function admitRepositoryItems(
+  input: OpenCodeRuntimeCompositionInput,
+  request: OpenCodeLifecyclePrepareRequest,
+  runRoot: string,
+): Promise<void> {
+  if (input.toolProfile !== "native") return;
+  await input.repositoryItems?.admitForRun({
+    runId: request.runId,
+    discoveryRoot: openCodeConfigDirectory(runRoot),
+    ...(request.signal === undefined ? {} : { signal: request.signal }),
+  });
+}
+
+// After the repository's items, so a repository skill keeps its name (#3903 AC3).
+async function admitRemoteSkills(
+  input: OpenCodeRuntimeCompositionInput,
+  request: OpenCodeLifecyclePrepareRequest,
+  runRoot: string,
+): Promise<void> {
+  if (input.toolProfile !== "native") return;
+  await input.remoteSkills?.admitForRun({
+    runId: request.runId,
+    discoveryRoot: openCodeConfigDirectory(runRoot),
+    mode: request.env.KEIKO_CODING_MODE,
+    ...(request.signal === undefined ? {} : { signal: request.signal }),
+  });
+}
+
+// The launch mode decides: only a run launched in Full access loads operator code (#3903 AC2).
+async function admitOperatorPlugins(
+  input: OpenCodeRuntimeCompositionInput,
+  request: OpenCodeLifecyclePrepareRequest,
+  runRoot: string,
+): Promise<void> {
+  if (input.toolProfile !== "native") return;
+  await input.operatorPlugins?.admitForRun({
+    runId: request.runId,
+    discoveryRoot: openCodeConfigDirectory(runRoot),
+    mode: request.env.KEIKO_CODING_MODE,
+    ...(request.signal === undefined ? {} : { signal: request.signal }),
+  });
+}
+
+function continuationContext(
+  input: OpenCodeRuntimeCompositionInput,
+): SessionContinuationContext | undefined {
+  const continuity = input.sessionContinuity;
+  if (continuity === undefined) return undefined;
+  return {
+    service: continuity.service,
+    workspaceId: continuity.workspaceId,
+    runtimeVersion: input.portable.verification.summary.upstreamVersion,
+    maxInputTokens: input.contextGeometry.maxInputTokens,
+    activityLog: input.activityLog,
+    ...(continuity.forkSource === undefined ? {} : { forkSource: continuity.forkSource }),
+  };
+}
+
+/** Seeds the run's private runtime database when the run asked to continue a task's session. */
+function seedRun(
+  input: OpenCodeRuntimeCompositionInput,
+  request: OpenCodeLifecyclePrepareRequest,
+  runRoot: string,
+): RunContinuation | undefined {
+  const context = continuationContext(input);
+  if (context === undefined) return undefined;
+  return seedContinuation(context, {
+    runId: request.runId,
+    runRoot,
+    workspaceRoot: request.env.KEIKO_CODING_WORKSPACE_ROOT ?? "",
+  });
+}
+
+/** A native run's built-in formatter decision, once per prepared run (parity row C07). */
+/** The run's further gateway models and per-agent overrides (#3903 AC1); none off the native profile. */
+function nativeAgentModels(
+  input: OpenCodeRuntimeCompositionInput,
+  documents: readonly Readonly<Record<string, unknown>>[] | undefined,
+): OpenCodeAgentModelBinding | undefined {
+  if (input.toolProfile !== "native") return undefined;
+  const catalog = input.agentModelCatalog?.();
+  return catalog === undefined ? undefined : openCodeAgentModelBinding(documents ?? [], catalog);
+}
+
+const AGENT_MODELS_BOUND_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.agent-models.bound",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.opencodeRuntimeComposition.recordAgentModelsBound",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    // The gateway models the provider declares beside the run's own, and the configured overrides.
+    offeredModelCount: { type: "integer", dataClass: "count", required: true },
+    configuredAgentCount: { type: "integer", dataClass: "count", required: true },
+    refusedAgentCount: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-runtime-agent-selection"],
+  proofIds: ["coding-runtime.agent-models.bound.emitted-line"],
+  releaseImpact: "patch",
+});
+
+/** One body-free line per prepared native run: counts only, never a model or an agent name. */
+function recordAgentModelsBound(
+  activityLog: ServerLogSink | undefined,
+  request: OpenCodeLifecyclePrepareRequest,
+  binding: OpenCodeAgentModelBinding | undefined,
+): void {
+  if (binding === undefined) return;
+  (activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      AGENT_MODELS_BOUND_OPERATION,
+      { correlationId: request.runId },
+      {
+        runId: request.runId,
+        offeredModelCount: Object.keys(binding.models).length,
+        configuredAgentCount: binding.admittedCount,
+        refusedAgentCount: binding.refusedCount,
+      },
+    ),
+  );
+}
+
+function recordNativeFormatterBound(
+  activityLog: ServerLogSink | undefined,
+  request: OpenCodeLifecyclePrepareRequest,
+  disposition: OpenCodeNativeFormatterDisposition | undefined,
+  entries?: { readonly admitted: number; readonly refused: number },
+): void {
+  if (disposition === undefined) return;
+  const mode = CODING_WORKBENCH_MODE_VALUES.find(
+    (value) => value === request.env.KEIKO_CODING_MODE,
+  );
+  (activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      NATIVE_FORMATTER_BOUND_OPERATION,
+      { correlationId: request.runId },
+      {
+        runId: request.runId,
+        disposition,
+        launchMode: mode ?? "unknown",
+        ...(entries === undefined
+          ? {}
+          : { configuredEntryCount: entries.admitted, refusedEntryCount: entries.refused }),
+      },
+    ),
+  );
+}
+
+/**
+ * Whether the prepared run admits only the gateway-bound provider, keeps OpenCode's hosted free
+ * models off and never fetches the models.dev catalog (parity row S11), read from the launch
+ * configuration and environment it was given.
+ */
+function recordProviderPolicyBound(
+  activityLog: ServerLogSink | undefined,
+  request: OpenCodeLifecyclePrepareRequest,
+  profile: Extract<OpenCodeLaunchProfileResult, { readonly ok: true }>,
+  toolProfile: OpenCodeToolProfile,
+): void {
+  const gatewayOnly =
+    JSON.stringify(profile.configValue.policies) ===
+    JSON.stringify(OPENCODE_GATEWAY_PROVIDER_POLICIES);
+  (activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      PROVIDER_POLICY_BOUND_OPERATION,
+      { correlationId: request.runId },
+      {
+        runId: request.runId,
+        providerPolicy: gatewayOnly ? "gateway-only" : "absent",
+        freeModels: profile.env.OPENCODE_DISABLE_FREE_MODELS === "1" ? "disabled" : "enabled",
+        modelsFetch: profile.env.OPENCODE_DISABLE_MODELS_FETCH === "1" ? "disabled" : "enabled",
+        jvmTemporaryScope: "run-private",
+        toolProfile,
+      },
+    ),
+  );
 }
 
 function persistPreparedRun(
@@ -927,8 +2235,13 @@ function persistPreparedRun(
   runRoot: string,
   password: string,
   configDigest: string,
-  program: PreparedOpenCodeServiceHostLaunch | undefined,
+  extras: {
+    readonly continuation?: RunContinuation | undefined;
+    readonly mcp?: OpenCodeNativeMcpAdmission | undefined;
+    readonly media?: PromptMediaInputs | undefined;
+  } = {},
 ): void {
+  const { continuation, mcp, media } = extras;
   const run = preparedRun(
     request.runId,
     runRoot,
@@ -936,36 +2249,28 @@ function persistPreparedRun(
     password,
     configDigest,
     request.verification,
+    request.env.KEIKO_CODING_MODE,
   );
-  if (program !== undefined) run.serviceHostPrepared = true;
+  if (continuation !== undefined) run.continuation = continuation;
+  if (mcp !== undefined) {
+    run.mcp = mcp.grants;
+    run.mcpOAuth = mcp.oauth;
+  }
+  if (media !== undefined) run.media = media;
   runs.set(request.runId, run);
 }
 
-function prepareCompositionServiceHost(
-  receipt: Extract<OpenCodeServiceHostDiskReceipt, { readonly ok: true }>,
-  request: OpenCodeLifecyclePrepareRequest,
-  stateRoot: string,
-  configDigest: string,
-  env: Readonly<Record<string, string>>,
-  toolProfile: OpenCodeToolProfile,
-): PreparedOpenCodeServiceHostLaunch | undefined {
-  return prepareOpenCodeServiceHostLaunch(
-    receipt,
-    {
-      workspace: request.env.KEIKO_CODING_WORKSPACE_ROOT,
-      stateRoot,
-      password: env.OPENCODE_SERVER_PASSWORD,
-      providerURL: `${request.env.KEIKO_MODEL_GATEWAY_URL ?? ""}/chat/completions`,
-      providerCapability: env.KEIKO_MODEL_GATEWAY_CAPABILITY,
-      facadeURL: env.KEIKO_TOOL_FACADE_URL,
-      facadeCapability: env.KEIKO_TOOL_FACADE_CAPABILITY,
-      mode: request.env.KEIKO_CODING_MODE,
-      runId: request.runId,
-      configDigest,
-      toolProfile,
-    },
-    env,
-  );
+/**
+ * The media a native run's prompt may attach: exactly what its launch profile declares to the
+ * runtime (`fixedOpenCodeV2Provider`), so a reference the model cannot receive is refused before it
+ * is sent. A mapped profile takes no reference at all.
+ */
+function promptMedia(input: OpenCodeRuntimeCompositionInput): PromptMediaInputs | undefined {
+  if (input.toolProfile !== "native") return undefined;
+  return {
+    image: input.contextGeometry.imageInput === true,
+    pdf: input.contextGeometry.documentInput === true,
+  };
 }
 
 async function prepare(
@@ -973,10 +2278,7 @@ async function prepare(
   bridge: ToolBridgeController,
   runs: Map<string, PreparedRun>,
   request: OpenCodeLifecyclePrepareRequest,
-  serviceHost?: Extract<OpenCodeServiceHostDiskReceipt, { readonly ok: true }>,
 ): Promise<OpenCodeLifecyclePrepareResult> {
-  if (serviceHost !== undefined && runs.has(request.runId))
-    return { ok: false, reason: "host-preparation-unqualified" };
   if (!verifiedProtocol(request.verification, input.portable.verification)) {
     return { ok: false, reason: "target-attestation-failed" };
   }
@@ -985,7 +2287,7 @@ async function prepare(
   }
   const runRoot = join(input.stateBaseRoot, request.runId);
   try {
-    return await materializePrepare(input, bridge, runs, request, runRoot, serviceHost);
+    return await materializePrepare(input, bridge, runs, request, runRoot);
   } catch {
     await disposeFailedPrepare(
       bridge,
@@ -1007,6 +2309,7 @@ function preparedRun(
   password: string,
   configDigest: string,
   verification: PortableSidecarRuntimeVerification,
+  mode?: string,
 ): PreparedRun {
   return {
     runId,
@@ -1015,9 +2318,82 @@ function preparedRun(
     password,
     configDigest,
     verification,
+    mode,
+    launchMode: mode,
     observedPermissionIds: new Set(),
+    commandPresentation: createOpenCodeCommandPresentation(),
     initialTurnBaselineStable: false,
     ready: false,
+    revertReady: false,
+  };
+}
+
+type CompositionSafeActivitySignal =
+  import("./codingSafeActivityProjection.js").CodingSafeActivitySignal;
+
+/**
+ * The adapter ingests each fresh, committed history signal once. The native profile's tools execute
+ * in the original runtime, outside the facade, so its terminal tool signals are also the run's tool
+ * evidence (#3873, #3897 review): they reach the facade's native settlement owner, which counts each
+ * call once by its identity. Counted whether or not the safe-activity projection accepts the
+ * signal; approval never reaches here, only the runtime's own completed or failed call.
+ */
+function adapterSafeActivitySink(
+  input: OpenCodeRuntimeCompositionInput,
+  run: PreparedRun,
+): Pick<Parameters<typeof createOpenCodeRuntimeAdapter>[0], "safeActivitySink"> {
+  const settle = nativeToolSettlementObserver(input, run);
+  const activity = input.safeActivity;
+  if (activity === undefined && settle === undefined) return {};
+  return {
+    safeActivitySink: {
+      ingest: (signal): boolean => {
+        settle?.(signal);
+        return activity?.ingest(displayActivitySignal(signal)) ?? true;
+      },
+      recordDrops: (count): void => {
+        activity?.recordDrops(count);
+      },
+    },
+  };
+}
+
+/** Native exit evidence is settled above, outside the closed display-signal schema. */
+function displayActivitySignal(
+  signal: CompositionSafeActivitySignal,
+): CompositionSafeActivitySignal {
+  if (signal.kind !== "tool") return signal;
+  const display = { ...signal };
+  delete display.exitCode;
+  delete display.exitStatusCheck;
+  return display;
+}
+
+/** The native tools whose completed call wrote the files its edit check named. */
+const NATIVE_FILE_WRITE_TOOLS: ReadonlySet<string> = new Set(["edit", "write", "patch"]);
+
+function nativeToolSettlementObserver(
+  input: OpenCodeRuntimeCompositionInput,
+  run: PreparedRun,
+): ((signal: CompositionSafeActivitySignal) => void) | undefined {
+  const settlement = input.toolProfile === "native" ? input.toolFacade.nativeSettlement : undefined;
+  if (settlement === undefined) return undefined;
+  return (signal): void => {
+    if (signal.kind !== "tool" || signal.messageId === undefined) return;
+    if (signal.state !== "succeeded" && signal.state !== "failed") return;
+    if (signal.state === "succeeded" && NATIVE_FILE_WRITE_TOOLS.has(signal.tool ?? "")) {
+      const key = openCodeNativeCallKey(signal.messageId, signal.callId);
+      recordOpenCodeEditSettled(run, key, input.activityLog);
+    }
+    settlement.settled({
+      messageId: signal.messageId,
+      callId: signal.callId,
+      tool: signal.tool,
+      state: signal.state,
+      ...planNoteSettlement(run, signal.messageId, signal.callId),
+      ...(signal.exitCode === undefined ? {} : { exitCode: signal.exitCode }),
+      ...(signal.exitStatusCheck === undefined ? {} : { exitStatusCheck: signal.exitStatusCheck }),
+    });
   };
 }
 
@@ -1030,7 +2406,6 @@ async function handshake(
 ): Promise<{ readonly ok: true } | { readonly ok: false; readonly reason: string }> {
   const run = runs.get(request.runId);
   if (run === undefined) return { ok: false, reason: "preparation-missing" };
-  if (run.serviceHostPrepared === true) return { ok: false, reason: "host-readiness-unqualified" };
   run.onPermission = request.onPermission;
   try {
     const endpoint = parseOpenCodeV2ChildEndpoint(
@@ -1050,18 +2425,14 @@ async function handshake(
       ...(input.activityLog === undefined ? {} : { activityLog: input.activityLog }),
       readiness: readinessV2Ports(input, bridge, run, client, endpoint, request),
       governedSink: input.governedEventSink,
-      ...(input.safeActivity
-        ? {
-            safeActivitySink: {
-              ingest: input.safeActivity.ingest,
-              recordDrops: input.safeActivity.recordDrops,
-            },
-          }
-        : {}),
+      ...adapterSafeActivitySink(input, run),
       control: {
-        status: async (sessionId, signal) => {
-          return (await v2SessionIsTerminal(client, sessionId, signal)) ? "terminal" : "activity";
-        },
+        status: createNativeTreeStatusPort({
+          runId: run.runId,
+          client,
+          tree: (sessionId) => nativeSessionTree(run, sessionId),
+          activityLog: input.activityLog,
+        }),
       },
       safety: {
         revokeAudiences: (): void => undefined,
@@ -1080,10 +2451,14 @@ async function handshake(
       await adapter.close();
       return { ok: false, reason: "preparation-missing" };
     }
+    // #3903 AC3: a kept MCP credential reaches the attested runtime before its first turn.
+    if (input.mcpCredentials !== undefined)
+      await seedMcpCredentials(run, client, input.mcpCredentials, input.activityLog);
     run.runtimeAdapter = adapter;
     run.client = client;
     run.sessionId = result.sessionId;
     run.ready = true;
+    run.revertReady = true;
     return { ok: true };
   } catch {
     return { ok: false, reason: "readiness-failed" };
@@ -1110,6 +2485,7 @@ function readinessV2Ports(
     runId: run.runId,
     activityLog: input.activityLog,
     captureMessages: input.safeActivity?.captureMessages,
+    userMessageDisplay: run.commandPresentation.displayFor,
     takeMergedEventCount: (): number => {
       const merged = mergedEvents;
       mergedEvents = 0;
@@ -1124,9 +2500,10 @@ function readinessV2Ports(
     verifiedTarget: {
       executable: join(input.portable.resourceRoot, run.verification.executablePath),
       attestationDigest: run.verification.protocolHandshakeDigest,
+      version: run.verification.summary.upstreamVersion,
     },
     configDigest: run.configDigest,
-    nativeContextConfigured: true,
+    nativeContextProfile: input.toolProfile === "native" ? "native" : "mapped",
     verifyTargetAttestation: (): Promise<boolean> => Promise.resolve(true),
     materialize: (): Promise<boolean> => Promise.resolve(configMaterialized(run.runRoot)),
     startupLine: (): Promise<string> => {
@@ -1141,13 +2518,23 @@ function readinessV2Ports(
         : unauthenticatedV2Health(input.fetch, endpoint, request.signal),
     openApiDigest: async (): Promise<string> =>
       projectOpenCodeV2ProtocolSurface(await client.document()).digest,
+    ...(input.toolProfile === "native"
+      ? {
+          policyPluginActive: (): Promise<boolean> =>
+            awaitOpenCodeNativePlugins(
+              (signal) => client.plugins(signal),
+              join(openCodeConfigDirectory(run.runRoot), "plugins"),
+              request.signal,
+            ),
+        }
+      : {}),
     gatewayChallenge: () =>
       challengeV2Gateway(input, run, client, fixedSessionId, request, startupRead),
     toolFacadeChallenge: () => challengeToolFacade(input, bridge),
     subscribe: async function* (signal): AsyncIterable<OpenCodeSyncHint> {
       // A reconnect opens another event stream for the same run, not another sidecar session.
       // Keep the creation promise so concurrent subscriptions cannot create competing sessions.
-      sessionCreation ??= createAndEchoV2Session(client, run.workspaceRoot, request.signal);
+      sessionCreation ??= bindRunSession(input, run, client, request.signal);
       fixedSessionId = await sessionCreation;
       streamCount += 1;
       if (fixedSessionId !== "")
@@ -1189,7 +2576,11 @@ function readinessV2Ports(
       let messages: readonly Readonly<Record<string, unknown>>[] = [];
       try {
         messages = await client.messages(fixedSessionId, signal);
-        const events = history.project(fixedSessionId, messages, checkpoints[fixedSessionId]);
+        // A continued session already holds the messages of earlier runs, which Coding History has
+        // and the timeline must not show again: the projection starts after them.
+        const ownMessages = withoutBaseline(messages, run.continuation?.baselineIds);
+        const events = history.project(fixedSessionId, ownMessages, checkpoints[fixedSessionId]);
+        observeNativeStepChanges(input, run, ownMessages);
         staged.clear();
         for (const event of events) {
           const safe = history.takeSignal(event);
@@ -1221,8 +2612,10 @@ function readinessV2Ports(
   };
 }
 
-function v2ExecutionState(type: unknown): "activity" | "terminal" | undefined {
+function v2ExecutionState(type: unknown): "activity" | "interrupted" | "terminal" | undefined {
   if (type === "session.execution.started") return "activity";
+  // The runtime ends a turn this way when a human refuses a question: no idle message follows.
+  if (type === "session.execution.interrupted") return "interrupted";
   if (
     type === "session.execution.succeeded" ||
     type === "session.execution.failed" ||
@@ -1378,7 +2771,7 @@ function pullSyncHint(pump: SyncHintPump): void {
   void pump.source.next().then(onNext).then(undefined, settle);
 }
 
-function v2SyncHint(
+export function v2SyncHint(
   event: Readonly<Record<string, unknown>>,
   fixedSessionId: string,
   onQuestionObserved: ((identity: string) => void) | undefined,
@@ -1442,6 +2835,83 @@ function recordOpenCodeV2HistoryFailure(
     ...(detail.frames === undefined ? {} : { frames: detail.frames }),
     ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
   });
+}
+
+/**
+ * The session a run works in: its own new one, or, when its database was seeded from a task's
+ * retained entry, the retained session resumed or forked (`bindContinuedSession`). A continued
+ * session that cannot be bound to this run's workspace fails the run's readiness: it is never
+ * replaced by a fresh one inside a database that still holds the other.
+ */
+async function bindRunSession(
+  input: OpenCodeRuntimeCompositionInput,
+  run: PreparedRun,
+  client: OpenCodeV2HttpClient,
+  signal: AbortSignal | undefined,
+): Promise<string> {
+  const continuation = run.continuation;
+  const context = continuationContext(input);
+  if (continuation === undefined || context === undefined) {
+    return createAndEchoV2Session(client, run.workspaceRoot, signal);
+  }
+  const line = continuedSessionLine(context, run, continuation);
+  let bound: Awaited<ReturnType<typeof bindContinuedSession>>;
+  try {
+    bound = await bindContinuedSession(client, continuation, run.workspaceRoot, signal);
+  } catch (error) {
+    // Not a refusal (the runtime could not be asked, or the run was cancelled): the readiness fails
+    // with the error itself, and the continuity line says the session was never bound.
+    recordSessionContinuity(input.activityLog, {
+      ...line,
+      outcome: "failed",
+      reason: "session-mismatch",
+      error,
+    });
+    throw error;
+  }
+  const forked = continuation.intent.kind === "fork";
+  if (!bound.ok) {
+    // An entry the runtime does not see the way its manifest says can never be used again.
+    if (bound.reason === "session-mismatch") context.service.store?.remove(continuation.taskId);
+    recordSessionContinuity(input.activityLog, {
+      ...line,
+      outcome: "failed",
+      reason: bound.reason,
+      ...(bound.error === undefined ? {} : { error: bound.error }),
+    });
+    return "";
+  }
+  continuation.baselineIds = bound.baselineIds;
+  context.service.settle(run.runId, { kind: forked ? "forked" : "resumed" });
+  recordSessionContinuity(input.activityLog, {
+    ...line,
+    outcome: forked ? "forked" : "resumed",
+    databaseBytes: continuation.databaseBytes,
+    messageCount: bound.baselineIds.size,
+    ageMs: continuation.ageMs,
+  });
+  return bound.sessionId;
+}
+
+function continuedSessionLine(
+  context: SessionContinuationContext,
+  run: PreparedRun,
+  continuation: RunContinuation,
+): Pick<
+  Parameters<typeof recordSessionContinuity>[1],
+  "runId" | "action" | "taskId" | "sourceTaskId" | "boundary" | "relocated"
+> {
+  const intent = continuation.intent;
+  const taskId = intent.kind === "resume" ? intent.taskId : context.service.taskOfRun(run.runId);
+  return {
+    runId: run.runId,
+    action: intent.kind,
+    ...(taskId === undefined ? {} : { taskId }),
+    ...(intent.kind === "fork"
+      ? { sourceTaskId: intent.sourceTaskId, boundary: intent.boundary.kind }
+      : {}),
+    ...(continuation.sourceDirectory === undefined ? {} : { relocated: true }),
+  };
 }
 
 async function createAndEchoV2Session(
@@ -1527,6 +2997,52 @@ async function challengeV2Gateway(
     return false;
   }
   const signal = request.signal ?? AbortSignal.timeout(request.timeoutMs);
+  if (run.continuation === undefined) {
+    return runGatewayChallenge(input, run, client, sessionId, signal);
+  }
+  return challengeInScratchSession(input, run, client, signal);
+}
+
+/**
+ * The gateway recognises its readiness probe only as a request that holds nothing but the probe, so
+ * a continued run, whose session holds a conversation, proves the route in a scratch session of its
+ * own database and removes it again: the continued session never carries a handshake turn, and the
+ * run's database ends up with exactly the one session the run works in.
+ */
+async function challengeInScratchSession(
+  input: OpenCodeRuntimeCompositionInput,
+  run: PreparedRun,
+  client: OpenCodeV2HttpClient,
+  signal: AbortSignal,
+): Promise<boolean> {
+  let scratchId: string;
+  try {
+    const created = await client.createSession(run.workspaceRoot, signal);
+    if (!validCreatedSession(created.id, created.location, run.workspaceRoot)) {
+      throw new Error("opencode-v2-session-invalid");
+    }
+    scratchId = created.id;
+  } catch {
+    recordGatewayChallengeFailure(input.diagnostics, run.runId, "scratch-session-failed");
+    return false;
+  }
+  const verified = await runGatewayChallenge(input, run, client, scratchId, signal);
+  try {
+    await client.removeSession(scratchId, signal);
+    return verified;
+  } catch {
+    recordGatewayChallengeFailure(input.diagnostics, run.runId, "scratch-session-failed");
+    return false;
+  }
+}
+
+async function runGatewayChallenge(
+  input: OpenCodeRuntimeCompositionInput,
+  run: PreparedRun,
+  client: OpenCodeV2HttpClient,
+  sessionId: string,
+  signal: AbortSignal,
+): Promise<boolean> {
   const observed = input.gatewayReadiness.waitForObservedRequest(run.runId, signal);
   let verified = false;
   try {
@@ -1558,7 +3074,8 @@ type GatewayChallengePreconditionFailure =
   | "session-missing"
   | "capability-invalid"
   | "live-verification-failed"
-  | "gateway-refused";
+  | "gateway-refused"
+  | "scratch-session-failed";
 
 function gatewayChallengePrecondition(
   input: OpenCodeRuntimeCompositionInput,
@@ -1635,15 +3152,17 @@ function verifiedProtocol(
   candidate: PortableSidecarRuntimeVerification,
   trusted: PortableSidecarRuntimeVerification,
 ): boolean {
+  // The discovered runtime's approved version selects its own producer-derived digests (#3908).
+  const pin = openCodeRuntimeVersionPin(candidate.summary.upstreamVersion);
   return (
     candidate === trusted &&
     candidate.summary.status === "verified" &&
-    candidate.summary.upstreamVersion === OPENCODE_PINNED_VERSION &&
+    pin !== undefined &&
     candidate.availability.protocolSchemaVerified &&
-    candidate.protocolSchemaRawSha256 === PINNED_RAW_SCHEMA_SHA256 &&
+    candidate.protocolSchemaRawSha256 === pin.rawSchemaSha256 &&
     runtimeField(candidate, "protocolHandshakeAlgorithm") ===
       OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM &&
-    DIGEST.test(candidate.protocolHandshakeDigest)
+    candidate.protocolHandshakeDigest === pin.protocolSurfaceSha256
   );
 }
 
@@ -1671,9 +3190,12 @@ function createPrivateState(runRoot: string): void {
     mkdirSync(path, { recursive: true, mode: 0o700 });
     chmodSync(path, 0o700);
   }
+  // The plan directory exists before launch: its kernel rule keeps the directories above it
+  // from being created or replaced while the run is alive.
   for (const path of [
-    join(runRoot, "config", "opencode"),
-    join(runRoot, "config", "opencode", "plugins"),
+    openCodeConfigDirectory(runRoot),
+    join(openCodeConfigDirectory(runRoot), "plugins"),
+    openCodePlanDirectory(runRoot),
   ]) {
     mkdirSync(path, { recursive: true, mode: 0o700 });
     chmodSync(path, 0o700);
@@ -1685,7 +3207,7 @@ function materialize(
   config: string,
   pluginSources: Readonly<Record<string, string>>,
 ): void {
-  const discoveryRoot = join(runRoot, "config", "opencode");
+  const discoveryRoot = openCodeConfigDirectory(runRoot);
   writePrivateFile(join(discoveryRoot, "opencode.json"), config);
   for (const [name, source] of Object.entries(pluginSources)) {
     writePrivateFile(join(discoveryRoot, "plugins", `${name}.ts`), source);
@@ -1700,8 +3222,8 @@ function writePrivateFile(path: string, value: string): void {
 function configMaterialized(runRoot: string): boolean {
   try {
     return (
-      statSync(join(runRoot, "config", "opencode", "opencode.json")).isFile() &&
-      readFileSync(join(runRoot, "config", "opencode", "opencode.json"), "utf8").length > 0
+      statSync(join(openCodeConfigDirectory(runRoot), "opencode.json")).isFile() &&
+      readFileSync(join(openCodeConfigDirectory(runRoot), "opencode.json"), "utf8").length > 0
     );
   } catch {
     return false;
@@ -1778,6 +3300,9 @@ interface ToolBridgeExecutionDeps {
   readonly beginTool?: NonNullable<OpenCodeRuntimeCompositionInput["safeActivity"]>["beginTool"];
   readonly diagnostics: ServerDiagnosticSink | undefined;
   readonly renderedResults?: RenderedResultLog | undefined;
+  readonly nativeWorktrees?: NativeWorktreeProvisionPort | undefined;
+  readonly externalReadRoots?: readonly string[] | undefined;
+  readonly nativeWebSearch?: NativeWebSearch | undefined;
 }
 
 /** Where a delivered tool result's model-facing rendering is recorded (#3873). */
@@ -2175,12 +3700,23 @@ function handleDirectToolRequest(
   const read = nativeReadTransportValue(input.body);
   if (read !== undefined)
     return handleNativeReadTransport(read, input.signal, deps, runs, nativeRead);
-  const native = nativeInitializationValue(input.body);
-  if (native !== undefined)
-    return handleNativeInitialization(native, input.signal, deps, gate, runs);
   const permission = parseV2PermissionRequest(input.body);
   if (permission !== undefined) {
     return handleV2PermissionRequest(permission, input.signal, deps, approvals, runs);
+  }
+  const nativePolicy = parseNativePolicyBody(input.body);
+  if (nativePolicy !== undefined) {
+    return handleNativePolicyRequest(nativePolicy, input.signal, deps, approvals, runs);
+  }
+  const webSearch = nativeWebSearchTransportValue(input.body);
+  if (webSearch !== undefined) {
+    const run = runs.get(webSearch.runId);
+    return answerNativeWebSearch(
+      deps.nativeWebSearch,
+      webSearch,
+      run?.ready === true && run.mode === "autonomous-delivery",
+      input.signal,
+    );
   }
   const admission = gate.admit(
     toolBridgeRequestDeadlineMs(gate.limits.requestDeadlineMs, input.body),
@@ -2190,6 +3726,560 @@ function handleDirectToolRequest(
   return executeToolRequest(deps, input.headers, input.body, admission).finally(
     detachExternalAbort,
   );
+}
+
+function parseNativePolicyBody(body: string): OpenCodeNativePolicyRequest | undefined {
+  if (!validJson(body)) return undefined;
+  const parsed: unknown = JSON.parse(body);
+  return v2Record(parsed)?.action === OPENCODE_NATIVE_POLICY_ACTION
+    ? parseOpenCodeNativePolicyRequest(parsed)
+    : undefined;
+}
+
+/**
+ * The native permission hook's question (#3897): what is the final effect of this evaluated
+ * OpenCode action for this run? The server-owned policy answers allow or deny at once, or puts the
+ * action to the human through the run's approval lane and answers with the decision. Every answer
+ * leaves a body-free line; an unready run, a foreign session or a malformed ask is refused.
+ */
+async function handleNativePolicyRequest(
+  request: OpenCodeNativePolicyRequest,
+  signal: AbortSignal | undefined,
+  deps: ToolBridgeExecutionDeps,
+  approvals: ReturnType<typeof createOpenCodeV2ApprovalRequests>,
+  runs: ReadonlyMap<string, PreparedRun>,
+): Promise<OpenCodeToolBridgeResponse> {
+  const run = runs.get(request.runId);
+  const sessionRelation =
+    run?.ready === true
+      ? await nativeSessionRelation(run, request.sessionID, signal, deps.diagnostics)
+      : undefined;
+  if (run?.ready !== true || sessionRelation === undefined) {
+    return { status: 403, body: "", rejection: "approval-unavailable" };
+  }
+  const decided = decideOpenCodeNativePolicy({
+    mode: run.mode,
+    workspaceRoot: run.workspaceRoot,
+    planRoot: openCodePlanDirectory(run.runRoot),
+    request,
+    nowMs: Date.now(),
+    ...(run.mcp === undefined ? {} : { mcp: run.mcp }),
+    ...(deps.externalReadRoots === undefined ? {} : { externalRoots: deps.externalReadRoots }),
+    webSearch: deps.nativeWebSearch?.admitted === true,
+  });
+  const decision = admittedSessionMove(run, request, decided);
+  const settled = await settleNativePolicyOutcome(run, decision, request, signal, deps, {
+    approvals,
+    sessionRelation,
+  });
+  return answerNativePolicy(run, request, decision, { ...settled, sessionRelation }, deps);
+}
+
+// #3903 AC3: the provider may search exactly the query the policy just allowed for this run.
+function grantAllowedWebSearch(
+  run: PreparedRun,
+  request: OpenCodeNativePolicyRequest,
+  outcome: OpenCodeNativePolicyOutcome,
+  deps: ToolBridgeExecutionDeps,
+): void {
+  const [query] = request.resources;
+  if (request.permission === "websearch" && outcome === "allowed" && query !== undefined)
+    deps.nativeWebSearch?.grant(run.runId, query);
+}
+
+// The settled decision becomes the hook's answer and its one body-free line; an approved
+// `worktree_create` is answered with the managed owner's result instead (#3903 AC4).
+async function answerNativePolicy(
+  run: PreparedRun,
+  request: OpenCodeNativePolicyRequest,
+  decision: OpenCodeNativePolicyDecision,
+  settled: NativePolicySettlement & { readonly sessionRelation: OpenCodeNativeSessionRelation },
+  deps: ToolBridgeExecutionDeps,
+): Promise<OpenCodeToolBridgeResponse> {
+  const { outcome } = settled;
+  grantAllowedWebSearch(run, request, outcome, deps);
+  const worktree = await nativeWorktreeOutcome(run, request, outcome, deps);
+  if ((outcome !== "allowed" && outcome !== "approved") || worktree !== undefined)
+    noteNativeCallRefused(deps, request);
+  recordOpenCodeNativePolicyDecision(deps.activityLog, run.runId, {
+    mode: run.mode,
+    request,
+    decision,
+    outcome,
+    sessionRelation: settled.sessionRelation,
+    ...(settled.authority === undefined ? {} : { authority: settled.authority }),
+    ...(worktree === undefined ? {} : { worktree: worktree.disposition }),
+  });
+  return worktree === undefined
+    ? nativePolicyResult(outcome, decision)
+    : nativePolicyResponse("deny", worktree.message);
+}
+
+/**
+ * An approved Code Mode `worktree_create` is provisioned by Keiko's managed task-workspace owner
+ * (#3903 AC4); the producer's own unmanaged worktree call is always blocked, and the model reads
+ * the managed result as its message. `undefined` for every other action and for a refused one.
+ */
+async function nativeWorktreeOutcome(
+  run: PreparedRun,
+  request: OpenCodeNativePolicyRequest,
+  outcome: OpenCodeNativePolicyOutcome,
+  deps: ToolBridgeExecutionDeps,
+): Promise<
+  { readonly message: string; readonly disposition: NativeWorktreeDisposition } | undefined
+> {
+  if (request.permission !== OPENCODE_CODE_MODE_WORKTREE_CREATE) return undefined;
+  if (outcome !== "allowed" && outcome !== "approved") return undefined;
+  const [name] = request.resources;
+  const port = deps.nativeWorktrees;
+  return nativeWorktreeAnswer(
+    port === undefined || name === undefined
+      ? { ok: false, reason: "unavailable" }
+      : await provisionedWorktree(port, run, name, deps.diagnostics),
+  );
+}
+
+// The managed owner records its classified failures itself; an unclassified one is recorded here,
+// body-free under the run's correlation, and still refuses the request.
+async function provisionedWorktree(
+  port: NativeWorktreeProvisionPort,
+  run: PreparedRun,
+  name: string,
+  diagnostics: ServerDiagnosticSink | undefined,
+): Promise<NativeWorktreeProvisionResult> {
+  try {
+    return await port.provision({
+      runId: run.runId,
+      workspaceRoot: run.workspaceRoot,
+      name,
+      correlationId: run.runId,
+    });
+  } catch (error) {
+    emitServerDiagnostic(diagnostics, {
+      correlationId: run.runId,
+      timestamp: new Date().toISOString(),
+      operation: "coding-runtime.tool-bridge",
+      source: "opencode-runtime-composition.native-worktree",
+      errorClass: contentFreeErrorClass(error),
+      message: "native-worktree-provision-failed",
+    });
+    return { ok: false, reason: "provision-failed" };
+  }
+}
+
+// A refused call ends as a failed tool in the runtime's history; the run's effort evidence reads it
+// as a refusal rather than a failure of the tool itself.
+function noteNativeCallRefused(
+  deps: ToolBridgeExecutionDeps,
+  request: OpenCodeNativePolicyRequest,
+): void {
+  if (request.source === undefined) return;
+  deps.facade.nativeSettlement?.refused({
+    messageId: request.source.messageID,
+    callId: request.source.id,
+  });
+}
+
+function nativePolicyResult(
+  outcome: OpenCodeNativePolicyOutcome,
+  decision: OpenCodeNativePolicyDecision,
+): OpenCodeToolBridgeResponse {
+  if (outcome === "allowed" || outcome === "approved") return nativePolicyResponse("allow");
+  if (outcome === "authority-refused" || outcome === "cancelled")
+    return nativePolicyResponse("deny", NATIVE_AUTHORITY_REFUSED_MESSAGE);
+  if (decision.effect === "deny") return nativePolicyResponse("deny", decision.message);
+  return nativePolicyResponse(
+    "deny",
+    humanDecisionFeedback(outcome === "denied" ? "denied" : "expired"),
+  );
+}
+
+const NATIVE_AUTHORITY_REFUSED_MESSAGE =
+  "Keiko refused this action: the run's authority is no longer valid or its budget is exhausted.";
+
+/**
+ * The policy's answer, revalidated against live authority before an effect is released (#3897
+ * review): an already-aborted ask is cancelled, and an allowed or human-approved action is
+ * admitted through the facade's native-effect owner, which authenticates the capability, requires
+ * the run to be running on its tree binding, checks the envelope's action classes and charges the
+ * run's tool-call budget once per original tool invocation, reads included. A wiring without that
+ * owner refuses every effect.
+ */
+async function settleNativePolicyOutcome(
+  run: PreparedRun,
+  decision: OpenCodeNativePolicyDecision,
+  request: OpenCodeNativePolicyRequest,
+  signal: AbortSignal | undefined,
+  deps: ToolBridgeExecutionDeps,
+  context: {
+    readonly approvals: ReturnType<typeof createOpenCodeV2ApprovalRequests>;
+    readonly sessionRelation: OpenCodeNativeSessionRelation;
+  },
+): Promise<NativePolicySettlement> {
+  const { approvals, sessionRelation } = context;
+  if (signal?.aborted === true) return { outcome: "cancelled" };
+  if (decision.effect === "deny") return { outcome: decision.reason };
+  const outcome: OpenCodeNativePolicyOutcome =
+    decision.effect === "ask"
+      ? await nativePolicyHumanDecision(run, decision, signal, deps, approvals)
+      : "allowed";
+  noteDeniedVerification(deps, request, outcome);
+  if (outcome !== "allowed" && outcome !== "approved") return { outcome };
+  const admission = nativeEffectAdmission(
+    deps,
+    decision.classification.actionClass,
+    request,
+    signal,
+  );
+  if (!admission.ok)
+    return { outcome: "authority-refused", authority: { reason: admission.reason } };
+  noteAdmittedEditTargets(run, request);
+  noteAdmittedEditEvidence(run, request, decision.classification, { deps, sessionRelation });
+  noteAdmittedVerification(run, deps, request);
+  return { outcome, authority: { charge: admission.charge } };
+}
+
+/** A human refused a project check: the run's verification is blocked, as for the governed one. */
+function noteDeniedVerification(
+  deps: ToolBridgeExecutionDeps,
+  request: OpenCodeNativePolicyRequest,
+  outcome: OpenCodeNativePolicyOutcome,
+): void {
+  if (outcome === "denied" && nativeVerificationKind(request) !== undefined)
+    deps.facade.nativeSettlement?.verificationDenied?.();
+}
+
+/** The project check an admitted native shell call runs, if it is one (#3901). */
+function nativeVerificationKind(
+  request: OpenCodeNativePolicyRequest,
+): VerificationKind | undefined {
+  return request.permission === "shell"
+    ? openCodeNativeVerificationKind(request.resources)
+    : undefined;
+}
+
+/** An admitted verification command, so its exit status can become the run's evidence (#3901). */
+function noteAdmittedVerification(
+  run: PreparedRun,
+  deps: ToolBridgeExecutionDeps,
+  request: OpenCodeNativePolicyRequest,
+): void {
+  const kind = nativeVerificationKind(request);
+  if (kind === undefined || request.source === undefined) return;
+  run.verificationCalls ??= new Set();
+  rememberKey(
+    run.verificationCalls,
+    openCodeNativeCallKey(request.source.messageID, request.source.id),
+  );
+  deps.facade.nativeSettlement?.verificationAdmitted?.(
+    { messageId: request.source.messageID, callId: request.source.id },
+    kind,
+  );
+}
+
+/** The most admitted plan-note edits a run remembers until the runtime reports them settled. */
+const PLAN_NOTE_EDITS_MAX = 256;
+
+/**
+ * What an admitted native edit means for the run's verification evidence (#3901). The plan agent's
+ * notes in the run's private plan directory are planning: the policy classifies that edit as a
+ * read, and its settlement does not count as a workspace edit. A workspace edit of a child session
+ * is settled on the child, whose history the run does not read, so it counts from its admission.
+ */
+function noteAdmittedEditEvidence(
+  run: PreparedRun,
+  request: OpenCodeNativePolicyRequest,
+  classification: OpenCodeNativeActionClassification,
+  context: {
+    readonly deps: ToolBridgeExecutionDeps;
+    readonly sessionRelation: OpenCodeNativeSessionRelation;
+  },
+): void {
+  if (request.permission !== "edit" || request.source === undefined) return;
+  if (classification.actionClass === "workspace-read") {
+    rememberPlanNoteEdit(run, openCodeNativeCallKey(request.source.messageID, request.source.id));
+    return;
+  }
+  if (context.sessionRelation === "child") context.deps.facade.nativeSettlement?.unsettledEdit?.();
+}
+
+function rememberPlanNoteEdit(run: PreparedRun, key: string): void {
+  run.planNoteEdits ??= new Set();
+  const notes = run.planNoteEdits;
+  notes.add(key);
+  if (notes.size > PLAN_NOTE_EDITS_MAX) notes.delete(notes.values().next().value ?? "");
+}
+
+/** A settled plan-note edit is no workspace edit; every other call keeps its tool's meaning. */
+function planNoteSettlement(
+  run: PreparedRun,
+  messageId: string,
+  callId: string,
+): { readonly workspaceEdit?: false } {
+  return run.planNoteEdits?.delete(openCodeNativeCallKey(messageId, callId)) === true
+    ? { workspaceEdit: false }
+    : {};
+}
+
+/** An admitted native edit's targets, so its settlement can record what the turn itself wrote. */
+function noteAdmittedEditTargets(run: PreparedRun, request: OpenCodeNativePolicyRequest): void {
+  if (request.source === undefined) return;
+  const key = openCodeNativeCallKey(request.source.messageID, request.source.id);
+  const files = openCodeNativeEditFiles(request, run.workspaceRoot);
+  noteOpenCodeEditTargets(run, key, files);
+  if (files.length === 0) return;
+  run.editTargetsByCall ??= new Map();
+  const targets = run.editTargetsByCall;
+  targets.delete(key);
+  targets.set(key, files);
+  if (targets.size > STEP_EVIDENCE_MAX) targets.delete(targets.keys().next().value ?? "");
+}
+
+/** The most call and step facts a run remembers for its verification evidence. */
+const STEP_EVIDENCE_MAX = 1024;
+
+function rememberKey(keys: Set<string>, key: string): void {
+  keys.delete(key);
+  keys.add(key);
+  if (keys.size > STEP_EVIDENCE_MAX) keys.delete(keys.values().next().value ?? "");
+}
+
+type NativeStepOutcome = "counted" | "covered" | "verification-only";
+
+/**
+ * The workspace files a finished native step changed, weighed against the run's verification
+ * evidence once per step (#3901). A file a native edit of the same step named is that edit's, which
+ * its own settlement already counted; anything else (a shell command's or a child session's writes)
+ * is a change no settlement reported, so it is the run's edit and a check must follow it. A step of
+ * project checks alone changed only what the checks themselves write. The step is weighed when the
+ * history shows it finished, before that read's tool settlements reach the ledger, so a check in a
+ * later step still proves it.
+ */
+function observeNativeStepChanges(
+  input: OpenCodeRuntimeCompositionInput,
+  run: PreparedRun,
+  messages: readonly Readonly<Record<string, unknown>>[],
+): void {
+  const settlement = input.toolProfile === "native" ? input.toolFacade.nativeSettlement : undefined;
+  if (settlement?.unsettledEdit === undefined) return;
+  run.seenStepChanges ??= new Set();
+  const seen = run.seenStepChanges;
+  for (const change of openCodeV2StepChanges(messages)) {
+    if (seen.has(change.messageId)) continue;
+    rememberKey(seen, change.messageId);
+    const weighed = weighStepChange(run, change);
+    if (weighed.outcome === "counted") settlement.unsettledEdit();
+    recordNativeStepChanged(input.activityLog, run.runId, change, weighed);
+  }
+}
+
+function weighStepChange(
+  run: PreparedRun,
+  change: OpenCodeV2StepChange,
+): { readonly outcome: NativeStepOutcome; readonly uncoveredCount: number } {
+  const keys = change.callIds.map((callId) => openCodeNativeCallKey(change.messageId, callId));
+  if (keys.length > 0 && keys.every((key) => run.verificationCalls?.has(key) === true))
+    return { outcome: "verification-only", uncoveredCount: 0 };
+  const covered = new Set(keys.flatMap((key) => run.editTargetsByCall?.get(key) ?? []));
+  const uncoveredCount =
+    change.files.filter((file) => !covered.has(file)).length + (change.truncated ? 1 : 0);
+  return { outcome: uncoveredCount > 0 ? "counted" : "covered", uncoveredCount };
+}
+
+const NATIVE_STEP_CHANGED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.native-step.changed",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.opencodeRuntimeComposition.recordNativeStepChanged",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["counted", "covered", "verification-only"],
+    },
+    fileCount: { type: "integer", dataClass: "count", required: true },
+    uncoveredCount: { type: "integer", dataClass: "count", required: true },
+    callCount: { type: "integer", dataClass: "count", required: true },
+    fileList: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["complete", "truncated"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-runtime-native-policy"],
+  proofIds: ["coding-runtime.native-step.changed.emitted-line"],
+  releaseImpact: "patch",
+});
+
+/** One body-free line per weighed step: what it changed and whether it counts as the run's edit. */
+function recordNativeStepChanged(
+  activityLog: ServerLogSink | undefined,
+  runId: string,
+  change: OpenCodeV2StepChange,
+  weighed: { readonly outcome: NativeStepOutcome; readonly uncoveredCount: number },
+): void {
+  (activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      NATIVE_STEP_CHANGED_OPERATION,
+      { correlationId: runId },
+      {
+        runId,
+        outcome: weighed.outcome,
+        fileCount: change.files.length,
+        uncoveredCount: weighed.uncoveredCount,
+        callCount: change.callIds.length,
+        fileList: change.truncated ? "truncated" : "complete",
+      },
+    ),
+  );
+}
+
+interface NativePolicySettlement {
+  readonly outcome: OpenCodeNativePolicyOutcome;
+  readonly authority?: OpenCodeNativeAuthorityEvidence;
+}
+
+function nativeEffectAdmission(
+  deps: ToolBridgeExecutionDeps,
+  actionClass: CodingWorkbenchActionClass,
+  request: OpenCodeNativePolicyRequest,
+  signal: AbortSignal | undefined,
+): CodingToolNativeEffectAdmission {
+  if (signal?.aborted === true) return { ok: false, reason: "unavailable" };
+  const { source, patchBytes } = request;
+  return (
+    deps.facade.nativeEffect?.admit({
+      capability: deps.capability,
+      actionClass,
+      ...(patchBytes === undefined ? {} : { patchBytes }),
+      ...(source === undefined
+        ? {}
+        : {
+            invocation: {
+              sessionId: request.sessionID,
+              messageId: source.messageID,
+              callId: source.id,
+            },
+          }),
+    }) ?? { ok: false, reason: "unavailable" }
+  );
+}
+
+/**
+ * Which native session asked: the run's own session, or a child session the original runtime
+ * created under it (a subagent, #3897 review). The run's session tree decides
+ * (`opencodeNativeSessionTree.ts`): a child is admitted once its `parentID` chain reaches the run's
+ * session within a bounded depth and every session on the chain is located in the run's workspace;
+ * the proof is read from the runtime's own session list and cached. Any other session, a failed
+ * read or a full cache refuses the ask.
+ */
+async function nativeSessionRelation(
+  run: PreparedRun,
+  sessionID: string,
+  signal: AbortSignal | undefined,
+  diagnostics: ServerDiagnosticSink | undefined,
+): Promise<OpenCodeNativeSessionRelation | undefined> {
+  if (run.sessionId === undefined || run.client === undefined) return undefined;
+  try {
+    return await classifyNativeSession(
+      run.client,
+      nativeSessionTree(run, run.sessionId),
+      sessionID,
+      signal,
+    );
+  } catch (error) {
+    // A failed read proves no ancestry, so the ask is refused; the failure itself is recorded
+    // body-free under the run's correlation.
+    emitServerDiagnostic(diagnostics, {
+      correlationId: run.runId,
+      timestamp: new Date().toISOString(),
+      operation: "coding-runtime.tool-bridge",
+      source: "opencode-runtime-composition.native-session-ancestry",
+      errorClass: contentFreeErrorClass(error),
+      message: "native-session-ancestry-failed",
+    });
+    return undefined;
+  }
+}
+
+/** The run's session tree, sharing the run's admission cache of proven children. */
+function nativeSessionTree(
+  run: Pick<PreparedRun, "workspaceRoot" | "childSessionIds" | "sessionLocations">,
+  sessionId: string,
+): NativeSessionTreeRun {
+  run.childSessionIds ??= new Set();
+  run.sessionLocations ??= new Set();
+  return {
+    sessionId,
+    workspaceRoot: run.workspaceRoot,
+    children: run.childSessionIds,
+    locations: run.sessionLocations,
+  };
+}
+
+// An allowed session move widens the run's tree to its directory before the move happens, so the
+// session's later children and jobs stay the run's (#3903 AC4); a tree at its bound refuses it.
+function admittedSessionMove(
+  run: PreparedRun,
+  request: OpenCodeNativePolicyRequest,
+  decision: OpenCodeNativePolicyDecision,
+): OpenCodeNativePolicyDecision {
+  const directory = request.resources[0];
+  if (decision.effect !== "allow" || request.permission !== OPENCODE_CODE_MODE_SESSION_MOVE)
+    return decision;
+  if (
+    directory !== undefined &&
+    run.sessionId !== undefined &&
+    admitNativeSessionLocation(nativeSessionTree(run, run.sessionId), directory)
+  )
+    return decision;
+  return {
+    effect: "deny",
+    reason: "unsupported-action",
+    message:
+      "Keiko refused this action: the run already follows its bound of working directories. Keep working in one of them.",
+  };
+}
+
+export { nativeSessionDescendsFromRun } from "./opencodeNativeSessionTree.js";
+
+// The ask goes to the human through the run's existing approval lane; the tool call it ends is
+// settled with the human's verdict like a governed ask (#3612).
+async function nativePolicyHumanDecision(
+  run: Pick<PreparedRun, "runId" | "onPermission">,
+  decision: Extract<OpenCodeNativePolicyDecision, { readonly effect: "ask" }>,
+  signal: AbortSignal | undefined,
+  deps: ToolBridgeExecutionDeps,
+  approvals: ReturnType<typeof createOpenCodeV2ApprovalRequests>,
+): Promise<OpenCodeNativePolicyOutcome> {
+  if (run.onPermission === undefined || signal?.aborted === true) return "unavailable";
+  const human = await approvals.requestNative({
+    runId: run.runId,
+    event: decision.event,
+    actionId: decision.actionId,
+    onPermission: run.onPermission,
+    signal: signal ?? new AbortController().signal,
+  });
+  settleDecidedTool(deps.settleTool, human);
+  return human.outcome;
+}
+
+function nativePolicyResponse(
+  effect: "allow" | "deny",
+  message?: string,
+): OpenCodeToolBridgeResponse {
+  return {
+    status: 200,
+    body: JSON.stringify(message === undefined ? { effect } : { effect, message }),
+  };
 }
 
 function parseV2PermissionRequest(body: string): Readonly<Record<string, unknown>> | undefined {
@@ -2927,6 +5017,10 @@ type NativeReadTransportPacket = Readonly<{
       }>
   );
 
+function nativeWebSearchTransportValue(body: string): NativeWebSearchRequest | undefined {
+  return validJson(body) ? parseNativeWebSearchRequest(JSON.parse(body)) : undefined;
+}
+
 function nativeReadTransportValue(body: string): unknown {
   if (!validJson(body)) return undefined;
   const value: unknown = JSON.parse(body);
@@ -3074,18 +5168,18 @@ async function handleNativeReadTransport(
   producer: CodingToolNativeReadInvocations | undefined,
 ): Promise<OpenCodeToolBridgeResponse> {
   const packet = copyNativeReadTransportPacket(value);
-  if (packet === undefined) return nativeInitializationRefusal("invalid-request", 400);
+  if (packet === undefined) return nativeTransportRefusal("invalid-request", 400);
   const run = runs.get(packet.runId);
   try {
     if (producer?.fileIO === undefined || !nativeReadRunCurrent(deps, run))
-      return nativeInitializationRefusal("dispatch-refused");
-    if (signal?.aborted === true) return nativeInitializationRefusal("cancelled");
+      return nativeTransportRefusal("dispatch-refused");
+    if (signal?.aborted === true) return nativeTransportRefusal("cancelled");
     return await dispatchNativeReadTransport(packet, run, producer, signal, deps);
   } catch (error) {
     if (producer !== undefined && packet.phase !== "begin")
       void producer.close(packet.identity, "cancelled");
     emitFacadeFailureDiagnostic(deps.diagnostics, nativeReadPacketActionId(packet), error);
-    return nativeInitializationRefusal("dispatch-refused", 502);
+    return nativeTransportRefusal("dispatch-refused", 502);
   }
 }
 
@@ -3121,8 +5215,7 @@ async function beginNativeReadTransport(
   signal: AbortSignal | undefined,
   deps: ToolBridgeExecutionDeps,
 ): Promise<OpenCodeToolBridgeResponse> {
-  if (packet.context.sessionID !== run.sessionId)
-    return nativeInitializationRefusal("dispatch-refused");
+  if (packet.context.sessionID !== run.sessionId) return nativeTransportRefusal("dispatch-refused");
   const body = JSON.stringify({
     action: "read",
     relativePath: packet.relativePath,
@@ -3137,11 +5230,11 @@ async function beginNativeReadTransport(
     ...(packet.offset === undefined ? {} : { offset: packet.offset }),
     ...(packet.limit === undefined ? {} : { limit: packet.limit }),
   });
-  if (!result.ok) return nativeInitializationRefusal(result.reason);
+  if (!result.ok) return nativeTransportRefusal(result.reason);
   let delivered = false;
   try {
     if (!nativeReadBeginCurrent(packet, run, producer, result.identity, signal, deps))
-      return nativeInitializationRefusal("dispatch-refused");
+      return nativeTransportRefusal("dispatch-refused");
     delivered = true;
     return {
       status: 200,
@@ -3181,7 +5274,7 @@ async function closeNativeReadTransport(
     const ok = await producer.close(packet.identity, packet.outcome);
     return nativeReadRunCurrent(deps, run) && signal?.aborted !== true
       ? { status: 200, body: JSON.stringify({ ok }), nativeResult: true }
-      : nativeInitializationRefusal("dispatch-refused");
+      : nativeTransportRefusal("dispatch-refused");
   } finally {
     detach();
   }
@@ -3210,7 +5303,7 @@ async function nativeReadTransportIO(
   deps: ToolBridgeExecutionDeps,
 ): Promise<OpenCodeToolBridgeResponse> {
   const io = producer.fileIO;
-  if (io === undefined) return nativeInitializationRefusal("dispatch-refused");
+  if (io === undefined) return nativeTransportRefusal("dispatch-refused");
   const detach = bindNativeReadDisconnect(signal, producer, packet.identity);
   const work = io[packet.phase](packet.identity, packet.input);
   void work.then((late) => {
@@ -3221,12 +5314,12 @@ async function nativeReadTransportIO(
     if (signal?.aborted === true || !nativeReadIOCurrent(deps, run, result)) {
       wipeNativeIOBytes(result);
       void producer.close(packet.identity, "cancelled");
-      return nativeInitializationRefusal("dispatch-refused");
+      return nativeTransportRefusal("dispatch-refused");
     }
     return nativeFileIOResponse(result);
   } catch (error) {
     if (signal?.aborted !== true) throw error;
-    return nativeInitializationRefusal("cancelled");
+    return nativeTransportRefusal("cancelled");
   } finally {
     detach();
   }
@@ -3248,66 +5341,6 @@ function nativeReadIOCurrent(
 
 function wipeNativeIOBytes(result: NativeFileIOResult): void {
   if (result.ok && "bytes" in result) result.bytes.fill(0);
-}
-
-type NativeInitializationPacket = Readonly<{
-  action: "native-initialization";
-  runId: string;
-}> &
-  (
-    | { readonly phase: "begin" }
-    | { readonly phase: "end"; readonly scopeId: string }
-    | {
-        readonly phase: "readBytes";
-        readonly scopeId: string;
-        readonly relativePath: string;
-        readonly range?: { readonly offset: number; readonly length: number };
-      }
-    | { readonly phase: "stat" | "list"; readonly scopeId: string; readonly relativePath: string }
-  );
-interface NativeInitializationAttachment {
-  readonly id: string;
-  readonly admission: AdmittedToolRequest;
-  readonly result: Promise<CodingAcceptedInitializationResult<void>>;
-  readonly end: () => void;
-  io?: CodingAcceptedInitializationReadPort;
-  open: boolean;
-}
-
-function nativeInitializationValue(body: string): unknown {
-  if (!validJson(body)) return undefined;
-  const value: unknown = JSON.parse(body);
-  return v2Record(value)?.action === "native-initialization" ? value : undefined;
-}
-
-/** Owned data only; transport never supplies authority, workspace root, purpose, or executable. */
-export function copyNativeInitializationPacket(
-  value: unknown,
-): NativeInitializationPacket | undefined {
-  const record = initializationData(value);
-  if (record?.action !== "native-initialization" || typeof record.runId !== "string")
-    return undefined;
-  if (!/^[A-Za-z0-9_-]{1,256}$/u.test(record.runId)) return undefined;
-  return copyInitializationPhase(record, record.runId);
-}
-
-function copyInitializationPhase(
-  record: Readonly<Record<string, unknown>>,
-  runId: string,
-): NativeInitializationPacket | undefined {
-  const action = "native-initialization";
-  if (record.phase === "begin")
-    return initialFields(record, ["action", "phase", "runId"])
-      ? Object.freeze({ action, phase: record.phase, runId })
-      : undefined;
-  if (typeof record.scopeId !== "string" || !/^[a-f0-9-]{36}$/u.test(record.scopeId))
-    return undefined;
-  const common = { action, runId, scopeId: record.scopeId } as const;
-  if (record.phase === "end")
-    return initialFields(record, ["action", "phase", "runId", "scopeId"])
-      ? Object.freeze({ ...common, phase: record.phase })
-      : undefined;
-  return copyInitializationIO(record, common);
 }
 
 function initializationData(value: unknown): Readonly<Record<string, unknown>> | undefined {
@@ -3333,32 +5366,6 @@ function initialFields(
   );
 }
 
-function copyInitializationIO(
-  record: Readonly<Record<string, unknown>>,
-  common: {
-    readonly action: "native-initialization";
-    readonly runId: string;
-    readonly scopeId: string;
-  },
-): NativeInitializationPacket | undefined {
-  if (typeof record.relativePath !== "string") return undefined;
-  const keys = ["action", "phase", "runId", "scopeId", "relativePath"];
-  const path = record.relativePath;
-  if (record.phase === "stat" || record.phase === "list")
-    return initialFields(record, keys)
-      ? Object.freeze({ ...common, phase: record.phase, relativePath: path })
-      : undefined;
-  if (record.phase !== "readBytes") return undefined;
-  const range = copyInitializationRange(record, keys);
-  if (range === false) return undefined;
-  return Object.freeze({
-    ...common,
-    phase: record.phase,
-    relativePath: path,
-    ...(range === undefined ? {} : { range }),
-  });
-}
-
 function copyInitializationRange(
   record: Readonly<Record<string, unknown>>,
   keys: readonly string[],
@@ -3375,158 +5382,19 @@ function copyInitializationRange(
   return Object.freeze({ offset: range.offset, length: range.length });
 }
 
-async function handleNativeInitialization(
-  value: unknown,
-  signal: AbortSignal | undefined,
-  deps: ToolBridgeExecutionDeps,
-  gate: ToolBridgeAdmissionGate,
-  runs: ReadonlyMap<string, PreparedRun>,
-): Promise<OpenCodeToolBridgeResponse> {
-  const packet = copyNativeInitializationPacket(value);
-  if (packet === undefined) return nativeInitializationRefusal("invalid-request", 400);
-  const run = runs.get(packet.runId);
-  try {
-    if (run?.serviceHostPrepared !== true || run.ready || !initializationRootCurrent(deps, run))
-      return nativeInitializationRefusal("initialization-refused");
-    if (packet.phase === "begin") return await beginNativeInitialization(run, signal, deps, gate);
-    return await continueNativeInitialization(packet, run, signal, deps);
-  } catch (error) {
-    run?.nativeInitialization?.admission.controller.abort("initialization-failed");
-    emitFacadeFailureDiagnostic(deps.diagnostics, undefined, error);
-    return nativeInitializationRefusal("initialization-failed", 502);
-  }
-}
-
 function initializationRootCurrent(deps: ToolBridgeExecutionDeps, run: PreparedRun): boolean {
   const root = deps.resolveWorkspaceRootAccess?.();
   return root?.canonicalRoot === run.workspaceRoot;
 }
 
-function nativeInitializationRefusal(reason: string, status = 409): OpenCodeToolBridgeResponse {
+function nativeTransportRefusal(reason: string, status = 409): OpenCodeToolBridgeResponse {
   return { status, body: JSON.stringify({ ok: false, reason }), nativeResult: true };
-}
-
-async function beginNativeInitialization(
-  run: PreparedRun,
-  signal: AbortSignal | undefined,
-  deps: ToolBridgeExecutionDeps,
-  gate: ToolBridgeAdmissionGate,
-): Promise<OpenCodeToolBridgeResponse> {
-  const facet = deps.facade.acceptedInitialization;
-  if (facet === undefined || run.nativeInitialization !== undefined)
-    return nativeInitializationRefusal("initialization-closed");
-  if (signal?.aborted === true) return nativeInitializationRefusal("cancelled");
-  const admission = gate.admit(gate.limits.requestDeadlineMs);
-  if (admission === undefined) return nativeInitializationRefusal("busy", 429);
-  const { state, ready } = createInitializationAttachment(
-    deps,
-    facet,
-    admission,
-    signal,
-    run.runId,
-  );
-  run.nativeInitialization = state;
-  const result = state.result;
-  const entered = await Promise.race([ready.then(() => true), result.then(() => false)]);
-  if (!entered) return initializationOutcome(await result);
-  if (!state.open || !initializationRootCurrent(deps, run)) {
-    admission.controller.abort("initialization-refused");
-    return nativeInitializationRefusal("initialization-refused");
-  }
-  recordNativeInitializationLifecycle(deps, run.runId, "begin", "accepted");
-  return { status: 200, body: JSON.stringify({ ok: true, scopeId: state.id }), nativeResult: true };
-}
-
-function initializationOutcome(
-  result: CodingAcceptedInitializationResult<void>,
-): OpenCodeToolBridgeResponse {
-  return result.ok
-    ? { status: 200, body: '{"ok":true}', nativeResult: true }
-    : nativeInitializationRefusal(result.reason);
-}
-
-async function continueNativeInitialization(
-  packet: Exclude<NativeInitializationPacket, { readonly phase: "begin" }>,
-  run: PreparedRun,
-  signal: AbortSignal | undefined,
-  deps: ToolBridgeExecutionDeps,
-): Promise<OpenCodeToolBridgeResponse> {
-  const state = run.nativeInitialization;
-  if (state?.id !== packet.scopeId || !state.open || state.io === undefined)
-    return nativeInitializationRefusal("initialization-closed");
-  const detach = bindExternalAbort(signal, state.admission);
-  try {
-    if (packet.phase === "end") {
-      state.open = false;
-      state.end();
-      const result = await state.result;
-      return initializationRootCurrent(deps, run)
-        ? initializationOutcome(result)
-        : nativeInitializationRefusal("initialization-refused");
-    }
-    return await initialIOUnderCurrentScope(packet, run, state, state.io, deps);
-  } finally {
-    detach();
-  }
-}
-
-async function initialIOUnderCurrentScope(
-  packet: Exclude<NativeInitializationPacket, { readonly phase: "begin" | "end" }>,
-  run: PreparedRun,
-  state: NativeInitializationAttachment,
-  io: CodingAcceptedInitializationReadPort,
-  deps: ToolBridgeExecutionDeps,
-): Promise<OpenCodeToolBridgeResponse> {
-  const work = executeInitialIO(packet, io);
-  void work.then(
-    (late) => {
-      if (state.admission.controller.signal.aborted && late.ok && "bytes" in late)
-        late.bytes.fill(0);
-    },
-    (error: unknown) => {
-      if (state.admission.controller.signal.aborted)
-        emitFacadeFailureDiagnostic(deps.diagnostics, undefined, error);
-    },
-  );
-  let result: InitialIOResult;
-  try {
-    result = await raceAbort(work, state.admission.controller.signal);
-  } catch (error) {
-    if (!state.admission.controller.signal.aborted) throw error;
-    return nativeInitializationRefusal(
-      abortReason(state.admission.controller.signal) === DEADLINE_ABORT ? "timeout" : "cancelled",
-    );
-  }
-  if (
-    !state.open ||
-    state.admission.controller.signal.aborted ||
-    !initializationRootCurrent(deps, run)
-  ) {
-    if (result.ok && "bytes" in result) result.bytes.fill(0);
-    state.admission.controller.abort("initialization-refused");
-    return nativeInitializationRefusal("initialization-refused");
-  }
-  return nativeFileIOResponse(result);
 }
 
 type NativeFileIOResult =
   | Awaited<ReturnType<CodingToolNativeReadFileIO["readBytes"]>>
   | Awaited<ReturnType<CodingToolNativeReadFileIO["stat"]>>
   | Awaited<ReturnType<CodingToolNativeReadFileIO["list"]>>;
-type InitialIOResult =
-  | Awaited<ReturnType<CodingAcceptedInitializationReadPort["readBytes"]>>
-  | Awaited<ReturnType<CodingAcceptedInitializationReadPort["stat"]>>
-  | Awaited<ReturnType<CodingAcceptedInitializationReadPort["list"]>>;
-function executeInitialIO(
-  packet: Exclude<NativeInitializationPacket, { readonly phase: "begin" | "end" }>,
-  io: CodingAcceptedInitializationReadPort,
-): Promise<InitialIOResult> {
-  const request = {
-    relativePath: packet.relativePath,
-    ...(packet.phase === "readBytes" && packet.range !== undefined ? { range: packet.range } : {}),
-  };
-  return io[packet.phase](request);
-}
 
 function nativeFileIOResponse(result: NativeFileIOResult): OpenCodeToolBridgeResponse {
   if (!result.ok) {
@@ -3539,7 +5407,7 @@ function nativeFileIOResponse(result: NativeFileIOResult): OpenCodeToolBridgeRes
           info: result.info,
         }),
       };
-    return nativeInitializationRefusal(result.reason);
+    return nativeTransportRefusal(result.reason);
   }
   const bytes = nativeFileIOResultBytes(result);
   try {
@@ -3559,128 +5427,4 @@ function nativeFileIOResultBytes(
   if ("bytes" in result) return result.bytes;
   if ("entries" in result) return encodeSecureWorkspaceNativeDirectory(result.entries);
   return new Uint8Array();
-}
-
-function createInitializationAttachment(
-  deps: ToolBridgeExecutionDeps,
-  facet: CodingAcceptedInitializationFacet,
-  admission: AdmittedToolRequest,
-  signal: AbortSignal | undefined,
-  runId: string,
-): { readonly state: NativeInitializationAttachment; readonly ready: Promise<void> } {
-  const acquired = initializationDeferred<undefined>();
-  const done = initializationDeferred<undefined>();
-  const completed = initializationDeferred<CodingAcceptedInitializationResult<void>>();
-  const state: NativeInitializationAttachment = {
-    id: randomUUID(),
-    admission,
-    result: completed.promise,
-    end: () => {
-      done.resolve(undefined);
-    },
-    open: true,
-  };
-  const close = (): void => {
-    state.open = false;
-    state.end();
-  };
-  admission.controller.signal.addEventListener("abort", close, { once: true });
-  const detach = bindExternalAbort(signal, admission);
-  void executeBridgeInitialization(
-    deps,
-    facet.run.bind(facet),
-    (io) => {
-      state.io = io;
-      acquired.resolve(undefined);
-      return done.promise;
-    },
-    admission,
-  ).then((result) => {
-    close();
-    detach();
-    admission.controller.signal.removeEventListener("abort", close);
-    completed.resolve(recordInitializationCompletion(deps, runId, result));
-  });
-  return { state, ready: acquired.promise };
-}
-
-function recordInitializationCompletion(
-  deps: ToolBridgeExecutionDeps,
-  runId: string,
-  result: CodingAcceptedInitializationResult<void>,
-): CodingAcceptedInitializationResult<void> {
-  try {
-    recordNativeInitializationLifecycle(
-      deps,
-      runId,
-      "end",
-      result.ok ? "completed" : result.reason,
-    );
-    return result;
-  } catch (error) {
-    emitFacadeFailureDiagnostic(deps.diagnostics, undefined, error);
-    return { ok: false, reason: "initialization-failed" };
-  }
-}
-
-const NATIVE_INITIALIZATION_LIFECYCLE_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
-  op: "coding-runtime.initialization-transport",
-  category: "process",
-  owner: "keiko-server",
-  emitter: "coding-runtime.opencodeRuntimeComposition.recordNativeInitializationLifecycle",
-  fields: {
-    stage: { type: "string", dataClass: "closed-enum", required: true, values: ["begin", "end"] },
-    outcome: {
-      type: "string",
-      dataClass: "closed-enum",
-      required: true,
-      values: [
-        "accepted",
-        "completed",
-        "initialization-closed",
-        "initialization-refused",
-        "initialization-failed",
-        "cancelled",
-        "timeout",
-        "busy",
-      ],
-    },
-  },
-  causal: "correlation",
-  lifecycle: "state",
-  analyzerProjection: "timeline",
-  failureClasses: ["coding-runtime-initialization-transport"],
-  proofIds: ["coding-runtime.initialization-transport.emitted-line"],
-  releaseImpact: "patch",
-});
-
-function recordNativeInitializationLifecycle(
-  deps: ToolBridgeExecutionDeps,
-  runId: string,
-  stage: "begin" | "end",
-  outcome:
-    | "accepted"
-    | "completed"
-    | Exclude<CodingAcceptedInitializationResult<void>, { readonly ok: true }>["reason"],
-): void {
-  deps.activityLog.write(
-    activityLogEvent(
-      NATIVE_INITIALIZATION_LIFECYCLE_OPERATION,
-      { correlationId: runId },
-      { stage, outcome },
-    ),
-  );
-}
-
-function initializationDeferred<T>(): {
-  readonly promise: Promise<T>;
-  readonly resolve: (value: T) => void;
-} {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
 }

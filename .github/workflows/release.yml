@@ -140,6 +140,8 @@ jobs:
         run: npm ci --ignore-scripts
       - name: Build workspace packages for qualification
         run: npm run build:packages
+      - name: Provision the pinned ripgrep runtime
+        run: npm run provision:ripgrep
       - name: Install Chromium for customer-shape qualification
         timeout-minutes: 10
         run: node node_modules/playwright/cli.js install --with-deps chromium

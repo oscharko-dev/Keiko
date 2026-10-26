@@ -1,10 +1,5 @@
 import { WORKSPACE_PATH_DISCOVERY_MODES } from "@oscharko-dev/keiko-contracts/runtime/workspace";
 import { WORKSPACE_PORTABLE_PATH_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
-import {
-  OPENCODE_TOOL_PROFILES,
-  type OpenCodeToolProfile,
-} from "@oscharko-dev/keiko-contracts/runtime/opencode-service-host";
-export type { OpenCodeToolProfile } from "@oscharko-dev/keiko-contracts/runtime/opencode-service-host";
 import { createHash, randomUUID } from "node:crypto";
 
 import {
@@ -12,8 +7,14 @@ import {
   createKeikoToolCatalog,
   opencodeRegistrationSet,
   OPENCODE_NATIVE_EXTENSION_DEFINITIONS,
+  OPENCODE_TOOL_PROFILES,
+  type OpenCodeToolProfile,
 } from "@oscharko-dev/keiko-tool-catalog";
-import type { GatewayToolCatalogAdvertisement } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
+export type { OpenCodeToolProfile } from "@oscharko-dev/keiko-tool-catalog";
+import type {
+  GatewayNativeToolAdvertisement,
+  GatewayToolCatalogAdvertisement,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 import type {
   CatalogDigest,
   CompiledCatalogTool,
@@ -28,8 +29,15 @@ import {
   CODING_TOOL_READ_MAX_WINDOW_LINES,
 } from "./codingToolIpc.js";
 import { proposalIdPattern } from "../gitDelivery/proposalId.js";
+import { isOpenCodeNativeDeliveryToolName } from "./opencodeNativeDeliveryTools.js";
+import {
+  isAdmittedOpenCodeNativeToolContract,
+  openCodeNativeToolSetDigest,
+  OPENCODE_NATIVE_TOOL_NAMES,
+} from "./opencodeNativeTools.js";
 
-export const OPENCODE_PINNED_VERSION = "2.0.10";
+import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
+export { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 export const OPENCODE_GOVERNED_ACTION_PERMISSION = "keiko_governed_action";
 
 /**
@@ -388,10 +396,17 @@ const GIT_STAGE_SCHEMA = {
       minItems: 1,
       maxItems: CODING_RUNTIME_GIT_MAX_PATHS,
       items: { type: "string", minLength: 1, maxLength: 512 },
-      description: "Workspace-relative paths to propose staging.",
+      description: "Workspace-relative paths to propose staging, or unstaging.",
+    },
+    // #3902 AC2: unstaging is staging's inverse under the same proposal and approval.
+    unstage: {
+      type: "boolean",
+      description:
+        "false proposes staging the paths; true proposes giving their staged changes back to the " +
+        "worktree, which keeps its bytes (only paths keiko_git_status lists as staged).",
     },
   },
-  required: ["paths"],
+  required: ["paths", "unstage"],
 } as const;
 
 const GIT_COMMIT_SCHEMA = {
@@ -421,6 +436,22 @@ const GIT_PULL_REQUEST_SCHEMA = {
   required: ["title"],
 } as const;
 
+// #3902 AC2: one fetch, or one fast-forward pull of the current branch from its upstream, through
+// the Git sync owner (runtimeGitService.ts). The flag selects the operation; nothing else is the
+// model's to choose.
+const GIT_SYNC_SCHEMA = {
+  type: "object",
+  properties: {
+    pull: {
+      type: "boolean",
+      description:
+        "false fetches the upstream remote's branches; true fast-forwards the current branch to " +
+        "its upstream (never merges, rebases or overwrites local changes).",
+    },
+  },
+  required: ["pull"],
+} as const;
+
 const GIT_CI_STATUS_SCHEMA = {
   type: "object",
   properties: {
@@ -437,14 +468,14 @@ const GIT_CI_STATUS_SCHEMA = {
 // the Workbench approval channel admits a proposal, the model redeems it by kind + proposalId
 // rather than each proposal type growing its own execute-phase tool.
 // The proposalId pattern below is derived from gitDelivery/proposalId.ts's PROPOSAL_ID_PREFIXES,
-// the single source of truth for the three prefixes the server actually mints for these four
-// redeemable kinds: "stage" (runtimeGitService.ts), "commit" (verifiedCommitService.ts's
+// the single source of truth for the prefixes the server actually mints for these five
+// redeemable kinds: "stage" and "unstage" (runtimeGitService.ts), "commit" (verifiedCommitService.ts's
 // VerifiedCommitService.propose()), and "push"/"pull-request" (both minted via
-// draftDeliveryId("delivery") in draftDeliveryFacts.ts) -- three prefixes for four kinds, not two.
+// draftDeliveryId("delivery") in draftDeliveryFacts.ts) -- four prefixes for five kinds.
 const GIT_EXECUTE_SCHEMA = {
   type: "object",
   properties: {
-    kind: { type: "string", enum: ["stage", "commit", "push", "pull-request"] },
+    kind: { type: "string", enum: ["stage", "unstage", "commit", "push", "pull-request"] },
     proposalId: {
       type: "string",
       minLength: 1,
@@ -474,6 +505,7 @@ export const OPENCODE_MODEL_VISIBLE_TOOLS = [
   { name: "keiko_git_push", parameters: GIT_PUSH_SCHEMA },
   { name: "keiko_pull_request", parameters: GIT_PULL_REQUEST_SCHEMA },
   { name: "keiko_git_execute", parameters: GIT_EXECUTE_SCHEMA },
+  { name: "keiko_git_sync", parameters: GIT_SYNC_SCHEMA },
   { name: "keiko_ci_status", parameters: GIT_CI_STATUS_SCHEMA },
 ] as const;
 
@@ -554,7 +586,10 @@ export const OPENCODE_TOOL_SOURCE_DEFINITIONS = [
   {
     name: "keiko_git_stage",
     action: "git-stage",
-    arguments: { paths: GIT_STAGE_SCHEMA.properties.paths },
+    arguments: {
+      paths: GIT_STAGE_SCHEMA.properties.paths,
+      unstage: GIT_STAGE_SCHEMA.properties.unstage,
+    },
   },
   {
     name: "keiko_git_commit",
@@ -576,11 +611,25 @@ export const OPENCODE_TOOL_SOURCE_DEFINITIONS = [
     },
   },
   {
+    name: "keiko_git_sync",
+    action: "git-sync",
+    arguments: { pull: GIT_SYNC_SCHEMA.properties.pull },
+  },
+  {
     name: "keiko_ci_status",
     action: "git-ci",
     arguments: { forceFresh: GIT_CI_STATUS_SCHEMA.properties.forceFresh },
   },
 ] as const;
+
+/**
+ * The generated-tool definitions the native profile registers (#3897): Keiko's Git delivery tools
+ * and nothing else (`opencodeNativeDeliveryTools.ts` names them and says why). Filtered from the
+ * one definition list the mapped profiles generate from, so a native run calls the identical tool
+ * source, schema and wire shape.
+ */
+export const OPENCODE_NATIVE_DELIVERY_TOOL_SOURCE_DEFINITIONS =
+  OPENCODE_TOOL_SOURCE_DEFINITIONS.filter(({ name }) => isOpenCodeNativeDeliveryToolName(name));
 
 // OpenCode V2 no longer advertises `todowrite`; keep it blocked if it reappears.
 export const OPENCODE_PINNED_BUILT_IN_TOOLS = [
@@ -664,15 +713,23 @@ export function openCodeVisibleToolNames(
   profile: OpenCodeToolProfile = "direct",
 ): readonly string[] {
   if (!OPEN_CODE_TOOL_PROFILES.has(profile)) throw new TypeError("Invalid OpenCode profile");
+  if (profile === "native") return OPENCODE_NATIVE_TOOL_NAMES;
   if (profile === "direct") return OPENCODE_MODEL_VISIBLE_TOOL_NAMES;
   return [...CODE_MODE_GATEWAY_SCHEMA_DIGESTS.keys()];
 }
 
+/**
+ * The tool contract a provider request must carry for the profile. The two mapped profiles pin
+ * the exact Keiko-generated set and schema digests; the native profile admits the producer's own
+ * bounded tool advertisement (#3897), since those tools execute inside OpenCode and register
+ * nothing in Keiko.
+ */
 export function hasExactOpenCodeVisibleToolContract(
   tools: readonly OpenCodeToolInput[] | undefined,
   profile: OpenCodeToolProfile = "direct",
 ): boolean {
   if (!OPEN_CODE_TOOL_PROFILES.has(profile)) return false;
+  if (profile === "native") return isAdmittedOpenCodeNativeToolContract(tools);
   const expected =
     profile === "direct" ? EXPECTED_GATEWAY_SCHEMA_DIGESTS : CODE_MODE_GATEWAY_SCHEMA_DIGESTS;
   if (tools?.length !== expected.size) return false;
@@ -858,6 +915,40 @@ export function openCodeGatewayCatalogProjection(
   if (!OPEN_CODE_TOOL_PROFILES.has(profile)) throw new TypeError("Invalid OpenCode profile");
   if (profile === "code-mode") return qualifiedCodeModeProjection();
   return { catalog: OPENCODE_GATEWAY_CATALOG, projection: OPENCODE_GATEWAY_PROJECTION };
+}
+
+/**
+ * The native profile's advertisement (#3897): the admitted definitions OpenCode sent, pinned by
+ * the tool-set digest and bounded by the same offer lifetime as the catalog offer.
+ */
+export function createOpenCodeNativeToolAdvertisement(
+  tools: readonly {
+    readonly name: string;
+    readonly description: string;
+    readonly parameters: Readonly<Record<string, unknown>>;
+  }[],
+  now: number,
+  offerLifetimeMs: number,
+): GatewayNativeToolAdvertisement {
+  if (!Number.isFinite(offerLifetimeMs) || offerLifetimeMs <= 0) {
+    throw new RangeError("the gateway offer lifetime must be a positive number of milliseconds");
+  }
+  if (!isAdmittedOpenCodeNativeToolContract(tools))
+    throw new TypeError("native-tool-contract-invalid");
+  return {
+    kind: "native",
+    runtime: { id: "opencode", version: OPENCODE_PINNED_VERSION },
+    tools: tools.map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+    })),
+    toolSetDigest: openCodeNativeToolSetDigest(tools),
+    offered: {
+      offerId: `opencode-native-${randomUUID()}`,
+      expiresAt: new Date(now + offerLifetimeMs).toISOString(),
+    },
+  };
 }
 
 export function createOpenCodeGatewayToolCatalogAdvertisement(

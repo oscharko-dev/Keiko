@@ -1,12 +1,15 @@
+import type { NativeWebSearch } from "./nativeWebSearch.js";
 import type { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
 import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync, realpathSync } from "node:fs";
-import { join } from "node:path";
+import { homedir } from "node:os";
+import { delimiter, dirname, join } from "node:path";
 
 import type {
   CodingWorkbenchSidecarGatewayRunMetadata,
   CodingWorkbenchRuntimeEvent,
   UpdatePortableTarget,
+  McpServerDefinition,
 } from "@oscharko-dev/keiko-contracts";
 import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { isCodingSafeActivityToolPresentation } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
@@ -18,24 +21,69 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   createRuntimeGatewayConfinement,
+  nativeHomeDeniedReadRoots,
+  NATIVE_OPENSSL_ENV_NAMES,
+  nativeOpenSslNodeOptions,
+  nativeOpenSslReadRoots,
+  nativeToolchainReadRoots,
   type LongLivedRuntimeSandboxAttestation,
+  type RuntimeGatewayEgress,
+  type RuntimeGatewayFilesystem,
 } from "@oscharko-dev/keiko-sandbox";
 
 import type { OpenCodeGatewayReadinessRegistry } from "../coding-sidecar-gateway.js";
 import type { ServerDiagnosticSink } from "../diagnostics-log.js";
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
 import type { CodingRuntimeEvidenceAggregator } from "./codingRuntimeEvidenceAggregator.js";
-import type { DevLanePortableOpenCodeRuntime } from "./devLanePortableCodingRuntime.js";
+import { openCodeNativeEgress } from "./opencodeNativeEgress.js";
+import {
+  recordNativeGitMetadataResolution,
+  resolveNativeGitMetadata,
+} from "./opencodeNativeGitMetadata.js";
+import {
+  devLaneCheckoutRoot,
+  npmLanePackageRoot,
+  type DevLanePortableOpenCodeRuntime,
+} from "./devLanePortableCodingRuntime.js";
 import {
   codingSafeActivityTtlMs,
   createCodingSafeActivityProjection,
   type CodingSafeActivityProjection,
   type CodingSafeActivitySignal,
 } from "./codingSafeActivityProjection.js";
+import { createCodingRuntimeRepositoryItemsPort } from "./codingRuntimeRepositoryItems.js";
+import {
+  createOperatorPluginsPort,
+  type OperatorPluginRegistry,
+  type OperatorPluginsPort,
+} from "./opencodeOperatorPlugins.js";
+import { createCodingRuntimeRepositoryInstructionsPort } from "./codingRuntimeRepositoryInstructions.js";
+import { globalOpenCodeConfigDirectory } from "./codingRuntimeInstructionSources.js";
+import {
+  readGlobalConfigDocuments,
+  readProjectConfigDocuments,
+} from "./opencodeConfigDocuments.js";
+import { gatewayAgentModel, type OpenCodeAgentModelCatalog } from "./opencodeNativeAgentModels.js";
+import type { OutboundHttpEgressConfig } from "@oscharko-dev/keiko-model-gateway/internal/http";
+import type {
+  NativeWorkspaceSource,
+  NativeWorktreeProvisionPort,
+} from "./opencodeNativeWorktree.js";
+import { continuationWorkspaceKey } from "./opencodeSessionContinuation.js";
+import type { RetainedSessionSource } from "./opencodeSessionRetention.js";
+import {
+  recordNativeExternalRootsResolved,
+  resolveNativeExternalReadRoots,
+} from "./opencodeNativeExternalRoots.js";
+import { exactWorkspaceRead, type SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
 import { createDevLaneRuntimeProcessBackend } from "./devLaneRuntimeProcessBackend.js";
 import { createNativeRuntimeProcessBackend } from "./nativeRuntimeProcessBackend.js";
+import type { McpOAuthCredentialStore } from "../mcp/mcpOAuthCredentialStore.js";
+import type { McpCredentialRelay } from "../mcp/mcpCredentialRelay.js";
+import type { RemoteSkillsPort } from "./opencodeRemoteSkills.js";
 import {
   createOpenCodeRuntimeComposition,
+  type McpOAuthIssuerPort,
   type OpenCodeRuntimeCompositionInput,
 } from "./opencodeRuntimeComposition.js";
 import { createOpenCodeRuntimeQuestionPort } from "./productionCodingRuntimeQuestionPort.js";
@@ -54,13 +102,30 @@ import {
 import { CodingRuntimeLaunchRejectedError } from "./launchFailure.js";
 import { codingRuntimeFactDigest } from "./runtimeAuthorityService.js";
 import { processServerLogSink } from "../process-log-sink.js";
+import type { CodingSessionContinuity } from "./codingSessionContinuity.js";
 import {
   OPENCODE_TOOL_SOURCE_DEFINITIONS,
   openCodeVisibleToolNames,
   type OpenCodeToolProfile,
 } from "./opencodeToolSchemas.js";
-import { resolveOpenCodeContextGeometry } from "./opencodeLaunchProfile.js";
+import {
+  openCodeConfigDirectory,
+  openCodePlanDirectory,
+  resolveOpenCodeContextGeometry,
+  type OpenCodeContextGeometry,
+} from "./opencodeLaunchProfile.js";
 import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
+import type { RipgrepRuntimeManifest } from "./ripgrepRuntime.js";
+import { nativeLinkedFilesField } from "./opencodeNativeLinkedFiles.js";
+import {
+  recordOpenCodeRipgrepResolution,
+  resolveOpenCodeRipgrep,
+  ripgrepLaunchEnvironment,
+  ripgrepMappedInheritedEnvNames,
+  ripgrepNativePath,
+  type OpenCodeRipgrepLocation,
+  type OpenCodeRipgrepResolution,
+} from "./opencodeRipgrepLaunch.js";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 
 const OPEN_CODE_START_TIMEOUT_MS = 120_000;
@@ -114,6 +179,11 @@ export interface ProductionOpenCodeBackendInput {
   readonly portable: ResolvedPortableOpenCodeRuntime;
   readonly runtimeStateRoot: string;
   readonly gatewayUrl: string;
+  /**
+   * The gateway's coding-capable model ids right now (#3903 AC1): the models a native run's agents
+   * may use beside the run's own. Absent offers the run's model alone.
+   */
+  readonly gatewayCodingModelIds?: (() => readonly string[]) | undefined;
   readonly resolveGatewayRunMetadata?:
     ((modelId: string) => CodingWorkbenchSidecarGatewayRunMetadata | undefined) | undefined;
   /**
@@ -127,9 +197,52 @@ export interface ProductionOpenCodeBackendInput {
     "waitForObservedRequest" | "verifyObserved" | "clear" | "toolProfile"
   >;
   readonly fetch?: typeof globalThis.fetch | undefined;
+  /** The host environment the native profile inherits its allowlisted names from (#3897). */
+  readonly processEnv?: NodeJS.ProcessEnv | undefined;
+  /**
+   * The runtime host's secure workspace read port, which the native profile reads the workspace's
+   * custom agents, commands and skills through (#3903). Absent, a native run admits none and says so.
+   */
+  readonly secureWorkspaceTextRead?: SecureWorkspaceTextReadPort | undefined;
+  /** The operator's plugin registry (#3903 AC2), read at each native run's prepare; absent loads none. */
+  readonly operatorPluginRegistry?: (() => OperatorPluginRegistry) | undefined;
+  /** The operator's `KEIKO_CODING_REPOSITORY_ITEMS_ENABLED` decision; absent keeps the default, on. */
+  readonly repositoryItemsEnabled?: boolean | undefined;
+  /** The operator's opt-out of the workspace AGENTS.md (#3900 AC3); absent keeps it on. */
+  readonly repositoryInstructionsEnabled?: boolean | undefined;
+  /**
+   * Keiko's egress for a Full access run's remote `instructions` entries (#3900 AC3); absent, a
+   * remote source is refused in every mode.
+   */
+  readonly instructionSourceEgress?: (() => OutboundHttpEgressConfig | undefined) | undefined;
+  /** Keiko's managed task-workspace owner for an approved Code Mode `worktree_create` (#3903 AC4). */
+  readonly nativeWorktrees?: NativeWorktreeProvisionPort | undefined;
+  /** The web search integration the operator admitted for native runs (#3903 AC3). */
+  readonly nativeWebSearch?: NativeWebSearch | undefined;
+  /** The operator's raw `KEIKO_CODING_EXTERNAL_READ_ROOTS` (#3900 AC5); absent admits none. */
+  readonly externalReadRoots?: string | undefined;
+  /** The operator's MCP server registry for one native run (`mcpServerRegistry.ts`). */
+  readonly mcpServers?: ((correlationId: string) => readonly McpServerDefinition[]) | undefined;
+  /** Validates a remote MCP server's expected OAuth issuer before a native launch (#3903 AC3). */
+  readonly mcpOAuthIssuer?: McpOAuthIssuerPort | undefined;
+  /** Keeps an admitted MCP server's OAuth credential between native runs (#3903 AC3). */
+  readonly mcpCredentials?: McpOAuthCredentialStore | undefined;
+  /**
+   * Keiko's MCP relay (#3903 AC3): a remote server with credential headers is reached through it
+   * at the gateway's origin, with the credentials read from `processEnv`.
+   */
+  readonly mcpRelay?: McpCredentialRelay | undefined;
+  /** Pulls the operator's remote skill sources for a Full access native run (#3903 AC3). */
+  readonly remoteSkills?: RemoteSkillsPort | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly activityLog?: ServerLogSink | undefined;
   readonly historyCapture?: CodingRuntimeHistory["captureNative"] | undefined;
+  /**
+   * The server's native session continuity service (S02/S03, #3904): how a run resumes or forks a
+   * task's retained session, and where a run that settled normally leaves its own. Absent keeps every
+   * run on a fresh session.
+   */
+  readonly sessionContinuity?: CodingSessionContinuity | undefined;
   readonly safeActivityProjection?: CodingSafeActivityProjection | undefined;
   /**
    * The configured Authority Envelope duration (ms, #3873). The safe-activity projection this
@@ -138,6 +251,11 @@ export interface ProductionOpenCodeBackendInput {
    * default, which follows the default envelope duration.
    */
   readonly runtimeMaxDurationMs?: number | undefined;
+  /**
+   * Hermetic test seam: the approval table the launch verifies ripgrep against. Production
+   * composition never supplies this, so the pinned upstream digests are always the ones used.
+   */
+  readonly ripgrepManifest?: Readonly<RipgrepRuntimeManifest> | undefined;
   /** Explicit functional-test seam. Production composition never supplies this. */
   readonly createSupervisor?:
     | ((input: {
@@ -194,9 +312,16 @@ function createOpenCodeRun(
     input.historyCapture,
     run.onRuntimeEvent,
   );
+  const launchInput = withVerifiedRipgrep(input, run, toolProfile);
   try {
-    const composition = composeOpenCodeRun(input, run, safeActivity, contextGeometry, toolProfile);
-    const launch = openCodeLaunchMaterial(input, run);
+    const composition = composeOpenCodeRun(
+      launchInput,
+      run,
+      safeActivity,
+      contextGeometry,
+      toolProfile,
+    );
+    const launch = openCodeLaunchMaterial(launchInput, run, toolProfile);
     const turnPort = createOpenCodeRuntimeTurnPort(composition.runPort);
     const questionPort = createOpenCodeRuntimeQuestionPort(composition.runPort);
     const permissionPort = createOpenCodeRuntimePermissionPort(composition.runPort);
@@ -219,8 +344,71 @@ function createOpenCodeRun(
   }
 }
 
-function composeOpenCodeRun(
+/**
+ * What one launch is built from: the backend's input with the environment the child inherits from
+ * already carrying the verified ripgrep directory (when there is one), and the resolution that
+ * decided it. Every later launch decision reads this one object, so the child PATH, the inherited
+ * names and the kernel read allowlist cannot disagree.
+ */
+type LaunchInput = ProductionOpenCodeBackendInput & {
+  readonly ripgrep: OpenCodeRipgrepResolution;
+};
+
+function ripgrepLocation(portable: ResolvedPortableOpenCodeRuntime): OpenCodeRipgrepLocation {
+  if (isDevLaneRuntime(portable)) {
+    const packageRoot = npmLanePackageRoot(portable);
+    if (packageRoot !== undefined) return { kind: "npm-package", packageRoot };
+    const checkoutRoot = devLaneCheckoutRoot(portable);
+    return checkoutRoot === undefined
+      ? { kind: "override-only" }
+      : { kind: "checkout", checkoutRoot };
+  }
+  if ("platformAssurance" in portable) {
+    return { kind: "packaged", resourceRoot: portable.installRoot, activation: portable.manifest };
+  }
+  return { kind: "override-only" };
+}
+
+/**
+ * Resolves the pinned ripgrep once for this launch, records the closed outcome, and returns the
+ * input whose inherited environment carries only a VERIFIED directory. An unverified ripgrep
+ * changes nothing: the run still starts, search degrades, and the reason is on the Activity Log.
+ */
+function withVerifiedRipgrep(
   input: ProductionOpenCodeBackendInput,
+  run: ProductionRuntimeBackendInput,
+  toolProfile: OpenCodeToolProfile,
+): LaunchInput {
+  const native = toolProfile === "native";
+  const ripgrep = resolveOpenCodeRipgrep({
+    target: input.portable.target,
+    location: ripgrepLocation(input.portable),
+    env: input.processEnv,
+    manifest: input.ripgrepManifest,
+  });
+  recordOpenCodeRipgrepResolution(
+    input.activityLog ?? processServerLogSink(),
+    run.minted.authorityRef.runId,
+    native,
+    ripgrep,
+  );
+  const processEnv = ripgrepLaunchEnvironment(input.processEnv, ripgrep, native);
+  return { ...input, ...(processEnv === undefined ? {} : { processEnv }), ripgrep };
+}
+
+function compositionPortableInput(
+  input: ProductionOpenCodeBackendInput,
+): OpenCodeRuntimeCompositionInput["portable"] {
+  return {
+    verification: input.portable.sidecar,
+    resourceRoot: input.portable.installRoot,
+    target: input.portable.target,
+    admission: admissionPolicy(input.portable),
+  };
+}
+
+function composeOpenCodeRun(
+  input: LaunchInput,
   run: ProductionRuntimeBackendInput,
   safeActivity: NonNullable<OpenCodeRuntimeCompositionInput["safeActivity"]>,
   contextGeometry: OpenCodeRuntimeCompositionInput["contextGeometry"],
@@ -228,12 +416,9 @@ function composeOpenCodeRun(
 ): ReturnType<typeof createOpenCodeRuntimeComposition> {
   return createOpenCodeRuntimeComposition({
     toolProfile,
-    portable: {
-      verification: input.portable.sidecar,
-      resourceRoot: input.portable.installRoot,
-      target: input.portable.target,
-      admission: admissionPolicy(input.portable),
-    },
+    ...(input.processEnv === undefined ? {} : { processEnv: input.processEnv }),
+    ...nativeRunInputs(input, run, toolProfile),
+    portable: compositionPortableInput(input),
     stateBaseRoot: openCodeStateBaseRoot(input.runtimeStateRoot),
     contextGeometry,
     capabilities: {
@@ -257,9 +442,10 @@ function composeOpenCodeRun(
       run.onRuntimeEvent,
     ),
     safeActivity,
+    ...sessionContinuityFor(input, run),
     gatewayReadiness: input.gatewayReadiness,
     fetch: input.fetch ?? globalThis.fetch,
-    supervisor: runtimeSupervisor(input, run),
+    supervisor: runtimeSupervisor(input, run, toolProfile),
     diagnostics: input.diagnostics,
     activityLog: input.activityLog,
     toolResultCorrelationId: run.minted.authorityRef.runId,
@@ -269,6 +455,274 @@ function composeOpenCodeRun(
     // #3873: one submitted task's whole agent loop is bounded by the run's own envelope duration,
     // never by a fixed turn wall shorter than the envelope the operator configured.
     maxTurnWaitMs: run.context.budget.maxRuntimeMs,
+  });
+}
+
+/**
+ * The directories of the admitted local MCP servers' executables join the toolchain `PATH` the
+ * kernel reads from (#3903): an MCP server is a process of the run, and it runs only where its
+ * install prefix is readable, under the same rules as every toolchain (a home directory or anything
+ * above it is never opened).
+ */
+function withMcpExecutableDirectories(
+  path: string | undefined,
+  servers: readonly McpServerDefinition[],
+): string | undefined {
+  const directories = servers.flatMap((server) =>
+    server.enabled && server.transport.kind === "local"
+      ? [dirname(server.transport.command[0])]
+      : [],
+  );
+  if (directories.length === 0) return path;
+  return [...(path === undefined ? [] : [path]), ...directories].join(delimiter);
+}
+
+// The relay answers on the gateway's own attested origin, which the native sandbox already admits.
+function mcpRelayFor(input: LaunchInput): Pick<OpenCodeRuntimeCompositionInput, "mcpRelay"> {
+  if (input.mcpRelay === undefined) return {};
+  return {
+    mcpRelay: {
+      relay: input.mcpRelay,
+      origin: new URL(input.gatewayUrl).origin,
+      secrets: input.processEnv ?? {},
+    },
+  };
+}
+
+// What only a native run reads from the repository and the operator: its Markdown items (#3903)
+// and its MCP servers (C04).
+function nativeRunInputs(
+  input: LaunchInput,
+  run: ProductionRuntimeBackendInput,
+  toolProfile: OpenCodeToolProfile,
+): Pick<
+  OpenCodeRuntimeCompositionInput,
+  | "repositoryItems"
+  | "operatorPlugins"
+  | "repositoryInstructions"
+  | "mcpServers"
+  | "mcpOAuthIssuer"
+  | "mcpCredentials"
+  | "mcpRelay"
+  | "remoteSkills"
+  | "nativeWorktrees"
+  | "nativeWebSearch"
+  | "externalReadRoots"
+  | "configDocuments"
+  | "agentModelCatalog"
+> {
+  if (toolProfile !== "native") return {};
+  return {
+    repositoryItems: repositoryItemsFor(input, run),
+    configDocuments: configDocumentsFor(input, run),
+    agentModelCatalog: () => agentModelCatalogFor(input, run),
+    ...(input.operatorPluginRegistry === undefined
+      ? {}
+      : { operatorPlugins: operatorPluginsFor(input, run, input.operatorPluginRegistry) }),
+    repositoryInstructions: repositoryInstructionsFor(input, run),
+    ...(input.mcpServers === undefined ? {} : { mcpServers: input.mcpServers }),
+    ...(input.mcpOAuthIssuer === undefined ? {} : { mcpOAuthIssuer: input.mcpOAuthIssuer }),
+    ...(input.mcpCredentials === undefined ? {} : { mcpCredentials: input.mcpCredentials }),
+    ...mcpRelayFor(input),
+    ...(input.remoteSkills === undefined ? {} : { remoteSkills: input.remoteSkills }),
+    ...(input.nativeWorktrees === undefined ? {} : { nativeWorktrees: input.nativeWorktrees }),
+    ...(input.nativeWebSearch === undefined ? {} : { nativeWebSearch: input.nativeWebSearch }),
+    externalReadRoots: nativeExternalReadRoots(input, run),
+  };
+}
+
+// One resolution per run, shared by the kernel allowlist and the composition's policy, so the two
+// can never disagree about which external references a run may read (#3900 AC5).
+const EXTERNAL_READ_ROOTS = new WeakMap<ProductionRuntimeBackendInput, readonly string[]>();
+
+function nativeExternalReadRoots(
+  input: LaunchInput,
+  run: ProductionRuntimeBackendInput,
+): readonly string[] {
+  const known = EXTERNAL_READ_ROOTS.get(run);
+  if (known !== undefined) return known;
+  const resolution = resolveNativeExternalReadRoots({
+    value: input.externalReadRoots,
+    kernelAllowlist:
+      input.portable.target === "macos-arm64" || input.portable.target === "macos-x64",
+    workspaceRoot: run.context.workspaceRoot,
+    privateStateRoot: nativePrivateStateRoot(input, run),
+    deniedRoots: nativeDeniedReadRoots(input.runtimeStateRoot),
+  });
+  recordNativeExternalRootsResolved(
+    input.activityLog ?? processServerLogSink(),
+    run.minted.authorityRef.runId,
+    resolution,
+  );
+  EXTERNAL_READ_ROOTS.set(run, resolution.roots);
+  return resolution.roots;
+}
+
+// The kernel's half of the accepted external references (#3900 AC5): absent when none is admitted
+// or the sandbox has no read allowlist that could name one (Linux mounts none yet).
+function externalReadRootsField(
+  input: LaunchInput,
+  run: ProductionRuntimeBackendInput,
+  macos: boolean,
+): { readonly externalReadRoots?: readonly string[] } {
+  if (!macos) return {};
+  const roots = nativeExternalReadRoots(input, run);
+  return roots.length === 0 ? {} : { externalReadRoots: roots };
+}
+
+/** The workspace's and the accepted references' hard-linked files, denied by the kernel. */
+function linkedFilesField(
+  input: LaunchInput,
+  run: ProductionRuntimeBackendInput,
+  macos: boolean,
+): { readonly linkedFiles?: readonly string[] } {
+  if (!macos) return {};
+  return nativeLinkedFilesField(
+    input.activityLog ?? processServerLogSink(),
+    run.minted.authorityRef.runId,
+    [run.context.workspaceRoot, ...nativeExternalReadRoots(input, run)],
+  );
+}
+
+function nativePrivateStateRoot(input: LaunchInput, run: ProductionRuntimeBackendInput): string {
+  return join(
+    realpathSync(input.runtimeStateRoot),
+    "coding-runtime",
+    "opencode",
+    run.minted.authorityRef.runId,
+  );
+}
+
+// A task's retained native session (#3904), bound to the run's own workspace.
+function sessionContinuityFor(
+  input: LaunchInput,
+  run: ProductionRuntimeBackendInput,
+): Pick<OpenCodeRuntimeCompositionInput, "sessionContinuity"> {
+  if (input.sessionContinuity === undefined) return {};
+  const source = input.nativeWorktrees?.source;
+  return {
+    sessionContinuity: {
+      service: input.sessionContinuity,
+      workspaceId: run.context.workspaceId,
+      // #3903 AC4, #3902 AC3: a task of the workspace this one was provisioned from may be forked.
+      ...(source === undefined
+        ? {}
+        : { forkSource: () => forkSourceOf(source(run.context.workspaceId)) }),
+    },
+  };
+}
+
+function forkSourceOf(
+  source: NativeWorkspaceSource | undefined,
+): RetainedSessionSource | undefined {
+  return source === undefined
+    ? undefined
+    : {
+        workspaceKey: continuationWorkspaceKey(source.workspaceId, source.root),
+        directory: source.root,
+      };
+}
+
+// The run's AGENTS.md and the further sources a standalone run loads, as the native runtime's own
+// instruction source (#3900 AC3), read only while its workspace is still the active one. Remote
+// sources are pulled only for a run launched in Full access, which cannot be narrowed in place.
+function repositoryInstructionsFor(
+  input: LaunchInput,
+  run: ProductionRuntimeBackendInput,
+): NonNullable<OpenCodeRuntimeCompositionInput["repositoryInstructions"]> {
+  const home = homedir();
+  const egress = input.instructionSourceEgress;
+  const port = createCodingRuntimeRepositoryInstructionsPort({
+    enabled: input.repositoryInstructionsEnabled !== false,
+    delivery: "native-instructions",
+    source: input.secureWorkspaceTextRead,
+    activityLog: input.activityLog ?? processServerLogSink(),
+    discovery: {
+      workspaceRoot: run.context.workspaceRoot,
+      home,
+      globalConfigDirectory: globalOpenCodeConfigDirectory(input.processEnv ?? {}, home),
+      ...(egress !== undefined && run.minted.effectiveMode === "autonomous-delivery"
+        ? { remote: { egress } }
+        : {}),
+    },
+  });
+  return {
+    materializeForRun: (request) =>
+      port.materializeForRun({ ...request, isRunWorkspace: run.workspaceIsCurrent }),
+  };
+}
+
+// The gateway models a native run's agents may use beside its own (#3903 AC1): every coding-capable
+// model the gateway resolves right now, each with the geometry the gateway admits for it.
+function agentModelCatalogFor(
+  input: LaunchInput,
+  run: ProductionRuntimeBackendInput,
+): OpenCodeAgentModelCatalog {
+  const runModelId = run.context.modelProfile.profileId;
+  const models: Record<string, OpenCodeContextGeometry> = {};
+  for (const modelId of input.gatewayCodingModelIds?.() ?? []) {
+    if (modelId === runModelId) continue;
+    const metadata = input.resolveGatewayRunMetadata?.(modelId);
+    const geometry = metadata === undefined ? undefined : resolveOpenCodeContextGeometry(metadata);
+    if (geometry !== undefined) models[modelId] = geometry;
+  }
+  return { runModelId, models };
+}
+
+// The user's global and the project's OpenCode configuration documents (#3900 AC4), the project's
+// read only while the run's workspace is still the active one. Without a secure read source a run
+// reads the global documents alone.
+function configDocumentsFor(
+  input: LaunchInput,
+  run: ProductionRuntimeBackendInput,
+): NonNullable<OpenCodeRuntimeCompositionInput["configDocuments"]> {
+  const directory = globalOpenCodeConfigDirectory(input.processEnv ?? {}, homedir());
+  const source = input.secureWorkspaceTextRead;
+  return async ({ signal }) => {
+    const global = readGlobalConfigDocuments(directory).documents;
+    if (source === undefined) return global;
+    const project = await readProjectConfigDocuments(
+      exactWorkspaceRead(source, run.workspaceIsCurrent, "workspace-unavailable"),
+      signal,
+    );
+    return [...global, ...project.documents];
+  };
+}
+
+// The run's own repository items (#3903), read only while its workspace is still the active one.
+function repositoryItemsFor(
+  input: LaunchInput,
+  run: ProductionRuntimeBackendInput,
+): ReturnType<typeof createCodingRuntimeRepositoryItemsPort> {
+  const catalog = agentModelCatalogFor(input, run);
+  return createCodingRuntimeRepositoryItemsPort({
+    enabled: input.repositoryItemsEnabled !== false,
+    source: input.secureWorkspaceTextRead,
+    isRunWorkspace: run.workspaceIsCurrent,
+    activityLog: input.activityLog ?? processServerLogSink(),
+    // #3903 AC1: an agent file's own model, kept when it names a model the gateway serves.
+    agentModel: (value) => gatewayAgentModel(value, catalog),
+  });
+}
+
+// The operator's plugins (#3903 AC2); a workspace source is read only while the run's workspace is
+// still the active one.
+function operatorPluginsFor(
+  input: LaunchInput,
+  run: ProductionRuntimeBackendInput,
+  registry: () => OperatorPluginRegistry,
+): OperatorPluginsPort {
+  const source = input.secureWorkspaceTextRead;
+  return createOperatorPluginsPort({
+    registry,
+    readWorkspaceText: (relativePath, signal) =>
+      source === undefined
+        ? Promise.resolve({ ok: false, reason: "workspace-unavailable" })
+        : exactWorkspaceRead(source, run.workspaceIsCurrent, "workspace-unavailable").readText({
+            relativePath,
+            ...(signal === undefined ? {} : { signal }),
+          }),
+    activityLog: input.activityLog ?? processServerLogSink(),
   });
 }
 
@@ -692,9 +1146,37 @@ function callIdFromAction(actionId: string): string | undefined {
   return SAFE_ACTIVITY_CALL_ID.test(callId) ? callId : undefined;
 }
 
+/**
+ * The environment names the native profile (#3897) inherits from the launcher: the toolchain
+ * search path and locale facts a standalone shell would see. Never a credential name
+ * (`buildRuntimeEnv` refuses those), and the mapped profiles inherit nothing.
+ */
+const NATIVE_INHERITED_ENV_ALLOWLIST: readonly string[] = Object.freeze([
+  "PATH",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "TZ",
+  "TERM",
+  "SHELL",
+  ...NATIVE_OPENSSL_ENV_NAMES,
+]);
+
+/**
+ * An operator's explicit OpenSSL and FIPS configuration reaches the native tree as it would a
+ * standalone shell (#3901 AC4): the OpenSSL names always, NODE_OPTIONS only when it carries nothing
+ * but Node's OpenSSL and FIPS switches. Its files open read-only through `nativeOpenSslReadRoots`.
+ */
+function nativeInheritedEnvAllowlist(env: NodeJS.ProcessEnv): readonly string[] {
+  return nativeOpenSslNodeOptions(env.NODE_OPTIONS)
+    ? [...NATIVE_INHERITED_ENV_ALLOWLIST, "NODE_OPTIONS"]
+    : NATIVE_INHERITED_ENV_ALLOWLIST;
+}
+
 function openCodeLaunchMaterial(
-  input: ProductionOpenCodeBackendInput,
+  input: LaunchInput,
   run: ProductionRuntimeBackendInput,
+  toolProfile: OpenCodeToolProfile,
 ): QualifiedProductionRuntimeRun["launch"] {
   return {
     recoveryHandle: randomBytes(16).toString("hex"),
@@ -706,7 +1188,10 @@ function openCodeLaunchMaterial(
     gatewayUrl: input.gatewayUrl,
     modelProfileId: run.context.modelProfile.profileId,
     args: [],
-    inheritedEnvAllowlist: [],
+    inheritedEnvAllowlist:
+      toolProfile === "native"
+        ? nativeInheritedEnvAllowlist(input.processEnv ?? process.env)
+        : ripgrepMappedInheritedEnvNames(input.ripgrep),
     shutdownTimeoutMs: 5_000,
     startTimeoutMs: OPEN_CODE_START_TIMEOUT_MS,
     confinement: input.portable.qualification,
@@ -727,21 +1212,22 @@ function assertOpenCodeRun(run: ProductionRuntimeBackendInput): void {
 }
 
 function runtimeSupervisor(
-  input: ProductionOpenCodeBackendInput,
+  input: LaunchInput,
   run: ProductionRuntimeBackendInput,
+  toolProfile: OpenCodeToolProfile,
 ): RuntimeProcessSupervisor {
   const workspaceRoot = run.context.workspaceRoot;
   if (input.createSupervisor) {
     return input.createSupervisor({ workspaceRoot, portable: input.portable });
   }
   if (isDevLaneRuntime(input.portable)) {
-    return devLaneSupervisor(input.portable, input, run);
+    return devLaneSupervisor(input.portable, input, run, toolProfile);
   }
   if (input.portable.target === "linux-x64") {
-    return linuxNamespaceGatewaySupervisor(input.portable, input, run);
+    return linuxNamespaceGatewaySupervisor(input.portable, input, run, toolProfile);
   }
   if (isEvaluationLaneRuntime(input.portable) && input.portable.target !== "windows-x64") {
-    return appSandboxSupervisor(input.portable, input, run);
+    return appSandboxSupervisor(input.portable, input, run, toolProfile);
   }
   return createRuntimeProcessSupervisor({
     backend: createNativeRuntimeProcessBackend({
@@ -749,7 +1235,7 @@ function runtimeSupervisor(
       runtimeRoots: [join(input.portable.installRoot, input.portable.sidecar.payloadRootPath)],
       workspaceRoot,
       identity: input.portable.qualification,
-      gatewayConfinement: runtimeGatewayConfinement(input.portable, input, run),
+      gatewayConfinement: runtimeGatewayConfinement(input.portable, input, run, toolProfile),
     }),
     qualifications: [input.portable.qualification],
   });
@@ -757,8 +1243,9 @@ function runtimeSupervisor(
 
 function linuxNamespaceGatewaySupervisor(
   portable: ResolvedPortableOpenCodeRuntime,
-  input: ProductionOpenCodeBackendInput,
+  input: LaunchInput,
   run: ProductionRuntimeBackendInput,
+  toolProfile: OpenCodeToolProfile,
 ): RuntimeProcessSupervisor {
   return createRuntimeProcessSupervisor({
     backend: createDevLaneRuntimeProcessBackend({
@@ -768,7 +1255,7 @@ function linuxNamespaceGatewaySupervisor(
         backend: "linux-namespace-gateway",
       },
       runtimeRoot: join(portable.installRoot, portable.sidecar.payloadRootPath),
-      gatewayConfinement: runtimeGatewayConfinement(portable, input, run),
+      gatewayConfinement: runtimeGatewayConfinement(portable, input, run, toolProfile),
     }),
     qualifications: [portable.qualification],
   });
@@ -776,10 +1263,12 @@ function linuxNamespaceGatewaySupervisor(
 
 function devLaneSupervisor(
   portable: DevLanePortableOpenCodeRuntime,
-  input: ProductionOpenCodeBackendInput,
+  input: LaunchInput,
   run: ProductionRuntimeBackendInput,
+  toolProfile: OpenCodeToolProfile,
 ): RuntimeProcessSupervisor {
-  if (portable.target !== "windows-x64") return appSandboxSupervisor(portable, input, run);
+  if (portable.target !== "windows-x64")
+    return appSandboxSupervisor(portable, input, run, toolProfile);
   if (portable.nativeHelperPath === undefined) throw new Error("dev-lane-supervisor-missing");
   return createRuntimeProcessSupervisor({
     backend: createNativeRuntimeProcessBackend({
@@ -788,7 +1277,7 @@ function devLaneSupervisor(
       runtimeRoots: [join(portable.installRoot, portable.sidecar.payloadRootPath)],
       workspaceRoot: run.context.workspaceRoot,
       identity: portable.qualification,
-      gatewayConfinement: runtimeGatewayConfinement(portable, input, run),
+      gatewayConfinement: runtimeGatewayConfinement(portable, input, run, toolProfile),
     }),
     qualifications: [portable.qualification],
   });
@@ -811,8 +1300,9 @@ function devLaneSupervisor(
  */
 function appSandboxSupervisor(
   portable: QualifiedPortableOpenCodeRuntime | DevLanePortableOpenCodeRuntime,
-  input: ProductionOpenCodeBackendInput,
+  input: LaunchInput,
   run: ProductionRuntimeBackendInput,
+  toolProfile: OpenCodeToolProfile,
 ): RuntimeProcessSupervisor {
   return createRuntimeProcessSupervisor({
     backend: createDevLaneRuntimeProcessBackend({
@@ -822,17 +1312,106 @@ function appSandboxSupervisor(
         backend: "macos-app-sandbox",
       },
       runtimeRoot: join(portable.installRoot, portable.sidecar.payloadRootPath),
-      gatewayConfinement: runtimeGatewayConfinement(portable, input, run),
+      gatewayConfinement: runtimeGatewayConfinement(portable, input, run, toolProfile),
     }),
     qualifications: [portable.qualification],
   });
 }
 
+/**
+ * Credential stores the native agent must never read, whatever it runs (ADR-0129 D3 hard denial):
+ * the well-known secret locations and the user's other agent state under the home
+ * (`nativeHomeDeniedReadRoots`, the same list that keeps a toolchain root from reopening them),
+ * plus Keiko's own state directory (gateway credentials, vault, the Activity Log).
+ */
+function nativeDeniedReadRoots(runtimeStateRoot: string): readonly string[] {
+  return [...nativeHomeDeniedReadRoots(homedir()), realpathSync(runtimeStateRoot)];
+}
+
+/**
+ * The native profile's kernel network disposition follows the run's launch mode (#3897,
+ * `openCodeNativeEgress`): only Full access keeps inherited egress, bounded by its Authority
+ * Envelope and the per-action policy; Ask for approval and Supervised workspace reach loopback only
+ * (the attested Model Gateway, the tool facade, local dev servers). The mapped profile has no
+ * network of its own. The composition refuses an in-place narrowing that this binding could not honor.
+ */
+function nativeEgress(mode: string): RuntimeGatewayEgress {
+  return openCodeNativeEgress(mode);
+}
+
+// The launcher's PATH plus the one verified ripgrep directory the child gets in front of it, so the
+// kernel opens exactly what the child can run and nothing broader; and the operator's explicit
+// OpenSSL configuration (#3901 AC4), from the same environment the run inherits it from.
+function nativeSupportReadRoots(
+  input: LaunchInput,
+  run: ProductionRuntimeBackendInput,
+): readonly string[] {
+  const path = ripgrepNativePath(process.env.PATH, input.ripgrep) ?? process.env.PATH;
+  const mcpServers = input.mcpServers?.(run.minted.authorityRef.runId) ?? [];
+  return [
+    ...nativeToolchainReadRoots(withMcpExecutableDirectories(path, mcpServers), homedir()),
+    ...nativeOpenSslReadRoots(input.processEnv ?? process.env, homedir()),
+  ];
+}
+
+function gatewayFilesystem(
+  portable: ResolvedPortableOpenCodeRuntime,
+  input: LaunchInput,
+  run: ProductionRuntimeBackendInput,
+  native: boolean,
+): { readonly filesystem?: RuntimeGatewayFilesystem } {
+  const macos = portable.target === "macos-arm64" || portable.target === "macos-x64";
+  // Linux confines only the native profile, with a bubblewrap mount allowlist; the gateway profile
+  // keeps its namespace bridge launcher there.
+  if (!macos && !(native && portable.target === "linux-x64")) return {};
+  const privateStateRoot = nativePrivateStateRoot(input, run);
+  return {
+    filesystem: {
+      workspaceRoot: run.context.workspaceRoot,
+      workspaceAccess: native ? "read-write" : "read-only",
+      privateStateRoot,
+      runtimeReadRoot: realpathSync(join(portable.installRoot, portable.sidecar.payloadRootPath)),
+      ...(native
+        ? {
+            deniedReadRoots: nativeDeniedReadRoots(input.runtimeStateRoot),
+            toolchainReadRoots: nativeSupportReadRoots(input, run),
+            ...nativeGitMetadataReadRoots(input, run),
+            ...externalReadRootsField(input, run, macos),
+            ...linkedFilesField(input, run, macos),
+            // The policy plugin and the private configuration are read-only to the shell.
+            protectedWriteRoots: [openCodeConfigDirectory(privateStateRoot)],
+            // The plan agent's private notes take no link that could name a workspace file.
+            linkFreeWriteRoots: [openCodePlanDirectory(privateStateRoot)],
+          }
+        : {}),
+    },
+  };
+}
+
+/** A linked worktree's proven common Git directory, recorded body-free (#3897 review). */
+function nativeGitMetadataReadRoots(
+  input: LaunchInput,
+  run: ProductionRuntimeBackendInput,
+): { readonly gitMetadataReadRoots?: readonly string[] } {
+  const resolution = resolveNativeGitMetadata(
+    run.context.workspaceRoot,
+    run.resolveWorkspaceRootAccess(),
+  );
+  recordNativeGitMetadataResolution(
+    input.activityLog ?? processServerLogSink(),
+    run.minted.authorityRef.runId,
+    resolution,
+  );
+  return resolution.readRoots.length === 0 ? {} : { gitMetadataReadRoots: resolution.readRoots };
+}
+
 function runtimeGatewayConfinement(
   portable: ResolvedPortableOpenCodeRuntime,
-  input: ProductionOpenCodeBackendInput,
+  input: LaunchInput,
   run: ProductionRuntimeBackendInput,
+  toolProfile: OpenCodeToolProfile,
 ): ReturnType<typeof createRuntimeGatewayConfinement> {
+  const native = toolProfile === "native";
   return createRuntimeGatewayConfinement({
     gatewayUrl: input.gatewayUrl,
     runId: run.minted.authorityRef.runId,
@@ -840,23 +1419,9 @@ function runtimeGatewayConfinement(
     envelopeDigest: run.minted.authorityRef.envelopeDigest,
     runtimeArtifactDigest: portable.sidecar.shippedExecutableSha256,
     modelProfileDigest: codingRuntimeFactDigest(run.context.modelProfile),
-    ...(portable.target === "macos-arm64" || portable.target === "macos-x64"
-      ? {
-          filesystem: {
-            workspaceRoot: run.context.workspaceRoot,
-            workspaceAccess: "read-only" as const,
-            privateStateRoot: join(
-              realpathSync(input.runtimeStateRoot),
-              "coding-runtime",
-              "opencode",
-              run.minted.authorityRef.runId,
-            ),
-            runtimeReadRoot: realpathSync(
-              join(portable.installRoot, portable.sidecar.payloadRootPath),
-            ),
-          },
-        }
-      : {}),
+    profile: native ? "keiko-native" : "keiko-gateway",
+    ...(native ? { egress: nativeEgress(run.minted.effectiveMode) } : {}),
+    ...gatewayFilesystem(portable, input, run, native),
   });
 }
 

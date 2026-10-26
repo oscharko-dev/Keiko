@@ -2,6 +2,8 @@ import type {
   ActivityLogErrorKind,
   CodingWorkbenchAuthorityEnvelope,
   CodingWorkbenchRuntimeFailureCode,
+  CodingWorkbenchActionClass,
+  VerificationKind,
 } from "@oscharko-dev/keiko-contracts";
 
 import type {
@@ -382,8 +384,136 @@ export interface CodingAcceptedInitializationFacet {
   ) => Promise<CodingAcceptedInitializationResult<T>>;
 }
 
+/**
+ * The original runtime's own identity of one native tool call: the session that ran it, the
+ * assistant message it belongs to and its tool call id (the permission request's `source`). One
+ * invocation may be asked about several times (an edit and the directory it touches, a repeated
+ * evaluation), so this identity is what budget and run evidence are counted by (#3897 review).
+ */
+export interface CodingToolNativeInvocation {
+  readonly sessionId: string;
+  readonly messageId: string;
+  readonly callId: string;
+}
+
+/**
+ * One permission check of a native OpenCode action the server-owned policy is about to allow
+ * (#3897 review). Every check revalidates live authority: a revoked or expired envelope, a paused
+ * run or an action class outside the envelope refuses it before the runtime proceeds. The budget is
+ * charged once per `invocation`, whatever its action class, so reads count like every other tool
+ * call; a check without a tool invocation (a non-tool evaluation) cannot be recognised again and
+ * is charged on its own.
+ */
+export interface CodingToolNativeEffectInput {
+  readonly capability: string;
+  readonly actionClass: CodingWorkbenchActionClass;
+  readonly invocation?: CodingToolNativeInvocation | undefined;
+  /** The UTF-8 size of the producer's diff of a proposed edit, charged to the patch budget. */
+  readonly patchBytes?: number | undefined;
+}
+
+/**
+ * How the admitted check was accounted: `charged` reserved the invocation's tool call,
+ * `already-charged` found it reserved by an earlier check of the same invocation, `per-check`
+ * reserved one for a check that names no invocation.
+ */
+export type CodingToolNativeCharge = "charged" | "already-charged" | "per-check";
+
+export type CodingToolNativeEffectAdmission =
+  | { readonly ok: true; readonly charge: CodingToolNativeCharge }
+  | { readonly ok: false; readonly reason: string };
+
+export interface CodingToolNativeEffectFacet {
+  readonly admit: (input: CodingToolNativeEffectInput) => CodingToolNativeEffectAdmission;
+}
+
+/** The message and call id a native tool call is known by in the runtime's own history. */
+export interface CodingToolNativeCall {
+  readonly messageId: string;
+  readonly callId: string;
+}
+
+/**
+ * One native tool call the original runtime reported terminal (`succeeded` or `failed`). `tool` is
+ * the runtime's own tool id, absent when it named none; approval, a pending or a running call is
+ * never reported here: only execution settles a call.
+ */
+export interface CodingToolNativeSettlementInput extends CodingToolNativeCall {
+  readonly tool?: string | undefined;
+  readonly state: "succeeded" | "failed";
+  /** A finished native `shell` call's own exit status; absent for every other tool and a job. */
+  readonly exitCode?: number | undefined;
+  /**
+   * The project check that exit status speaks for, read from the call's whole command line; absent
+   * when another command of the line could have decided it (`npm test; cd .`).
+   */
+  readonly exitStatusCheck?: VerificationKind | undefined;
+  /**
+   * Whether the call wrote the task workspace, as its admission named it (#3901): `false` for an
+   * edit of the run's private plan notes, which is planning, not a change a check must cover.
+   * Absent keeps the tool's own meaning: a completed edit tool call is the run's edit.
+   */
+  readonly workspaceEdit?: boolean | undefined;
+}
+
+/** A native verification command's result, as the runtime's own exit status reports it. */
+export interface CodingToolNativeVerificationResult {
+  readonly kind: VerificationKind;
+  readonly passed: boolean;
+  /** The run's edit revision when the command was admitted: a pass proves no later edit. */
+  readonly editRevision: number | undefined;
+  readonly durationMs: number;
+  /** The run's admission observer captured with the command; told only after it executed. */
+  readonly executed: CodingVerificationExecutedObserver | undefined;
+}
+
+/**
+ * The run's verification owner as native verification commands reach it (#3897 review, #3901):
+ * the same edit revision, admission observer, blocker and summary event the governed verifier
+ * uses, so a native edit needs a native check at its own revision before the run can succeed.
+ */
+export interface CodingToolNativeVerificationHooks {
+  readonly revision?: (() => number | undefined) | undefined;
+  readonly admitted?: (() => CodingVerificationExecutedObserver | undefined) | undefined;
+  readonly blocked?:
+    ((reason: CodingVerificationBlockedReason, targetDigest?: string) => void) | undefined;
+  readonly publish: (result: CodingToolNativeVerificationResult) => void;
+}
+
+/**
+ * `counted` reached the run's effort roll-up; `duplicate` was already counted: the same call seen
+ * again, or a Keiko delivery tool the facade served and settled itself.
+ */
+export type CodingToolNativeSettlement = "counted" | "duplicate";
+
+/**
+ * The run evidence of native tool calls, which execute outside `execute()` and so never reach the
+ * facade's own settlement (#3873, #3897 review). Fed from the runtime's validated history, it
+ * reports each call to the run's effort roll-up exactly once, by call identity, so a repeated
+ * history read or a reconnect never counts a call twice.
+ */
+export interface CodingToolNativeSettlementFacet {
+  /** The policy refused or a human denied this call: its terminal failure is a refusal. */
+  readonly refused: (call: CodingToolNativeCall) => void;
+  readonly settled: (input: CodingToolNativeSettlementInput) => CodingToolNativeSettlement;
+  /** The policy admitted this call as a verification command (`openCodeNativeVerificationKind`). */
+  readonly verificationAdmitted?:
+    ((call: CodingToolNativeCall, kind: VerificationKind) => void) | undefined;
+  /** A human refused a native verification command: no later pass of an older one clears it. */
+  readonly verificationDenied?: (() => void) | undefined;
+  /**
+   * An admitted workspace edit whose settlement the runtime reports only on a child session, which
+   * the run's own history does not carry (#3901): it is the run's edit from its admission.
+   */
+  readonly unsettledEdit?: (() => void) | undefined;
+}
+
 export interface CodingToolFacade {
   readonly execute: (input: CodingToolFacadeInput) => Promise<CodingToolResult>;
+  /** Live authority and budget admission for native OpenCode effects; absent wirings refuse them. */
+  readonly nativeEffect?: CodingToolNativeEffectFacet | undefined;
+  /** Run evidence for native tool calls that executed outside `execute()`; absent counts nothing. */
+  readonly nativeSettlement?: CodingToolNativeSettlementFacet | undefined;
   /** Inactive accepted initial acquisition; no model/HTTP dispatch surface. */
   readonly acceptedInitialization?: CodingAcceptedInitializationFacet | undefined;
   /** Inactive private service prerequisite; neither model IPC nor HTTP routes expose it. */

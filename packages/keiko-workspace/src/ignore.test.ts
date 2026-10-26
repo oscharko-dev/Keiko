@@ -1,10 +1,33 @@
 import { describe, expect, it } from "vitest";
-import { compileIgnore, DEFAULT_DENY_PATTERNS, isDenied, isIgnored } from "./ignore.js";
+import {
+  CREDENTIAL_PATH_DENY_PATTERNS,
+  TOOL_STATE_PATH_DENY_PATTERNS,
+} from "@oscharko-dev/keiko-contracts/sensitive-path-patterns";
+import {
+  compileIgnore,
+  DEFAULT_DENY_PATTERNS,
+  isDenied,
+  isIgnored,
+  isRepositoryClaudeSkillPath,
+} from "./ignore.js";
 
 describe("DEFAULT_DENY_PATTERNS", () => {
   it("is a frozen, non-empty list", () => {
     expect(Object.isFrozen(DEFAULT_DENY_PATTERNS)).toBe(true);
     expect(DEFAULT_DENY_PATTERNS.length).toBeGreaterThan(0);
+  });
+});
+
+describe("DEFAULT_DENY_PATTERNS source of truth (#3897)", () => {
+  it("is exactly the credential subset the native sandbox enforces plus the tool state", () => {
+    expect([...DEFAULT_DENY_PATTERNS].sort()).toEqual(
+      [...CREDENTIAL_PATH_DENY_PATTERNS, ...TOOL_STATE_PATH_DENY_PATTERNS].sort(),
+    );
+  });
+
+  it("denies every kernel-enforced credential pattern", () => {
+    for (const pattern of CREDENTIAL_PATH_DENY_PATTERNS)
+      expect(isDenied(`work/${pattern.replaceAll("*", "x")}`)).toBe(true);
   });
 });
 
@@ -251,5 +274,36 @@ describe("normalize trailing-slash handling (ReDoS regression)", () => {
     // stripping stops exactly after the emoji instead of corrupting it.
     const m = compileIgnore(["src/😀"]);
     expect(isIgnored(m, "src/😀", false)).toBe(isIgnored(m, "src/😀/////", false));
+  });
+});
+
+// #3903, owner decision of 2026-10-24: the one named exception to the `.claude` tool-state entry.
+describe("isRepositoryClaudeSkillPath (the named .claude skills exception)", () => {
+  it.each([".claude/skills", ".claude/skills/review", ".claude/skills/code-review/SKILL.md"])(
+    "covers %s, which the always-on deny list still denies",
+    (path) => {
+      expect(isRepositoryClaudeSkillPath(path)).toBe(true);
+      expect(isDenied(path)).toBe(true);
+    },
+  );
+
+  it.each([
+    ".claude",
+    ".claude/settings.json",
+    ".claude/skills/review/run.sh",
+    ".claude/skills/review/references/SKILL.md",
+    ".claude/skills/Review/SKILL.md",
+    ".claude/skills/review/skill.md",
+    ".CLAUDE/skills/review/SKILL.md",
+    ".claude/Skills/review/SKILL.md",
+    ".claude/skills/../skills/review/SKILL.md",
+    ".claude/skills/.hidden/SKILL.md",
+    ".claude/skills/node_modules/SKILL.md",
+    ".claude/skills/1review/SKILL.md",
+    `.claude/skills/${"a".repeat(65)}/SKILL.md`,
+    "app/.claude/skills/review/SKILL.md",
+    ".codex/skills/review/SKILL.md",
+  ])("does not cover %s", (path) => {
+    expect(isRepositoryClaudeSkillPath(path)).toBe(false);
   });
 });

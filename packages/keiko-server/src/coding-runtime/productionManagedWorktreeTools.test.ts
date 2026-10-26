@@ -588,6 +588,38 @@ describe("production managed worktree tools", () => {
     );
     expect(settle).toHaveBeenCalledOnce();
   });
+  // PR #4064 review (6390703192): the verifier's container backend on macOS installed Linux
+  // bindings into the tree the native runtime's shell uses. A native run's verification names the
+  // host platform, so the bootstrap refuses an install for another one; a mapped run names none.
+  it.each([
+    ["native", { os: process.platform, cpu: process.arch }],
+    [undefined, undefined],
+  ] as const)(
+    "hands a %s run's host platform to the verifier's bootstrap",
+    async (profile, host) => {
+      const inputs: VerificationRunInput[] = [];
+      const facade = verificationFacade({
+        records: [],
+        ...(profile === undefined ? {} : { toolProfile: profile }),
+        runToReport: (input) => {
+          inputs.push(input);
+          return Promise.resolve(verificationReport("passed"));
+        },
+      });
+      await facade.execute({
+        capability: "runtime-capability",
+        body: JSON.stringify({
+          action: "verification",
+          verifierId: "test",
+          actionId: "host-platform",
+          idempotencyKey: "host-platform",
+        }),
+      });
+      expect(inputs).toHaveLength(1);
+      expect(inputs[0]?.sharedHostPlatform).toEqual(host);
+    },
+  );
+
   it("routes reads through the secure workspace port and rechecks live authority", async () => {
     let live = true;
     const readText = vi.fn(() => Promise.resolve({ ok: true as const, text: "private source" }));
@@ -3937,6 +3969,65 @@ function failedVerificationReport(): VerificationReport {
 // announces the open decision so the run can report itself paused, and makes ONE further attempt
 // once the decision lands. The second attempt is a whole attempt, not a bare `runToReport` retry:
 // the candidate-verification ticket brackets each run.
+describe("native verification publication through the production facade", () => {
+  it.each(
+    (["test", "typecheck", "lint", "build"] as const).flatMap((kind) => [
+      {
+        kind,
+        exitCode: 0,
+        state: "succeeded",
+        status: "passed",
+        passedCount: 1,
+        failedCount: 0,
+      } as const,
+      {
+        kind,
+        exitCode: 1,
+        state: "failed",
+        status: "failed",
+        passedCount: 0,
+        failedCount: 1,
+      } as const,
+    ]),
+  )("publishes admitted native $kind $status checks as valid runtime evidence", (result) => {
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const executed = vi.fn();
+    const facade = verificationFacade({
+      toolProfile: "native",
+      verificationRevision: () => 3,
+      verificationAdmitted: () => executed,
+      records: [],
+      events,
+      runToReport: () => Promise.resolve(verificationReport("passed")),
+    });
+    const settlement = facade.nativeSettlement;
+    if (settlement?.verificationAdmitted === undefined)
+      throw new TypeError("native verification admission unavailable");
+    const call = { messageId: "message-verification-1", callId: "tool-verification-1" };
+    settlement.verificationAdmitted(call, result.kind);
+    const outcome = {
+      ...call,
+      tool: "shell",
+      state: result.state,
+      exitCode: result.exitCode,
+      exitStatusCheck: result.kind,
+    };
+    expect(settlement.settled(outcome)).toBe("counted");
+    expect(executed).toHaveBeenCalledExactlyOnceWith(codingVerificationTargetDigest(result.kind));
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      kind: "verification-summarized",
+      verificationEditRevision: 3,
+      verificationStatus: result.status,
+      passedCount: result.passedCount,
+      failedCount: result.failedCount,
+      verificationSummary: { verifierId: result.kind, status: result.status },
+    });
+    expect(settlement.settled(outcome)).toBe("duplicate");
+    expect(events).toHaveLength(1);
+  });
+});
+
 describe("verification waiting on the operator's package-script trust decision", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -4326,9 +4417,11 @@ function verificationFacade(options: {
   ) => void;
   readonly failureOutput?: readonly VerificationStepOutput[];
   readonly workspaceRoot?: string;
+  readonly toolProfile?: ProductionManagedWorktreeToolInput["toolProfile"];
   readonly records: ServerDiagnosticRecord[];
 }): ReturnType<typeof createProductionManagedWorktreeToolFacade> {
   return createProductionManagedWorktreeToolFacade({
+    toolProfile: options.toolProfile,
     verificationRevision: options.verificationRevision,
     verificationBlocked: options.verificationBlocked,
     verificationAdmitted: options.verificationAdmitted,

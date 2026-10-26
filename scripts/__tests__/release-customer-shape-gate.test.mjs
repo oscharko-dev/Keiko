@@ -12,6 +12,17 @@ const workflowPath = resolve(
   "release.yml",
 );
 const workflow = readFileSync(workflowPath, "utf8");
+const pullRequestWorkflow = readFileSync(
+  resolve(
+    import.meta.dirname,
+    "..",
+    "..",
+    ".github",
+    "workflows",
+    "coding-workbench-customer-shape.yml",
+  ),
+  "utf8",
+);
 const qualifierPath = resolve(
   import.meta.dirname,
   "..",
@@ -46,6 +57,19 @@ function noRedundantBuildStep(steps) {
   return !steps.some((step) => step.name === "Build workspace packages");
 }
 
+// OpenCode's glob/grep tools run ripgrep. The staged qualification installs the npm package, whose
+// runtime tree cannot carry the binary, so the qualifier hands the provisioned, digest-verified copy
+// to the runtime; without this step the hand-off throws before the journey starts (#3897).
+function ripgrepProvisionGate(steps, qualifyIndex) {
+  const provision = steps.findIndex((step) => step.name === "Provision the pinned ripgrep runtime");
+  return (
+    provision >= 0 &&
+    provision < qualifyIndex &&
+    steps[provision].run === "npm run provision:ripgrep" &&
+    unconditionalStep(steps[provision])
+  );
+}
+
 function qualificationStepGate(installStep, qualifyStep, steps) {
   return (
     installStep.run === "node node_modules/playwright/cli.js install --with-deps chromium" &&
@@ -67,7 +91,9 @@ function qualificationJobGate(qualification) {
   if (install < 0 || qualify <= install) return false;
   const installStep = steps[install];
   const qualifyStep = steps[qualify];
-  return qualificationStepGate(installStep, qualifyStep, steps);
+  return (
+    qualificationStepGate(installStep, qualifyStep, steps) && ripgrepProvisionGate(steps, qualify)
+  );
 }
 
 function publishStepsGate(steps) {
@@ -93,6 +119,35 @@ function publishJobGate(publishJob) {
 function executableGate(source) {
   const { jobs } = parse(source);
   return qualificationJobGate(jobs["qualify-customer-shape"]) && publishJobGate(jobs.publish);
+}
+
+function pullRequestGate(source) {
+  const qualification = parse(source).jobs.qualify;
+  const steps = qualification.steps;
+  const qualify = steps.findIndex((step) => step.name === "Run customer-shape qualification");
+  return (
+    qualification["runs-on"] === "macos-15" &&
+    qualify >= 0 &&
+    steps[qualify].run === "npm run qualify:coding-workbench:customer-shape" &&
+    ripgrepProvisionGate(steps, qualify)
+  );
+}
+
+function withoutStep(source, jobName, stepName) {
+  const modified = parse(source);
+  const steps = modified.jobs[jobName].steps;
+  const index = steps.findIndex((step) => step.name === stepName);
+  if (index < 0) throw new Error(`step missing: ${stepName}`);
+  steps.splice(index, 1);
+  return stringify(modified);
+}
+
+function withStepChange(source, jobName, stepName, change) {
+  const modified = parse(source);
+  const step = modified.jobs[jobName].steps.find((candidate) => candidate.name === stepName);
+  if (step === undefined) throw new Error(`step missing: ${stepName}`);
+  change(step);
+  return stringify(modified);
 }
 
 describe("customer-shape publish gate", () => {
@@ -162,4 +217,63 @@ describe("customer-shape publish gate", () => {
       expect(executableGate(stringify(modified))).toBe(false);
     },
   );
+});
+
+describe("customer-shape qualification provisions the pinned ripgrep", () => {
+  const PROVISION = "Provision the pinned ripgrep runtime";
+
+  it("provisions it before the staged journey on the release and pull-request lanes", () => {
+    expect(executableGate(workflow)).toBe(true);
+    expect(pullRequestGate(pullRequestWorkflow)).toBe(true);
+  });
+
+  it("rejects a release qualification that never provisions it", () => {
+    const weakened = withoutStep(workflow, "qualify-customer-shape", PROVISION);
+    expect(executableGate(weakened)).toBe(false);
+  });
+
+  it("rejects a pull-request qualification that never provisions it", () => {
+    const weakened = withoutStep(pullRequestWorkflow, "qualify", PROVISION);
+    expect(pullRequestGate(weakened)).toBe(false);
+  });
+
+  it("rejects a provision step that does not run the repository script", () => {
+    const change = (step) => {
+      step.run = "echo provisioned";
+    };
+    expect(
+      executableGate(withStepChange(workflow, "qualify-customer-shape", PROVISION, change)),
+    ).toBe(false);
+    expect(pullRequestGate(withStepChange(pullRequestWorkflow, "qualify", PROVISION, change))).toBe(
+      false,
+    );
+  });
+
+  it("rejects a provision step the lane could skip", () => {
+    const change = (step) => {
+      step.if = "false";
+    };
+    expect(
+      executableGate(withStepChange(workflow, "qualify-customer-shape", PROVISION, change)),
+    ).toBe(false);
+    expect(pullRequestGate(withStepChange(pullRequestWorkflow, "qualify", PROVISION, change))).toBe(
+      false,
+    );
+  });
+
+  it("rejects a provision step that only runs after the qualification it feeds", () => {
+    for (const [source, jobName, gate] of [
+      [workflow, "qualify-customer-shape", executableGate],
+      [pullRequestWorkflow, "qualify", pullRequestGate],
+    ]) {
+      const modified = parse(source);
+      const steps = modified.jobs[jobName].steps;
+      const [provision] = steps.splice(
+        steps.findIndex((step) => step.name === PROVISION),
+        1,
+      );
+      steps.push(provision);
+      expect(gate(stringify(modified))).toBe(false);
+    }
+  });
 });
