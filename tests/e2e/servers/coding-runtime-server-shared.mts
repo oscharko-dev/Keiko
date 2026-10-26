@@ -203,6 +203,13 @@ export interface CodingRuntimeJourneyServerConfig {
   /** Test-only lower provider response; all BFF admission, authority, and persistence stay real. */
   readonly chatResponse?: ((request: GatewayRequest) => NormalizedResponse) | undefined;
   readonly gatewayConfig?: GatewayConfig | undefined;
+  /**
+   * The provider transport of the gateway's readiness probes for a journey that brings its own
+   * `gatewayConfig`. Without it such a provider is probed over the real transport, which suits a
+   * local model mock that answers a plain chat call; a mock that only accepts its own requests
+   * supplies the answer a working endpoint would give instead, so no probe ever reaches it.
+   */
+  readonly gatewayReadinessFetch?: typeof functionalReadinessFetch | undefined;
 }
 
 interface JourneyComposition {
@@ -458,7 +465,7 @@ function scriptedModelDeps(
   });
 }
 
-function scriptedGatewayConfig(): GatewayConfig {
+export function scriptedGatewayConfig(): GatewayConfig {
   const config = functionalGatewayConfig();
   return {
     ...config,
@@ -561,6 +568,13 @@ function scriptedResolver(
       });
 }
 
+function journeyReadinessFetch(
+  config: CodingRuntimeJourneyServerConfig,
+): typeof functionalReadinessFetch | undefined {
+  if (config.gatewayReadinessFetch !== undefined) return config.gatewayReadinessFetch;
+  return config.gatewayConfig === undefined ? functionalReadinessFetch : undefined;
+}
+
 function scriptedUiHandlerDepsOptions(
   config: CodingRuntimeJourneyServerConfig,
   services: JourneyWorkspaceServices,
@@ -569,6 +583,7 @@ function scriptedUiHandlerDepsOptions(
   resolver: ReturnType<typeof scriptedResolver>,
 ): Parameters<typeof buildUiHandlerDeps>[0] {
   const chatResponse = config.chatResponse;
+  const readinessFetch = journeyReadinessFetch(config);
   return {
     configPath: undefined,
     evidenceDir: join(bffStateRoot, "evidence"),
@@ -590,10 +605,9 @@ function scriptedUiHandlerDepsOptions(
     codingRuntimeServerPrincipal: () => `${config.fixtureId}-operator`,
     autonomousDeliveryDeploymentCeiling: "autonomous-delivery",
     // The fixture provider answers the readiness probes for the default journey configuration; a
-    // journey with its own provider (a local model mock) is probed over the real transport.
-    ...(config.gatewayConfig === undefined
-      ? { gatewayReadinessFetch: functionalReadinessFetch }
-      : {}),
+    // journey with its own provider (a local model mock) is probed over the real transport unless
+    // it names the transport that answers for that provider.
+    ...(readinessFetch === undefined ? {} : { gatewayReadinessFetch: readinessFetch }),
     ...(chatResponse === undefined
       ? {}
       : {
