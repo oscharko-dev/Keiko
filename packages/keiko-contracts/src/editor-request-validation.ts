@@ -7,6 +7,13 @@ import {
 } from "./coding-context.js";
 import { isLanguageDocumentOverlay, isLanguagePosition } from "./language-service.js";
 
+export interface CapturedEditorRequestCore {
+  readonly root: unknown;
+  readonly contextBudgetBytes: unknown;
+  readonly editorSessionId?: unknown;
+  readonly context?: ReturnType<typeof buildContextSelectors>;
+}
+
 export function collectEditorDocumentRequestErrors(
   value: Record<string, unknown>,
   errors: string[],

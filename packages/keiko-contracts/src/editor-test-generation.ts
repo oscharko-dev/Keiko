@@ -34,6 +34,7 @@
 import {
   admitEditorRequestForCapture,
   captureEditorRequestIdentity,
+  type CapturedEditorRequestCore,
 } from "./editor-request-validation.js";
 import {
   isLanguageDocumentOverlay,
@@ -412,13 +413,9 @@ export function parseEditorTestGenerationRequest(value: unknown): EditorTestGene
   return { ok: true, value: request };
 }
 
-interface CapturedEditorTestGenerationWireRequest {
+interface CapturedEditorTestGenerationWireRequest extends CapturedEditorRequestCore {
   readonly schemaVersion: typeof EDITOR_TEST_GENERATION_SCHEMA_VERSION;
-  readonly root: unknown;
   readonly target: unknown;
-  readonly contextBudgetBytes: unknown;
-  readonly editorSessionId?: unknown;
-  readonly context?: ReturnType<typeof buildContextSelectors>;
 }
 
 function captureCompleteTestGenerationRequest(

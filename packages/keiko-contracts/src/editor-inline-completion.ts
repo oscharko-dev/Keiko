@@ -28,6 +28,7 @@ import { isOneOf } from "./contract-validation-primitives.js";
 import {
   admitEditorRequestForCapture,
   captureEditorRequestIdentity,
+  type CapturedEditorRequestCore,
   collectEditorDocumentRequestErrors,
 } from "./editor-request-validation.js";
 import {
@@ -336,15 +337,11 @@ export function parseEditorInlineCompletionTelemetry(
   return buildTelemetryReport(value);
 }
 
-interface CapturedEditorInlineCompletionWireRequest {
+interface CapturedEditorInlineCompletionWireRequest extends CapturedEditorRequestCore {
   readonly schemaVersion: typeof EDITOR_INLINE_COMPLETION_SCHEMA_VERSION;
-  readonly root: unknown;
   readonly document: unknown;
   readonly position: unknown;
   readonly triggerKind: unknown;
-  readonly contextBudgetBytes: unknown;
-  readonly editorSessionId?: unknown;
-  readonly context?: ReturnType<typeof buildContextSelectors>;
   readonly maxCostClass?: CostClass;
   readonly maxOutputTokens?: number;
 }
