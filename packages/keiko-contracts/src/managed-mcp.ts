@@ -34,7 +34,7 @@ export interface ManagedMcpTool<
 
 export interface ManagedMcpProvider<Context extends ManagedMcpInvocationContext> {
   readonly id: string;
-  /** A changed declaration requires fresh admission; existing hosts refuse drift. */
+  /** Return stable handler references. Changed metadata or handlers require a new host/admission. */
   readonly tools: () => readonly ManagedMcpTool<Context>[];
 }
 

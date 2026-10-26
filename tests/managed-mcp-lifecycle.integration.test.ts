@@ -41,6 +41,8 @@ describe("managed MCP Activity Log reconstruction", () => {
       idempotency: "server-key-required",
       cancellation: "before-effect",
     });
+    const execute = (): Promise<ManagedMcpToolResult> =>
+      Promise.resolve({ data: { value: "private-synthetic-result" } });
     const host = createManagedMcpHost({
       providers: [
         {
@@ -50,8 +52,7 @@ describe("managed MCP Activity Log reconstruction", () => {
               name: "fixture.echo",
               risk: "read",
               descriptor,
-              execute: (): Promise<ManagedMcpToolResult> =>
-                Promise.resolve({ data: { value: "private-synthetic-result" } }),
+              execute,
             },
           ],
         },

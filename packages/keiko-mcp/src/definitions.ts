@@ -48,6 +48,7 @@ export function toolsOf<Context extends ManagedMcpInvocationContext>(
   const tools = providers.flatMap((provider) => [...provider.tools()]);
   if (
     tools.length === 0 ||
+    tools.some((tool) => typeof tool.execute !== "function") ||
     tools.length > 320 ||
     new Set(tools.map((tool) => tool.name)).size !== tools.length ||
     new Set(providers.map((provider) => provider.id)).size !== providers.length

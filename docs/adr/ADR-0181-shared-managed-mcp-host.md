@@ -44,6 +44,14 @@ Caller cancellation, host shutdown, request cancellation and the SDK handler sig
 are combined in the provider context and its final before-effect guard; settlement
 revokes that guard. A timed-out caller cannot leave a delayed provider authorized.
 
+Provider handler references are captured with the initial metadata and served from
+immutable host-owned bindings. A provider must return stable functions across
+registration queries. Replacing a handler while retaining its name/schema/digest is
+still drift and requires a new host/admission. The host rechecks this continuity at
+execution and on both sides of the final consumer effect guard, including delayed
+handlers. Handler functions are never exposed in catalog metadata or serialized into
+protocol/evidence payloads.
+
 ### D3 — Trusted context stays outside the protocol
 
 Server composition resolves consumer identity, binding generations, authority and

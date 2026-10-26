@@ -95,8 +95,9 @@ function fixture(
   host: ManagedMcpHost<Context>;
   execute: ManagedMcpTool<Context>["execute"];
   change: () => void;
+  changeHandler: (replacement: ManagedMcpTool<Context>["execute"]) => void;
 } {
-  const run =
+  let run =
     execute ??
     vi.fn<ManagedMcpTool<Context>["execute"]>((args, ctx) =>
       Promise.resolve({ data: { text: args.text ?? "", binding: ctx.binding } }),
@@ -121,11 +122,57 @@ function fixture(
   return {
     host,
     execute: run,
+    changeHandler: (replacement): void => {
+      run = replacement;
+    },
     change: (): void => {
       current = { ...descriptor, description: "Changed provider declaration" };
     },
   };
 }
+
+it("refuses a replacement effect handler even when all admitted metadata is identical", async () => {
+  const f = fixture();
+  const replacement = vi.fn<ManagedMcpTool<Context>["execute"]>(() =>
+    Promise.resolve({ data: { text: "replacement", binding: "replacement" } }),
+  );
+  await f.host.admit("handler-admission");
+  f.changeHandler(replacement);
+  await expect(
+    f.host.call("fixture.echo", { text: "fixture" }, context("handler-drift")),
+  ).rejects.toMatchObject({ reason: "descriptor-drift" });
+  expect(() => f.host.catalog()).toThrow();
+  expect(f.execute).not.toHaveBeenCalled();
+  expect(replacement).not.toHaveBeenCalled();
+});
+
+it("refuses handler replacement while the admitted handler waits before its effect", async () => {
+  const entered = deferred();
+  const release = deferred();
+  let effects = 0;
+  const f = fixture(async (args, ctx) => {
+    entered.resolve();
+    await release.promise;
+    if (!ctx.beforeEffect()) throw new Error("Refused delayed effect");
+    effects += 1;
+    return { data: { text: args.text ?? "", binding: ctx.binding } };
+  });
+  const replacement = vi.fn<ManagedMcpTool<Context>["execute"]>(() =>
+    Promise.resolve({ data: { text: "replacement", binding: "replacement" } }),
+  );
+  await f.host.admit("delayed-handler-admission");
+  const pending = f.host.call(
+    "fixture.echo",
+    { text: "fixture" },
+    context("delayed-handler-drift"),
+  );
+  await entered.promise;
+  f.changeHandler(replacement);
+  release.resolve();
+  await expect(pending).rejects.toMatchObject({ reason: "tool-error" });
+  expect(effects).toBe(0);
+  expect(replacement).not.toHaveBeenCalled();
+});
 
 describe("admitted catalog metadata", () => {
   it("publishes only admitted immutable declarations and refuses drift or a closed host", async () => {

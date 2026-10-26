@@ -637,3 +637,20 @@ tests and 97 registry tests pass. Package build, root typecheck, changed lint, p
 graph, dependency hygiene/currency, supply-chain decision matrix, ADR index and error
 observability pass. Full final performance, SBOM/assembled-package, coverage, Linux,
 Sonar and GitHub qualification remain open.
+
+## Auditor follow-up — admitted handler continuity (#4089)
+
+Against `a284d25bc`, two real-SDK regressions failed: an unchanged declaration with
+a replaced execute function ran the replacement, and a delayed original handler
+still reached its effect after replacement. The host now captures immutable tool
+bindings, checks handler references as well as metadata, executes only those captured
+references, and revalidates continuity before execution and around the final effect
+guard. Stable provider ports remain invocation-local; metadata exposes no functions.
+The corresponding fixtures now declare stable handler references instead of creating
+new functions during each registration query. Both regressions require zero unwanted
+effects; cancellation and independent concurrent invocation coverage remain in place.
+
+After the repair, all 14 SDK tests, 353 server tests, the registered Activity Log
+reader/loss-summary integration and 97 registry drift tests pass. Package build,
+root typecheck, affected lint/format and error observability pass. The generated
+inventory still resolves all 606 proofs and 30 scenarios without violations.

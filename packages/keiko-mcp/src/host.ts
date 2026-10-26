@@ -61,6 +61,7 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
   readonly #registrySha256: string;
   readonly #toolCount: number;
   readonly #catalog: readonly ManagedMcpToolDeclaration[];
+  readonly #tools: readonly ManagedMcpTool<Context>[];
   readonly #lifetime = new AbortController();
   #admission: Promise<void> | undefined;
   #admitted = false;
@@ -71,12 +72,16 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
     private readonly log: ManagedMcpLogPort,
   ) {
     const tools = toolsOf(providers);
-    this.#catalog = deepFreeze(
-      tools.map(({ name, risk, descriptor }) => ({
+    this.#tools = deepFreeze(
+      tools.map(({ name, risk, descriptor, execute }) => ({
         name,
         risk,
         descriptor: structuredClone(descriptor),
+        execute,
       })),
+    );
+    this.#catalog = deepFreeze(
+      this.#tools.map(({ name, risk, descriptor }) => ({ name, risk, descriptor })),
     );
     this.#expected = definitionIdentity(tools.map(toolDefinition));
     this.#declarations = this.declarationIdentity(tools);
@@ -103,9 +108,25 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
 
   private currentTools(): readonly ManagedMcpTool<Context>[] {
     const tools = toolsOf(this.providers);
-    if (this.declarationIdentity(tools) !== this.#declarations)
+    if (
+      this.declarationIdentity(tools) !== this.#declarations ||
+      tools.some((tool, index) => tool.execute !== this.#tools[index]?.execute)
+    )
       throw new ManagedMcpError("descriptor-drift");
-    return tools;
+    return this.#tools;
+  }
+
+  private invocationContext(context: Context, signal: AbortSignal): Context {
+    const scoped = withSignal(context, signal);
+    return {
+      ...scoped,
+      beforeEffect: (): boolean => {
+        this.currentTools();
+        const allowed = scoped.beforeEffect();
+        this.currentTools();
+        return allowed;
+      },
+    };
   }
 
   private server(request?: Request): McpServer {
@@ -127,7 +148,11 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
         async (args, sdkContext) => {
           if (context === undefined || context.signal.aborted) throw new ManagedMcpError("aborted");
           try {
-            const result = await tool.execute(args, withSignal(context, sdkContext.mcpReq.signal));
+            this.currentTools();
+            const result = await tool.execute(
+              args,
+              this.invocationContext(context, sdkContext.mcpReq.signal),
+            );
             if (
               Buffer.byteLength(JSON.stringify(result.data)) > tool.descriptor.bounds.maxResultBytes
             )

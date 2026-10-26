@@ -335,6 +335,10 @@ async function managedFixture(
 }> {
   const logs = createBufferedServerLogSink();
   let descriptor = conversationDescriptor();
+  const handler: ManagedMcpTool<CatalogHandlerContext<ConversationConsumer>>["execute"] = async (
+    _args,
+    context,
+  ): Promise<ManagedMcpToolResult> => ({ data: { text: await execute(context) } });
   const managed = await createManagedProviderCatalog<ConversationConsumer>({
     providers: [
       {
@@ -344,9 +348,7 @@ async function managedFixture(
             name: "conversation.lookup",
             risk: "read",
             descriptor,
-            execute: async (_args, context): Promise<ManagedMcpToolResult> => ({
-              data: { text: await execute(context) },
-            }),
+            execute: handler,
           },
         ],
       },
