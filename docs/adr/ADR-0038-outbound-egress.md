@@ -104,6 +104,14 @@ single-credential posture: the proxy layer may not introduce additional secrets.
    paragraph read as "enabling the flag lifts the denyLoopback refusal," which two independent
    reviewers correctly read as a possible bypass; it was imprecise about *which* refusal — the
    blanket pre-flight one, not the per-address policy denial — and is corrected here.
+   **Correction (#4082, 2026-10-26), bodyless responses.** Native adapters construct HTTP
+   204, 205 and 304 responses with a null body. Their upstream completion still controls
+   socket reuse; an aborted or unexpectedly nonempty response retires its connection.
+   Response-construction failures reject the request promise rather than escaping a Node
+   response callback. The existing completion/failure events retain the closed outcome.
+   A Jira mutation may already have committed before response adaptation fails: transport
+   failure is never proof that a mutation had no effect or permission to replay it.
+
    **Correction (#3156, 2026-08-15), pool identity.** The vetting guarantee above only holds if a
    vetted connection is never handed to a call other than the one that vetted it.
    `fetchHttpsViaProxy`'s CONNECT-tunnel pool (`idleHttpsProxyTunnels`, a short-lived, same-process

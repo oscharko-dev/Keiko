@@ -59,7 +59,7 @@ The seed also creates restricted, edit-only and assignable identities with priva
 PATs. Explicit permission schemes separate edit, assignment and transition, and
 separate project visibility. It verifies the permission matrix and actual denied
 read/assignment/transition calls, then confirms status and assignee stayed unchanged.
-Pagination, hostile content and complete isolation journeys remain pending. This basic seed does not yet satisfy #4082 AC5.
+The additional fixture groups below supply pagination, hostile content and isolated-project cases. Complete integrated journeys remain pending; the basic seed alone does not satisfy #4082 AC5.
 
 ## Qualify required fields and transition screens
 
@@ -81,6 +81,18 @@ then restores the requirement in a `finally` block. It leaves that issue ready f
 next consumer. License checks bracket the group. Configuration, issue IDs and field
 IDs stay in the private fixture manifest; diagnostics contain closed cases/counts.
 
+## Seed content and isolation fixtures
+
+```sh
+node scripts/testing/jira-chat-lab/seed-content.mjs "$HOME/.local/share/keiko-jira-4081-new"
+```
+
+Run after required-field qualification. This creates 21 pagination issues, a hostile
+summary/description/comment fixture and an isolated-project issue. It verifies two
+nonoverlapping search pages, exact hostile-content readback, restricted-project read
+success, the other identity's read refusal and unchanged comments after a denied write.
+Jira 10.3.26 reports this permission refusal as 400. Repeating the seed reuses fixtures.
+
 ## Verify the actual product HTTPS path
 
 ```sh
@@ -93,8 +105,21 @@ node scripts/testing/jira-chat-lab/verify-connection.mjs \
 The PAT must be a private regular file. The harness invokes the production custody,
 encrypted vault, HTTP adapter and domain verifier, then removes its temporary vault.
 It checks trusted HTTPS, rejection without CA trust, and refusal after exact admission
-is removed. It emits only closed outcomes. It does not qualify mutations through the
-product, model calls, complete fixture coverage or Chat UX.
+is removed, using the same already-created HTTP port throughout. It emits only closed
+outcomes. This probe alone does not qualify mutations, model calls or Chat UX.
+
+```sh
+node scripts/testing/jira-chat-lab/preflight.mjs "$HOME/.local/share/keiko-jira-4081-new"
+```
+
+Start each live group with this licensed HTTPS/read/write preflight. It performs a
+unique description edit (204) and comment (201) through the production vault and HTTP
+adapter, then checks independent state, exactly one matching change and a one-comment
+count increase. An already-confirmed assignment is not repeated. A private exclusive
+pending marker prevents automatic reruns after interruption: reconcile its possible
+remote effects by read-only inspection before removing that marker. Never assume a
+transport failure means a mutation was not committed. Finish each group with a license
+check; an interrupted or expired-license group is not acceptance evidence.
 
 The equivalent operator-owned configuration is:
 

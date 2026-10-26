@@ -151,6 +151,17 @@ describe("Atlassian browser client through the real credential route (#4082)", (
         status: "invalid-response",
       });
       expect(outbound).toHaveLength(1);
+      const failed = events.filter((event) => event.op === "atlassian.connection.checked");
+      expect(failed).toHaveLength(1);
+      const event = failed[0];
+      if (!event) throw new TypeError("Missing connection outcome");
+      const line = formatActivityLogProofLine(event);
+      expect(expectRegisteredActivityLogLine(event.op, line)).toMatchObject({
+        outcome: "invalid-response",
+      });
+      expect(line).not.toContain("<html>");
+      expect(line).not.toContain("cloud.example");
+      expect(line).not.toContain(syntheticToken());
     },
   );
 

@@ -468,6 +468,11 @@ describe("gatewayFetch", () => {
     const proxySockets = new Set<Socket>();
     const origin = createHttpsServer({ key: TEST_TLS_KEY, cert: TEST_TLS_CERT }, (req, res) => {
       originRequests += 1;
+      if (req.url === "/empty") {
+        res.writeHead(204, { connection: "keep-alive" });
+        res.end();
+        return;
+      }
       res.writeHead(200, { "content-type": "application/json", connection: "keep-alive" });
       res.end(JSON.stringify({ path: req.url, count: originRequests }));
     });
@@ -500,10 +505,18 @@ describe("gatewayFetch", () => {
       });
       expect(await first.json()).toEqual({ path: "/first", count: 1 });
 
+      const empty = await gatewayFetch(`https://127.0.0.1:${String(originPort)}/empty`, {
+        egress,
+        method: "PUT",
+      });
+      expect(empty.status).toBe(204);
+      expect(empty.body).toBeNull();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
       const second = await gatewayFetch(`https://127.0.0.1:${String(originPort)}/second`, {
         egress,
       });
-      expect(await second.json()).toEqual({ path: "/second", count: 2 });
+      expect(await second.json()).toEqual({ path: "/second", count: 3 });
       expect(proxyConnects).toBe(1);
     } finally {
       _resetWarnedCaBundlePaths();
@@ -1832,6 +1845,52 @@ function makePassThrough(
 function noop(): void {}
 
 describe("streamingResponseFromNode", () => {
+  it.each(["data", "error", "aborted"])(
+    "retires a bodyless peer on %s without returning its socket",
+    (event) => {
+      const src = makePassThrough(205);
+      const cancel = vi.fn();
+      const done = vi.fn();
+      const response = streamingResponseFromNode(
+        src as unknown as IncomingMessage,
+        cancel,
+        100,
+        done,
+      );
+      src.emit(
+        event,
+        event === "error" ? new Error("synthetic failure") : Buffer.from("unexpected"),
+      );
+      src.emit("end");
+      expect(response.body).toBeNull();
+      expect(cancel).toHaveBeenCalledTimes(1);
+      expect(done).not.toHaveBeenCalled();
+      src.destroy();
+    },
+  );
+  it.each([204, 205, 304])(
+    "preserves bodyless status %i and completes the underlying response",
+    async (status) => {
+      const src = makePassThrough(status, "", { etag: "synthetic-version" });
+      const done = vi.fn();
+      const cancel = vi.fn();
+      const response = streamingResponseFromNode(
+        src as unknown as IncomingMessage,
+        cancel,
+        100,
+        done,
+      );
+      expect(response.status).toBe(status);
+      expect(response.body).toBeNull();
+      expect(response.headers.get("etag")).toBe("synthetic-version");
+      await expect(response.text()).resolves.toBe("");
+      src.end();
+      await once(src, "end");
+      expect(done).toHaveBeenCalledTimes(1);
+      expect(cancel).not.toHaveBeenCalled();
+    },
+  );
+
   it("delivers chunks incrementally before end() is called (mutation guard: buffered impl hangs)", async () => {
     const src = makePassThrough();
     const res = streamingResponseFromNode(src as unknown as IncomingMessage, noop);

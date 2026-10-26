@@ -477,3 +477,37 @@ field supplies a genuine refusal. Data Center 10.3.26 also requires the paginate
 create-metadata endpoints; the retired aggregate endpoint returns 404. Script lint,
 formatting, scripted admin reset and the full field qualification passed. Pagination,
 hostile fixtures, automated initial setup and remaining integrated acceptance stay open.
+
+### Native response and content fixture checkpoint (#4082 AC5, partial)
+
+The licensed fixture lane now supplies 21 pagination issues, hostile issue/comment
+content and an isolated-project issue. Two disjoint pages and exact content readback
+pass. The restricted identity can read its project; the primary identity receives
+403 there; a forbidden comment returns 400 with unchanged remote count.
+
+The first production-adapter write exposed a native HTTP bug: constructing a Fetch
+Response with a body for 204 threw outside the request promise after Jira had already
+committed an assignment. Read-only changelog reconciliation confirmed exactly one
+assignment effect; that assignment was not replayed. Native 204/205/304 responses now
+have null bodies, completion controls socket reuse, and construction errors reject
+the request. Three focused cases failed before the fix. The full HTTP/logging suites
+pass **130 tests**, including CONNECT reuse across 204; four native integration cases
+prove one request, registered body-free Activity Log reconstruction and invalid-status
+rejection. Package build, root typecheck and changed lint pass. ADR-0038 is corrected.
+
+A subsequent licensed production preflight passed a distinct description edit (204)
+and comment creation (201), independent readbacks, exactly one matching changelog
+effect and a one-comment increase. Its exclusive private pending marker prevents
+blind reruns after interruption. Trusted HTTPS, untrusted-CA refusal and revoked
+admission then passed through the same retained port. Review fixes also make shared
+English/German Atlassian errors provider-neutral; 14 UI client/panel tests and UI
+typechecking passed. These adapter checks do not claim MCP, model or Chat acceptance.
+Automated first-run setup, the shared host and the remaining complete ACs stay open.
+
+The complete Activity Log gate passed its seven checks after recording two exact
+observability delegations: bounded Atlassian JSON validation returns invalid-response
+to its existing connection-check logger; native Response construction rejects to the
+existing gateway failure logger. No legacy failure entry was added. The real
+Jira/Confluence client-route tests and native HTTP integration assert exactly one
+registered owner outcome and absence of remote content. The observability gate tests
+and native integration passed 24 tests; the real client-route lane passed 7 tests.

@@ -2588,10 +2588,10 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "The site did not respond in time. Try verifying again in a moment.",
   "atlassianConnectors.verify.redirect-refused.label": "Redirect refused",
   "atlassianConnectors.verify.redirect-refused.copy":
-    "The address redirects elsewhere. Enter the final HTTPS Jira address.",
-  "atlassianConnectors.verify.invalid-response.label": "Invalid Jira response",
+    "The address redirects elsewhere. Enter the final HTTPS address of the Atlassian site.",
+  "atlassianConnectors.verify.invalid-response.label": "Invalid Atlassian response",
   "atlassianConnectors.verify.invalid-response.copy":
-    "The address returned no valid Jira JSON response. Check the address and login gateway.",
+    "The address returned no valid Atlassian JSON response. Check the address and login gateway.",
   "atlassianConnectors.verify.unsupported-version.label": "Unsupported Jira version",
   "atlassianConnectors.verify.unsupported-version.copy":
     "This connection supports Jira Data Center 10.3.26. Verify the deployment and version.",

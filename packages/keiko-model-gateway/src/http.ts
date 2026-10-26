@@ -464,6 +464,52 @@ export function streamingResponseFromNode(
   maxBytes: number = MAX_RESPONSE_BYTES,
   onDone?: () => void,
 ): Response {
+  const init = {
+    status: res.statusCode ?? 500,
+    statusText: res.statusMessage ?? "",
+    headers: headersFromNode(res.headers),
+  };
+  if (init.status === 204 || init.status === 205 || init.status === 304) {
+    consumeBodylessNodeResponse(res, onCancel, onDone);
+    return new Response(null, init);
+  }
+  return new Response(nodeResponseBody(res, onCancel, maxBytes, onDone), init);
+}
+
+function consumeBodylessNodeResponse(
+  res: IncomingMessage,
+  onCancel: () => void,
+  onDone: (() => void) | undefined,
+): void {
+  let done = false;
+  const finish = (complete: boolean): void => {
+    if (done) return;
+    done = true;
+    if (complete) onDone?.();
+    else onCancel();
+  };
+  res.once("end", () => {
+    finish(true);
+  });
+  res.once("error", () => {
+    finish(false);
+  });
+  res.once("aborted", () => {
+    finish(false);
+  });
+  // These statuses cannot carry payload bytes. Retire a violating peer instead of draining it.
+  res.once("data", () => {
+    finish(false);
+  });
+  res.resume();
+}
+
+function nodeResponseBody(
+  res: IncomingMessage,
+  onCancel: () => void,
+  maxBytes: number,
+  onDone: (() => void) | undefined,
+): ReadableStream<Uint8Array> {
   let total = 0;
   let done = false;
   const finish = (): void => {
@@ -471,7 +517,7 @@ export function streamingResponseFromNode(
     done = true;
     onDone?.();
   };
-  const body = new ReadableStream<Uint8Array>({
+  return new ReadableStream<Uint8Array>({
     start(controller): void {
       res.on("data", (chunk: Buffer) => {
         if (done) return;
@@ -501,11 +547,22 @@ export function streamingResponseFromNode(
       onCancel();
     },
   });
-  return new Response(body, {
-    status: res.statusCode ?? 500,
-    statusText: res.statusMessage ?? "",
-    headers: headersFromNode(res.headers),
-  });
+}
+
+function resolveNodeResponse(
+  res: IncomingMessage,
+  resolve: (response: Response) => void,
+  reject: (error: Error) => void,
+  onCancel: () => void,
+  maxBytes: number,
+  onDone?: () => void,
+): void {
+  try {
+    resolve(streamingResponseFromNode(res, onCancel, maxBytes, onDone));
+  } catch (error) {
+    onCancel();
+    reject(error instanceof Error ? error : new TypeError("Invalid HTTP response"));
+  }
 }
 
 // Composes a caller-supplied AbortSignal with an AbortSignal.timeout so both
@@ -570,7 +627,7 @@ async function fetchWithCaBundle(
         lookup,
       },
       (res) => {
-        resolve(streamingResponseFromNode(res, () => req.destroy(), cap));
+        resolveNodeResponse(res, resolve, reject, () => req.destroy(), cap);
       },
     );
     req.on("error", reject);
@@ -604,7 +661,7 @@ async function fetchDirectPinned(
         signal: init.signal ?? undefined,
       },
       (res) => {
-        resolve(streamingResponseFromNode(res, () => req.destroy(), cap));
+        resolveNodeResponse(res, resolve, reject, () => req.destroy(), cap);
       },
     );
     req.on("error", reject);
@@ -1294,15 +1351,7 @@ async function fetchHttpViaProxy(
         signal: init.signal ?? undefined,
       },
       (res: IncomingMessage) => {
-        resolve(
-          streamingResponseFromNode(
-            res,
-            () => {
-              req.destroy();
-            },
-            cap,
-          ),
-        );
+        resolveNodeResponse(res, resolve, reject, () => req.destroy(), cap);
       },
     );
     req.on("error", (error) => {
@@ -1354,19 +1403,19 @@ async function fetchHttpsViaProxy(
       },
       (res) => {
         const responseAllowsReuse = (res.headers.connection ?? "").toLowerCase() !== "close";
-        resolve(
-          streamingResponseFromNode(
-            res,
-            () => {
-              socket.destroy();
-              req.destroy();
-            },
-            cap,
-            () => {
-              if (responseAllowsReuse) releaseIdleHttpsProxyTunnel(tunnelKey, socket);
-              else socket.destroy();
-            },
-          ),
+        resolveNodeResponse(
+          res,
+          resolve,
+          reject,
+          () => {
+            socket.destroy();
+            req.destroy();
+          },
+          cap,
+          () => {
+            if (responseAllowsReuse) releaseIdleHttpsProxyTunnel(tunnelKey, socket);
+            else socket.destroy();
+          },
         );
       },
     );
