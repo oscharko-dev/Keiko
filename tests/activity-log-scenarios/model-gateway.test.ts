@@ -1,4 +1,5 @@
 import { resetServerLogger } from "../support/activity-log-test-support.js";
+import { listSupportIncidents } from "@oscharko-dev/keiko-activity-log";
 // Activity Log scenario matrix (#3532): the model-gateway surface — Gateway chat/stream calls, http
 // egress, the circuit breaker, and the gateway's own log-sink loss path. Each scenario drives a
 // production `Gateway` entry point with the real production file writer under a temporary
@@ -13,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   Gateway,
+  requestSpeechToText,
   createScriptedGatewayClock,
   createScriptedGatewayFetch,
   DEFAULT_CIRCUIT_BREAKER_CONFIG,
@@ -310,5 +312,79 @@ describe("Activity Log scenario: model-gateway", () => {
     expect(persistedActivityLogLines(raw, "gateway.config.resolved")).toEqual([]);
     const sinkFailed = persistedLine(raw, "gateway.log.sink-failed");
     expect(sinkFailed).toMatchObject({ droppedOp: "gateway.config.resolved" });
+  });
+});
+
+async function persistSttReconstructionAttempt(): Promise<void> {
+  const clock = createScriptedGatewayClock();
+  const configured = provider();
+  const outcome = await requestSpeechToText({
+    endpoint: configured.baseUrl,
+    apiKey: configured.apiKey,
+    modelId: "keiko-stt",
+    audio: new TextEncoder().encode("private reconstruction audio"),
+    mimeType: "audio/webm",
+    correlationId: "corr-stt-reconstruction",
+    log: processServerLogSink(),
+    fetchImpl: createScriptedGatewayFetch(
+      [{ status: 429, bodyJson: { error: "private speech provider body" }, latencyMs: 0 }],
+      clock,
+    ),
+  });
+  expect(outcome).toEqual({ ok: false, kind: "rate-limited" });
+}
+
+async function proveSttReconstruction(stateDir: string, startedAtMs: number): Promise<void> {
+  const trace = await expectActivityLogScenario("model-gateway.dependency-failure", {
+    stateDir,
+    startedAtMs,
+    expectedOps: ["speech.stt.request.dispatch", "speech.stt.request.completed"],
+  });
+  expect(trace.failureClasses).toContain("speech-stt-request");
+  // End/timeline Speech evidence has no registered-failure operation. The existing harness
+  // proves its user-reported selection is honestly insufficient:no-registered-failure.
+  expect(listSupportIncidents(stateDir).map((incident) => incident.trigger)).toEqual([
+    "user-report",
+  ]);
+  const raw = readPersistedActivityLog(stateDir);
+  const started = persistedLine(raw, "speech.stt.request.dispatch");
+  const completed = persistedLine(raw, "speech.stt.request.completed");
+  expect(completed).toMatchObject({
+    level: "warn",
+    correlationId: "corr-stt-reconstruction",
+    errorKind: "rate-limited",
+    outcome: "failed",
+    failureKind: "rate-limited",
+    httpStatus: 429,
+  });
+  expect(completed.endpointDigest).toBe(started.endpointDigest);
+  for (const secret of [
+    provider().baseUrl,
+    provider().apiKey,
+    "private reconstruction audio",
+    "private speech provider body",
+  ]) {
+    expect(raw).not.toContain(secret);
+  }
+}
+
+describe("Activity Log scenario: STT completion continuity (#3918)", (): void => {
+  it("reconstructs real STT failure evidence with the existing user-reported selection limit", async (): Promise<void> => {
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-scenario-stt-"));
+    const startedAtMs = Date.now();
+    try {
+      vi.stubEnv("KEIKO_STATE_DIR", stateDir);
+      vi.stubEnv("KEIKO_LOG_LEVEL", "debug");
+      resetServerLogger();
+      await persistSttReconstructionAttempt();
+      await proveSttReconstruction(stateDir, startedAtMs);
+    } finally {
+      try {
+        resetServerLogger();
+      } finally {
+        vi.unstubAllEnvs();
+        rmSync(stateDir, { recursive: true, force: true });
+      }
+    }
   });
 });

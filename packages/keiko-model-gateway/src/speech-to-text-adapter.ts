@@ -16,7 +16,6 @@ import {
   defineActivityLogOperation,
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { apiKeyHeaderValue } from "./config.js";
 import { speechProviderUrl } from "./speech-provider-url.js";
 import {
@@ -27,7 +26,8 @@ import {
 } from "./http.js";
 import {
   logCorrelationId,
-  logEndpointHost,
+  logEndpointDigest,
+  speechCompletionLogEnvelope,
   logModelId,
   resolveLogSink,
   withCorrelationId,
@@ -102,7 +102,7 @@ function logDispatch(request: SpeechToTextRequest, timeoutMs: number): void {
       SPEECH_STT_REQUEST_DISPATCH_OPERATION,
       { level: "info", ...(correlationId === undefined ? {} : { correlationId }) },
       {
-        endpointDigest: sha256Hex(logEndpointHost(request.endpoint) ?? "invalid-endpoint"),
+        endpointDigest: logEndpointDigest(request.endpoint),
         modelId: logModelId(request.modelId),
         timeoutMs,
         audioBytes: request.audio.byteLength,
@@ -205,15 +205,14 @@ function logCompleted(
   log.write(
     activityLogEvent(
       SPEECH_STT_REQUEST_COMPLETED_OPERATION,
+      speechCompletionLogEnvelope(
+        outcome,
+        correlationId,
+        failureKind,
+        SPEECH_STT_FAILURE_ERROR_KIND,
+      ),
       {
-        level: outcome.ok ? "info" : "warn",
-        ...(correlationId === undefined ? {} : { correlationId }),
-        ...(failureKind === undefined
-          ? {}
-          : { errorKind: SPEECH_STT_FAILURE_ERROR_KIND[failureKind] }),
-      },
-      {
-        endpointDigest: sha256Hex(logEndpointHost(request.endpoint) ?? "invalid-endpoint"),
+        endpointDigest: logEndpointDigest(request.endpoint),
         modelId: logModelId(request.modelId),
         outcome: outcome.ok ? "succeeded" : "failed",
         ...(failureKind === undefined ? {} : { failureKind }),

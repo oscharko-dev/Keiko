@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "3ab9408e51a68dec409b6e908dc6a77e555f9575d21d381131d9930a2c274106",
+    "catalogDigest": "625712bdaf127ef9a2021603667551c6a5075d165ec7f85ae46a27f273d6bcd3",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -32900,7 +32900,7 @@
         "proofIds": ["speech.stt.language.normalized.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-model-gateway/src/speech-to-text-adapter.ts:40",
-        "emitterSites": ["packages/keiko-model-gateway/src/speech-to-text-adapter.ts:333"]
+        "emitterSites": ["packages/keiko-model-gateway/src/speech-to-text-adapter.ts:332"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -90923,7 +90923,7 @@
     {
       "op": "<dynamic>",
       "category": "embedding",
-      "site": "packages/keiko-model-gateway/src/speech-to-text-adapter.ts:470",
+      "site": "packages/keiko-model-gateway/src/speech-to-text-adapter.ts:469",
       "package": "keiko-model-gateway"
     },
     {

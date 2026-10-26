@@ -1,8 +1,23 @@
 import { describe, expect, it, vi } from "vitest";
-import { classifyDispatchError, requestSpeechToText } from "./speech-to-text-adapter.js";
+import { requestSpeechToText as publicSpeechToText } from "@oscharko-dev/keiko-model-gateway";
+import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
+import {
+  ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+  resetActivityLogLossCountersForTests,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
+  classifyDispatchError,
+  requestSpeechToText,
+  type SpeechToTextRequest,
+  type SpeechToTextOutcome,
+} from "./speech-to-text-adapter.js";
 import { OutboundHttpEgressError } from "./http.js";
 import { GATEWAY_VOICE_TIMEOUT_FLOOR_MS } from "./resilience.js";
-import type { ModelGatewayLogTransport, ModelGatewayLogEvent } from "./observability.js";
+import type {
+  ModelGatewayLogTransport,
+  ModelGatewayLogEvent,
+  ModelGatewayLogSink,
+} from "./observability.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -814,3 +829,258 @@ function normalFixtureEvent(
   if (event?.category === "diagnostic") throw new TypeError("Expected normal fixture evidence");
   return event;
 }
+
+interface SttCompletionObservation {
+  active: boolean;
+  readonly status: 200 | 429;
+  readonly refusedField: "none" | "endpoint" | "modelId";
+  readonly failure: Error;
+  readonly trace: string[];
+  readonly requestReceivers: unknown[];
+  readonly sinkReceivers: unknown[];
+  readonly events: ModelGatewayLogTransport[];
+}
+
+function sttCompletionObservation(
+  status: 200 | 429,
+  refusedField: "none" | "endpoint" | "modelId",
+): SttCompletionObservation {
+  const failure: Error = Object.freeze(new TypeError("synthetic STT completion field refusal"));
+  return {
+    active: false,
+    status,
+    refusedField,
+    failure,
+    trace: [],
+    requestReceivers: [],
+    sinkReceivers: [],
+    events: [],
+  };
+}
+
+function sttCompletionSink(state: SttCompletionObservation): ModelGatewayLogSink {
+  return {
+    get correlationId(): string | undefined {
+      if (state.active) {
+        state.trace.push("sink.correlationId");
+        state.sinkReceivers.push(this);
+      }
+      return state.status === 200 ? "corr-stt-owning-sink" : undefined;
+    },
+    get write(): (event: ModelGatewayLogTransport) => void {
+      if (state.active) {
+        state.trace.push("sink.write.get");
+        state.sinkReceivers.push(this);
+      }
+      return function (this: ModelGatewayLogSink, event: ModelGatewayLogTransport): void {
+        if (state.active) {
+          state.trace.push("sink.write.call");
+          state.sinkReceivers.push(this);
+        }
+        state.events.push(event);
+      };
+    },
+  };
+}
+
+function sttCompletionRequest(
+  state: SttCompletionObservation,
+  sink: ModelGatewayLogSink,
+): SpeechToTextRequest {
+  return {
+    endpoint: ENDPOINT,
+    apiKey: SECRET_API_KEY,
+    modelId: "keiko-stt",
+    audio: AUDIO,
+    mimeType: "audio/webm",
+    log: sink,
+    correlationId: state.status === 200 ? "corr-stt-completion-request" : undefined,
+    fetchImpl: mockFetch(() => {
+      state.active = true;
+      return state.status === 200
+        ? ok({ text: "private completion transcript" })
+        : new Response(JSON.stringify({ error: "private provider body" }), { status: 429 });
+    }),
+  };
+}
+
+function observeSttCompletionFields(
+  request: SpeechToTextRequest,
+  sink: ModelGatewayLogSink,
+  state: SttCompletionObservation,
+): () => void {
+  const fields = [
+    ["endpoint", ENDPOINT],
+    ["modelId", "keiko-stt"],
+    ["log", sink],
+    ["correlationId", request.correlationId],
+  ] as const;
+  const originals = fields.map(([key]) => ({
+    key,
+    descriptor: Object.getOwnPropertyDescriptor(request, key),
+  }));
+  for (const [key, value] of fields) {
+    Object.defineProperty(request, key, {
+      configurable: true,
+      get(this: SpeechToTextRequest): string | ModelGatewayLogSink | undefined {
+        if (!state.active) return value;
+        state.trace.push(key);
+        state.requestReceivers.push(this);
+        if (state.refusedField === key) throw state.failure;
+        return key === "endpoint" && state.status === 429 ? "not a provider endpoint" : value;
+      },
+    });
+  }
+  return (): void => {
+    for (const { key, descriptor } of originals) {
+      if (descriptor === undefined) Reflect.deleteProperty(request, key);
+      else Object.defineProperty(request, key, descriptor);
+    }
+  };
+}
+
+function expectSttCompletionOrder(
+  state: SttCompletionObservation,
+  request: SpeechToTextRequest,
+  sink: ModelGatewayLogSink,
+): void {
+  expect(state.trace).toEqual([
+    "log",
+    "sink.correlationId",
+    ...(state.status === 200 ? ["sink.correlationId"] : []),
+    "correlationId",
+    "endpoint",
+    "modelId",
+    "sink.write.get",
+    "sink.write.call",
+  ]);
+  expect(state.requestReceivers).toHaveLength(4);
+  for (const receiver of state.requestReceivers) expect(receiver).toBe(request);
+  expect(state.sinkReceivers).toHaveLength(state.status === 200 ? 4 : 3);
+  for (const receiver of state.sinkReceivers) expect(receiver).toBe(sink);
+}
+
+function expectSttCompletionMetadata(
+  state: SttCompletionObservation,
+  completed: ModelGatewayLogEvent | undefined,
+): void {
+  expect(completed).toMatchObject({
+    op: "speech.stt.request.completed",
+    level: state.status === 200 ? "info" : "warn",
+    extra: {
+      modelId: "keiko-stt",
+      outcome: state.status === 200 ? "succeeded" : "failed",
+      httpStatus: state.status,
+    },
+  });
+}
+
+function expectHealthySttCompletion(
+  dispatch: ModelGatewayLogEvent | undefined,
+  completed: ModelGatewayLogEvent | undefined,
+): void {
+  expect(completed?.extra?.endpointDigest).toBe(dispatch?.extra?.endpointDigest);
+  expect(completed?.correlationId).toBe("corr-stt-completion-request");
+  expect(completed).not.toHaveProperty("errorKind");
+  expect(completed?.extra).not.toHaveProperty("failureKind");
+}
+
+function expectFailedSttCompletion(completed: ModelGatewayLogEvent | undefined): void {
+  expect(completed?.extra?.endpointDigest).toBe(sha256Hex("invalid-endpoint"));
+  expect(completed?.extra?.failureKind).toBe("rate-limited");
+  expect(completed?.errorKind).toBe("rate-limited");
+  expect(completed?.correlationId).toBe(ACTIVITY_LOG_UNKNOWN_CORRELATION_ID);
+}
+
+function expectSttCompletionEvent(state: SttCompletionObservation): void {
+  const dispatch = normalFixtureEvent(state.events[0]);
+  const completed = normalFixtureEvent(state.events.at(-1));
+  expectSttCompletionMetadata(state, completed);
+  if (state.status === 200) {
+    expectHealthySttCompletion(dispatch, completed);
+  } else {
+    expectFailedSttCompletion(completed);
+  }
+  for (const secret of [
+    ENDPOINT,
+    SECRET_API_KEY,
+    AUDIO_MARKER,
+    "private completion transcript",
+    "private provider body",
+  ]) {
+    expect(JSON.stringify(state.events)).not.toContain(secret);
+  }
+}
+
+const STT_COMPLETION_SURFACES = [
+  { name: "source", run: requestSpeechToText },
+  { name: "public", run: publicSpeechToText },
+] as const;
+
+// Completion is activated only by the actual owned fetch seam, after dispatch has read the request.
+describe("STT completion evidence observations (#3918)", (): void => {
+  for (const surface of STT_COMPLETION_SURFACES) {
+    for (const status of [200, 429] as const) {
+      it(`${surface.name} retains completion field order and ${String(status)} metadata`, async (): Promise<void> => {
+        const state = sttCompletionObservation(status, "none");
+        const sink = sttCompletionSink(state);
+        const request = sttCompletionRequest(state, sink);
+        const restore = observeSttCompletionFields(request, sink, state);
+        let outcome: SpeechToTextOutcome | undefined;
+        resetActivityLogLossCountersForTests();
+        try {
+          outcome = await surface.run(request);
+        } finally {
+          try {
+            restore();
+          } finally {
+            resetActivityLogLossCountersForTests();
+          }
+        }
+        expect(outcome).toEqual(
+          status === 200
+            ? { ok: true, value: { transcript: "private completion transcript" } }
+            : { ok: false, kind: "rate-limited" },
+        );
+        expectSttCompletionOrder(state, request, sink);
+        expectSttCompletionEvent(state);
+      });
+    }
+    for (const refusedField of ["endpoint", "modelId"] as const) {
+      it(`${surface.name} preserves the exact completion ${refusedField} exception`, async (): Promise<void> => {
+        const state = sttCompletionObservation(200, refusedField);
+        const sink = sttCompletionSink(state);
+        const request = sttCompletionRequest(state, sink);
+        const restore = observeSttCompletionFields(request, sink, state);
+        let caught: unknown;
+        resetActivityLogLossCountersForTests();
+        try {
+          await surface.run(request);
+        } catch (error) {
+          caught = error;
+        } finally {
+          try {
+            restore();
+          } finally {
+            resetActivityLogLossCountersForTests();
+          }
+        }
+        expect(caught).toBe(state.failure);
+        expect(state.trace).toEqual([
+          "log",
+          "sink.correlationId",
+          "sink.correlationId",
+          "correlationId",
+          "endpoint",
+          ...(refusedField === "modelId" ? ["modelId"] : []),
+        ]);
+        expect(state.events).toHaveLength(1);
+        expect(normalFixtureEvent(state.events[0])?.op).toBe("speech.stt.request.dispatch");
+        expect(state.requestReceivers).toHaveLength(refusedField === "endpoint" ? 3 : 4);
+        for (const receiver of state.requestReceivers) expect(receiver).toBe(request);
+        expect(state.sinkReceivers).toHaveLength(2);
+        for (const receiver of state.sinkReceivers) expect(receiver).toBe(sink);
+      });
+    }
+  }
+});

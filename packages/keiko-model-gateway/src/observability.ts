@@ -374,3 +374,32 @@ export function logEndpointHost(url: string | URL | undefined): string | undefin
     return undefined;
   }
 }
+
+/** The shared Speech endpoint privacy projection, evaluated at each original field position. */
+export function logEndpointDigest(endpoint: string): string {
+  return sha256Hex(logEndpointHost(endpoint) ?? "invalid-endpoint");
+}
+
+interface SpeechCompletionStatus {
+  readonly ok: boolean;
+}
+
+interface SpeechCompletionLogEnvelope {
+  readonly level: "info" | "warn";
+  readonly correlationId?: string;
+  readonly errorKind?: ActivityLogErrorKind;
+}
+
+/** Keep severity, optional correlation and the caller's finite classification lookup in order. */
+export function speechCompletionLogEnvelope<FailureKind extends string>(
+  outcome: SpeechCompletionStatus,
+  correlationId: string | undefined,
+  failureKind: FailureKind | undefined,
+  errorKinds: Readonly<Record<FailureKind, ActivityLogErrorKind>>,
+): SpeechCompletionLogEnvelope {
+  return {
+    level: outcome.ok ? "info" : "warn",
+    ...(correlationId === undefined ? {} : { correlationId }),
+    ...(failureKind === undefined ? {} : { errorKind: errorKinds[failureKind] }),
+  };
+}
