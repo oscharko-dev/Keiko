@@ -93,20 +93,143 @@ static int udp_send(int family, UINT16 port) {
   return result == 1;
 }
 
-int gateway_socket_leaf(int family, UINT16 gateway, UINT16 hostile) {
-  WSADATA data;
+static int appcontainer_member(void) {
   HANDLE token = NULL;
   DWORD contained = 0, returned = 0;
-  int result;
-  if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return 80;
+  if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return 0;
   if (!GetTokenInformation(token, TokenIsAppContainer, &contained, sizeof(contained), &returned)) {
-    CloseHandle(token); return 81;
+    CloseHandle(token); return 0;
   }
   CloseHandle(token);
-  if (!contained || WSAStartup(MAKEWORD(2, 2), &data) != 0) return 82;
+  return contained == 1;
+}
+
+int gateway_socket_leaf(int family, UINT16 gateway, UINT16 hostile) {
+  WSADATA data;
+  int result;
+  if (!appcontainer_member() || WSAStartup(MAKEWORD(2, 2), &data) != 0) return 82;
   result = (connect_target(family, gateway) ? 1 : 0) | (connect_target(family, hostile) ? 2 : 0) |
            (udp_send(family, gateway) ? 4 : 0);
   WSACleanup();
+  return result;
+}
+
+/* OpenCode is an HTTP server as well as a gateway client. Its host control route must be proven
+ * separately from outbound TCP: a successful gateway request says nothing about inbound access. */
+int gateway_socket_server(int family) {
+  WSADATA data;
+  struct socket_target server = {0};
+  unsigned char announcement[8] = {'K', 'S', 'V', '1', 0, 0, 0, 0};
+  DWORD written = 0;
+  fd_set ready;
+  struct timeval timeout = {5, 0};
+  SOCKET connection = INVALID_SOCKET;
+  int result = 91;
+  if (!appcontainer_member() || WSAStartup(MAKEWORD(2, 2), &data) != 0) return result;
+  server.listener = INVALID_SOCKET;
+  if (!listen_target(family, &server)) goto done;
+  announcement[4] = (unsigned char)server.port;
+  announcement[5] = (unsigned char)(server.port >> 8);
+  announcement[6] = (unsigned char)family;
+  if (!WriteFile(GetStdHandle(STD_OUTPUT_HANDLE), announcement, sizeof(announcement), &written, NULL) ||
+      written != sizeof(announcement)) goto done;
+  FD_ZERO(&ready); FD_SET(server.listener, &ready);
+  if (select(0, &ready, NULL, NULL, &timeout) <= 0) goto done;
+  connection = accept(server.listener, NULL, NULL);
+  if (connection != INVALID_SOCKET && send(connection, "K", 1, 0) == 1) result = 0;
+done:
+  if (connection != INVALID_SOCKET) closesocket(connection);
+  if (server.listener != INVALID_SOCKET) closesocket(server.listener);
+  WSACleanup();
+  return result;
+}
+
+static DWORD read_server_port(HANDLE output, int family, UINT16 *port) {
+  unsigned char bytes[8];
+  DWORD available = 0, count = 0;
+  ULONGLONG deadline = GetTickCount64() + 5000;
+  while (GetTickCount64() < deadline) {
+    if (!PeekNamedPipe(output, NULL, 0, NULL, &available, NULL)) return GetLastError();
+    if (available >= sizeof(bytes)) {
+      if (!ReadFile(output, bytes, sizeof(bytes), &count, NULL)) return GetLastError();
+      if (count != sizeof(bytes) || memcmp(bytes, "KSV1", 4) != 0 ||
+          bytes[6] != family || bytes[7] != 0) return ERROR_INVALID_DATA;
+      *port = (UINT16)((UINT16)bytes[4] | ((UINT16)bytes[5] << 8));
+      return *port != 0 ? ERROR_SUCCESS : ERROR_INVALID_DATA;
+    }
+    Sleep(10);
+  }
+  return ERROR_TIMEOUT;
+}
+
+static DWORD control_route_probe(PSID sid, const wchar_t *executable, int family) {
+  STARTUPINFOEXW startup = {0};
+  PROCESS_INFORMATION child = {0};
+  SECURITY_CAPABILITIES capabilities = {0};
+  SECURITY_ATTRIBUTES inheritable = {sizeof(SECURITY_ATTRIBUTES), NULL, TRUE};
+  JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = {0};
+  HANDLE output = NULL, inherited[3] = {NULL, NULL, NULL}, job = NULL;
+  SIZE_T size = 0;
+  wchar_t *command = calloc(33000, sizeof(wchar_t));
+  DWORD result = ERROR_INVALID_DATA, code = 99;
+  UINT16 port = 0;
+  int initialized = 0;
+  if (command == NULL) return ERROR_OUTOFMEMORY;
+  if (!CreatePipe(&output, &inherited[1], &inheritable, 0) ||
+      !SetHandleInformation(output, HANDLE_FLAG_INHERIT, 0)) { result = GetLastError(); goto done; }
+  inherited[0] = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                              &inheritable, OPEN_EXISTING, 0, NULL);
+  inherited[2] = CreateFileW(L"NUL", GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                              &inheritable, OPEN_EXISTING, 0, NULL);
+  if (inherited[0] == INVALID_HANDLE_VALUE || inherited[2] == INVALID_HANDLE_VALUE) {
+    result = GetLastError(); goto done;
+  }
+  (void)InitializeProcThreadAttributeList(NULL, 2, 0, &size);
+  startup.lpAttributeList = calloc(1, size);
+  if (startup.lpAttributeList == NULL || !InitializeProcThreadAttributeList(startup.lpAttributeList, 2, 0, &size)) {
+    result = ERROR_OUTOFMEMORY; goto done;
+  }
+  initialized = 1;
+  startup.StartupInfo.cb = sizeof(startup);
+  startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+  startup.StartupInfo.hStdInput = inherited[0];
+  startup.StartupInfo.hStdOutput = inherited[1];
+  startup.StartupInfo.hStdError = inherited[2];
+  capabilities.AppContainerSid = sid;
+  job = CreateJobObjectW(NULL, NULL);
+  limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+  if (job == NULL || !SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits)) ||
+      !UpdateProcThreadAttribute(startup.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+                                  inherited, sizeof(inherited), NULL, NULL) ||
+      !UpdateProcThreadAttribute(startup.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
+                                  &capabilities, sizeof(capabilities), NULL, NULL) ||
+      _snwprintf_s(command, 33000, _TRUNCATE, L"\"%ls\" --socket-server %d", executable, family) < 0 ||
+      !CreateProcessW(executable, command, NULL, NULL, TRUE,
+        EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED | CREATE_NO_WINDOW, NULL, NULL,
+        &startup.StartupInfo, &child) || !AssignProcessToJobObject(job, child.hProcess) ||
+      ResumeThread(child.hThread) == (DWORD)-1) { result = GetLastError(); goto done; }
+  CloseHandle(inherited[1]); inherited[1] = NULL;
+  result = read_server_port(output, family, &port);
+  if (result == ERROR_SUCCESS && !connect_target(family, port)) result = ERROR_CONNECTION_REFUSED;
+  if (result == ERROR_SUCCESS && (WaitForSingleObject(child.hProcess, 5000) != WAIT_OBJECT_0 ||
+      !GetExitCodeProcess(child.hProcess, &code) || code != 0)) result = ERROR_INVALID_DATA;
+done:
+  if (child.hProcess != NULL) {
+    if (WaitForSingleObject(child.hProcess, 0) != WAIT_OBJECT_0) {
+      (void)TerminateProcess(child.hProcess, 92);
+      (void)WaitForSingleObject(child.hProcess, 5000);
+    }
+    CloseHandle(child.hProcess);
+  }
+  if (child.hThread != NULL) CloseHandle(child.hThread);
+  if (job != NULL) CloseHandle(job);
+  if (initialized) DeleteProcThreadAttributeList(startup.lpAttributeList);
+  free(startup.lpAttributeList);
+  if (output != NULL) CloseHandle(output);
+  for (size_t index = 0; index < 3; index++)
+    if (inherited[index] != NULL && inherited[index] != INVALID_HANDLE_VALUE) CloseHandle(inherited[index]);
+  free(command);
+  printf("socket-host-control-route: family=%d code=%lu child=%lu\n", family, result, code);
   return result;
 }
 
@@ -366,6 +489,7 @@ int gateway_socket_proof(void) {
           printf("socket-udp-reception: family=%d first=%d peer=%d expected=0\n", family, received, peer_received);
           if (received != 0 || peer_received != 0) result = ERROR_INVALID_DATA;
         }
+        if (result == ERROR_SUCCESS) result = control_route_probe(sid, executable, family);
       }
     }
     closed = keiko_gateway_filters_close(&filters);

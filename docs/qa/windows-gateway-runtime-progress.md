@@ -62,6 +62,14 @@ was installed during these local tests.
 The local package build/typecheck passed. Full service, installer, exact endpoint, crash/reboot,
 non-elevated production launch and actual Workbench acceptance remain outstanding.
 
+The first disposable-runner attempt stopped at IPC authentication before installing any filter:
+its process image retained a Windows 8.3 pathname. A native short-path launch reproduced the denial
+locally. Expanding that spelling while retaining the protected pathname and file-ID comparison
+passes both long/short-path positive controls and the existing negative controls. The socket fixture
+now also requires host-to-AppContainer server connectivity under the same gateway filter; this
+separate inbound control route is necessary for the unchanged OpenCode HTTP service. Its outcome
+must be measured on the disposable runner, not inferred from outbound gateway access.
+
 Platform contracts used by these components:
 [registry flush durability](https://learn.microsoft.com/en-us/windows/win32/api/winreg/nf-winreg-regflushkey),
 [named-pipe client impersonation](https://learn.microsoft.com/en-us/windows/win32/api/namedpipeapi/nf-namedpipeapi-impersonatenamedpipeclient),

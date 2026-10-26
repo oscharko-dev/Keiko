@@ -44,21 +44,26 @@ static DWORD image_matches(HANDLE process, HANDLE approved_image) {
   FILE_STANDARD_INFO standard = {0};
   DWORD length = 32768, result = ERROR_SUCCESS;
   wchar_t *path = calloc(length, sizeof(wchar_t));
+  wchar_t *long_path = calloc(length, sizeof(wchar_t));
   wchar_t *approved_path = calloc(length, sizeof(wchar_t));
   HANDLE image = INVALID_HANDLE_VALUE;
-  if (path == NULL || approved_path == NULL) { result = ERROR_OUTOFMEMORY; goto done; }
+  if (path == NULL || long_path == NULL || approved_path == NULL) { result = ERROR_OUTOFMEMORY; goto done; }
   if (!GetFileInformationByHandleEx(approved_image, FileIdInfo, &expected, sizeof(expected)) ||
       !GetFileInformationByHandleEx(approved_image, FileStandardInfo, &standard, sizeof(standard)) ||
       !QueryFullProcessImageNameW(process, 0, path, &length)) {
     result = GetLastError(); goto done;
   }
   if (standard.Directory || standard.DeletePending) { result = ERROR_ACCESS_DENIED; goto done; }
+  /* The process image name may retain 8.3 components (including the hosted runner's TEMP).
+   * Expand spelling only: GetLongPathName does not authorize a different junction/hardlink path. */
+  length = GetLongPathNameW(path, long_path, 32768);
+  if (length == 0 || length >= 32768) { result = ERROR_ACCESS_DENIED; goto done; }
   length = GetFinalPathNameByHandleW(approved_image, approved_path, 32768, FILE_NAME_NORMALIZED);
   /* Require the protected installation pathname as well as its file ID. Looking up an arbitrary
    * process-reported pathname would accept a hostile image renamed/replaced after it started. */
   if (length < 7 || length >= 32768 || wcsncmp(approved_path, L"\\\\?\\", 4) != 0 ||
       approved_path[5] != L':' || approved_path[6] != L'\\' ||
-      CompareStringOrdinal(path, -1, approved_path + 4, -1, TRUE) != CSTR_EQUAL) {
+      CompareStringOrdinal(long_path, -1, approved_path + 4, -1, TRUE) != CSTR_EQUAL) {
     result = ERROR_ACCESS_DENIED; goto done;
   }
   image = CreateFileW(path, FILE_READ_ATTRIBUTES, FILE_SHARE_READ, NULL, OPEN_EXISTING,
@@ -71,6 +76,7 @@ static DWORD image_matches(HANDLE process, HANDLE approved_image) {
 done:
   if (image != INVALID_HANDLE_VALUE) CloseHandle(image);
   free(path);
+  free(long_path);
   free(approved_path);
   return result;
 }

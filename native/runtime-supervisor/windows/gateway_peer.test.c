@@ -43,7 +43,7 @@ static int peer_case(const wchar_t *executable, HANDLE approved_image, int anony
   struct keiko_gateway_peer peer = {0};
   DWORD code = 99, authenticated = ERROR_INVALID_DATA;
   char byte = 0;
-  int ok = 0;
+  int ok = 0, stage = 0;
   if (command == NULL || UuidCreate(&id) != RPC_S_OK || UuidToStringW(&id, &id_text) != RPC_S_OK)
     goto done;
   if (_snwprintf_s(name, 128, _TRUNCATE, L"\\\\.\\pipe\\KeikoGatewayFixture-%ls", id_text) < 0)
@@ -58,6 +58,7 @@ static int peer_case(const wchar_t *executable, HANDLE approved_image, int anony
   startup.cb = sizeof(startup);
   if (!CreateProcessW(executable, command, NULL, NULL, FALSE, CREATE_NO_WINDOW,
                        NULL, NULL, &startup, &child)) goto done;
+  stage = 1;
   {
     BOOL connected = ConnectNamedPipe(pipe, &operation);
     DWORD error = connected ? ERROR_SUCCESS : GetLastError();
@@ -65,6 +66,7 @@ static int peer_case(const wchar_t *executable, HANDLE approved_image, int anony
   }
   ResetEvent(operation.hEvent);
   if (!finish_io(pipe, &operation, ReadFile(pipe, &byte, 1, NULL, &operation), 1) || byte != 'K') goto done;
+  stage = 2;
   authenticated = keiko_gateway_peer_authenticate(pipe, approved_image, &peer);
   if (accepted) {
     ok = authenticated == ERROR_SUCCESS && peer.pid == child.dwProcessId &&
@@ -78,6 +80,8 @@ static int peer_case(const wchar_t *executable, HANDLE approved_image, int anony
   if (WaitForSingleObject(child.hProcess, 5000) != WAIT_OBJECT_0 ||
       !GetExitCodeProcess(child.hProcess, &code) || code != 0) ok = 0;
 done:
+  if (!ok) printf("gateway-peer-case: stage=%d expected=%d anonymous=%d authentication=%lu child=%lu\n",
+                   stage, accepted, anonymous, authenticated, code);
   keiko_gateway_peer_close(&peer);
   if (child.hProcess != NULL) {
     if (WaitForSingleObject(child.hProcess, 0) != WAIT_OBJECT_0) {
@@ -96,21 +100,25 @@ done:
 
 int gateway_peer_tests(void) {
   wchar_t *executable = calloc(32768, sizeof(wchar_t));
+  wchar_t *short_path = calloc(32768, sizeof(wchar_t));
   wchar_t system_image[MAX_PATH];
   HANDLE approved = INVALID_HANDLE_VALUE, other = INVALID_HANDLE_VALUE;
   int ok = 0;
-  if (executable == NULL || GetModuleFileNameW(NULL, executable, 32768) == 0 ||
+  if (executable == NULL || short_path == NULL || GetModuleFileNameW(NULL, executable, 32768) == 0 ||
+      GetShortPathNameW(executable, short_path, 32768) == 0 ||
       GetSystemDirectoryW(system_image, MAX_PATH) == 0 ||
       wcscat_s(system_image, MAX_PATH, L"\\kernel32.dll") != 0) goto done;
   approved = CreateFileW(executable, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
   other = CreateFileW(system_image, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
   if (approved == INVALID_HANDLE_VALUE || other == INVALID_HANDLE_VALUE) goto done;
-  ok = peer_case(executable, approved, 0, 1) && peer_case(executable, other, 0, 0) &&
+  ok = peer_case(executable, approved, 0, 1) && peer_case(short_path, approved, 0, 1) &&
+       peer_case(executable, other, 0, 0) &&
        peer_case(executable, approved, 1, 0);
 done:
   if (approved != INVALID_HANDLE_VALUE) CloseHandle(approved);
   if (other != INVALID_HANDLE_VALUE) CloseHandle(other);
   free(executable);
+  free(short_path);
   puts(ok ? "gateway-local-peer-authentication: passed" : "gateway-local-peer-authentication: failed");
   return ok ? 0 : 1;
 }

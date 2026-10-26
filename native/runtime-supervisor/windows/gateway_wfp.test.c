@@ -9,6 +9,7 @@
 int gateway_socket_proof(void);
 int gateway_socket_child(int family, UINT16 gateway, UINT16 hostile);
 int gateway_socket_leaf(int family, UINT16 gateway, UINT16 hostile);
+int gateway_socket_server(int family);
 int gateway_journal_tests(void);
 int gateway_peer_tests(void);
 int gateway_peer_client(const char *pipe_name, int anonymous);
@@ -225,6 +226,7 @@ int main(int argc, char **argv) {
     return gateway_peer_client(argv[2], strcmp(argv[3], "1") == 0);
   if (argc == 3 && strcmp(argv[1], "--identity-child") == 0) return gateway_identity_child(argv[2]);
   if (argc == 3 && strcmp(argv[1], "--identity-leaf") == 0) return gateway_identity_leaf(argv[2]);
+  if (argc == 3 && strcmp(argv[1], "--socket-server") == 0) return gateway_socket_server(atoi(argv[2]));
   if (argc == 2 && strcmp(argv[1], "--guard-held") == 0) return guarded_child();
   if (argc == 2 && strcmp(argv[1], "--socket-proof") == 0) return gateway_socket_proof();
   if (argc == 5 && strcmp(argv[1], "--socket-child") == 0) {
