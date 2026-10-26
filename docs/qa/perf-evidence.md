@@ -528,6 +528,8 @@ After the shared Coding History transfer line at `08fbb9bec` it was measured aga
 2.11, 2.57 and 129.0 ms, each below its committed ceiling.
 After the bounded DNS lookups at `7789da5c4` it was measured again: p95 1524.8, 1.95, 2.37 and
 142.6 ms, each below its committed ceiling.
+After the support code inventory was regenerated at `def82bff7` it was measured again: p95
+1465.6, 1.86, 2.02 and 128.5 ms, each below its committed ceiling.
 
 The PR lane runs `check:perf-evidence:coding-runtime` and the hermetic ruler tests
 (`test:perf:coding-runtime`). It checks integrity and budgets unconditionally. Set
