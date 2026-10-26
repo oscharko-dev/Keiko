@@ -95,24 +95,6 @@ export async function revokeEditorWorkspaceTrust(
   });
 }
 
-/**
- * Assert the server still reports `root` as restricted. Opening a root (ADR-0147 as amended by PR
- * #3685) never grants trust, so a journey that opens a revoked root asserts the server-owned state
- * rather than the absence of a prompt alone.
- */
-export async function expectEditorWorkspaceRestricted(
-  request: APIRequestContext,
-  root: string,
-): Promise<void> {
-  const response = await request.get("/api/editor/verification/trust", {
-    params: { projectId: root },
-  });
-  expect(response.ok(), await response.text()).toBe(true);
-  expect((await response.json()) as { readonly trust: string }).toMatchObject({
-    trust: "restricted",
-  });
-}
-
 interface SeedEditorWindowOptions {
   readonly root?: string;
   readonly openFiles?: readonly string[];

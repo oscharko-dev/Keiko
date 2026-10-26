@@ -7,10 +7,10 @@ import { validateWorkspaceManifest } from "@oscharko-dev/keiko-contracts/runtime
 import {
   cleanupEditorWorkspaces,
   createEditorWorkspace,
-  expectEditorWorkspaceRestricted,
   openEditorWorkspace,
   revokeEditorWorkspaceTrust,
 } from "./support/editorWorkspace.js";
+import { expectEditorWorkspaceRestricted } from "./support/editorWorkspaceTrust.js";
 import { editorM11PairingFragment } from "./support/editor-m11-app-session.js";
 
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };

@@ -3,8 +3,11 @@
 // process) all derive the SAME hermetic state layout from these helpers, so the spec can locate the
 // git fixture and the managed worktree the REAL server provisioned without any side channel.
 
-import { join } from "node:path";
-import { e2eStateDir } from "./e2e-state-dir.js";
+import {
+  codingRuntimeJourneyManagedWorkspaceRoot,
+  codingRuntimeJourneyRepositoryRoot,
+  codingRuntimeJourneyStateDir,
+} from "./coding-runtime-journey-state.js";
 
 export const TRACER_DEFAULT_UI_PORT = 32485;
 
@@ -21,25 +24,10 @@ export const TRACER_ORIGINAL_CONTENT = "export const value = 'ORIGINAL_TRACER_23
 export const TRACER_EDITED_CONTENT = "export const value = 'NEW_TRACER_2385';\n";
 export const TRACER_TARGET_RELATIVE_PATH = "src/example.ts";
 
-// Deterministic (pid-free) state id: the config, the webServer entry, and the workers each
-// re-derive the identical directory. The config's prepare step wipes it before every boot.
 export function tracerStateDir(): string {
-  const runId = process.env.GITHUB_RUN_ID;
-  const stateId =
-    runId === undefined || runId.length === 0
-      ? "code-task-opencode-tracer"
-      : `code-task-opencode-tracer-${runId}`;
-  return e2eStateDir(stateId);
+  return codingRuntimeJourneyStateDir("code-task-opencode-tracer");
 }
 
-// The local git checkout the tracer binds through the Coding Workbench "Code setup" section.
-export function tracerRepositoryRoot(stateDir: string): string {
-  return join(stateDir, "repository");
-}
+export const tracerRepositoryRoot = codingRuntimeJourneyRepositoryRoot;
 
-// The Keiko-owned managed worktree root. MUST stay `<dirname(uiDbPath)>/task-workspaces` because
-// buildUiHandlerDeps derives `deps.managedTaskWorkspaceRoot` from the ui-db path and the injected
-// resolver/workspace services must agree with the routes on the same containment root.
-export function tracerManagedWorkspaceRoot(stateDir: string): string {
-  return join(stateDir, "bff-state", "ui-db", "task-workspaces");
-}
+export const tracerManagedWorkspaceRoot = codingRuntimeJourneyManagedWorkspaceRoot;

@@ -6,11 +6,11 @@ import {
   cleanupEditorWorkspaces,
   createEditorWorkspace,
   EDITOR_SELECTORS,
-  expectEditorWorkspaceRestricted,
   firstPane,
   openEditorWorkspace,
   revokeEditorWorkspaceTrust,
 } from "./support/editorWorkspace.js";
+import { expectEditorWorkspaceRestricted } from "./support/editorWorkspaceTrust.js";
 import { replaceEditorBuffer } from "./support/editor-chord.js";
 import { editorM11PairingFragment } from "./support/editor-m11-app-session.js";
 import { formatViolations, runAxe, seriousOrCritical } from "./support/axe.js";

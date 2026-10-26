@@ -5,7 +5,11 @@
 // and loopback port keep this journey isolated from the tracer and authority journeys.
 
 import { join } from "node:path";
-import { e2eStateDir } from "./e2e-state-dir.js";
+import {
+  codingRuntimeJourneyManagedWorkspaceRoot,
+  codingRuntimeJourneyRepositoryRoot,
+  codingRuntimeJourneyStateDir,
+} from "./coding-runtime-journey-state.js";
 
 export const RESEARCH_DEFAULT_UI_PORT = 32487;
 export const RESEARCH_APP_SESSION_LAUNCHER_SECRET =
@@ -20,28 +24,13 @@ export const RESEARCH_JOURNEY_HOST = "docs.example.org";
 // scripted URL, so the spec's expectation can never drift from what the server actually projects.
 export const RESEARCH_JOURNEY_REQUEST_LINE = "/guide/streams topic=backpressure";
 
-// Deterministic (pid-free) state id: the config, the webServer entry, and the workers each
-// re-derive the identical directory. The config's prepare step wipes it before every boot.
 export function researchStateDir(): string {
-  const runId = process.env.GITHUB_RUN_ID;
-  const stateId =
-    runId === undefined || runId.length === 0
-      ? "code-task-2387-research"
-      : `code-task-2387-research-${runId}`;
-  return e2eStateDir(stateId);
+  return codingRuntimeJourneyStateDir("code-task-2387-research");
 }
 
-// The local git checkout the journey binds through the Coding Workbench "Code setup" section.
-export function researchRepositoryRoot(stateDir: string): string {
-  return join(stateDir, "repository");
-}
+export const researchRepositoryRoot = codingRuntimeJourneyRepositoryRoot;
 
-// The Keiko-owned managed worktree root. MUST stay `<dirname(uiDbPath)>/task-workspaces` because
-// buildUiHandlerDeps derives `deps.managedTaskWorkspaceRoot` from the ui-db path and the injected
-// resolver/workspace services must agree with the routes on the same containment root.
-export function researchManagedWorkspaceRoot(stateDir: string): string {
-  return join(stateDir, "bff-state", "ui-db", "task-workspaces");
-}
+export const researchManagedWorkspaceRoot = codingRuntimeJourneyManagedWorkspaceRoot;
 
 // ─── #2637 prompt-injection fixture ──────────────────────────────────────────────────────────
 // Owned here, not in the package harness, because BOTH the server entry (which serves the page and
