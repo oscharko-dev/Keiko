@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "f832f96471d17a650374d6ac88783cade9c3ca989c1282f8318b0cbfaf9c8e62",
+    "catalogDigest": "ead8288d4c0e342cc1065adb5ec22ce711f39b6875c710d3422047d35507ebba",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -8676,9 +8676,9 @@
         "failureClasses": ["coding-runtime-mcp-credentials"],
         "proofIds": ["coding-runtime.mcp-credentials.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeNativeMcpCredentials.ts:157",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeNativeMcpCredentials.ts:158",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/opencodeNativeMcpCredentials.ts:212"
+          "packages/keiko-server/src/coding-runtime/opencodeNativeMcpCredentials.ts:213"
         ]
       },
       {
@@ -10598,8 +10598,8 @@
         "failureClasses": ["coding-runtime-remote-skills"],
         "proofIds": ["coding-runtime.remote-skills.admitted.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRemoteSkills.ts:421",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeRemoteSkills.ts:479"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRemoteSkills.ts:418",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeRemoteSkills.ts:476"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -10745,8 +10745,8 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeRepositoryInstructions.ts:149",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingRuntimeRepositoryInstructions.ts:850",
-          "packages/keiko-server/src/coding-runtime/codingRuntimeRepositoryInstructions.ts:880"
+          "packages/keiko-server/src/coding-runtime/codingRuntimeRepositoryInstructions.ts:858",
+          "packages/keiko-server/src/coding-runtime/codingRuntimeRepositoryInstructions.ts:888"
         ]
       },
       {
@@ -100991,7 +100991,7 @@
     {
       "op": "coding-runtime.mcp-credentials",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeNativeMcpCredentials.ts:160",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeNativeMcpCredentials.ts:161",
       "package": "keiko-server"
     },
     {
@@ -101190,7 +101190,7 @@
     {
       "op": "coding-runtime.remote-skills.admitted",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRemoteSkills.ts:424",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRemoteSkills.ts:421",
       "package": "keiko-server"
     },
     {
