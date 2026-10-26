@@ -3,8 +3,8 @@
   "target": "coding-runtime",
   "evidenceClass": "functional-performance-not-platform-qualified",
   "subject": {
-    "commit": "1049404b686cfdd21dec0df1a012df1ed3673b23",
-    "sourceTreeSha256": "97d541684bb6b639aa9b52fd2a0616ddf7e53c679817b3828881edf71b8d69b7",
+    "commit": "4428bcb193d03128ba6c287f41298a88a0ceca5e",
+    "sourceTreeSha256": "b4929fb915b2a3c8b4c8e2714bb9d6a9570b42a933005701042b0fd62a9318f6",
     "lockfileSha256": "713ae5d2354b61a496b2e84c070d9d98ef44af1921f8a83323d4ed32ef067f18"
   },
   "measurementHarnessSha256": "00a44c772e81f524589332ff7a22241fe1f96acb46415ced0b80318bf3b78ce8",
@@ -24,307 +24,307 @@
   },
   "samples": [
     {
-      "coldStartMs": 1481.0311249999995,
-      "readinessMs": 1.956916000000092,
-      "sseFirstByteMs": 2.004417000000103,
-      "boundedThroughputMs": 124.6023750000004,
+      "coldStartMs": 1504.2058749999997,
+      "readinessMs": 1.8332500000014988,
+      "sseFirstByteMs": 2.069416000000274,
+      "boundedThroughputMs": 129.4712500000005,
       "observedOutputChars": 2048,
       "observedChunks": 64,
       "observedChars": 2048,
       "gatewayCalls": 1
     },
     {
-      "coldStartMs": 1462.2804579999993,
-      "readinessMs": 1.7977499999997235,
-      "sseFirstByteMs": 2.0547499999993306,
-      "boundedThroughputMs": 126.0676250000015,
+      "coldStartMs": 1492.9432500000003,
+      "readinessMs": 1.84375,
+      "sseFirstByteMs": 2.3695000000006985,
+      "boundedThroughputMs": 122.62825000000157,
       "observedOutputChars": 2048,
       "observedChunks": 64,
       "observedChars": 2048,
       "gatewayCalls": 1
     },
     {
-      "coldStartMs": 1464.859375,
-      "readinessMs": 1.8046659999999974,
-      "sseFirstByteMs": 1.9347920000000158,
-      "boundedThroughputMs": 120.12345800000003,
+      "coldStartMs": 1452.916957999998,
+      "readinessMs": 1.783292000000074,
+      "sseFirstByteMs": 1.9882919999981823,
+      "boundedThroughputMs": 126.51508399999875,
       "observedOutputChars": 2048,
       "observedChunks": 64,
       "observedChars": 2048,
       "gatewayCalls": 1
     },
     {
-      "coldStartMs": 1479.150583999999,
-      "readinessMs": 1.8702090000006137,
-      "sseFirstByteMs": 1.9279590000005555,
+      "coldStartMs": 1477.9271660000013,
+      "readinessMs": 1.8002500000002328,
+      "sseFirstByteMs": 2.105959000000439,
+      "boundedThroughputMs": 126.15429199999926,
+      "observedOutputChars": 2048,
+      "observedChunks": 64,
+      "observedChars": 2048,
+      "gatewayCalls": 1
+    },
+    {
+      "coldStartMs": 1448.1342079999995,
+      "readinessMs": 1.8250000000007276,
+      "sseFirstByteMs": 1.8564169999990554,
+      "boundedThroughputMs": 124.42562499999985,
+      "observedOutputChars": 2048,
+      "observedChunks": 64,
+      "observedChars": 2048,
+      "gatewayCalls": 1
+    },
+    {
+      "coldStartMs": 1501.398083,
+      "readinessMs": 1.7857079999994312,
+      "sseFirstByteMs": 2.6362499999995634,
+      "boundedThroughputMs": 149.84879200000069,
+      "observedOutputChars": 2048,
+      "observedChunks": 64,
+      "observedChars": 2048,
+      "gatewayCalls": 1
+    },
+    {
+      "coldStartMs": 1525.3780420000003,
+      "readinessMs": 2.014792000001762,
+      "sseFirstByteMs": 2.0566670000007434,
+      "boundedThroughputMs": 125.24329099999886,
+      "observedOutputChars": 2048,
+      "observedChunks": 64,
+      "observedChars": 2048,
+      "gatewayCalls": 1
+    },
+    {
+      "coldStartMs": 1464.0842499999999,
+      "readinessMs": 1.8854579999970156,
+      "sseFirstByteMs": 1.8389999999999418,
+      "boundedThroughputMs": 123.66033299999981,
+      "observedOutputChars": 2048,
+      "observedChunks": 64,
+      "observedChars": 2048,
+      "gatewayCalls": 1
+    },
+    {
+      "coldStartMs": 1460.729792000002,
+      "readinessMs": 1.708083000001352,
+      "sseFirstByteMs": 2.0595829999983835,
+      "boundedThroughputMs": 123.1595419999976,
+      "observedOutputChars": 2048,
+      "observedChunks": 64,
+      "observedChars": 2048,
+      "gatewayCalls": 1
+    },
+    {
+      "coldStartMs": 1467.583917,
+      "readinessMs": 1.7542079999984708,
+      "sseFirstByteMs": 1.897791999999754,
+      "boundedThroughputMs": 128.06312499999694,
+      "observedOutputChars": 2048,
+      "observedChunks": 64,
+      "observedChars": 2048,
+      "gatewayCalls": 1
+    },
+    {
+      "coldStartMs": 1454.0817499999976,
+      "readinessMs": 1.7363340000010794,
+      "sseFirstByteMs": 1.935124999996333,
+      "boundedThroughputMs": 124.78920799999469,
+      "observedOutputChars": 2048,
+      "observedChunks": 64,
+      "observedChars": 2048,
+      "gatewayCalls": 1
+    },
+    {
+      "coldStartMs": 1448.9038749999963,
+      "readinessMs": 1.7820839999985765,
+      "sseFirstByteMs": 1.948792000002868,
+      "boundedThroughputMs": 127.99345800000447,
+      "observedOutputChars": 2048,
+      "observedChunks": 64,
+      "observedChars": 2048,
+      "gatewayCalls": 1
+    },
+    {
+      "coldStartMs": 1446.836083000002,
+      "readinessMs": 0.4041660000002594,
+      "sseFirstByteMs": 1.847208999999566,
+      "boundedThroughputMs": 123.35154200000397,
+      "observedOutputChars": 2048,
+      "observedChunks": 64,
+      "observedChars": 2048,
+      "gatewayCalls": 1
+    },
+    {
+      "coldStartMs": 1476.2837080000027,
+      "readinessMs": 1.7165420000019367,
+      "sseFirstByteMs": 1.885958999999275,
+      "boundedThroughputMs": 121.95233299999381,
+      "observedOutputChars": 2048,
+      "observedChunks": 64,
+      "observedChars": 2048,
+      "gatewayCalls": 1
+    },
+    {
+      "coldStartMs": 1464.0094170000011,
+      "readinessMs": 1.8230000000039581,
+      "sseFirstByteMs": 1.9175000000032014,
+      "boundedThroughputMs": 128.2074169999978,
+      "observedOutputChars": 2048,
+      "observedChunks": 64,
+      "observedChars": 2048,
+      "gatewayCalls": 1
+    },
+    {
+      "coldStartMs": 1444.299334000003,
+      "readinessMs": 1.8661250000004657,
+      "sseFirstByteMs": 1.7747500000041327,
+      "boundedThroughputMs": 117.15104200000496,
+      "observedOutputChars": 2048,
+      "observedChunks": 64,
+      "observedChars": 2048,
+      "gatewayCalls": 1
+    },
+    {
+      "coldStartMs": 1565.908374999999,
+      "readinessMs": 1.7842500000042492,
+      "sseFirstByteMs": 2.0380420000001322,
+      "boundedThroughputMs": 124.81312500000058,
+      "observedOutputChars": 2048,
+      "observedChunks": 64,
+      "observedChars": 2048,
+      "gatewayCalls": 1
+    },
+    {
+      "coldStartMs": 1455.9622089999975,
+      "readinessMs": 1.6849589999983436,
+      "sseFirstByteMs": 1.9371660000033444,
+      "boundedThroughputMs": 127.73124999999709,
+      "observedOutputChars": 2048,
+      "observedChunks": 64,
+      "observedChars": 2048,
+      "gatewayCalls": 1
+    },
+    {
+      "coldStartMs": 1458.5285839999997,
+      "readinessMs": 1.8257090000042808,
+      "sseFirstByteMs": 1.8324999999967986,
+      "boundedThroughputMs": 121.28270799999882,
+      "observedOutputChars": 2048,
+      "observedChunks": 64,
+      "observedChars": 2048,
+      "gatewayCalls": 1
+    },
+    {
+      "coldStartMs": 1461.4537500000006,
+      "readinessMs": 1.7598749999961,
+      "sseFirstByteMs": 1.8870830000014394,
+      "boundedThroughputMs": 126.31212499999674,
+      "observedOutputChars": 2048,
+      "observedChunks": 64,
+      "observedChars": 2048,
+      "gatewayCalls": 1
+    },
+    {
+      "coldStartMs": 1490.9626250000001,
+      "readinessMs": 1.7091250000012224,
+      "sseFirstByteMs": 2.141166000001249,
+      "boundedThroughputMs": 126.91058300000441,
+      "observedOutputChars": 2048,
+      "observedChunks": 64,
+      "observedChars": 2048,
+      "gatewayCalls": 1
+    },
+    {
+      "coldStartMs": 1463.976125000001,
+      "readinessMs": 1.8285830000022543,
+      "sseFirstByteMs": 1.8274160000000848,
+      "boundedThroughputMs": 128.0460830000011,
+      "observedOutputChars": 2048,
+      "observedChunks": 64,
+      "observedChars": 2048,
+      "gatewayCalls": 1
+    },
+    {
+      "coldStartMs": 1463.1110830000034,
+      "readinessMs": 1.7045839999991586,
+      "sseFirstByteMs": 1.8250839999964228,
+      "boundedThroughputMs": 124.04508299999725,
+      "observedOutputChars": 2048,
+      "observedChunks": 64,
+      "observedChars": 2048,
+      "gatewayCalls": 1
+    },
+    {
+      "coldStartMs": 1459.675249999993,
+      "readinessMs": 1.6252499999973224,
+      "sseFirstByteMs": 2.065582999995968,
+      "boundedThroughputMs": 140.59591699999874,
+      "observedOutputChars": 2048,
+      "observedChunks": 64,
+      "observedChars": 2048,
+      "gatewayCalls": 1
+    },
+    {
+      "coldStartMs": 1490.9442500000005,
+      "readinessMs": 1.8152499999996508,
+      "sseFirstByteMs": 1.7935829999987618,
+      "boundedThroughputMs": 123.69320799999696,
+      "observedOutputChars": 2048,
+      "observedChunks": 64,
+      "observedChars": 2048,
+      "gatewayCalls": 1
+    },
+    {
+      "coldStartMs": 1457.8550840000025,
+      "readinessMs": 1.8334999999933643,
+      "sseFirstByteMs": 0.731208000004699,
+      "boundedThroughputMs": 122.78191700000025,
+      "observedOutputChars": 2048,
+      "observedChunks": 64,
+      "observedChars": 2048,
+      "gatewayCalls": 1
+    },
+    {
+      "coldStartMs": 1461.5370420000036,
+      "readinessMs": 1.6603749999994761,
+      "sseFirstByteMs": 1.8155830000032438,
+      "boundedThroughputMs": 122.39537500000733,
+      "observedOutputChars": 2048,
+      "observedChunks": 64,
+      "observedChars": 2048,
+      "gatewayCalls": 1
+    },
+    {
+      "coldStartMs": 1454.4308339999989,
+      "readinessMs": 1.7362500000017462,
+      "sseFirstByteMs": 1.8018329999904381,
+      "boundedThroughputMs": 119.42654200000106,
+      "observedOutputChars": 2048,
+      "observedChunks": 64,
+      "observedChars": 2048,
+      "gatewayCalls": 1
+    },
+    {
+      "coldStartMs": 1460.1916249999922,
+      "readinessMs": 1.8157500000088476,
+      "sseFirstByteMs": 1.957250000006752,
+      "boundedThroughputMs": 121.6619170000049,
+      "observedOutputChars": 2048,
+      "observedChunks": 64,
+      "observedChars": 2048,
+      "gatewayCalls": 1
+    },
+    {
+      "coldStartMs": 1455.3866659999912,
+      "readinessMs": 1.6999999999970896,
+      "sseFirstByteMs": 1.8659159999951953,
       "boundedThroughputMs": 121.88450000000012,
-      "observedOutputChars": 2048,
-      "observedChunks": 64,
-      "observedChars": 2048,
-      "gatewayCalls": 1
-    },
-    {
-      "coldStartMs": 1458.4455839999991,
-      "readinessMs": 1.7800830000014685,
-      "sseFirstByteMs": 2.0880420000030426,
-      "boundedThroughputMs": 123.20662500000253,
-      "observedOutputChars": 2048,
-      "observedChunks": 64,
-      "observedChars": 2048,
-      "gatewayCalls": 1
-    },
-    {
-      "coldStartMs": 1454.643541999998,
-      "readinessMs": 1.8247080000001006,
-      "sseFirstByteMs": 1.8430410000000848,
-      "boundedThroughputMs": 123.76379200000156,
-      "observedOutputChars": 2048,
-      "observedChunks": 64,
-      "observedChars": 2048,
-      "gatewayCalls": 1
-    },
-    {
-      "coldStartMs": 1455.8346249999995,
-      "readinessMs": 1.8591669999987062,
-      "sseFirstByteMs": 2.1120840000003227,
-      "boundedThroughputMs": 123.03066699999908,
-      "observedOutputChars": 2048,
-      "observedChunks": 64,
-      "observedChars": 2048,
-      "gatewayCalls": 1
-    },
-    {
-      "coldStartMs": 1454.8079580000012,
-      "readinessMs": 1.7411250000004657,
-      "sseFirstByteMs": 2.057875000002241,
-      "boundedThroughputMs": 121.86450000000332,
-      "observedOutputChars": 2048,
-      "observedChunks": 64,
-      "observedChars": 2048,
-      "gatewayCalls": 1
-    },
-    {
-      "coldStartMs": 1455.5900840000031,
-      "readinessMs": 1.747957999999926,
-      "sseFirstByteMs": 1.974583999999595,
-      "boundedThroughputMs": 122.55424999999741,
-      "observedOutputChars": 2048,
-      "observedChunks": 64,
-      "observedChars": 2048,
-      "gatewayCalls": 1
-    },
-    {
-      "coldStartMs": 1466.9655829999974,
-      "readinessMs": 1.680499999998574,
-      "sseFirstByteMs": 1.810709000001225,
-      "boundedThroughputMs": 122.72025000000212,
-      "observedOutputChars": 2048,
-      "observedChunks": 64,
-      "observedChars": 2048,
-      "gatewayCalls": 1
-    },
-    {
-      "coldStartMs": 1462.4984579999982,
-      "readinessMs": 1.731167000001733,
-      "sseFirstByteMs": 2.123541999997542,
-      "boundedThroughputMs": 123.47791599999982,
-      "observedOutputChars": 2048,
-      "observedChunks": 64,
-      "observedChars": 2048,
-      "gatewayCalls": 1
-    },
-    {
-      "coldStartMs": 1447.7914170000004,
-      "readinessMs": 1.757000000001426,
-      "sseFirstByteMs": 1.8290830000005371,
-      "boundedThroughputMs": 124.38029200000165,
-      "observedOutputChars": 2048,
-      "observedChunks": 64,
-      "observedChars": 2048,
-      "gatewayCalls": 1
-    },
-    {
-      "coldStartMs": 1456.3379999999997,
-      "readinessMs": 1.8481250000004366,
-      "sseFirstByteMs": 1.9717920000002778,
-      "boundedThroughputMs": 123.87508300000263,
-      "observedOutputChars": 2048,
-      "observedChunks": 64,
-      "observedChars": 2048,
-      "gatewayCalls": 1
-    },
-    {
-      "coldStartMs": 1470.0377909999988,
-      "readinessMs": 1.6891250000007858,
-      "sseFirstByteMs": 1.9497499999997672,
-      "boundedThroughputMs": 127.32566699999734,
-      "observedOutputChars": 2048,
-      "observedChunks": 64,
-      "observedChars": 2048,
-      "gatewayCalls": 1
-    },
-    {
-      "coldStartMs": 1444.9321670000063,
-      "readinessMs": 0.4754580000007991,
-      "sseFirstByteMs": 1.8759159999972326,
-      "boundedThroughputMs": 122.25879200000054,
-      "observedOutputChars": 2048,
-      "observedChunks": 64,
-      "observedChars": 2048,
-      "gatewayCalls": 1
-    },
-    {
-      "coldStartMs": 1459.400625000002,
-      "readinessMs": 1.8578749999942374,
-      "sseFirstByteMs": 1.8916669999962323,
-      "boundedThroughputMs": 126.770500000006,
-      "observedOutputChars": 2048,
-      "observedChunks": 64,
-      "observedChars": 2048,
-      "gatewayCalls": 1
-    },
-    {
-      "coldStartMs": 1444.4201659999962,
-      "readinessMs": 1.7072499999994761,
-      "sseFirstByteMs": 1.932583000001614,
-      "boundedThroughputMs": 125.17683299999771,
-      "observedOutputChars": 2048,
-      "observedChunks": 64,
-      "observedChars": 2048,
-      "gatewayCalls": 1
-    },
-    {
-      "coldStartMs": 1474.229790999998,
-      "readinessMs": 1.739291999998386,
-      "sseFirstByteMs": 1.8448329999955604,
-      "boundedThroughputMs": 120.43162499999744,
-      "observedOutputChars": 2048,
-      "observedChunks": 64,
-      "observedChars": 2048,
-      "gatewayCalls": 1
-    },
-    {
-      "coldStartMs": 1453.1216249999998,
-      "readinessMs": 1.8745840000046883,
-      "sseFirstByteMs": 1.9687919999996666,
-      "boundedThroughputMs": 126.3312089999963,
-      "observedOutputChars": 2048,
-      "observedChunks": 64,
-      "observedChars": 2048,
-      "gatewayCalls": 1
-    },
-    {
-      "coldStartMs": 1437.2790839999943,
-      "readinessMs": 0.3255829999980051,
-      "sseFirstByteMs": 1.9170830000002752,
-      "boundedThroughputMs": 122.17833300000348,
-      "observedOutputChars": 2048,
-      "observedChunks": 64,
-      "observedChars": 2048,
-      "gatewayCalls": 1
-    },
-    {
-      "coldStartMs": 1464.1697090000016,
-      "readinessMs": 1.8864159999939147,
-      "sseFirstByteMs": 1.8172500000000582,
-      "boundedThroughputMs": 120.12333399999625,
-      "observedOutputChars": 2048,
-      "observedChunks": 64,
-      "observedChars": 2048,
-      "gatewayCalls": 1
-    },
-    {
-      "coldStartMs": 1456.2374159999963,
-      "readinessMs": 1.691791999997804,
-      "sseFirstByteMs": 2.086875000000873,
-      "boundedThroughputMs": 125.14233299999614,
-      "observedOutputChars": 2048,
-      "observedChunks": 64,
-      "observedChars": 2048,
-      "gatewayCalls": 1
-    },
-    {
-      "coldStartMs": 1446.2819999999992,
-      "readinessMs": 1.7832500000004075,
-      "sseFirstByteMs": 1.8485000000000582,
-      "boundedThroughputMs": 125.71800000000076,
-      "observedOutputChars": 2048,
-      "observedChunks": 64,
-      "observedChars": 2048,
-      "gatewayCalls": 1
-    },
-    {
-      "coldStartMs": 1450.4257080000025,
-      "readinessMs": 1.7191659999953117,
-      "sseFirstByteMs": 0.4422080000003916,
-      "boundedThroughputMs": 125.75395800000115,
-      "observedOutputChars": 2048,
-      "observedChunks": 64,
-      "observedChars": 2048,
-      "gatewayCalls": 1
-    },
-    {
-      "coldStartMs": 1456.7072090000001,
-      "readinessMs": 1.7674589999951422,
-      "sseFirstByteMs": 1.7960000000020955,
-      "boundedThroughputMs": 128.39558400000533,
-      "observedOutputChars": 2048,
-      "observedChunks": 64,
-      "observedChars": 2048,
-      "gatewayCalls": 1
-    },
-    {
-      "coldStartMs": 1458.1164170000047,
-      "readinessMs": 1.7327500000028522,
-      "sseFirstByteMs": 1.9452079999973648,
-      "boundedThroughputMs": 127.63129199999821,
-      "observedOutputChars": 2048,
-      "observedChunks": 64,
-      "observedChars": 2048,
-      "gatewayCalls": 1
-    },
-    {
-      "coldStartMs": 1455.1204169999983,
-      "readinessMs": 1.6987079999962589,
-      "sseFirstByteMs": 1.782374999995227,
-      "boundedThroughputMs": 120.31529100000625,
-      "observedOutputChars": 2048,
-      "observedChunks": 64,
-      "observedChars": 2048,
-      "gatewayCalls": 1
-    },
-    {
-      "coldStartMs": 1443.3469170000026,
-      "readinessMs": 1.7272920000032173,
-      "sseFirstByteMs": 1.8356669999993755,
-      "boundedThroughputMs": 124.72387499999604,
-      "observedOutputChars": 2048,
-      "observedChunks": 64,
-      "observedChars": 2048,
-      "gatewayCalls": 1
-    },
-    {
-      "coldStartMs": 1445.5942499999946,
-      "readinessMs": 1.7645830000037677,
-      "sseFirstByteMs": 1.7983339999991586,
-      "boundedThroughputMs": 126.46495800000412,
-      "observedOutputChars": 2048,
-      "observedChunks": 64,
-      "observedChars": 2048,
-      "gatewayCalls": 1
-    },
-    {
-      "coldStartMs": 1569.0082499999917,
-      "readinessMs": 1.9208750000034343,
-      "sseFirstByteMs": 1.989040999993449,
-      "boundedThroughputMs": 144.49433300000965,
       "observedOutputChars": 2048,
       "observedChunks": 64,
       "observedChars": 2048,
       "gatewayCalls": 1
     }
   ],
-  "measuredAtIso": "2026-10-26T06:54:04.616Z",
+  "measuredAtIso": "2026-10-26T07:07:04.386Z",
   "role": "measurement",
   "calibrationSha256": "40aba8a8dd947e3e1656fbd2360479390e1a80381496e351c98ec11107cd2cdd",
   "procedure": {
@@ -341,29 +341,29 @@
   },
   "aggregates": {
     "coldStartMs": {
-      "minimum": 1437.2790839999943,
-      "maximum": 1569.0082499999917,
-      "p50": 1456.2374159999963,
-      "p95": 1481.0311249999995
+      "minimum": 1444.299334000003,
+      "maximum": 1565.908374999999,
+      "p50": 1461.4537500000006,
+      "p95": 1525.3780420000003
     },
     "readinessMs": {
-      "minimum": 0.3255829999980051,
-      "maximum": 1.956916000000092,
-      "p50": 1.757000000001426,
-      "p95": 1.9208750000034343
+      "minimum": 0.4041660000002594,
+      "maximum": 2.014792000001762,
+      "p50": 1.783292000000074,
+      "p95": 1.8854579999970156
     },
     "sseFirstByteMs": {
-      "minimum": 0.4422080000003916,
-      "maximum": 2.123541999997542,
-      "p50": 1.9279590000005555,
-      "p95": 2.1120840000003227
+      "minimum": 0.731208000004699,
+      "maximum": 2.6362499999995634,
+      "p50": 1.897791999999754,
+      "p95": 2.3695000000006985
     },
     "boundedThroughputMs": {
-      "minimum": 120.12333399999625,
-      "maximum": 144.49433300000965,
-      "p50": 123.87508300000263,
-      "p95": 128.39558400000533
+      "minimum": 117.15104200000496,
+      "maximum": 149.84879200000069,
+      "p50": 124.42562499999985,
+      "p95": 140.59591699999874
     }
   },
-  "documentSha256": "62325369aaf76d0584262109aa00d452012581b4f9d1df6a392f8390b841f5c9"
+  "documentSha256": "47e937f86142d465de0a5662e90ba8f5da01b674a225cc337a6a79c355846a21"
 }
