@@ -11,14 +11,17 @@
 // checkout before npm sees it. A version npm already holds is accepted only with the pinned
 // integrity, so a re-run is idempotent and a foreign upload fails closed. Publishing happens only
 // under GitHub Actions OIDC (coding-runtime-publish.yml); no registry token is read.
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
-import { verifyCodingRuntimeNpmCandidate } from "./build-coding-runtime-npm-package.mjs";
+import {
+  loadRuntimeApproval,
+  verifyCodingRuntimeNpmCandidate,
+} from "./build-coding-runtime-npm-package.mjs";
 import { compareStrings } from "./lib/compare-strings.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 import { isMainModule } from "./lib/is-main-module.mjs";
@@ -29,6 +32,7 @@ const REGISTRY = "https://registry.npmjs.org";
 const VERSION = /^\d+\.\d+\.\d+$/u;
 const SHA256 = /^[a-f0-9]{64}$/u;
 const INTEGRITY = /^sha512-[A-Za-z0-9+/]{86}==$/u;
+const COMMIT = /^[a-f0-9]{40}$/u;
 const VERIFY_ATTEMPTS = 30;
 const VERIFY_DELAY_MS = 30_000;
 
@@ -94,6 +98,35 @@ export async function verifyDownloadedRuntime(entry, version, assetDir, deps = {
   return tarballPath;
 }
 
+function gitRunner(root) {
+  return (args) =>
+    spawnSync(resolveHostExecutable("git"), args, { cwd: root, stdio: "ignore" }).status;
+}
+
+/**
+ * Makes each approved helper source commit available to the builder's source check, which stays
+ * unchanged (PR #4064 review). A workflow checkout holds one commit, and a squash merge keeps the
+ * approved commit's tree but not the commit itself in dev's history, so the check could not find
+ * it. The exact commit is fetched by its SHA from the checkout's origin, only when it is absent;
+ * a commit that stays absent fails the publish before npm is asked anything.
+ */
+export async function provideApprovedSourceCommits(entries, root, deps = {}) {
+  const git = deps.git ?? gitRunner(root);
+  const commits = new Set();
+  for (const entry of entries) {
+    commits.add(
+      (await (deps.loadApproval ?? loadRuntimeApproval)(entry.target)).helperSourceCommit,
+    );
+  }
+  for (const commit of commits) {
+    if (!COMMIT.test(commit ?? "")) throw new TypeError("invalid helper source commit");
+    const present = () => git(["cat-file", "-e", `${commit}^{commit}`]) === 0;
+    if (present()) continue;
+    git(["fetch", "--no-tags", "--depth=1", "origin", commit]);
+    if (!present()) throw new Error(`approved helper source commit ${commit} is unavailable`);
+  }
+}
+
 /** The integrity npm holds for name@version, or undefined when npm has no such version. */
 export function registryIntegrity(name, version, run) {
   try {
@@ -145,6 +178,7 @@ export async function publishCodingRuntimePackages({ root, version, assetDir, en
   }
   const document = JSON.parse(readFileSync(join(root, CODING_RUNTIME_RELEASES_FILE), "utf8"));
   const entries = reviewedRelease(document, version);
+  await provideApprovedSourceCommits(entries, root, deps);
   const tarballs = [];
   for (const entry of entries) {
     tarballs.push(await verifyDownloadedRuntime(entry, version, assetDir, deps));

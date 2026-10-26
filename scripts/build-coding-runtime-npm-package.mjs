@@ -235,7 +235,8 @@ export async function buildCodingRuntimeNpmPackage({ target, version, outDir, de
   }
 }
 
-async function loadRuntimeApproval(target) {
+/** The approval compiled into this checkout for one target, with its pinned ripgrep. */
+export async function loadRuntimeApproval(target) {
   const { NPM_LANE_RUNTIME_APPROVALS } =
     await import("../packages/keiko-server/dist/coding-runtime/npmLaneRuntimeApprovals.js");
   const approval = NPM_LANE_RUNTIME_APPROVALS[target];

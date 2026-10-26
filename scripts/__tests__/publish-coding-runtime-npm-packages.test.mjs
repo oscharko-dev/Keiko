@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   CODING_RUNTIME_RELEASES_FILE,
+  provideApprovedSourceCommits,
   publishCodingRuntimePackages,
   publishRuntime,
   receiptAssetName,
@@ -20,6 +22,12 @@ const VERSION = "1.1.4";
 const OIDC = {
   ACTIONS_ID_TOKEN_REQUEST_URL: "https://oidc.invalid",
   ACTIONS_ID_TOKEN_REQUEST_TOKEN: "t",
+};
+const HELPER_COMMIT = "a".repeat(40);
+// The approval compiled into the checkout, and a checkout that already holds its helper commit.
+const APPROVED = {
+  loadApproval: () => Promise.resolve({ helperSourceCommit: HELPER_COMMIT }),
+  git: () => 0,
 };
 const roots = [];
 
@@ -209,7 +217,13 @@ describe("coding-runtime package publisher", () => {
     const x64 = pinned(assetDir, "macos-x64", Buffer.from("x64"));
     const root = reviewedRoot({ "macos-arm64": arm64, "macos-x64": x64 });
     const npm = vi.fn();
-    const deps = { npm, run: vi.fn(), verifyCandidate: () => Promise.resolve(), log: vi.fn() };
+    const deps = {
+      npm,
+      run: vi.fn(),
+      verifyCandidate: () => Promise.resolve(),
+      log: vi.fn(),
+      ...APPROVED,
+    };
 
     await expect(
       publishCodingRuntimePackages({ root, version: VERSION, assetDir, env: {}, deps }),
@@ -237,7 +251,13 @@ describe("coding-runtime package publisher", () => {
       if (!held.has(name)) throw notFound();
       return JSON.stringify(held.get(name));
     });
-    const deps = { npm, run: vi.fn(), verifyCandidate: () => Promise.resolve(), log: vi.fn() };
+    const deps = {
+      npm,
+      run: vi.fn(),
+      verifyCandidate: () => Promise.resolve(),
+      log: vi.fn(),
+      ...APPROVED,
+    };
 
     await expect(
       publishCodingRuntimePackages({ root, version: VERSION, assetDir, env: OIDC, deps }),
@@ -248,5 +268,85 @@ describe("coding-runtime package publisher", () => {
         [x64.name, x64.integrity],
       ]),
     );
+  });
+  // PR #4064 review (4373164085): a workflow checkout holds one commit, and the approved helper
+  // commit lies outside dev's history after a squash merge.
+  it("fetches an absent approved helper commit by its SHA once, before anything is verified", async () => {
+    const calls = [];
+    let fetched = false;
+    const git = (args) => {
+      calls.push(args.join(" "));
+      if (args[0] === "fetch") fetched = true;
+      return args[0] === "cat-file" && !fetched ? 128 : 0;
+    };
+    const entries = [{ target: "macos-arm64" }, { target: "macos-x64" }];
+
+    await provideApprovedSourceCommits(entries, "/checkout", { ...APPROVED, git });
+    expect(calls).toEqual([
+      `cat-file -e ${HELPER_COMMIT}^{commit}`,
+      `fetch --no-tags --depth=1 origin ${HELPER_COMMIT}`,
+      `cat-file -e ${HELPER_COMMIT}^{commit}`,
+    ]);
+    calls.length = 0;
+    await provideApprovedSourceCommits(entries, "/checkout", { ...APPROVED, git });
+    expect(calls).toEqual([`cat-file -e ${HELPER_COMMIT}^{commit}`]);
+    await expect(
+      provideApprovedSourceCommits(entries, "/checkout", {
+        git,
+        loadApproval: () => Promise.resolve({ helperSourceCommit: "HEAD" }),
+      }),
+    ).rejects.toThrow("invalid helper source commit");
+  });
+
+  it("asks npm nothing and verifies nothing when the approved helper commit stays absent", async () => {
+    const assetDir = scratch();
+    const arm64 = pinned(assetDir, "macos-arm64", Buffer.from("arm64"));
+    const root = reviewedRoot({ "macos-arm64": arm64 });
+    const npm = vi.fn();
+    const verifyCandidate = vi.fn(() => Promise.resolve());
+    const deps = { ...APPROVED, git: () => 128, npm, run: vi.fn(), verifyCandidate, log: vi.fn() };
+
+    await expect(
+      publishCodingRuntimePackages({ root, version: VERSION, assetDir, env: OIDC, deps }),
+    ).rejects.toThrow(`approved helper source commit ${HELPER_COMMIT} is unavailable`);
+    expect(verifyCandidate).not.toHaveBeenCalled();
+    expect(npm).not.toHaveBeenCalled();
+  });
+
+  // The auditor's case with real git: a one-commit checkout of dev, whose approved helper commit is
+  // reachable only from a pull-request ref of the origin.
+  it("makes the approved commit available in a one-commit checkout, so the source check passes", async () => {
+    const work = scratch();
+    const origin = join(work, "origin");
+    const git = (cwd, ...args) =>
+      execFileSync(
+        "git",
+        ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args],
+        { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+      ).trim();
+    mkdirSync(origin);
+    git(origin, "init", "-q", "-b", "dev");
+    git(origin, "commit", "-q", "--allow-empty", "-m", "base");
+    git(origin, "checkout", "-q", "-b", "helper");
+    mkdirSync(join(origin, "native"));
+    writeFileSync(join(origin, "native", "helper.c"), "int main(void) { return 0; }\n");
+    git(origin, "add", "native");
+    git(origin, "commit", "-q", "-m", "approved helper");
+    const approved = git(origin, "rev-parse", "HEAD");
+    git(origin, "update-ref", "refs/pull/1/head", approved);
+    git(origin, "checkout", "-q", "dev");
+    git(origin, "checkout", "-q", approved, "--", "native");
+    git(origin, "commit", "-q", "-m", "squashed");
+    git(origin, "branch", "-q", "-D", "helper");
+    git(work, "clone", "-q", "--depth", "1", "--branch", "dev", `file://${origin}`, "checkout");
+    const checkout = join(work, "checkout");
+    const diff = () => git(checkout, "diff", "--quiet", "--no-ext-diff", approved, "--", "native");
+
+    expect(diff).toThrow();
+    await provideApprovedSourceCommits([{ target: "macos-arm64" }], checkout, {
+      loadApproval: () => Promise.resolve({ helperSourceCommit: approved }),
+    });
+    expect(diff()).toBe("");
+    expect(git(checkout, "rev-list", "--count", "HEAD")).toBe("1");
   });
 });
