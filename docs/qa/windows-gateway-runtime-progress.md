@@ -170,7 +170,31 @@ not establish a working inbound route.
 The bounded WFP diagnostic now expands the runner's short image pathname before constructing its
 event query, and exercises an independently verified blocked outbound flow inside the collection
 interval before probing inbound access. This positive control distinguishes an empty diagnostic
-from evidence about the failing inbound route. Its runner result remains pending.
+from evidence about the failing inbound route.
+
+[Run 40384624097](https://github.com/oscharko-dev/Keiko/actions/runs/40384624097) validates that
+diagnostic: both families record the expected outbound blocks and the actual inbound drops. IPv4
+is blocked by Windows Firewall at receive/accept; IPv6 is blocked by AppContainer isolation at
+receive/accept. Each bounded query returns six events. This separates the two failures without
+logging private filter data or overriding either policy.
+
+The next disposable experiment uses supported firewall rule fields: expanded fixture image,
+current user owner, the AppContainer SID in the local-principal authorization list, exact loopback
+addresses, TCP and the exclusively bound listener port. Microsoft's
+[local-user rule contract](https://learn.microsoft.com/en-us/powershell/module/netsecurity/new-netfirewallrule#-localuser)
+includes AppContainer principals. Real socket controls must still prove that admission; the
+separate AppContainer isolation and exact WFP egress controls remain required. Every temporary
+rule is removed and its absence verified.
+Independent denies and utility-owner reaping must still take effect. No rule is installed locally
+or integrated into production. The experiment also requires a foreign AppContainer with the same
+executable and its own exclusive listener to be refused by the first tree's principal rule.
+
+The experimental control route uses IPv4 with both outbound gateway families, matching
+`opencodeLaunchProfile.ts` (`--hostname 127.0.0.1`) and `opencodeV2HttpClient.ts` (IPv4-only endpoint
+admission). IPv6 outbound gateway, hostile-loopback, UDP and descendant tests remain required.
+This does not claim IPv6 inbound support or change the ordinary socket proof; it corrects the
+experimental composition to match the actual product. IPv6 AppContainer inbound admission remains
+an unresolved capability outside that current control contract.
 
 Local protocol validation also ran the complete existing `runtime-gateway.test.ts`: 29 passed,
 eight failed on existing POSIX filesystem fixtures rejected by Windows path canonicalization, and
