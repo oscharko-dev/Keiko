@@ -13484,6 +13484,12 @@
               "required": false
             },
             {
+              "name": "credentialRedacted",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "durationMs",
               "type": "integer",
               "dataClass": "duration",

@@ -1712,13 +1712,21 @@ describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
   () => {
     const FIXTURE_TITLE = "Keiko fixture search result";
     const FIXTURE_URL = "https://example.test/keiko-governed-search";
+    // A synthetic operator key with characters each encoding spells differently.
+    const SEARCH_KEY = "synthetic-search-key/7+fixture=";
 
     async function searchService(): Promise<{
       readonly endpoint: string;
       readonly queries: string[];
+      readonly keys: (string | null)[];
     }> {
       const queries: string[] = [];
+      const keys: (string | null)[] = [];
+      // Like a careless provider, the fixture echoes the key it received in every field it returns.
       const server = createServer((request, response) => {
+        const key = new URL(request.url ?? "/", "http://127.0.0.1").searchParams.get("exaApiKey");
+        keys.push(key);
+        const echo = key ?? "";
         let body = "";
         request.setEncoding("utf8");
         request.on("data", (chunk: string) => {
@@ -1729,7 +1737,7 @@ describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
             readonly params?: { readonly arguments?: { readonly query?: string } };
           };
           queries.push(call.params?.arguments?.query ?? "");
-          const text = `Title: ${FIXTURE_TITLE}\nURL: ${FIXTURE_URL}\nPublished: 2026-10-01T00:00:00.000Z\nText: The fixture page about governed search.`;
+          const text = `Title: ${FIXTURE_TITLE} ${echo}\nURL: ${FIXTURE_URL}?key=${encodeURIComponent(echo)}\nPublished: 2026-10-01T00:00:00.000Z\nText: The fixture page about governed search, read with ${echo}.`;
           response.writeHead(200, { "content-type": "text/event-stream" });
           response.end(
             `event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [{ type: "text", text }] } })}\n\n`,
@@ -1747,7 +1755,7 @@ describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
       );
       const address = server.address();
       if (address === null || typeof address === "string") throw new Error("fixture-address");
-      return { endpoint: `http://127.0.0.1:${String(address.port)}/mcp`, queries };
+      return { endpoint: `http://127.0.0.1:${String(address.port)}/mcp`, queries, keys };
     }
 
     async function journey(
@@ -1762,7 +1770,12 @@ describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
         (request) => {
           transcripts.push(JSON.stringify(request.messages));
         },
-        endpoint === undefined ? undefined : { KEIKO_CODING_WEBSEARCH_ENDPOINT: endpoint },
+        endpoint === undefined
+          ? undefined
+          : {
+              KEIKO_CODING_WEBSEARCH_ENDPOINT: endpoint,
+              KEIKO_CODING_WEBSEARCH_API_KEY: SEARCH_KEY,
+            },
       );
       const runId = await startRun(pipeline, {
         requestId: `websearch-${mode}`,
@@ -1784,8 +1797,12 @@ describe.skipIf(!devLaneDiscoveryFunctionalEnabled())(
       const service = await searchService();
       const transcript = await journey("autonomous-delivery", service.endpoint);
       expect(service.queries).toEqual([FUNCTIONAL_WEBSEARCH_QUERY]);
+      expect(service.keys).toEqual([SEARCH_KEY]);
       expect(transcript).toContain(FIXTURE_TITLE);
       expect(transcript).toContain(FIXTURE_URL);
+      // PR #4064 review: the key the provider echoed never reaches the model, in any encoding.
+      for (const form of [SEARCH_KEY, encodeURIComponent(SEARCH_KEY), "synthetic-search-key"])
+        expect(transcript).not.toContain(form);
     }, 240_000);
 
     it("keeps the honest refusals: below Full access, and with no admitted integration", async () => {

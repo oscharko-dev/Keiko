@@ -11,6 +11,13 @@
 // other refusal leaves the process unidentified. Perl (`/usr/bin/perl`, part of macOS) makes the
 // calls, as it does for the run's sandbox member; the process layer (devLaneRuntimeProcessBackend.ts)
 // runs it.
+//
+// The listing and the reads are not one snapshot: a listed process can end and its PID pass to a
+// process forked later before the read, so the row then names the newcomer, not the process listed
+// (PR #4064 review). Just before listing, the lister therefore forks a child, reads its identity and
+// reaps it: the mark. Every process forked after the listing began has a larger identity than the
+// mark, so a row with one (`lateCount`) may stand in for a listed process it never names. A process
+// forked between the mark and the listing counts too; that only costs a proof another round.
 
 /** One process the kernel listed and identified. */
 export interface ProcessRecord {
@@ -31,6 +38,8 @@ export interface ProcessTable {
   readonly foreignUserCount: number;
   /** Processes the kernel refused to identify for another reason. */
   readonly unidentifiedCount: number;
+  /** Processes forked after the listing began: each may hold the PID of a process it listed. */
+  readonly lateCount: number;
 }
 
 export type ProcessTableReader = () => Promise<ProcessTable>;
@@ -50,6 +59,11 @@ const PERL_PATH = "/usr/bin/perl";
 const TABLE_MAX_BUFFER_BYTES = 8 * 1024 * 1024;
 const SZOMB = 5;
 const TABLE_SCRIPT = [
+  // The mark: a child forked, identified (alive or a zombie) and reaped before the listing.
+  String.raw`my $mark = fork(); die "mark\n" unless defined $mark; if ($mark == 0) { exit 0; }`,
+  String.raw`my $marked = "\0" x 192; my $mread = syscall(336, 2, $mark, 18, 1, $marked, 192);`,
+  String.raw`waitpid($mark, 0); die "mark\n" if $mread != 192;`,
+  String.raw`print "mark ", unpack("Q", substr($marked, 152, 8)), "\n";`,
   String.raw`my $size = 4 * 65536; my $buf = "\0" x $size;`,
   // proc_info(LISTPIDS = 1, PROC_ALL_PIDS = 1): the size of the PID array in bytes.
   "my $n = syscall(336, 1, 1, 0, 0, $buf, $size);",
@@ -73,6 +87,7 @@ const TABLE_SCRIPT = [
 ].join("\n");
 const RECORD = /^(\d+) (\d+) (\d+) (\d+)$/u;
 const UNREAD = /^\d+ (foreign|gone|unidentified)$/u;
+const MARK = /^mark (\d+)$/u;
 
 type UnreadReason = "foreign" | "gone" | "unidentified";
 
@@ -89,12 +104,21 @@ function parsedRecord(match: RegExpExecArray): ProcessRecord | undefined {
   return { pid: Number(pid), zombie: Number(status) === SZOMB, uniqueId, parentUniqueId };
 }
 
+// The mark is the first line, and exactly one: without it no row can be told from a newcomer.
+function markOf(lines: readonly string[]): bigint {
+  const mark = MARK.exec(lines[0] ?? "")?.[1];
+  if (mark === undefined || lines.slice(1).some((line) => MARK.test(line)))
+    throw new TypeError("darwin-process-table-malformed");
+  return BigInt(mark);
+}
+
 /** The table the lister printed; a line out of its grammar makes the whole table unusable. */
 export function parseProcessTable(output: string): ProcessTable {
+  const lines = output.split("\n").filter((line) => line !== "");
+  const mark = markOf(lines);
   const records: ProcessRecord[] = [];
   const unread: Record<UnreadReason, number> = { foreign: 0, gone: 0, unidentified: 0 };
-  for (const line of output.split("\n")) {
-    if (line === "") continue;
+  for (const line of lines.slice(1)) {
     const record = RECORD.exec(line);
     const parsed = record === null ? undefined : parsedRecord(record);
     const reason = unreadReason(line);
@@ -107,6 +131,7 @@ export function parseProcessTable(output: string): ProcessTable {
     goneCount: unread.gone,
     foreignUserCount: unread.foreign,
     unidentifiedCount: unread.unidentified,
+    lateCount: records.filter((row) => BigInt(row.uniqueId) > mark).length,
   };
 }
 

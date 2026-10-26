@@ -12,6 +12,7 @@ import {
   type GatewayFetchOptions,
   type OutboundHttpEgressConfig,
 } from "@oscharko-dev/keiko-model-gateway/internal/http";
+import { redactSecretLiterals } from "@oscharko-dev/keiko-security";
 
 /**
  * The search integration the original `websearch` (T15) reaches in a native run (#3903 AC3, #3907
@@ -28,7 +29,10 @@ import {
  * - through the gateway's outbound transport with the deployment's proxy and CA settings, one POST
  *   to the configured host only, no redirect, bounded time, bytes and results.
  * The model reads only titles, URLs, dates and bounded text of the results; the activity log only
- * the outcome, counts, sizes and duration, never the query, a result or the endpoint.
+ * the outcome, counts, sizes and duration, never the query, a result or the endpoint. The provider
+ * receives the key in its query string and can echo it in any result field; the answer loses every
+ * occurrence, as sent, percent-encoded or form-encoded, before a field is read (PR #4064 review), so
+ * the key reaches neither the runtime nor the model.
  */
 
 export interface NativeWebSearchConfig {
@@ -41,6 +45,12 @@ export interface NativeWebSearchResult {
   readonly title?: string;
   readonly content?: string;
   readonly published?: number;
+}
+
+/** The results of one answer, and whether the operator's key had to be removed from it. */
+export interface NativeWebSearchAnswer {
+  readonly results: readonly NativeWebSearchResult[];
+  readonly credentialRedacted: boolean;
 }
 
 export type NativeWebSearchOutcome =
@@ -109,6 +119,7 @@ export const NATIVE_WEBSEARCH_OPERATION = defineActivityLogOperation({
       values: ["unconfigured", "ungranted", "transport", "response", "timeout"],
     },
     resultCount: { type: "integer", dataClass: "count", required: true },
+    credentialRedacted: { type: "boolean", dataClass: "closed-enum", required: false },
     responseBytes: { type: "integer", dataClass: "count", required: true },
     durationMs: { type: "integer", dataClass: "duration", required: true },
     frames: {
@@ -266,19 +277,33 @@ function parsedResult(block: string): NativeWebSearchResult | undefined {
   };
 }
 
-/** The results of one answer, in the provider's text format; anything else yields none. */
+// The forms in which a provider can return the key it received in its own query string.
+function credentialForms(credential: string): readonly string[] {
+  const formEncoded = new URLSearchParams([["k", credential]]).toString().slice("k=".length);
+  return [...new Set([credential, encodeURIComponent(credential), formEncoded])];
+}
+
+/**
+ * The results of one answer, in the provider's text format; anything else yields none. The answer
+ * loses every occurrence of `credential` before any field is read or bounded, so no title, URL or
+ * excerpt can carry it, whole or cut.
+ */
 export function parseNativeWebSearchAnswer(
   text: string,
-): readonly NativeWebSearchResult[] | undefined {
+  credential?: string,
+): NativeWebSearchAnswer | undefined {
   const result = rpcResult(text);
   if (result === undefined || result.isError === true) return undefined;
   const body = resultText(result);
-  if (body === undefined) return [];
-  return body
+  if (body === undefined) return { results: [], credentialRedacted: false };
+  const visible =
+    credential === undefined ? body : redactSecretLiterals(body, credentialForms(credential));
+  const results = visible
     .split(/\n\n---\n\n/u)
     .map(parsedResult)
     .filter((entry): entry is NativeWebSearchResult => entry !== undefined)
     .slice(0, MAX_RESULTS);
+  return { results, credentialRedacted: visible !== body };
 }
 
 function failureReason(error: unknown): "transport" | "response" | "timeout" {
@@ -291,6 +316,7 @@ function failureReason(error: unknown): "transport" | "response" | "timeout" {
 interface SearchEvidence {
   readonly outcome: NativeWebSearchOutcome;
   readonly responseBytes: number;
+  readonly credentialRedacted?: boolean;
   readonly error?: unknown;
 }
 
@@ -317,6 +343,9 @@ export function recordWebSearch(
         outcome: outcome.status,
         ...(completed ? {} : { reason: outcome.reason }),
         resultCount: completed ? outcome.results.length : 0,
+        ...(evidence.credentialRedacted === undefined
+          ? {}
+          : { credentialRedacted: evidence.credentialRedacted }),
         responseBytes: evidence.responseBytes,
         durationMs: Math.max(0, Math.round(durationMs)),
         ...(evidence.error === undefined
@@ -332,6 +361,19 @@ interface SearchRequest {
   readonly query: string;
   readonly signal: AbortSignal | undefined;
   readonly startedAt: number;
+}
+
+function answerEvidence(
+  answer: NativeWebSearchAnswer | undefined,
+  responseBytes: number,
+): SearchEvidence & { readonly outcome: NativeWebSearchOutcome } {
+  return answer === undefined
+    ? { outcome: { status: "failed", reason: "response" }, responseBytes }
+    : {
+        outcome: { status: "completed", results: answer.results },
+        responseBytes,
+        credentialRedacted: answer.credentialRedacted,
+      };
 }
 
 async function performSearch(
@@ -357,20 +399,12 @@ async function performSearch(
     });
     const bytes = await readBytesCapped(response, MAX_RESPONSE_BYTES);
     responseBytes = bytes.byteLength;
-    const results = response.ok
-      ? parseNativeWebSearchAnswer(new TextDecoder().decode(bytes))
+    const answer = response.ok
+      ? parseNativeWebSearchAnswer(new TextDecoder().decode(bytes), config.apiKey)
       : undefined;
-    const outcome: NativeWebSearchOutcome =
-      results === undefined
-        ? { status: "failed", reason: "response" }
-        : { status: "completed", results };
-    recordWebSearch(
-      deps.activityLog,
-      request.runId,
-      { outcome, responseBytes },
-      now() - request.startedAt,
-    );
-    return outcome;
+    const evidence = answerEvidence(answer, responseBytes);
+    recordWebSearch(deps.activityLog, request.runId, evidence, now() - request.startedAt);
+    return evidence.outcome;
   } catch (error) {
     const outcome: NativeWebSearchOutcome = { status: "failed", reason: failureReason(error) };
     recordWebSearch(

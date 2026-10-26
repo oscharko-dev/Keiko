@@ -77,7 +77,7 @@ describe("the admitted web search integration (#3903 AC3)", () => {
   });
 
   it("reads the provider's answer as bounded web results, in either transport", () => {
-    const sse = parseNativeWebSearchAnswer(answer(TEXT));
+    const sse = parseNativeWebSearchAnswer(answer(TEXT))?.results;
     expect(sse).toEqual([
       {
         url: "https://example.test/one",
@@ -87,7 +87,7 @@ describe("the admitted web search integration (#3903 AC3)", () => {
       },
       { url: "https://example.test/two", title: "Second result", content: "A highlight." },
     ]);
-    expect(parseNativeWebSearchAnswer(answer(TEXT, false))).toEqual(sse);
+    expect(parseNativeWebSearchAnswer(answer(TEXT, false))?.results).toEqual(sse);
     expect(parseNativeWebSearchAnswer(JSON.stringify({ jsonrpc: "2.0", id: 1 }))).toBeUndefined();
     expect(
       parseNativeWebSearchAnswer(
@@ -95,15 +95,39 @@ describe("the admitted web search integration (#3903 AC3)", () => {
       ),
     ).toBeUndefined();
     const long = `Title: ${"t".repeat(600)}\nURL: https://example.test/x\nText: ${"c".repeat(5_000)}`;
-    const [bounded] = parseNativeWebSearchAnswer(answer(long)) ?? [];
+    const [bounded] = parseNativeWebSearchAnswer(answer(long))?.results ?? [];
     expect(bounded?.title?.length).toBeLessThanOrEqual(513);
     expect(bounded?.content?.length).toBeLessThanOrEqual(4_001);
     // Labels are read line by line, so a hostile run of blanks is scanned once, not backtracked.
     const blanks = " ".repeat(200_000);
     const hostile = `Title:${blanks}\nURL:${blanks}https://example.test/y\nText:${blanks}\n${blanks}`;
-    expect(parseNativeWebSearchAnswer(answer(hostile))).toEqual([
-      { url: "https://example.test/y" },
+    expect(parseNativeWebSearchAnswer(answer(hostile))).toEqual({
+      results: [{ url: "https://example.test/y" }],
+      credentialRedacted: false,
+    });
+  });
+
+  // PR #4064 review: the provider receives the operator's key in its query string and can echo it
+  // in any field. Every occurrence goes, as sent, percent-encoded or form-encoded, before a field is
+  // read or cut, so no title, URL or excerpt carries it whole or in part.
+  it("removes the operator's key from every field a provider echoes it in", () => {
+    const key = "operator-key/7+x=";
+    const echoed = [
+      `Title: Echo ${key}\nURL: https://example.test/a?k=${encodeURIComponent(key)}\nText: raw ${key}`,
+      `Title: Form\nURL: https://example.test/b?${new URLSearchParams([["k", key]]).toString()}\nText: ok`,
+      `Title: Cut\nURL: https://example.test/c\nText: ${"c".repeat(3_995)}${key}`,
+    ].join("\n\n---\n\n");
+    const parsed = parseNativeWebSearchAnswer(answer(echoed), key);
+    expect(parsed?.credentialRedacted).toBe(true);
+    expect(parsed?.results.map((result) => result.url)).toEqual([
+      "https://example.test/a?k=[REDACTED]",
+      "https://example.test/b?k=[REDACTED]",
+      "https://example.test/c",
     ]);
+    const visible = JSON.stringify(parsed?.results);
+    for (const form of [key, encodeURIComponent(key), "operator-key"])
+      expect(visible).not.toContain(form);
+    expect(parseNativeWebSearchAnswer(answer(TEXT), key)?.credentialRedacted).toBe(false);
   });
 
   it("searches once for the query the run's policy allowed, through the configured endpoint only", async () => {
@@ -156,6 +180,27 @@ describe("the admitted web search integration (#3903 AC3)", () => {
     const lines = sink.lines().join("\n");
     for (const secret of ["governed search", "operator-key", "search.example.test", "First result"])
       expect(lines).not.toContain(secret);
+  });
+
+  it("hands back a provider's echo of the key without it, and records that it did", async () => {
+    const sink = createBufferedServerLogSink();
+    const echoed = `Title: Leak operator-key\nURL: https://example.test/one?k=operator-key\nText: operator-key`;
+    const search = createNativeWebSearch({
+      config: { endpoint: new URL("https://search.example.test/mcp"), apiKey: "operator-key" },
+      activityLog: sink,
+      fetchImpl: fixture(answer(echoed)).fetchImpl,
+    });
+    search.grant("run-1", "governed search");
+    const outcome = await search.search("run-1", "governed search", undefined);
+    expect(outcome).toMatchObject({ status: "completed", results: [{ title: "Leak [REDACTED]" }] });
+    expect(JSON.stringify(outcome)).not.toContain("operator-key");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.websearch.performed.emitted-line",
+        formatActivityLogProofLine(sink.events[0] ?? {}),
+      ),
+    ).toMatchObject({ outcome: "completed", resultCount: 1, credentialRedacted: true });
+    expect(sink.lines().join("\n")).not.toContain("operator-key");
   });
 
   it("refuses without an admitted integration and reports a provider failure with its evidence", async () => {

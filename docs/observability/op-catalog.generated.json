@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "ead8288d4c0e342cc1065adb5ec22ce711f39b6875c710d3422047d35507ebba",
+    "catalogDigest": "bd6ab78218800012ea60f8bb800181981b777854926da90ad21dcf42d76b54a1",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -7023,8 +7023,8 @@
         "failureClasses": ["coding-runtime-descendant-sweep"],
         "proofIds": ["coding-runtime.descendants.swept.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.ts:87",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.ts:328"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.ts:89",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.ts:330"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -13765,6 +13765,11 @@
             "dataClass": "count",
             "required": true
           },
+          "credentialRedacted": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": false
+          },
           "responseBytes": {
             "type": "integer",
             "dataClass": "count",
@@ -13802,8 +13807,8 @@
         "failureClasses": ["coding-runtime-websearch"],
         "proofIds": ["coding-runtime.websearch.performed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/nativeWebSearch.ts:91",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/nativeWebSearch.ts:307"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/nativeWebSearch.ts:101",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/nativeWebSearch.ts:333"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -65482,6 +65487,12 @@
                   "required": false
                 },
                 {
+                  "name": "credentialRedacted",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "durationMs",
                   "type": "integer",
                   "dataClass": "duration",
@@ -100809,7 +100820,7 @@
     {
       "op": "coding-runtime.descendants.swept",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.ts:90",
+      "site": "packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.ts:92",
       "package": "keiko-server"
     },
     {
@@ -101500,7 +101511,7 @@
     {
       "op": "coding-runtime.websearch.performed",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/nativeWebSearch.ts:94",
+      "site": "packages/keiko-server/src/coding-runtime/nativeWebSearch.ts:104",
       "package": "keiko-server"
     },
     {

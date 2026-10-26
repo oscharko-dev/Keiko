@@ -159,10 +159,14 @@ from a counter that only grows, kept across exec and never handed out again, wit
 identity of the forking process. Keiko reads the host's process table outside every sandbox
 (`proc_info` LISTPIDS, then PIDINFO with zombies), asks the member which of its live processes
 belong to the instance (the member's own `proc_info` is refused for every process of another
-instance), and reads the table again. Any member keeps the run going. Otherwise the end is proven
-when the first table lost no PID before reading it, identified every process the kernel refused to
-read as another user's (Seatbelt refuses setuid programs inside a sandbox, so every process of a run
-keeps the user's uid), and names only processes that were answered as non-members while alive and
+instance), and reads the table again. Any member keeps the run going. The listing and the reads are
+no snapshot: a listed process can end and its PID pass to a newer process before the read, which
+then stands in its place. Just before listing, the reader therefore forks a child, reads its
+identity and reaps it (the mark); a row with a larger identity was forked after the listing began
+and may hold such a PID (PR #4064 review). Otherwise the end is proven when the first table lost no
+PID before reading it, holds no row newer than its mark, identified every process the kernel refused
+to read as another user's (Seatbelt refuses setuid programs inside a sandbox, so every process of a
+run keeps the user's uid), and names only processes that were answered as non-members while alive and
 are still alive with the same identity, processes such non-members forked, and processes forked
 before the run's root. Every process of a run descends from its root and has a larger identity; the
 root's identity is the one that forked the member, taken only while the member names the root's PID

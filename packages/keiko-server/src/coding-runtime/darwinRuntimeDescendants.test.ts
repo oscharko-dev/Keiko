@@ -76,6 +76,7 @@ function table(state: Host): ProcessTable {
     goneCount,
     foreignUserCount: 3,
     unidentifiedCount: 0,
+    lateCount: 0,
   };
 }
 
@@ -226,6 +227,40 @@ describe("macOS runtime descendants (#3899 AC2, #3901 AC3)", () => {
     });
   });
 
+  // PR #4064 review: the listing and the reads are no snapshot. A run's process forks a child the
+  // listing misses and exits; an unrelated process takes its PID before the read, so the first table
+  // names only non-members and lost nothing. The newcomer was forked after the listing's mark: that
+  // round proves nothing, and the broadcast that follows ends the child.
+  it("proves nothing from a table in which a listed PID passed to a newer process", async () => {
+    const child = process(72, "710");
+    const newcomer: ProcessRecord = {
+      pid: 71,
+      zombie: false,
+      uniqueId: "9000",
+      parentUniqueId: "1",
+    };
+    const state = host([child, newcomer], [child.uniqueId]);
+    let reads = 0;
+    const sweep = await new RuntimeDescendantTracker({
+      runId: RUN_ID,
+      activityLog: { write: (): undefined => undefined },
+      membership: member(state),
+      readTable: (): Promise<ProcessTable> => {
+        reads += 1;
+        const current = table(state);
+        if (reads > 1) return Promise.resolve(current);
+        const listed = current.records.filter((row) => row.uniqueId !== child.uniqueId);
+        return Promise.resolve({ ...current, records: listed, lateCount: 1 });
+      },
+      rootPid: ROOT_PID,
+      settleMs: 0,
+    }).sweep();
+
+    expect(sweep).toMatchObject({ outcome: "reaped", roundCount: 1, memberCount: 0 });
+    expect(state.broadcasts).toBe(1);
+    expect(state.processes.map((row) => row.uniqueId)).not.toContain(child.uniqueId);
+  });
+
   it("does not take a zombie whose parent has gone for a host process", () => {
     const records = [HOST, process(90, "999", { zombie: true })];
     const tableOf = (rows: ProcessRecord[]): ProcessTable => ({
@@ -233,6 +268,7 @@ describe("macOS runtime descendants (#3899 AC2, #3901 AC3)", () => {
       goneCount: 0,
       foreignUserCount: 0,
       unidentifiedCount: 0,
+      lateCount: 0,
     });
     expect(tablesProveNoMember(tableOf(records), tableOf([HOST]), SELF.uniqueId, ROOT_ID)).toBe(
       false,
@@ -250,6 +286,7 @@ describe("macOS runtime descendants (#3899 AC2, #3901 AC3)", () => {
       goneCount: 0,
       foreignUserCount: 4,
       unidentifiedCount: 0,
+      lateCount: 0,
     };
     const after: ProcessTable = { ...before, records: [HOST] };
 
@@ -262,6 +299,10 @@ describe("macOS runtime descendants (#3899 AC2, #3901 AC3)", () => {
     expect(
       tablesProveNoMember({ ...before, unidentifiedCount: 1 }, after, SELF.uniqueId, ROOT_ID),
     ).toBe(false);
+    // A process forked after the listing began may hold the PID of a listed process (PR #4064).
+    expect(tablesProveNoMember({ ...before, lateCount: 1 }, after, SELF.uniqueId, ROOT_ID)).toBe(
+      false,
+    );
     // Without the root's identity, age proves nothing.
     expect(tablesProveNoMember(before, after, SELF.uniqueId, undefined)).toBe(false);
     // The run's root itself, and a child forked by a process that has ended, may be the run's.

@@ -1128,14 +1128,17 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   result formatting stay OpenCode's, while the search runs in the server (`nativeWebSearch.ts`):
   only with an integration the operator admitted (`KEIKO_CODING_WEBSEARCH_ENDPOINT`, an Exa-style
   MCP endpoint, https or a loopback http service; an optional `KEIKO_CODING_WEBSEARCH_API_KEY` that
-  never reaches the runtime), only for the exact query the run's policy has just allowed for that
+  never reaches the runtime: the provider receives it in its query string, so every occurrence it
+  echoes, as sent, percent-encoded or form-encoded, leaves its answer before a result field is
+  read), only for the exact query the run's policy has just allowed for that
   run (a one-use grant), and through the gateway's outbound transport with the deployment's proxy
   and CA, one POST to the configured host, no redirect, bounded time, bytes and results. With an
   integration, `websearch` is an internet action like `webfetch`: Full access allows it, narrower
   modes keep the honest refusal. Without one the policy refuses it at once in every mode
   (`unsupported-action`) and names the alternative, `webfetch` of a known URL, which Full access
   allows through the policy with inherited egress. `coding-runtime.websearch.performed` records the
-  outcome, counts, sizes and duration, never the query, a result or the endpoint. Real binary,
+  outcome, counts, sizes, duration and whether the key had to be removed (`credentialRedacted`),
+  never the query, a result, the key or the endpoint. Real binary,
   production composition: a fixture-owned loopback search service answers one Full access search
   the model then reads; Supervised workspace and an unconfigured server search nothing.
 - **An unoffered native tool name is the producer's to answer.** The gateway binds a native call

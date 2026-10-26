@@ -654,6 +654,7 @@ describe("dev-lane runtime process backend", () => {
                 goneCount: 0,
                 foreignUserCount: 0,
                 unidentifiedCount: 0,
+                lateCount: 0,
               }),
             settleMs: 0,
           });

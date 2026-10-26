@@ -31,14 +31,16 @@ import type { SandboxMembership, SandboxMemberSelf } from "./darwinSandboxMember
 //    same identity was answered while alive: it is no member, and never was one, since a process
 //    cannot enter an instance it was not started in.
 // The end is proven when the first table names no PID that ended, or that the kernel refused to
-// identify, before it could be read, and every process in it (zombies included) is such a
-// non-member, was forked by one, or was forked before the run's root. Every process of the run
-// descends from its root, so its identity is larger than the root's; the root's identity is the one
-// that forked the member, taken only while the member still names the root's PID as its parent.
-// Then no member was alive when the first table was listed: a member alive then was either answered
-// as one, or ended before an answer, and so neither stayed alive nor had a non-member parent (its
-// parent was a member). Without a member alive, none can appear afterwards. The run's root, the only
-// member a non-member forked, has exited and been reaped before the sweep starts.
+// identify, before it could be read, no process forked after its listing began (which may hold the
+// PID of a listed process that ended in between, darwinProcessTable.ts), and every process in it
+// (zombies included) is such a non-member, was forked by one, or was forked before the run's root.
+// Every process of the run descends from its root, so its identity is larger than the root's; the
+// root's identity is the one that forked the member, taken only while the member still names the
+// root's PID as its parent. Then no member was alive when the first table was listed: a member alive
+// then was either answered as one, or ended before an answer, and so neither stayed alive nor had a
+// non-member parent (its parent was a member). Without a member alive, none can appear afterwards.
+// The run's root, the only member a non-member forked, has exited and been reaped before the sweep
+// starts.
 //
 // While a member remains, the member sends SIGKILL to all of them in one broadcast and the sweep
 // asks again; a process forked during a broadcast is reached by the next one. A process that
@@ -166,7 +168,7 @@ export function tablesProveNoMember(
   selfId: string,
   rootId: string | undefined,
 ): boolean {
-  if (before.goneCount > 0 || before.unidentifiedCount > 0) return false;
+  if (before.goneCount > 0 || before.unidentifiedCount > 0 || before.lateCount > 0) return false;
   const alive = new Set(after.records.filter((row) => !row.zombie).map((row) => row.uniqueId));
   // Asked about while alive, answered as no member, and alive with the same identity afterwards.
   const nonMembers = new Set(

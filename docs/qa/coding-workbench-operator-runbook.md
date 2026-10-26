@@ -190,7 +190,8 @@ A native run's `websearch` reaches a search integration only when the operator a
 starting the server: `KEIKO_CODING_WEBSEARCH_ENDPOINT` names an Exa-style MCP endpoint (for
 example `https://mcp.exa.ai/mcp`), https, or http on the loopback interface for a search service on
 the same machine; `KEIKO_CODING_WEBSEARCH_API_KEY` optionally carries its key, which stays in the
-server and never reaches the run (#3903 AC3). An endpoint with credentials in its URL, a fragment,
+server and never reaches the run (#3903 AC3); a result in which the service echoes it reaches the
+run without it. An endpoint with credentials in its URL, a fragment,
 or plain http to another host admits nothing. The search runs in Keiko's server through the
 deployment's proxy and CA settings, for the exact query the run's policy just allowed; it is
 available in Full access, like `webfetch`, and refused below it. Without an admitted integration

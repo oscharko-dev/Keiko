@@ -13151,6 +13151,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: true,
       },
+      credentialRedacted: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
       responseBytes: {
         type: "integer",
         dataClass: "count",
