@@ -134,6 +134,26 @@ only the gateway TCP bit allowed, and neither UDP receiver observed a datagram. 
 socket proof sources are unchanged by the subsequent path/fixture increment. This is executable
 component evidence, not installed-service, crash-recovery or production launch qualification.
 
+The preceding head `5576b9046ffb75bd064517dc6502e6abf4900d07` also completed the hosted
+[Windows cross-platform job](https://github.com/oscharko-dev/Keiko/actions/runs/40386177102/job/121803672625).
+It passed the full native-quality gate, both supervisor descendant variants, the complete shell
+smoke (including its privileged final symlink control), Git reparse checks, checkout binding
+(30 passed, one skipped), and handoff fixtures (41 passed, one skipped). Product npm/Yarn smoke
+passed with optional dependencies both omitted and included. Those package-install smokes do not
+provide a Windows npm coding-runtime package or an admitted Workbench service. The latest path
+extensions still require their own current-head CI results.
+
+That earlier CI run was not wholly green: the npm helper-source approval test detected the changed
+protocol harness in the pinned source tree, and the macOS coalesced-handoff fixture timed out
+without reaching its selected owned version. The source-digest mismatch reproduces locally
+(four approval tests pass, one fails). No approval is changed merely to hide this mismatch.
+The existing portable helper qualifier now records the binary hash, size, target and source-tree
+hash after a successful native build and smoke, before temporary artifact cleanup. This provides
+reviewable rebuild evidence without approving or publishing a runtime. Its native Windows tests
+and the workflow module-graph suite pass all 12 cases; two existing module-graph fixture path
+expectations now use host path separators. Requalification and source-pin reconciliation remain
+required before merge. The identity-output increment also passes targeted ESLint/Prettier and the required local Sonar rerun (analysis task `e0c7f39d-724f-4dcb-a389-c9d84f564fff`).
+
 The follow-up diff passes typecheck/package-graph, targeted ESLint/Prettier and local documentation
 link checks. The required local Sonar gate was rerun against this diff and again reported no
 unresolved finding (analysis task `8a95a402-03d2-4345-863a-be1b9673b34a`).
