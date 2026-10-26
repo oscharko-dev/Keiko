@@ -351,6 +351,11 @@ export interface CodingHistoryTask {
   readonly createdAt: number;
   readonly updatedAt: number;
   readonly latestRunId?: string | undefined;
+  /**
+   * `imported` marks a task created from a saved file (#3904 AC4). It has no run of its own, so the
+   * next message continues it as a new task (a fork) that carries its conversation as context.
+   */
+  readonly origin?: "imported" | undefined;
 }
 
 export interface CodingHistoryDetail {
@@ -434,6 +439,29 @@ export interface CodingTaskExportResponse {
   readonly messageCount: number;
   readonly byteCount: number;
   readonly truncated: boolean;
+}
+
+/**
+ * The user-controlled import of a saved coding task (#3904 AC4): a Keiko task export
+ * (`keiko-coding-task-export` v1, JSON) or a session transcript saved by the original OpenCode
+ * (`opencode export`). The file becomes a new Coding History task of the active workspace. Read
+ * back, it is untrusted historical data: it grants no permission and no authority.
+ */
+export const CODING_TASK_IMPORT_MAX_BYTES = 16 * 1024 * 1024;
+/** Coding History lists the newest 200 messages of a task; an import keeps no more than that. */
+export const CODING_TASK_IMPORT_MAX_MESSAGES = 200;
+export const CODING_TASK_IMPORT_SOURCES = ["keiko-task-export", "opencode-session"] as const;
+export type CodingTaskImportSource = (typeof CODING_TASK_IMPORT_SOURCES)[number];
+
+export interface CodingTaskImportResponse {
+  readonly task: CodingHistoryTask;
+  readonly source: CodingTaskImportSource;
+  /** Messages the new task holds. */
+  readonly messageCount: number;
+  /** Older messages left out to stay within `CODING_TASK_IMPORT_MAX_MESSAGES`. */
+  readonly omittedMessageCount: number;
+  /** Entries that carried no conversation text: system messages, tool-only or empty turns. */
+  readonly skippedMessageCount: number;
 }
 export type WorkflowStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
 export type ChatTurnState = "pending" | "completed" | "failed" | "cancelled";

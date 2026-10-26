@@ -1,5 +1,5 @@
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
-import { CODING_HISTORY_MESSAGE_MAX_CHARS } from "../store/codingHistory.js";
+import { codingHistoryChunkEnd } from "../store/codingHistory.js";
 import { contentFreeErrorClass } from "../diagnostics-log.js";
 import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import { createHash } from "node:crypto";
@@ -33,12 +33,13 @@ import {
   type CodingTaskExportRequest,
   type CodingTaskExportResult,
 } from "./codingTaskExport.js";
-
-// Keep source offsets stable across streaming captures without splitting a UTF-16 surrogate pair.
-function nativeChunkEnd(content: string, offset: number): number {
-  const end = Math.min(content.length, offset + CODING_HISTORY_MESSAGE_MAX_CHARS);
-  return (content.codePointAt(end - 1) ?? 0) > 0xffff ? end - 1 : end;
-}
+import {
+  runCodingTaskImport,
+  type CodingTaskImportPorts,
+  type CodingTaskImportRequest,
+  type CodingTaskImportResult,
+  type CodingTaskImportTarget,
+} from "./codingTaskImport.js";
 
 const HISTORY_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -369,6 +370,35 @@ export class CodingRuntimeHistory {
     );
   }
 
+  /**
+   * The user-controlled import of one saved task (#3904 AC4): a new task of this operator in the
+   * active workspace. A caller without an app session, or with no workspace to import into, never
+   * has the file read. The task has no run of its own, so continuing it forks it.
+   */
+  public importTask(
+    request: CodingTaskImportRequest,
+    active: ActiveWorkspaceView | undefined,
+    ports: Omit<CodingTaskImportPorts, "target">,
+  ): Promise<CodingTaskImportResult> {
+    return runCodingTaskImport(this.log, request, { ...ports, target: this.importTarget(active) });
+  }
+
+  private importTarget(active: ActiveWorkspaceView | undefined): CodingTaskImportTarget {
+    const history = this.store.codingHistory;
+    const operatorDigest = this.operator();
+    if (history === undefined || operatorDigest === undefined) return "unavailable";
+    if (active === undefined) return "no-workspace";
+    const scope = taskScopeOf(active.instance);
+    return (task) =>
+      history.importTask({
+        ...scope,
+        title: task.title,
+        modelId: "coding",
+        operatorDigest,
+        messages: task.messages,
+      });
+  }
+
   public previousRunId(id: string): string | undefined {
     const operator = this.operator();
     return operator === undefined
@@ -569,7 +599,8 @@ export class CodingRuntimeHistory {
     const content = stripUnsafeFormatChars(message.content);
     let written = 0;
     for (let offset = 0; offset < content.length;) {
-      const end = nativeChunkEnd(content, offset);
+      // Source offsets stay stable across streaming captures.
+      const end = codingHistoryChunkEnd(content, offset);
       const sourceId =
         offset === 0 ? message.messageId : `${digest(message.messageId)}:${String(offset)}`;
       if (

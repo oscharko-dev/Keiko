@@ -26,6 +26,23 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Saves a redacted copy of this task to your device. Nothing is uploaded.",
   "codingWorkbench.history.exporting": "Preparing export…",
   "codingWorkbench.history.exportError": "The task could not be exported. Try again.",
+  "codingWorkbench.history.import": "Import task",
+  "codingWorkbench.history.importFile": "Coding task file",
+  "codingWorkbench.history.importHint":
+    "Imports a task saved with Export JSON, or an OpenCode session transcript, from your device into this workspace. The file stays on this computer.",
+  "codingWorkbench.history.importing": "Importing task…",
+  "codingWorkbench.history.importPartial":
+    "Older messages were left out. The {count} most recent messages were imported.",
+  "codingWorkbench.history.importInvalid":
+    "This file is not a coding task export or an OpenCode session transcript.",
+  "codingWorkbench.history.importUnsupported": "This file was exported by a newer Keiko version.",
+  "codingWorkbench.history.importTooLarge": "This file is too large to import.",
+  "codingWorkbench.history.importEmpty": "This file holds no conversation to import.",
+  "codingWorkbench.history.importNoWorkspace":
+    "Open a workspace first. The task is imported into the active workspace.",
+  "codingWorkbench.history.importError": "The task could not be imported. Try again.",
+  "codingWorkbench.history.importedNotice":
+    "“{title}” was imported from a file. Your next message continues it as a new task that keeps this conversation and does not change “{title}”.",
   "codingWorkbench.history.finish": "Complete task",
   "codingWorkbench.history.fork": "Fork task",
   "codingWorkbench.history.forkFrom": "Fork from here",
