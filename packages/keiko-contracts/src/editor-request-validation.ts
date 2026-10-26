@@ -1,7 +1,9 @@
 import {
+  buildContextSelectors,
   collectEditorSessionIdError,
   isBoundedEditorSessionId,
   isNonEmptyString,
+  isRecord,
 } from "./coding-context.js";
 import { isLanguageDocumentOverlay, isLanguagePosition } from "./language-service.js";
 
@@ -31,4 +33,25 @@ export function captureEditorRequestIdentity(value: Record<string, unknown>): {
       ? { editorSessionId: value.editorSessionId }
       : {}),
   };
+}
+
+export function admitEditorRequestForCapture(
+  value: unknown,
+  collectRequestErrors: (value: Record<string, unknown>) => string[],
+):
+  | { readonly ok: false; readonly errors: readonly string[] }
+  | {
+      readonly ok: true;
+      readonly value: Record<string, unknown>;
+      readonly context: ReturnType<typeof buildContextSelectors> | undefined;
+    } {
+  if (!isRecord(value)) {
+    return { ok: false, errors: ["request must be an object"] };
+  }
+  const errors = collectRequestErrors(value);
+  if (errors.length > 0) {
+    return { ok: false, errors };
+  }
+  const context = isRecord(value.context) ? buildContextSelectors(value.context) : undefined;
+  return { ok: true, value, context };
 }

@@ -20,6 +20,7 @@
 
 import { isOneOf } from "./contract-validation-primitives.js";
 import {
+  admitEditorRequestForCapture,
   captureEditorRequestIdentity,
   collectEditorDocumentRequestErrors,
 } from "./editor-request-validation.js";
@@ -37,7 +38,6 @@ import {
   isCostClass,
   isNonEmptyString,
   isNonNegativeInteger,
-  isRecord,
 } from "./coding-context.js";
 import type { CompletionDegradeReason, CompletionInteractionMode, CostClass } from "./gateway.js";
 
@@ -208,15 +208,9 @@ function collectRequestErrors(value: Record<string, unknown>): string[] {
 // Validates an `unknown` payload into an EditorCompletionWireRequest, reporting one error per failed
 // invariant. The BFF uses this to reject a malformed request with 400 INVALID_REQUEST.
 export function parseEditorCompletionRequest(value: unknown): EditorCompletionParse {
-  if (!isRecord(value)) {
-    return { ok: false, errors: ["request must be an object"] };
-  }
-  const errors = collectRequestErrors(value);
-  if (errors.length > 0) {
-    return { ok: false, errors };
-  }
-  const context = isRecord(value.context) ? buildContextSelectors(value.context) : undefined;
-  const request = captureCompleteCompletionRequest(value, context);
+  const admission = admitEditorRequestForCapture(value, collectRequestErrors);
+  if (!admission.ok) return admission;
+  const request = captureCompleteCompletionRequest(admission.value, admission.context);
   if (!isCompleteCompletionRequest(request))
     return { ok: false, errors: collectRequestErrors({ ...request }) };
   return { ok: true, value: request };

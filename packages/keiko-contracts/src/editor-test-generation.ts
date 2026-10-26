@@ -31,7 +31,10 @@
 // from the sibling editor contracts so the test-generation tier shares one stable provenance model with
 // the completion and inline-completion gateways.
 
-import { captureEditorRequestIdentity } from "./editor-request-validation.js";
+import {
+  admitEditorRequestForCapture,
+  captureEditorRequestIdentity,
+} from "./editor-request-validation.js";
 import {
   isLanguageDocumentOverlay,
   isLanguagePosition,
@@ -401,15 +404,9 @@ function collectRequestErrors(value: Record<string, unknown>): string[] {
 // invariant. The BFF uses this to reject a malformed request with 400 INVALID_REQUEST. The narrowed
 // `target` is taken verbatim after validation so the discriminated variants stay intact.
 export function parseEditorTestGenerationRequest(value: unknown): EditorTestGenerationParse {
-  if (!isRecord(value)) {
-    return { ok: false, errors: ["request must be an object"] };
-  }
-  const errors = collectRequestErrors(value);
-  if (errors.length > 0) {
-    return { ok: false, errors };
-  }
-  const context = isRecord(value.context) ? buildContextSelectors(value.context) : undefined;
-  const request = captureCompleteTestGenerationRequest(value, context);
+  const admission = admitEditorRequestForCapture(value, collectRequestErrors);
+  if (!admission.ok) return admission;
+  const request = captureCompleteTestGenerationRequest(admission.value, admission.context);
   if (!isCompleteTestGenerationRequest(request))
     return { ok: false, errors: collectRequestErrors({ ...request }) };
   return { ok: true, value: request };

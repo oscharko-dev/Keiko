@@ -627,3 +627,114 @@ describe.each([
     }
   });
 });
+
+describe.each([
+  ["source", parseEditorInlineCompletionRequest],
+  ["public", publicOwner.parseEditorInlineCompletionRequest],
+] as const)("%s parser admission and context projection", (_surface, parse): void => {
+  it("projects the third context read after collection and preserves captured references", (): void => {
+    const input = baseRequest();
+    const body = input.document;
+    const trace: string[] = [];
+    const receivers: unknown[] = [];
+    const changedFiles = ["src/a.ts"];
+    const guardOnly = {
+      get queryText(): never {
+        throw new TypeError("guard-only context must not be projected");
+      },
+    };
+    let reads = 0;
+    Object.defineProperty(input, "document", {
+      get(): unknown {
+        trace.push("body");
+        return body;
+      },
+    });
+    Object.defineProperty(input, "context", {
+      get(this: unknown): unknown {
+        receivers.push(this);
+        reads += 1;
+        trace.push(`context:${String(reads)}`);
+        if (reads === 1) return { queryText: "collection" };
+        if (reads === 2) return guardOnly;
+        return { queryText: "third-projection", changedFiles };
+      },
+    });
+    const parsed = parse(input);
+    expect(trace).toEqual(["body", "context:1", "context:2", "context:3", "body"]);
+    expect(receivers).toHaveLength(3);
+    for (const receiver of receivers) expect(receiver).toBe(input);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value.document).toBe(body);
+    expect(parsed.value.context?.queryText).toBe("third-projection");
+    expect(parsed.value.context?.changedFiles).toBe(changedFiles);
+    expect(Object.keys(parsed.value.context ?? {})).toEqual(["queryText", "changedFiles"]);
+  });
+
+  it("omits context after a refused projection guard or an empty projection", (): void => {
+    for (const mode of ["refused", "empty"] as const) {
+      const input = baseRequest();
+      let reads = 0;
+      Object.defineProperty(input, "context", {
+        get(): unknown {
+          reads += 1;
+          return mode === "refused" && reads === 2 ? undefined : {};
+        },
+      });
+      const parsed = parse(input);
+      expect(reads).toBe(mode === "refused" ? 2 : 3);
+      expect(parsed.ok).toBe(true);
+      if (!parsed.ok) continue;
+      expect(Object.hasOwn(parsed.value, "context")).toBe(false);
+    }
+  });
+
+  it("propagates a projection getter failure before capture with exact identity", (): void => {
+    const input = baseRequest();
+    const body = input.document;
+    const trace: string[] = [];
+    const failure: Error = Object.freeze(new TypeError("synthetic context projection refusal"));
+    let reads = 0;
+    Object.defineProperty(input, "document", {
+      get(): unknown {
+        trace.push("body");
+        return body;
+      },
+    });
+    Object.defineProperty(input, "context", {
+      get(): unknown {
+        reads += 1;
+        trace.push(`context:${String(reads)}`);
+        if (reads === 3) throw failure;
+        return {};
+      },
+    });
+    let observed: unknown;
+    try {
+      parse(input);
+    } catch (error) {
+      observed = error;
+    }
+    expect(observed).toBe(failure);
+    expect(trace).toEqual(["body", "context:1", "context:2", "context:3"]);
+  });
+
+  it("retains an own undefined selector copied after a successful selector guard", (): void => {
+    const input = baseRequest();
+    let reads = 0;
+    input.context = {
+      get queryText(): unknown {
+        reads += 1;
+        return reads === 4 ? undefined : "selector";
+      },
+    };
+    const parsed = parse(input);
+    expect(reads).toBe(4);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(Object.hasOwn(parsed.value, "context")).toBe(true);
+    expect(Object.hasOwn(parsed.value.context ?? {}, "queryText")).toBe(true);
+    expect(parsed.value.context?.queryText).toBeUndefined();
+  });
+});
