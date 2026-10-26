@@ -132,6 +132,6 @@ Risk describes review depth only; it does not change required checks or owner-on
 ## Learning
 
 - Confirmed failure class and regression proof, if applicable:
-- Relevant [Experience.md](../Experience.md) entry updated, or why no durable lesson is needed:
+- Relevant [EXPERIENCE.md](../EXPERIENCE.md) entry updated, or why no durable lesson is needed:
 
 Do not add an experience entry for routine success or unverified hypotheses.
