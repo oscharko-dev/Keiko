@@ -1,11 +1,13 @@
 import {
   activityLogEvent,
   defineActivityLogOperation,
+  recordActivityLogLoss,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type {
   ManagedMcpFailure,
   ManagedMcpLogPort,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
+import { ManagedMcpError } from "./definitions.js";
 
 const LIFECYCLE = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -32,6 +34,8 @@ const LIFECYCLE = defineActivityLogOperation({
         "descriptor-drift",
         "protocol-error",
         "tool-error",
+        "log-unavailable",
+        "deadline-exceeded",
         "aborted",
         "closed",
       ],
@@ -59,19 +63,25 @@ export function recordManagedMcp(
   reason: ManagedMcpFailure | "none" = "none",
   invocationId?: string,
 ): void {
-  log.write(
-    activityLogEvent(
-      LIFECYCLE,
-      { correlationId, level: phase === "failed" ? "error" : "info" },
-      {
-        phase,
-        reason,
-        toolCount,
-        registrySha256,
-        completeness: "complete",
-        loss: "none",
-        ...(invocationId === undefined ? {} : { invocationId }),
-      },
-    ),
-  );
+  try {
+    log.write(
+      activityLogEvent(
+        LIFECYCLE,
+        { correlationId, level: phase === "failed" ? "error" : "info" },
+        {
+          phase,
+          reason,
+          toolCount,
+          registrySha256,
+          completeness: "complete",
+          loss: "none",
+          ...(invocationId === undefined ? {} : { invocationId }),
+        },
+      ),
+    );
+  } catch {
+    recordActivityLogLoss("port-sink-failed");
+    // Loss of terminal evidence never changes the already observed execution outcome.
+    if (phase !== "completed" && phase !== "failed") throw new ManagedMcpError("log-unavailable");
+  }
 }

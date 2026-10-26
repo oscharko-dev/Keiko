@@ -10,6 +10,7 @@ import type {
   ManagedMcpLogPort,
   ManagedMcpTool,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
+import { activityLogLossCounters } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { createManagedMcpHost } from "./index.js";
 import {
   expectActivityLogProof,
@@ -89,6 +90,7 @@ afterEach(async () => {
 function fixture(
   execute?: ManagedMcpTool<Context>["execute"],
   log: ManagedMcpLogPort = { write: () => undefined },
+  options: { durationMs?: number; risk?: "read" | "write" } = {},
 ): {
   host: ManagedMcpHost<Context>;
   execute: ManagedMcpTool<Context>["execute"];
@@ -99,13 +101,17 @@ function fixture(
     vi.fn<ManagedMcpTool<Context>["execute"]>((args, ctx) =>
       Promise.resolve({ data: { text: args.text ?? "", binding: ctx.binding } }),
     );
-  let current = descriptor;
+  let current: ToolDescriptor = {
+    ...descriptor,
+    bounds: { ...descriptor.bounds, maxDurationMs: options.durationMs ?? 1000 },
+    idempotency: options.risk === "write" ? "server-key-required" : "read-only",
+  };
   const host = createManagedMcpHost<Context>({
     providers: [
       {
         id: "fixture",
         tools: (): readonly ManagedMcpTool<Context>[] => [
-          { name: "fixture.echo", risk: "read", descriptor: current, execute: run },
+          { name: "fixture.echo", risk: options.risk ?? "read", descriptor: current, execute: run },
         ],
       },
     ],
@@ -224,5 +230,144 @@ describe("managed MCP protocol", () => {
     ]);
     expect(lines.join()).not.toContain("private-synthetic-text");
     expect(lines.join()).not.toContain("fixture.echo");
+  });
+});
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let finish = (): void => undefined;
+  const promise = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  return {
+    promise,
+    resolve: (): void => {
+      finish();
+    },
+  };
+}
+
+describe("managed MCP effect and evidence boundaries", () => {
+  it.each(["admitted", "started"] as const)(
+    "fails closed before effects when %s evidence cannot be written",
+    async (phase) => {
+      const before = activityLogLossCounters()["port-sink-failed"];
+      const { host, execute } = fixture(undefined, {
+        write: (event) => {
+          const proof = expectActivityLogProof(
+            "mcp.managed.lifecycle.line",
+            formatActivityLogProofLine(event),
+          );
+          if (proof.phase === phase) throw new Error("private sink failure");
+        },
+      });
+      if (phase === "admitted") {
+        await expect(host.admit("admission-fixture")).rejects.toMatchObject({
+          reason: "log-unavailable",
+        });
+        expect(host.protocolEra()).toBeUndefined();
+      } else {
+        await host.admit("admission-fixture");
+        await expect(
+          host.call("fixture.echo", { text: "one" }, context("first")),
+        ).rejects.toMatchObject({ reason: "log-unavailable" });
+      }
+      expect(execute).not.toHaveBeenCalled();
+      expect(activityLogLossCounters()["port-sink-failed"]).toBe(before + 1);
+    },
+  );
+
+  it("revokes a delayed provider before its effect after the actual SDK timeout", async () => {
+    const entered = deferred();
+    const release = deferred();
+    const finished = deferred();
+    let effects = 0;
+    let aborted = false;
+    const execute = vi.fn<ManagedMcpTool<Context>["execute"]>(async (args, ctx) => {
+      entered.resolve();
+      await release.promise;
+      aborted = ctx.signal.aborted;
+      if (ctx.beforeEffect()) effects += 1;
+      finished.resolve();
+      return { data: { text: args.text ?? "", binding: ctx.binding } };
+    });
+    const { host } = fixture(execute, undefined, { durationMs: 500, risk: "write" });
+    await host.admit("admission-fixture");
+    const outcome = host.call("fixture.echo", { text: "one" }, context("first")).then(
+      () => "success",
+      () => "refused",
+    );
+    await entered.promise;
+    expect(await outcome).toBe("refused");
+    release.resolve();
+    await finished.promise;
+    expect({ aborted, effects }).toEqual({ aborted: true, effects: 0 });
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it("isolates caller cancellation from another invocation and stops the late effect", async () => {
+    const entered = deferred();
+    const release = deferred();
+    const finished = deferred();
+    const effects: string[] = [];
+    const controller = new AbortController();
+    const execute = vi.fn<ManagedMcpTool<Context>["execute"]>(async (args, ctx) => {
+      if (ctx.binding === "first") {
+        entered.resolve();
+        await release.promise;
+      }
+      if (ctx.beforeEffect()) effects.push(ctx.binding);
+      if (ctx.binding === "first") finished.resolve();
+      return { data: { text: args.text ?? "", binding: ctx.binding } };
+    });
+    const { host } = fixture(execute, undefined, { risk: "write" });
+    await host.admit("admission-fixture");
+    const first = host
+      .call("fixture.echo", { text: "one" }, context("first", controller.signal))
+      .then(
+        () => "success",
+        () => "refused",
+      );
+    await entered.promise;
+    expect(await host.call("fixture.echo", { text: "two" }, context("second"))).toEqual({
+      text: "two",
+      binding: "second",
+    });
+    controller.abort();
+    expect(await first).toBe("refused");
+    release.resolve();
+    await finished.promise;
+    expect(effects).toEqual(["second"]);
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves a confirmed mutation when its completed log fails and records the loss", async () => {
+    const before = activityLogLossCounters()["port-sink-failed"];
+    const phases: unknown[] = [];
+    let effects = 0;
+    const { host } = fixture(
+      (args, ctx) => {
+        if (ctx.beforeEffect()) effects += 1;
+        return Promise.resolve({ data: { text: args.text ?? "", binding: ctx.binding } });
+      },
+      {
+        write: (event) => {
+          const proof = expectActivityLogProof(
+            "mcp.managed.lifecycle.line",
+            formatActivityLogProofLine(event),
+          );
+          phases.push(proof.phase);
+          if (proof.phase === "completed") throw new Error("private sink failure");
+        },
+      },
+      { risk: "write" },
+    );
+    await host.admit("admission-fixture");
+    await expect(host.call("fixture.echo", { text: "one" }, context("first"))).resolves.toEqual({
+      text: "one",
+      binding: "first",
+    });
+    expect(effects).toBe(1);
+    expect(phases).not.toContain("failed");
+    expect(activityLogLossCounters()["port-sink-failed"]).toBe(before + 1);
   });
 });

@@ -39,7 +39,10 @@ assert the modern era and per-request metadata.
 Automatic input fulfillment and reconnection retries are disabled. No sampling,
 elicitation, resource, prompt or task integration is registered. Unsolicited protocol
 behavior cannot create additional model calls or retry a handler. Request/result sizes
-are bounded, and cancellation is propagated into the request-local provider context.
+are bounded. One invocation deadline covers uncached listing and calling together.
+Caller cancellation, host shutdown, request cancellation and the SDK handler signal
+are combined in the provider context and its final before-effect guard; settlement
+revokes that guard. A timed-out caller cannot leave a delayed provider authorized.
 
 ### D3 — Trusted context stays outside the protocol
 
@@ -75,6 +78,11 @@ not establish absence of a remote effect. Domain handlers and the existing invoc
 owner retain durable intent and observed outcomes; confirmed, unconfirmed, rejected and
 unknown-effect states remain distinguishable. Arbitrary provider errors are replaced
 before the SDK can render them into content.
+
+A failed pre-effect log write fails closed. A failed terminal write never changes an
+already observed execution outcome: it increments the existing process-wide Activity
+Log loss ledger, whose registered heartbeat/exit summary reports missing evidence.
+It does not trigger another tool call or invent an execution failure.
 
 Registered `mcp.managed.lifecycle` events contain closed phases/reasons, counts, the
 admitted declaration digest and opaque correlation/invocation identities. They contain

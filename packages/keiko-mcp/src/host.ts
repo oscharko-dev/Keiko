@@ -36,6 +36,18 @@ function failure(error: unknown, signal?: AbortSignal): ManagedMcpError {
   return error instanceof ManagedMcpError ? error : new ManagedMcpError("protocol-error");
 }
 
+function withSignal<Context extends ManagedMcpInvocationContext>(
+  context: Context,
+  ...signals: AbortSignal[]
+): Context {
+  const signal = AbortSignal.any([context.signal, ...signals]);
+  return {
+    ...context,
+    signal,
+    beforeEffect: () => !signal.aborted && context.beforeEffect() && !signal.aborted,
+  };
+}
+
 class ManagedHost<Context extends ManagedMcpInvocationContext> implements ManagedMcpHost<Context> {
   readonly #contexts = new AsyncLocalStorage<Context>();
   readonly #requests = new WeakMap<Request, Context>();
@@ -45,6 +57,7 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
   readonly #declarations: string;
   readonly #registrySha256: string;
   readonly #toolCount: number;
+  readonly #lifetime = new AbortController();
   #admission: Promise<void> | undefined;
   #admitted = false;
   #closed = false;
@@ -60,7 +73,7 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
     this.#toolCount = tools.length;
     this.#handler = createMcpHandler(({ requestInfo }) => this.server(requestInfo), {
       legacy: "reject",
-      responseMode: "json",
+      responseMode: "auto",
       keepAliveMs: 0,
       maxRequestBodySize: TOOL_CATALOG_LIMITS.maxArgumentBytes + 16_384,
     });
@@ -100,10 +113,10 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
           outputSchema: fromJsonSchema<CatalogJsonObject>(tool.descriptor.resultSchema),
           annotations: { ...definition.annotations },
         },
-        async (args) => {
+        async (args, sdkContext) => {
           if (context === undefined || context.signal.aborted) throw new ManagedMcpError("aborted");
           try {
-            const result = await tool.execute(args, context);
+            const result = await tool.execute(args, withSignal(context, sdkContext.mcpReq.signal));
             if (
               Buffer.byteLength(JSON.stringify(result.data)) > tool.descriptor.bounds.maxResultBytes
             )
@@ -132,7 +145,7 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
       context === undefined
         ? original
         : new Request(original, { signal: AbortSignal.any([original.signal, context.signal]) });
-    if (context !== undefined) this.#requests.set(request, context);
+    if (context !== undefined) this.#requests.set(request, withSignal(context, request.signal));
     try {
       return await this.#handler.fetch(request);
     } finally {
@@ -140,11 +153,16 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
     }
   }
 
-  private async list(correlationId: string, invocationId?: string): Promise<void> {
+  private async list(
+    correlationId: string,
+    invocationId?: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
     this.currentTools();
     const listed = await this.#client.listTools(undefined, {
       cacheMode: "bypass",
       timeout: 10_000,
+      ...(signal === undefined ? {} : { signal }),
     });
     if (definitionIdentity(listed.tools) !== this.#expected || listed.nextCursor !== undefined)
       throw new ManagedMcpError("descriptor-drift");
@@ -181,8 +199,8 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
       );
       if (this.#client.getProtocolEra() !== "modern") throw new ManagedMcpError("protocol-error");
       await this.list(correlationId);
-      this.#admitted = true;
       recordManagedMcp(this.log, correlationId, "admitted", this.#toolCount, this.#registrySha256);
+      this.#admitted = true;
     } catch (error) {
       const refused = failure(error);
       recordManagedMcp(
@@ -257,20 +275,37 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
   ): Promise<CatalogJsonObject> {
     const tool = this.currentTools().find((candidate) => candidate.name === name);
     if (tool === undefined) throw new ManagedMcpError("invalid-arguments");
-    const result = await this.#contexts.run(context, async () => {
-      await this.list(context.correlationId, context.invocationId);
-      return this.#client.callTool(
-        { name, arguments: argumentsValue },
-        { signal: context.signal, timeout: Math.min(30_000, tool.descriptor.bounds.maxDurationMs) },
-      );
-    });
-    if (result.isError) throw new ManagedMcpError("tool-error");
-    if (result.structuredContent === undefined) throw new ManagedMcpError("protocol-error");
-    return result.structuredContent as CatalogJsonObject;
+    const invocation = new AbortController();
+    const bound = withSignal(context, this.#lifetime.signal, invocation.signal);
+    const timeout = Math.min(30_000, tool.descriptor.bounds.maxDurationMs);
+    const timer = setTimeout(() => {
+      invocation.abort();
+    }, timeout);
+    timer.unref();
+    try {
+      const result = await this.#contexts.run(bound, async () => {
+        await this.list(bound.correlationId, bound.invocationId, bound.signal);
+        if (bound.signal.aborted) throw new ManagedMcpError("aborted");
+        return this.#client.callTool(
+          { name, arguments: argumentsValue },
+          { signal: bound.signal, timeout },
+        );
+      });
+      if (result.isError) throw new ManagedMcpError("tool-error");
+      if (result.structuredContent === undefined) throw new ManagedMcpError("protocol-error");
+      return result.structuredContent as CatalogJsonObject;
+    } catch (error) {
+      if (invocation.signal.aborted) throw new ManagedMcpError("deadline-exceeded");
+      throw failure(error, bound.signal);
+    } finally {
+      clearTimeout(timer);
+      invocation.abort();
+    }
   }
 
   public async close(): Promise<void> {
     this.#closed = true;
+    this.#lifetime.abort();
     await Promise.all([this.#client.close(), this.#handler.close()]);
   }
 }

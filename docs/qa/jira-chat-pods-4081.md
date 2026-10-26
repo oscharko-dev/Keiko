@@ -547,3 +547,22 @@ composition, a bound non-Coding consumer, Jira provider admission and downstream
 Chat delivery still require implementation and evidence. All 55 complete ACs
 remain open. ADR-0181 records the new host decision; affected existing ADRs and
 package/dependency documentation are updated in the same change.
+
+
+## Auditor follow-up — #4089 cancellation and terminal evidence
+
+Two real-SDK regressions first failed against `14d8c9695`: a delayed provider
+performed one effect after SDK timeout because its signal/guard remained live;
+a sink throwing on `completed` changed confirmed success into `protocol-error`.
+The host now combines caller/host/request/SDK cancellation, applies one deadline
+across list and call, and revokes the effect guard at settlement. After timeout,
+the released provider observes cancellation and performs zero effects. A parallel
+invocation still completes once. Terminal logging failure preserves the confirmed
+result and counts one `port-sink-failed` in the existing Activity Log loss ledger.
+Admission/start evidence failures remain closed before effects.
+
+Eleven SDK tests pass, plus the integration that formats the actual registered loss
+summary and projects it through the existing reader. Package build, root typecheck,
+changed lint, error observability and all 97 registry drift tests pass. The existing
+12 binder suites / 200 tests also passed unchanged before binder refactoring.
+No new logging subsystem or error-observability exemption was introduced.

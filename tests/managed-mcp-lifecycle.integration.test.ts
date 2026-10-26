@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { activityLogLossCounters } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { activityLogLossSummaryEvent } from "@oscharko-dev/keiko-activity-log";
 import { createManagedMcpHost } from "@oscharko-dev/keiko-mcp";
 import type {
   ManagedMcpInvocationContext,
@@ -7,11 +9,15 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { createToolDescriptor, createToolRef } from "@oscharko-dev/keiko-tool-catalog";
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
-import { formatActivityLogProofLine } from "./support/activity-log-proof.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "./support/activity-log-proof.js";
 
 describe("managed MCP Activity Log reconstruction", () => {
   it("joins real SDK admission, listing and invocation without exposing result content", async () => {
     const lines: string[] = [];
+    let rejectTerminal = false;
     const descriptor = createToolDescriptor({
       toolRef: createToolRef("keiko.fixture.echo", 1),
       description: "Return a synthetic bound result.",
@@ -52,7 +58,10 @@ describe("managed MCP Activity Log reconstruction", () => {
       ],
       log: {
         write: (event) => {
-          lines.push(formatActivityLogProofLine(event));
+          const line = formatActivityLogProofLine(event);
+          if (rejectTerminal && (JSON.parse(line) as { phase?: string }).phase === "completed")
+            throw new Error("private sink failure");
+          lines.push(line);
         },
       },
     });
@@ -83,6 +92,34 @@ describe("managed MCP Activity Log reconstruction", () => {
       ).toBe(true);
       expect(lines.join()).toContain("registrySha256");
       expect(lines.join()).not.toContain("private-synthetic-result");
+      rejectTerminal = true;
+      const before = activityLogLossCounters()["port-sink-failed"];
+      await expect(
+        host.call(
+          "fixture.echo",
+          {},
+          {
+            correlationId: "loss-observable-fixture",
+            invocationId: "loss-invocation-fixture",
+            signal: new AbortController().signal,
+            beforeEffect: () => true,
+          },
+        ),
+      ).resolves.toEqual({ value: "private-synthetic-result" });
+      expect(activityLogLossCounters()["port-sink-failed"]).toBe(before + 1);
+      const lossLine = formatActivityLogProofLine(
+        activityLogLossSummaryEvent(activityLogLossCounters(), "heartbeat"),
+      );
+      expect(expectActivityLogProof("activity-log.loss.heartbeat-summary", lossLine)).toMatchObject(
+        { portSinkFailed: before + 1, completeness: "partial", loss: "event-dropped" },
+      );
+      expect(
+        analyzeLogText([...lines, lossLine].join("\n")).clusters.some(
+          (cluster) => cluster.op === "activity-log.loss" && cluster.errorKind === "unavailable",
+        ),
+      ).toBe(true);
+      expect(lossLine).not.toContain("private sink failure");
+      expect(lossLine).not.toContain("private-synthetic-result");
     } finally {
       await host.close();
     }

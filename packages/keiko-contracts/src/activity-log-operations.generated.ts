@@ -28337,6 +28337,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "descriptor-drift",
           "protocol-error",
           "tool-error",
+          "log-unavailable",
+          "deadline-exceeded",
           "aborted",
           "closed",
         ],

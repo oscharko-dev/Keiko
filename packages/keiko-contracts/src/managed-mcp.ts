@@ -43,6 +43,8 @@ export type ManagedMcpFailure =
   | "descriptor-drift"
   | "protocol-error"
   | "tool-error"
+  | "log-unavailable"
+  | "deadline-exceeded"
   | "aborted"
   | "closed";
 
