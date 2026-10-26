@@ -2188,7 +2188,13 @@ function SessionContextBar({
     posture,
     t,
   });
-  return <CodingWorkbenchInfoPanel facts={facts} contextUsage={state.run.value?.contextUsage} />;
+  return (
+    <CodingWorkbenchInfoPanel
+      facts={facts}
+      contextUsage={state.run.value?.contextUsage}
+      runtimeVersion={state.runtime.value?.runtimeVersion}
+    />
+  );
 }
 
 interface LiveSectionProps {

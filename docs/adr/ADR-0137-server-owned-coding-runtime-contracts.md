@@ -680,12 +680,35 @@ Coding History, so neither is exported. A file stays within 8 MiB: the newest me
 kept, the older ones are counted as omitted, and only a file that cannot hold its own header is
 refused (413 `CODING_HISTORY_EXPORT_TOO_LARGE`). An unknown `format` is a 400. A saved export is data:
 the human may place it in a workspace and attach it to a new task with an `@file` reference, which
-admits any UTF-8 text file of at most 64 KiB (`opencodePromptInputs.ts`); Keiko offers no import of
-its own, and the file grants no permission or authority. The body-free `coding-runtime.history.export`
+admits any UTF-8 text file of at most 64 KiB (`opencodePromptInputs.ts`), or import it, and the file
+grants no permission or authority. The body-free `coding-runtime.history.export`
 operation records `requested`, then `completed` or `refused` (closed reasons `unauthenticated`,
 `unavailable`, `invalid-format`, `too-large`, `failed`) with the format, message, omitted and
 redacted-message counts and the byte size, never any text; a failed browser download is reported
 through the client diagnostic sink.
+
+Import task in Coding History (#3904 AC4) is the same boundary in the other direction. The human
+picks one file on their device; the browser sends it to `POST /api/coding-workbench/history/import`,
+admitted behind a paired app session (an unpaired caller answers like an unavailable History and the
+file is never read), and the server stores its conversation as a new task of this operator in the
+active workspace (409 `CODING_HISTORY_IMPORT_NO_WORKSPACE` without one, or while its identity cannot
+be proven). Nothing is fetched or sent anywhere else. Two documents are read: a
+`keiko-coding-task-export` of schema version 1 (closed keys; a newer version is 400
+`CODING_HISTORY_IMPORT_UNSUPPORTED_VERSION`), and an OpenCode session transcript, of which only the
+visible text parts are kept. Anything else is 400 `CODING_HISTORY_IMPORT_INVALID`, a file without
+conversation text 400 `CODING_HISTORY_IMPORT_EMPTY`, and a file above 16 MiB 413
+`CODING_HISTORY_IMPORT_TOO_LARGE`; a refused file stores nothing. The file's text is as untrusted
+as any input, so every title and message is redacted again with the evidence redactor, absolute
+paths are masked and unsafe format characters stripped; the title is one line of at most 100
+characters, times are kept in order and never in the future, and only the newest 200 messages are
+kept. The task is marked `origin: "imported"` and has no run of its own, so it is never continued
+in place: the Workbench forks it as it ended (D10's fork, without a cancel), and the person may fork
+before one of its messages instead. The runtime's own session import stays unreachable. The
+body-free `coding-runtime.history.import` operation records `requested`, then `completed` (source,
+message, omitted, skipped and redacted-message counts, byte size) or `refused` (closed reasons
+`unauthenticated`, `unavailable`, `no-workspace`, `invalid-document`, `unsupported-version`,
+`too-large`, `empty`, `failed`), never any text; a failed import is reported through the client
+diagnostic sink.
 
 Delivery approval, one rule for D3 and D4. In `governed-assist` and `supervised-coding`, commit,
 push and pull-request create/update each require their own action-bound, one-use human approval in
@@ -1023,8 +1046,8 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
 - **The runtime keeps its own tools, agents and configuration.** The launch configuration of the
   native profile (`opencodeLaunchProfile.ts`) names no ordinary action: it denies only the
   mode-independent `external_directory` escape (admitting the run's own plan directory), keeps
-  `update` and `share` off (a session is never published; the equivalent is the human's local export
-  of a task's Coding History, D4), keeps the single `keiko-runtime` provider behind the Model
+  `update` and `share` off (a session is never published, and OpenCode 2.1.4 has no share operation;
+  the equivalent is the human's local export and import of a task's Coding History, D4), keeps the single `keiko-runtime` provider behind the Model
   Gateway, and enables native snapshots. The producer appends configured rules after each built-in agent's own
   rules and the last match wins, so any configured rule naming an ordinary action would replace an
   agent's own denial: the earlier blanket `allow` (and a blanket `ask`) let the Plan agent write
@@ -1475,7 +1498,15 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   through the repository skill sanitizer, and writes at most 16 copies to the private `skill/`
   discovery directory beside the repository's `skills/`, where the producer's own `skill` tool lists
   and loads them; sibling files are never copied and a repository skill keeps its name. Each prepare
-  first removes the previous pull. Evidence: `coding-runtime.remote-skills.admitted` (a registry
+  first removes the previous pull. Each fetch ends at 10 seconds and one admission, every source
+  together, at 30, so a run never waits longer for an unreachable network; a source that does not
+  answer is `source-failed` and the run starts with the repository's own skills (#3907 AC10). The
+  gateway request ends a DNS lookup no resolver answers with the request's own deadline or
+  cancellation, because the resolver itself takes no signal; a cancelled request starts no lookup.
+  The lookup it gave up on cannot be cancelled either, so requests for one host share the lookup in
+  flight, and while two lookups nobody waits for are pending, a lookup for another host fails at
+  once as a temporary resolver failure (`EAI_AGAIN`).
+  Evidence: `coding-runtime.remote-skills.admitted` (a registry
   line or one line per source with counts, closed refusal reasons and SHA-256 digests of the source
   and of the copies; never a URL, a name or a body). The staged 2.1.4 executable lists a pulled
   skill beside the repository's own, sanitized, and pulls nothing itself.

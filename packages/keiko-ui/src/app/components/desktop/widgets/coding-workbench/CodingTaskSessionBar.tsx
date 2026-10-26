@@ -16,6 +16,11 @@ interface SessionBarProps {
   readonly onHistory: () => void;
 }
 
+// A fork the person asked for holds the other fork actions; an imported task's implicit one does not.
+function requestedFork(session: CodingTaskSession): boolean {
+  return session.fork !== null && session.fork.implicit !== true;
+}
+
 // #3903 AC4: continue the task as a fork in a workspace provisioned from its own.
 function continueActions(
   session: CodingTaskSession,
@@ -26,7 +31,7 @@ function continueActions(
     label: t("codingWorkbench.history.continueIn", { workspace: target.name }),
     icon: Icons.branch,
     run: (): void => void session.continueIn(target),
-    disabled: locked || session.detail === null || session.fork !== null,
+    disabled: locked || session.detail === null || requestedFork(session),
   }));
 }
 

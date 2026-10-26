@@ -18,6 +18,7 @@ import {
   connectResponseHeaderExceedsLimit,
   gatewayTrustedCaCertificates,
   gatewayFetch,
+  type GatewayFetchOptions,
   httpsProxyTunnelKey,
   isMissingIssuerError,
   isRecoverableTlsTrustError,
@@ -686,6 +687,95 @@ describe("gatewayFetch", () => {
 // vi.doMock, same pattern as capabilities.test.ts) so the production dnsLookup call inside
 // enforceOutboundTargetPolicy is fully controlled, without disturbing the real-DNS-dependent
 // tests elsewhere in this file, which keep using the statically-imported gatewayFetch.
+
+// #3907 AC10: the resolver takes no signal, so a machine without a network (or a resolver that drops
+// the query) must not hold a request past its own deadline or its caller's cancellation.
+describe("gatewayFetch DNS lookup deadline (#3907 AC10)", () => {
+  // A resolver whose answers the test releases by hand; every lookup stays pending until then.
+  async function withHeldResolver(
+    run: (
+      fetchVia: typeof gatewayFetch,
+      lookup: ReturnType<typeof vi.fn>,
+      answerAll: () => void,
+    ) => Promise<void>,
+  ): Promise<void> {
+    vi.resetModules();
+    const answers: (() => void)[] = [];
+    const lookup = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          answers.push(() => {
+            resolve([{ address: "192.0.2.1", family: 4 }]);
+          });
+        }),
+    );
+    vi.doMock("node:dns/promises", () => ({ lookup }));
+    try {
+      const { gatewayFetch: boundedGatewayFetch } = await import("./http.js");
+      await run(boundedGatewayFetch, lookup, () => {
+        for (const answer of answers.splice(0)) answer();
+      });
+    } finally {
+      vi.doUnmock("node:dns/promises");
+      vi.resetModules();
+    }
+  }
+
+  const timedOut = { timeoutMs: 20 } as const satisfies GatewayFetchOptions;
+
+  it.each([
+    ["its own timeout", (): GatewayFetchOptions => ({ timeoutMs: 50 }), "TimeoutError", 1],
+    [
+      "its caller's cancellation",
+      (): GatewayFetchOptions => ({ signal: AbortSignal.timeout(50) }),
+      "TimeoutError",
+      1,
+    ],
+    [
+      "an already cancelled caller, before any lookup starts",
+      (): GatewayFetchOptions => ({ signal: AbortSignal.abort() }),
+      "AbortError",
+      0,
+    ],
+  ])("ends a lookup no resolver answers with %s", async (_case, options, name, lookups) => {
+    await withHeldResolver(async (fetchVia, lookup) => {
+      await expect(
+        fetchVia("http://silent-resolver.invalid/notes.txt", options()),
+      ).rejects.toMatchObject({ name });
+      expect(lookup).toHaveBeenCalledTimes(lookups);
+    });
+  });
+
+  it("shares the one unanswered lookup between requests for the same host", async () => {
+    await withHeldResolver(async (fetchVia, lookup) => {
+      const url = "http://silent-resolver.invalid/notes.txt";
+      await expect(fetchVia(url, timedOut)).rejects.toMatchObject({ name: "TimeoutError" });
+      await expect(fetchVia(url, timedOut)).rejects.toMatchObject({ name: "TimeoutError" });
+      expect(lookup).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("refuses another host while abandoned lookups fill the bound, and recovers once they settle", async () => {
+    await withHeldResolver(async (fetchVia, lookup, answerAll) => {
+      for (const host of ["first", "second"]) {
+        await expect(fetchVia(`http://${host}.invalid/notes.txt`, timedOut)).rejects.toMatchObject({
+          name: "TimeoutError",
+        });
+      }
+      await expect(fetchVia("http://third.invalid/notes.txt", timedOut)).rejects.toMatchObject({
+        code: "EAI_AGAIN",
+      });
+      expect(lookup).toHaveBeenCalledTimes(2);
+
+      answerAll();
+      await new Promise((resolve) => setImmediate(resolve));
+      await expect(fetchVia("http://third.invalid/notes.txt", timedOut)).rejects.toMatchObject({
+        name: "TimeoutError",
+      });
+      expect(lookup).toHaveBeenCalledTimes(3);
+    });
+  });
+});
 
 describe("gatewayFetch DNS-rebinding pinning (AUDIT-SEC-001)", () => {
   it("connects using the policy-validated address instead of re-resolving DNS at connect time", async () => {

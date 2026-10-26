@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type {
   CodingWorkbenchSidecarGatewayRunMetadata,
   CodingWorkbenchRuntimeEvidenceClass,
+  CodingWorkbenchRuntimeVersion,
   CodingWorkbenchRuntimeUnavailableReason,
   McpServerDefinition,
 } from "@oscharko-dev/keiko-contracts";
@@ -60,6 +61,7 @@ import {
 import { createDevLaneSecureWorkspaceTextReadPort } from "./devLaneSecureWorkspaceTextRead.js";
 import { SECURE_WORKSPACE_TEXT_READ_MAX_BYTES } from "./secureWorkspaceTextReadProtocol.js";
 import { createProductionOpenCodeBackend } from "./productionOpenCodeBackend.js";
+import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import type {
   ProductionOpenCodeBackendInput,
   ResolvedPortableOpenCodeRuntime,
@@ -204,11 +206,14 @@ export type ProductionOpenCodeActivationResult =
       readonly ports: ProductionOpenCodePorts;
       /** How strong the activated runtime's evidence is; never optional on the success branch. */
       readonly evidenceClass: CodingWorkbenchRuntimeEvidenceClass;
+      /** What the activated runtime is, from its verified release metadata (#3904 AC4). */
+      readonly runtimeVersion: CodingWorkbenchRuntimeVersion;
       readonly unavailableReason?: undefined;
     }
   | {
       readonly ports?: undefined;
       readonly evidenceClass?: undefined;
+      readonly runtimeVersion?: undefined;
       readonly unavailableReason: CodingWorkbenchRuntimeUnavailableReason;
     };
 
@@ -389,7 +394,23 @@ export function resolveProductionOpenCodeActivation(
   }
   return {
     evidenceClass: runtimeEvidenceClass(runtime.portable),
+    runtimeVersion: runtimeVersionFacts(runtime.portable),
     ports: activatedPorts(input, runtime.portable, endpoints, secureWorkspaceTextRead),
+  };
+}
+
+/**
+ * The version the activated runtime's verified sidecar metadata names, beside the version this
+ * build pins and where the runtime came from. Only a dev-lane runtime carries a `lane`; every
+ * other activated runtime is the packaged portable release.
+ */
+function runtimeVersionFacts(
+  portable: ResolvedPortableOpenCodeRuntime,
+): CodingWorkbenchRuntimeVersion {
+  return {
+    opencode: portable.sidecar.summary.upstreamVersion,
+    pinned: OPENCODE_PINNED_VERSION,
+    origin: "lane" in portable ? portable.lane : "portable-release",
   };
 }
 

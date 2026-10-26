@@ -160,6 +160,25 @@ describe("forking from the task chrome", () => {
     expect(screen.getByRole("button", { name: "Continue in “feature-x”" })).toBeDisabled();
   });
 
+  // #3904 AC4: an imported task's implicit fork does not hold continuing it in another workspace.
+  it("keeps continuing an imported task elsewhere open beside its implicit fork", () => {
+    const target = { workspaceId: "workspace-2", name: "feature-x" };
+    const imported = {
+      ...sessionWith([]),
+      fork: { taskId: "task-7", title: "t", implicit: true as const },
+      forkTargets: [target],
+    };
+    const { rerender } = render(
+      <CodingTaskSessionBar session={imported} active={false} onHistory={vi.fn()} />,
+    );
+
+    expect(screen.getByRole("button", { name: "Fork task" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Continue in “feature-x”" })).toBeEnabled();
+    const requested = { ...imported, fork: { taskId: "task-7", title: "t" } };
+    rerender(<CodingTaskSessionBar session={requested} active={false} onHistory={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Continue in “feature-x”" })).toBeDisabled();
+  });
+
   it("offers a fork before each user message, and only to a caller that can fork", () => {
     const assistant = {
       ...historyMessage("m-2", "run-6", "An answer"),

@@ -12,6 +12,8 @@ function forkNoticeText(
   fork: CodingTaskForkSource,
   t: ReturnType<typeof useCodingWorkbenchTranslate>,
 ): string {
+  if (fork.implicit === true)
+    return t("codingWorkbench.history.importedNotice", { title: fork.title });
   if (fork.targetWorkspace !== undefined)
     return t("codingWorkbench.history.forkNoticeWorkspace", {
       title: fork.title,
@@ -27,7 +29,7 @@ function forkNoticeText(
 /**
  * Tells the person that the next message starts a new task forked from the one on display, and lets
  * them take it back. The fork is the person's own request (S03): nothing starts it, and the task it
- * forks is never changed.
+ * forks is never changed. An imported task can only continue as a fork, so that one has no cancel.
  */
 export function CodingTaskForkNotice({
   fork,
@@ -42,9 +44,11 @@ export function CodingTaskForkNotice({
     <output className={styles.cmpForkNotice}>
       <BranchIcon />
       <span className={styles.cmpForkNoticeText}>{forkNoticeText(fork, t)}</span>
-      <button type="button" className={styles.cmpForkNoticeCancel} onClick={onCancel}>
-        {t("codingWorkbench.history.forkCancel")}
-      </button>
+      {fork.implicit === true ? null : (
+        <button type="button" className={styles.cmpForkNoticeCancel} onClick={onCancel}>
+          {t("codingWorkbench.history.forkCancel")}
+        </button>
+      )}
     </output>
   );
 }
