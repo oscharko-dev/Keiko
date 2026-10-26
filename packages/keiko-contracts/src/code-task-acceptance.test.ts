@@ -3147,3 +3147,68 @@ describe("qualification numeric-field observation preservation", () => {
     });
   }
 });
+
+describe("acceptance evidence header exception identity (#3918)", (): void => {
+  for (const surface of ["source", "public"] as const) {
+    const contributionValidator =
+      surface === "source" ? validateCodeTaskAcceptanceContribution : publicAcceptanceValidator;
+    const manifestValidator =
+      surface === "source" ? validateCodeTaskQualificationManifest : publicQualificationManifest;
+    for (const kind of ["contribution", "manifest"] as const) {
+      const validate = kind === "contribution" ? contributionValidator : manifestValidator;
+
+      it(`${surface} ${kind} preserves a throwing kind or schema getter exactly`, (): void => {
+        for (const field of ["kind", "schemaVersion"] as const) {
+          const input =
+            kind === "contribution" ? validContribution() : validQualificationManifest();
+          const trace: string[] = [];
+          const failure: Error = Object.freeze(new TypeError("synthetic header refusal"));
+          const receivers: unknown[] = [];
+          observeEvidenceHeader(input, trace, true);
+          Object.defineProperty(input, field, {
+            get(this: unknown): never {
+              receivers.push(this);
+              trace.push(field);
+              throw failure;
+            },
+          });
+          let caught: unknown;
+          try {
+            validate(input);
+          } catch (error) {
+            caught = error;
+          }
+          expect(caught).toBe(failure);
+          expect(receivers).toHaveLength(1);
+          expect(receivers[0]).toBe(input);
+          expect(trace).toEqual(field === "kind" ? ["kind"] : ["kind", "schemaVersion"]);
+        }
+      });
+
+      it(`${surface} ${kind} reaches a throwing provenance getter after invalid headers`, (): void => {
+        const input = kind === "contribution" ? validContribution() : validQualificationManifest();
+        const trace: string[] = [];
+        const failure: Error = Object.freeze(new TypeError("synthetic provenance refusal"));
+        const receivers: unknown[] = [];
+        observeEvidenceHeader(input, trace, true);
+        Object.defineProperty(input, "sourceTreeSha", {
+          get(this: unknown): never {
+            receivers.push(this);
+            trace.push("sourceTreeSha");
+            throw failure;
+          },
+        });
+        let caught: unknown;
+        try {
+          validate(input);
+        } catch (error) {
+          caught = error;
+        }
+        expect(caught).toBe(failure);
+        expect(receivers).toHaveLength(1);
+        expect(receivers[0]).toBe(input);
+        expect(trace).toEqual(EVIDENCE_HEADER_OBSERVATIONS);
+      });
+    }
+  }
+});

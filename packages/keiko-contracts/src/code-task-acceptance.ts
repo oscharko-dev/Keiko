@@ -477,19 +477,34 @@ function sourceProvenanceFieldsAreValid(errors: string[], value: Record<string, 
   return valid;
 }
 
+function acceptanceEvidenceHeaderFieldsAreValid(
+  errors: string[],
+  value: Record<string, unknown>,
+  expectedKind:
+    typeof CODE_TASK_ACCEPTANCE_CONTRIBUTION_KIND | typeof CODE_TASK_QUALIFICATION_MANIFEST_KIND,
+  expectedSchemaVersion: typeof CODE_TASK_ACCEPTANCE_SCHEMA_VERSION,
+): boolean {
+  let valid = true;
+
+  if (ownField(value, "kind") !== expectedKind) {
+    valid = addValidationError(errors, `kind must be ${expectedKind}`);
+  }
+  if (ownField(value, "schemaVersion") !== expectedSchemaVersion) {
+    valid = addValidationError(errors, "schemaVersion must be the literal 1");
+  }
+  return sourceProvenanceFieldsAreValid(errors, value) && valid;
+}
+
 function contributionHeaderFieldsAreValid(
   errors: string[],
   value: Record<string, unknown>,
 ): boolean {
-  let valid = true;
-
-  if (ownField(value, "kind") !== CODE_TASK_ACCEPTANCE_CONTRIBUTION_KIND) {
-    valid = addValidationError(errors, `kind must be ${CODE_TASK_ACCEPTANCE_CONTRIBUTION_KIND}`);
-  }
-  if (ownField(value, "schemaVersion") !== CODE_TASK_ACCEPTANCE_SCHEMA_VERSION) {
-    valid = addValidationError(errors, "schemaVersion must be the literal 1");
-  }
-  return sourceProvenanceFieldsAreValid(errors, value) && valid;
+  return acceptanceEvidenceHeaderFieldsAreValid(
+    errors,
+    value,
+    CODE_TASK_ACCEPTANCE_CONTRIBUTION_KIND,
+    CODE_TASK_ACCEPTANCE_SCHEMA_VERSION,
+  );
 }
 
 function contributionSalvageFieldsAreValid(
@@ -1935,15 +1950,12 @@ function qualificationManifestHeaderFieldsAreValid(
   errors: string[],
   value: Record<string, unknown>,
 ): boolean {
-  let valid = true;
-
-  if (ownField(value, "kind") !== CODE_TASK_QUALIFICATION_MANIFEST_KIND) {
-    valid = addValidationError(errors, `kind must be ${CODE_TASK_QUALIFICATION_MANIFEST_KIND}`);
-  }
-  if (ownField(value, "schemaVersion") !== CODE_TASK_QUALIFICATION_MANIFEST_SCHEMA_VERSION) {
-    valid = addValidationError(errors, "schemaVersion must be the literal 1");
-  }
-  return sourceProvenanceFieldsAreValid(errors, value) && valid;
+  return acceptanceEvidenceHeaderFieldsAreValid(
+    errors,
+    value,
+    CODE_TASK_QUALIFICATION_MANIFEST_KIND,
+    CODE_TASK_QUALIFICATION_MANIFEST_SCHEMA_VERSION,
+  );
 }
 
 // Split out of qualificationManifestBodyErrors to keep both functions under the repository's
