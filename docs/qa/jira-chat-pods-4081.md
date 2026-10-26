@@ -654,3 +654,28 @@ After the repair, all 14 SDK tests, 353 server tests, the registered Activity Lo
 reader/loss-summary integration and 97 registry drift tests pass. Package build,
 root typecheck, affected lint/format and error observability pass. The generated
 inventory still resolves all 606 proofs and 30 scenarios without violations.
+
+## Mutation transport replay safety — #4083 AC5 (partial), Epic #4081
+
+The existing shared Atlassian HTTP helper retried PUT after 5xx/429 and POST after 429. Three new regressions failed because a committed first attempt was resent;
+the PUT cases could overwrite an intervening actor change. Automatic retries are
+now restricted to GET. Every POST/PUT dispatches once, regardless of Retry-After,
+while bounded GET backoff/deadline behavior remains covered. This also protects
+existing Cloud Jira and Confluence write callers.
+
+The existing action activity owner now projects its outcome into the registered
+Activity Log without credentials, targets or Jira content. A real server-route
+fixture proves one PUT attempt after 503 and reconstructs the failed/unavailable
+outcome through the formatter and reader. A terminal sink failure records loss
+without changing an observed successful write. ADR-0128 D3 reflects the retry rule.
+
+Focused transport/Jira/Confluence tests: 50 passed. Existing write/live-search route
+suites including the new route and log-loss proofs: 69 passed. Package build, root
+typecheck, affected lint, error observability and ADR index pass. The regenerated
+inventory resolves 607 proofs and 30 scenarios with zero violations. All 97 registry
+drift tests and changed-file format checks pass.
+
+This is not complete AC5 acceptance: existing route failure reasons still do not
+prove absence of a remote effect. Durable invocation intent, distinct uncertain
+and acknowledged-but-unconfirmed results, reconciliation and Chat/UI folds remain
+to be implemented. No automatic retry is permitted to bridge that gap.

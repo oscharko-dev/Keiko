@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 371,
-  "completeClassCount": 371,
+  "supportedClassCount": 372,
+  "completeClassCount": 372,
   "completeness": "complete",
   "classes": [
     {
@@ -1521,6 +1521,86 @@
             "causeChain": false
           },
           "proofIds": ["gateway.log.sink-failed.emitted-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "atlassian-action-execution",
+      "requirementContract": "atlassian-action-execution",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["end"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": [],
+        "end": ["atlassian.action.outcome"],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "atlassian.action.outcome",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["atlassian.action.outcome"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "atlassian.action.outcome",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "end",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "actionType",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "disposition",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "durationMs",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "failureReason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "provider",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["atlassian.action.outcome.line"],
           "replayReferences": [],
           "missingObligations": []
         }

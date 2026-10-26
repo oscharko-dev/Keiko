@@ -301,12 +301,20 @@ matching the existing per-page timeout convention in
 `DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS.timeoutMs`. Sync-run timeouts are additionally bounded
 by the overall `maxDurationMs` run budget (D5).
 
-**Bounded backoff for 429/5xx:** exponential backoff starting at 500 ms, factor 2, capped at 8 000
+**Bounded read backoff for 429/5xx:** GET requests use exponential backoff starting at 500 ms, factor 2, capped at 8 000
 ms per attempt, maximum 5 attempts, honoring a `Retry-After` response header when present (itself
 capped at the same 8 000 ms ceiling so a hostile or misconfigured upstream cannot stall a run past
 its budget). 4xx responses other than 429 are not retried; they fail immediately as typed,
 content-free errors (`auth-failed`, `permission-denied`, `malformed-payload`, per the #2240 job
 failure-reason vocabulary).
+POST and PUT mutations are dispatched at most once, including responses carrying
+`Retry-After`. HTTP method idempotency does not establish that no effect occurred:
+a committed mutation may lose its response, and a repeated PUT may overwrite an
+intervening actor's change. The invocation owner retains the original intent and
+reconciles observed remote state; uncertain effects never trigger an automatic resend
+(#4081/#4083). The shared HTTP transport and existing action Activity Log remain the
+owners of per-request and terminal evidence.
+
 
 ### D4 — Action-class mapping table
 

@@ -6,6 +6,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "atlassian-action-execution",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: [],
+      end: ["atlassian.action.outcome"],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["atlassian.action.outcome"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["atlassian.action.outcome"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["atlassian.action.outcome"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "mcp-managed",
     requiredProductSurfaces: ["keiko-mcp"],
     requiredLifecycleOperations: {

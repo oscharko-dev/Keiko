@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "56542dc15c3eb0af0605183e66f43ef6f8f270f79bc243a22cdda79fa4082ff9"
+    "catalogDigest": "96a3460a1d2137b6b930df912ec3a15c1a9111fccd4a52fa5578106cd66fe1c3"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -59,10 +59,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 593,
-    "proofCount": 606,
-    "resolvedProofCount": 606,
-    "failureClassCount": 371,
+    "operationCount": 594,
+    "proofCount": 607,
+    "resolvedProofCount": 607,
+    "failureClassCount": 372,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -91,6 +91,7 @@
       "owners": ["keiko-server"],
       "ports": ["ServerLogSink"],
       "operations": [
+        "atlassian.action.outcome",
         "atlassian.connection.checked",
         "atlassian.credential.created",
         "atlassian.credential.rejected",
@@ -771,6 +772,7 @@
     }
   ],
   "failureClassScenarios": {
+    "atlassian-action-execution": ["bff.dependency-failure"],
     "mcp-managed": ["tools-workflows.dependency-failure"],
     "chat-creation-intent": ["bff.dependency-failure"],
     "chat-draft-persistence": ["bff.dependency-failure"],
@@ -1187,6 +1189,9 @@
     ],
     "server-log.writer-ownership-rejected.registered-line": [
       "packages/keiko-activity-log/src/server-log.writer-ownership.test.ts"
+    ],
+    "atlassian.action.outcome.line": [
+      "packages/keiko-server/src/atlassian/writeActionRoutes.test.ts"
     ],
     "atlassian.connection.checked.line": [
       "packages/keiko-server/src/atlassian/credentialActivity.test.ts"
