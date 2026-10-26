@@ -411,9 +411,12 @@ interface CapturedPromptEnhancementWireRequest {
 
 // Capture raw observed wire fields, omitting absent optionals.
 // The existing second admission check below validates this captured value.
-function buildWireRequestValue(
+function captureWireRequestIntent(
   input: Record<string, unknown>,
-): CapturedPromptEnhancementWireRequest {
+): Pick<
+  CapturedPromptEnhancementWireRequest,
+  "text" | "outputKind" | "profilePreference" | "missingInformationStrategy"
+> {
   return {
     text: input.text,
     ...(input.outputKind === undefined ? {} : { outputKind: input.outputKind }),
@@ -425,13 +428,40 @@ function buildWireRequestValue(
       : {
           missingInformationStrategy: input.missingInformationStrategy,
         }),
+  };
+}
+
+function captureWireRequestContextMetadata(
+  input: Record<string, unknown>,
+): Pick<
+  CapturedPromptEnhancementWireRequest,
+  "hasConnectedContext" | "attachmentCount" | "locale"
+> {
+  return {
     ...(input.hasConnectedContext === undefined
       ? {}
       : { hasConnectedContext: input.hasConnectedContext }),
     ...(input.attachmentCount === undefined ? {} : { attachmentCount: input.attachmentCount }),
     ...(input.locale === undefined ? {} : { locale: input.locale }),
+  };
+}
+
+function captureWireRequestModelOptions(
+  input: Record<string, unknown>,
+): Pick<CapturedPromptEnhancementWireRequest, "modelId" | "candidateCount"> {
+  return {
     ...(input.modelId === undefined ? {} : { modelId: input.modelId }),
     ...(input.candidateCount === undefined ? {} : { candidateCount: input.candidateCount }),
+  };
+}
+
+function buildWireRequestValue(
+  input: Record<string, unknown>,
+): CapturedPromptEnhancementWireRequest {
+  return {
+    ...captureWireRequestIntent(input),
+    ...captureWireRequestContextMetadata(input),
+    ...captureWireRequestModelOptions(input),
   };
 }
 
