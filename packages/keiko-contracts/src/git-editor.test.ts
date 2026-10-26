@@ -1630,3 +1630,74 @@ describe("Git Editor eager response phases (#3918)", (): void => {
     },
   );
 });
+
+import {
+  GIT_EDITOR_DIFF_SCOPES,
+  GIT_EDITOR_DIFF_LAYERS,
+  GIT_EDITOR_DIFF_LINE_KINDS,
+  GIT_EDITOR_DIFF_FILE_STATUSES,
+} from "./git-editor.js";
+import * as publicGitEditorEnumGuards from "@oscharko-dev/keiko-contracts/runtime/git-editor";
+
+const gitEditorEnumGuardWitnesses = [
+  [
+    "scope",
+    GIT_EDITOR_DIFF_SCOPES,
+    isGitEditorDiffScope,
+    publicGitEditorEnumGuards.isGitEditorDiffScope,
+  ],
+  [
+    "layer",
+    GIT_EDITOR_DIFF_LAYERS,
+    isGitEditorDiffLayer,
+    publicGitEditorEnumGuards.isGitEditorDiffLayer,
+  ],
+  [
+    "line kind",
+    GIT_EDITOR_DIFF_LINE_KINDS,
+    isGitEditorDiffLineKind,
+    publicGitEditorEnumGuards.isGitEditorDiffLineKind,
+  ],
+  [
+    "file status",
+    GIT_EDITOR_DIFF_FILE_STATUSES,
+    isGitEditorDiffFileStatus,
+    publicGitEditorEnumGuards.isGitEditorDiffFileStatus,
+  ],
+] as const;
+
+describe("GitEditor catalog guard boundaries (#3918)", () => {
+  for (const [name, catalog, sourceGuard, publicGuard] of gitEditorEnumGuardWitnesses) {
+    for (const [surface, guard] of [
+      ["source", sourceGuard],
+      ["public", publicGuard],
+    ] as const) {
+      it(`${surface} ${name} admits its catalog and refuses foreign values without coercion`, () => {
+        for (const member of catalog) expect(guard(member)).toBe(true);
+        expect(guard("not-a-git-editor-value")).toBe(false);
+        expect(guard("")).toBe(false);
+        let conversions = 0;
+        const hostile = {
+          [Symbol.toPrimitive](): never {
+            conversions += 1;
+            throw new TypeError("unexpected GitEditor enum coercion");
+          },
+        };
+        const boxed: unknown = Reflect.construct(String, ["staged"]);
+        const refused: readonly unknown[] = [
+          undefined,
+          null,
+          0,
+          false,
+          Symbol("git-editor-enum"),
+          [],
+          {},
+          boxed,
+          hostile,
+        ];
+        for (const value of refused) expect(guard(value)).toBe(false);
+        expect(conversions).toBe(0);
+      });
+    }
+  }
+});

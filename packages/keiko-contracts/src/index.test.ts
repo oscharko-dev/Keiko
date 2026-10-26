@@ -1695,3 +1695,51 @@ it("preserves Git enum root TYPE callable domains through existing runtime selec
     typeof gitEnumRuntimeForIndex.isGitDeliveryExecutionErrorCode
   >();
 });
+
+import type {
+  isGitEditorDiffScope as RootGitEditorScopeGuard,
+  isGitEditorDiffLayer as RootGitEditorLayerGuard,
+  isGitEditorDiffLineKind as RootGitEditorLineKindGuard,
+  isGitEditorDiffFileStatus as RootGitEditorFileStatusGuard,
+} from "@oscharko-dev/keiko-contracts";
+import * as gitEditorEnumRuntimeForIndex from "@oscharko-dev/keiko-contracts/runtime/git-editor";
+import * as gitEditorEnumAliasForIndex from "@oscharko-dev/keiko-contracts/git-editor";
+
+it("preserves GitEditor root TYPE callable domains and public runtime alias forwarding (#3918)", () => {
+  expectTypeOf<typeof RootGitEditorScopeGuard>().toEqualTypeOf<
+    (value: unknown) => value is import("@oscharko-dev/keiko-contracts").GitEditorDiffScope
+  >();
+  expectTypeOf<typeof RootGitEditorLayerGuard>().toEqualTypeOf<
+    (value: unknown) => value is import("@oscharko-dev/keiko-contracts").GitEditorDiffLayer
+  >();
+  expectTypeOf<typeof RootGitEditorLineKindGuard>().toEqualTypeOf<
+    (value: unknown) => value is import("@oscharko-dev/keiko-contracts").GitEditorDiffLineKind
+  >();
+  expectTypeOf<typeof RootGitEditorFileStatusGuard>().toEqualTypeOf<
+    (value: unknown) => value is import("@oscharko-dev/keiko-contracts").GitEditorDiffFileStatus
+  >();
+  expectTypeOf<typeof RootGitEditorScopeGuard>().toEqualTypeOf<
+    typeof gitEditorEnumRuntimeForIndex.isGitEditorDiffScope
+  >();
+  expectTypeOf<typeof RootGitEditorLayerGuard>().toEqualTypeOf<
+    typeof gitEditorEnumRuntimeForIndex.isGitEditorDiffLayer
+  >();
+  expectTypeOf<typeof RootGitEditorLineKindGuard>().toEqualTypeOf<
+    typeof gitEditorEnumRuntimeForIndex.isGitEditorDiffLineKind
+  >();
+  expectTypeOf<typeof RootGitEditorFileStatusGuard>().toEqualTypeOf<
+    typeof gitEditorEnumRuntimeForIndex.isGitEditorDiffFileStatus
+  >();
+  expect(gitEditorEnumAliasForIndex.isGitEditorDiffScope).toBe(
+    gitEditorEnumRuntimeForIndex.isGitEditorDiffScope,
+  );
+  expect(gitEditorEnumAliasForIndex.isGitEditorDiffLayer).toBe(
+    gitEditorEnumRuntimeForIndex.isGitEditorDiffLayer,
+  );
+  expect(gitEditorEnumAliasForIndex.isGitEditorDiffLineKind).toBe(
+    gitEditorEnumRuntimeForIndex.isGitEditorDiffLineKind,
+  );
+  expect(gitEditorEnumAliasForIndex.isGitEditorDiffFileStatus).toBe(
+    gitEditorEnumRuntimeForIndex.isGitEditorDiffFileStatus,
+  );
+});

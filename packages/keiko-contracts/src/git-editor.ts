@@ -1,7 +1,9 @@
 // Editor Git read contracts (Issue #2227, Epic #2093, ADR-0127). These bounded wire shapes lift
 // the existing client-only unified-diff vocabulary into the contracts leaf and add the structured
 // diff/blame metadata consumed by later route, bridge, renderer, and agent-context issues.
-// Leaf-package rule (ADR-0019): no @oscharko-dev/keiko-* imports; pure types + guards only.
+// Leaf-package rule (ADR-0019): pure contracts-internal types + guards; no package dependencies.
+
+import { isInSet } from "./contract-validation-primitives.js";
 
 export const GIT_EDITOR_SCHEMA_VERSION = "1" as const;
 
@@ -142,11 +144,6 @@ export interface GitEditorParseFail {
 
 export type GitEditorParseResult<T> = GitEditorParseOk<T> | GitEditorParseFail;
 
-const GIT_EDITOR_DIFF_FILE_STATUSES_VALUES: readonly unknown[] = GIT_EDITOR_DIFF_FILE_STATUSES;
-const GIT_EDITOR_DIFF_LAYERS_VALUES: readonly unknown[] = GIT_EDITOR_DIFF_LAYERS;
-const GIT_EDITOR_DIFF_LINE_KINDS_VALUES: readonly unknown[] = GIT_EDITOR_DIFF_LINE_KINDS;
-const GIT_EDITOR_DIFF_SCOPES_VALUES: readonly unknown[] = GIT_EDITOR_DIFF_SCOPES;
-
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -179,21 +176,18 @@ function isWorkspacePath(value: unknown): value is string {
   return segments.every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
 }
 
-export function isGitEditorDiffScope(value: unknown): value is GitEditorDiffScope {
-  return typeof value === "string" && GIT_EDITOR_DIFF_SCOPES_VALUES.includes(value);
-}
+export const isGitEditorDiffScope: (value: unknown) => value is GitEditorDiffScope =
+  isInSet(GIT_EDITOR_DIFF_SCOPES);
 
-export function isGitEditorDiffLayer(value: unknown): value is GitEditorDiffLayer {
-  return typeof value === "string" && GIT_EDITOR_DIFF_LAYERS_VALUES.includes(value);
-}
+export const isGitEditorDiffLayer: (value: unknown) => value is GitEditorDiffLayer =
+  isInSet(GIT_EDITOR_DIFF_LAYERS);
 
-export function isGitEditorDiffLineKind(value: unknown): value is GitEditorDiffLineKind {
-  return typeof value === "string" && GIT_EDITOR_DIFF_LINE_KINDS_VALUES.includes(value);
-}
+export const isGitEditorDiffLineKind: (value: unknown) => value is GitEditorDiffLineKind = isInSet(
+  GIT_EDITOR_DIFF_LINE_KINDS,
+);
 
-export function isGitEditorDiffFileStatus(value: unknown): value is GitEditorDiffFileStatus {
-  return typeof value === "string" && GIT_EDITOR_DIFF_FILE_STATUSES_VALUES.includes(value);
-}
+export const isGitEditorDiffFileStatus: (value: unknown) => value is GitEditorDiffFileStatus =
+  isInSet(GIT_EDITOR_DIFF_FILE_STATUSES);
 
 function hasValidLineCoordinates(value: Readonly<Record<string, unknown>>): boolean {
   const oldLine = value.oldLine;
