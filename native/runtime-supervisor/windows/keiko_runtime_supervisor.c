@@ -324,9 +324,8 @@ static HANDLE configured_job(const char *recovery_handle, HANDLE *completion_por
   return job;
 }
 
-static int initialize_startup_info(STARTUPINFOEXW *startup, SIZE_T *attribute_size) {
-  HANDLE inherited[3] = {GetStdHandle(STD_INPUT_HANDLE), GetStdHandle(STD_OUTPUT_HANDLE),
-                         GetStdHandle(STD_ERROR_HANDLE)};
+static int initialize_startup_info(STARTUPINFOEXW *startup, SIZE_T *attribute_size,
+                                   HANDLE inherited[3]) {
   memset(startup, 0, sizeof(*startup));
   startup->StartupInfo.cb = sizeof(*startup);
   startup->StartupInfo.dwFlags = STARTF_USESTDHANDLES;
@@ -338,12 +337,16 @@ static int initialize_startup_info(STARTUPINFOEXW *startup, SIZE_T *attribute_si
   return startup->lpAttributeList != NULL &&
          InitializeProcThreadAttributeList(startup->lpAttributeList, 1, 0, attribute_size) &&
          UpdateProcThreadAttribute(startup->lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-                                   inherited, sizeof(inherited), NULL, NULL);
+                                   inherited, 3 * sizeof(HANDLE), NULL, NULL);
 }
 
 static int launch_in_job(const struct launch_request *request, HANDLE job,
                          PROCESS_INFORMATION *process) {
   STARTUPINFOEXW startup;
+  /* UpdateProcThreadAttribute retains this pointer through CreateProcessW. A callee-local array
+   * expires when startup initialization returns, causing ERROR_INVALID_PARAMETER without inlining. */
+  HANDLE inherited[3] = {GetStdHandle(STD_INPUT_HANDLE), GetStdHandle(STD_OUTPUT_HANDLE),
+                         GetStdHandle(STD_ERROR_HANDLE)};
   SIZE_T attribute_size = 0;
   wchar_t *executable = wide_string(request->executable);
   wchar_t *cwd = wide_string(request->cwd);
@@ -353,7 +356,7 @@ static int launch_in_job(const struct launch_request *request, HANDLE job,
                 EXTENDED_STARTUPINFO_PRESENT;
   BOOL created = FALSE;
   if (executable != NULL && cwd != NULL && line != NULL && environment != NULL &&
-      initialize_startup_info(&startup, &attribute_size)) {
+      initialize_startup_info(&startup, &attribute_size, inherited)) {
     created = CreateProcessW(executable, line, NULL, NULL, TRUE, flags, environment, cwd,
                              &startup.StartupInfo, process);
     if (created && !AssignProcessToJobObject(job, process->hProcess)) {

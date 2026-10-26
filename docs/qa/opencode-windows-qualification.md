@@ -45,8 +45,9 @@ SHA-256 identities of the initially staged executables:
 | Runtime supervisor    | `3c4686521deb13747cc18ba68632e978128dbd69471d04302f0cd6e303687e25` |
 | Secure workspace read | `717342608116797c0b347aaf6a0f7782d356675033b07ef8139c4e53dae42335` |
 
-The extended supervisor harness was run against these exact supervisor bytes. Only its synthetic
-fixture and harness changed; the production supervisor did not. The dev-lane source-tree digest
+The initial extended supervisor harness was run against these exact supervisor bytes. Subsequent
+execution of the quality-gate build exposed the handle-array lifetime defect described below;
+that defect is now repaired in the supervisor source. The dev-lane source-tree digest
 also covers fixture source, so restage after applying this change before testing dev-lane discovery.
 Locally compiled helper hashes identify this run, not newly approved distributed binaries.
 
@@ -129,6 +130,17 @@ against both ordinary and `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP` children
 positive controls and PID disappearance, and reports native execution separately from the explicit
 non-Windows source-contract-only skip. No workflow condition or required check is relaxed.
 
+The new Windows CI invocation found a supervisor defect hidden by the optimized local build:
+`initialize_startup_info` passed a callee-local handle array to `UpdateProcThreadAttribute`, which
+retains its pointer until the attribute list is destroyed. The unoptimized quality build then
+failed `CreateProcessW` with `ERROR_INVALID_PARAMETER`. The exact CI compiler/linker options
+reproduced this locally. Keeping the array in the launching caller until attribute-list teardown
+fixes the lifetime; the same build now passes both descendant variants and both termination paths.
+The existing launch/reap/error protocol and body-free server lifecycle logging remain unchanged.
+The [Windows API lifetime contract](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-updateprocthreadattribute)
+requires this storage lifetime independently of compiler optimization. Restaged/distributed helper
+identities must be regenerated and qualified; the initial hash above is not the repaired binary.
+
 The initial staged-helper concurrency run failed its positive control: all 32 reads returned
 `CHANGED_DURING_READ`. The updater created and removed temporary siblings of the target, changing
 the root directory metadata even when Windows sharing protection correctly denied target
@@ -164,6 +176,10 @@ Next work, in dependency order:
 
 ## Update impact
 
-Not release-impacting: this increment changes synthetic qualification fixtures, the existing
-Windows CI test invocation and documentation only. Product runtime behavior, stores, configuration,
-distributed binaries, version pins and approvals are unchanged.
+Release-impacting supervisor reliability fix: retain inherited-handle storage through Windows
+process creation. Category `fixes`, priority `normal`, remediation `no-action-required`; no state
+stores or protocol versions change. Proposed note: "Fix a Windows runtime supervisor startup
+failure caused by expired process-attribute storage." Target release version and release-owner
+approval are pending; catalog insertion is deferred to the release-cut PR under the
+[release-impact runbook](../release/release-impact-runbook.md). This does not itself enable the
+still-unimplemented Windows gateway service.
