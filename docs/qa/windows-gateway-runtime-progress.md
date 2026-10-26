@@ -126,6 +126,14 @@ capability, so the experiment cannot hide a wider egress allowance behind a diff
 The ordinary socket proof retains the original token and still requires a working control route.
 This is a pending experiment, not an assertion that capability provisioning fixes the blocker.
 
+[Run 40374429393](https://github.com/oscharko-dev/Keiko/actions/runs/40374429393) also failed the
+inbound positive control with that capability in both families; outbound and cleanup controls
+still passed. The next diagnostic reads at most 256 recent WFP events filtered to the synthetic
+test executable. It reports only closed drop categories, layer/status numbers and identity-match
+booleans, never raw events, filters or OS-supplied strings. It temporarily enables event collection
+only in the disposable-runner experiment and restores the prior engine option on cleanup. This
+diagnostic cannot turn a failed socket assertion into a pass.
+
 Local protocol validation also ran the complete existing `runtime-gateway.test.ts`: 29 passed,
 eight failed on existing POSIX filesystem fixtures rejected by Windows path canonicalization, and
 25 macOS tests skipped. The new cross-language vector case passes individually. These baseline

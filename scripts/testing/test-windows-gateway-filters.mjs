@@ -80,6 +80,7 @@ if (
     join(root, "native/runtime-supervisor/windows/gateway_identity.test.c"),
     join(root, "native/runtime-supervisor/windows/gateway_socket.test.c"),
     join(root, "native/runtime-supervisor/windows/gateway_inbound.test.c"),
+    join(root, "native/runtime-supervisor/windows/gateway_diagnostics.test.c"),
     "/link",
     "/DEPENDENTLOADFLAG:0x800",
     "fwpuclnt.lib",

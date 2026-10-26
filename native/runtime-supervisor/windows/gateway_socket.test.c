@@ -16,6 +16,10 @@ struct gateway_inbound_fixture;
 DWORD gateway_inbound_start(PSID sid, struct gateway_inbound_fixture **owned);
 DWORD gateway_inbound_stop(struct gateway_inbound_fixture *fixture);
 DWORD gateway_inbound_block(PSID sid, UINT16 family, HANDLE *owned);
+struct gateway_diagnostics;
+DWORD gateway_diagnostics_start(const wchar_t *executable, struct gateway_diagnostics **owned);
+DWORD gateway_diagnostics_read(struct gateway_diagnostics *owner, PSID sid);
+DWORD gateway_diagnostics_stop(struct gateway_diagnostics *owner);
 
 static int listen_target(int family, struct socket_target *target) {
   memset(target, 0, sizeof(*target));
@@ -247,9 +251,11 @@ static int udp_received(SOCKET listener);
 static DWORD scoped_inbound_probe(PSID sid, const wchar_t *executable, int family,
                                   UINT16 gateway, UINT16 hostile, SOCKET udp, PSID_AND_ATTRIBUTES network) {
   struct gateway_inbound_fixture *owner = NULL;
+  struct gateway_diagnostics *diagnostics = NULL;
   HANDLE deny = NULL;
-  DWORD result = gateway_inbound_start(sid, &owner), closed;
+  DWORD result = gateway_diagnostics_start(executable, &diagnostics), closed;
   DWORD observed = 99;
+  if (result == ERROR_SUCCESS) result = gateway_inbound_start(sid, &owner);
   if (result == ERROR_SUCCESS)
     result = control_route_probe(sid, executable, family, "inbound-provisioned", network);
   if (result == ERROR_SUCCESS) {
@@ -274,6 +280,12 @@ static DWORD scoped_inbound_probe(PSID sid, const wchar_t *executable, int famil
   if (result == ERROR_SUCCESS &&
       control_route_probe(sid, executable, family, "inbound-owner-reaped", network) != ERROR_CONNECTION_REFUSED)
     result = ERROR_INVALID_DATA;
+  if (diagnostics != NULL) {
+    closed = gateway_diagnostics_read(diagnostics, sid);
+    if (closed != ERROR_SUCCESS) result = closed;
+    closed = gateway_diagnostics_stop(diagnostics);
+    if (closed != ERROR_SUCCESS) result = closed;
+  }
   printf("socket-inbound-experiment: family=%d code=%lu\n", family, result);
   return result;
 }
