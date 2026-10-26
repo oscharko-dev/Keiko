@@ -185,7 +185,7 @@ describe("complete caller-owned port failure delivery (#3918)", (): void => {
             };
           },
         };
-        reportFailure(
+        reportFailure<FailureNotice, FailureNoticeSink>(
           sink,
           droppedOp,
           cause,
@@ -278,7 +278,7 @@ describe("complete caller-owned port failure delivery (#3918)", (): void => {
         };
         const warn = vi.spyOn(process, "emitWarning").mockImplementation((): void => undefined);
         try {
-          reportFailure(
+          reportFailure<FailureNotice, FailureNoticeSink>(
             sink,
             "test.delivery",
             codedDeliveryFailure(),
@@ -353,7 +353,7 @@ describe("complete caller-owned port failure delivery (#3918)", (): void => {
           trace.push("warning");
         });
         try {
-          reportFailure(
+          reportFailure<FailureNotice, FailureNoticeSink>(
             sink,
             "test.delivery",
             codedDeliveryFailure(),
