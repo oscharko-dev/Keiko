@@ -95,15 +95,19 @@ Windows filesystem capability or enable a native launch. The broader selection s
 **20 failed, 132 passed, 25 skipped**: those remaining tests construct macOS/Linux native services
 using real Windows temporary paths, and one requires unavailable symbolic-link privilege. They are
 not represented as successful native Windows or foreign-platform execution.
+The direct backend consumer suite `backends.test.ts` also passes all 39 tests on Windows after
+this repair. Policy inspection and these seam tests remain distinct from real OS confinement.
 
 Final checks of this increment: the five directly affected supervisor/logging/build/native-quality
 test files pass (**58 tests, zero skips**); the separately diagnosed macOS abstraction case above
 is not included in that scoped count. Typecheck, targeted ESLint/Prettier, MSVC `/W4 /WX /analyze`
 on the changed C fixture, PowerShell syntax, the ADR index and all four changed documentation
-files' relative links/anchors pass. The real local Sonar command was attempted through Git Bash,
-but Docker's Linux engine pipe remained unavailable after `docker desktop start --detach`;
-`docker desktop status` still reported stopped. No Sonar pass or full Windows native-quality gate
-pass is claimed. That gate also includes privileged SMB and .NET checks beyond this local run.
+files' relative links/anchors pass. The prescribed local Sonar gate passed on 2026-10-26 using
+the existing Ubuntu/WSL Docker engine, repository-pinned analyzer images, Node 24.18.0 and verified
+Compose 5.6.1. Docker Desktop's Windows-side engine remained unavailable. SonarJS does not certify
+the native C code, which has separate compiler/analyzer and process-lifecycle evidence above.
+No full Windows native-quality gate pass is claimed: that gate also includes privileged SMB and
+.NET checks beyond this local run.
 
 Concurrent work was revalidated against open PR
 [#4076](https://github.com/oscharko-dev/Keiko/pull/4076): its macOS runtime-package pin and native
