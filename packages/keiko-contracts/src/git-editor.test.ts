@@ -382,6 +382,10 @@ describe("parseGitEditorBlameResponse", () => {
 });
 
 import {
+  isGitEditorDiffScope as publicDiffScopeGuard,
+  isGitEditorDiffLayer as publicDiffLayerGuard,
+  isGitEditorDiffLineKind as publicDiffLineKindGuard,
+  isGitEditorDiffFileStatus as publicDiffFileStatusGuard,
   parseGitEditorDiffRequest as publicDiffRequest,
   parseGitEditorDiffResponse as publicDiffResponse,
   parseGitEditorBlameRequest as publicBlameRequest,
@@ -1637,32 +1641,16 @@ import {
   GIT_EDITOR_DIFF_LINE_KINDS,
   GIT_EDITOR_DIFF_FILE_STATUSES,
 } from "./git-editor.js";
-import * as publicGitEditorEnumGuards from "@oscharko-dev/keiko-contracts/runtime/git-editor";
 
 const gitEditorEnumGuardWitnesses = [
-  [
-    "scope",
-    GIT_EDITOR_DIFF_SCOPES,
-    isGitEditorDiffScope,
-    publicGitEditorEnumGuards.isGitEditorDiffScope,
-  ],
-  [
-    "layer",
-    GIT_EDITOR_DIFF_LAYERS,
-    isGitEditorDiffLayer,
-    publicGitEditorEnumGuards.isGitEditorDiffLayer,
-  ],
-  [
-    "line kind",
-    GIT_EDITOR_DIFF_LINE_KINDS,
-    isGitEditorDiffLineKind,
-    publicGitEditorEnumGuards.isGitEditorDiffLineKind,
-  ],
+  ["scope", GIT_EDITOR_DIFF_SCOPES, isGitEditorDiffScope, publicDiffScopeGuard],
+  ["layer", GIT_EDITOR_DIFF_LAYERS, isGitEditorDiffLayer, publicDiffLayerGuard],
+  ["line kind", GIT_EDITOR_DIFF_LINE_KINDS, isGitEditorDiffLineKind, publicDiffLineKindGuard],
   [
     "file status",
     GIT_EDITOR_DIFF_FILE_STATUSES,
     isGitEditorDiffFileStatus,
-    publicGitEditorEnumGuards.isGitEditorDiffFileStatus,
+    publicDiffFileStatusGuard,
   ],
 ] as const;
 
