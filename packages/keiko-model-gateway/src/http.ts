@@ -742,17 +742,41 @@ function refuseUndelegatedProxiedHostnameEgress(
 async function enforceOutboundTargetPolicy(
   target: URL,
   egress: OutboundHttpEgressConfig | undefined,
-  options: { readonly resolveDns: boolean },
+  options: { readonly resolveDns: boolean; readonly signal: AbortSignal | undefined },
 ): Promise<readonly LookupAddress[] | undefined> {
   const literalReason = outboundTargetBlockedReason(target, egress);
   if (literalReason !== undefined) throw blockedTargetError(literalReason);
   if (!options.resolveDns) return undefined;
-  const addresses = await dnsLookup(target.hostname, { all: true, verbatim: true });
+  const addresses = await boundedDnsLookup(target.hostname, options.signal);
   for (const address of addresses) {
     const reason = outboundAddressBlockedReason(address.address, egress);
     if (reason !== undefined) throw blockedTargetError(`DNS resolved to ${reason}`);
   }
   return addresses;
+}
+
+// The resolver takes no signal, so a lookup that never answers (no network, a resolver that drops
+// the query) would outlive the request's own deadline: the timeout composed into the request ends
+// the fetch, not this wait (#3907 AC10). The wait therefore ends with the request signal, with the
+// same reason a fetch reports when that signal fires. The abandoned lookup settles unobserved; the
+// race already subscribed to it, so its late failure is handled.
+async function boundedDnsLookup(
+  hostname: string,
+  signal: AbortSignal | undefined,
+): Promise<LookupAddress[]> {
+  const lookup = dnsLookup(hostname, { all: true, verbatim: true });
+  if (signal === undefined) return lookup;
+  let removeAbort = (): void => undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    removeAbort = attachAbortGuard(signal, () => {
+      reject(abortReason(signal));
+    });
+  });
+  try {
+    return await Promise.race([lookup, aborted]);
+  } finally {
+    removeAbort();
+  }
 }
 
 function proxyPort(proxy: URL): number {
@@ -1512,10 +1536,14 @@ interface GatewayDnsResolution {
 async function resolveGatewayDns(
   plan: GatewayProxyPlan,
   egress: OutboundHttpEgressConfig | undefined,
+  signal: AbortSignal | undefined,
 ): Promise<GatewayDnsResolution> {
   const dns = planGatewayDns(plan.usesRealTransport, plan.proxy, plan.doFetch, egress);
   const resolveDns = dns.pinForConnect || dns.pinForProxyConnect;
-  const vettedAddresses = await enforceOutboundTargetPolicy(plan.target, egress, { resolveDns });
+  const vettedAddresses = await enforceOutboundTargetPolicy(plan.target, egress, {
+    resolveDns,
+    signal,
+  });
   return {
     pinnedAddresses: dns.pinForConnect ? vettedAddresses : undefined,
     proxyPinnedAddress: dns.pinForProxyConnect ? requirePinnedAddress(vettedAddresses) : undefined,
@@ -1606,7 +1634,7 @@ async function performGatewayFetch(url: string, options: GatewayFetchOptions): P
   const plan = planGatewayProxy(url, fetchImpl, egress, log);
   refuseUndelegatedProxiedHostnameEgress(plan.target, plan.proxy, egress);
   refuseUnpinnableResearchEgress(plan.proxy, egress);
-  const dns = await resolveGatewayDns(plan, egress);
+  const dns = await resolveGatewayDns(plan, egress, init.signal ?? undefined);
   if (plan.proxy !== undefined) {
     const response = await fetchViaProxy(
       plan.target,

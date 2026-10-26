@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "ca2ecbb6954f7491bedc52b508d068ea3766d277ca6c184547733b4b965d5b78",
+    "catalogDigest": "a65fc918608d9f624e389d1f1fa0c665588cb9800c1c6625807dfea487f27b17",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -10704,8 +10704,8 @@
         "failureClasses": ["coding-runtime-remote-skills"],
         "proofIds": ["coding-runtime.remote-skills.admitted.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRemoteSkills.ts:418",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeRemoteSkills.ts:476"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRemoteSkills.ts:432",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeRemoteSkills.ts:490"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -27317,7 +27317,7 @@
         "proofIds": ["http.gateway.egress.planned.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-model-gateway/src/http.ts:104",
-        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1558"]
+        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1586"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -27359,7 +27359,7 @@
         "proofIds": ["http.gateway.fetch.completed.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-model-gateway/src/http.ts:170",
-        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1711"]
+        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1739"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -27407,7 +27407,7 @@
         "proofIds": ["http.gateway.fetch.failed.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-model-gateway/src/http.ts:193",
-        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1748"]
+        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1776"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -27465,7 +27465,7 @@
         "proofIds": ["http.gateway.fetch.started.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-model-gateway/src/http.ts:144",
-        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1670"]
+        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1698"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -27507,7 +27507,7 @@
         "proofIds": ["http.gateway.tls.ca-bundle-fallback.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-model-gateway/src/http.ts:81",
-        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1375"]
+        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1399"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -27554,7 +27554,7 @@
         "proofIds": ["http.gateway.tls.trust-failed.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-model-gateway/src/http.ts:53",
-        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1356"]
+        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1380"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -101447,7 +101447,7 @@
     {
       "op": "coding-runtime.remote-skills.admitted",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRemoteSkills.ts:421",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRemoteSkills.ts:435",
       "package": "keiko-server"
     },
     {

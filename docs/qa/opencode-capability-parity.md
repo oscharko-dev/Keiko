@@ -398,6 +398,30 @@ Workbench.
   native write and edit in Full access inside the Seatbelt profile, and so do the project's own
   configured formatters ([native-formatter][native-formatter], #3900 AC4).
 
+### 3.6 Network capabilities with and without a network (#3907 AC10)
+
+Each network capability works where the run may use the network and is cleanly unavailable where
+no network answers: the attempt ends within its own bound, the model or the run reads a failure,
+and the run goes on. A local model behind the Model Gateway needs no internet; the gateway itself is
+loopback for the run in every mode.
+
+| Capability                                         | With a network                                                                                     | Without one                                                                                                                                                                                                                                                                                                   | Proof                                                                    |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| Native `webfetch` (T14)                            | Full access fetches through the policy as the original tool                                        | The policy still allows; the producer reports the failure and the turn goes on. A kernel without a route fails at once (`Transport error`), packets that are dropped end at the tool's own timeout (`Request timed out`; at most 120 seconds, the test asks 2), and a name no resolver answers fails at once. | Real binary ([qualification-test][qualification-test])                   |
+| `websearch` through Keiko's provider (T15)         | Full access searches through the operator-admitted integration, bounded in time, bytes and results | The server's request ends at its 25-second deadline, including a DNS lookup no resolver answers: the lookup takes no signal, so the gateway ends the wait with the request's own timeout or cancellation. The model reads a failed search                                                                     | [http-test][http-test] ("gatewayFetch DNS lookup deadline (#3907 AC10)") |
+| Remote skill indexes (T17)                         | Admitted from the operator's indexes before launch                                                 | Each fetch ends at 10 seconds and the whole admission at 30, however many sources an unreachable network leaves silent; each is recorded as `source-failed` and the run starts with the repository's own skills                                                                                               | [remote-skills-test][remote-skills-test]                                 |
+| Mapped `keiko_research_fetch` (T14)                | One exact https URL under an operator-approved grant                                               | The same gateway request and the same lookup deadline as `websearch`                                                                                                                                                                                                                                          | [http-test][http-test]                                                   |
+| Package installs and formatter installs (T11, C07) | Full access reaches the project's registry as standalone does                                      | Below Full access the package manager is offline and fails at once (`ENOTCACHED`). A Full access install without a network is the package manager's own retry and timeout; it is not exercised here                                                                                                           | [qualification][qualification], [formatter-test][formatter-test]         |
+
+Three capabilities have no network path in a Keiko run, so a disconnected deployment loses
+nothing: session sharing (S05; 2.1.4 offers no share operation and Keiko sets
+`share: "disabled"`), language-server downloads (T20; the 2.1.4 executable holds no language-server
+client) and npm plugins (C05; the operator installs the package and registers its digest, Keiko
+copies the tree before launch, and `opencode plugin add` stays refused). Remote MCP servers and
+their OAuth (C04) are admitted only from the operator's registry; how a run behaves when an
+admitted remote server cannot be reached is not yet exercised and belongs to the connected and
+disconnected proof run of #3907 AC10.
+
 ## 4. Keiko capabilities without a native counterpart
 
 On both profiles:
@@ -1476,6 +1500,8 @@ names are the stable facts. The opt-in real-binary suites run with `KEIKO_OPENCO
 [operator-plugins]: ../../packages/keiko-server/src/coding-runtime/opencodeOperatorPlugins.ts
 [mcp-oauth-issuer]: ../../packages/keiko-server/src/mcp/mcpOAuthIssuer.ts
 [remote-skills]: ../../packages/keiko-server/src/coding-runtime/opencodeRemoteSkills.ts
+[remote-skills-test]: ../../packages/keiko-server/src/coding-runtime/opencodeRemoteSkills.test.ts
+[http-test]: ../../packages/keiko-model-gateway/src/http.test.ts
 [mcp-oauth-authorization]: ../../packages/keiko-server/src/coding-runtime/opencodeNativeMcpAuthorization.ts
 [repository-config]: ../../packages/keiko-server/src/coding-runtime/codingRuntimeRepositoryConfig.ts
 [research-grants]: ../../packages/keiko-server/src/coding-runtime/researchApprovalIssuance.ts

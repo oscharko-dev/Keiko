@@ -18,6 +18,7 @@ import {
   connectResponseHeaderExceedsLimit,
   gatewayTrustedCaCertificates,
   gatewayFetch,
+  type GatewayFetchOptions,
   httpsProxyTunnelKey,
   isMissingIssuerError,
   isRecoverableTlsTrustError,
@@ -686,6 +687,38 @@ describe("gatewayFetch", () => {
 // vi.doMock, same pattern as capabilities.test.ts) so the production dnsLookup call inside
 // enforceOutboundTargetPolicy is fully controlled, without disturbing the real-DNS-dependent
 // tests elsewhere in this file, which keep using the statically-imported gatewayFetch.
+
+// #3907 AC10: the resolver takes no signal, so a machine without a network (or a resolver that drops
+// the query) must not hold a request past its own deadline or its caller's cancellation.
+describe("gatewayFetch DNS lookup deadline (#3907 AC10)", () => {
+  it.each([
+    ["its own timeout", (): GatewayFetchOptions => ({ timeoutMs: 50 }), "TimeoutError"],
+    [
+      "its caller's cancellation",
+      (): GatewayFetchOptions => ({ signal: AbortSignal.timeout(50) }),
+      "TimeoutError",
+    ],
+    [
+      "an already cancelled caller",
+      (): GatewayFetchOptions => ({ signal: AbortSignal.abort() }),
+      "AbortError",
+    ],
+  ])("ends a lookup no resolver answers with %s", async (_case, options, name) => {
+    vi.resetModules();
+    const lookup = vi.fn(() => new Promise<never>(() => undefined));
+    vi.doMock("node:dns/promises", () => ({ lookup }));
+    try {
+      const { gatewayFetch: boundedGatewayFetch } = await import("./http.js");
+      await expect(
+        boundedGatewayFetch("http://silent-resolver.invalid/notes.txt", options()),
+      ).rejects.toMatchObject({ name });
+      expect(lookup).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.doUnmock("node:dns/promises");
+      vi.resetModules();
+    }
+  });
+});
 
 describe("gatewayFetch DNS-rebinding pinning (AUDIT-SEC-001)", () => {
   it("connects using the policy-validated address instead of re-resolving DNS at connect time", async () => {

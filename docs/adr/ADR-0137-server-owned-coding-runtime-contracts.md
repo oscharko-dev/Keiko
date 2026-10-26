@@ -1492,7 +1492,12 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   through the repository skill sanitizer, and writes at most 16 copies to the private `skill/`
   discovery directory beside the repository's `skills/`, where the producer's own `skill` tool lists
   and loads them; sibling files are never copied and a repository skill keeps its name. Each prepare
-  first removes the previous pull. Evidence: `coding-runtime.remote-skills.admitted` (a registry
+  first removes the previous pull. Each fetch ends at 10 seconds and one admission, every source
+  together, at 30, so a run never waits longer for an unreachable network; a source that does not
+  answer is `source-failed` and the run starts with the repository's own skills (#3907 AC10). The
+  gateway request ends a DNS lookup no resolver answers with the request's own deadline or
+  cancellation, because the resolver itself takes no signal.
+  Evidence: `coding-runtime.remote-skills.admitted` (a registry
   line or one line per source with counts, closed refusal reasons and SHA-256 digests of the source
   and of the copies; never a URL, a name or a body). The staged 2.1.4 executable lists a pulled
   skill beside the repository's own, sanitized, and pulls nothing itself.
