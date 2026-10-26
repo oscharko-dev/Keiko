@@ -6,8 +6,9 @@
 import {
   codingRuntimeJourneyManagedWorkspaceRoot,
   codingRuntimeJourneyRepositoryRoot,
-  codingRuntimeJourneyStateDir,
+  codingRuntimeJourneyStateId,
 } from "./coding-runtime-journey-state.js";
+import { e2eStateDir } from "./e2e-state-dir.js";
 
 export const TRACER_DEFAULT_UI_PORT = 32485;
 
@@ -25,7 +26,7 @@ export const TRACER_EDITED_CONTENT = "export const value = 'NEW_TRACER_2385';\n"
 export const TRACER_TARGET_RELATIVE_PATH = "src/example.ts";
 
 export function tracerStateDir(): string {
-  return codingRuntimeJourneyStateDir("code-task-opencode-tracer");
+  return e2eStateDir(codingRuntimeJourneyStateId("code-task-opencode-tracer"));
 }
 
 export const tracerRepositoryRoot = codingRuntimeJourneyRepositoryRoot;

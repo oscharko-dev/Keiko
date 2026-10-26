@@ -8,8 +8,9 @@ import { join } from "node:path";
 import {
   codingRuntimeJourneyManagedWorkspaceRoot,
   codingRuntimeJourneyRepositoryRoot,
-  codingRuntimeJourneyStateDir,
+  codingRuntimeJourneyStateId,
 } from "./coding-runtime-journey-state.js";
+import { e2eStateDir } from "./e2e-state-dir.js";
 
 export const RESEARCH_DEFAULT_UI_PORT = 32487;
 export const RESEARCH_APP_SESSION_LAUNCHER_SECRET =
@@ -25,7 +26,7 @@ export const RESEARCH_JOURNEY_HOST = "docs.example.org";
 export const RESEARCH_JOURNEY_REQUEST_LINE = "/guide/streams topic=backpressure";
 
 export function researchStateDir(): string {
-  return codingRuntimeJourneyStateDir("code-task-2387-research");
+  return e2eStateDir(codingRuntimeJourneyStateId("code-task-2387-research"));
 }
 
 export const researchRepositoryRoot = codingRuntimeJourneyRepositoryRoot;

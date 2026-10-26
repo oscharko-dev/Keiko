@@ -8,8 +8,9 @@
 import {
   codingRuntimeJourneyManagedWorkspaceRoot,
   codingRuntimeJourneyRepositoryRoot,
-  codingRuntimeJourneyStateDir,
+  codingRuntimeJourneyStateId,
 } from "./coding-runtime-journey-state.js";
+import { e2eStateDir } from "./e2e-state-dir.js";
 
 export const AUTHORITY_DEFAULT_UI_PORT = 32486;
 
@@ -27,7 +28,7 @@ export const AUTHORITY_EDITED_CONTENT = "export const value = 'NEW_AUTHORITY_238
 export const AUTHORITY_TARGET_RELATIVE_PATH = "src/example.ts";
 
 export function authorityStateDir(): string {
-  return codingRuntimeJourneyStateDir("code-task-2386-authority");
+  return e2eStateDir(codingRuntimeJourneyStateId("code-task-2386-authority"));
 }
 
 export const authorityRepositoryRoot = codingRuntimeJourneyRepositoryRoot;

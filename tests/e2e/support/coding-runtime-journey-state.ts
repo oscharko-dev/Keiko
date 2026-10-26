@@ -5,13 +5,13 @@
 // channel. Each journey keeps its own state id and loopback port, which keeps them isolated.
 
 import { join } from "node:path";
-import { e2eStateDir } from "./e2e-state-dir.js";
 
 // Deterministic (pid-free) state id: the config, the webServer entry, and the workers each
-// re-derive the identical directory. The config's prepare step wipes it before every boot.
-export function codingRuntimeJourneyStateDir(stateId: string): string {
+// re-derive the identical directory through `e2eStateDir`. The config's prepare step wipes it
+// before every boot.
+export function codingRuntimeJourneyStateId(stateId: string): string {
   const runId = process.env.GITHUB_RUN_ID;
-  return e2eStateDir(runId === undefined || runId.length === 0 ? stateId : `${stateId}-${runId}`);
+  return runId === undefined || runId.length === 0 ? stateId : `${stateId}-${runId}`;
 }
 
 // The local git checkout the journey binds through the Coding Workbench "Code setup" section.
