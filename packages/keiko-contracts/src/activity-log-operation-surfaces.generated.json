@@ -10,6 +10,7 @@
   "activity-log.segment.recovered": "lifecycle-crash",
   "activity-log.segment.sealed": "lifecycle-crash",
   "activity-log.writer-rejected": "lifecycle-crash",
+  "atlassian.connection.checked": "bff",
   "atlassian.credential.created": "bff",
   "atlassian.credential.rejected": "bff",
   "chat.compaction.facts.classified": "bff",

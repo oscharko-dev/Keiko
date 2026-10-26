@@ -15,8 +15,8 @@
 import { bffFetchJson } from "./http";
 import type {
   AtlassianConnectionVerificationStatus,
-  AtlassianConnectorProvider,
-  AtlassianConnectorAuthScheme,
+  AtlassianCredentialMetadata,
+  AtlassianCredentialCreateRequest,
   AtlassianConnectorActionExecutionResult,
   AtlassianConnectorActivityRecord,
   AtlassianConnectorActivityReasonCode,
@@ -25,7 +25,6 @@ import type {
   AtlassianSyncJobState,
   JiraLiveSearchResult,
 } from "@oscharko-dev/keiko-contracts";
-import { ATLASSIAN_CONNECTOR_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 
 // ---------------------------------------------------------------------------
 // UI-local wire shapes (no contract equivalent; enums come from keiko-contracts)
@@ -44,15 +43,7 @@ export { isAtlassianConnectionVerificationStatus as isAtlassianConnectorVerifySt
 // The non-secret credential metadata projection every credentials route answers (ADR-0128 D2). It
 // carries no field that could hold the token; `authRef` is the opaque vault handle and `createdAt`
 // is the epoch-ms registration time surfaced in the connector list.
-export interface AtlassianConnectorMetadata {
-  readonly schemaVersion: typeof ATLASSIAN_CONNECTOR_SCHEMA_VERSION;
-  readonly authRef: string;
-  readonly provider: AtlassianConnectorProvider;
-  readonly displayName: string;
-  readonly baseUrl: string;
-  readonly authScheme: AtlassianConnectorAuthScheme;
-  readonly createdAt: number;
-}
+export type AtlassianConnectorMetadata = AtlassianCredentialMetadata;
 
 // ---------------------------------------------------------------------------
 // Request/response envelopes
@@ -60,13 +51,13 @@ export interface AtlassianConnectorMetadata {
 
 // The create request is the ONLY hop the token makes. `apiToken` is write-only: it is not part of
 // any response type below, so a caller cannot round-trip it back into client state.
-export interface CreateAtlassianConnectorInput {
-  readonly provider: AtlassianConnectorProvider;
-  readonly displayName: string;
-  readonly baseUrl: string;
-  readonly accountEmail: string;
-  readonly apiToken: string;
-}
+// Preserve callers of the original Cloud form while the wire always specifies its scheme.
+export type CreateAtlassianConnectorInput =
+  | AtlassianCredentialCreateRequest
+  | Omit<
+      Extract<AtlassianCredentialCreateRequest, { authScheme: "basic-api-token" }>,
+      "authScheme"
+    >;
 
 export interface VerifyAtlassianConnectorResult {
   readonly authRef: string;
@@ -149,7 +140,10 @@ export async function createAtlassianConnector(
 ): Promise<AtlassianConnectorMetadata> {
   return fetchJson<AtlassianConnectorMetadata>(CREDENTIALS_PATH, {
     method: "POST",
-    body: JSON.stringify({ ...input, authScheme: "basic-api-token" }),
+    body: JSON.stringify({
+      ...input,
+      authScheme: "authScheme" in input ? input.authScheme : "basic-api-token",
+    }),
   });
 }
 

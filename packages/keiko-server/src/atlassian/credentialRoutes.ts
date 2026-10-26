@@ -22,6 +22,7 @@ import type { IncomingMessage } from "node:http";
 import {
   AtlassianCredentialCustodyError,
   verifyAtlassianConnection,
+  verifyJiraDataCenterConnection,
   type AtlassianCredentialCustody,
   type AtlassianCredentialMetadata,
   type AtlassianHttpBodyPort,
@@ -42,7 +43,7 @@ import {
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
-import { recordCredentialCreated } from "./credentialActivity.js";
+import { recordCredentialCreated, recordConnectionCheck } from "./credentialActivity.js";
 
 const MAX_CREDENTIAL_BODY_BYTES = 16_000;
 
@@ -379,13 +380,20 @@ export function handleVerifyAtlassianConnectorCredential(
     const authRef = decodeAuthRefParam(ctx);
     const metadata = authRef === undefined ? undefined : guard.custody.getMetadata(authRef);
     if (metadata === undefined) return credentialNotFound(ctx.correlationId);
-    const status = await verifyAtlassianConnection(
-      guard.httpPortFactory(metadata, ctx.correlationId ?? UNKNOWN_CORRELATION_ID),
-      {
-        provider: metadata.provider,
-        baseUrl: metadata.baseUrl,
-      },
-    );
+    const status =
+      metadata.deployment === "data-center"
+        ? await verifyJiraDataCenterConnection(
+            guard.httpBodyPortFactory(metadata, ctx.correlationId ?? UNKNOWN_CORRELATION_ID),
+            metadata.baseUrl,
+          )
+        : await verifyAtlassianConnection(
+            guard.httpPortFactory(metadata, ctx.correlationId ?? UNKNOWN_CORRELATION_ID),
+            {
+              provider: metadata.provider,
+              baseUrl: metadata.baseUrl,
+            },
+          );
+    recordConnectionCheck(guard, ctx.correlationId ?? UNKNOWN_CORRELATION_ID, status);
     return { status: 200, body: { authRef: metadata.authRef, status } };
   });
 }

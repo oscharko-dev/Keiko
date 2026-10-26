@@ -44,6 +44,10 @@ const VERIFY_LABEL: Readonly<Record<AtlassianConnectorVerifyStatus, MessageKey>>
   forbidden: "atlassianConnectors.verify.forbidden.label",
   unreachable: "atlassianConnectors.verify.unreachable.label",
   timeout: "atlassianConnectors.verify.timeout.label",
+  "redirect-refused": "atlassianConnectors.verify.redirect-refused.label",
+  "invalid-response": "atlassianConnectors.verify.invalid-response.label",
+  "unsupported-version": "atlassianConnectors.verify.unsupported-version.label",
+  "tls-failed": "atlassianConnectors.verify.tls-failed.label",
 };
 
 const VERIFY_COPY: Readonly<Record<AtlassianConnectorVerifyStatus, MessageKey>> = {
@@ -52,6 +56,10 @@ const VERIFY_COPY: Readonly<Record<AtlassianConnectorVerifyStatus, MessageKey>> 
   forbidden: "atlassianConnectors.verify.forbidden.copy",
   unreachable: "atlassianConnectors.verify.unreachable.copy",
   timeout: "atlassianConnectors.verify.timeout.copy",
+  "redirect-refused": "atlassianConnectors.verify.redirect-refused.copy",
+  "invalid-response": "atlassianConnectors.verify.invalid-response.copy",
+  "unsupported-version": "atlassianConnectors.verify.unsupported-version.copy",
+  "tls-failed": "atlassianConnectors.verify.tls-failed.copy",
 };
 
 const VERIFY_TONE: Readonly<Record<AtlassianConnectorVerifyStatus, ConnectorTone>> = {
@@ -60,6 +68,10 @@ const VERIFY_TONE: Readonly<Record<AtlassianConnectorVerifyStatus, ConnectorTone
   forbidden: "danger",
   unreachable: "warning",
   timeout: "warning",
+  "redirect-refused": "danger",
+  "invalid-response": "danger",
+  "unsupported-version": "danger",
+  "tls-failed": "danger",
 };
 
 export function verifyStatusLabelKey(status: AtlassianConnectorVerifyStatus): MessageKey {

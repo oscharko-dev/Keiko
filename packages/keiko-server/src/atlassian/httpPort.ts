@@ -33,6 +33,7 @@ import { isSafeAtlassianConnectorBaseUrl } from "@oscharko-dev/keiko-contracts/r
 import {
   classifyOutboundHost,
   gatewayFetch,
+  isRecoverableTlsTrustError,
   type OutboundHttpEgressConfig,
 } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
@@ -212,11 +213,34 @@ function assertAllowlistedTarget(base: URL, requestUrl: string): URL {
 // error text is deliberately dropped so no upstream detail can ride into diagnostics or wire
 // responses. The narrow return union is assignable to both port result unions (body-less and
 // bounded-body).
-function classifyTransportError(error: unknown): { kind: "timeout" } | { kind: "network-error" } {
+function classifyTransportError(
+  error: unknown,
+): { kind: "timeout" } | { kind: "network-error"; reason?: "tls" } {
   if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
     return { kind: "timeout" };
   }
+  if (isRecoverableTlsTrustError(error) || isTerminalTlsError(error)) {
+    return { kind: "network-error", reason: "tls" };
+  }
   return { kind: "network-error" };
+}
+
+const TERMINAL_TLS_CODES: ReadonlySet<string> = new Set([
+  "TLS_CA_FAILURE",
+  "CERT_HAS_EXPIRED",
+  "CERT_NOT_YET_VALID",
+  "ERR_TLS_CERT_ALTNAME_INVALID",
+]);
+
+function isTerminalTlsError(error: unknown): boolean {
+  let current = error;
+  for (let depth = 0; depth < 4; depth += 1) {
+    if (typeof current !== "object" || current === null) return false;
+    const record = current as Record<string, unknown>;
+    if (typeof record.code === "string" && TERMINAL_TLS_CODES.has(record.code)) return true;
+    current = record.cause;
+  }
+  return false;
 }
 
 // Best-effort body drain: the custody lane never reads response content, but the stream must be

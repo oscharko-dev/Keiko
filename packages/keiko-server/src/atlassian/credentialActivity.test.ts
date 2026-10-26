@@ -6,7 +6,7 @@ import {
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
-import { recordCredentialCreated } from "./credentialActivity.js";
+import { recordCredentialCreated, recordConnectionCheck } from "./credentialActivity.js";
 
 const metadata: AtlassianCredentialMetadata = {
   schemaVersion: "1",
@@ -19,6 +19,35 @@ const metadata: AtlassianCredentialMetadata = {
 };
 
 describe("credential creation activity", () => {
+  it.each(["ok", "auth-failed", "invalid-response", "tls-failed", "sync-unsupported"] as const)(
+    "records the closed connection outcome %s",
+    (result) => {
+      let event: ServerLogEvent | undefined;
+      recordConnectionCheck(
+        {
+          activityLog: {
+            write: (value): void => {
+              event = value;
+            },
+          },
+        },
+        "connection-check-fixture",
+        result,
+      );
+      assert(event !== undefined);
+      const proof = expectActivityLogProof(
+        "atlassian.connection.checked.line",
+        formatActivityLogProofLine(event),
+      );
+      expect(proof).toMatchObject({
+        correlationId: "connection-check-fixture",
+        outcome: result,
+        action: result === "sync-unsupported" ? "sync" : "verify",
+        completeness: "complete",
+        loss: "none",
+      });
+    },
+  );
   it("records the committed outcome without credential identity or content", () => {
     let event: ServerLogEvent | undefined;
     recordCredentialCreated(

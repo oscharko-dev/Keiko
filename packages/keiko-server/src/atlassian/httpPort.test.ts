@@ -179,6 +179,28 @@ describe("createGatewayAtlassianHttpPort", () => {
     expect(JSON.stringify(result)).not.toContain(SYNTHETIC_TOKEN);
   });
 
+  it.each(["CERT_HAS_EXPIRED", "ERR_TLS_CERT_ALTNAME_INVALID", "TLS_CA_FAILURE"])(
+    "classifies %s without exposing certificate or endpoint data",
+    async (code) => {
+      const fetchImpl = (): Promise<Response> =>
+        Promise.reject(
+          new TypeError("synthetic transport failure", {
+            cause: Object.assign(new Error("synthetic certificate"), { code }),
+          }),
+        );
+      const result = await bodyPort(
+        fetchImpl,
+        resolver(),
+      )({
+        method: "GET",
+        url: "https://acme.example/rest/api/2/serverInfo",
+        timeoutMs: 100,
+        maxBodyBytes: 65536,
+      });
+      expect(result).toEqual({ kind: "network-error", reason: "tls" });
+    },
+  );
+
   it("clamps a hostile timeout budget instead of honoring it", async () => {
     const credentials = resolver();
     const { fetchImpl } = fetchFake(200);

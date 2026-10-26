@@ -14,6 +14,8 @@ import { atlassianCredentialStorePath } from "../packages/keiko-server/src/atlas
 import {
   createAtlassianConnector,
   listAtlassianConnectors,
+  verifyAtlassianConnector,
+  startAtlassianConnectorSync,
 } from "../packages/keiko-ui/src/lib/atlassian-connectors-api.js";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import { responseCorrelationIdOf } from "../packages/keiko-ui/src/lib/bff-correlation.js";
@@ -27,6 +29,16 @@ let configDir: string;
 let configPath: string;
 let close: (() => Promise<void>) | undefined;
 let events: ServerLogEvent[];
+let responses: Response[];
+let outbound: { url: string; authorization: string | null }[];
+
+function fixtureFetch(input: Parameters<typeof fetch>[0], init?: RequestInit): Promise<Response> {
+  outbound.push({
+    url: input instanceof Request ? input.url : String(input),
+    authorization: new Headers(init?.headers).get("authorization"),
+  });
+  return Promise.resolve(responses.shift() ?? new Response("", { status: 503 }));
+}
 
 function dependencies(): UiHandlerDeps {
   return {
@@ -42,6 +54,7 @@ function dependencies(): UiHandlerDeps {
       configPath,
       env: { KEIKO_ATLASSIAN_CONNECTOR_CREDENTIALS_KEY: randomBytes(32).toString("base64") },
       egress: () => undefined,
+      fetchImpl: fixtureFetch,
       activityLog: {
         write: (event): void => {
           events.push(event);
@@ -53,6 +66,8 @@ function dependencies(): UiHandlerDeps {
 
 beforeEach(async () => {
   events = [];
+  responses = [];
+  outbound = [];
   configDir = await mkdtemp(join(realpathSync(tmpdir()), "keiko-jira-client-"));
   configPath = join(configDir, "keiko.config.json");
   let port = 0;
@@ -94,6 +109,47 @@ afterEach(async () => {
 });
 
 describe("Atlassian browser client through the real credential route (#4082)", () => {
+  it("creates a Data Center PAT credential without an account email", async () => {
+    const metadata = await createAtlassianConnector({
+      provider: "jira",
+      deployment: "data-center",
+      authScheme: "bearer-pat",
+      displayName: "Synthetic Data Center",
+      baseUrl: "https://jira.example/context",
+      apiToken: syntheticToken(),
+    });
+    expect(metadata).toMatchObject({
+      deployment: "data-center",
+      authScheme: "bearer-pat",
+      generation: 1,
+    });
+    expect(await listAtlassianConnectors()).toEqual([metadata]);
+    expect(JSON.stringify(metadata)).not.toContain(syntheticToken());
+    expect(await readFile(atlassianCredentialStorePath(configPath), "utf8")).not.toContain(
+      syntheticToken(),
+    );
+    responses.push(
+      Response.json({ version: "10.3.26", versionNumbers: [10, 3, 26], deploymentType: "Server" }),
+      Response.json({ name: "fixture-user", key: "fixture-key", active: true }),
+    );
+    expect(await verifyAtlassianConnector(metadata.authRef)).toMatchObject({ status: "ok" });
+    expect(outbound.map((request) => request.url)).toEqual([
+      "https://jira.example/context/rest/api/2/serverInfo",
+      "https://jira.example/context/rest/api/2/myself",
+    ]);
+    expect(
+      outbound.every((request) => request.authorization === `Bearer ${syntheticToken()}`),
+    ).toBe(true);
+    await expect(
+      startAtlassianConnectorSync(metadata.authRef, { projectKeys: ["FIXTURE"] }),
+    ).rejects.toMatchObject({ code: "SYNC_UNSUPPORTED_DEPLOYMENT" });
+    expect(outbound).toHaveLength(2);
+    const checked = events.filter((event) => event.op === "atlassian.connection.checked");
+    expect(checked).toHaveLength(2);
+    expect(JSON.stringify(checked)).not.toContain(syntheticToken());
+    expect(JSON.stringify(checked)).not.toContain("jira.example");
+  });
+
   it("creates a Cloud credential with the form's actual request and keeps its secret private", async () => {
     const metadata = await createAtlassianConnector({
       provider: "jira",

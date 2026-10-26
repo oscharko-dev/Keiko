@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "d187e3c3d9663b2be0b0d8597c185a8185c5de2c1d6e4acc4b5f05f95546e639"
+    "catalogDigest": "614847cbe4687b6ccf9c8139d838ac19c77c1e32ee83881d4474e21c2b395575"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -59,9 +59,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 591,
-    "proofCount": 604,
-    "resolvedProofCount": 604,
+    "operationCount": 592,
+    "proofCount": 605,
+    "resolvedProofCount": 605,
     "failureClassCount": 370,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -91,6 +91,7 @@
       "owners": ["keiko-server"],
       "ports": ["ServerLogSink"],
       "operations": [
+        "atlassian.connection.checked",
         "atlassian.credential.created",
         "atlassian.credential.rejected",
         "chat.compaction.facts.classified",
@@ -1184,6 +1185,9 @@
     ],
     "server-log.writer-ownership-rejected.registered-line": [
       "packages/keiko-activity-log/src/server-log.writer-ownership.test.ts"
+    ],
+    "atlassian.connection.checked.line": [
+      "packages/keiko-server/src/atlassian/credentialActivity.test.ts"
     ],
     "atlassian.credential.created.line": [
       "packages/keiko-server/src/atlassian/credentialActivity.test.ts"

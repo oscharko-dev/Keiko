@@ -1536,11 +1536,15 @@
       "lifecycleOperations": {
         "start": [],
         "state": [],
-        "end": ["atlassian.credential.created"],
+        "end": ["atlassian.connection.checked", "atlassian.credential.created"],
         "failure": ["atlassian.credential.rejected"],
         "loss": []
       },
       "causalEdges": [
+        {
+          "op": "atlassian.connection.checked",
+          "mode": "correlation"
+        },
         {
           "op": "atlassian.credential.created",
           "mode": "correlation"
@@ -1551,9 +1555,39 @@
         }
       ],
       "lossSignals": [],
-      "resourceSignals": ["atlassian.credential.created"],
+      "resourceSignals": ["atlassian.connection.checked", "atlassian.credential.created"],
       "replayReferences": [],
       "operations": [
+        {
+          "op": "atlassian.connection.checked",
+          "owner": "keiko-server",
+          "category": "setup",
+          "lifecycle": "end",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "action",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["atlassian.connection.checked.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
         {
           "op": "atlassian.credential.created",
           "owner": "keiko-server",

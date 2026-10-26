@@ -306,3 +306,38 @@ Targeted local results on the initial implementation diff, 2026-10-26:
 
 These focused results do not substitute for final current-head gates, real-model
 qualification or settled reviews. All 55 complete acceptance criteria remain open.
+
+### Data Center custody and verification increment (#4082 AC1/2/4/6, partial)
+
+Shared contracts now distinguish Cloud Basic from explicitly selected Jira Data Center
+PAT connections. Legacy Cloud metadata and vault envelopes retain their original shape.
+Data Center metadata starts at generation 1. The token is materialized as a Bearer header
+only in the existing outbound adapter. Generation changes and invalidation are still pending.
+
+The new Data Center creation tests failed before this increment (unsupported scheme and
+rejected UI request) and pass afterwards. The real UI client/HTTP route/custody/vault test
+also traverses the actual outbound adapter with synthetic fetch responses: REST-v2 version
+and active identity checks preserve the context path, and sync is refused without an extra
+outbound request. This is deterministic composition evidence, not a real Jira-lab result.
+
+Verification reads at most 64 KiB per response and shares one 30-second deadline across
+`serverInfo` and `myself`. Only Jira Data Center 10.3.26 is admitted. Redirect, invalid/HTML,
+authentication, permission, unsupported-version, TLS and network outcomes are closed;
+English/German presentation is included. `atlassian.connection.checked` records only the
+action and outcome with correlation and completeness/loss markers. An initial proof exposed
+redaction of the generic field name `result`; the producer now uses the permitted closed
+`outcome` field, leaving the security redactor unchanged.
+
+Targeted results on this increment, 2026-10-26:
+
+- Package build and UI TypeScript check passed.
+- Nine affected connector/server/client suites: **178 passed**.
+- UI API and status-label suites: **15 passed**.
+- Changed-source/test ESLint, formatting and `git diff --check` passed.
+- Operation generation: **605/605** resolved proofs, zero registry/inventory violations.
+
+Still pending: exact operator-configured private target admission, lifecycle invalidation,
+real HTTPS lab and real-model qualification, complete epic implementation and final gates.
+The message catalogs changed; updater UI evidence must be regenerated through its original
+producer before final acceptance. Public-contract/export changes still require final package
+surface qualification. These pending checks are not represented as passing.

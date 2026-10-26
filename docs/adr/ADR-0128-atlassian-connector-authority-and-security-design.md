@@ -160,9 +160,11 @@ dependency for the connector's own domain logic, which never imports it.
 
 **Auth scheme is a closed enum, not a fork:** `AtlassianConnectorAuthScheme = "basic-api-token" |
 "bearer-pat"`. Cloud connectors use `basic-api-token`
-(`Authorization: Basic base64(email:api_token)`); `bearer-pat` is reserved for the Data Center
-follow-up (`Authorization: Bearer <PAT>`, D7) and is declared now so the credential shape never
-needs a breaking change when that follow-up lands. No implementation ships for `bearer-pat` in v1.
+(`Authorization: Basic base64(email:api_token)`). The additive Jira Data Center variant
+uses `Authorization: Bearer <PAT>` and requires explicit `deployment: data-center` with
+`provider: jira`; it has no account-email field. Absent deployment on legacy metadata
+continues to mean Cloud. Both variants use the same custody, encrypted vault and execution-only
+resolver. Data Center metadata starts at credential generation 1 (#4082).
 
 **Storage construction (fixed, no alternative left open for the implementing child):** a new,
 dedicated instance of the existing `@oscharko-dev/keiko-security/secret-vault` primitives —
@@ -435,15 +437,17 @@ that leaks synced bodies); this record keeps them structurally separate, mirrori
 `editor-agent-governance.ts`'s bounded audit record is content-free while the actual file content it
 describes is not redacted at the workspace layer.
 
-### D7 — v1 platform: Atlassian Cloud REST, with named follow-ups
+### D7 — Qualified platforms and named follow-ups
 
-v1 targets Atlassian Cloud REST APIs only, against a configurable, per-connector base URL validated
-per D3. The following are explicitly deferred, each with the reason it is not v1:
+Cloud REST behavior remains supported. Epic #4081 adds a bounded Jira Data Center 10.3.26
+REST-v2/PAT connection path. Version and active identity are verified with bounded `serverInfo`
+and `myself` JSON reads under one deadline; HTML, redirects, authentication, permission, version,
+TLS and network failures have closed outcomes. Context paths are preserved. This implementation
+is not a qualification claim: real lab and model acceptance is recorded in
+[the epic evidence matrix](../qa/jira-chat-pods-4081.md). Other Data Center versions and
+Confluence Data Center remain unsupported. The existing sync lane remains Cloud-only.
 
-- **Data Center compatibility.** Different base-path conventions, more commonly self-signed/private
-  CAs (already covered by D3's CA composition, but unverified against a real Data Center instance),
-  and the `bearer-pat` auth scheme (declared in D2, unimplemented). Deferred because it requires
-  access to a Data Center instance to verify, which this issue does not have.
+The following capabilities remain deferred:
 - **OAuth 2.0 (3LO).** API-token Basic auth is sufficient for a single local user's own credential
   and requires no redirect-based consent flow, browser round-trip, or refresh-token custody. OAuth
   is deferred until multi-user or app-marketplace distribution creates an actual need for it.
@@ -519,9 +523,8 @@ and distribution accordingly.
   additive table row under this same ADR's D4 pattern, not a new ADR, unless it also changes the
   credential, egress, or package-boundary decisions (D1-D3), in which case it would need its own
   record referencing this one.
-- `bearer-pat` exists in the auth-scheme enum today with no implementation, matching the standard
-  "declare the shape, implement the follow-up separately" pattern already used for
-  `CodingWorkbenchModelSource`'s subscription-profile values before their runtimes shipped.
+- `bearer-pat` is implemented for explicitly selected Jira Data Center connections; existing
+  Cloud credential envelopes and metadata remain readable without rewriting their stored shape.
 
 ## Alternatives Considered
 

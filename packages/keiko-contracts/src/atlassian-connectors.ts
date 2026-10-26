@@ -45,10 +45,59 @@ export const ATLASSIAN_CONNECTOR_PROVIDERS: readonly AtlassianConnectorProvider[
   "jira",
 ] as const satisfies readonly AtlassianConnectorProvider[]);
 
-// `basic-api-token` is the only implemented v1 scheme (Atlassian Cloud). `bearer-pat` is declared
-// now for the Data Center follow-up (ADR-0128 D7) so the credential shape never needs a breaking
-// change; no runtime ships for it in v1.
+// Cloud uses Basic API tokens; Jira Data Center uses an explicitly selected Bearer PAT variant.
 export type AtlassianConnectorAuthScheme = "basic-api-token" | "bearer-pat";
+
+export type AtlassianConnectorDeployment = "cloud" | "data-center";
+
+interface AtlassianCredentialMetadataBase {
+  readonly schemaVersion: typeof ATLASSIAN_CONNECTOR_SCHEMA_VERSION;
+  readonly authRef: string;
+  readonly displayName: string;
+  readonly baseUrl: string;
+  readonly createdAt: number;
+  /** Legacy Cloud records without this field have generation 1. */
+  readonly generation?: number;
+}
+
+/** A secret-free projection. An absent legacy deployment always means Cloud. */
+export type AtlassianCredentialMetadata = AtlassianCredentialMetadataBase &
+  (
+    | {
+        readonly provider: AtlassianConnectorProvider;
+        readonly deployment?: "cloud";
+        readonly authScheme: "basic-api-token";
+      }
+    | {
+        readonly provider: "jira";
+        readonly deployment: "data-center";
+        readonly authScheme: "bearer-pat";
+        readonly generation: number;
+      }
+  );
+
+interface AtlassianCredentialCreateBase {
+  readonly displayName: string;
+  readonly baseUrl: string;
+  /** Write-only, accepted by custody and never returned by a metadata projection. */
+  readonly apiToken: string;
+}
+
+export type AtlassianCredentialCreateRequest = AtlassianCredentialCreateBase &
+  (
+    | {
+        readonly provider: AtlassianConnectorProvider;
+        readonly deployment?: "cloud";
+        readonly authScheme: "basic-api-token";
+        readonly accountEmail: string;
+      }
+    | {
+        readonly provider: "jira";
+        readonly deployment: "data-center";
+        readonly authScheme: "bearer-pat";
+        readonly accountEmail?: never;
+      }
+  );
 
 export const ATLASSIAN_CONNECTOR_AUTH_SCHEMES: readonly AtlassianConnectorAuthScheme[] =
   Object.freeze([
@@ -61,7 +110,15 @@ export const ATLASSIAN_CONNECTOR_AUTH_SCHEMES: readonly AtlassianConnectorAuthSc
 // surface renders exactly these actionable states — never a raw provider error. Defined in this
 // leaf so both the server package and the UI share one source of truth (no re-declaration).
 export type AtlassianConnectionVerificationStatus =
-  "ok" | "auth-failed" | "forbidden" | "unreachable" | "timeout";
+  | "ok"
+  | "auth-failed"
+  | "forbidden"
+  | "unreachable"
+  | "timeout"
+  | "redirect-refused"
+  | "invalid-response"
+  | "unsupported-version"
+  | "tls-failed";
 
 export const ATLASSIAN_CONNECTION_VERIFICATION_STATUSES: readonly AtlassianConnectionVerificationStatus[] =
   Object.freeze([
@@ -70,6 +127,10 @@ export const ATLASSIAN_CONNECTION_VERIFICATION_STATUSES: readonly AtlassianConne
     "forbidden",
     "unreachable",
     "timeout",
+    "redirect-refused",
+    "invalid-response",
+    "unsupported-version",
+    "tls-failed",
   ] as const satisfies readonly AtlassianConnectionVerificationStatus[]);
 
 export function isAtlassianConnectionVerificationStatus(

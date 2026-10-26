@@ -2677,6 +2677,18 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "atlassianConnectors.verify.timeout.label": "Zeitüberschreitung der Verbindung",
   "atlassianConnectors.verify.timeout.copy":
     "Die Website hat nicht rechtzeitig geantwortet. Versuchen Sie es gleich erneut.",
+  "atlassianConnectors.verify.redirect-refused.label": "Weiterleitung abgelehnt",
+  "atlassianConnectors.verify.redirect-refused.copy":
+    "Die Adresse leitet weiter. Gib die endgültige HTTPS-Adresse von Jira ein.",
+  "atlassianConnectors.verify.invalid-response.label": "Ungültige Jira-Antwort",
+  "atlassianConnectors.verify.invalid-response.copy":
+    "Die Adresse lieferte keine gültige Jira-JSON-Antwort. Prüfe die Adresse und das Anmelde-Gateway.",
+  "atlassianConnectors.verify.unsupported-version.label": "Jira-Version nicht unterstützt",
+  "atlassianConnectors.verify.unsupported-version.copy":
+    "Diese Verbindung unterstützt Jira Data Center 10.3.26. Prüfe Bereitstellung und Version.",
+  "atlassianConnectors.verify.tls-failed.label": "Zertifikatsprüfung fehlgeschlagen",
+  "atlassianConnectors.verify.tls-failed.copy":
+    "Prüfe Gültigkeit, Hostname und vertrauenswürdige Zertifizierungsstelle.",
   "atlassianConnectors.scope.confluenceLabel": "Confluence-Bereichsschlüssel",
   "atlassianConnectors.scope.confluencePlaceholder": "z. B. ENG",
   "atlassianConnectors.scope.jiraLabel": "Jira-Projektschlüssel",

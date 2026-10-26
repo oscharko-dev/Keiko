@@ -26,7 +26,8 @@
 import { randomBytes } from "node:crypto";
 import { Buffer } from "node:buffer";
 import type {
-  AtlassianConnectorAuthScheme,
+  AtlassianCredentialMetadata,
+  AtlassianCredentialCreateRequest,
   AtlassianConnectorProvider,
 } from "@oscharko-dev/keiko-contracts";
 import {
@@ -115,15 +116,7 @@ export class AtlassianCredentialCustodyError extends Error {
 // The non-secret projection of one stored credential. There is deliberately no field that could
 // carry the token or the account email: the email is half of the Basic credential pair and lives
 // only inside the sealed vault envelope.
-export interface AtlassianCredentialMetadata {
-  readonly schemaVersion: typeof ATLASSIAN_CONNECTOR_SCHEMA_VERSION;
-  readonly authRef: string;
-  readonly provider: AtlassianConnectorProvider;
-  readonly displayName: string;
-  readonly baseUrl: string;
-  readonly authScheme: AtlassianConnectorAuthScheme;
-  readonly createdAt: number;
-}
+export type { AtlassianCredentialMetadata } from "@oscharko-dev/keiko-contracts";
 
 const METADATA_KEYS: ReadonlySet<string> = new Set([
   "schemaVersion",
@@ -133,6 +126,8 @@ const METADATA_KEYS: ReadonlySet<string> = new Set([
   "baseUrl",
   "authScheme",
   "createdAt",
+  "deployment",
+  "generation",
 ]);
 
 function isFiniteNonNegativeNumber(value: unknown): value is number {
@@ -145,6 +140,18 @@ function hasOnlyMetadataKeys(record: Record<string, unknown>): boolean {
   return Object.keys(record).every((key) => METADATA_KEYS.has(key));
 }
 
+function isValidDeploymentMetadata(record: Record<string, unknown>): boolean {
+  if (record.authScheme === "basic-api-token") {
+    return record.deployment === undefined || record.deployment === "cloud";
+  }
+  return (
+    record.authScheme === "bearer-pat" &&
+    record.provider === "jira" &&
+    record.deployment === "data-center" &&
+    record.generation !== undefined
+  );
+}
+
 function hasValidMetadataFields(record: Record<string, unknown>): boolean {
   return (
     record.schemaVersion === ATLASSIAN_CONNECTOR_SCHEMA_VERSION &&
@@ -152,7 +159,9 @@ function hasValidMetadataFields(record: Record<string, unknown>): boolean {
     isAtlassianConnectorProvider(record.provider) &&
     isSafeAtlassianDisplayName(record.displayName) &&
     isSafeAtlassianConnectorBaseUrl(record.baseUrl) &&
-    record.authScheme === "basic-api-token" &&
+    isValidDeploymentMetadata(record) &&
+    (record.generation === undefined ||
+      (Number.isSafeInteger(record.generation) && Number(record.generation) > 0)) &&
     isFiniteNonNegativeNumber(record.createdAt)
   );
 }
@@ -181,11 +190,9 @@ export interface AtlassianCredentialMetadataStore {
 }
 
 // ─── Resolved credential (execution path only; in-memory, short-lived) ────────
-export interface AtlassianResolvedCredential {
-  readonly scheme: "basic-api-token";
-  readonly accountEmail: string;
-  readonly apiToken: string;
-}
+export type AtlassianResolvedCredential =
+  | { readonly scheme: "basic-api-token"; readonly accountEmail: string; readonly apiToken: string }
+  | { readonly scheme: "bearer-pat"; readonly apiToken: string };
 
 // The narrow execution-only resolver. NOT part of `AtlassianCredentialCustody`: keiko-server
 // injects it exclusively into the outbound HTTP adapter (ADR-0128 D2 write-only rule), so no
@@ -216,23 +223,26 @@ export interface CreatedAtlassianCredentialCustody {
   readonly executionResolver: AtlassianCredentialExecutionResolver;
 }
 
-// The sealed vault envelope. Versioned so a future `bearer-pat` payload (ADR-0128 D7) is an
-// additive envelope variant, not a breaking change.
-interface VaultSecretEnvelope {
+// Additive v1 envelopes preserve existing Cloud vault records.
+type VaultSecretEnvelope = AtlassianResolvedCredential & {
   readonly schemaVersion: typeof ATLASSIAN_CONNECTOR_SCHEMA_VERSION;
-  readonly scheme: "basic-api-token";
-  readonly accountEmail: string;
-  readonly apiToken: string;
-}
+};
 
 function isVaultSecretEnvelope(value: unknown): value is VaultSecretEnvelope {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const record = value as Record<string, unknown>;
+  if (
+    !isRecord(value) ||
+    value.schemaVersion !== ATLASSIAN_CONNECTOR_SCHEMA_VERSION ||
+    !isSafeAtlassianApiToken(value.apiToken)
+  )
+    return false;
+  const keys =
+    value.scheme === "basic-api-token"
+      ? new Set(["schemaVersion", "scheme", "accountEmail", "apiToken"])
+      : new Set(["schemaVersion", "scheme", "apiToken"]);
+  if (Object.keys(value).some((key) => !keys.has(key))) return false;
   return (
-    record.schemaVersion === ATLASSIAN_CONNECTOR_SCHEMA_VERSION &&
-    record.scheme === "basic-api-token" &&
-    isSafeAtlassianAccountEmail(record.accountEmail) &&
-    isSafeAtlassianApiToken(record.apiToken)
+    value.scheme === "bearer-pat" ||
+    (value.scheme === "basic-api-token" && isSafeAtlassianAccountEmail(value.accountEmail))
   );
 }
 
@@ -261,26 +271,51 @@ const CREATE_INPUT_KEYS: ReadonlySet<string> = new Set([
   "displayName",
   "baseUrl",
   "authScheme",
+  "deployment",
   "accountEmail",
   "apiToken",
 ]);
 
-interface ValidatedCreateInput {
-  readonly provider: AtlassianConnectorProvider;
-  readonly displayName: string;
-  readonly baseUrl: string;
-  readonly accountEmail: string;
-  readonly apiToken: string;
+type ValidatedCreateInput = AtlassianCredentialCreateRequest;
+
+function assertSupportedAuthScheme(input: Record<string, unknown>, errors: string[]): void {
+  if (input.authScheme === "basic-api-token") {
+    if (input.deployment !== undefined && input.deployment !== "cloud")
+      errors.push("deployment must match authScheme");
+    if (!isSafeAtlassianAccountEmail(input.accountEmail))
+      errors.push("accountEmail must be a bounded email address");
+    return;
+  }
+  if (input.authScheme === "bearer-pat") {
+    if (input.provider !== "jira" || input.deployment !== "data-center")
+      throw new AtlassianCredentialCustodyError("unsupported-auth-scheme");
+    if (Object.hasOwn(input, "accountEmail"))
+      errors.push("accountEmail must be absent for bearer-pat");
+    return;
+  }
+  errors.push("authScheme must be basic-api-token or bearer-pat");
 }
 
-// Validates the auth scheme separately so the declared-but-unimplemented `bearer-pat` value
-// (ADR-0128 D2/D7) is refused with its own closed code rather than a generic validation error.
-function assertSupportedAuthScheme(value: unknown, errors: string[]): void {
-  if (value === "basic-api-token") return;
-  if (value === "bearer-pat") {
-    throw new AtlassianCredentialCustodyError("unsupported-auth-scheme");
-  }
-  errors.push("authScheme must be basic-api-token");
+function validatedCreateVariant(input: Record<string, unknown>): ValidatedCreateInput {
+  const common = {
+    displayName: input.displayName as string,
+    baseUrl: input.baseUrl as string,
+    apiToken: input.apiToken as string,
+  };
+  if (input.authScheme === "bearer-pat")
+    return {
+      ...common,
+      provider: "jira",
+      deployment: "data-center",
+      authScheme: "bearer-pat",
+    };
+  return {
+    ...common,
+    provider: input.provider as AtlassianConnectorProvider,
+    authScheme: "basic-api-token",
+    accountEmail: input.accountEmail as string,
+    ...(input.deployment === "cloud" ? { deployment: "cloud" } : {}),
+  };
 }
 
 // Every message names the field and its rule only — never the submitted value, so a rejected
@@ -296,7 +331,7 @@ function validateCreateInput(input: unknown): ValidatedCreateInput {
   if (Object.keys(input).some((key) => !CREATE_INPUT_KEYS.has(key))) {
     errors.push("input must not include unexpected fields");
   }
-  assertSupportedAuthScheme(input.authScheme, errors);
+  assertSupportedAuthScheme(input, errors);
   if (!isAtlassianConnectorProvider(input.provider)) {
     errors.push("provider must be confluence or jira");
   }
@@ -306,22 +341,13 @@ function validateCreateInput(input: unknown): ValidatedCreateInput {
   if (!isSafeAtlassianConnectorBaseUrl(input.baseUrl)) {
     errors.push("baseUrl must be an https URL without credentials, query, or fragment");
   }
-  if (!isSafeAtlassianAccountEmail(input.accountEmail)) {
-    errors.push("accountEmail must be a bounded email address");
-  }
   if (!isSafeAtlassianApiToken(input.apiToken)) {
     errors.push("apiToken must be printable ASCII between 8 and 1024 characters");
   }
   if (errors.length > 0) {
     throw new AtlassianCredentialCustodyError("invalid-input", errors);
   }
-  return {
-    provider: input.provider as AtlassianConnectorProvider,
-    displayName: input.displayName as string,
-    baseUrl: input.baseUrl as string,
-    accountEmail: input.accountEmail as string,
-    apiToken: input.apiToken as string,
-  };
+  return validatedCreateVariant(input);
 }
 
 // `atlassian-cred:<16 random bytes, base64url>` — 22 unpadded characters (ADR-0128 D2), matching
@@ -343,12 +369,19 @@ function vaultOp<T>(operation: () => T): T {
 }
 
 function serializeSecret(input: ValidatedCreateInput): string {
-  const envelope: VaultSecretEnvelope = {
-    schemaVersion: ATLASSIAN_CONNECTOR_SCHEMA_VERSION,
-    scheme: "basic-api-token",
-    accountEmail: input.accountEmail,
-    apiToken: input.apiToken,
-  };
+  const envelope: VaultSecretEnvelope =
+    input.authScheme === "bearer-pat"
+      ? {
+          schemaVersion: ATLASSIAN_CONNECTOR_SCHEMA_VERSION,
+          scheme: "bearer-pat",
+          apiToken: input.apiToken,
+        }
+      : {
+          schemaVersion: ATLASSIAN_CONNECTOR_SCHEMA_VERSION,
+          scheme: "basic-api-token",
+          accountEmail: input.accountEmail,
+          apiToken: input.apiToken,
+        };
   return JSON.stringify(envelope);
 }
 
@@ -362,11 +395,8 @@ function parseSecretEnvelope(raw: string): AtlassianResolvedCredential {
   if (!isVaultSecretEnvelope(parsed)) {
     throw new AtlassianCredentialCustodyError("credential-unreadable");
   }
-  return {
-    scheme: parsed.scheme,
-    accountEmail: parsed.accountEmail,
-    apiToken: parsed.apiToken,
-  };
+  if (parsed.scheme === "bearer-pat") return { scheme: parsed.scheme, apiToken: parsed.apiToken };
+  return { scheme: parsed.scheme, accountEmail: parsed.accountEmail, apiToken: parsed.apiToken };
 }
 
 function createCredential(
@@ -387,11 +417,21 @@ function createCredential(
   const metadata: AtlassianCredentialMetadata = {
     schemaVersion: ATLASSIAN_CONNECTOR_SCHEMA_VERSION,
     authRef,
-    provider: validated.provider,
     displayName: validated.displayName,
     baseUrl: validated.baseUrl,
-    authScheme: "basic-api-token",
     createdAt: now(),
+    ...(validated.authScheme === "bearer-pat"
+      ? ({
+          provider: "jira",
+          authScheme: "bearer-pat",
+          deployment: "data-center",
+          generation: 1,
+        } as const)
+      : ({
+          provider: validated.provider,
+          authScheme: "basic-api-token",
+          ...(validated.deployment === "cloud" ? ({ deployment: "cloud" } as const) : {}),
+        } as const)),
   };
   // Vault write FIRST (mirroring the provider-credential migration ordering): if the metadata
   // insert fails, the orphaned ciphertext is removed best-effort so no unreferenced secret
@@ -489,6 +529,7 @@ export function createAtlassianCredentialCustody(
 // sanctioned caller — keiko-server's outbound AtlassianHttpPort adapter — which materialises it
 // immediately before the platform fetch call and never logs or re-emits it (ADR-0128 D2).
 export function atlassianAuthorizationHeaderValue(credential: AtlassianResolvedCredential): string {
+  if (credential.scheme === "bearer-pat") return `Bearer ${credential.apiToken}`;
   const basicToken = `${credential.accountEmail}:${credential.apiToken}`;
   return `Basic ${Buffer.from(basicToken, "utf8").toString("base64")}`;
 }

@@ -180,13 +180,56 @@ describe("createAtlassianCredentialCustody — create", () => {
     expect(metadataStore.rows.size).toBe(0);
   });
 
-  it("rejects the declared-but-unimplemented bearer-pat scheme with its own code", () => {
+  it("rejects bearer-pat without explicit Data Center selection", () => {
     const { custody, vault } = custodyOverFakes();
     expect(
       custodyErrorCode(() => {
         custody.create(createInput({ authScheme: "bearer-pat" }));
       }),
     ).toBe("unsupported-auth-scheme");
+    expect(vault.entries.size).toBe(0);
+  });
+
+  it("resolves a Data Center PAT only through the execution resolver as a Bearer header", () => {
+    const { custody, executionResolver, vault } = custodyOverFakes();
+    const metadata = custody.create({
+      provider: "jira",
+      deployment: "data-center",
+      authScheme: "bearer-pat",
+      displayName: "Lab Jira",
+      baseUrl: "https://jira.example/context",
+      apiToken: SYNTHETIC_TOKEN,
+    });
+    expect(metadata).toMatchObject({
+      deployment: "data-center",
+      generation: 1,
+      authScheme: "bearer-pat",
+    });
+    expect(JSON.stringify(metadata)).not.toContain(SYNTHETIC_TOKEN);
+    const resolved = executionResolver.resolveForExecution(metadata.authRef);
+    expect(resolved).toEqual({ scheme: "bearer-pat", apiToken: SYNTHETIC_TOKEN });
+    expect(atlassianAuthorizationHeaderValue(resolved)).toBe(`Bearer ${SYNTHETIC_TOKEN}`);
+    expect(vault.entries.size).toBe(1);
+  });
+
+  it.each([
+    { provider: "confluence" },
+    { deployment: "cloud" },
+    { accountEmail: SYNTHETIC_EMAIL },
+    { authScheme: "basic-api-token", accountEmail: SYNTHETIC_EMAIL },
+  ])("refuses a mismatched Data Center credential variant", (override) => {
+    const { custody, vault } = custodyOverFakes();
+    expect(() =>
+      custody.create({
+        provider: "jira",
+        deployment: "data-center",
+        authScheme: "bearer-pat",
+        displayName: "Lab Jira",
+        baseUrl: "https://jira.example",
+        apiToken: SYNTHETIC_TOKEN,
+        ...override,
+      }),
+    ).toThrow(AtlassianCredentialCustodyError);
     expect(vault.entries.size).toBe(0);
   });
 
