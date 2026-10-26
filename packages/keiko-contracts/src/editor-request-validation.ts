@@ -62,3 +62,25 @@ export function admitEditorRequestForCapture(
   const context = isRecord(value.context) ? buildContextSelectors(value.context) : undefined;
   return { ok: true, value, context };
 }
+
+function copyCapturedEditorRequestFields(
+  value: CapturedEditorRequestCore,
+): Record<string, unknown> {
+  return { ...value };
+}
+
+export function finalizeCapturedEditorRequest<
+  Captured extends CapturedEditorRequestCore,
+  Validated extends Captured,
+>(
+  request: Captured,
+  isComplete: (value: Captured) => value is Validated,
+  collectRequestErrors: (value: Record<string, unknown>) => string[],
+):
+  | { readonly ok: true; readonly value: Validated }
+  | { readonly ok: false; readonly errors: readonly string[] } {
+  if (!isComplete(request)) {
+    return { ok: false, errors: collectRequestErrors(copyCapturedEditorRequestFields(request)) };
+  }
+  return { ok: true, value: request };
+}

@@ -28,6 +28,7 @@ import { isOneOf } from "./contract-validation-primitives.js";
 import {
   admitEditorRequestForCapture,
   captureEditorRequestIdentity,
+  finalizeCapturedEditorRequest,
   type CapturedEditorRequestCore,
   collectEditorDocumentRequestErrors,
 } from "./editor-request-validation.js";
@@ -214,9 +215,7 @@ export function parseEditorInlineCompletionRequest(value: unknown): EditorInline
   const admission = admitEditorRequestForCapture(value, collectRequestErrors);
   if (!admission.ok) return admission;
   const request = captureCompleteInlineRequest(admission.value, admission.context);
-  if (!isCompleteInlineRequest(request))
-    return { ok: false, errors: collectRequestErrors({ ...request }) };
-  return { ok: true, value: request };
+  return finalizeCapturedEditorRequest(request, isCompleteInlineRequest, collectRequestErrors);
 }
 
 export interface EditorInlineCompletionTelemetryParseOk {

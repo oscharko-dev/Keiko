@@ -34,6 +34,7 @@
 import {
   admitEditorRequestForCapture,
   captureEditorRequestIdentity,
+  finalizeCapturedEditorRequest,
   type CapturedEditorRequestCore,
 } from "./editor-request-validation.js";
 import {
@@ -408,9 +409,11 @@ export function parseEditorTestGenerationRequest(value: unknown): EditorTestGene
   const admission = admitEditorRequestForCapture(value, collectRequestErrors);
   if (!admission.ok) return admission;
   const request = captureCompleteTestGenerationRequest(admission.value, admission.context);
-  if (!isCompleteTestGenerationRequest(request))
-    return { ok: false, errors: collectRequestErrors({ ...request }) };
-  return { ok: true, value: request };
+  return finalizeCapturedEditorRequest(
+    request,
+    isCompleteTestGenerationRequest,
+    collectRequestErrors,
+  );
 }
 
 interface CapturedEditorTestGenerationWireRequest extends CapturedEditorRequestCore {
