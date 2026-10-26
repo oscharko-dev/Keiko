@@ -1221,7 +1221,7 @@ missing evidence under Rule 1, then fix the behaviour.
 
 ## 9. Traps specific to this repo (learn these once)
 
-Repository lessons now live in [Experience.md](Experience.md). Before changing UI styling,
+Repository lessons now live in [EXPERIENCE.md](EXPERIENCE.md). Before changing UI styling,
 performance evidence, package exports, workflow branch lists or coverage gates, read the matching
 entry there. In particular, the assembled package-surface check prunes the live dependency tree:
 read its ordering warning before running it. The applicable constraints are unchanged.
