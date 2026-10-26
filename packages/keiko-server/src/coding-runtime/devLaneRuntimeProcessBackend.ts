@@ -1,6 +1,7 @@
-import { spawn, type StdioOptions } from "node:child_process";
+import { execFile, spawn, type StdioOptions } from "node:child_process";
 import { dirname } from "node:path";
 import { Duplex, Readable, Writable } from "node:stream";
+import { promisify } from "node:util";
 import {
   copyRuntimeGatewayConfinement,
   currentPlatform,
@@ -29,6 +30,7 @@ import {
   type DescendantSweep,
   type DescendantTrackerOptions,
 } from "./darwinRuntimeDescendants.js";
+import { darwinProcessTableReader } from "./darwinProcessTable.js";
 import {
   createSandboxMembership,
   SANDBOX_MEMBER_FD,
@@ -56,6 +58,10 @@ import {
   prepareRuntimeGatewayProcessSandbox,
   recordRuntimeGatewayConfinementSpawned,
 } from "./runtimeGatewayProcessSandbox.js";
+
+// macOS: the host's process table with kernel identities, read by `/usr/bin/perl` outside every
+// sandbox (darwinProcessTable.ts); this process layer runs it.
+const readDarwinProcessTable = darwinProcessTableReader(promisify(execFile));
 
 /**
  * Gateway-enforcing POSIX process backend. macOS uses Seatbelt for development/evaluation while a
@@ -331,6 +337,8 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
     const tracker = this.createDescendantTracker({
       runId,
       activityLog: this.activityLog,
+      readTable: readDarwinProcessTable,
+      rootPid: tree.child.pid,
       ...(member === undefined ? {} : { membership: createSandboxMembership(member) }),
     });
     tree.descendants = tracker;

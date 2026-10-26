@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "d16fb624f9eadadf78a0af49647022ab42555873421681820cb9ad1a0989deb7",
+    "catalogDigest": "c8247f3adbc078dec74affb10edf6083552495b3b2eb11547e46b4a95efd85d8",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -6960,7 +6960,14 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["clean", "reaped", "survivors", "unproven", "membership-unavailable"]
+            "values": [
+              "clean",
+              "reaped",
+              "survivors",
+              "unproven",
+              "listing-failed",
+              "membership-unavailable"
+            ]
           },
           "roundCount": {
             "type": "integer",
@@ -6968,6 +6975,16 @@
             "required": true
           },
           "checkCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "identityProofCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "memberCount": {
             "type": "integer",
             "dataClass": "count",
             "required": true
@@ -6998,14 +7015,14 @@
         "diagnosticWhen": [
           {
             "field": "outcome",
-            "values": ["survivors", "unproven", "membership-unavailable"]
+            "values": ["survivors", "unproven", "listing-failed", "membership-unavailable"]
           }
         ],
         "failureClasses": ["coding-runtime-descendant-sweep"],
         "proofIds": ["coding-runtime.descendants.swept.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.ts:55",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.ts:194"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.ts:87",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.ts:328"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -31823,8 +31840,8 @@
         },
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeActivityOperations.ts:182",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:528",
-          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:600",
+          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:536",
+          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:608",
           "packages/keiko-server/src/coding-runtime/nativeRuntimeProcessBackend.ts:255"
         ]
       },
@@ -32002,7 +32019,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeActivityOperations.ts:189",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:576",
+          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:584",
           "packages/keiko-server/src/coding-runtime/nativeRuntimeProcessBackend.ts:281"
         ]
       },
@@ -59636,6 +59653,18 @@
                   "type": "string-array",
                   "dataClass": "opaque-id",
                   "required": false
+                },
+                {
+                  "name": "identityProofCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "memberCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
                 },
                 {
                   "name": "outcome",
@@ -100549,7 +100578,7 @@
     {
       "op": "coding-runtime.descendants.swept",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.ts:58",
+      "site": "packages/keiko-server/src/coding-runtime/darwinRuntimeDescendants.ts:90",
       "package": "keiko-server"
     },
     {

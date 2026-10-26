@@ -20,6 +20,7 @@ import {
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
 
+import type { ProcessTable } from "./darwinProcessTable.js";
 import { RuntimeDescendantTracker } from "./darwinRuntimeDescendants.js";
 import type { SandboxMembership } from "./darwinSandboxMembership.js";
 import {
@@ -616,7 +617,20 @@ describe("dev-lane runtime process backend", () => {
           // The kernel's answer for the run's sandbox instance, and its member's broadcast.
           const membership: SandboxMembership | undefined = member
             ? {
+                self: () =>
+                  Promise.resolve({
+                    pid: 4799,
+                    uniqueId: "47990",
+                    parentPid: options.rootPid,
+                    parentUniqueId: "47110",
+                  }),
                 occupied: () => Promise.resolve(processes.size > 0),
+                members: (pids) =>
+                  Promise.resolve(
+                    pids
+                      .filter((pid) => processes.has(pid))
+                      .map((pid) => ({ pid, uniqueId: String(pid * 10) })),
+                  ),
                 killAll: (): Promise<void> => {
                   signals.push("kill-all");
                   for (const pid of [...processes]) if (!keep(pid)) processes.delete(pid);
@@ -628,6 +642,19 @@ describe("dev-lane runtime process backend", () => {
           return new RuntimeDescendantTracker({
             ...options,
             ...(membership === undefined ? {} : { membership }),
+            // The host's table: the run's processes, forked after the run's root.
+            readTable: (): Promise<ProcessTable> =>
+              Promise.resolve({
+                records: [...processes].map((pid) => ({
+                  pid,
+                  zombie: false,
+                  uniqueId: String(pid * 10),
+                  parentUniqueId: "47110",
+                })),
+                goneCount: 0,
+                foreignUserCount: 0,
+                unidentifiedCount: 0,
+              }),
             settleMs: 0,
           });
         },
@@ -1076,6 +1103,58 @@ describe("dev-lane runtime process backend", () => {
       }
     },
     40_000,
+  );
+
+  // PR #4064 review (4372402175, 4373090489), on the real kernel: a parent outside every sandbox
+  // holds an exited child unreaped for the whole sweep. XNU counts that zombie in the member's
+  // broadcast check, so the sweep proves the end by kernel identity instead: an empty run settles
+  // clean, and a run with a detached process is reaped, never left as survivors.
+  it.skipIf(process.platform !== "darwin")(
+    "proves a run's end while an unrelated zombie of the same user exists",
+    async () => {
+      const holder = spawn(
+        "/usr/bin/perl",
+        ["-e", '$| = 1; my $c = fork(); if ($c == 0) { exit 0 } print "$c\\n"; sleep 60'],
+        { stdio: ["ignore", "pipe", "ignore"] },
+      );
+      const marker = `3901.${String(process.pid)}`;
+      try {
+        await new Promise<void>((resolve) => {
+          holder.stdout.once("data", () => {
+            resolve();
+          });
+        });
+        for (const [script, outcome] of [
+          ["#!/bin/sh\nexit 0\n", "clean"],
+          [
+            `#!/bin/sh\n/usr/bin/perl -e 'use POSIX; if (fork() == 0) { POSIX::setsid(); exec "/bin/sleep", "${marker}9" } exit 0'\nexit 0\n`,
+            "reaped",
+          ],
+        ] as const) {
+          const fixture = stageFixture();
+          writeFileSync(fixture.executable, script);
+          const sink = createBufferedServerLogSink();
+          const backend = createDevLaneRuntimeProcessBackend({
+            identity: IDENTITY,
+            gatewayConfinement: nativeConfinement(fixture),
+            runtimeRoot: fixture.runtimeRoot,
+            activityLog: sink,
+          });
+          const tree = backend.spawnOwnedTree(launchRequest(fixture), SANDBOX);
+          await expect(backend.waitForCompleteTreeExit(tree, 20_000), outcome).resolves.toBe(true);
+          const swept = sink.events.find(
+            (event) => event.op === "coding-runtime.descendants.swept",
+          );
+          expect(swept?.extra, outcome).toMatchObject({ outcome });
+          expect(Number(swept?.extra?.identityProofCount), outcome).toBeGreaterThanOrEqual(1);
+          expect(processesCarrying(`${marker}9`)).toEqual([]);
+        }
+      } finally {
+        holder.kill("SIGKILL");
+        for (const pid of processesCarrying(`${marker}9`)) process.kill(pid, "SIGKILL");
+      }
+    },
+    60_000,
   );
 });
 

@@ -7803,6 +7803,18 @@
               "required": false
             },
             {
+              "name": "identityProofCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "memberCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
               "name": "outcome",
               "type": "string",
               "dataClass": "closed-enum",
