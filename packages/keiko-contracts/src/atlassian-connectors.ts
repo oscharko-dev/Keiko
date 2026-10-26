@@ -1436,3 +1436,11 @@ export function isAtlassianConnectorRegistryFailureReason(
 ): value is AtlassianConnectorRegistryFailureReason {
   return isOneOf(value, ATLASSIAN_CONNECTOR_REGISTRY_FAILURE_REASONS);
 }
+
+export type {
+  JiraFieldKind,
+  JiraFieldOperation,
+  JiraFieldReference,
+  JiraFieldMetadata,
+  JiraFieldUpdate,
+} from "./jira-tool-fields.js";

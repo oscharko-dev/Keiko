@@ -699,3 +699,30 @@ observability and ADR index pass; the generated registry has zero violations.
 The selected mode and scoped authority remain separate requirements. Memory keeps
 its explicit-or-Ask default. Chat authority integration and the full AC7 acceptance
 remain open; no artificial Coding session is presented as a Chat proof.
+
+## Jira metadata field matrix — #4083 AC3 foundation
+
+Added additive shared field-capability types and a bounded connector-owned parser/validator.
+Supported standard and explicitly named core custom-field types cover text, finite numbers,
+calendar dates, millisecond datetimes, user/option references and bounded lists. Options and users
+are checked against advertised allowed values; Cloud account IDs and Data Center usernames stay
+separate. Cloud rich text uses the existing ADF composer; Data Center retains plain text.
+
+Unknown plugin types remain unsupported even when their base schema resembles a supported type.
+Required values, current metadata verbs, explicit clearing and omission are distinguished. A
+Jira-declared create default can remain omitted without fabricating its value. Add/remove is
+implemented only for labels and cannot be combined with replacement of the same field. Metadata,
+references and update lists are bounded; malformed objects, duplicate field IDs, invalid dates,
+unsupported verbs, extra reference keys and unsupported labels schemas fail closed.
+
+All 62 focused tests pass (26 new field tests plus existing Jira/Confluence writes and ADF tests).
+Package build, root typecheck and changed-source lint pass. The first feature test failed because
+the implementation was absent. This is pure validation groundwork, not provider/HTTP acceptance:
+fetching fresh target metadata, live fixtures, atomic transition requests and shared MCP provider
+integration remain open. No #4083 criterion is marked complete by this checkpoint.
+
+Review gate follow-up: the targeted semantic-duplication check currently fails with nine clone
+groups and five stale baseline entries, including the reported shared offer-admission preamble
+and the Atlassian transport paths. This is recorded as an open gate, not an accepted exemption;
+reproduction is complete and the next increment addresses the verified duplication. No new
+clone is reported in this field-validation increment.

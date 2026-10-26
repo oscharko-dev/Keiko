@@ -316,6 +316,18 @@ reconciles observed remote state; uncertain effects never trigger an automatic r
 owners of per-request and terminal evidence.
 
 
+**Bounded Jira field validation (#4083).** The connector owns one metadata-driven field matrix
+for its managed Jira provider. It admits standard text, finite numbers, calendar dates,
+millisecond datetime values, user/option references and explicit bounded list types. Core Jira
+custom-field types are named explicitly; an unknown plugin type is unsupported even if its base
+schema looks familiar. Current metadata operations and allowed references constrain values.
+Omission preserves an edit; null/empty clearing requires an optional field and an allowed set.
+Create may leave a Jira-declared default omitted without copying or fabricating it. Add/remove is
+limited to labels; replacement and additive changes cannot target the same field in one action.
+Cloud rich text uses the existing ADF composer; Data Center uses plain text, and user references
+respect each deployment's identity scheme. Fresh metadata, authority and dispatch remain separate
+provider obligations; the pure validator grants no execution authority.
+
 ### D4 — Action-class mapping table
 
 **Shared deployment ceiling (#4083).** Production composition resolves one ceiling for Coding and
