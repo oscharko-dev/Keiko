@@ -141,6 +141,13 @@ The [Windows API lifetime contract](https://learn.microsoft.com/en-us/windows/wi
 requires this storage lifetime independently of compiler optimization. Restaged/distributed helper
 identities must be regenerated and qualified; the initial hash above is not the repaired binary.
 
+A subsequent runner exposed binary fixture output passing through Windows CRT text mode: a
+process-ID byte equal to `0x0a` gained a carriage return, corrupting the observed PID. The fixture
+now writes the frame with `WriteFile`. A deterministic encoding check includes newline, carriage
+return, NUL and EOF bytes; it failed with the old writer and passes with the repair. These synthetic
+values are used only for serialization, never as process-liveness evidence. The actual ordinary and
+detached descendants still pass both cancellation and control-EOF probes locally.
+
 The initial staged-helper concurrency run failed its positive control: all 32 reads returned
 `CHANGED_DURING_READ`. The updater created and removed temporary siblings of the target, changing
 the root directory metadata even when Windows sharing protection correctly denied target

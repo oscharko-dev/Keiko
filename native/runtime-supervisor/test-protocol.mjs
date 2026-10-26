@@ -345,6 +345,14 @@ if (process.platform === "win32") {
     const runtime = join(root, "qualification-fixture.exe");
     if (suppliedHelper === undefined) await compile(source, helper);
     await compile(fixtureSource, runtime);
+    const encoding = await runProcess(runtime, hermeticWindowsEnv(), ["--observation-encoding"]);
+    assert.equal(encoding.code, 0);
+    assert.equal(encoding.stderr.length, 0);
+    assert.deepEqual(
+      encoding.stdout,
+      Buffer.from("4b525131000d0a01041a0a02", "hex"),
+      "fixture PID bytes must not undergo Windows CRT text-mode newline translation",
+    );
     for (const detached of [false, true]) {
       await qualifyWindows(helper, runtime, root, detached);
       await assertControlEofFailsClosed(helper, runtime, root, detached);

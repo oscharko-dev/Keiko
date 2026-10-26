@@ -12,15 +12,27 @@ static void write_u32(unsigned char *value, uint32_t number) {
   value[3] = (unsigned char)(number >> 24);
 }
 
+static int write_observation(DWORD root, DWORD descendant) {
+  unsigned char observation[12] = {'K', 'R', 'Q', '1', 0, 0, 0, 0, 0, 0, 0, 0};
+  DWORD written = 0;
+  write_u32(observation + 4, root);
+  write_u32(observation + 8, descendant);
+  /* PID bytes are binary: CRT text mode inserts CR before any 0x0a byte in a process ID. */
+  return WriteFile(GetStdHandle(STD_OUTPUT_HANDLE), observation, sizeof(observation), &written, NULL) &&
+         written == sizeof(observation);
+}
+
 int wmain(int argc, wchar_t **argv) {
   PROCESS_INFORMATION child;
   STARTUPINFOW startup;
   /* Wide path buffers are heap-allocated: ~130 KiB of stack trips analyzer budgets (C6262). */
   wchar_t *executable, *command;
-  unsigned char observation[12] = {'K', 'R', 'Q', '1', 0, 0, 0, 0, 0, 0, 0, 0};
   DWORD length;
   DWORD creation_flags = 0;
   BOOL created;
+  /* Deterministic wire check only; these values are never reported as live processes. */
+  if (argc == 2 && wcscmp(argv[1], L"--observation-encoding") == 0)
+    return write_observation(0x010a0d00u, 0x020a1a04u) ? 0 : 5;
   if (argc == 2 && wcscmp(argv[1], L"--descendant") == 0) {
     Sleep(INFINITE);
     return 0;
@@ -54,10 +66,7 @@ int wmain(int argc, wchar_t **argv) {
     return 3;
   }
   CloseHandle(child.hThread);
-  write_u32(observation + 4, GetCurrentProcessId());
-  write_u32(observation + 8, child.dwProcessId);
-  if (fwrite(observation, 1, sizeof(observation), stdout) != sizeof(observation) ||
-      fflush(stdout) != 0) {
+  if (!write_observation(GetCurrentProcessId(), child.dwProcessId)) {
     TerminateProcess(child.hProcess, 4);
     CloseHandle(child.hProcess);
     return 4;
