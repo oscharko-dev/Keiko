@@ -530,6 +530,9 @@ After the bounded DNS lookups at `7789da5c4` it was measured again: p95 1524.8, 
 142.6 ms, each below its committed ceiling.
 After the support code inventory was regenerated at `def82bff7` it was measured again: p95
 1465.6, 1.86, 2.02 and 128.5 ms, each below its committed ceiling.
+After the optional runtime packages were pinned to 1.1.4 at `05bb62655` (the lockfile is part of
+the subject) it was measured again: p95 1551.9, 1.93, 2.32 and 136.6 ms, each below its committed
+ceiling.
 
 The PR lane runs `check:perf-evidence:coding-runtime` and the hermetic ruler tests
 (`test:perf:coding-runtime`). It checks integrity and budgets unconditionally. Set

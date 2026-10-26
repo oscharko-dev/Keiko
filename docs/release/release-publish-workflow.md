@@ -360,10 +360,12 @@ search from the republished packages. Republish both with the pinned ripgrep, th
 as in step 3; the customer-shape qualifier drops its `KEIKO_RIPGREP_BINARY_PATH` hand-off in that
 same change.
 
-The 1.1.4 preparation addresses F18's one-MiB secure-read helper. Public 1.1.3 remains capped at
-64 KiB even when the updated server accepts it. Private tarball preparation does not complete
-external native publication or final fresh npm/Yarn installation validation; those remain pending
-until the sequence above succeeds. The existing Yarn qualification uses the `node-modules`
+The 1.1.4 runtime packages carry OpenCode 2.1.4 and address F18's one-MiB secure-read helper.
+`coding-runtime-publish.yml` published both on 2026-10-26 (#3898 AC8), and the root optional
+dependency pins and `package-lock.json` name 1.1.4 since that date (step 3). Public 1.1.3 remains
+capped at 64 KiB even when the updated server accepts it; an installation that still holds it keeps
+working until it updates. The final fresh npm/Yarn installation validation against the next
+product release remains pending (#3898 AC9). The existing Yarn qualification uses the `node-modules`
 linker and does not prove Plug'n'Play support. Linux and Windows npm runtime availability is
 unchanged; their coding engines remain on the packaged lanes described by ADR-0140.
 
