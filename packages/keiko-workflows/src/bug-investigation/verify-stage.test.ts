@@ -11,6 +11,7 @@ import {
 import type { PatchFileChange, SpawnFn } from "@oscharko-dev/keiko-tools";
 import type { BugInvestigationInput } from "./types.js";
 import { recordingSpawn, scriptChildClose } from "./_support.js";
+import { confinedVerificationRoot } from "../unit-tests/_support.js";
 
 vi.mock("@oscharko-dev/keiko-verification", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@oscharko-dev/keiko-verification")>();
@@ -18,7 +19,7 @@ vi.mock("@oscharko-dev/keiko-verification", async (importOriginal) => {
   return withConfinedVerificationFixture(actual);
 });
 
-const ROOT = "/repo";
+const ROOT = confinedVerificationRoot();
 
 interface StateOpts {
   readonly withTestScript?: boolean;

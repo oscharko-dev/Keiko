@@ -5,6 +5,7 @@ import type { UnitTestWorkflowDeps, UnitTestWorkflowInput } from "./types.js";
 import { SKIP_UNRESOLVED } from "./verify-stage.js";
 import { memFs } from "@oscharko-dev/keiko-workspace/testing";
 import {
+  confinedVerificationRoot,
   recordingSink,
   recordingSpawn,
   recordingWriter,
@@ -19,7 +20,7 @@ vi.mock("@oscharko-dev/keiko-verification", async (importOriginal) => {
   return withConfinedVerificationFixture(actual);
 });
 
-const ROOT = "/repo";
+const ROOT = confinedVerificationRoot();
 
 // A valid create diff that adds a sibling-discoverable test under tests/ (mirrored convention).
 const VALID_TEST_DIFF =

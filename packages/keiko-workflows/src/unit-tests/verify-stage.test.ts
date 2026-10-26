@@ -17,7 +17,7 @@ import type { SpawnFn } from "@oscharko-dev/keiko-tools";
 import { buildRunState, type RunState } from "./internal.js";
 import { runWorkflowVerification } from "./verify-stage.js";
 import type { UnitTestWorkflowDeps, UnitTestWorkflowInput } from "./types.js";
-import { recordingSpawn, scriptChildClose } from "./_support.js";
+import { confinedVerificationRoot, recordingSpawn, scriptChildClose } from "./_support.js";
 
 vi.mock("@oscharko-dev/keiko-verification", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@oscharko-dev/keiko-verification")>();
@@ -25,7 +25,7 @@ vi.mock("@oscharko-dev/keiko-verification", async (importOriginal) => {
   return withConfinedVerificationFixture(actual);
 });
 
-const ROOT = "/repo";
+const ROOT = confinedVerificationRoot();
 
 function runState(deps: Partial<UnitTestWorkflowDeps>): {
   state: RunState;
