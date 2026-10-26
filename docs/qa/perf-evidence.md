@@ -547,6 +547,10 @@ measurement and the freshness check. No ceiling widened; one tightened.
 | `sseFirstByteMs`      | 4.65                          | 4.48                      | 4.48              | 2.42         |
 | `boundedThroughputMs` | 160.0                         | 179.3                     | 160.0             | 129.6        |
 
+The three follow-up branches (task import and offline network tools, the 1.1.4 runtime pin and this
+journey repair) were combined into one delivery at `6bfb9e129` and measured again against this
+calibration: p95 1547.2, 1.92, 2.51 and 138.9 ms, each below its committed ceiling.
+
 The PR lane runs `check:perf-evidence:coding-runtime` and the hermetic ruler tests
 (`test:perf:coding-runtime`). It checks integrity and budgets unconditionally. Set
 `KEIKO_PERF_EVIDENCE_BASE_REF` to the PR/merge-group base for diff-owned toolchain freshness, as for
