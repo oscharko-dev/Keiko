@@ -34,8 +34,10 @@ import type {
 } from "./code-task-target-validation.js";
 import {
   validateCodeTaskParentTarget,
-  validateCodeTaskIdentityHeader,
+  validateCodeTaskHeaderTags,
   isCodeTaskGrantId,
+  isCodeTaskRunId,
+  isCodeTaskTaskId,
   isCodeTaskWorkspaceId,
 } from "./code-task-target-validation.js";
 export type {
@@ -549,12 +551,16 @@ const CODE_TASK_EXECUTION_KEYS = new Set([
 ]);
 
 function executionHeaderFieldsAreValid(errors: string[], value: Record<string, unknown>): boolean {
-  let valid = validateCodeTaskIdentityHeader(
+  let valid = validateCodeTaskHeaderTags(
     errors,
     value,
     CODE_TASK_EXECUTION_KIND,
     CODE_TASK_GOVERNANCE_SCHEMA_VERSION,
   );
+  if (!isCodeTaskTaskId(ownField(value, "taskId")))
+    valid = addValidationError(errors, "taskId is invalid");
+  if (!isCodeTaskRunId(ownField(value, "runId")))
+    valid = addValidationError(errors, "runId is invalid");
   if (!isCodeTaskWorkspaceId(ownField(value, "workspaceId")))
     valid = addValidationError(errors, "workspaceId is invalid");
   return valid;

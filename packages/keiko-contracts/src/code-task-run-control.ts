@@ -4,7 +4,7 @@ import {
 } from "./code-task-record-validation.js";
 import {
   validateCodeTaskParentTarget,
-  validateCodeTaskIdentityHeader,
+  validateCodeTaskHeaderTags,
 } from "./code-task-target-validation.js";
 // Cross-child run-control contracts for Epic #2384 Code-task children (Issue #2386). Same type
 // rule as ./code-task-governance.ts: readonly, JSON-serializable, discriminated unions, literal
@@ -35,6 +35,8 @@ import {
   isCodeTaskGrantScope,
   isCodeTaskIdempotencyKey,
   isCodeTaskQuestionId,
+  isCodeTaskRunId,
+  isCodeTaskTaskId,
   isContentFreeReasonCode,
 } from "./code-task-governance.js";
 import type { CodingWorkbenchValidationResult } from "./coding-workbench.js";
@@ -211,12 +213,16 @@ function questionFactFieldsAreValid(errors: string[], value: unknown): boolean {
 }
 
 function runControlHeaderFieldsAreValid(errors: string[], value: Record<string, unknown>): boolean {
-  let valid = validateCodeTaskIdentityHeader(
+  let valid = validateCodeTaskHeaderTags(
     errors,
     value,
     RUN_CONTROL_SNAPSHOT_KIND,
     CODE_TASK_GOVERNANCE_SCHEMA_VERSION,
   );
+  if (!isCodeTaskTaskId(ownField(value, "taskId")))
+    valid = addValidationError(errors, "taskId is invalid");
+  if (!isCodeTaskRunId(ownField(value, "runId")))
+    valid = addValidationError(errors, "runId is invalid");
   if (!isCodeTaskIdempotencyKey(ownField(value, "idempotencyKey"))) {
     valid = addValidationError(errors, "idempotencyKey is invalid");
   }
