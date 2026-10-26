@@ -224,18 +224,28 @@ requests may only target that host; there is no cross-connector or wildcard allo
 enforced twice: once at connector-creation validation, and again at request-construction time in
 the `AtlassianHttpPort` adapter (defense in depth, mirroring the existing
 `outboundTargetBlockedReason` literal hostname/address-shape re-check in
-`keiko-model-gateway/src/http.ts`, applied via `classifyOutboundHost` — see `httpPort.ts`'s
-`isBlockedLoopbackTarget`). That literal-shape check runs unconditionally, proxied or not; the
+`keiko-model-gateway/src/http.ts`, applied by the connector adapter before credential resolution). That literal-shape check runs unconditionally, proxied or not; the
 gateway's *DNS-resolved* address re-check (`enforceOutboundTargetPolicy` with `resolveDns: true`)
 additionally requires `egress.pinProxiedConnectTarget` when this connector's traffic is proxied
 (ADR-0038 D6) — proxied deployments are first-class for this lane (below).
 
+**Exact Data Center admission (#4082, 2026-10-26).** The file-owned
+`atlassian.privateTargets` block may admit at most 64 canonical HTTPS base URLs, including
+port and context path, with an explicit `private` or `loopback` address class. It applies only
+to explicitly selected Jira Data Center connections. Setup request bodies, environment variables
+and global permissive egress flags cannot create this admission; setup saves preserve the
+operator block. Every request rechecks the current entry. DNS results must all match the declared
+class, and direct/proxied connects retain address pinning. Metadata/link-local targets and the
+active BFF listener port stay denied. Request paths must remain inside the configured context
+path; noncanonical paths, encoded traversal/separators and fragments fail before credentials
+are resolved. Safe configuration projections omit private target addresses.
+
 **Correction (#3156, 2026-08-15).** The platform-level default for `pinProxiedConnectTarget` stays
 off for a generic `gatewayFetch` caller (ADR-0038 D6: a caller must construct it explicitly, exactly
 like `denyLoopback`) — nothing about that default changes here. This connector is one such caller,
-and it opts in on every call: `connectorEgressConfig` in `httpPort.ts` unconditionally sets both
-`pinProxiedConnectTarget` and `denyLoopback` to `true` in the config this connector passes to
-`gatewayFetch`, so a proxied connector's DNS-resolved address is independently re-validated after
+and it opts in on every call: `connectorEgressConfig` in `httpPort.ts` unconditionally sets
+`pinProxiedConnectTarget` to `true`. `denyLoopback` is also true except for the exact operator-owned
+Data Center admission described below, so a proxied connector's DNS-resolved address is independently re-validated after
 resolution against the same loopback/private/link-local/metadata policy as the direct path, not
 merely covered by the literal-shape check. This text previously said the connector left that
 opt-in off in v1, covering a proxied deployment's resolved address by the literal check alone; two

@@ -4540,6 +4540,7 @@ function atlassianConnectorCredentialFields(
 ): Pick<UiHandlerDeps, "atlassianConnectorCredentials"> {
   return {
     atlassianConnectorCredentials: buildAtlassianConnectorCredentialDeps({
+      networkConfig: () => args.runtimeConfig.current()?.atlassian,
       configPath: args.runtimeConfig.storagePath,
       env: args.options.env,
       egress: () => args.runtimeConfig.current()?.egress ?? args.egress,

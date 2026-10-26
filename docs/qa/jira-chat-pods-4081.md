@@ -341,3 +341,37 @@ real HTTPS lab and real-model qualification, complete epic implementation and fi
 The message catalogs changed; updater UI evidence must be regenerated through its original
 producer before final acceptance. Public-contract/export changes still require final package
 surface qualification. These pending checks are not represented as passing.
+
+### Exact private-network admission increment (#4082 AC3, partial)
+
+The existing operator configuration accepts `atlassian.privateTargets`, an array of at
+most 64 exact HTTPS base URLs with `addressClass: "private" | "loopback"`. The hostname,
+port and context path must match the stored Data Center connection. Global permissive
+egress flags and request bodies cannot grant this admission. Setup rebuilds and reloads
+preserve the operator block. Safe config projections omit it. Context paths are canonical,
+without encoded separators, percent escapes, repeated separators or dot traversal.
+
+The existing gateway pins direct and proxied connections to the vetted DNS result and now
+enforces the declared address class on every resolved address. Mixed public/private DNS,
+metadata/link-local targets and the active BFF listener remain denied. Removing the operator
+entry takes effect on the next request. Cloud connectors retain their existing restricted
+network posture. A context-path escape regression failed before the containment fix.
+
+Targeted results on this increment, 2026-10-26:
+
+- Package build passed.
+- Seven gateway/config/setup/connector/client suites: **907 passed**.
+- Final client/transport rerun including actual BFF-listener isolation: **49 passed**.
+- Changed TypeScript source/test lint and formatting passed.
+
+This is deterministic transport/configuration evidence; real HTTPS Jira qualification is
+still pending. The auditor identified the existing Cloud HTML-2xx false-positive in the
+status-only verification path. That finding is accepted and will be fixed next for both Jira
+and Confluence Cloud, with real client-to-route regression tests. No complete AC is closed.
+
+The cross-boundary client fixture now lives in the UI test lane and imports the built server:
+`packages/keiko-ui/src/lib/atlassian-connector-client.integration.test.ts`. This preserves
+separate browser and Node compiler environments while exercising the real HTTP server/vault.
+The root TypeScript check and UI TypeScript check pass; the final UI client/integration run
+passed **12 tests**. Root test narrowing was updated for the credential discriminated union.
+The operation catalog remains **605/605** proofs with zero inventory violations.

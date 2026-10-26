@@ -4,25 +4,26 @@ import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
-import { createInMemoryUiStore, buildRedactor } from "../packages/keiko-server/src/index.js";
-import type { UiHandlerDeps } from "../packages/keiko-server/src/deps.js";
-import { createRunRegistry } from "../packages/keiko-server/src/runs.js";
-import { createUiServer, UI_HOST } from "../packages/keiko-server/src/server.js";
-import { buildAtlassianConnectorCredentialDeps } from "../packages/keiko-server/src/atlassian/wiring.js";
-import { atlassianCredentialMetadataPath } from "../packages/keiko-server/src/atlassian/credentialMetadataStore.js";
-import { atlassianCredentialStorePath } from "../packages/keiko-server/src/atlassian/credentialVault.js";
+import { createInMemoryUiStore, buildRedactor } from "../../../keiko-server/dist/index.js";
+import type { UiHandlerDeps } from "../../../keiko-server/dist/deps.js";
+import { createRunRegistry } from "../../../keiko-server/dist/runs.js";
+import { createUiServer, UI_HOST } from "../../../keiko-server/dist/server.js";
+import { buildAtlassianConnectorCredentialDeps } from "../../../keiko-server/dist/atlassian/wiring.js";
+import { atlassianCredentialMetadataPath } from "../../../keiko-server/dist/atlassian/credentialMetadataStore.js";
+import { atlassianCredentialStorePath } from "../../../keiko-server/dist/atlassian/credentialVault.js";
 import {
   createAtlassianConnector,
   listAtlassianConnectors,
   verifyAtlassianConnector,
   startAtlassianConnectorSync,
-} from "../packages/keiko-ui/src/lib/atlassian-connectors-api.js";
+} from "./atlassian-connectors-api.js";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
-import { responseCorrelationIdOf } from "../packages/keiko-ui/src/lib/bff-correlation.js";
+import type { AtlassianNetworkConfig } from "@oscharko-dev/keiko-contracts";
+import { responseCorrelationIdOf } from "./bff-correlation.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
-} from "./support/activity-log-proof.js";
+} from "../../../../tests/support/activity-log-proof.js";
 
 const syntheticToken = (): string => ["fixture", "jira", "token", "4082"].join("-");
 let configDir: string;
@@ -31,6 +32,8 @@ let close: (() => Promise<void>) | undefined;
 let events: ServerLogEvent[];
 let responses: Response[];
 let outbound: { url: string; authorization: string | null }[];
+let networkConfig: AtlassianNetworkConfig | undefined;
+let listenerPort = 0;
 
 function fixtureFetch(input: Parameters<typeof fetch>[0], init?: RequestInit): Promise<Response> {
   outbound.push({
@@ -54,6 +57,7 @@ function dependencies(): UiHandlerDeps {
       configPath,
       env: { KEIKO_ATLASSIAN_CONNECTOR_CREDENTIALS_KEY: randomBytes(32).toString("base64") },
       egress: () => undefined,
+      networkConfig: () => networkConfig,
       fetchImpl: fixtureFetch,
       activityLog: {
         write: (event): void => {
@@ -65,6 +69,7 @@ function dependencies(): UiHandlerDeps {
 }
 
 beforeEach(async () => {
+  networkConfig = undefined;
   events = [];
   responses = [];
   outbound = [];
@@ -92,6 +97,7 @@ beforeEach(async () => {
   if (address === null || typeof address === "string")
     throw new TypeError("Missing fixture listener");
   port = address.port;
+  listenerPort = port;
   const origin = `http://${UI_HOST}:${String(port)}`;
   const platformFetch = globalThis.fetch;
   // Browser-relative URL resolution only: the real client, HTTP server, route and vault execute.
@@ -100,6 +106,22 @@ beforeEach(async () => {
     (input: Parameters<typeof fetch>[0], init?: RequestInit): Promise<Response> =>
       platformFetch(typeof input === "string" ? new URL(input, origin) : input, init),
   );
+});
+
+it("refuses the actual BFF listener even if a loopback target is operator-admitted", async () => {
+  const baseUrl = `https://127.0.0.1:${String(listenerPort)}/jira`;
+  networkConfig = { privateTargets: [{ baseUrl, addressClass: "loopback" }] };
+  const created = await createAtlassianConnector({
+    provider: "jira",
+    deployment: "data-center",
+    authScheme: "bearer-pat",
+    displayName: "Listener isolation",
+    baseUrl,
+    apiToken: syntheticToken(),
+  });
+  const verified = await verifyAtlassianConnector(created.authRef);
+  expect(verified.status).toBe("unreachable");
+  expect(outbound).toHaveLength(0);
 });
 
 afterEach(async () => {

@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "614847cbe4687b6ccf9c8139d838ac19c77c1e32ee83881d4474e21c2b395575"
+    "catalogDigest": "195cac7b8611435bb03b85610d5b6f40653455f4e93614a9b210b3c67f7d502a"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -2951,5 +2951,12 @@
     "ui.crash": ["tests/activity-log-scenarios/client-diagnostics-ui.test.ts"],
     "ui.dependency-failure": ["tests/activity-log-scenarios/client-diagnostics-ui.test.ts"]
   },
-  "violations": []
+  "violations": [
+    {
+      "code": "proof-outside-owner",
+      "site": "packages/keiko-ui/src/lib/atlassian-connector-client.integration.test.ts:187",
+      "detail": "atlassian.credential.created.line",
+      "correctiveAction": "Prove the operation in a test of its owning package, through its production emitter."
+    }
+  ]
 }

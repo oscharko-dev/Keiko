@@ -6623,6 +6623,11 @@ describe("handleGatewaySetup", () => {
           ],
           circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
           codingOutageWindowMs,
+          atlassian: {
+            privateTargets: [
+              { baseUrl: "https://jira.operator.test/context", addressClass: "private" },
+            ],
+          },
           groundedAnswers: { ownAssessment: "disabled" },
           branding: { logoUrl: "https://assets.example.invalid/keiko.svg" },
         }),
@@ -6630,11 +6635,22 @@ describe("handleGatewaySetup", () => {
       );
 
       const result = await handleGatewaySetup(
-        ctx({ preserveExisting: true, imageInputModelIds: [] }),
+        ctx({
+          preserveExisting: true,
+          imageInputModelIds: [],
+          atlassian: {
+            privateTargets: [{ baseUrl: "https://attacker.test", addressClass: "loopback" }],
+          },
+        }),
         deps,
       );
 
       expect(result.status).toBe(200);
+      expect(currentGatewayConfig(deps)?.atlassian).toEqual({
+        privateTargets: [
+          { baseUrl: "https://jira.operator.test/context", addressClass: "private" },
+        ],
+      });
       expect(currentGatewayConfig(deps)?.groundedAnswers).toEqual({ ownAssessment: "disabled" });
       expect(currentGatewayConfig(deps)?.branding).toEqual({
         logoUrl: "https://assets.example.invalid/keiko.svg",
@@ -11362,12 +11378,18 @@ describe("rawConfigFromCurrent — voice persona persistence round-trip", () => 
   it("preserves the grounded-answer policy and the PR branding on reload", () => {
     const config = parseGatewayConfig({
       ...voiceRaw,
+      atlassian: {
+        privateTargets: [
+          { baseUrl: "https://jira.operator.test/context", addressClass: "private" },
+        ],
+      },
       groundedAnswers: { ownAssessment: "disabled" },
       branding: { logoUrl: "https://assets.example.invalid/keiko.svg" },
     });
 
     const reloaded = parseGatewayConfig(rawConfigFromCurrent(config, undefined));
 
+    expect(reloaded.atlassian).toEqual(config.atlassian);
     expect(reloaded.groundedAnswers).toEqual({ ownAssessment: "disabled" });
     expect(reloaded.branding).toEqual({ logoUrl: "https://assets.example.invalid/keiko.svg" });
   });

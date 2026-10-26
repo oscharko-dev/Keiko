@@ -82,6 +82,8 @@ const ATLASSIAN_CREDENTIAL_REJECTED_OPERATION = defineActivityLogOperation({
 // closures, so no route can reach a stored secret (ADR-0128 D2). The body-less port serves the
 // verify probe; the bounded-body port serves the sync lane (Issue #2242).
 export interface AtlassianConnectorCredentialDeps {
+  /** Listener lifecycle owned by the BFF, never exposed through an HTTP request. */
+  readonly registerListener?: (port: number) => () => void;
   readonly custody: AtlassianCredentialCustody;
   readonly httpPortFactory: (
     metadata: AtlassianCredentialMetadata,

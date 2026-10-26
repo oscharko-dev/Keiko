@@ -4,6 +4,7 @@
 // and are excluded from every serialisation path.
 
 import { readFileSync } from "node:fs";
+import { parseAtlassianNetworkConfig } from "./atlassian-network-config.js";
 import { isIP } from "node:net";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { ConfigInvalidError } from "@oscharko-dev/keiko-security/errors/gateway";
@@ -2328,6 +2329,7 @@ function buildGatewayConfig(
   const figma = parseFigmaConnectorConfig(raw);
   const branding = parseGatewayBrandingConfig(raw);
   const groundedAnswers = parseGroundedAnswersConfig(raw);
+  const atlassian = parseAtlassianNetworkConfig(raw.atlassian);
   const codingOutageWindowMs = parseCodingOutageWindow(raw.codingOutageWindowMs);
   return {
     providers,
@@ -2341,6 +2343,7 @@ function buildGatewayConfig(
     ...(figma !== undefined ? { figma } : {}),
     ...(branding !== undefined ? { branding } : {}),
     ...(groundedAnswers !== undefined ? { groundedAnswers } : {}),
+    ...(atlassian === undefined ? {} : { atlassian }),
   };
 }
 

@@ -17,6 +17,7 @@ import type {
 } from "@oscharko-dev/keiko-security/secret-vault";
 import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import type { AtlassianNetworkConfig } from "@oscharko-dev/keiko-contracts";
 import type { OutboundHttpEgressConfig } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { openAtlassianCredentialVault } from "./credentialVault.js";
@@ -25,6 +26,7 @@ import { createGatewayAtlassianHttpBodyPort, createGatewayAtlassianHttpPort } fr
 import type { AtlassianConnectorCredentialDeps } from "./credentialRoutes.js";
 
 export interface BuildAtlassianConnectorCredentialDepsOptions {
+  readonly networkConfig?: () => AtlassianNetworkConfig | undefined;
   // The effective gateway config path; the credential custody domain lives in the sibling
   // `credentials/` directory (shared with the provider vault, separately keyed — ADR-0128 D2).
   readonly configPath: string;
@@ -73,14 +75,26 @@ function lazyVaultPort(
 export function buildAtlassianConnectorCredentialDeps(
   options: BuildAtlassianConnectorCredentialDepsOptions,
 ): AtlassianConnectorCredentialDeps {
+  const listenerPorts = new Set<number>();
   const { custody, executionResolver } = createAtlassianCredentialCustody({
     vault: lazyVaultPort(options),
     metadataStore: createAtlassianCredentialMetadataStore({ configPath: options.configPath }),
   });
   return {
     custody,
+    registerListener: (port): (() => void) => {
+      listenerPorts.add(port);
+      return (): void => {
+        listenerPorts.delete(port);
+      };
+    },
     httpPortFactory: (metadata, correlationId) =>
       createGatewayAtlassianHttpPort({
+        privateTargets: () =>
+          metadata.deployment === "data-center"
+            ? (options.networkConfig?.()?.privateTargets ?? [])
+            : [],
+        deniedLoopbackPorts: () => [...listenerPorts],
         baseUrl: metadata.baseUrl,
         authRef: metadata.authRef,
         credentials: executionResolver,
@@ -90,6 +104,11 @@ export function buildAtlassianConnectorCredentialDeps(
       }),
     httpBodyPortFactory: (metadata, correlationId) =>
       createGatewayAtlassianHttpBodyPort({
+        privateTargets: () =>
+          metadata.deployment === "data-center"
+            ? (options.networkConfig?.()?.privateTargets ?? [])
+            : [],
+        deniedLoopbackPorts: () => [...listenerPorts],
         baseUrl: metadata.baseUrl,
         authRef: metadata.authRef,
         credentials: executionResolver,

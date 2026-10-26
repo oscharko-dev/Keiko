@@ -36,7 +36,7 @@ export type { OutboundHttpEgressConfig } from "./types.js";
 // string alone, with no DNS resolution and no dependency on any `OutboundHttpEgressConfig` flag —
 // safe to use unconditionally, proxied or not (see keiko-server's Atlassian httpPort.ts for why
 // that distinction matters: `denyLoopback` cannot be pinned on a proxied request there).
-export { classifyOutboundHost } from "./egress-policy.js";
+export { classifyOutboundHost, outboundTargetBlockedReason } from "./egress-policy.js";
 
 // Captured once at module load, before any test can monkey-patch `globalThis.fetch`. Used to
 // detect a caller-substituted global fetch (the established test convention in this codebase,
@@ -749,7 +749,11 @@ async function enforceOutboundTargetPolicy(
   if (!options.resolveDns) return undefined;
   const addresses = await boundedDnsLookup(target.hostname, options.signal);
   for (const address of addresses) {
-    const reason = outboundAddressBlockedReason(address.address, egress);
+    const reason = outboundAddressBlockedReason(
+      address.address,
+      egress,
+      Number(target.port || (target.protocol === "https:" ? 443 : 80)),
+    );
     if (reason !== undefined) throw blockedTargetError(`DNS resolved to ${reason}`);
   }
   return addresses;

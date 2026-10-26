@@ -7,7 +7,7 @@ import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it } from "vitest";
 import { isAtlassianConnectorAuthRef } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { createLocalSecretVault } from "@oscharko-dev/keiko-security/secret-vault";
 import {
@@ -464,7 +464,7 @@ describe("createAtlassianCredentialCustody — resolveForExecution", () => {
     const { custody, executionResolver } = custodyOverFakes();
     const metadata = custody.create(createInput());
     const resolved = executionResolver.resolveForExecution(metadata.authRef);
-    expect(resolved.scheme).toBe("basic-api-token");
+    assert(resolved.scheme === "basic-api-token");
     expect(resolved.accountEmail).toBe(SYNTHETIC_EMAIL);
     expect(resolved.apiToken).toBe(SYNTHETIC_TOKEN);
   });
@@ -512,7 +512,7 @@ describe("createAtlassianCredentialCustody — metadata re-validation on read (K
     const tainted = {
       ...metadata,
       apiToken: "should-never-reach-a-metadata-projection",
-    } as AtlassianCredentialMetadata;
+    };
     metadataStore.rows.set(metadata.authRef, tainted);
 
     expect(custody.getMetadata(metadata.authRef)).toBeUndefined();

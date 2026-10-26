@@ -1231,6 +1231,8 @@ export type {
   AtlassianConnectorActivityRecord,
   AtlassianConnectorAuthScheme,
   AtlassianConnectorDeployment,
+  AtlassianPrivateTarget,
+  AtlassianNetworkConfig,
   AtlassianCredentialMetadata,
   AtlassianCredentialCreateRequest,
   AtlassianConnectorAuthorityFailureReason,

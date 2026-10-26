@@ -50,6 +50,16 @@ export type AtlassianConnectorAuthScheme = "basic-api-token" | "bearer-pat";
 
 export type AtlassianConnectorDeployment = "cloud" | "data-center";
 
+/** Operator file configuration, never a credential-create or Chat request field. */
+export interface AtlassianPrivateTarget {
+  readonly baseUrl: string;
+  readonly addressClass: "private" | "loopback";
+}
+
+export interface AtlassianNetworkConfig {
+  readonly privateTargets: readonly AtlassianPrivateTarget[];
+}
+
 interface AtlassianCredentialMetadataBase {
   readonly schemaVersion: typeof ATLASSIAN_CONNECTOR_SCHEMA_VERSION;
   readonly authRef: string;
@@ -214,6 +224,16 @@ export function isSafeAtlassianConnectorBaseUrl(value: unknown): value is string
   }
   if (!isSafeParsedBaseUrl(url)) return false;
   return !value.includes("@") && !value.includes("?") && !value.includes("#");
+}
+
+/** Exact target identity; ambiguous path encodings and normalizing traversal are not admitted. */
+export function canonicalAtlassianConnectorBaseUrl(value: unknown): string | undefined {
+  if (!isSafeAtlassianConnectorBaseUrl(value)) return undefined;
+  const url = new URL(value);
+  const normalized = url.toString().replace(/\/$/, "");
+  if (normalized !== value.replace(/\/$/, "")) return undefined;
+  if (url.pathname.includes("%") || url.pathname.includes("//")) return undefined;
+  return normalized;
 }
 
 // ─── Connector descriptor (ADR-0128 D2) ───────────────────────────────────────
