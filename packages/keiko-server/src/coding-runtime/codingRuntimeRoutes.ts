@@ -554,6 +554,10 @@ export function handleCodingRuntimeReadiness(ctx: RouteContext, deps: UiHandlerD
         ? {
             runtimeEvidenceClass:
               deps.codingRuntimeEvidenceClass ?? "functional-not-platform-qualified",
+            // #3904 AC4: only what the activation verified; an unthreaded value is not reported.
+            ...(deps.codingRuntimeVersion === undefined
+              ? {}
+              : { runtimeVersion: deps.codingRuntimeVersion }),
           }
         : {
             runtimeUnavailableReason: deps.codingRuntimeUnavailableReason ?? "runtime-unqualified",

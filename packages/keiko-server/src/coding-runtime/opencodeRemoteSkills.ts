@@ -49,6 +49,9 @@ const MAX_INDEX_ENTRIES = 64;
 /** Across every source of a run, as for the repository's own skills. */
 const MAX_REMOTE_SKILLS = 16;
 const FETCH_TIMEOUT_MS = 10_000;
+// Every source together: a run never waits longer than this for its remote skills, however many
+// fetches an unreachable network lets run into their own timeout one after the other (#3907 AC10).
+const ADMISSION_DEADLINE_MS = 30_000;
 const FULL_ACCESS = "autonomous-delivery";
 /** Beside the repository's `skills/`; the producer discovers both. */
 const REMOTE_SKILL_DIRECTORY = "skill";
@@ -142,6 +145,8 @@ export interface RemoteSkillsAdmissionInput {
   readonly egress: () => OutboundHttpEgressConfig | undefined;
   readonly activityLog: ServerLogSink | undefined;
   readonly fetchImpl?: typeof fetch | undefined;
+  /** The bound on one admission, every source together; a test shortens it. */
+  readonly admissionDeadlineMs?: number | undefined;
 }
 
 export interface RemoteSkillsPort {
@@ -185,7 +190,8 @@ async function admitRemoteSkills(
       return;
     }
     const pull: Pull = { names: repositorySkillNames(request.discoveryRoot), files: [] };
-    for (const source of registry.sources) await pullSource(input, request, source, pull); // NOSONAR typescript:S9382 -- an earlier source's skills take their names first, and the cap spans sources
+    const bounded = { ...request, signal: admissionSignal(input, request.signal) };
+    for (const source of registry.sources) await pullSource(input, bounded, source, pull); // NOSONAR typescript:S9382 -- an earlier source's skills take their names first, and the cap spans sources
     writeAdmittedRepositoryItems(request.discoveryRoot, pull.files);
   } catch (error) {
     recordRemoteSkills(
@@ -196,6 +202,14 @@ async function admitRemoteSkills(
     );
     rmSync(join(request.discoveryRoot, REMOTE_SKILL_DIRECTORY), { recursive: true, force: true });
   }
+}
+
+function admissionSignal(
+  input: RemoteSkillsAdmissionInput,
+  signal: AbortSignal | undefined,
+): AbortSignal {
+  const deadline = AbortSignal.timeout(input.admissionDeadlineMs ?? ADMISSION_DEADLINE_MS);
+  return signal === undefined ? deadline : AbortSignal.any([signal, deadline]);
 }
 
 function repositorySkillNames(discoveryRoot: string): Set<string> {

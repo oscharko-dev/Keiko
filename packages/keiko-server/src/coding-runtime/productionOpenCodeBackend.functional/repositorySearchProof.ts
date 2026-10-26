@@ -1,7 +1,11 @@
-// Scripted MODEL boundary for the real-binary lane: the search result and subsequent bounded read
-// still traverse the shipped runtime, protocol, binder and production workspace handlers.
+// Scripted MODEL boundary for the real-binary lane: the search result and the subsequent bounded
+// read are the original runtime's own `grep` and `read` tools (#3897), so the result still traverses
+// the shipped runtime, its permission hook and the production workspace boundary; only the model's
+// choice of what to read next is derived here, from the result and never from a fixture path.
 import { createHash } from "node:crypto";
-import { decodeGovernedToolModelContent } from "../governedToolModelContent.js";
+import { isAbsolute, relative } from "node:path";
+
+import { nativeToolResultText, nativeWorkingDirectory } from "./nativeToolTranscript.js";
 
 export const H1_PROOF_SEARCH_CALL_ID = "h1-real-binary-search";
 
@@ -16,61 +20,55 @@ export interface RepositorySearchConsumptionProof {
   readonly readTargetDerivedFromResult: true;
 }
 
-function record(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function searchOutput(transcript: string): Record<string, unknown> {
-  const messages: unknown = JSON.parse(transcript);
-  if (!Array.isArray(messages)) throw new TypeError("H1 proof requires gateway messages");
-  const reply: unknown = messages.find(
-    (message: unknown) =>
-      record(message) && message.role === "tool" && message.toolCallId === H1_PROOF_SEARCH_CALL_ID,
-  );
-  if (!record(reply) || typeof reply.content !== "string") {
-    throw new TypeError("H1 proof requires the correlated runtime search result");
-  }
-  const output = decodeGovernedToolModelContent(reply.content);
-  if (
-    !record(output) ||
-    output.status !== "completed" ||
-    !record(output.search) ||
-    output.search.ok !== true ||
-    output.search.kind !== "search"
-  ) {
-    throw new TypeError("H1 proof requires a completed search result");
-  }
-  return output.search;
-}
-
-function firstUsefulHit(
-  search: Record<string, unknown>,
-  needle: string,
-): {
+interface SearchHit {
   readonly path: string;
-  readonly snippet: string;
-  readonly startLine: number;
-  readonly endLine: number;
-} {
-  const hit: unknown = Array.isArray(search.hits) ? search.hits[0] : undefined;
+  readonly line: number;
+  readonly text: string;
+}
+
+interface SearchResult {
+  readonly declared: number;
+  readonly hits: readonly SearchHit[];
+}
+
+// The pinned 2.1.4 `grep` result: `Found <n> matches`, then per file its path and a colon, then
+// `  Line <n>: <text>` for every match in it (observed against the staged executable).
+const FOUND_HEADER = /^Found (\d+) matches?$/u;
+const HIT_LINE = /^ {2}Line (\d+): (.*)$/u;
+
+function parseSearchResult(text: string): SearchResult {
+  const [header = "", ...rest] = text.split("\n");
+  const declared = FOUND_HEADER.exec(header)?.[1];
+  if (declared === undefined) throw new TypeError("H1 proof requires a completed search result");
+  const hits: SearchHit[] = [];
+  let path: string | undefined;
+  for (const line of rest) {
+    const match = HIT_LINE.exec(line);
+    if (match !== null && path !== undefined) {
+      hits.push({ path, line: Number(match[1]), text: match[2] ?? "" });
+    } else if (line.endsWith(":") && !line.startsWith(" ")) {
+      path = line.slice(0, -1);
+    }
+  }
+  return { declared: Number(declared), hits };
+}
+
+function firstUsefulHit(result: SearchResult, needle: string, root: string): SearchHit {
+  const hit = result.hits[0];
   if (
-    !record(hit) ||
-    typeof hit.path !== "string" ||
-    typeof hit.snippet !== "string" ||
-    !hit.snippet.includes(needle) ||
-    !Number.isSafeInteger(hit.startLine) ||
-    !Number.isSafeInteger(hit.endLine) ||
-    Number(hit.startLine) < 1 ||
-    Number(hit.endLine) < Number(hit.startLine)
+    hit === undefined ||
+    result.declared !== result.hits.length ||
+    !hit.text.includes(needle) ||
+    !Number.isSafeInteger(hit.line) ||
+    hit.line < 1
   ) {
     throw new TypeError("H1 proof requires a useful bounded result with raw line coordinates");
   }
-  return {
-    path: hit.path,
-    snippet: hit.snippet,
-    startLine: Number(hit.startLine),
-    endLine: Number(hit.endLine),
-  };
+  const path = relative(root, hit.path);
+  if (path === "" || path.startsWith("..") || isAbsolute(path)) {
+    throw new TypeError("H1 proof requires a workspace-contained result");
+  }
+  return { ...hit, path };
 }
 
 export function repositorySearchReadHandoff(
@@ -78,21 +76,17 @@ export function repositorySearchReadHandoff(
   needle: string,
   observe: ((proof: RepositorySearchConsumptionProof) => void) | undefined,
 ): Record<string, unknown> {
-  const search = searchOutput(transcript);
-  const hit = firstUsefulHit(search, needle);
+  const result = parseSearchResult(nativeToolResultText(transcript, H1_PROOF_SEARCH_CALL_ID));
+  const hit = firstUsefulHit(result, needle, nativeWorkingDirectory(transcript));
   observe?.({
     schemaVersion: 1,
     toolCallId: H1_PROOF_SEARCH_CALL_ID,
-    hitCount: Array.isArray(search.hits) ? search.hits.length : 0,
+    hitCount: result.hits.length,
     pathDigest: createHash("sha256").update(hit.path).digest("hex"),
-    snippetDigest: createHash("sha256").update(hit.snippet).digest("hex"),
-    startLine: hit.startLine,
-    endLine: hit.endLine,
+    snippetDigest: createHash("sha256").update(hit.text).digest("hex"),
+    startLine: hit.line,
+    endLine: hit.line,
     readTargetDerivedFromResult: true,
   });
-  return {
-    relativePath: hit.path,
-    startLine: hit.startLine,
-    maxLines: hit.endLine - hit.startLine + 1,
-  };
+  return { path: hit.path, offset: hit.line, limit: 1 };
 }

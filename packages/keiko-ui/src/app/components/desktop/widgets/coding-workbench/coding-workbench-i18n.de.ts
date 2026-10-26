@@ -29,6 +29,25 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.history.exporting": "Export wird vorbereitet…",
   "codingWorkbench.history.exportError":
     "Die Aufgabe konnte nicht exportiert werden. Bitte erneut versuchen.",
+  "codingWorkbench.history.import": "Aufgabe importieren",
+  "codingWorkbench.history.importFile": "Datei der Coding-Aufgabe",
+  "codingWorkbench.history.importHint":
+    "Importiert eine mit „Als JSON exportieren“ gespeicherte Aufgabe oder ein OpenCode-Sitzungsprotokoll von deinem Gerät in diesen Arbeitsbereich. Die Datei bleibt auf diesem Computer.",
+  "codingWorkbench.history.importing": "Aufgabe wird importiert…",
+  "codingWorkbench.history.importPartial":
+    "Ältere Nachrichten wurden ausgelassen. Importiert wurden die {count} neuesten Nachrichten.",
+  "codingWorkbench.history.importInvalid":
+    "Diese Datei ist kein Export einer Coding-Aufgabe und kein OpenCode-Sitzungsprotokoll.",
+  "codingWorkbench.history.importUnsupported":
+    "Diese Datei wurde von einer neueren Keiko-Version exportiert.",
+  "codingWorkbench.history.importTooLarge": "Diese Datei ist zu groß für den Import.",
+  "codingWorkbench.history.importEmpty": "Diese Datei enthält keinen Verlauf zum Importieren.",
+  "codingWorkbench.history.importNoWorkspace":
+    "Öffne zuerst einen Arbeitsbereich. Die Aufgabe wird in den aktiven Arbeitsbereich importiert.",
+  "codingWorkbench.history.importError":
+    "Die Aufgabe konnte nicht importiert werden. Bitte erneut versuchen.",
+  "codingWorkbench.history.importedNotice":
+    "„{title}“ wurde aus einer Datei importiert. Deine nächste Nachricht setzt sie als neue Aufgabe fort, die diesen Verlauf behält und „{title}“ nicht verändert.",
   "codingWorkbench.history.finish": "Aufgabe abschließen",
   "codingWorkbench.history.fork": "Aufgabe verzweigen",
   "codingWorkbench.history.forkFrom": "Ab hier verzweigen",
@@ -270,6 +289,20 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.info.agent": "Agent",
   "codingWorkbench.info.modelReadiness": "Modellbereitschaft",
   "codingWorkbench.info.runtime": "Runtime-Verifikation",
+  "codingWorkbench.info.runtimeVersion": "OpenCode-Runtime",
+  "codingWorkbench.info.runtimeVersion.value": "{version} · {origin}",
+  "codingWorkbench.info.runtimeVersion.pinned":
+    "{version} · {origin} · diese Keiko-Version erwartet {pinned}",
+  "codingWorkbench.info.runtimeOrigin.portable-release": "Keiko-Release",
+  "codingWorkbench.info.runtimeOrigin.npm-runtime-package": "npm-Runtime-Paket",
+  "codingWorkbench.info.runtimeOrigin.dev-checkout": "Entwicklungs-Checkout",
+  "codingWorkbench.info.latestRelease": "Neuestes Keiko-Release",
+  "codingWorkbench.info.latestRelease.checking": "Wird geprüft…",
+  "codingWorkbench.info.latestRelease.current": "{version} ist installiert und aktuell",
+  "codingWorkbench.info.latestRelease.available":
+    "{version} ist verfügbar. Installiere es unter Updates; es bringt seine eigene OpenCode-Runtime mit.",
+  "codingWorkbench.info.latestRelease.unknown":
+    "Unbekannt: Die Update-Prüfung hat die Release-Quelle nicht erreicht",
   "codingWorkbench.info.contextWindow": "Kontextfenster",
   "codingWorkbench.info.context.meter": "Kontextfenster zu {percent} % belegt",
   "codingWorkbench.info.context.used": "Belegter Input",

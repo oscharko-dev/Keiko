@@ -2381,6 +2381,27 @@ describe("CodingWorkbenchWindow", () => {
     expect(dialog).toHaveTextContent("Not reported by runtime");
   });
 
+  // #3904 AC4: the runtime version the server verified reaches the information unchanged.
+  it("shows the activated runtime's version from readiness in the information", (): void => {
+    const state = liveState();
+    const ready = state.runtime.value;
+    if (ready === null) throw new Error("readiness fixture missing");
+    renderWorkbench({
+      ...state,
+      runtime: {
+        ...state.runtime,
+        value: {
+          ...ready,
+          runtimeVersion: { opencode: "2.1.4", pinned: "2.1.4", origin: "portable-release" },
+        },
+      },
+    });
+    const dialog = openWorkbenchInformation();
+    expect(dialog).toHaveTextContent("OpenCode runtime");
+    expect(dialog).toHaveTextContent("2.1.4 · Keiko release");
+    expect(dialog).toHaveTextContent("Latest Keiko release");
+  });
+
   it("separates current context capacity from cumulative run input", ({ onTestFinished }): void => {
     // The expected English display must not depend on the Windows host's regional settings.
     const NumberFormat = Intl.NumberFormat;

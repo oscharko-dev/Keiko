@@ -610,6 +610,31 @@ export interface CodingWorkbenchRuntimeReadiness {
    * the run's runtime cannot honour, exactly as it refuses a `plan` request.
    */
   readonly promptInputs?: CodingWorkbenchRuntimePromptInputs | undefined;
+  /**
+   * The version facts of the activated runtime (#3904 AC4), only when it is available. Absent reads
+   * as not reported, never as the pinned version: a server that cannot name the runtime it
+   * verified must not let the browser claim one.
+   */
+  readonly runtimeVersion?: CodingWorkbenchRuntimeVersion | undefined;
+}
+
+/** Where the activated runtime came from (#3904 AC4); see `CodingWorkbenchRuntimeVersion`. */
+export type CodingWorkbenchRuntimeOrigin =
+  "portable-release" | "npm-runtime-package" | "dev-checkout";
+
+export const CODING_WORKBENCH_RUNTIME_ORIGINS: readonly CodingWorkbenchRuntimeOrigin[] =
+  Object.freeze(["portable-release", "npm-runtime-package", "dev-checkout"] as const);
+
+/**
+ * What runs and what this build expects (#3904 AC4). `opencode` is the version the verified
+ * runtime's approved release metadata names; `pinned` is the version this Keiko build stages. They
+ * differ while an earlier approved runtime package is still installed. A newer runtime arrives only
+ * with a Keiko update; the runtime never updates itself.
+ */
+export interface CodingWorkbenchRuntimeVersion {
+  readonly opencode: string;
+  readonly pinned: string;
+  readonly origin: CodingWorkbenchRuntimeOrigin;
 }
 
 /** The prompt inputs a runtime can honour; see `CodingWorkbenchRuntimeReadiness.promptInputs`. */
@@ -1893,6 +1918,7 @@ export function validateCodingWorkbenchRuntimeReadiness(
       "runtimeEvidenceClass",
       "selectableAgents",
       "promptInputs",
+      "runtimeVersion",
     ],
     "runtimeReadiness",
   );
@@ -1906,6 +1932,7 @@ export function validateCodingWorkbenchRuntimeReadiness(
   validateRuntimeEvidenceClass(value, errors);
   validateSelectableAgents(value, errors);
   validatePromptInputs(value.promptInputs, errors);
+  validateRuntimeVersion(value, errors);
   // The server may confirm a NARROWER effective mode than the plain request/ceiling clamp (the
   // #2386 mode-change gate anchors it to the live run), but never a wider one: widening past the
   // clamp is the fail-closed contract boundary.
@@ -1983,6 +2010,36 @@ function validateSelectableAgents(value: Record<string, unknown>, errors: string
   }
   if (!agents.includes(DEFAULT_CODING_WORKBENCH_AGENT)) {
     errors.push("selectableAgents must include the default agent");
+  }
+}
+
+// A release version: numeric core and an optional bounded pre-release, never a path or a range.
+const RUNTIME_VERSION_PATTERN = /^\d{1,6}\.\d{1,6}\.\d{1,6}(?:-[0-9A-Za-z.-]{1,32})?$/u;
+
+function isRuntimeVersionText(value: unknown): value is string {
+  return typeof value === "string" && RUNTIME_VERSION_PATTERN.test(value);
+}
+
+/**
+ * Absent reads as not reported. A present value names two release versions and a closed origin,
+ * and only an available runtime may carry one.
+ */
+function validateRuntimeVersion(value: Record<string, unknown>, errors: string[]): void {
+  const version = value.runtimeVersion;
+  if (version === undefined) return;
+  if (!isRecord(version)) {
+    errors.push("runtimeVersion must be an object");
+    return;
+  }
+  errors.push(...exactKeys(version, ["opencode", "pinned", "origin"], "runtimeVersion"));
+  for (const field of ["opencode", "pinned"] as const) {
+    if (!isRuntimeVersionText(version[field])) errors.push(`runtimeVersion.${field} is invalid`);
+  }
+  if (!isOneOf(version.origin, CODING_WORKBENCH_RUNTIME_ORIGINS)) {
+    errors.push("runtimeVersion.origin is invalid");
+  }
+  if (value.runtimeAvailable !== true) {
+    errors.push("runtimeVersion must be absent when the runtime is unavailable");
   }
 }
 
