@@ -44,6 +44,12 @@ static DWORD inbound_readback(PSID sid) {
         printf("socket-inbound-filter: package=%d loopback=%d action=%lu flags=%lu conditions=%lu\n",
                package, loopback, (unsigned long)filter->action.type, (unsigned long)filter->flags,
                (unsigned long)filter->numFilterConditions);
+        printf("socket-inbound-filter-layer: connect4=%d connect6=%d receive4=%d receive6=%d app-isolation=%d\n",
+               IsEqualGUID(&filter->layerKey, &FWPM_LAYER_ALE_AUTH_CONNECT_V4),
+               IsEqualGUID(&filter->layerKey, &FWPM_LAYER_ALE_AUTH_CONNECT_V6),
+               IsEqualGUID(&filter->layerKey, &FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4),
+               IsEqualGUID(&filter->layerKey, &FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6),
+               IsEqualGUID(&filter->subLayerKey, &FWPM_SUBLAYER_MPSSVC_APP_ISOLATION));
       }
     }
     if (filters != NULL) FwpmFreeMemory0((void **)&filters);

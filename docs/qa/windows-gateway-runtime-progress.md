@@ -143,6 +143,13 @@ non-listening port in both families; refusal or the bounded timeout must prevent
 independently of AppContainer. On the local host the reserved negative port times out (10060).
 No raw filter, provider name or event contents are printed by these diagnostics.
 
+[Run 40377579714](https://github.com/oscharko-dev/Keiko/actions/runs/40377579714) confirms a
+package-matching loopback permit from the system utility, while the actual host connections time
+out (`WSAETIMEDOUT`, 10060). The earlier 1225 value is the fixture's closed unavailable-route
+result, not a captured Winsock refusal. The next control also provisions inbound access before
+Keiko's outbound filters, so a failure of the utility itself can be separated from a conflict with
+the exact egress policy. Listener exit state and closed filter-layer classifications are retained.
+
 Local protocol validation also ran the complete existing `runtime-gateway.test.ts`: 29 passed,
 eight failed on existing POSIX filesystem fixtures rejected by Windows path canonicalization, and
 25 macOS tests skipped. The new cross-language vector case passes individually. These baseline

@@ -166,7 +166,7 @@ int gateway_socket_server(int family) {
   fd_set ready;
   struct timeval timeout = {5, 0};
   SOCKET connection = INVALID_SOCKET;
-  int result = 91;
+  int result = 91, ready_count;
   if (!appcontainer_member() || WSAStartup(MAKEWORD(2, 2), &data) != 0) return result;
   server.listener = INVALID_SOCKET;
   if (!listen_target(family, &server)) goto done;
@@ -176,9 +176,13 @@ int gateway_socket_server(int family) {
   if (!WriteFile(GetStdHandle(STD_OUTPUT_HANDLE), announcement, sizeof(announcement), &written, NULL) ||
       written != sizeof(announcement)) goto done;
   FD_ZERO(&ready); FD_SET(server.listener, &ready);
-  if (select(0, &ready, NULL, NULL, &timeout) <= 0) goto done;
+  ready_count = select(0, &ready, NULL, NULL, &timeout);
+  if (ready_count <= 0) {
+    result = ready_count == 0 ? WSAETIMEDOUT : WSAGetLastError();
+    goto done;
+  }
   connection = accept(server.listener, NULL, NULL);
-  if (connection != INVALID_SOCKET && send(connection, "K", 1, 0) == 1) result = 0;
+  result = connection != INVALID_SOCKET && send(connection, "K", 1, 0) == 1 ? 0 : WSAGetLastError();
 done:
   if (connection != INVALID_SOCKET) closesocket(connection);
   if (server.listener != INVALID_SOCKET) closesocket(server.listener);
@@ -260,6 +264,8 @@ static DWORD control_route_probe(PSID sid, const wchar_t *executable, int family
       !GetExitCodeProcess(child.hProcess, &code) || code != 0)) result = ERROR_INVALID_DATA;
 done:
   if (child.hProcess != NULL) {
+    /* Preserve whether the listener actually remained alive on a failed host connection. */
+    (void)GetExitCodeProcess(child.hProcess, &code);
     if (WaitForSingleObject(child.hProcess, 0) != WAIT_OBJECT_0) {
       (void)TerminateProcess(child.hProcess, 92);
       (void)WaitForSingleObject(child.hProcess, 5000);
@@ -277,6 +283,16 @@ done:
   printf("socket-host-control-route: phase=%s family=%d code=%lu child=%lu winsock=%d\n",
          phase, family, result, code, socket_error);
   return result;
+}
+
+static DWORD unfiltered_inbound_probe(PSID sid, const wchar_t *executable, int family,
+                                       PSID_AND_ATTRIBUTES network) {
+  struct gateway_inbound_fixture *owner = NULL;
+  DWORD result = gateway_inbound_start(sid, &owner), closed;
+  if (result == ERROR_SUCCESS)
+    result = control_route_probe(sid, executable, family, "unfiltered-inbound-provisioned", network);
+  closed = gateway_inbound_stop(owner);
+  return closed == ERROR_SUCCESS ? result : closed;
 }
 
 static DWORD run_child(PSID sid, const wchar_t *executable, int family,
@@ -571,6 +587,10 @@ int gateway_socket_proof(int inbound_experiment) {
         DWORD route = control_route_probe(sid, executable, family, "unfiltered", network_pointer);
         DWORD expected = inbound_experiment ? ERROR_CONNECTION_REFUSED : ERROR_SUCCESS;
         if (route != expected) control_result = ERROR_INVALID_DATA;
+        if (inbound_experiment) {
+          route = unfiltered_inbound_probe(sid, executable, family, network_pointer);
+          if (route != ERROR_SUCCESS) control_result = route;
+        }
       }
       if (result == ERROR_SUCCESS)
         result = keiko_gateway_filters_open(sid, (UINT16)family, gateway.port, &filters);
