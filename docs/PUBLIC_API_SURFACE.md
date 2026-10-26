@@ -1,4 +1,4 @@
-# Public API surface — 1.2.7
+# Public API surface — 1.3.0
 
 This document summarizes the current approved customer-facing surface for
 `@oscharko-dev/keiko`. It is current-state only: the heading names the product version whose surface
@@ -110,6 +110,9 @@ for compatibility. The root `package.json` `"version"` field is kept in lockstep
 ## Stability notes
 
 - Removing a root-barrel export or renaming a CLI flag is a breaking change.
+- 1.3.0: root exports and CLI entrypoints remain unchanged. The macOS optional coding-runtime
+  dependencies move to 1.1.4 (OpenCode 2.1.4). The local server adds authenticated Coding History
+  import and export routes for the Workbench UI. No customer database schema migration is introduced.
 - 1.2.7: root exports and CLI entrypoints remain unchanged. Portable update coordination, locking
   and recovery share the canonical runtime-state directory independently of UI database storage.
   No customer database schema migration is introduced. Published source updaters require the
