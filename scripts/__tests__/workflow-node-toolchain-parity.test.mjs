@@ -212,8 +212,9 @@ describe("workflow Node toolchain parity", () => {
     // qualification lane added for #3591 brings the setup-node total to 32; its independent
     // macOS 15 pull-request replay brings the total to 33; the Windows gateway proof adds one.
     // The four-target portable secure-read matrix adds one pinned setup-node definition.
-    // The isolated Firefox smoke matrix adds one more governed setup definition.
-    expect(withSetupNode).toHaveLength(36);
+    // The isolated Firefox smoke matrix adds one more governed setup definition. The owner-dispatched
+    // coding-runtime package publisher (#3898 AC8, coding-runtime-publish.yml) adds one more.
+    expect(withSetupNode).toHaveLength(37);
   });
 
   it("pins every actions/setup-node step to an approved exact Node version", () => {

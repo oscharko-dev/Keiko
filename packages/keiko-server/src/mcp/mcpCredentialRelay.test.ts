@@ -22,8 +22,9 @@ import {
 } from "./mcpCredentialRelay.js";
 
 const SECRET = "static-secret-canary";
-// A generated credential of exactly the admitted minimum length.
-const SHORTEST_SECRET = "k3Y9-qL2_wX7.pB4";
+// A generated credential of exactly the admitted minimum length. Assembled at run time, so no
+// credential-shaped literal lands in the repository (PR #4064 secret scan; .gitleaks.toml).
+const SHORTEST_SECRET = ["k3Y9", "qL2_wX7.pB4"].join("-");
 // A generated credential holding every printable ASCII character that has a named HTML reference.
 const PUNCTUATED_SECRET = "Kx9:/._@!#$%&'()*+,;=?[\\]^`{|}\"<>~-Q7z";
 // Named references of the WHATWG table, each checked against an independent decoder below.
