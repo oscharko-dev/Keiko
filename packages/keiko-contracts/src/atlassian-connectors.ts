@@ -13,7 +13,7 @@
 // shape is content-free by construction: enums, counts, identifiers, hashes, and durations — no
 // field can hold an issue/page body, comment text, raw JQL, token, or URL.
 
-import { isOneOf, isRecord } from "./contract-validation-primitives.js";
+import { isInSet, isRecord } from "./contract-validation-primitives.js";
 import {
   codingWorkbenchPolicyEffectFor,
   decideCodingWorkbenchActionForMode,
@@ -72,11 +72,11 @@ export const ATLASSIAN_CONNECTION_VERIFICATION_STATUSES: readonly AtlassianConne
     "timeout",
   ] as const satisfies readonly AtlassianConnectionVerificationStatus[]);
 
-export function isAtlassianConnectionVerificationStatus(
+export const isAtlassianConnectionVerificationStatus: (
   value: unknown,
-): value is AtlassianConnectionVerificationStatus {
-  return isOneOf(value, ATLASSIAN_CONNECTION_VERIFICATION_STATUSES);
-}
+) => value is AtlassianConnectionVerificationStatus = isInSet(
+  ATLASSIAN_CONNECTION_VERIFICATION_STATUSES,
+);
 
 // Opaque credential handle generated server-side at credential-write time (ADR-0128 D2):
 // `atlassian-cred:<16 random bytes, base64url>`. 16 bytes encode to exactly 22 unpadded base64url
@@ -1199,11 +1199,9 @@ export const ATLASSIAN_LIVE_SEARCH_TEMPLATE_IDS: readonly AtlassianLiveSearchTem
     "assigned-to-me-open",
   ] as const satisfies readonly AtlassianLiveSearchTemplateId[]);
 
-export function isAtlassianLiveSearchTemplateId(
+export const isAtlassianLiveSearchTemplateId: (
   value: unknown,
-): value is AtlassianLiveSearchTemplateId {
-  return isOneOf(value, ATLASSIAN_LIVE_SEARCH_TEMPLATE_IDS);
-}
+) => value is AtlassianLiveSearchTemplateId = isInSet(ATLASSIAN_LIVE_SEARCH_TEMPLATE_IDS);
 
 // Exactly one of `jql` (opaque free text, bounded by ATLASSIAN_JQL_MAX_CHARS, transported only —
 // never parsed, never in evidence) or `templateId` selects the query; `maxResults` optionally
@@ -1305,56 +1303,47 @@ export interface AtlassianConnectorPodSource {
 }
 
 // ─── Enum guards ───────────────────────────────────────────────────────────────
-export function isAtlassianConnectorProvider(value: unknown): value is AtlassianConnectorProvider {
-  return isOneOf(value, ATLASSIAN_CONNECTOR_PROVIDERS);
-}
+export const isAtlassianConnectorProvider: (value: unknown) => value is AtlassianConnectorProvider =
+  isInSet(ATLASSIAN_CONNECTOR_PROVIDERS);
 
-export function isAtlassianConnectorAuthScheme(
+export const isAtlassianConnectorAuthScheme: (
   value: unknown,
-): value is AtlassianConnectorAuthScheme {
-  return isOneOf(value, ATLASSIAN_CONNECTOR_AUTH_SCHEMES);
-}
+) => value is AtlassianConnectorAuthScheme = isInSet(ATLASSIAN_CONNECTOR_AUTH_SCHEMES);
 
-export function isAtlassianConnectorActionType(
+export const isAtlassianConnectorActionType: (
   value: unknown,
-): value is AtlassianConnectorActionType {
-  return isOneOf(value, ATLASSIAN_CONNECTOR_ACTION_TYPES);
-}
+) => value is AtlassianConnectorActionType = isInSet(ATLASSIAN_CONNECTOR_ACTION_TYPES);
 
-export function isAtlassianSyncJobStatus(value: unknown): value is AtlassianSyncJobStatus {
-  return isOneOf(value, ATLASSIAN_SYNC_JOB_STATUSES);
-}
+export const isAtlassianSyncJobStatus: (value: unknown) => value is AtlassianSyncJobStatus =
+  isInSet(ATLASSIAN_SYNC_JOB_STATUSES);
 
-export function isAtlassianSyncTerminalStatus(
+export const isAtlassianSyncTerminalStatus: (
   value: unknown,
-): value is AtlassianSyncTerminalStatus {
-  return isOneOf(value, ATLASSIAN_SYNC_TERMINAL_STATUSES);
-}
+) => value is AtlassianSyncTerminalStatus = isInSet(ATLASSIAN_SYNC_TERMINAL_STATUSES);
 
-export function isAtlassianSyncFailureReason(value: unknown): value is AtlassianSyncFailureReason {
-  return isOneOf(value, ATLASSIAN_SYNC_FAILURE_REASONS);
-}
+export const isAtlassianSyncFailureReason: (value: unknown) => value is AtlassianSyncFailureReason =
+  isInSet(ATLASSIAN_SYNC_FAILURE_REASONS);
 
-export function isAtlassianConnectorActionReviewReason(
+export const isAtlassianConnectorActionReviewReason: (
   value: unknown,
-): value is AtlassianConnectorActionReviewReason {
-  return isOneOf(value, ATLASSIAN_CONNECTOR_ACTION_REVIEW_REASONS);
-}
+) => value is AtlassianConnectorActionReviewReason = isInSet(
+  ATLASSIAN_CONNECTOR_ACTION_REVIEW_REASONS,
+);
 
-export function isAtlassianConnectorWriteFailureReason(
+export const isAtlassianConnectorWriteFailureReason: (
   value: unknown,
-): value is AtlassianConnectorWriteFailureReason {
-  return isOneOf(value, ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS);
-}
+) => value is AtlassianConnectorWriteFailureReason = isInSet(
+  ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS,
+);
 
-export function isAtlassianConnectorAuthorityFailureReason(
+export const isAtlassianConnectorAuthorityFailureReason: (
   value: unknown,
-): value is AtlassianConnectorAuthorityFailureReason {
-  return isOneOf(value, ATLASSIAN_CONNECTOR_AUTHORITY_FAILURE_REASONS);
-}
+) => value is AtlassianConnectorAuthorityFailureReason = isInSet(
+  ATLASSIAN_CONNECTOR_AUTHORITY_FAILURE_REASONS,
+);
 
-export function isAtlassianConnectorRegistryFailureReason(
+export const isAtlassianConnectorRegistryFailureReason: (
   value: unknown,
-): value is AtlassianConnectorRegistryFailureReason {
-  return isOneOf(value, ATLASSIAN_CONNECTOR_REGISTRY_FAILURE_REASONS);
-}
+) => value is AtlassianConnectorRegistryFailureReason = isInSet(
+  ATLASSIAN_CONNECTOR_REGISTRY_FAILURE_REASONS,
+);

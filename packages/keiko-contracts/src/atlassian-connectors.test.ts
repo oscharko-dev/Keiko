@@ -1336,3 +1336,139 @@ describe("Jira citation metadata native observation preservation", () => {
     });
   }
 });
+
+import * as atlasEnumSource from "./atlassian-connectors.js";
+import * as atlasEnumPublic from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+
+interface AtlasEnumBindingCase {
+  readonly name: string;
+  readonly catalog: readonly string[];
+  readonly source: (value: unknown) => boolean;
+  readonly public: (value: unknown) => boolean;
+}
+
+const atlasEnumBindingCases: readonly AtlasEnumBindingCase[] = [
+  {
+    name: "isAtlassianConnectionVerificationStatus",
+    catalog: atlasEnumSource.ATLASSIAN_CONNECTION_VERIFICATION_STATUSES,
+    source: atlasEnumSource.isAtlassianConnectionVerificationStatus,
+    public: atlasEnumPublic.isAtlassianConnectionVerificationStatus,
+  },
+  {
+    name: "isAtlassianLiveSearchTemplateId",
+    catalog: atlasEnumSource.ATLASSIAN_LIVE_SEARCH_TEMPLATE_IDS,
+    source: atlasEnumSource.isAtlassianLiveSearchTemplateId,
+    public: atlasEnumPublic.isAtlassianLiveSearchTemplateId,
+  },
+  {
+    name: "isAtlassianConnectorProvider",
+    catalog: atlasEnumSource.ATLASSIAN_CONNECTOR_PROVIDERS,
+    source: atlasEnumSource.isAtlassianConnectorProvider,
+    public: atlasEnumPublic.isAtlassianConnectorProvider,
+  },
+  {
+    name: "isAtlassianConnectorAuthScheme",
+    catalog: atlasEnumSource.ATLASSIAN_CONNECTOR_AUTH_SCHEMES,
+    source: atlasEnumSource.isAtlassianConnectorAuthScheme,
+    public: atlasEnumPublic.isAtlassianConnectorAuthScheme,
+  },
+  {
+    name: "isAtlassianConnectorActionType",
+    catalog: atlasEnumSource.ATLASSIAN_CONNECTOR_ACTION_TYPES,
+    source: atlasEnumSource.isAtlassianConnectorActionType,
+    public: atlasEnumPublic.isAtlassianConnectorActionType,
+  },
+  {
+    name: "isAtlassianSyncJobStatus",
+    catalog: atlasEnumSource.ATLASSIAN_SYNC_JOB_STATUSES,
+    source: atlasEnumSource.isAtlassianSyncJobStatus,
+    public: atlasEnumPublic.isAtlassianSyncJobStatus,
+  },
+  {
+    name: "isAtlassianSyncTerminalStatus",
+    catalog: atlasEnumSource.ATLASSIAN_SYNC_TERMINAL_STATUSES,
+    source: atlasEnumSource.isAtlassianSyncTerminalStatus,
+    public: atlasEnumPublic.isAtlassianSyncTerminalStatus,
+  },
+  {
+    name: "isAtlassianSyncFailureReason",
+    catalog: atlasEnumSource.ATLASSIAN_SYNC_FAILURE_REASONS,
+    source: atlasEnumSource.isAtlassianSyncFailureReason,
+    public: atlasEnumPublic.isAtlassianSyncFailureReason,
+  },
+  {
+    name: "isAtlassianConnectorActionReviewReason",
+    catalog: atlasEnumSource.ATLASSIAN_CONNECTOR_ACTION_REVIEW_REASONS,
+    source: atlasEnumSource.isAtlassianConnectorActionReviewReason,
+    public: atlasEnumPublic.isAtlassianConnectorActionReviewReason,
+  },
+  {
+    name: "isAtlassianConnectorWriteFailureReason",
+    catalog: atlasEnumSource.ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS,
+    source: atlasEnumSource.isAtlassianConnectorWriteFailureReason,
+    public: atlasEnumPublic.isAtlassianConnectorWriteFailureReason,
+  },
+  {
+    name: "isAtlassianConnectorAuthorityFailureReason",
+    catalog: atlasEnumSource.ATLASSIAN_CONNECTOR_AUTHORITY_FAILURE_REASONS,
+    source: atlasEnumSource.isAtlassianConnectorAuthorityFailureReason,
+    public: atlasEnumPublic.isAtlassianConnectorAuthorityFailureReason,
+  },
+  {
+    name: "isAtlassianConnectorRegistryFailureReason",
+    catalog: atlasEnumSource.ATLASSIAN_CONNECTOR_REGISTRY_FAILURE_REASONS,
+    source: atlasEnumSource.isAtlassianConnectorRegistryFailureReason,
+    public: atlasEnumPublic.isAtlassianConnectorRegistryFailureReason,
+  },
+];
+
+const atlasEnumBindingSurfaces: readonly ("source" | "public")[] = ["source", "public"];
+
+for (const surface of atlasEnumBindingSurfaces) {
+  for (const entry of atlasEnumBindingCases) {
+    it(`${surface} ${entry.name} retains its closed catalog without coercion (#3918)`, () => {
+      const guard = entry[surface];
+      for (const member of entry.catalog) expect(guard(member)).toBe(true);
+      expect(guard("foreign-atlassian-catalog-entry")).toBe(false);
+      expect(guard("")).toBe(false);
+      let coercions = 0;
+      const hostile = {
+        [Symbol.toPrimitive](): never {
+          coercions += 1;
+          throw new TypeError("fixture coercion must not run");
+        },
+        toString(): never {
+          coercions += 1;
+          throw new TypeError("fixture string conversion must not run");
+        },
+        valueOf(): never {
+          coercions += 1;
+          throw new TypeError("fixture value conversion must not run");
+        },
+      };
+      const boxedString: unknown = Object("jira");
+      const nonStrings: readonly unknown[] = [
+        undefined,
+        null,
+        false,
+        true,
+        0,
+        1,
+        Symbol("fixture"),
+        [],
+        {},
+        boxedString,
+        hostile,
+      ];
+      for (const value of nonStrings) expect(guard(value)).toBe(false);
+      expect(coercions).toBe(0);
+    });
+  }
+  it(`${surface} keeps running jobs outside the terminal-status domain (#3918)`, () => {
+    const api = surface === "source" ? atlasEnumSource : atlasEnumPublic;
+    expect(api.isAtlassianSyncJobStatus("running")).toBe(true);
+    expect(api.isAtlassianSyncTerminalStatus("running")).toBe(false);
+    expect(api.isAtlassianSyncJobStatus("succeeded")).toBe(true);
+    expect(api.isAtlassianSyncTerminalStatus("succeeded")).toBe(true);
+  });
+}

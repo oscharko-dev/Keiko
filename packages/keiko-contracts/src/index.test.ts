@@ -1589,3 +1589,58 @@ it("exposes concrete typed catalog wire parsers without widening strict producer
     import("./index.js").LocalKnowledgeCapsuleSetsCatalogResponse["capsuleSets"][number]["capsuleCount"]
   >().toEqualTypeOf<number>();
 });
+
+import type {
+  isAtlassianConnectionVerificationStatus as RootAtlasVerificationGuard,
+  isAtlassianLiveSearchTemplateId as RootAtlasTemplateGuard,
+  isAtlassianConnectorProvider as RootAtlasProviderGuard,
+  isAtlassianConnectorAuthScheme as RootAtlasAuthGuard,
+  isAtlassianConnectorActionType as RootAtlasActionGuard,
+  isAtlassianSyncJobStatus as RootAtlasJobGuard,
+  isAtlassianSyncTerminalStatus as RootAtlasTerminalGuard,
+  isAtlassianSyncFailureReason as RootAtlasSyncFailureGuard,
+  isAtlassianConnectorActionReviewReason as RootAtlasReviewGuard,
+  isAtlassianConnectorWriteFailureReason as RootAtlasWriteFailureGuard,
+  isAtlassianConnectorAuthorityFailureReason as RootAtlasAuthorityFailureGuard,
+  isAtlassianConnectorRegistryFailureReason as RootAtlasRegistryFailureGuard,
+} from "@oscharko-dev/keiko-contracts";
+import type * as atlasEnumRuntimeForIndex from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+
+it("preserves Atlassian root TYPE callable domains through existing runtime selectors (#3918)", () => {
+  expectTypeOf<typeof RootAtlasVerificationGuard>().toEqualTypeOf<
+    typeof atlasEnumRuntimeForIndex.isAtlassianConnectionVerificationStatus
+  >();
+  expectTypeOf<typeof RootAtlasTemplateGuard>().toEqualTypeOf<
+    typeof atlasEnumRuntimeForIndex.isAtlassianLiveSearchTemplateId
+  >();
+  expectTypeOf<typeof RootAtlasProviderGuard>().toEqualTypeOf<
+    typeof atlasEnumRuntimeForIndex.isAtlassianConnectorProvider
+  >();
+  expectTypeOf<typeof RootAtlasAuthGuard>().toEqualTypeOf<
+    typeof atlasEnumRuntimeForIndex.isAtlassianConnectorAuthScheme
+  >();
+  expectTypeOf<typeof RootAtlasActionGuard>().toEqualTypeOf<
+    typeof atlasEnumRuntimeForIndex.isAtlassianConnectorActionType
+  >();
+  expectTypeOf<typeof RootAtlasJobGuard>().toEqualTypeOf<
+    typeof atlasEnumRuntimeForIndex.isAtlassianSyncJobStatus
+  >();
+  expectTypeOf<typeof RootAtlasTerminalGuard>().toEqualTypeOf<
+    typeof atlasEnumRuntimeForIndex.isAtlassianSyncTerminalStatus
+  >();
+  expectTypeOf<typeof RootAtlasSyncFailureGuard>().toEqualTypeOf<
+    typeof atlasEnumRuntimeForIndex.isAtlassianSyncFailureReason
+  >();
+  expectTypeOf<typeof RootAtlasReviewGuard>().toEqualTypeOf<
+    typeof atlasEnumRuntimeForIndex.isAtlassianConnectorActionReviewReason
+  >();
+  expectTypeOf<typeof RootAtlasWriteFailureGuard>().toEqualTypeOf<
+    typeof atlasEnumRuntimeForIndex.isAtlassianConnectorWriteFailureReason
+  >();
+  expectTypeOf<typeof RootAtlasAuthorityFailureGuard>().toEqualTypeOf<
+    typeof atlasEnumRuntimeForIndex.isAtlassianConnectorAuthorityFailureReason
+  >();
+  expectTypeOf<typeof RootAtlasRegistryFailureGuard>().toEqualTypeOf<
+    typeof atlasEnumRuntimeForIndex.isAtlassianConnectorRegistryFailureReason
+  >();
+});
