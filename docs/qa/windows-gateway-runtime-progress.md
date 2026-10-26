@@ -117,6 +117,15 @@ this experiment. Microsoft's [IPC documentation](https://learn.microsoft.com/en-
 limits this utility mechanism to local sideload/debug scenarios; a positive experiment does not
 establish an installed production control plane or release approval.
 
+[Run 40372342820](https://github.com/oscharko-dev/Keiko/actions/runs/40372342820) kept the
+utility alive but still could not establish either family's inbound connection. That fixture had
+no network capability in its AppContainer tokens. The explicit inbound experiment now supplies
+`privateNetworkClientServer` at profile creation and process launch, as required by Microsoft's
+IPC documentation. Both concurrent trees and their outbound/UDP/descendant controls use that same
+capability, so the experiment cannot hide a wider egress allowance behind a different test token.
+The ordinary socket proof retains the original token and still requires a working control route.
+This is a pending experiment, not an assertion that capability provisioning fixes the blocker.
+
 Local protocol validation also ran the complete existing `runtime-gateway.test.ts`: 29 passed,
 eight failed on existing POSIX filesystem fixtures rejected by Windows path canonicalization, and
 25 macOS tests skipped. The new cross-language vector case passes individually. These baseline

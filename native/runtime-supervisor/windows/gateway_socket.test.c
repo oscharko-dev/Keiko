@@ -166,7 +166,8 @@ static DWORD read_server_port(HANDLE output, int family, UINT16 *port) {
   return ERROR_TIMEOUT;
 }
 
-static DWORD control_route_probe(PSID sid, const wchar_t *executable, int family, const char *phase) {
+static DWORD control_route_probe(PSID sid, const wchar_t *executable, int family, const char *phase,
+                                  PSID_AND_ATTRIBUTES network) {
   STARTUPINFOEXW startup = {0};
   PROCESS_INFORMATION child = {0};
   SECURITY_CAPABILITIES capabilities = {0};
@@ -200,6 +201,8 @@ static DWORD control_route_probe(PSID sid, const wchar_t *executable, int family
   startup.StartupInfo.hStdOutput = inherited[1];
   startup.StartupInfo.hStdError = inherited[2];
   capabilities.AppContainerSid = sid;
+  capabilities.Capabilities = network;
+  capabilities.CapabilityCount = network == NULL ? 0 : 1;
   job = CreateJobObjectW(NULL, NULL);
   limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
   if (job == NULL || !SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits)) ||
@@ -238,19 +241,19 @@ done:
 }
 
 static DWORD run_child(PSID sid, const wchar_t *executable, int family,
-                       UINT16 gateway, UINT16 hostile, DWORD *observed);
+                       UINT16 gateway, UINT16 hostile, DWORD *observed, PSID_AND_ATTRIBUTES network);
 static int udp_received(SOCKET listener);
 
 static DWORD scoped_inbound_probe(PSID sid, const wchar_t *executable, int family,
-                                  UINT16 gateway, UINT16 hostile, SOCKET udp) {
+                                  UINT16 gateway, UINT16 hostile, SOCKET udp, PSID_AND_ATTRIBUTES network) {
   struct gateway_inbound_fixture *owner = NULL;
   HANDLE deny = NULL;
   DWORD result = gateway_inbound_start(sid, &owner), closed;
   DWORD observed = 99;
   if (result == ERROR_SUCCESS)
-    result = control_route_probe(sid, executable, family, "inbound-provisioned");
+    result = control_route_probe(sid, executable, family, "inbound-provisioned", network);
   if (result == ERROR_SUCCESS) {
-    result = run_child(sid, executable, family, gateway, hostile, &observed);
+    result = run_child(sid, executable, family, gateway, hostile, &observed, network);
     printf("socket-inbound-egress: family=%d code=%lu observations=%lu expected-tcp-mask=1\n",
            family, result, observed);
     if (result == ERROR_SUCCESS &&
@@ -258,18 +261,18 @@ static DWORD scoped_inbound_probe(PSID sid, const wchar_t *executable, int famil
   }
   if (result == ERROR_SUCCESS) result = gateway_inbound_block(sid, (UINT16)family, &deny);
   if (result == ERROR_SUCCESS &&
-      control_route_probe(sid, executable, family, "independent-deny") != ERROR_CONNECTION_REFUSED)
+      control_route_probe(sid, executable, family, "independent-deny", network) != ERROR_CONNECTION_REFUSED)
     result = ERROR_INVALID_DATA;
   if (deny != NULL) {
     closed = FwpmEngineClose0(deny);
     if (closed != ERROR_SUCCESS) result = closed;
   }
   if (result == ERROR_SUCCESS)
-    result = control_route_probe(sid, executable, family, "deny-removed");
+    result = control_route_probe(sid, executable, family, "deny-removed", network);
   closed = gateway_inbound_stop(owner);
   if (closed != ERROR_SUCCESS) result = closed;
   if (result == ERROR_SUCCESS &&
-      control_route_probe(sid, executable, family, "inbound-owner-reaped") != ERROR_CONNECTION_REFUSED)
+      control_route_probe(sid, executable, family, "inbound-owner-reaped", network) != ERROR_CONNECTION_REFUSED)
     result = ERROR_INVALID_DATA;
   printf("socket-inbound-experiment: family=%d code=%lu\n", family, result);
   return result;
@@ -316,7 +319,7 @@ static int udp_received(SOCKET listener) {
 }
 
 static DWORD run_child(PSID sid, const wchar_t *executable, int family,
-                       UINT16 gateway, UINT16 hostile, DWORD *observed) {
+                       UINT16 gateway, UINT16 hostile, DWORD *observed, PSID_AND_ATTRIBUTES network) {
   STARTUPINFOEXW startup = {0};
   PROCESS_INFORMATION process = {0};
   SECURITY_CAPABILITIES capabilities = {0};
@@ -332,6 +335,8 @@ static DWORD run_child(PSID sid, const wchar_t *executable, int family,
     result = ERROR_BUFFER_OVERFLOW; goto done;
   }
   capabilities.AppContainerSid = sid;
+  capabilities.Capabilities = network;
+  capabilities.CapabilityCount = network == NULL ? 0 : 1;
   startup.StartupInfo.cb = sizeof(startup);
   (void)InitializeProcThreadAttributeList(NULL, 1, 0, &bytes);
   startup.lpAttributeList = HeapAlloc(GetProcessHeap(), 0, bytes);
@@ -399,12 +404,13 @@ struct concurrent_probe {
   int family;
   UINT16 gateway, hostile;
   DWORD result, observed;
+  PSID_AND_ATTRIBUTES network;
 };
 
 static DWORD WINAPI concurrent_child(void *context) {
   struct concurrent_probe *probe = context;
   probe->result = run_child(probe->sid, probe->executable, probe->family,
-                            probe->gateway, probe->hostile, &probe->observed);
+                            probe->gateway, probe->hostile, &probe->observed, probe->network);
   return 0;
 }
 
@@ -429,8 +435,21 @@ int gateway_socket_proof(int inbound_experiment) {
   PSID_AND_ATTRIBUTES previous = NULL, configured = NULL;
   PSECURITY_DESCRIPTOR original = NULL, intermediate = NULL;
   DWORD count = 0, result = ERROR_SUCCESS, control_result = ERROR_SUCCESS, index;
+  union { SID alignment; BYTE bytes[SECURITY_MAX_SID_SIZE]; } network_sid;
+  DWORD network_size = sizeof(network_sid);
+  SID_AND_ATTRIBUTES network = {0};
+  PSID_AND_ATTRIBUTES network_pointer = NULL;
   int exemption_changed = 0, profile_created = 0, peer_created = 0, sockets_started = 0, family;
   if (executable == NULL) return 1;
+  /* Inbound loopback also needs the documented private-network capability. Only the explicit
+   * experiment grants it. The same token is used for the hostile outbound/descendant controls. */
+  if (inbound_experiment) {
+    if (!CreateWellKnownSid(WinCapabilityPrivateNetworkClientServerSid, NULL,
+                            network_sid.bytes, &network_size)) { result = GetLastError(); goto done; }
+    network.Sid = network_sid.bytes;
+    network.Attributes = SE_GROUP_ENABLED;
+    network_pointer = &network;
+  }
   firewall = LoadLibraryExW(L"FirewallAPI.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
   if (firewall == NULL) { result = GetLastError(); goto done; }
   get_config.address = GetProcAddress(firewall, "NetworkIsolationGetAppContainerConfig");
@@ -444,13 +463,15 @@ int gateway_socket_proof(int inbound_experiment) {
   if (_snwprintf_s(profile, 80, _TRUNCATE, L"Keiko.SocketProof.%ls", uuid_text) < 0) {
     result = ERROR_BUFFER_OVERFLOW; goto done;
   }
-  result = (DWORD)CreateAppContainerProfile(profile, profile, L"Disposable Keiko socket test", NULL, 0, &sid);
+  result = (DWORD)CreateAppContainerProfile(profile, profile, L"Disposable Keiko socket test",
+                                            network_pointer, network_pointer == NULL ? 0 : 1, &sid);
   if (FAILED((HRESULT)result)) goto done;
   profile_created = 1;
   if (_snwprintf_s(peer_profile, 88, _TRUNCATE, L"%ls.Peer", profile) < 0) {
     result = ERROR_BUFFER_OVERFLOW; goto done;
   }
-  result = (DWORD)CreateAppContainerProfile(peer_profile, peer_profile, L"Disposable peer test", NULL, 0, &peer_sid);
+  result = (DWORD)CreateAppContainerProfile(peer_profile, peer_profile, L"Disposable peer test",
+                                            network_pointer, network_pointer == NULL ? 0 : 1, &peer_sid);
   if (FAILED((HRESULT)result)) goto done;
   peer_created = 1;
   result = gateway_test_grant_execute(executable, sid, &original);
@@ -488,19 +509,19 @@ int gateway_socket_proof(int inbound_experiment) {
         result = ERROR_NOT_READY;
       }
       if (result == ERROR_SUCCESS)
-      result = run_child(sid, executable, family, gateway.port, hostile.port, &observed);
+      result = run_child(sid, executable, family, gateway.port, hostile.port, &observed, network_pointer);
       printf("socket-baseline: family=%d code=%lu connections=%lu expected=7 descendant=same\n", family, result, observed);
       if (result == ERROR_SUCCESS && (observed != 7 || udp_received(udp) != 1 || udp_received(udp) != 1))
         result = ERROR_INVALID_DATA;
       if (result == ERROR_SUCCESS) {
-        result = run_child(peer_sid, executable, family, hostile.port, gateway.port, &observed);
+        result = run_child(peer_sid, executable, family, hostile.port, gateway.port, &observed, network_pointer);
         printf("socket-peer-baseline: family=%d code=%lu connections=%lu expected=7 descendant=same\n", family, result, observed);
         if (result == ERROR_SUCCESS &&
             (observed != 7 || udp_received(peer_udp) != 1 || udp_received(peer_udp) != 1))
           result = ERROR_INVALID_DATA;
       }
       if (result == ERROR_SUCCESS) {
-        DWORD route = control_route_probe(sid, executable, family, "unfiltered");
+        DWORD route = control_route_probe(sid, executable, family, "unfiltered", network_pointer);
         DWORD expected = inbound_experiment ? ERROR_CONNECTION_REFUSED : ERROR_SUCCESS;
         if (route != expected) control_result = ERROR_INVALID_DATA;
       }
@@ -510,8 +531,8 @@ int gateway_socket_proof(int inbound_experiment) {
         result = keiko_gateway_filters_open(peer_sid, (UINT16)family, hostile.port, &peer_filters);
       if (result == ERROR_SUCCESS) {
         struct concurrent_probe probes[2] = {
-          {sid, executable, family, gateway.port, hostile.port, ERROR_NOT_READY, 99},
-          {peer_sid, executable, family, hostile.port, gateway.port, ERROR_NOT_READY, 99}
+          {sid, executable, family, gateway.port, hostile.port, ERROR_NOT_READY, 99, network_pointer},
+          {peer_sid, executable, family, hostile.port, gateway.port, ERROR_NOT_READY, 99, network_pointer}
         };
         HANDLE threads[2] = {NULL, NULL};
         size_t probe_index;
@@ -537,11 +558,11 @@ int gateway_socket_proof(int inbound_experiment) {
           if (received != 0 || peer_received != 0) result = ERROR_INVALID_DATA;
         }
         if (result == ERROR_SUCCESS) {
-          DWORD route = control_route_probe(sid, executable, family, "filtered");
+          DWORD route = control_route_probe(sid, executable, family, "filtered", network_pointer);
           DWORD expected = inbound_experiment ? ERROR_CONNECTION_REFUSED : ERROR_SUCCESS;
           if (route != expected) control_result = ERROR_INVALID_DATA;
           if (inbound_experiment) {
-            route = scoped_inbound_probe(sid, executable, family, gateway.port, hostile.port, udp);
+            route = scoped_inbound_probe(sid, executable, family, gateway.port, hostile.port, udp, network_pointer);
             if (route != ERROR_SUCCESS) control_result = route;
           }
         }
