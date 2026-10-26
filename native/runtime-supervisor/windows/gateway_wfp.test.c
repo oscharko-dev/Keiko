@@ -80,13 +80,20 @@ static DWORD assert_removed(const struct keiko_gateway_filters *before) {
     if (before->ids[index] == 0) continue;
     DWORD found = FwpmFilterGetById0(engine, before->ids[index], &filter);
     if (filter != NULL) FwpmFreeMemory0((void **)&filter);
-    if (found != FWP_E_FILTER_NOT_FOUND) result = ERROR_INVALID_DATA;
+    if (found != FWP_E_FILTER_NOT_FOUND) {
+      printf("filter-cleanup: object=filter index=%u code=%lu\n", (unsigned)index,
+             (unsigned long)found);
+      result = ERROR_INVALID_DATA;
+    }
   }
   {
     FWPM_SUBLAYER0 *sublayer = NULL;
     DWORD found = FwpmSubLayerGetByKey0(engine, &before->sublayer, &sublayer);
     if (sublayer != NULL) FwpmFreeMemory0((void **)&sublayer);
-    if (found != FWP_E_SUBLAYER_NOT_FOUND) result = ERROR_INVALID_DATA;
+    if (found != FWP_E_SUBLAYER_NOT_FOUND) {
+      printf("filter-cleanup: object=sublayer code=%lu\n", (unsigned long)found);
+      result = ERROR_INVALID_DATA;
+    }
   }
   {
     DWORD closed = FwpmEngineClose0(engine);
@@ -100,6 +107,7 @@ static int lifecycle_test(UINT16 family) {
   struct keiko_gateway_filters before = {0};
   PSID sid = NULL;
   DWORD result;
+  const char *stage = "install";
   if (!ConvertStringSidToSidW(L"S-1-15-2-112233-445566-778899-112244-335577-669988-123456", &sid))
     return 1;
   /* Synthetic package identity: these filters cannot affect any existing application. This is
@@ -107,12 +115,16 @@ static int lifecycle_test(UINT16 family) {
   result = keiko_gateway_filters_open(sid, family, 1983, &filters);
   if (result == ERROR_SUCCESS) {
     before = filters;
+    stage = "close";
     result = keiko_gateway_filters_close(&filters);
-    if (result == ERROR_SUCCESS) result = assert_removed(&before);
+    if (result == ERROR_SUCCESS) {
+      stage = "verify-removal";
+      result = assert_removed(&before);
+    }
   }
   LocalFree(sid);
-  printf("gateway-filter-lifecycle: %s; code=%lu\n", result == ERROR_SUCCESS ? "passed" : "failed",
-         (unsigned long)result);
+  printf("gateway-filter-lifecycle: %s; stage=%s code=%lu\n",
+         result == ERROR_SUCCESS ? "passed" : "failed", stage, (unsigned long)result);
   return result == ERROR_SUCCESS ? 0 : 1;
 }
 

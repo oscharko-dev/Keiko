@@ -143,9 +143,16 @@ static DWORD verify_filter_ids(const struct keiko_gateway_filters *filters, PSID
   HANDLE engine = filters->guard_engine != NULL ? filters->guard_engine : filters->engine;
   DWORD checked = FwpmSubLayerGetByKey0(engine, &filters->sublayer, &sublayer);
   if (checked != ERROR_SUCCESS) return checked;
-  if (sublayer == NULL || !same_guid(&sublayer->subLayerKey, &filters->sublayer) ||
-      sublayer->weight != 0x7fff || sublayer->providerKey != NULL ||
-      sublayer->flags != (UINT32)(filters->guard_engine != NULL ? FWPM_SUBLAYER_FLAG_PERSISTENT : 0))
+  int valid_sublayer = 1;
+  if (sublayer == NULL) valid_sublayer = readback_mismatch("missing-sublayer");
+  else if (!same_guid(&sublayer->subLayerKey, &filters->sublayer))
+    valid_sublayer = readback_mismatch("sublayer-key");
+  else if (sublayer->weight != 0x7fff) valid_sublayer = readback_mismatch("sublayer-weight");
+  else if (sublayer->providerKey != NULL) valid_sublayer = readback_mismatch("sublayer-provider");
+  else if (sublayer->flags !=
+             (UINT32)(filters->guard_engine != NULL ? FWPM_SUBLAYER_FLAG_PERSISTENT : 0))
+    valid_sublayer = readback_mismatch("sublayer-flags");
+  if (!valid_sublayer)
     checked = ERROR_INVALID_DATA;
   if (sublayer != NULL) FwpmFreeMemory0((void **)&sublayer);
   if (checked != ERROR_SUCCESS) return checked;
