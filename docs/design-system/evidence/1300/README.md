@@ -112,3 +112,14 @@ all 14 reference captures, the seven-mode accessibility proof with zero serious/
 and zero unresolved incomplete findings, and all 108 running-app captures with zero page errors,
 unexpected API requests, missing selectors, crashed windows or unavailable workspace-trust states.
 No gate, fixture or rule was changed.
+
+## Coding runtime pin 1.1.4 — 2026-10-26
+
+The pin of the optional coding-runtime packages to 1.1.4 changes `package.json` and
+`package-lock.json`, which these producers bind. The same four original producers were rerun on the
+pinned tree on Node 24.22.0 (macOS arm64) and all passed: component fidelity with 427 probes and
+zero gated or recorded differences, editor token fidelity with 160 gated probes, zero gated
+differences and all 14 reference captures, the seven-mode accessibility proof with zero
+serious/critical violations and zero unresolved incomplete findings, and all 108 running-app
+captures with zero page errors, unexpected API requests, missing selectors, crashed windows or
+unavailable workspace-trust states. No gate, fixture or rule was changed.

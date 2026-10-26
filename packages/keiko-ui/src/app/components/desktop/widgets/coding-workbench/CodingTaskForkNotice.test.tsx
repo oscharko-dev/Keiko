@@ -74,4 +74,19 @@ describe("CodingTaskForkNotice", () => {
 
     expect(onCancel).toHaveBeenCalledOnce();
   });
+
+  // #3904 AC4: an imported task continues only as a new task, so there is nothing to cancel.
+  it("says an imported task continues as a new task and offers no cancel", () => {
+    render(
+      <CodingTaskForkNotice
+        fork={{ taskId: "task-7", title: "Repair the parser", implicit: true }}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "“Repair the parser” was imported from a file. Your next message continues it as a new task",
+    );
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  });
 });

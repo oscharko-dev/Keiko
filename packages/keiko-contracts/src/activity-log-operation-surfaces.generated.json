@@ -117,6 +117,7 @@
   "coding-runtime.history": "tools-workflows",
   "coding-runtime.history-projection": "tools-workflows",
   "coding-runtime.history.export": "tools-workflows",
+  "coding-runtime.history.import": "tools-workflows",
   "coding-runtime.inbox.action": "tools-workflows",
   "coding-runtime.inbox.dispatch-failed": "tools-workflows",
   "coding-runtime.initial-turn.dispatch-failed": "tools-workflows",

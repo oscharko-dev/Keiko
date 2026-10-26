@@ -1451,8 +1451,10 @@ export type {
   CodingWorkbenchRuntimeStartRequest,
   CodingWorkbenchRuntimeStatus,
   CodingWorkbenchRuntimeStopRequest,
+  CodingWorkbenchRuntimeOrigin,
   CodingWorkbenchRuntimeTakeoverRequest,
   CodingWorkbenchRuntimeUnavailableReason,
+  CodingWorkbenchRuntimeVersion,
 } from "./coding-workbench-runtime-api.js";
 export type {
   CODING_WORKBENCH_AGENTS,
@@ -1463,6 +1465,7 @@ export type {
   CODING_WORKBENCH_RUNTIME_APPROVAL_DECISIONS,
   CODING_WORKBENCH_RUNTIME_EVIDENCE_CLASSES,
   CODING_WORKBENCH_RUNTIME_PREFERENCES,
+  CODING_WORKBENCH_RUNTIME_ORIGINS,
   CODING_WORKBENCH_RUNTIME_SSE_CURSOR_MAX_CHARS,
   CODING_WORKBENCH_RUNTIME_SSE_EVENT_KINDS,
   CODING_WORKBENCH_RUNTIME_UNAVAILABLE_REASONS,

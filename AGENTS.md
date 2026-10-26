@@ -151,8 +151,8 @@ component SBOM into `@oscharko-dev/keiko-coding-runtime-<target>` at the same pa
 TARGET's release, so a clean `npm install -g` finds search normally and the server verifies
 `<package>/runtime/native/rg` against the pinned digest at every run launch; `KEIKO_RIPGREP_BINARY_PATH`
 remains a developer and qualification override only. Unit tests are hermetic and do not need it; the
-customer-shape qualification, the portable stage jobs and the npm runtime package build do, and CI runs
-it as a setup step there.
+customer-shape qualification, the nightly real-binary journey, the portable stage jobs and the npm runtime
+package build do, and CI runs it as a setup step there.
 
 Use `npm` only. This repo is npm workspaces with a committed `package-lock.json` — there is no
 pnpm/yarn/bun lockfile. Do not add one.
@@ -1028,6 +1028,15 @@ class, frames and cause chain), a completion the format, message, omitted and re
 counts and the byte size. Message text is stored as the runtime produced it, so the export redacts
 every string again with the evidence redactor and masks absolute host paths; no text, title, branch
 or path ever enters the line (ADR-0137 D4).
+
+`coding-runtime.history.import` records the human's local import of a saved task (Import task: a
+Keiko task export or an OpenCode session transcript the person picks; nothing is fetched or
+uploaded): `requested`, then `completed` or `refused` under the request's correlation. A refusal
+carries one closed reason (`unauthenticated`, `unavailable`, `no-workspace`, `invalid-document`,
+`unsupported-version`, `too-large`, `empty`, `failed`; a failure also its error class, frames and
+cause chain), a completion the source, message, omitted, skipped and redacted-message counts and the
+byte size. The file's text is untrusted, so it is redacted again before it is stored; no text,
+title or path ever enters the line (ADR-0137 D4).
 
 `gateway.conversation.admission` records the closed decision before a conversation model call,
 with admitted and current configuration generations and the request correlation. A fresh probe

@@ -94,6 +94,7 @@ import type {
   CodingWorkbenchMode,
   CodingWorkbenchModelSource,
   CodingWorkbenchRuntimeEvidenceClass,
+  CodingWorkbenchRuntimeVersion,
   CodingWorkbenchRuntimeUnavailableReason,
   CommandTerminationEvidence,
   DebugDeploymentPolicy,
@@ -915,6 +916,8 @@ export interface UiHandlerDeps {
    * "unverified" and never silently to "verified".
    */
   readonly codingRuntimeEvidenceClass?: CodingWorkbenchRuntimeEvidenceClass | undefined;
+  /** What the qualified runtime is (#3904 AC4); absent reads as not reported. */
+  readonly codingRuntimeVersion?: CodingWorkbenchRuntimeVersion | undefined;
   // Server-owned deployment ceiling for coding-runtime authority. Undefined fails closed to
   // governed-assist; the readiness projection reports the same ceiling the mint clamp enforces.
   readonly codingRuntimeDeploymentCeiling?: CodingWorkbenchMode | undefined;
@@ -5472,8 +5475,7 @@ function buildRuntimeUiHandlerDeps(
 ): RuntimeUiHandlerDeps {
   const codingRuntimeControlPlaneDeps = buildCodingRuntimeControlPlaneDeps(
     services.codingRuntimeControlPlane,
-    services.runtimeComposition.unavailableReason,
-    services.runtimeComposition.evidenceClass,
+    services.runtimeComposition,
   );
   return {
     codingAppSessionChannel: services.codingAppSessionChannel,
@@ -5866,6 +5868,7 @@ interface CodingRuntimeControlPlaneDeps {
   codingSafeActivityProjection?: UiHandlerDeps["codingSafeActivityProjection"];
   codingRuntimeUnavailableReason?: UiHandlerDeps["codingRuntimeUnavailableReason"];
   codingRuntimeEvidenceClass?: UiHandlerDeps["codingRuntimeEvidenceClass"];
+  codingRuntimeVersion?: UiHandlerDeps["codingRuntimeVersion"];
   codingSidecarGatewayCancellationRegistry?: UiHandlerDeps["codingSidecarGatewayCancellationRegistry"];
   runtimeCapabilityAuthenticator?: UiHandlerDeps["runtimeCapabilityAuthenticator"];
   gitDeliveryAuthority?: UiHandlerDeps["gitDeliveryAuthority"];
@@ -5911,10 +5914,13 @@ function codingRuntimeControlPlanePassthroughDeps(
 
 function buildCodingRuntimeControlPlaneDeps(
   controlPlane: ReturnType<typeof createCodingRuntimeControlPlane> | undefined,
-  unavailableReason: CodingWorkbenchRuntimeUnavailableReason | undefined,
-  evidenceClass: CodingWorkbenchRuntimeEvidenceClass | undefined,
+  composition: Pick<
+    ProductionRuntimeComposition,
+    "unavailableReason" | "evidenceClass" | "runtimeVersion"
+  >,
 ): CodingRuntimeControlPlaneDeps {
   if (controlPlane === undefined) return {};
+  const { unavailableReason, evidenceClass, runtimeVersion } = composition;
   return {
     codingRuntimeOrchestrator: controlPlane.orchestrator,
     codingRuntimeEventHub: controlPlane.eventHub,
@@ -5924,7 +5930,10 @@ function buildCodingRuntimeControlPlaneDeps(
       : {}),
     ...(!controlPlane.runtimeHostQualified
       ? { codingRuntimeUnavailableReason: unavailableReason ?? "runtime-unqualified" }
-      : { codingRuntimeEvidenceClass: evidenceClass ?? "functional-not-platform-qualified" }),
+      : {
+          codingRuntimeEvidenceClass: evidenceClass ?? "functional-not-platform-qualified",
+          ...(runtimeVersion === undefined ? {} : { codingRuntimeVersion: runtimeVersion }),
+        }),
     ...(controlPlane.cancellationRegistry !== undefined
       ? {
           codingSidecarGatewayCancellationRegistry: controlPlane.cancellationRegistry,
@@ -5984,6 +5993,7 @@ interface ProductionRuntimeComposition {
   readonly resolver: ProductionCodingRuntimeResolver | undefined;
   readonly unavailableReason: CodingWorkbenchRuntimeUnavailableReason | undefined;
   readonly evidenceClass: CodingWorkbenchRuntimeEvidenceClass | undefined;
+  readonly runtimeVersion?: CodingWorkbenchRuntimeVersion | undefined;
   readonly runtimeMutationLease?: CodingRuntimeEditorMutationLeasePort | undefined;
   readonly materializedPatches?: MaterializedPatchRegistry | undefined;
   readonly dispose?: (() => void) | undefined;
@@ -5993,6 +6003,7 @@ interface ProductionRuntimePortResolution {
   readonly ports: ProductionCodingRuntimePorts | undefined;
   readonly unavailableReason: CodingWorkbenchRuntimeUnavailableReason | undefined;
   readonly evidenceClass: CodingWorkbenchRuntimeEvidenceClass | undefined;
+  readonly runtimeVersion?: CodingWorkbenchRuntimeVersion | undefined;
   readonly activated: boolean;
 }
 
@@ -6111,6 +6122,7 @@ function resolveProductionRuntimePorts(
     ports: activation.ports,
     unavailableReason: activation.unavailableReason,
     evidenceClass: activation.evidenceClass,
+    runtimeVersion: activation.runtimeVersion,
     activated: activation.ports !== undefined,
   };
 }
@@ -6231,9 +6243,18 @@ function productionRuntimeResolver(
     }),
     readiness,
     mutationPorts,
-    // Fail-closed default: an unthreaded activation degrades to the weak class, never to verified.
-    resolution.evidenceClass ?? "functional-not-platform-qualified",
+    activatedRuntimeFacts(resolution),
   );
+}
+
+function activatedRuntimeFacts(
+  resolution: ProductionRuntimePortResolution,
+): Pick<ProductionRuntimeComposition, "evidenceClass" | "runtimeVersion"> {
+  return {
+    // Fail-closed default: an unthreaded activation degrades to the weak class, never to verified.
+    evidenceClass: resolution.evidenceClass ?? "functional-not-platform-qualified",
+    runtimeVersion: resolution.runtimeVersion,
+  };
 }
 
 // The two server-owned ports of a runtime mutation, created once per composition: the final claim
@@ -6371,7 +6392,7 @@ function qualifiedProductionRuntimeComposition(
   resolver: ProductionCodingRuntimeResolver,
   readiness: OpenCodeGatewayReadinessRegistry,
   mutationPorts: RuntimeMutationPorts,
-  evidenceClass: CodingWorkbenchRuntimeEvidenceClass,
+  evidence: Pick<ProductionRuntimeComposition, "evidenceClass" | "runtimeVersion">,
 ): ProductionRuntimeComposition {
   const { runtimeMutationLeaseBroker, materializedPatches } = mutationPorts;
   return {
@@ -6384,7 +6405,7 @@ function qualifiedProductionRuntimeComposition(
       },
     },
     unavailableReason: undefined,
-    evidenceClass,
+    ...evidence,
     runtimeMutationLease: runtimeMutationLeaseBroker,
     materializedPatches,
     dispose: (): void => {

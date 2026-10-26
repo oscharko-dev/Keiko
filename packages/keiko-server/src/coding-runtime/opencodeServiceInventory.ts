@@ -645,7 +645,12 @@ export const OPENCODE_SERVICE_DISPOSITIONS = flatten<
     ["S05"],
     ["experimental.session.export"],
   ),
-  refused("not-yet-implemented", 3904, ["S05"], ["experimental.session.import"]),
+  keikoOperation(
+    "Coding History task import (local, redacted)",
+    "coding-runtime/codingTaskImport.ts",
+    ["S05"],
+    ["experimental.session.import"],
+  ),
   refused("not-yet-implemented", 3904, ["S08"], ["session.compact", "session.context"]),
   refused("not-yet-implemented", 3901, ["T11"], ["session.shell"]),
   refused(
@@ -729,7 +734,12 @@ export const OPENCODE_CLI_DISPOSITIONS = flatten<OpenCodeServiceDispositionEntry
     ["S05"],
     ["session export"],
   ),
-  refused("not-yet-implemented", 3904, ["S05"], ["session import"]),
+  keikoOperation(
+    "Coding History task import (local, redacted)",
+    "coding-runtime/codingTaskImport.ts",
+    ["S05"],
+    ["session import"],
+  ),
   refused("not-yet-implemented", 3904, ["S02"], ["session delete"]),
   refused("leaves-machine", 3904, ["S06"], ["upgrade"]),
 ]);

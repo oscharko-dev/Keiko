@@ -4,16 +4,19 @@ import type {
   CodingHistoryTask,
   CodingTaskExportFormat,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { ApiError } from "@/lib/api";
 import {
   CODING_HISTORY_CHANGED,
   exportCodingTask,
   fetchCodingHistory,
+  importCodingTask,
   saveCodingTaskExport,
   updateCodingTask,
 } from "@/lib/coding-history-api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
 import { useCodingWorkbenchTranslate } from "./coding-workbench-i18n";
+import type { CodingWorkbenchMessageKey } from "./coding-workbench-i18n.en";
 import { repositoryName } from "./CodingWorkbenchRepositorySelector";
 import styles from "./CodingHistory.module.css";
 import type { WindowRenderContext } from "../../windows/WindowsRegistry";
@@ -26,6 +29,12 @@ function historyError(error: unknown): void {
 
 function exportError(error: unknown): void {
   reportClientDiagnostic(`[keiko] coding task export failed: ${clientErrorSummary(error)}`, {
+    correlationId: correlationIdOf(error),
+  });
+}
+
+function importError(error: unknown): void {
+  reportClientDiagnostic(`[keiko] coding task import failed: ${clientErrorSummary(error)}`, {
     correlationId: correlationIdOf(error),
   });
 }
@@ -106,12 +115,7 @@ export function CodingHistoryPanel({
   );
   return (
     <section className={styles.cmpPanel} aria-label={t("codingWorkbench.history.title")}>
-      <header className={styles.cmpHeader}>
-        <h2>{t("codingWorkbench.history.title")}</h2>
-        <button className={styles.cmpPrimary} type="button" onClick={onNew}>
-          {t("codingWorkbench.history.new")}
-        </button>
-      </header>
+      <HistoryHeader onOpen={onOpen} onNew={onNew} />
       <input
         className={styles.cmpInput}
         type="search"
@@ -133,6 +137,107 @@ export function CodingHistoryPanel({
       </ul>
     </section>
   );
+}
+
+type ImportState =
+  | { readonly kind: "idle" }
+  | { readonly kind: "busy" }
+  | { readonly kind: "partial"; readonly count: number }
+  | { readonly kind: "failed"; readonly message: CodingWorkbenchMessageKey };
+
+const IMPORT_FAILURES: Readonly<Record<string, CodingWorkbenchMessageKey>> = {
+  CODING_HISTORY_IMPORT_INVALID: "codingWorkbench.history.importInvalid",
+  CODING_HISTORY_IMPORT_UNSUPPORTED_VERSION: "codingWorkbench.history.importUnsupported",
+  CODING_HISTORY_IMPORT_TOO_LARGE: "codingWorkbench.history.importTooLarge",
+  CODING_HISTORY_IMPORT_EMPTY: "codingWorkbench.history.importEmpty",
+  CODING_HISTORY_IMPORT_NO_WORKSPACE: "codingWorkbench.history.importNoWorkspace",
+};
+
+function importFailure(error: unknown): CodingWorkbenchMessageKey {
+  const known = error instanceof ApiError ? IMPORT_FAILURES[error.code] : undefined;
+  return known ?? "codingWorkbench.history.importError";
+}
+
+// The person picks a saved task on their device; the local server stores it as a new task of the
+// active workspace, which then opens. Nothing is uploaded anywhere else (#3904 AC4).
+function useTaskImport(
+  onOpen: (task: CodingHistoryTask) => void,
+): readonly [ImportState, (file: File) => Promise<void>] {
+  const [state, setState] = useState<ImportState>({ kind: "idle" });
+  const run = useCallback(
+    async (file: File): Promise<void> => {
+      setState({ kind: "busy" });
+      try {
+        const result = await importCodingTask(file);
+        setState(
+          result.omittedMessageCount > 0
+            ? { kind: "partial", count: result.messageCount }
+            : { kind: "idle" },
+        );
+        onOpen(result.task);
+      } catch (cause) {
+        importError(cause);
+        setState({ kind: "failed", message: importFailure(cause) });
+      }
+    },
+    [onOpen],
+  );
+  return [state, run];
+}
+
+function HistoryHeader({
+  onOpen,
+  onNew,
+}: {
+  readonly onOpen: (task: CodingHistoryTask) => void;
+  readonly onNew: () => void;
+}): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  const picker = useRef<HTMLInputElement>(null);
+  const [state, run] = useTaskImport(onOpen);
+  return (
+    <>
+      <header className={styles.cmpHeader}>
+        <h2>{t("codingWorkbench.history.title")}</h2>
+        <div className={styles.cmpHeaderActions}>
+          <button
+            className={styles.cmpSecondary}
+            type="button"
+            title={t("codingWorkbench.history.importHint")}
+            disabled={state.kind === "busy"}
+            onClick={() => picker.current?.click()}
+          >
+            {t("codingWorkbench.history.import")}
+          </button>
+          <button className={styles.cmpPrimary} type="button" onClick={onNew}>
+            {t("codingWorkbench.history.new")}
+          </button>
+        </div>
+        <input
+          ref={picker}
+          type="file"
+          accept=".json,application/json"
+          hidden
+          aria-label={t("codingWorkbench.history.importFile")}
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            event.target.value = "";
+            if (file !== undefined) void run(file);
+          }}
+        />
+      </header>
+      <ImportStatus state={state} />
+    </>
+  );
+}
+
+function ImportStatus({ state }: { readonly state: ImportState }): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  if (state.kind === "busy") return <output>{t("codingWorkbench.history.importing")}</output>;
+  if (state.kind === "partial")
+    return <output>{t("codingWorkbench.history.importPartial", { count: state.count })}</output>;
+  if (state.kind === "failed") return <p role="alert">{t(state.message)}</p>;
+  return null;
 }
 
 function HistoryFilters({
