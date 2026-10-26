@@ -240,9 +240,12 @@ previous exemption list and executable ACL before deleting the profiles. This is
 test-only: a crash between those operations is not reconciled by an installed service. A passing
 socket fixture does not justify using that lifecycle in production or enabling availability.
 
-Implementation is tracked in [draft PR #3668](https://github.com/oscharko-dev/Keiko/pull/3668),
-stacked on the checkout fix in [PR #3667](https://github.com/oscharko-dev/Keiko/pull/3667).
-The local Sonar gate was attempted but could not start because the Docker daemon is unavailable.
+The current implementation is tracked in [draft PR #4090](https://github.com/oscharko-dev/Keiko/pull/4090),
+continuing the earlier [draft PR #3668](https://github.com/oscharko-dev/Keiko/pull/3668) foundation.
+On 2026-10-26 the prescribed local Sonar gate passed against the changed files using the existing
+Ubuntu/WSL Docker engine, the repository's pinned analyzer images, Node 24.18.0 and verified
+Compose 5.6.1. The Windows Docker Desktop daemon remained unavailable. Strict native compilation,
+default native tests, error-observability and the assembled package surface (6,937 files) also pass.
 The full repository CI matrix and the actual DesignPatterns workbench commit remain unverified.
 
 ## Platform references
