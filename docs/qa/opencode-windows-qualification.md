@@ -65,7 +65,7 @@ No customer model, secret, endpoint, workspace, or private runtime log was used.
 | `node scripts/testing/test-windows-gateway-filters.mjs`                                                                                      | PASS: C compiler/analyzer and policy validation. Default mode installs no WFP filters and proves no network isolation                                                                                                                                    |
 | `node native/runtime-supervisor/test-protocol.mjs --helper .portable-sidecar-payloads/windows-x64/native/keiko-runtime-supervisor.exe`       | PASS: actual helper, ordinary and detached descendants, cancellation and control-pipe EOF. Both PIDs must be live before cancellation and gone afterward; explicit cancellation additionally requires zero active Job Object processes before completion |
 | `node native/secure-workspace-read/test-protocol.mjs`                                                                                        | PASS: source-built helper, protocol, controlled races and load tests. Observed load sample: 1,000 sequential reads, p95 5.6 ms; 100 concurrent reads, batch 386.9 ms; resource delta 0. These are local observations, not canonical performance budgets  |
-| `node native/secure-workspace-read/test-protocol.mjs --binary .portable-sidecar-payloads/windows-x64/native/keiko-secure-workspace-read.exe` | FAIL: external-binary file-generation consistency; none of 32 concurrent reads observed a known generation. Do not substitute the source-built harness result for this artifact result                                                                   |
+| `node native/secure-workspace-read/test-protocol.mjs --binary .portable-sidecar-payloads/windows-x64/native/keiko-secure-workspace-read.exe` | PASS after the fixture repair described below, against the same staged bytes: 32/32 known-generation reads, concurrent ancestor-alias proof and load tests; p95 5.7 ms, concurrent batch 387.4 ms, resource delta 0                                      |
 | `node scripts/__tests__/windows-git-reparse-smoke.mjs`                                                                                       | PASS: actual Windows Git executable reparse containment                                                                                                                                                                                                  |
 | `node scripts/__tests__/windows-cmd-spawn-smoke.mjs`                                                                                         | BLOCKED: `EPERM` creating the adversarial file symlink to `cmd.exe`. The later argv/injection matrix did not execute; junction support alone is insufficient                                                                                             |
 
@@ -109,7 +109,7 @@ No unmerged branch was used as acceptance evidence or merged into this branch.
 | W4 — Artifacts / approvals           | PARTIAL. Approved OpenCode and ripgrep bytes verified, local helper built. No approved Windows npm package/helper release; retained-state and stale-helper refusal still need installed-artifact execution                                                       |
 | W5 — Platform lanes                  | PARTIAL. Existing required Windows native-quality lane now runs the actual supervisor protocol harness against its freshly compiled helper. Real service execution remains blocked; native macOS-only and environment-gated suites are not Windows certification |
 | W6 — Three-mode task comparison      | BLOCKED by W1 and the missing live model/Gateway qualification. No task or mode counted as passed                                                                                                                                                                |
-| W7 — Windows paths / filesystem      | PARTIAL. Git reparse and source-built secure-read protocol/race tests pass. Staged-binary contention proof fails. Full instruction/media/external-root, linked-worktree move/watcher and path-form matrix remains open                                           |
+| W7 — Windows paths / filesystem      | PARTIAL. Git reparse and both source-built and staged-binary secure-read protocol/race tests pass. Full instruction/media/external-root, linked-worktree move/watcher and path-form matrix remains open                                                          |
 | W8 — Shell / real repair             | BLOCKED. 113 Windows shell unit cases pass; actual shell smoke stops at the symlink prerequisite. No project-selected Node/Vitest or Java/Maven/Gradle failing-test-to-repair loop                                                                               |
 | W9 — Persisted sessions / locks      | NOT RUN. Requires functioning admitted service; no session, WAL, authority expiry or restore claim                                                                                                                                                               |
 | W10 — Agents / IPC / active input    | NOT RUN. Native capabilities are unavailable under the retained mapped profile. Native local MCP still constructs `/usr/bin/env -i`; no native Windows MCP execution claim                                                                                       |
@@ -129,6 +129,15 @@ against both ordinary and `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP` children
 positive controls and PID disappearance, and reports native execution separately from the explicit
 non-Windows source-contract-only skip. No workflow condition or required check is relaxed.
 
+The initial staged-helper concurrency run failed its positive control: all 32 reads returned
+`CHANGED_DURING_READ`. The updater created and removed temporary siblings of the target, changing
+the root directory metadata even when Windows sharing protection correctly denied target
+replacement. Moving those temporary files into a pre-created staging subdirectory removes that
+unrelated ancestor churn. Atomic replacement still targets the same file, and all race, known-byte
+and positive-success assertions remain active. The same unchanged staged helper then passed, with
+32/32 known-generation reads, nine mutation attempts (eight after spawn) and five sharing denials.
+No production helper guard or accepted status was relaxed.
+
 The source-built secure-read protocol, released-helper qualification and live OpenCode service
 tests are separate evidence classes. This increment does not add a passing substitute for the
 unavailable service. The existing `productionOpenCodeBackend.functional.test.ts` dev-lane discovery
@@ -145,8 +154,7 @@ Next work, in dependency order:
 1. Integrate and qualify Windows gateway confinement through the existing native backend and
    helper owners, with actual positive/negative network controls and inherited descendant policy.
    Keep current refusal until that proof exists; WFP policy parsing alone is insufficient.
-2. Reproduce and resolve staged secure-read contention without weakening its successful-read
-   positive control; run the shell smoke on a host with file-symlink privileges. Reconcile the
+2. Run the shell smoke on a host with file-symlink privileges. Reconcile the
    Windows applicability of native/POSIX test fixtures without counting skips as execution.
 3. Extend the existing npm builder/discovery approval path for Windows; obtain the release owner's
    approved package/helper versions and publication. Do not invent approval digests or bypass them.

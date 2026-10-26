@@ -2287,6 +2287,8 @@ function assertKnownGeneration(result, generations) {
 
 async function assertFileGenerationConsistency(binary, fixture) {
   const target = join(fixture, "concurrent-generation.txt");
+  const staging = join(fixture, "concurrent-staging");
+  await mkdir(staging);
   const generations = [
     Buffer.from(`${"a".repeat(2_584)}\n`),
     Buffer.from(`${"b".repeat(32_767)}\n`),
@@ -2301,7 +2303,10 @@ async function assertFileGenerationConsistency(binary, fixture) {
   await runConcurrentUpdater(
     "file-generation",
     async (attempt) => {
-      const staged = join(fixture, `.concurrent-generation-${attempt}.tmp`);
+      // Keep staging churn outside the reader's ancestor chain. On Windows the helper denies
+      // target replacement while reading; creating/removing an unrelated sibling still changes
+      // the observed root and correctly refuses every read, hiding that sharing protection.
+      const staged = join(staging, `.concurrent-generation-${attempt}.tmp`);
       await writeFile(staged, generations[attempt % generations.length]);
       try {
         await rename(staged, target);
@@ -2326,6 +2331,7 @@ async function assertFileGenerationConsistency(binary, fixture) {
       "reads observed a known generation — a helper that fails closed under all contention would " +
       "satisfy every other assertion in this suite",
   );
+  console.log(`secure-workspace-read consistency: knownGenerationReads=${successfulReads}`);
 }
 
 async function assertAncestorAliasConsistency(binary, fixture, outside) {
