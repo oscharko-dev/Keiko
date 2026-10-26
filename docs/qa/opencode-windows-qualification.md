@@ -154,6 +154,15 @@ and the workflow module-graph suite pass all 12 cases; two existing module-graph
 expectations now use host path separators. Requalification and source-pin reconciliation remain
 required before merge. The identity-output increment also passes targeted ESLint/Prettier and the required local Sonar rerun (analysis task `e0c7f39d-724f-4dcb-a389-c9d84f564fff`).
 
+The first ARM64 identity receipt on head `c758a9e1e` passed its native smoke but used the qualifier's
+temporary basename `helper`, unlike the npm builder's `keiko-secure-workspace-read`. Its 34,872-byte
+artifact is not used to replace the 34,888-byte approval. The qualifier now uses the shipped
+basename: the [Mach-O code-signature layout](https://llvm.org/doxygen/MachOLayoutBuilder_8h_source.html)
+includes the output filename, so equal compiler inputs alone do not make differently named build
+outputs comparable. The six native Windows qualifier tests pass again after this correction.
+The full macOS native-quality step on `c758a9e1e` also passed, including the previously failing
+coalesced-handoff case; no handoff production code or timeout was changed.
+
 The follow-up diff passes typecheck/package-graph, targeted ESLint/Prettier and local documentation
 link checks. The required local Sonar gate was rerun against this diff and again reported no
 unresolved finding (analysis task `8a95a402-03d2-4345-863a-be1b9673b34a`).

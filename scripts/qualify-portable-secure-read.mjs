@@ -30,7 +30,11 @@ export async function qualifyPortableSecureRead(platformTarget, load = true) {
   const sourceTreeSha256 = hashHelperSourceTree(helperSource);
   const root = await mkdtemp(join(tmpdir(), "keiko-secure-read-qualification-"));
   try {
-    const executable = join(root, process.platform === "win32" ? "helper.exe" : "helper");
+    // Use the shipped basename too: the macOS linker embeds it in the ad-hoc code signature.
+    const executable = join(
+      root,
+      `keiko-secure-workspace-read${process.platform === "win32" ? ".exe" : ""}`,
+    );
     const code = await runSecureWorkspaceReadBuild({
       argv: [process.execPath, "build-secure-workspace-read.mjs", platformTarget, executable],
     });
