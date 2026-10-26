@@ -502,6 +502,18 @@ ceilings, which are wider.
 The measured p95 of cold start and bounded throughput rose by 4.7 % and 38 % over the previous
 ceilings. Both rises are the profiled feature work above; neither is an unexplained regression.
 
+**Ruler recalibrated, 2026-10-26 (PR #4064, #3902 AC2, #3903 AC3).** The functional test support
+gained the governed fetch/pull and web search journeys, so the ruler moved again. The recorded
+environment is unchanged, so the shrink-only `--recalibrate` ran at `1049404b6`, followed by an
+independent measurement and the freshness check. No ceiling widened; two tightened.
+
+| Metric                | Previous ceiling (2026-10-25) | Fresh calibration ceiling | Committed ceiling | Measured p95 |
+| --------------------- | ----------------------------- | ------------------------- | ----------------- | ------------ |
+| `coldStartMs`         | 1771.7                        | 1614.3                    | 1614.3            | 1481.0       |
+| `readinessMs`         | 3.26                          | 3.59                      | 3.26              | 1.92         |
+| `sseFirstByteMs`      | 4.65                          | 4.91                      | 4.65              | 2.11         |
+| `boundedThroughputMs` | 177.9                         | 160.0                     | 160.0             | 128.4        |
+
 The PR lane runs `check:perf-evidence:coding-runtime` and the hermetic ruler tests
 (`test:perf:coding-runtime`). It checks integrity and budgets unconditionally. Set
 `KEIKO_PERF_EVIDENCE_BASE_REF` to the PR/merge-group base for diff-owned toolchain freshness, as for
