@@ -34,9 +34,8 @@ import type {
 } from "./code-task-target-validation.js";
 import {
   validateCodeTaskParentTarget,
+  validateCodeTaskIdentityHeader,
   isCodeTaskGrantId,
-  isCodeTaskRunId,
-  isCodeTaskTaskId,
   isCodeTaskWorkspaceId,
 } from "./code-task-target-validation.js";
 export type {
@@ -550,18 +549,12 @@ const CODE_TASK_EXECUTION_KEYS = new Set([
 ]);
 
 function executionHeaderFieldsAreValid(errors: string[], value: Record<string, unknown>): boolean {
-  let valid = true;
-
-  if (ownField(value, "kind") !== CODE_TASK_EXECUTION_KIND) {
-    valid = addValidationError(errors, `kind must be ${CODE_TASK_EXECUTION_KIND}`);
-  }
-  if (ownField(value, "schemaVersion") !== CODE_TASK_GOVERNANCE_SCHEMA_VERSION) {
-    valid = addValidationError(errors, "schemaVersion must be the literal 1");
-  }
-  if (!isCodeTaskTaskId(ownField(value, "taskId")))
-    valid = addValidationError(errors, "taskId is invalid");
-  if (!isCodeTaskRunId(ownField(value, "runId")))
-    valid = addValidationError(errors, "runId is invalid");
+  let valid = validateCodeTaskIdentityHeader(
+    errors,
+    value,
+    CODE_TASK_EXECUTION_KIND,
+    CODE_TASK_GOVERNANCE_SCHEMA_VERSION,
+  );
   if (!isCodeTaskWorkspaceId(ownField(value, "workspaceId")))
     valid = addValidationError(errors, "workspaceId is invalid");
   return valid;

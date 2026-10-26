@@ -56,3 +56,30 @@ export function validateCodeTaskParentTarget(
   errors.push(...targetErrors);
   return targetErrors.length === 0;
 }
+
+/** Validate the shared identity header; callers retain their distinct target/revision policies. */
+export function validateCodeTaskIdentityHeader(
+  errors: string[],
+  value: Record<string, unknown>,
+  expectedKind: string,
+  expectedSchemaVersion: 1,
+): boolean {
+  let valid = true;
+  if (ownField(value, "kind") !== expectedKind) {
+    errors.push(`kind must be ${expectedKind}`);
+    valid = false;
+  }
+  if (ownField(value, "schemaVersion") !== expectedSchemaVersion) {
+    errors.push("schemaVersion must be the literal 1");
+    valid = false;
+  }
+  if (!isCodeTaskTaskId(ownField(value, "taskId"))) {
+    errors.push("taskId is invalid");
+    valid = false;
+  }
+  if (!isCodeTaskRunId(ownField(value, "runId"))) {
+    errors.push("runId is invalid");
+    valid = false;
+  }
+  return valid;
+}

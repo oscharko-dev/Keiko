@@ -1538,3 +1538,103 @@ describe("public CodeTask ID consumer", () => {
     }
   });
 });
+
+const EXECUTION_IDENTITY_HEADER_FIELDS = [
+  "kind",
+  "schemaVersion",
+  "taskId",
+  "runId",
+  "workspaceId",
+] as const;
+
+describe.each([
+  ["source", validateCodeTaskExecutionV1],
+  ["public", publicCodeTaskExecution],
+] as const)("%s identity-header observations", (_surface, validate): void => {
+  it("reads the healthy header and local suffix once in order with original receivers", (): void => {
+    const input = execution();
+    const trace: string[] = [];
+    const receivers: unknown[] = [];
+    for (const field of EXECUTION_IDENTITY_HEADER_FIELDS) {
+      const original = input[field];
+      Object.defineProperty(input, field, {
+        get(this: unknown): unknown {
+          trace.push(field);
+          receivers.push(this);
+          return original;
+        },
+      });
+    }
+    const result = validate(input);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(input);
+    expect(trace).toEqual(["kind", "schemaVersion", "taskId", "runId", "workspaceId"]);
+    expect(receivers).toHaveLength(5);
+    for (const receiver of receivers) expect(receiver).toBe(input);
+  });
+
+  it("retains earlier own-key errors and eagerly checks every refused prefix and local suffix", (): void => {
+    const input = {
+      ...execution(),
+      kind: "foreign",
+      schemaVersion: 2,
+      taskId: 0,
+      runId: "",
+      workspaceId: false,
+      fixtureExtra: true,
+    };
+    const trace: string[] = [];
+    for (const field of EXECUTION_IDENTITY_HEADER_FIELDS) {
+      const original = input[field];
+      Object.defineProperty(input, field, {
+        get(): unknown {
+          trace.push(field);
+          return original;
+        },
+      });
+    }
+    expect(validate(input)).toEqual({
+      ok: false,
+      errors: [
+        "codeTaskExecution.fixtureExtra is not allowed",
+        "kind must be code-task-execution",
+        "schemaVersion must be the literal 1",
+        "taskId is invalid",
+        "runId is invalid",
+        "workspaceId is invalid",
+      ],
+    });
+    expect(trace).toEqual(["kind", "schemaVersion", "taskId", "runId", "workspaceId"]);
+  });
+
+  it("propagates each opaque header getter refusal without later observations", (): void => {
+    for (const [fault, expected] of [
+      ["kind", ["kind"]],
+      ["schemaVersion", ["kind", "schemaVersion"]],
+      ["taskId", ["kind", "schemaVersion", "taskId"]],
+      ["runId", ["kind", "schemaVersion", "taskId", "runId"]],
+    ] as const) {
+      const input = execution();
+      const trace: string[] = [];
+      const failure: Error = Object.freeze(new TypeError("synthetic identity-header refusal"));
+      for (const field of EXECUTION_IDENTITY_HEADER_FIELDS) {
+        const original = input[field];
+        Object.defineProperty(input, field, {
+          get(): unknown {
+            trace.push(field);
+            if (field === fault) throw failure;
+            return original;
+          },
+        });
+      }
+      let observed: unknown;
+      try {
+        validate(input);
+      } catch (error) {
+        observed = error;
+      }
+      expect(observed).toBe(failure);
+      expect(trace).toEqual(expected);
+    }
+  });
+});

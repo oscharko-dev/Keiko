@@ -2,7 +2,10 @@ import {
   isCodeTaskRecord as isRecord,
   validateCodeTaskOwnKeys,
 } from "./code-task-record-validation.js";
-import { validateCodeTaskParentTarget } from "./code-task-target-validation.js";
+import {
+  validateCodeTaskParentTarget,
+  validateCodeTaskIdentityHeader,
+} from "./code-task-target-validation.js";
 // Cross-child run-control contracts for Epic #2384 Code-task children (Issue #2386). Same type
 // rule as ./code-task-governance.ts: readonly, JSON-serializable, discriminated unions, literal
 // `schemaVersion: 1`, branded ids, explicit tagged-absent facts, content-free payloads.
@@ -32,8 +35,6 @@ import {
   isCodeTaskGrantScope,
   isCodeTaskIdempotencyKey,
   isCodeTaskQuestionId,
-  isCodeTaskRunId,
-  isCodeTaskTaskId,
   isContentFreeReasonCode,
 } from "./code-task-governance.js";
 import type { CodingWorkbenchValidationResult } from "./coding-workbench.js";
@@ -210,18 +211,12 @@ function questionFactFieldsAreValid(errors: string[], value: unknown): boolean {
 }
 
 function runControlHeaderFieldsAreValid(errors: string[], value: Record<string, unknown>): boolean {
-  let valid = true;
-
-  if (ownField(value, "kind") !== RUN_CONTROL_SNAPSHOT_KIND) {
-    valid = addValidationError(errors, `kind must be ${RUN_CONTROL_SNAPSHOT_KIND}`);
-  }
-  if (ownField(value, "schemaVersion") !== CODE_TASK_GOVERNANCE_SCHEMA_VERSION) {
-    valid = addValidationError(errors, "schemaVersion must be the literal 1");
-  }
-  if (!isCodeTaskTaskId(ownField(value, "taskId")))
-    valid = addValidationError(errors, "taskId is invalid");
-  if (!isCodeTaskRunId(ownField(value, "runId")))
-    valid = addValidationError(errors, "runId is invalid");
+  let valid = validateCodeTaskIdentityHeader(
+    errors,
+    value,
+    RUN_CONTROL_SNAPSHOT_KIND,
+    CODE_TASK_GOVERNANCE_SCHEMA_VERSION,
+  );
   if (!isCodeTaskIdempotencyKey(ownField(value, "idempotencyKey"))) {
     valid = addValidationError(errors, "idempotencyKey is invalid");
   }

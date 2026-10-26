@@ -1145,3 +1145,125 @@ it("public CodeTask ID consumer refuses an invalid idempotency key", () => {
     });
   }
 });
+
+const SNAPSHOT_IDENTITY_HEADER_FIELDS = [
+  "kind",
+  "schemaVersion",
+  "taskId",
+  "runId",
+  "idempotencyKey",
+  "runEpoch",
+  "stateRevision",
+] as const;
+
+describe.each([
+  ["source", validateRunControlSnapshotV1],
+  ["public", publicRunControlSnapshot],
+] as const)("%s identity-header observations", (_surface, validate): void => {
+  it("reads the healthy header and local suffix once in order with original receivers", (): void => {
+    const input = snapshot();
+    const trace: string[] = [];
+    const receivers: unknown[] = [];
+    for (const field of SNAPSHOT_IDENTITY_HEADER_FIELDS) {
+      const original = input[field];
+      Object.defineProperty(input, field, {
+        get(this: unknown): unknown {
+          trace.push(field);
+          receivers.push(this);
+          return original;
+        },
+      });
+    }
+    const result = validate(input);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(input);
+    expect(trace).toEqual([
+      "kind",
+      "schemaVersion",
+      "taskId",
+      "runId",
+      "idempotencyKey",
+      "runEpoch",
+      "stateRevision",
+    ]);
+    expect(receivers).toHaveLength(7);
+    for (const receiver of receivers) expect(receiver).toBe(input);
+  });
+
+  it("retains earlier own-key errors and eagerly checks every refused prefix and local suffix", (): void => {
+    const input = {
+      ...snapshot(),
+      kind: "foreign",
+      schemaVersion: 2,
+      taskId: 0,
+      runId: "",
+      idempotencyKey: false,
+      runEpoch: -1,
+      stateRevision: -1,
+      fixtureExtra: true,
+    };
+    const trace: string[] = [];
+    for (const field of SNAPSHOT_IDENTITY_HEADER_FIELDS) {
+      const original = input[field];
+      Object.defineProperty(input, field, {
+        get(): unknown {
+          trace.push(field);
+          return original;
+        },
+      });
+    }
+    expect(validate(input)).toEqual({
+      ok: false,
+      errors: [
+        "runControlSnapshot.fixtureExtra is not allowed",
+        "kind must be run-control-snapshot",
+        "schemaVersion must be the literal 1",
+        "taskId is invalid",
+        "runId is invalid",
+        "idempotencyKey is invalid",
+        "runEpoch must be a non-negative integer",
+        "stateRevision must be a non-negative integer",
+      ],
+    });
+    expect(trace).toEqual([
+      "kind",
+      "schemaVersion",
+      "taskId",
+      "runId",
+      "idempotencyKey",
+      "runEpoch",
+      "stateRevision",
+    ]);
+  });
+
+  it("propagates each opaque header getter refusal without later observations", (): void => {
+    for (const [fault, expected] of [
+      ["kind", ["kind"]],
+      ["schemaVersion", ["kind", "schemaVersion"]],
+      ["taskId", ["kind", "schemaVersion", "taskId"]],
+      ["runId", ["kind", "schemaVersion", "taskId", "runId"]],
+    ] as const) {
+      const input = snapshot();
+      const trace: string[] = [];
+      const failure: Error = Object.freeze(new TypeError("synthetic identity-header refusal"));
+      for (const field of SNAPSHOT_IDENTITY_HEADER_FIELDS) {
+        const original = input[field];
+        Object.defineProperty(input, field, {
+          get(): unknown {
+            trace.push(field);
+            if (field === fault) throw failure;
+            return original;
+          },
+        });
+      }
+      let observed: unknown;
+      try {
+        validate(input);
+      } catch (error) {
+        observed = error;
+      }
+      expect(observed).toBe(failure);
+      expect(trace).toEqual(expected);
+    }
+  });
+});
