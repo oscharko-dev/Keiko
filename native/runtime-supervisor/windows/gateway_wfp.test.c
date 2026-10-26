@@ -6,7 +6,7 @@
 #include <rpc.h>
 #include <stdlib.h>
 
-int gateway_socket_proof(void);
+int gateway_socket_proof(int inbound_experiment);
 int gateway_socket_child(int family, UINT16 gateway, UINT16 hostile);
 int gateway_socket_leaf(int family, UINT16 gateway, UINT16 hostile);
 int gateway_socket_server(int family);
@@ -242,7 +242,8 @@ int main(int argc, char **argv) {
   if (argc == 3 && strcmp(argv[1], "--identity-leaf") == 0) return gateway_identity_leaf(argv[2]);
   if (argc == 3 && strcmp(argv[1], "--socket-server") == 0) return gateway_socket_server(atoi(argv[2]));
   if (argc == 2 && strcmp(argv[1], "--guard-held") == 0) return guarded_child();
-  if (argc == 2 && strcmp(argv[1], "--socket-proof") == 0) return gateway_socket_proof();
+  if (argc == 2 && strcmp(argv[1], "--socket-proof") == 0) return gateway_socket_proof(0);
+  if (argc == 2 && strcmp(argv[1], "--inbound-control-proof") == 0) return gateway_socket_proof(1);
   if (argc == 5 && strcmp(argv[1], "--socket-child") == 0) {
     return gateway_socket_child(atoi(argv[2]), (UINT16)atoi(argv[3]), (UINT16)atoi(argv[4]));
   }

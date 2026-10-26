@@ -12,6 +12,10 @@
 struct socket_target { SOCKADDR_STORAGE address; int size; SOCKET listener; UINT16 port; };
 typedef DWORD (WINAPI *get_config_fn)(DWORD *, PSID_AND_ATTRIBUTES *);
 typedef DWORD (WINAPI *set_config_fn)(DWORD, PSID_AND_ATTRIBUTES);
+struct gateway_inbound_fixture;
+DWORD gateway_inbound_start(PSID sid, struct gateway_inbound_fixture **owned);
+DWORD gateway_inbound_stop(struct gateway_inbound_fixture *fixture);
+DWORD gateway_inbound_block(PSID sid, UINT16 family, HANDLE *owned);
 
 static int listen_target(int family, struct socket_target *target) {
   memset(target, 0, sizeof(*target));
@@ -233,6 +237,44 @@ done:
   return result;
 }
 
+static DWORD run_child(PSID sid, const wchar_t *executable, int family,
+                       UINT16 gateway, UINT16 hostile, DWORD *observed);
+static int udp_received(SOCKET listener);
+
+static DWORD scoped_inbound_probe(PSID sid, const wchar_t *executable, int family,
+                                  UINT16 gateway, UINT16 hostile, SOCKET udp) {
+  struct gateway_inbound_fixture *owner = NULL;
+  HANDLE deny = NULL;
+  DWORD result = gateway_inbound_start(sid, &owner), closed;
+  DWORD observed = 99;
+  if (result == ERROR_SUCCESS)
+    result = control_route_probe(sid, executable, family, "inbound-provisioned");
+  if (result == ERROR_SUCCESS) {
+    result = run_child(sid, executable, family, gateway, hostile, &observed);
+    printf("socket-inbound-egress: family=%d code=%lu observations=%lu expected-tcp-mask=1\n",
+           family, result, observed);
+    if (result == ERROR_SUCCESS &&
+        (observed > 7 || (observed & 3) != 1 || udp_received(udp) != 0)) result = ERROR_INVALID_DATA;
+  }
+  if (result == ERROR_SUCCESS) result = gateway_inbound_block(sid, (UINT16)family, &deny);
+  if (result == ERROR_SUCCESS &&
+      control_route_probe(sid, executable, family, "independent-deny") != ERROR_CONNECTION_REFUSED)
+    result = ERROR_INVALID_DATA;
+  if (deny != NULL) {
+    closed = FwpmEngineClose0(deny);
+    if (closed != ERROR_SUCCESS) result = closed;
+  }
+  if (result == ERROR_SUCCESS)
+    result = control_route_probe(sid, executable, family, "deny-removed");
+  closed = gateway_inbound_stop(owner);
+  if (closed != ERROR_SUCCESS) result = closed;
+  if (result == ERROR_SUCCESS &&
+      control_route_probe(sid, executable, family, "inbound-owner-reaped") != ERROR_CONNECTION_REFUSED)
+    result = ERROR_INVALID_DATA;
+  printf("socket-inbound-experiment: family=%d code=%lu\n", family, result);
+  return result;
+}
+
 int gateway_socket_child(int family, UINT16 gateway, UINT16 hostile) {
   STARTUPINFOW startup = {0};
   PROCESS_INFORMATION process = {0};
@@ -374,7 +416,7 @@ static DWORD restore_access(wchar_t *path, PSECURITY_DESCRIPTOR original) {
   return SetNamedSecurityInfoW(path, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, NULL, NULL, acl, NULL);
 }
 
-int gateway_socket_proof(void) {
+int gateway_socket_proof(int inbound_experiment) {
   HMODULE firewall = NULL;
   union { FARPROC address; get_config_fn call; } get_config = {0};
   union { FARPROC address; set_config_fn call; } set_config = {0};
@@ -459,7 +501,8 @@ int gateway_socket_proof(void) {
       }
       if (result == ERROR_SUCCESS) {
         DWORD route = control_route_probe(sid, executable, family, "unfiltered");
-        if (route != ERROR_SUCCESS) control_result = route;
+        DWORD expected = inbound_experiment ? ERROR_CONNECTION_REFUSED : ERROR_SUCCESS;
+        if (route != expected) control_result = ERROR_INVALID_DATA;
       }
       if (result == ERROR_SUCCESS)
         result = keiko_gateway_filters_open(sid, (UINT16)family, gateway.port, &filters);
@@ -495,7 +538,12 @@ int gateway_socket_proof(void) {
         }
         if (result == ERROR_SUCCESS) {
           DWORD route = control_route_probe(sid, executable, family, "filtered");
-          if (route != ERROR_SUCCESS) control_result = route;
+          DWORD expected = inbound_experiment ? ERROR_CONNECTION_REFUSED : ERROR_SUCCESS;
+          if (route != expected) control_result = ERROR_INVALID_DATA;
+          if (inbound_experiment) {
+            route = scoped_inbound_probe(sid, executable, family, gateway.port, hostile.port, udp);
+            if (route != ERROR_SUCCESS) control_result = route;
+          }
         }
       }
     }

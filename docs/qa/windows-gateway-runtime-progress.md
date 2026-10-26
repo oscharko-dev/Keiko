@@ -102,6 +102,21 @@ and Microsoft's separate [inbound/outbound loopback configuration](https://learn
 explain why outbound gateway proof alone is insufficient. No broad allow, hard-permit firewall
 override or unconfined fallback was added to make the control-route assertion pass.
 
+[Run 40371027521](https://github.com/oscharko-dev/Keiko/actions/runs/40371027521) reproduced the
+control-route refusal both before and after installing Keiko filters, for IPv4 and IPv6. Both
+families' concurrent-tree outbound/UDP/descendant checks passed. The inbound gap is therefore not
+caused by the Keiko outbound deny. The full development proof correctly remains failed.
+
+The separate `--inbound-control-proof` experiment investigates the documented
+`CheckNetIsolation LoopbackExempt -is` lifetime on disposable runners only. It starts the trusted
+System32 utility for one temporary package SID under an owned Job Object, discards its potentially
+identifying output, and requires working inbound sockets while exact egress remains enforced. An
+independent inbound deny must still block, removing it must restore the connection, and reaping the
+utility must revoke inbound access. The existing socket proof is not replaced or marked passed by
+this experiment. Microsoft's [IPC documentation](https://learn.microsoft.com/en-us/windows/uwp/communication/interprocess-communication)
+limits this utility mechanism to local sideload/debug scenarios; a positive experiment does not
+establish an installed production control plane or release approval.
+
 Local protocol validation also ran the complete existing `runtime-gateway.test.ts`: 29 passed,
 eight failed on existing POSIX filesystem fixtures rejected by Windows path canonicalization, and
 25 macOS tests skipped. The new cross-language vector case passes individually. These baseline

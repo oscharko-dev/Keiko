@@ -40,10 +40,15 @@ if (
   process.platform !== "win32" ||
   options.length > 1 ||
   (options.length === 1 &&
-    !new Set(["--filter-lifecycle", "--guarded-lifecycle", "--socket-proof"]).has(options[0]))
+    !new Set([
+      "--filter-lifecycle",
+      "--guarded-lifecycle",
+      "--socket-proof",
+      "--inbound-control-proof",
+    ]).has(options[0]))
 ) {
   process.stderr.write(
-    "Requires Windows; usage: test-windows-gateway-filters.mjs [--filter-lifecycle|--guarded-lifecycle|--socket-proof]\n",
+    "Requires Windows; usage: test-windows-gateway-filters.mjs [--filter-lifecycle|--guarded-lifecycle|--socket-proof|--inbound-control-proof]\n",
   );
   process.exitCode = 2;
 } else {
@@ -74,6 +79,7 @@ if (
     join(root, "native/runtime-supervisor/windows/gateway_request.test.c"),
     join(root, "native/runtime-supervisor/windows/gateway_identity.test.c"),
     join(root, "native/runtime-supervisor/windows/gateway_socket.test.c"),
+    join(root, "native/runtime-supervisor/windows/gateway_inbound.test.c"),
     "/link",
     "/DEPENDENTLOADFLAG:0x800",
     "fwpuclnt.lib",
