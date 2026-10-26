@@ -1316,3 +1316,187 @@ describe("Git Editor parser admission (#3918)", () => {
     },
   );
 });
+
+type CardinalityObservationOwner = (typeof responseByteOwners)[number];
+type CardinalityObservationMode =
+  "healthy" | "mismatch" | "array-refusal" | "count-refusal" | "count-throw" | "array-throw";
+
+interface CardinalityObservation {
+  readonly input: unknown;
+  readonly trace: readonly string[];
+  readonly receivers: readonly unknown[];
+}
+
+function observeCardinalityByteFields(
+  input: unknown,
+  owner: CardinalityObservationOwner,
+  mode: CardinalityObservationMode,
+  trace: string[],
+  receivers: unknown[],
+): void {
+  Object.defineProperty(input, "totalBytes", {
+    get(this: unknown): number {
+      trace.push("bytes");
+      receivers.push(this);
+      return mode === "healthy" ? owner.maximum : owner.maximum + 1;
+    },
+  });
+  Object.defineProperty(input, "truncated", {
+    get(this: unknown): boolean {
+      trace.push("truncated");
+      receivers.push(this);
+      return false;
+    },
+  });
+}
+
+function observeResponseCardinality(
+  owner: CardinalityObservationOwner,
+  mode: CardinalityObservationMode,
+): CardinalityObservation {
+  const collectionField = owner.countField === "totalFiles" ? "files" : "lines";
+  const guardRead = owner.countField === "totalFiles" ? 5 : 4;
+  const members = owner.countField === "totalFiles" ? [diffFile()] : [blameLine()];
+  const input = owner.create({ truncated: false });
+  const trace: string[] = [];
+  const receivers: unknown[] = [];
+  let collectionReads = 0;
+  let countReads = 0;
+  Object.defineProperty(input, collectionField, {
+    get(this: unknown): unknown {
+      trace.push("collection");
+      receivers.push(this);
+      collectionReads += 1;
+      if (mode === "array-refusal" && collectionReads === guardRead) return null;
+      if (mode === "array-throw" && collectionReads === guardRead + 1)
+        throw new TypeError("cardinality probe refusal");
+      return members;
+    },
+  });
+  Object.defineProperty(input, owner.countField, {
+    get(this: unknown): unknown {
+      trace.push("count");
+      receivers.push(this);
+      countReads += 1;
+      if (mode === "count-refusal" && countReads === 2) return "invalid";
+      if (mode === "count-throw" && countReads === 3)
+        throw new TypeError("cardinality probe refusal");
+      return mode === "mismatch" && countReads === 3 ? 0 : 1;
+    },
+  });
+  observeCardinalityByteFields(input, owner, mode, trace, receivers);
+  return { input, trace, receivers };
+}
+
+describe("Git Editor temporal response cardinality (#3918)", (): void => {
+  it.each(responseByteOwners)(
+    "$name retains later count reads and original receivers",
+    (owner): void => {
+      const earlier =
+        owner.countField === "totalFiles"
+          ? ["collection", "collection", "collection", "collection"]
+          : ["collection", "collection", "collection"];
+      for (const mode of ["healthy", "mismatch"] as const) {
+        const probe = observeResponseCardinality(owner, mode);
+        const result = owner.parse(probe.input);
+        const expected = [
+          ...earlier,
+          "truncated",
+          "count",
+          "bytes",
+          "collection",
+          "count",
+          "count",
+          "collection",
+          "bytes",
+          "bytes",
+        ];
+        if (mode === "mismatch") expected.push("truncated");
+        expect(probe.trace).toEqual(expected);
+        expect(probe.receivers).toHaveLength(probe.trace.length);
+        for (const receiver of probe.receivers) expect(receiver).toBe(probe.input);
+        if (mode === "healthy") {
+          expect(result.ok).toBe(true);
+          if (result.ok) expect(result.value).toBe(probe.input);
+        } else {
+          expect(result).toEqual({
+            ok: false,
+            errors: [owner.countError, "truncated must be true when totalBytes exceeds maxBytes"],
+          });
+        }
+      }
+    },
+  );
+
+  it.each(responseByteOwners)(
+    "$name short-circuits count guards while retaining the byte check",
+    (owner): void => {
+      const earlier =
+        owner.countField === "totalFiles"
+          ? ["collection", "collection", "collection", "collection"]
+          : ["collection", "collection", "collection"];
+      for (const mode of ["array-refusal", "count-refusal"] as const) {
+        const probe = observeResponseCardinality(owner, mode);
+        expect(owner.parse(probe.input)).toEqual({
+          ok: false,
+          errors: ["truncated must be true when totalBytes exceeds maxBytes"],
+        });
+        expect(probe.trace).toEqual(
+          mode === "array-refusal"
+            ? [
+                ...earlier,
+                "truncated",
+                "count",
+                "bytes",
+                "collection",
+                "bytes",
+                "bytes",
+                "truncated",
+              ]
+            : [
+                ...earlier,
+                "truncated",
+                "count",
+                "bytes",
+                "collection",
+                "count",
+                "bytes",
+                "bytes",
+                "truncated",
+              ],
+        );
+      }
+    },
+  );
+
+  it.each(responseByteOwners)(
+    "$name closes late cardinality inspection before the byte check",
+    (owner): void => {
+      const earlier =
+        owner.countField === "totalFiles"
+          ? ["collection", "collection", "collection", "collection"]
+          : ["collection", "collection", "collection"];
+      for (const mode of ["count-throw", "array-throw"] as const) {
+        const probe = observeResponseCardinality(owner, mode);
+        expect(owner.parse(probe.input)).toEqual({
+          ok: false,
+          errors: ["payload could not be inspected: TypeError"],
+        });
+        expect(probe.trace).toEqual(
+          mode === "count-throw"
+            ? [...earlier, "truncated", "count", "bytes", "collection", "count", "count"]
+            : [
+                ...earlier,
+                "truncated",
+                "count",
+                "bytes",
+                "collection",
+                "count",
+                "count",
+                "collection",
+              ],
+        );
+      }
+    },
+  );
+});

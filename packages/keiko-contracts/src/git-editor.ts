@@ -511,18 +511,30 @@ function validateResponseByteLimit(
   return true;
 }
 
+function validateResponseCardinality(
+  input: Readonly<Record<string, unknown>>,
+  collectionField: "files" | "lines",
+  totalField: "totalFiles" | "totalLines",
+  errors: string[],
+): boolean {
+  if (
+    Array.isArray(input[collectionField]) &&
+    isIntegerAtLeast(input[totalField], 0) &&
+    input[totalField] < input[collectionField].length
+  ) {
+    return rejectEditorField(
+      errors,
+      `${totalField} must not be smaller than ${collectionField}.length`,
+    );
+  }
+  return true;
+}
+
 function validateDiffResponseConsistency(
   input: Readonly<Record<string, unknown>>,
   errors: string[],
 ): boolean {
-  let valid = true;
-  if (
-    Array.isArray(input.files) &&
-    isIntegerAtLeast(input.totalFiles, 0) &&
-    input.totalFiles < input.files.length
-  ) {
-    valid = rejectEditorField(errors, "totalFiles must not be smaller than files.length");
-  }
+  const valid = validateResponseCardinality(input, "files", "totalFiles", errors);
   return validateResponseByteLimit(input, GIT_EDITOR_DIFF_MAX_BYTES, errors) && valid;
 }
 
@@ -642,14 +654,7 @@ function validateBlameResponseConsistency(
   input: Readonly<Record<string, unknown>>,
   errors: string[],
 ): boolean {
-  let valid = true;
-  if (
-    Array.isArray(input.lines) &&
-    isIntegerAtLeast(input.totalLines, 0) &&
-    input.totalLines < input.lines.length
-  ) {
-    valid = rejectEditorField(errors, "totalLines must not be smaller than lines.length");
-  }
+  const valid = validateResponseCardinality(input, "lines", "totalLines", errors);
   return validateResponseByteLimit(input, GIT_EDITOR_BLAME_MAX_BYTES, errors) && valid;
 }
 
