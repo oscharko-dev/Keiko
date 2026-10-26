@@ -1,25 +1,21 @@
+import { codingCatalogConsumer } from "./catalogCodingConsumer.js";
+import { CatalogDispatchFault, requireDispatch } from "./catalogToolErrors.js";
+import { sameRef } from "./catalogToolRequest.js";
+export { CatalogDispatchFault, requireDispatch } from "./catalogToolErrors.js";
+export { sameRef } from "./catalogToolRequest.js";
 import {
   captureCatalogJson,
-  createKeikoToolCatalog,
   createToolRef,
   validateToolArguments,
-  nativeTextSnapshotRegistrationSet,
-  verifyToolDescriptor,
 } from "@oscharko-dev/keiko-tool-catalog";
 import type {
   CatalogJsonObject,
   CatalogJsonValue,
   CatalogProfile,
-  ToolResultReason,
-  ToolResultStatus,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { deepFreeze } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
 import { canonicalise } from "@oscharko-dev/keiko-security/hashing";
-import {
-  codingToolRequiredActionClasses,
-  parseCodingToolRequest,
-  type CodingToolActionRequest,
-} from "../coding-runtime/codingToolIpc.js";
+import { type CodingToolActionRequest } from "../coding-runtime/codingToolIpc.js";
 import {
   assertCatalogCompatibility,
   catalogHandlerFor,
@@ -30,30 +26,11 @@ import {
 import type {
   BoundToolInvocation,
   CatalogActionIdentity,
+  CatalogConsumerPort,
   CatalogToolExecutionOverride,
   CatalogTrustedContext,
 } from "./catalogToolPorts.js";
 
-export class CatalogDispatchFault extends Error {
-  public constructor(
-    public readonly status: Exclude<ToolResultStatus, "completed">,
-    public readonly reason: ToolResultReason,
-    cause?: unknown,
-  ) {
-    super("Catalog dispatch rejected", { cause });
-  }
-}
-
-const NATIVE_READ_REGISTRATION = nativeTextSnapshotRegistrationSet("invocation");
-const NATIVE_READ_DESCRIPTOR = NATIVE_READ_REGISTRATION.entries[0]?.descriptor;
-const NATIVE_READ_PROFILE = createKeikoToolCatalog([NATIVE_READ_REGISTRATION]).profiles[0];
-export function requireDispatch(
-  condition: boolean,
-  status: Exclude<ToolResultStatus, "completed">,
-  reason: ToolResultReason,
-): asserts condition {
-  if (!condition) throw new CatalogDispatchFault(status, reason);
-}
 export function catalogBudgetOperation<T>(operation: () => T): T {
   try {
     return operation();
@@ -149,12 +126,6 @@ function captureRef(value: CatalogJsonValue | undefined): ReturnType<typeof crea
     throw new CatalogDispatchFault("invalid", "unknown-tool");
   }
 }
-export function sameRef(
-  left: BoundToolInvocation["toolRef"],
-  right: BoundToolInvocation["toolRef"],
-): boolean {
-  return left.canonicalId === right.canonicalId && left.contractVersion === right.contractVersion;
-}
 export function catalogDispatchContext(state: CatalogBindingState): CatalogTrustedContext {
   return Object.freeze({ ...state.options.context() });
 }
@@ -212,6 +183,7 @@ export function captureHandlerAction(
   identity: CatalogActionIdentity,
   executionOverride?: CatalogToolExecutionOverride,
   profile?: CatalogProfile,
+  consumer: CatalogConsumerPort = codingCatalogConsumer,
 ): CodingToolActionRequest {
   requireDispatch(handler.binding !== undefined, "failed", "handler-unavailable");
   requireDispatch(
@@ -222,90 +194,18 @@ export function captureHandlerAction(
   );
   const actionFor = executionOverride?.actionFor ?? handler.binding.actionFor;
   const captured = captureCatalogJson(actionFor(args, identity));
-  const parsed = captureHandlerRequest(handler, captured, executionOverride, profile);
+  const parsed = consumer.captureAction(handler, captured, executionOverride, profile);
   requireDispatch(
     parsed?.actionId === identity.actionId && parsed.idempotencyKey === identity.idempotencyKey,
     "failed",
     "handler-mismatch",
   );
   requireDispatch(
-    codingToolRequiredActionClasses(parsed).every((effect) =>
-      handler.descriptor.effects.includes(effect),
-    ),
+    consumer.requiredEffects(parsed).every((effect) => handler.descriptor.effects.includes(effect)),
     "failed",
     "handler-mismatch",
   );
   return deepFreeze(parsed);
-}
-
-function captureHandlerRequest(
-  handler: CatalogBoundHandler,
-  captured: CatalogJsonValue,
-  executionOverride: CatalogToolExecutionOverride | undefined,
-  profile: CatalogProfile | undefined,
-): CodingToolActionRequest | undefined {
-  const capture = executionOverride?.captureNativeReadAction;
-  if (capture === undefined)
-    return parseCodingToolRequest(
-      JSON.stringify(captured),
-      handler.descriptor.bounds.maxArgumentBytes,
-    );
-  requireNativeReadHandler(handler, profile);
-  return captureUnchangedNativeReadAction(capture, captured);
-}
-
-function requireNativeReadHandler(
-  handler: CatalogBoundHandler,
-  profile: CatalogProfile | undefined,
-): void {
-  verifyNativeReadDescriptor(handler);
-  const descriptor = NATIVE_READ_DESCRIPTOR;
-  requireDispatch(descriptor !== undefined, "failed", "handler-mismatch");
-  requireDispatch(
-    profile !== undefined &&
-      NATIVE_READ_PROFILE !== undefined &&
-      canonicalise(captureCatalogJson(profile)) === canonicalise(NATIVE_READ_PROFILE),
-    "failed",
-    "handler-mismatch",
-  );
-  requireDispatch(
-    sameRef(handler.descriptor.toolRef, descriptor.toolRef) &&
-      handler.descriptor.descriptorDigest === descriptor.descriptorDigest &&
-      handler.binding?.descriptorDigest === descriptor.descriptorDigest &&
-      handler.binding.handlerId === descriptor.handlerRequirement.id &&
-      handler.binding.handlerVersion === descriptor.handlerRequirement.contractVersion &&
-      handler.binding.catalogAction === descriptor.actionMapping[0]?.action,
-    "failed",
-    "handler-mismatch",
-  );
-}
-
-function verifyNativeReadDescriptor(handler: CatalogBoundHandler): void {
-  try {
-    verifyToolDescriptor(handler.descriptor);
-  } catch (error) {
-    throw new CatalogDispatchFault("failed", "handler-mismatch", error);
-  }
-}
-
-function captureUnchangedNativeReadAction(
-  capture: NonNullable<CatalogToolExecutionOverride["captureNativeReadAction"]>,
-  captured: CatalogJsonValue,
-): CodingToolActionRequest | undefined {
-  const expected = canonicalise(captured);
-  const request = capture(deepFreeze(captured));
-  const data = request === undefined ? undefined : captureCatalogJson(request);
-  requireDispatch(
-    data !== undefined &&
-      typeof data === "object" &&
-      data !== null &&
-      !Array.isArray(data) &&
-      (data as CatalogJsonObject).action === "read" &&
-      canonicalise(data) === expected,
-    "failed",
-    "handler-mismatch",
-  );
-  return request;
 }
 
 function withoutProof(request: CodingToolActionRequest): string {
@@ -329,7 +229,9 @@ export async function approveCatalogAction(
   const approved = await state.input.approvalPort.request(request, context);
   requireDispatch(approved !== undefined, "denied", "approval-rejected");
   const captured = captureCatalogJson(approved);
-  const parsed = parseCodingToolRequest(JSON.stringify(captured), 262_144);
+  const parsed = (state.input.consumerPort ?? codingCatalogConsumer).captureApprovedAction(
+    captured,
+  );
   requireDispatch(
     parsed !== undefined && withoutProof(parsed) === withoutProof(request),
     "denied",

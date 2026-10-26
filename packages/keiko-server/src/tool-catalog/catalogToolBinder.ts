@@ -28,21 +28,18 @@ import {
   isValidCorrelationId,
   UNKNOWN_CORRELATION_ID,
 } from "../correlation.js";
-import { codingToolRequiredActionClasses } from "../coding-runtime/codingToolIpc.js";
+import { codingCatalogConsumer } from "./catalogCodingConsumer.js";
 import type {
   BoundToolSet,
+  CatalogBoundHandler,
   CatalogToolBinderInput,
   CatalogToolBinderOptions,
   CatalogToolExecutionOverride,
-  CatalogToolHandlerBinding,
   CatalogTrustedContext,
   OfferedToolSet,
 } from "./catalogToolPorts.js";
 
-export interface CatalogBoundHandler {
-  readonly descriptor: ToolDescriptor;
-  readonly binding: CatalogToolHandlerBinding | undefined;
-}
+export type { CatalogBoundHandler } from "./catalogToolPorts.js";
 /** Server-private state. The public binder exposes only safe binding, offer and result projections. */
 export interface CatalogBindingState {
   readonly projection: CompiledToolProjection;
@@ -152,6 +149,14 @@ function buildCatalogPreparation(
     return descriptor;
   });
   const handlers = captureHandlers(input, descriptors);
+  const consumerPort = input.consumerPort ?? codingCatalogConsumer;
+  requireBinding(
+    [
+      consumerPort.requiredEffects,
+      consumerPort.captureAction,
+      consumerPort.captureApprovedAction,
+    ].every((value) => typeof value === "function"),
+  );
   const handlersByRef = new Map(
     handlers.map((handler) => [refKey(handler.descriptor.toolRef), handler]),
   );
@@ -165,6 +170,7 @@ function buildCatalogPreparation(
     bindingReadiness: observeReadiness ? catalogBoundToolSetReadiness(handlers) : undefined,
     input: {
       ...input,
+      consumerPort: Object.freeze({ ...consumerPort }),
       projection,
       handlerBindings: handlers.flatMap((handler) =>
         handler.binding === undefined ? [] : [handler.binding],
@@ -366,9 +372,9 @@ function canOffer(
   if (!state.input.budgetPort.available(handler.descriptor, context)) return false;
   const request = handler.binding.previewAction({ actionId: offerId, idempotencyKey: offerId });
   requireBinding(
-    codingToolRequiredActionClasses(request).every((effect) =>
-      handler.descriptor.effects.includes(effect),
-    ),
+    (state.input.consumerPort ?? codingCatalogConsumer)
+      .requiredEffects(request)
+      .every((effect) => handler.descriptor.effects.includes(effect)),
   );
   const authority = state.input.authorityPort.preview(context.authority, request);
   return (

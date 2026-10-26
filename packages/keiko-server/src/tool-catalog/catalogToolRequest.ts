@@ -19,3 +19,10 @@ export function catalogRequestDigest(
     }),
   ) as CatalogDigest;
 }
+
+export function sameRef(
+  left: BoundToolInvocation["toolRef"],
+  right: BoundToolInvocation["toolRef"],
+): boolean {
+  return left.canonicalId === right.canonicalId && left.contractVersion === right.contractVersion;
+}

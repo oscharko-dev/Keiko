@@ -566,3 +566,23 @@ summary and projects it through the existing reader. Package build, root typeche
 changed lint, error observability and all 97 registry drift tests pass. The existing
 12 binder suites / 200 tests also passed unchanged before binder refactoring.
 No new logging subsystem or error-observability exemption was introduced.
+
+
+## Binder preparation — #4089 (partial)
+
+Coding action decoding, effect classification and approval decoding now enter the
+existing binder through a captured consumer port. The native-read exception keeps
+its exact descriptor/profile checks. The decoder functions are frozen at binding;
+a regression first demonstrated that replacing a supplied decoder changed an
+already bound invocation, then passed after capture. Admission, context checks,
+budgets, cursors, invocation records, terminal settlement and lifecycle emission
+remain in their existing owners. This preparation still uses Coding context types;
+it is not yet the required non-Coding consumer.
+
+All 200 existing binder cases pass before and after extraction; the new replacement
+regression raises the total to 201. Package build, root typecheck, changed lint,
+dependency/import/contract checks, all 76 negative architecture fixtures, governed
+tool contract, catalog conformance and error observability pass. The regenerated
+operation inventory reports no violations. The auditor code-reviewed the preceding
+MCP cancellation/terminal-log fixes and confirmed both reported paths addressed;
+that confirmation is not a full host/binder acceptance.

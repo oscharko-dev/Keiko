@@ -4,6 +4,8 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 import type {
   CatalogDigest,
+  CatalogProfile,
+  ToolDescriptor,
   CatalogJsonValue,
   CompiledToolProjection,
   ToolRef,
@@ -99,7 +101,25 @@ export interface CatalogBoundAuthorityPort {
   readonly preview: CodingToolAuthorityPreview;
   readonly admit: CodingToolAuthorityPort["admit"];
 }
+/** The consumer owns action decoding; catalog admission, budgets and settlement stay shared. */
+export interface CatalogConsumerPort {
+  readonly requiredEffects: (request: CodingToolActionRequest) => ToolDescriptor["effects"];
+  readonly captureAction: (
+    handler: CatalogBoundHandler,
+    captured: CatalogJsonValue,
+    executionOverride: CatalogToolExecutionOverride | undefined,
+    profile: CatalogProfile | undefined,
+  ) => CodingToolActionRequest | undefined;
+  readonly captureApprovedAction: (
+    captured: CatalogJsonValue,
+  ) => CodingToolActionRequest | undefined;
+}
+export interface CatalogBoundHandler {
+  readonly descriptor: ToolDescriptor;
+  readonly binding: CatalogToolHandlerBinding | undefined;
+}
 export interface CatalogToolBinderInput {
+  readonly consumerPort?: CatalogConsumerPort;
   readonly projection: CompiledToolProjection;
   readonly handlerBindings: readonly CatalogToolHandlerBinding[];
   readonly authorityPort: CatalogBoundAuthorityPort;
