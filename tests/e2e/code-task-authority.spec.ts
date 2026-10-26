@@ -443,10 +443,15 @@ async function proveRevocationSurfacesRepairState(page: Page, runId: string): Pr
   await expect(
     runtimeQuestions(page).getByText("not paired for question content", { exact: false }),
   ).toBeVisible();
+  // The refused Pause makes the window inspect its pairing again, so it is now confirmed unpaired
+  // and the Changes panel names that cause (release-audit F-08) instead of the generic refusal it
+  // showed while the browser still believed itself paired. The disclosure stays open throughout.
   const changes = await openRunChanges(page);
-  await expect(changes.getByRole("alert")).toContainText("app session may need to be paired", {
-    timeout: 15_000,
-  });
+  await expect(changes.getByRole("status")).toContainText(
+    "Browser window not paired — open Keiko through the launcher",
+    { timeout: 15_000 },
+  );
+  await expect(changes).toHaveAttribute("open", "");
   await expect(changes.getByRole("region", { name: "Run-scoped file diff" })).toHaveCount(0);
   await expect(changes).not.toContainText(AUTHORITY_EDITED_CONTENT.trim());
   await expect(workbench(page)).toHaveAttribute("data-state", "running");
