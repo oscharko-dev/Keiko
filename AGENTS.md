@@ -151,8 +151,8 @@ component SBOM into `@oscharko-dev/keiko-coding-runtime-<target>` at the same pa
 TARGET's release, so a clean `npm install -g` finds search normally and the server verifies
 `<package>/runtime/native/rg` against the pinned digest at every run launch; `KEIKO_RIPGREP_BINARY_PATH`
 remains a developer and qualification override only. Unit tests are hermetic and do not need it; the
-customer-shape qualification, the portable stage jobs and the npm runtime package build do, and CI runs
-it as a setup step there.
+customer-shape qualification, the nightly real-binary journey, the portable stage jobs and the npm runtime
+package build do, and CI runs it as a setup step there.
 
 Use `npm` only. This repo is npm workspaces with a committed `package-lock.json` — there is no
 pnpm/yarn/bun lockfile. Do not add one.

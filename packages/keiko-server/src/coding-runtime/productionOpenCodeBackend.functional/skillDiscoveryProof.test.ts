@@ -1,35 +1,33 @@
 import { describe, expect, it } from "vitest";
 import { scriptedResponse, type ScriptState } from "./_support.js";
 import {
+  FUNCTIONAL_REPOSITORY_SKILL_NAME,
   SKILL_DISCOVERY_PROOF_CALL_ID,
+  functionalRepositorySkillText,
   skillInvocationHandoff,
   type SkillDiscoveryConsumptionProof,
 } from "./skillDiscoveryProof.js";
 
-function transcript(skills: unknown, callId = SKILL_DISCOVERY_PROOF_CALL_ID): string {
-  return JSON.stringify([
-    { role: "tool", toolCallId: callId, content: JSON.stringify({ status: "completed", skills }) },
-  ]);
+// The pinned 2.1.4 system prompt lists the skills it can load; this is its observed shape.
+function listing(...skills: readonly (readonly [id: string, name: string])[]): string {
+  const entries = skills.map(
+    ([id, name]) =>
+      `  <skill>\n    <id>${id}</id>\n    <name>${name}</name>\n    <description>d</description>\n  </skill>`,
+  );
+  return `Skills provide specialized instructions.\n<available_skills>\n${entries.join("\n")}\n</available_skills>\n`;
 }
 
-const LISTING = {
-  schemaVersion: 1,
-  catalogDigest: "c".repeat(64),
-  skills: [
-    {
-      skillId: "skl_listed-by-runtime@1",
-      version: "1",
-      sourceDigest: "d".repeat(64),
-      category: "repository-analysis",
-      capabilities: ["keiko.workspace.read"],
-      compatibility: { profile: "opencode", minVersion: 1, maxVersion: 1 },
-      readiness: { state: "ready" },
-    },
-  ],
-};
+function transcript(system: string): string {
+  return JSON.stringify([{ role: "system", content: system }]);
+}
 
-describe("real-binary skill discovery model response boundary (#3417)", () => {
-  it("discovers the approved skills before it invokes one", () => {
+const LISTED = listing(
+  ["opencode", "OpenCode"],
+  ["listed-by-runtime", FUNCTIONAL_REPOSITORY_SKILL_NAME],
+);
+
+describe("real-binary skill discovery model response boundary (#3417, #3897)", () => {
+  it("invokes the skill the runtime's own listing names, after its search-derived read", () => {
     const script = {
       mode: "productive-search",
       proveSkillDiscovery: true,
@@ -37,14 +35,10 @@ describe("real-binary skill discovery model response boundary (#3417)", () => {
       old: "export const marker = true;\n",
       next: "export const marker = false;\n",
     } as ScriptState;
-    expect(scriptedResponse(script).toolCalls[0]).toMatchObject({
+    expect(scriptedResponse(script, transcript(LISTED)).toolCalls[0]).toMatchObject({
       id: SKILL_DISCOVERY_PROOF_CALL_ID,
-      name: "keiko_skill_discover",
-      arguments: {},
-    });
-    expect(scriptedResponse(script, transcript(LISTING)).toolCalls[0]).toMatchObject({
-      name: "keiko_skill",
-      arguments: { skillId: "skl_listed-by-runtime@1" },
+      name: "skill",
+      arguments: { id: "listed-by-runtime" },
     });
     // The ordinary productive journey continues afterwards, starting with its question.
     expect(scriptedResponse(script).toolCalls[0]?.name).toBe("question");
@@ -60,37 +54,38 @@ describe("real-binary skill discovery model response boundary (#3417)", () => {
     expect(scriptedResponse(script).toolCalls[0]?.name).toBe("question");
   });
 
-  it("derives the invocation from the correlated result and records a body-free proof", () => {
+  it("derives the invocation from the runtime listing and records a body-free proof", () => {
     const evidence: SkillDiscoveryConsumptionProof[] = [];
     expect(
-      skillInvocationHandoff(transcript(LISTING), (proof) => {
+      skillInvocationHandoff(transcript(LISTED), FUNCTIONAL_REPOSITORY_SKILL_NAME, (proof) => {
         evidence.push(proof);
       }),
-    ).toEqual({ skillId: "skl_listed-by-runtime@1" });
+    ).toEqual({ id: "listed-by-runtime" });
     expect(evidence).toEqual([
       expect.objectContaining({
         toolCallId: SKILL_DISCOVERY_PROOF_CALL_ID,
-        listedCount: 1,
-        catalogDigest: "c".repeat(64),
+        listedCount: 2,
         invokedSkillDerivedFromResult: true,
       }),
     ]);
     expect(evidence.at(0)?.skillIdDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(evidence.at(0)?.listingDigest).toMatch(/^[a-f0-9]{64}$/u);
     expect(JSON.stringify(evidence)).not.toContain("listed-by-runtime");
   });
 
   it.each([
-    { ...LISTING, skills: [] },
-    { ...LISTING, skills: [{ ...LISTING.skills[0], readiness: { state: "unavailable" } }] },
-    { ...LISTING, catalogDigest: undefined },
-    "not-a-listing",
-  ])("refuses an unusable discovery result instead of invoking a canned skill", (skills) => {
-    expect(() => skillInvocationHandoff(transcript(skills), undefined)).toThrow(TypeError);
+    ["a listing that does not carry the admitted skill", listing(["opencode", "OpenCode"])],
+    ["an empty listing", listing()],
+    ["a prompt without a listing", "No skills here."],
+  ])("refuses %s instead of invoking a canned skill", (_name, system) => {
+    expect(() =>
+      skillInvocationHandoff(transcript(system), FUNCTIONAL_REPOSITORY_SKILL_NAME, undefined),
+    ).toThrow(TypeError);
   });
 
-  it("rejects a discovery result without its original tool-call identity", () => {
-    expect(() => skillInvocationHandoff(transcript(LISTING, "unrelated-call"), undefined)).toThrow(
-      TypeError,
-    );
+  it("carries a fixture skill the repository-item admission accepts", () => {
+    const text = functionalRepositorySkillText();
+    expect(text).toContain(`name: ${FUNCTIONAL_REPOSITORY_SKILL_NAME}`);
+    expect(text).toMatch(/^---\nname: [a-z-]+\ndescription: .+\n---\n.+\n$/u);
   });
 });

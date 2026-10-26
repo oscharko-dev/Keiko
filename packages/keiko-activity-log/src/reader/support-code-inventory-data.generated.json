@@ -1221,6 +1221,7 @@
     "keiko-server/coding-runtime/productionOpenCodeActivation",
     "keiko-server/coding-runtime/productionOpenCodeBackend",
     "keiko-server/coding-runtime/productionOpenCodeBackend.functional/_support",
+    "keiko-server/coding-runtime/productionOpenCodeBackend.functional/nativeToolTranscript",
     "keiko-server/coding-runtime/productionOpenCodeBackend.functional/repositorySearchProof",
     "keiko-server/coding-runtime/productionOpenCodeBackend.functional/skillDiscoveryProof",
     "keiko-server/coding-runtime/productionPortableCodingRuntime",
