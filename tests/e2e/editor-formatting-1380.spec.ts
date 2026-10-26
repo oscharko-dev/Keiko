@@ -5,6 +5,10 @@ import { inferEditorLanguageModeId } from "@oscharko-dev/keiko-contracts/runtime
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import {
+  documentAction,
+  expectFormatActionAvailability,
+} from "./support/editor-document-actions.js";
 import { clickWindowChromeButton } from "./support/window-chrome.js";
 
 // Issue #1380 (Epic #1491), ADR-0068 D8 item 4 — packaged-app browser e2e for the built-in editor
@@ -16,8 +20,9 @@ import { clickWindowChromeButton } from "./support/window-chrome.js";
 //   AC1 — basic-languages grammars actually tokenise (colourised Monaco tokens, not flat plaintext).
 //   AC2 — theme + tokenisation stay stable across a page reload (dark theme persists; tokens reapply).
 //   AC5 — the Format affordance reflects the registry-derived formatting source consistently:
-//         enabled ("Format ready") for keiko-language-service (ts/js) and disabled
-//         ("Format unavailable") for release-packaged "none" languages, including json/css.
+//         offered in the "More file actions" menu ("Format ready") for keiko-language-service
+//         (ts/js) and omitted from it ("Format unavailable") for release-packaged "none"
+//         languages, including json/css.
 //   AC3/AC4 — Format applies deterministic edits for TypeScript through the governed language
 //         service, while a "none" language leaves the buffer byte-identical.
 //
@@ -216,15 +221,6 @@ function statusBar(editorWindow: ReturnType<Page["getByRole"]>): ReturnType<Page
   return editorWindow.getByTestId("editor-status-bar");
 }
 
-function formatButton(editorWindow: ReturnType<Page["getByRole"]>): ReturnType<Page["getByRole"]> {
-  // The explicit Format Document action button in the editor toolbar (EditorRuntimeWidget.tsx),
-  // carrying a dynamic `aria-disabled` driven by the registry-derived `formattingAvailable` value
-  // (ADR-0068 D3/D4). Resolved by accessible name — the same locator the CI-covered editor suites
-  // use. The former `data-tip="Format document"` attribute no longer exists, so that selector
-  // matched nothing and every Format assertion here failed on a missing element.
-  return editorWindow.getByRole("button", { name: "Format", exact: true });
-}
-
 // The current Monaco editor buffer text, read from the rendered `.view-line`s. Two correctness
 // details make this faithful where `allInnerTexts()` is not: (1) Monaco positions each `.view-line`
 // ABSOLUTELY, so DOM order need not match visual order — we sort by the CSS `top` offset; (2) leading
@@ -247,15 +243,20 @@ async function readEditorBuffer(editorWindow: ReturnType<Page["getByRole"]>): Pr
 }
 
 // Trigger Format reliably: focus the buffer by clicking a `.view-line` (so the keybinding targets
-// the editor), click the explicit Format button, then issue Monaco's native Format Document
-// keybinding belt-and-braces. The caller first waits until the Format affordance is ready, which is
-// the editor-tier signal that the governed language-service formatter is reachable.
+// the editor), choose the explicit Format action from the "More file actions" menu (a secondary
+// document action since #3685, offered only when formatting is available), return focus to the
+// buffer (choosing a menu action hands focus back to the menu's trigger), then issue Monaco's
+// native Format Document keybinding belt-and-braces. The caller first waits until the Format
+// affordance is ready, which is the editor-tier signal that the governed language-service formatter
+// is reachable.
 async function triggerFormat(
   page: Page,
   editorWindow: ReturnType<Page["getByRole"]>,
 ): Promise<void> {
-  await editorWindow.locator(".monaco-editor .view-lines").first().click();
-  await formatButton(editorWindow).click();
+  const buffer = editorWindow.locator(".monaco-editor .view-lines").first();
+  await buffer.click();
+  await (await documentAction(editorWindow, "Format")).click();
+  await buffer.click();
   await page.keyboard.press("Shift+Alt+KeyF");
 }
 
@@ -381,10 +382,7 @@ test(`AC5 Format availability + status field reflect the formatting source consi
     await expect(statusBar(editorWindow).locator('[data-field="formatting"]')).toHaveText(
       available ? "Format ready" : "Format unavailable",
     );
-    await expect(formatButton(editorWindow)).toHaveAttribute(
-      "aria-disabled",
-      available ? "false" : "true",
-    );
+    await expectFormatActionAvailability(editorWindow, available);
   }
 
   assertNoPageErrors();
@@ -442,11 +440,12 @@ test(`AC4 a "none"-source file has no reachable formatter and its buffer is unto
   // Close the Files window so nothing overlaps the editor when we focus it for the keybinding.
   await closeFilesWindow(page);
 
-  // The status + button agree that no formatter is reachable for this "none" source (ADR-0068 D3/D4).
+  // The status + menu agree that no formatter is reachable for this "none" source (ADR-0068 D3/D4):
+  // the status reads unavailable and the opened "More file actions" menu offers no Format action.
   await expect(statusBar(editorWindow).locator('[data-field="formatting"]')).toHaveText(
     "Format unavailable",
   );
-  await expect(formatButton(editorWindow)).toHaveAttribute("aria-disabled", "true");
+  await expectFormatActionAvailability(editorWindow, false);
 
   const before = await readEditorBuffer(editorWindow);
   // Issue Monaco's native Format Document shortcut directly: with no provider registered for JSON

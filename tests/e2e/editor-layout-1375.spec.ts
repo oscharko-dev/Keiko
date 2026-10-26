@@ -99,6 +99,25 @@ async function tabCenter(
   };
 }
 
+/**
+ * Where a user grabs a tab to drag it: on its label.
+ *
+ * Not the geometric centre of the tab. The close × is a 28px target (#3685) that owns its own
+ * pointerdown and must never arm a drag, and at this viewport the centre of a 245px tab lands on
+ * top of it. A press there is a close press, so a drag that starts from it proves nothing about
+ * tab dragging.
+ */
+async function tabGrabPoint(
+  pane: Locator,
+  file: string,
+): Promise<{ readonly x: number; readonly y: number }> {
+  const label = pane.locator(`.ed-tab-hit[data-tip="${file}"] .ed-tab-label`);
+  await expect(label).toBeVisible();
+  const box = await label.boundingBox();
+  if (box === null) throw new Error(`tab label ${file} must have a browser box`);
+  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+}
+
 async function insertionHighlightStyles(workspace: Locator): Promise<
   readonly {
     readonly file: string | null;
@@ -235,7 +254,7 @@ test("keeps pointer-drag tab insertion feedback and next-click focus consistent"
   const pane = workspace.locator(".ed-pane").first();
   expect(await tabLabels(pane)).toEqual([...OPEN_FILES]);
 
-  const source = await tabCenter(pane, "README.md");
+  const source = await tabGrabPoint(pane, "README.md");
   const activeTarget = await tabCenter(pane, ACTIVE_FILE);
 
   await page.mouse.move(source.x, source.y);
