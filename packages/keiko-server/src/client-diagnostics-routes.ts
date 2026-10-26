@@ -131,6 +131,19 @@ const CLIENT_DIAGNOSTIC_RATE_LIMIT_KEYS = {
   loss: "client-diagnostics-loss",
 } as const;
 
+const CLIENT_COMPOSER_OPTIONAL_DIGEST_FIELD: {
+  readonly type: "string";
+  readonly dataClass: "digest";
+  readonly required: false;
+  readonly maxLength: 64;
+} = { type: "string", dataClass: "digest", required: false, maxLength: 64 };
+
+const CLIENT_COMPOSER_OPTIONAL_COUNT_FIELD: {
+  readonly type: "integer";
+  readonly dataClass: "count";
+  readonly required: false;
+} = { type: "integer", dataClass: "count", required: false };
+
 const CLIENT_COMPOSER_ACTIVITY = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -164,11 +177,11 @@ const CLIENT_COMPOSER_ACTIVITY = defineActivityLogOperation({
       values: ["attempted"],
     },
     normalization: { type: "string", dataClass: "closed-enum", required: false, values: ["trim"] },
-    displayedDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
-    submittedDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    displayedDigest: { ...CLIENT_COMPOSER_OPTIONAL_DIGEST_FIELD },
+    submittedDigest: { ...CLIENT_COMPOSER_OPTIONAL_DIGEST_FIELD },
     draftMatchesInput: { type: "boolean", dataClass: "closed-enum", required: false },
-    inputCharacterCount: { type: "integer", dataClass: "count", required: false },
-    submittedCharacterCount: { type: "integer", dataClass: "count", required: false },
+    inputCharacterCount: { ...CLIENT_COMPOSER_OPTIONAL_COUNT_FIELD },
+    submittedCharacterCount: { ...CLIENT_COMPOSER_OPTIONAL_COUNT_FIELD },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
