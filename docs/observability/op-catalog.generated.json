@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "27a206dd51cc629f04ea71e6b053dc3a960e6156db3928483a6842bef75db7bd",
+    "catalogDigest": "c135f40fe51299579825cc610a1e3809b66ecb5a61680437cdf6944aac181bf9",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -27138,7 +27138,7 @@
         "proofIds": ["git.verified-commit.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:112",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:1079"]
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:1097"]
       },
       {
         "contractKind": "activity-log-operation",
