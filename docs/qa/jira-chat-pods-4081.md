@@ -416,3 +416,18 @@ expired. A normal update did not renew it. The probes above are exploratory tran
 checks, not an accepted scenario group: complete live acceptance must run again under a
 valid license with the read/write preflight and all required fixture classes. Fresh-session
 provisioning and the remaining live prerequisites are open. No AC is closed by this checkpoint.
+
+### Fresh-session provisioning checkpoint (#4082 AC5, partial)
+
+Added pinned Jira/PostgreSQL Compose configuration and a private session launcher.
+Each newly initialized session gets an independent Compose project, volumes and
+three distinct private passwords; stop retains its data. Existing laboratory data
+is untouched. Initializer assertions verify the synthetic manifest, independent
+secrets and file permissions; start/status were exercised on the fresh instance.
+Script lint and formatting pass.
+
+The normal Jira first-run UI accepted the published test license in the fresh
+instance. The admin API then reported `valid: true`, `expired: false` and 10,553
+seconds remaining. This resolves the expired-instance prerequisite for the current
+session without changing clocks or licensing code. Automated setup, complete
+synthetic fixtures and licensed read/write/model/browser qualification remain open.

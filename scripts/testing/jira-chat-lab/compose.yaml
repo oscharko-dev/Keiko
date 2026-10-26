@@ -1,0 +1,58 @@
+services:
+  database:
+    image: library/postgres:16-bookworm@sha256:2b429c90204d3dc581371d2ce267ffb0aeeddf4968e176de5003037b4d0de8a9
+    restart: "no"
+    environment:
+      POSTGRES_DB: jira
+      POSTGRES_USER: jira
+      POSTGRES_PASSWORD_FILE: /run/secrets/database_password
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    secrets: [database_password]
+    volumes: [database_data:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U jira -d jira"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    mem_limit: 1g
+    logging:
+      options: { max-size: 10m, max-file: "3" }
+  jira:
+    image: atlassian/jira-software:10.3.26@sha256:ddcddc61ee43067fa274538b888d36408c47bc6a4ec14e41113dc304b8529168
+    restart: "no"
+    depends_on:
+      database: { condition: service_healthy }
+    ports: ["127.0.0.1:${KEIKO_JIRA_LAB_HTTP_PORT:-18081}:8080"]
+    environment:
+      ATL_JDBC_URL: jdbc:postgresql://database:5432/jira
+      ATL_JDBC_USER: jira
+      ATL_DB_DRIVER: org.postgresql.Driver
+      ATL_DB_TYPE: postgres72
+      JVM_MINIMUM_MEMORY: 1024m
+      JVM_MAXIMUM_MEMORY: 2048m
+      CLUSTERED: "false"
+      ATL_TOMCAT_ACCESSLOG: "false"
+    entrypoint: [/bin/sh, /opt/keiko-jira-entrypoint.sh]
+    secrets: [database_password]
+    volumes:
+      - jira_home:/var/atlassian/application-data/jira
+      - ./jira-entrypoint.sh:/opt/keiko-jira-entrypoint.sh:ro
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'curl --fail --silent http://127.0.0.1:8080/status | grep -q ''"state":"RUNNING"''',
+        ]
+      start_period: 300s
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    mem_limit: 4g
+    logging:
+      options: { max-size: 10m, max-file: "3" }
+secrets:
+  database_password:
+    file: ${KEIKO_JIRA_LAB_STATE_DIR:?private laboratory state directory required}/secrets/database-password
+volumes:
+  database_data:
+  jira_home:

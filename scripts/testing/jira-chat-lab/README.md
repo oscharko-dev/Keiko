@@ -62,3 +62,31 @@ Jira 10.3.26 fixture. Its license is expired, and a normal license update did no
 renew it. These are exploratory transport results, not completed live acceptance.
 Fresh-session provisioning, additional fixture classes and the full live lane
 remain outstanding in `docs/qa/jira-chat-pods-4081.md`.
+
+## Fresh isolated sessions
+
+The pinned Compose definition provides independent database/Jira volumes per
+session. Initialize a new private directory (its parent must already exist):
+
+```sh
+node scripts/testing/jira-chat-lab/session.mjs init "$HOME/.local/share/keiko-jira-4081-new"
+node scripts/testing/jira-chat-lab/session.mjs start "$HOME/.local/share/keiko-jira-4081-new"
+node scripts/testing/jira-chat-lab/session.mjs status "$HOME/.local/share/keiko-jira-4081-new"
+```
+
+Each initialization creates a distinct project name and three private, independently
+randomized passwords. The default HTTP port is 18081; an optional final `init`
+argument selects another unprivileged port. Complete Jira's normal first-run setup
+with the published test license, a `keiko-admin` account using the private
+`secrets/admin-password`, and email delivery disabled. Do not reuse an expired
+instance as an accepted test session. Automated setup and complete fixture seeding
+are the next increment.
+
+`stop` stops this manifest's containers and retains its volumes. The harness does
+not delete an existing instance or its data. Use a new directory/project for the
+next independent session. No background renewal or clock changes are performed.
+
+Fresh-session checkpoint: the isolated instance provisioned on 2026-10-26 accepted
+the official license through its normal setup flow. Its admin API reported
+`valid: true`, `expired: false` and 10,553 seconds remaining at the checkpoint.
+Full identity/read/write preflight and fixture coverage still need to run there.
