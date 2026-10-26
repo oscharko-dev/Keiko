@@ -542,11 +542,11 @@ function validateDiffResponseFields(
   input: Readonly<Record<string, unknown>>,
   errors: string[],
 ): input is Readonly<Record<string, unknown>> & GitEditorDiffResponse {
-  let valid = true;
-  valid = validateDiffResponseShape(input, errors) && valid;
-  valid = validateDiffResponseFiles(input, errors) && valid;
-  valid = validateDiffResponseTotals(input, errors) && valid;
-  return valid;
+  return [
+    validateDiffResponseShape(input, errors),
+    validateDiffResponseFiles(input, errors),
+    validateDiffResponseTotals(input, errors),
+  ].every(Boolean);
 }
 
 export function parseGitEditorDiffResponse(
@@ -662,11 +662,11 @@ function validateBlameResponseFields(
   input: Readonly<Record<string, unknown>>,
   errors: string[],
 ): input is Readonly<Record<string, unknown>> & GitEditorBlameResponse {
-  let valid = true;
-  valid = validateBlameResponseShape(input, errors) && valid;
-  valid = validateBlameResponseLines(input, errors) && valid;
-  valid = validateBlameResponseTotals(input, errors) && valid;
-  return valid;
+  return [
+    validateBlameResponseShape(input, errors),
+    validateBlameResponseLines(input, errors),
+    validateBlameResponseTotals(input, errors),
+  ].every(Boolean);
 }
 
 export function parseGitEditorBlameResponse(

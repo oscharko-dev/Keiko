@@ -1500,3 +1500,133 @@ describe("Git Editor temporal response cardinality (#3918)", (): void => {
     },
   );
 });
+
+function responsePhaseRefusal(owner: CardinalityObservationOwner): unknown {
+  const common = {
+    schemaVersion: "invalid",
+    extra: true,
+    truncated: "invalid",
+    totalBytes: -1,
+    maxBytes: 0,
+  };
+  if (owner.countField === "totalFiles") {
+    return owner.create({ ...common, scope: "all", files: null, totalFiles: -1, maxFiles: 0 });
+  }
+  return owner.create({
+    ...common,
+    path: "../outside",
+    startLine: 0,
+    lines: null,
+    totalLines: -1,
+    maxLines: 0,
+  });
+}
+
+function responsePhaseRefusalErrors(owner: CardinalityObservationOwner): readonly string[] {
+  if (owner.countField === "totalFiles") {
+    return [
+      "response has unknown fields",
+      "schemaVersion invalid",
+      "scope must be staged or unstaged",
+      "files must be an array of at most 400 entries",
+      "truncated must be a boolean",
+      "totalFiles must be a non-negative integer",
+      "totalBytes must be a non-negative integer",
+      "maxBytes invalid",
+      "maxFiles invalid",
+    ];
+  }
+  return [
+    "response has unknown fields",
+    "schemaVersion invalid",
+    "path must be a bounded workspace-relative path",
+    "startLine must be a positive integer",
+    "lines must be an array of at most 2000 entries",
+    "truncated must be a boolean",
+    "totalLines must be a non-negative integer",
+    "totalBytes must be a non-negative integer",
+    "maxBytes invalid",
+    "maxLines invalid",
+  ];
+}
+
+interface ResponsePhaseFrontier {
+  readonly input: unknown;
+  readonly trace: readonly string[];
+  readonly receivers: readonly unknown[];
+}
+
+function observeResponsePhaseFrontier(
+  owner: CardinalityObservationOwner,
+  mode: "shape-refusal" | "member-refusal",
+): ResponsePhaseFrontier {
+  const input = owner.create();
+  const trace: string[] = [];
+  const receivers: unknown[] = [];
+  const failure: Error = Object.freeze(new TypeError("synthetic response phase refusal"));
+  const collectionField = owner.countField === "totalFiles" ? "files" : "lines";
+  Object.defineProperty(input, "schemaVersion", {
+    get(this: unknown): string {
+      trace.push("shape");
+      receivers.push(this);
+      return mode === "shape-refusal" ? "invalid" : GIT_EDITOR_SCHEMA_VERSION;
+    },
+  });
+  Object.defineProperty(input, collectionField, {
+    get(this: unknown): unknown {
+      trace.push("members");
+      receivers.push(this);
+      if (mode === "shape-refusal") throw failure;
+      return null;
+    },
+  });
+  Object.defineProperty(input, "truncated", {
+    get(this: unknown): boolean {
+      trace.push("totals");
+      receivers.push(this);
+      if (mode === "member-refusal") throw failure;
+      return false;
+    },
+  });
+  return { input, trace, receivers };
+}
+
+describe("Git Editor eager response phases (#3918)", (): void => {
+  it.each(responseByteOwners)(
+    "$name accumulates ordered shape member and totals refusals",
+    (owner): void => {
+      expect(owner.parse(responsePhaseRefusal(owner))).toEqual({
+        ok: false,
+        errors: responsePhaseRefusalErrors(owner),
+      });
+    },
+  );
+
+  it.each(responseByteOwners)(
+    "$name inspects members after a shape refusal and stops on their throw",
+    (owner): void => {
+      const probe = observeResponsePhaseFrontier(owner, "shape-refusal");
+      expect(owner.parse(probe.input)).toEqual({
+        ok: false,
+        errors: ["payload could not be inspected: TypeError"],
+      });
+      expect(probe.trace).toEqual(["shape", "members"]);
+      expect(probe.receivers).toHaveLength(probe.trace.length);
+      for (const receiver of probe.receivers) expect(receiver).toBe(probe.input);
+    },
+  );
+
+  it.each(responseByteOwners)(
+    "$name inspects totals after a member refusal and closes their throw",
+    (owner): void => {
+      const probe = observeResponsePhaseFrontier(owner, "member-refusal");
+      expect(owner.parse(probe.input)).toEqual({
+        ok: false,
+        errors: ["payload could not be inspected: TypeError"],
+      });
+      expect(probe.trace).toEqual(["shape", "members", "totals"]);
+      expect(probe.receivers).toHaveLength(probe.trace.length);
+      for (const receiver of probe.receivers) expect(receiver).toBe(probe.input);
+    },
+  );
+});
