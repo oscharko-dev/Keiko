@@ -301,7 +301,7 @@ function runWindowsCmdSpawnSmoke() {
       ordinaryShim,
       junctionSystemRoot,
     );
-    assertSystemBinaryRedirectRejectedBeforeSpawn(ordinaryShim, root);
+    console.log("windows-cmd-spawn-smoke: component=system-root-identity result=passed");
 
     for (const [label, shimPath] of [
       ["ordinary .cmd", ordinaryShim],
@@ -310,9 +310,14 @@ function runWindowsCmdSpawnSmoke() {
       assertArgvRoundTrip(label, shimPath, root, outPath);
       assertParseable(label, shimPath, root, outPath);
       assertNoInjection(label, shimPath, root, outPath);
+      console.log(`windows-cmd-spawn-smoke: component=${label} result=passed`);
     }
     assertShimDoubleEscape();
     assertPercentRejected(ordinaryShim);
+    // File symlinks need an elevated token or Developer Mode. Keep this mandatory proof last so
+    // missing local privileges do not hide independent live argv/injection failures. Its failure
+    // still fails the smoke; only completion of every assertion reaches the final PASS below.
+    assertSystemBinaryRedirectRejectedBeforeSpawn(ordinaryShim, root);
   } catch (error) {
     failure = error;
   } finally {

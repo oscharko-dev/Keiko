@@ -55,7 +55,8 @@ Locally compiled helper hashes identify this run, not newly approved distributed
 
 Commands are relative to the checkout and use the supported Node/npm toolchain above. Tests ran
 on native Windows, outside the agent execution sandbox where it prevented Vitest cache renames.
-No customer model, secret, endpoint, workspace, or private runtime log was used.
+No customer model, secret, endpoint, workspace, or private runtime log was used. The privileged
+WFP follow-up below ran only on a disposable GitHub-hosted Windows runner.
 
 | Command / check                                                                                                                              | Result and limits                                                                                                                                                                                                                                        |
 | -------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -64,12 +65,12 @@ No customer model, secret, endpoint, workspace, or private runtime log was used.
 | `node scripts/provision-ripgrep.mjs`                                                                                                         | PASS: pinned archive and extracted `rg.exe` verified                                                                                                                                                                                                     |
 | Staged `opencode.exe --version`; `rg.exe --version`                                                                                          | PASS: 2.1.4 and 15.1.0                                                                                                                                                                                                                                   |
 | `node scripts/testing/test-windows-gateway-filters.mjs`                                                                                      | PASS: C compiler/analyzer and policy validation. Default mode installs no WFP filters and proves no network isolation                                                                                                                                    |
-| `node scripts/testing/test-windows-gateway-filters.mjs --guarded-lifecycle`                                                                  | BLOCKED: compile and policy validation pass; the opt-in lifecycle returns Win32 `ERROR_ACCESS_DENIED` (5). This privileged filter-state proof remains assigned to disposable Windows runners; no local socket-proof was run                                                   |
+| `node scripts/testing/test-windows-gateway-filters.mjs --guarded-lifecycle`                                                                  | BLOCKED: the sandboxed attempt compiled and passed policy validation, then returned Win32 `ERROR_ACCESS_DENIED` (5). Privileged filter-state proofs remain assigned to disposable Windows runners; no local socket-proof was run                         |
 | `node native/runtime-supervisor/test-protocol.mjs --helper .portable-sidecar-payloads/windows-x64/native/keiko-runtime-supervisor.exe`       | PASS: actual helper, ordinary and detached descendants, cancellation and control-pipe EOF. Both PIDs must be live before cancellation and gone afterward; explicit cancellation additionally requires zero active Job Object processes before completion |
 | `node native/secure-workspace-read/test-protocol.mjs`                                                                                        | PASS: source-built helper, protocol, controlled races and load tests. Observed load sample: 1,000 sequential reads, p95 5.6 ms; 100 concurrent reads, batch 386.9 ms; resource delta 0. These are local observations, not canonical performance budgets  |
 | `node native/secure-workspace-read/test-protocol.mjs --binary .portable-sidecar-payloads/windows-x64/native/keiko-secure-workspace-read.exe` | PASS after the fixture repair described below, against the same staged bytes: 32/32 known-generation reads, concurrent ancestor-alias proof and load tests; p95 5.7 ms, concurrent batch 387.4 ms, resource delta 0                                      |
 | `node scripts/__tests__/windows-git-reparse-smoke.mjs`                                                                                       | PASS: actual Windows Git executable reparse containment                                                                                                                                                                                                  |
-| `node scripts/__tests__/windows-cmd-spawn-smoke.mjs`                                                                                         | BLOCKED: `EPERM` creating the adversarial file symlink to `cmd.exe`. The later argv/injection matrix did not execute; junction support alone is insufficient                                                                                             |
+| `node scripts/__tests__/windows-cmd-spawn-smoke.mjs`                                                                                         | PARTIAL: real ordinary `.cmd` and npm-shim argv/injection cases and fake/junction SystemRoot refusals pass. The mandatory final file-symlink probe still fails with `EPERM`; the command exits nonzero and reports no overall PASS                       |
 
 Two diagnostic Vitest selections were also executed:
 
@@ -99,6 +100,44 @@ not represented as successful native Windows or foreign-platform execution.
 The direct backend consumer suite `backends.test.ts` also passes all 39 tests on Windows after
 this repair. Policy inspection and these seam tests remain distinct from real OS confinement.
 
+A follow-up selection of Windows security/shell, workspace paths/discovery, checkout binding and
+portable handoff tests produced **344 passed, 21 failed, 12 skipped** across 11 files. Seventeen
+failures came from POSIX-only test roots and path comparisons, or the directory-link fixture:
+`paths.test.ts` and `workspacePathDiscovery.safety.test.ts` now use host-absolute paths, and the
+native directory-alias case uses real Windows junctions. All **36 tests in those two files pass**
+after the repair, preserving denial, incomplete coverage, abort/deadline and root-rebinding checks.
+The other four failures in the selection require symbolic-link privileges (system binary identity
+and portable handoff files); none was converted into a skip. The checkout-binding suite and
+portable discovery suite passed in the initial selection. These component results do not qualify
+a running Workbench or installed upgrade.
+
+The native secure-read protocol harness also now exercises spaces and Unicode in actual directory
+and file names, ASCII case aliases, alternate root separator spelling, an existing relative path
+beyond 260 characters, an existing NTFS alternate data stream, and device/namespace root refusal.
+Successful reads must return the exact expected bytes; rejected reads must remain content-free.
+Both the source-built helper and the unchanged staged helper pass, together with the existing
+link/race/load controls. The staged follow-up observed 32/32 known-generation reads, 11 replacement
+attempts (10 after spawn), seven sharing denials, p95 5.5 ms and resource delta 0.
+
+The shell harness now performs its mandatory final-binary symlink probe after its independent
+live argv/injection checks. Missing file-symlink privilege therefore leaves useful component
+evidence while still failing the complete smoke. No assertion, privilege requirement or exit
+status was relaxed.
+
+The existing Windows gateway development workflow also passed on the disposable `windows-2025`
+runner: [run 40392166306](https://github.com/oscharko-dev/Keiko/actions/runs/40392166306), exact head
+`1048f05e96aefbc6e25c67ed03a5bd7500118368`. It compiled/analyzed the C sources and passed dynamic
+filter cleanup, durable-deny guard cleanup after gateway permit revocation, and real AppContainer
+socket probes for IPv4 and IPv6. Both process trees and their descendants reached all seven
+baseline connections before filtering; with filters, both trees produced five observations with
+only the gateway TCP bit allowed, and neither UDP receiver observed a datagram. The policy and
+socket proof sources are unchanged by the subsequent path/fixture increment. This is executable
+component evidence, not installed-service, crash-recovery or production launch qualification.
+
+The follow-up diff passes typecheck/package-graph, targeted ESLint/Prettier and local documentation
+link checks. The required local Sonar gate was rerun against this diff and again reported no
+unresolved finding (analysis task `8a95a402-03d2-4345-863a-be1b9673b34a`).
+
 Final checks of this increment: the five directly affected supervisor/logging/build/native-quality
 test files pass (**58 tests, zero skips**); the separately diagnosed macOS abstraction case above
 is not included in that scoped count. Typecheck, targeted ESLint/Prettier, MSVC `/W4 /WX /analyze`
@@ -110,30 +149,38 @@ the native C code, which has separate compiler/analyzer and process-lifecycle ev
 No full Windows native-quality gate pass is claimed: that gate also includes privileged SMB and
 .NET checks beyond this local run.
 
-Concurrent work was revalidated against open PR
-[#4076](https://github.com/oscharko-dev/Keiko/pull/4076): its macOS runtime-package pin and native
-nightly journey repairs do not supply Windows runtime approval or Windows service qualification.
-No unmerged branch was used as acceptance evidence or merged into this branch.
+The initial concurrency review inspected
+[#4076](https://github.com/oscharko-dev/Keiko/pull/4076) while open. It subsequently merged into
+`dev` at `1c4464abb`; this branch integrated that completed work before the follow-up runs above.
+Its macOS runtime-package pin and native journey repairs do not supply Windows runtime approval.
+
+The missing gateway implementation is owned by [#3423](https://github.com/oscharko-dev/Keiko/issues/3423)
+and [#3666](https://github.com/oscharko-dev/Keiko/issues/3666), with current work in
+[draft PR #4090](https://github.com/oscharko-dev/Keiko/pull/4090). Its unmerged record identifies an
+additional host-to-AppContainer HTTP control-route blocker; successful outbound filtering alone
+does not establish OpenCode service connectivity. Its service, installer and production launch
+composition remain incomplete. That branch was inspected for dependency coordination only;
+no unfinished implementation or its results were imported as this branch's qualification.
 
 ## Acceptance disposition
 
-| Group                                | Evidence / remaining work                                                                                                                                                                                                                                        |
-| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| W1 — OS boundaries                   | BLOCKED. Mapped profile retained by explicit decision. Production gateway confinement still refuses Windows. Native filesystem and foreign-process boundaries remain unqualified                                                                                 |
-| W2 — Owned process tree              | PARTIAL. Real Job Object helper cancels/reaps ordinary and detached descendants and handles control EOF. Workbench concurrency release, original service, watchers and active turns remain untested behind W1                                                    |
-| W3 — Customer installs               | BLOCKED. Fresh development dependencies and staging pass, but the npm runtime target map and approved npm runtime identities contain macOS only. No clean Windows npm/npx/Yarn/start/reload/upgrade qualification                                                |
-| W4 — Artifacts / approvals           | PARTIAL. Approved OpenCode and ripgrep bytes verified, local helper built. No approved Windows npm package/helper release; retained-state and stale-helper refusal still need installed-artifact execution                                                       |
-| W5 — Platform lanes                  | PARTIAL. Existing required Windows native-quality lane now runs the actual supervisor protocol harness against its freshly compiled helper. Real service execution remains blocked; native macOS-only and environment-gated suites are not Windows certification |
-| W6 — Three-mode task comparison      | BLOCKED by W1 and the missing live model/Gateway qualification. No task or mode counted as passed                                                                                                                                                                |
-| W7 — Windows paths / filesystem      | PARTIAL. Git reparse and both source-built and staged-binary secure-read protocol/race tests pass. Full instruction/media/external-root, linked-worktree move/watcher and path-form matrix remains open                                                          |
-| W8 — Shell / real repair             | BLOCKED. 113 Windows shell unit cases pass; actual shell smoke stops at the symlink prerequisite. No project-selected Node/Vitest or Java/Maven/Gradle failing-test-to-repair loop                                                                               |
-| W9 — Persisted sessions / locks      | NOT RUN. Requires functioning admitted service; no session, WAL, authority expiry or restore claim                                                                                                                                                               |
-| W10 — Agents / IPC / active input    | NOT RUN. Native capabilities are unavailable under the retained mapped profile. Native local MCP still constructs `/usr/bin/env -i`; no native Windows MCP execution claim                                                                                       |
-| W11 — Network / environment          | BLOCKED. Policy-input validation is not an installed WFP socket proof. No inherited proxy/CA/OpenSSL/FIPS, endpoint-failure, long-stream or orphan-request qualification                                                                                         |
-| W12 — Visible identity / state       | PARTIAL, static only. Production selects `direct`, not `native`. Actual UI/model/agent/mode state and reload flows remain untested                                                                                                                               |
-| W13 — Upgrade / rollback             | BLOCKED. No approved/released Windows npm runtime pair or installed portable candidate supplied for this run. No executable-lock, rollback or retained-state qualification                                                                                       |
-| W14 — Large repositories / resources | NOT RUN. Secure-read load observations above cannot substitute for standalone/Workbench task measurements or another platform's reference budgets                                                                                                                |
-| W15 — Private skills / races         | NOT RUN. No actual model dispatch, compaction, revision replacement or multi-turn repair evidence                                                                                                                                                                |
+| Group                                | Evidence / remaining work                                                                                                                                                                                                                                                                      |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| W1 — OS boundaries                   | BLOCKED. Mapped profile retained by explicit decision. Production gateway confinement still refuses Windows. Native filesystem and foreign-process boundaries remain unqualified                                                                                                               |
+| W2 — Owned process tree              | PARTIAL. Real Job Object helper cancels/reaps ordinary and detached descendants and handles control EOF. Workbench concurrency release, original service, watchers and active turns remain untested behind W1                                                                                  |
+| W3 — Customer installs               | BLOCKED. Fresh development dependencies and staging pass, but the npm runtime target map and approved npm runtime identities contain macOS only. No clean Windows npm/npx/Yarn/start/reload/upgrade qualification                                                                              |
+| W4 — Artifacts / approvals           | PARTIAL. Approved OpenCode and ripgrep bytes verified, local helper built. No approved Windows npm package/helper release; retained-state and stale-helper refusal still need installed-artifact execution                                                                                     |
+| W5 — Platform lanes                  | PARTIAL. Existing required Windows native-quality lane now runs the actual supervisor protocol harness against its freshly compiled helper. Real service execution remains blocked; native macOS-only and environment-gated suites are not Windows certification                               |
+| W6 — Three-mode task comparison      | BLOCKED by W1 and the missing live model/Gateway qualification. No task or mode counted as passed                                                                                                                                                                                              |
+| W7 — Windows paths / filesystem      | PARTIAL. Git reparse, checkout binding, portable discovery, and source-built/staged secure-read paths and races pass, including Unicode, case aliases, long paths, ADS and namespace refusal. Full instruction/media/external-root and linked-worktree move/watcher qualification remains open |
+| W8 — Shell / real repair             | PARTIAL. 113 shell unit cases and actual `.cmd`/npm-shim argv/injection controls pass; the final binary-symlink proof lacks privilege. No project-selected Node/Vitest or Java/Maven/Gradle Workbench failing-test-to-repair loop                                                              |
+| W9 — Persisted sessions / locks      | NOT RUN. Requires functioning admitted service; no session, WAL, authority expiry or restore claim                                                                                                                                                                                             |
+| W10 — Agents / IPC / active input    | NOT RUN. Native capabilities are unavailable under the retained mapped profile. Native local MCP still constructs `/usr/bin/env -i`; no native Windows MCP execution claim                                                                                                                     |
+| W11 — Network / environment          | PARTIAL. Disposable Windows runner passes IPv4/IPv6 WFP lifecycle and actual AppContainer socket/descendant controls. Installed service, inherited proxy/CA/OpenSSL/FIPS, endpoint failures, long streams and orphan requests remain unqualified                                               |
+| W12 — Visible identity / state       | PARTIAL, static only. Production selects `direct`, not `native`. Actual UI/model/agent/mode state and reload flows remain untested                                                                                                                                                             |
+| W13 — Upgrade / rollback             | BLOCKED. No approved/released Windows npm runtime pair or installed portable candidate supplied for this run. No executable-lock, rollback or retained-state qualification                                                                                                                     |
+| W14 — Large repositories / resources | NOT RUN. Secure-read load observations above cannot substitute for standalone/Workbench task measurements or another platform's reference budgets                                                                                                                                              |
+| W15 — Private skills / races         | NOT RUN. No actual model dispatch, compaction, revision replacement or multi-turn repair evidence                                                                                                                                                                                              |
 
 ## CI and remaining capability gaps
 
