@@ -15,10 +15,10 @@
 //   is answered → the contained edit lands in the managed worktree and the vetted verification is
 //   summarized → Pause flips the run to the sticky paused state → requesting a WIDER mode while
 //   the run is live is rejected against the server-confirmed effective mode → a follow-up sent
-//   while paused is admitted as a new task turn WITHOUT auto-resuming the run (pause stays
-//   sticky) → Resume returns the run to running → revoking the session surfaces the honest
-//   re-pair state on the questions surface (#2478) → Stop settles the durable snapshot as
-//   cancelled.
+//   while paused is admitted as a new task turn and resumes the run through the one resume path
+//   (#3452) → revoking the session surfaces the honest re-pair state on the questions surface
+//   (#2478) and refuses the unpaired browser's Pause (#2802) → a fresh launcher pairing restores
+//   Pause and Resume → Stop settles the durable snapshot as cancelled.
 //
 // The negative test proves the surface is live, not static: intercepting only the readiness route
 // with a contract-valid `runtimeAvailable: false` body must flip the workbench to "Runtime not
@@ -56,6 +56,19 @@ const realBinaryJourney = process.env.KEIKO_E2E_REAL_BINARY === "1";
 
 function workbench(page: Page): Locator {
   return page.locator('section[aria-label="Coding Workbench"][data-state]');
+}
+
+// #3561 made the run's Changes view a collapsed disclosure. It has no accessible name; its summary
+// reads the changed-file count once the run's changes are read, "Changes" while they are
+// unavailable. Its content is only reachable once the operator expands it.
+async function openRunChanges(page: Page): Promise<Locator> {
+  const changes = workbench(page)
+    .getByRole("group")
+    .filter({ has: page.locator("summary", { hasText: /^(?:Changes|\d+ changed files?)$/u }) });
+  await expect(changes).toBeVisible({ timeout: 30_000 });
+  if ((await changes.getAttribute("open")) === null) await changes.locator("summary").click();
+  await expect(changes).toHaveAttribute("open", "");
+  return changes;
 }
 
 // #2478: the journey acts as the trusted launcher — it mints a fresh single-use attestation with
@@ -364,7 +377,7 @@ async function proveRunChangesView(
   stranger: APIRequestContext,
   target: string,
 ): Promise<void> {
-  const changes = page.getByRole("region", { name: "Changes" });
+  const changes = await openRunChanges(page);
   const fileButton = changes.getByRole("button", {
     name: new RegExp(AUTHORITY_TARGET_RELATIVE_PATH, "u"),
   });
@@ -407,30 +420,54 @@ async function proveChangesRefreshPreservesFocusAndContent(
 }
 
 // #2478: revoking the app session (sign-out through the paired cookie jar) must surface as the
-// honest re-pair state on the questions surface at the next resync (the pause transition), never
-// a silent empty list — while the content-free run controls keep working without a session.
-async function proveRevocationSurfacesRepairState(page: Page): Promise<void> {
+// honest re-pair state on the questions surface, never a silent empty list. Since #2802 (#2869) the
+// state-changing run routes are bound to the app session too, so the unpaired browser's Pause is
+// refused and the run keeps running. Re-pairing through the launcher restores the run controls.
+async function proveRevocationSurfacesRepairState(page: Page, runId: string): Promise<void> {
   const signedOut = await page.request.post("/api/coding-workbench/app-session/sign-out", {
     headers: { "x-keiko-csrf": "1" },
     data: {},
   });
   expect(signedOut.ok()).toBe(true);
   await page.getByRole("button", { name: "Pause run" }).click();
-  await expect(workbench(page)).toHaveAttribute("data-state", "paused");
   await expect(runtimeQuestions(page)).toHaveAttribute("data-question-state", "unpaired", {
     timeout: 15_000,
   });
   await expect(
     runtimeQuestions(page).getByText("not paired for question content", { exact: false }),
   ).toBeVisible();
-  const changes = page.getByRole("region", { name: "Changes" });
+  const changes = await openRunChanges(page);
   await expect(changes.getByRole("alert")).toContainText("app session may need to be paired", {
     timeout: 15_000,
   });
   await expect(changes.getByRole("region", { name: "Run-scoped file diff" })).toHaveCount(0);
   await expect(changes).not.toContainText(AUTHORITY_EDITED_CONTENT.trim());
+  await expect(workbench(page)).toHaveAttribute("data-state", "running");
+  expect(await runState(page, runId)).toBe("running");
+
+  await repairAppSession(page);
+  await expect(workbench(page)).toHaveAttribute("data-state", "running");
+  await page.getByRole("button", { name: "Pause run" }).click();
+  await expect(workbench(page)).toHaveAttribute("data-state", "paused");
   await page.getByRole("button", { name: "Resume run" }).click();
   await expect(workbench(page)).toHaveAttribute("data-state", "running");
+}
+
+// A fresh launcher attestation pairs the reloaded page again; the restored workspace keeps the
+// Workbench window, so it is opened only when the reload did not bring it back.
+async function repairAppSession(page: Page): Promise<void> {
+  await page.goto(`/${launcherPairingFragment()}`);
+  await expect.poll(() => page.url()).not.toContain("keiko-app-session");
+  const launcher = page.getByRole("button", { name: "Coding Workbench", exact: true });
+  await expect(launcher).toBeVisible();
+  if ((await launcher.getAttribute("aria-pressed")) !== "true") await launcher.click();
+  await expect(workbench(page)).toBeVisible();
+}
+
+async function runState(page: Page, runId: string): Promise<string | undefined> {
+  const snapshot = await page.request.get(`/api/coding-workbench/runtime/runs/${runId}`);
+  expect(snapshot.ok()).toBe(true);
+  return ((await snapshot.json()) as { readonly state?: string }).state;
 }
 
 async function proveLiveActivityTimeline(
@@ -647,31 +684,33 @@ test("#2386 authority: question, sticky pause, widening rejection, follow-up, se
   await expectEffectiveMode(page, "supervised-coding");
   await expect(workbench(page)).toHaveAttribute("data-state", "paused");
 
-  // A follow-up drafted while paused is admitted as a new task turn — and must NOT auto-resume.
-  // It runs BEFORE the narrowing request below: since #2644 the mode is product-wide, so a
-  // narrowed policy would legitimately hold a NEW task turn for approval instead of admitting it.
+  // A follow-up drafted while paused is admitted as a new task turn. Since #3452 (F51) it is the
+  // operator's own "continue with this": the run resumes through the one resume path and the turn is
+  // dispatched against the resumed revision, at the authority the run already holds. It runs BEFORE
+  // the narrowing request below: since #2644 the mode is product-wide, so a narrowed policy would
+  // legitimately hold a NEW task turn for approval instead of admitting it.
   const taskSubmitted = timeline.getByText("Task submitted", { exact: true });
   const submittedBefore = await taskSubmitted.count();
   await page.getByLabel("Task instructions").fill("Follow up: tighten the constant name");
   await page.getByRole("button", { name: "Send follow-up" }).click();
   await expect(taskSubmitted).toHaveCount(submittedBefore + 1, { timeout: 90_000 });
-  await expect(workbench(page)).toHaveAttribute("data-state", "paused");
+  await expect(workbench(page)).toHaveAttribute("data-state", "running");
+  await expectEffectiveMode(page, "supervised-coding");
 
-  // Narrowing the product-wide policy while the run is paused leaves the live run's confirmed
-  // mode untouched, exactly like the widening attempt above.
+  // Narrowing the product-wide policy while the run is live leaves its confirmed mode untouched,
+  // exactly like the widening attempt above.
   await requestAutonomyMode(page, /Ask for approval/u);
   await expectEffectiveMode(page, "supervised-coding");
 
-  await page.getByRole("button", { name: "Resume run" }).click();
-  await expect(workbench(page)).toHaveAttribute("data-state", "running");
-
-  // #2478: revocation flips the questions surface to the honest re-pair state.
-  await proveRevocationSurfacesRepairState(page);
+  // #2478: revocation flips the questions surface to the honest re-pair state; once re-paired, the
+  // proof pauses the run and returns it to running through an explicit Resume.
+  await proveRevocationSurfacesRepairState(page, runId);
 
   // Settle through Stop: the orchestrator releases the active slot and the durable per-run
-  // snapshot records the terminal cancelled state.
+  // snapshot records the terminal cancelled state, which the Workbench keeps showing until the
+  // operator starts a new task (#3394).
   await page.getByRole("button", { name: "Stop run" }).click();
-  await expect(workbench(page)).toHaveAttribute("data-state", "idle");
+  await expect(workbench(page)).toHaveAttribute("data-state", "cancelled");
   const settled = await page.request.get(`/api/coding-workbench/runtime/runs/${runId}`);
   expect(settled.ok()).toBe(true);
   expect(((await settled.json()) as { readonly state?: string }).state).toBe("cancelled");

@@ -8,6 +8,12 @@ import { e2eStateDir } from "./e2e-state-dir.js";
 
 export const TRACER_DEFAULT_UI_PORT = 32485;
 
+// #2802: a run starts only from a paired app session, so the journey acts as the trusted launcher.
+// The server entry provisions this process-scoped secret to the BFF environment, and the spec mints
+// single-use pairing attestations with it through the REAL `mintLauncherPairingAttestation`. A
+// deterministic test fixture, not a real credential.
+export const TRACER_APP_SESSION_LAUNCHER_SECRET = "tracer-2385-app-session-launcher-secret-fixture";
+
 // Fixture file contents mirroring the functional pipeline test's scripted edit contract
 // (packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.functional.test.ts): the
 // scripted model proposes exactly ORIGINAL -> EDITED for the target file.

@@ -465,11 +465,16 @@ function researchResolverSeams(research: CodingRuntimeResearchJourneyConfig): {
     ProductionCodingRuntimeResolverInput["childModelPortFactory"]
   >;
   readonly childModelId: string;
+  readonly gatewayEgress: NonNullable<ProductionCodingRuntimeResolverInput["gatewayEgress"]>;
 } {
   const fetchImpl = research.hermeticFetch();
   return {
     researchEgressEnabled: true,
     researchFetchImpl: fetchImpl,
+    // Production offers the research tool only while the gateway resolves an outbound transport
+    // (#3414-AC9), so the journey models a deployment that configured one. The hermetic fetch above
+    // still answers every request; no socket is opened.
+    gatewayEgress: () => ({ noProxy: [] }),
     childModelPortFactory: () => ({
       call: (): Promise<NormalizedResponse> => {
         const response = research.childModelResponse();

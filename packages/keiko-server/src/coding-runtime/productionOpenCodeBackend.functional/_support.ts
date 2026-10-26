@@ -141,6 +141,11 @@ interface FunctionalRuntimeResolverBaseInput {
   readonly researchEgressEnabled?: boolean | undefined;
   /** #2387 hermetic research transport; tests never touch the real network. */
   readonly researchFetchImpl?: ProductionCodingRuntimeResolverInput["researchFetchImpl"];
+  /**
+   * #2387: the gateway's configured outbound transport. Research is offered only while one
+   * resolves, as in production, so a journey that proves the research loop supplies it.
+   */
+  readonly gatewayEgress?: ProductionCodingRuntimeResolverInput["gatewayEgress"];
 }
 
 type FunctionalChildModelInput =
@@ -217,6 +222,7 @@ export function createFunctionalRuntimeResolver(
       researchEgressEnabled: input.researchEgressEnabled,
     },
     ...(input.researchFetchImpl ? { researchFetchImpl: input.researchFetchImpl } : {}),
+    ...(input.gatewayEgress ? { gatewayEgress: input.gatewayEgress } : {}),
     ...resolveFunctionalChildModelInput(input),
     ...(input.verifiedCommit === undefined ? {} : { verifiedCommit: input.verifiedCommit }),
     ...(input.draftDelivery === undefined ? {} : { draftDelivery: input.draftDelivery }),
@@ -934,8 +940,10 @@ function productiveResponse(step: number, script: ScriptState): NormalizedRespon
     script.verificationIssued = true;
     return tool("keiko_verification", { verifierId: "typecheck" });
   }
+  // A held run reports the closing progress a settling run would, then blocks on a question: the
+  // causal-terminal contract settles a run on its first `stop`, so only a blocked turn keeps it live.
   if (script.holdAfterVerification === true && script.verificationIssued === true) {
-    return tool("question", question());
+    return { ...tool("question", question()), content: normal().content };
   }
   return normal();
 }
