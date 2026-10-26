@@ -70,6 +70,15 @@ now also requires host-to-AppContainer server connectivity under the same gatewa
 separate inbound control route is necessary for the unchanged OpenCode HTTP service. Its outcome
 must be measured on the disposable runner, not inferred from outbound gateway access.
 
+The next runner reached filter installation and rejected the new exact sublayer-weight readback.
+Windows assigns the closest available weight, so the requested sublayer weight cannot be used as
+an identity assertion. Readback retains exact sublayer GUID/provider/persistence checks and exact
+filter weights, actions and conditions inside that sublayer. The gateway permit remains soft;
+another provider's deny must still win. This follows Microsoft's
+[provider installation contract](https://learn.microsoft.com/en-us/windows/win32/fwp/installing-a-provider)
+and [filter arbitration](https://learn.microsoft.com/en-us/windows/win32/fwp/filter-arbitration).
+The privileged socket proof still must pass; this readback repair alone proves no connectivity.
+
 Platform contracts used by these components:
 [registry flush durability](https://learn.microsoft.com/en-us/windows/win32/api/winreg/nf-winreg-regflushkey),
 [named-pipe client impersonation](https://learn.microsoft.com/en-us/windows/win32/api/namedpipeapi/nf-namedpipeapi-impersonatenamedpipeclient),

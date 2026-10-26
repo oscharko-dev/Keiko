@@ -147,7 +147,10 @@ static DWORD verify_filter_ids(const struct keiko_gateway_filters *filters, PSID
   if (sublayer == NULL) valid_sublayer = readback_mismatch("missing-sublayer");
   else if (!same_guid(&sublayer->subLayerKey, &filters->sublayer))
     valid_sublayer = readback_mismatch("sublayer-key");
-  else if (sublayer->weight != 0x7fff) valid_sublayer = readback_mismatch("sublayer-weight");
+  /* BFE assigns the closest available sublayer weight (Installing a Provider, Microsoft).
+   * The requested weight is a placement hint, not an identity or policy field. Exact filter
+   * weights within this private sublayer still enforce permit-before-deny, and the permit
+   * remains soft so another provider's deny is never overridden. */
   else if (sublayer->providerKey != NULL) valid_sublayer = readback_mismatch("sublayer-provider");
   else if (sublayer->flags !=
              (UINT32)(filters->guard_engine != NULL ? FWPM_SUBLAYER_FLAG_PERSISTENT : 0))
