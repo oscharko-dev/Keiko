@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "dcd70ea51bef7eb662959f920e9661fe3fbd71ecd6f6b886038b6d779e5e5bfb",
+    "catalogDigest": "2b8ccf41b60ce6375028d469d0be8f8f4f4b436cfed3ef47b7f71f64ae927bbe",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -29577,6 +29577,72 @@
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
+        "op": "mcp.managed.lifecycle",
+        "category": "process",
+        "owner": "keiko-mcp",
+        "emitter": "activity.recordManagedMcp",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "phase": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["admitted", "listed", "started", "completed", "failed"]
+          },
+          "reason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "none",
+              "not-admitted",
+              "invalid-arguments",
+              "descriptor-drift",
+              "protocol-error",
+              "tool-error",
+              "aborted",
+              "closed"
+            ]
+          },
+          "registrySha256": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 64
+          },
+          "toolCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "invocationId": {
+            "type": "string",
+            "dataClass": "opaque-id",
+            "required": false,
+            "maxLength": 128
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["mcp-managed"],
+        "proofIds": ["mcp.managed.lifecycle.line"],
+        "releaseImpact": "minor",
+        "registrationSite": "packages/keiko-mcp/src/activity.ts:10",
+        "emitterSites": ["packages/keiko-mcp/src/activity.ts:63"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
         "op": "mcp.oauth.issuer.checked",
         "category": "security",
         "owner": "keiko-server",
@@ -41558,6 +41624,34 @@
       {
         "contractKind": "activity-log-failure-class",
         "schemaVersion": 1,
+        "failureClass": "mcp-managed",
+        "requiredProductSurfaces": ["keiko-mcp"],
+        "requiredLifecycleOperations": {
+          "start": [],
+          "state": ["mcp.managed.lifecycle"],
+          "end": [],
+          "failure": [],
+          "loss": []
+        },
+        "requiredCausalOperations": ["mcp.managed.lifecycle"],
+        "requiredLossOperations": [],
+        "requiredProofOperations": ["mcp.managed.lifecycle"],
+        "requiredReplayProofIds": [],
+        "requiredResourceOperations": ["mcp.managed.lifecycle"],
+        "requiredEvidenceClasses": [
+          "closed-enum",
+          "completeness-state",
+          "count",
+          "digest",
+          "loss-state",
+          "opaque-id"
+        ],
+        "requiredFrameOperations": [],
+        "requiredCauseOperations": []
+      },
+      {
+        "contractKind": "activity-log-failure-class",
+        "schemaVersion": 1,
         "failureClass": "chat-creation-intent",
         "requiredProductSurfaces": ["keiko-server"],
         "requiredLifecycleOperations": {
@@ -52155,8 +52249,8 @@
     "failureClassCoverage": {
       "schemaVersion": 1,
       "releaseExpectation": "100%-complete",
-      "supportedClassCount": 370,
-      "completeClassCount": 370,
+      "supportedClassCount": 371,
+      "completeClassCount": 371,
       "completeness": "complete",
       "classes": [
         {
@@ -86392,6 +86486,87 @@
           "completeness": "complete"
         },
         {
+          "failureClass": "mcp-managed",
+          "requirementContract": "mcp-managed",
+          "productSurfaces": ["keiko-mcp"],
+          "lifecycleTransitions": ["state"],
+          "lifecycleOperations": {
+            "start": [],
+            "state": ["mcp.managed.lifecycle"],
+            "end": [],
+            "failure": [],
+            "loss": []
+          },
+          "causalEdges": [
+            {
+              "op": "mcp.managed.lifecycle",
+              "mode": "correlation"
+            }
+          ],
+          "lossSignals": [],
+          "resourceSignals": ["mcp.managed.lifecycle"],
+          "replayReferences": [],
+          "operations": [
+            {
+              "op": "mcp.managed.lifecycle",
+              "owner": "keiko-mcp",
+              "category": "process",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "invocationId",
+                  "type": "string",
+                  "dataClass": "opaque-id",
+                  "required": false
+                },
+                {
+                  "name": "phase",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "reason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "registrySha256",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": true
+                },
+                {
+                  "name": "toolCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": [
+                "closed-enum",
+                "completeness-state",
+                "count",
+                "digest",
+                "loss-state",
+                "opaque-id"
+              ],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["mcp.managed.lifecycle.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            }
+          ],
+          "missingObligations": [],
+          "completeness": "complete"
+        },
+        {
           "failureClass": "mcp-oauth-issuer",
           "requirementContract": "mcp-oauth-issuer",
           "productSurfaces": ["keiko-server"],
@@ -99669,6 +99844,12 @@
       "package": "keiko-local-knowledge"
     },
     {
+      "op": "mcp.managed.lifecycle",
+      "category": "process",
+      "site": "packages/keiko-mcp/src/activity.ts:13",
+      "package": "keiko-mcp"
+    },
+    {
       "op": "consolidation.log.sink-failed",
       "category": "diagnostic",
       "site": "packages/keiko-memory-consolidation/src/log-port.ts:105",
@@ -104736,6 +104917,7 @@
     "managed-lsp.evidence.project",
     "managed-lsp.trust.restrict",
     "manual-pod.job",
+    "mcp.managed.lifecycle",
     "mcp.oauth.issuer.checked",
     "mcp.registry.loaded",
     "memory-vault.log.sink-failed",

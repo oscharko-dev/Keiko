@@ -511,3 +511,39 @@ existing gateway failure logger. No legacy failure entry was added. The real
 Jira/Confluence client-route tests and native HTTP integration assert exactly one
 registered owner outcome and absence of remote content. The observability gate tests
 and native integration passed 24 tests; the real client-route lane passed 7 tests.
+
+
+## Shared MCP protocol checkpoint — #4089 (partial)
+
+The new `keiko-mcp` package owns official client/server SDK 2.4.0 imports and
+activates protocol 2026-07-28 on both ends. One in-process handler/client uses
+injected fetch without listeners or per-Pod processes. Invocation-local context
+is outside protocol arguments; uncached listing checks and declaration digests
+reject drift. Provider errors are closed, result sizes bounded, and calls are
+not automatically repeated. Read/write hints are descriptive; durable invocation
+accounting and server authority remain separate obligations.
+
+Six actual-SDK tests cover discovery/request metadata, list/call, schema and
+reserved-argument refusal, drift, concurrent context isolation, failure closure
+and registered emission. A separate integration uses a real canonical descriptor
+and reconstructs admission and invocation through the existing Activity Log
+reader without result content. The generated catalog covers 606/606 proofs and
+30/30 scenarios; its 97 drift tests pass. Package build, root typecheck, changed
+lint, package graph, dependency hygiene/currency, ADR index and error observability
+pass. The negative architecture suite passes all 76 fixtures; positive dependency,
+import, contract, vector, governed-tool and catalog-conformance checks pass.
+
+The full `arch:check` aggregate currently fails its final performance-evidence
+step because the new lockfile changes the measured subject. The documented
+reference procedure requires committed, clean revisions and a paired measurement.
+That evidence, complete package surface/coverage qualification and full gates
+remain pending for final acceptance as requested. No performance budget or gate
+was weakened. The native HTTP Promise rejection is now recognized directly by
+the observability checker, removing its temporary exact exemption; only the
+previously proved pure JSON-classifier delegation remains.
+
+This checkpoint does **not** complete #4089: generalized production binder
+composition, a bound non-Coding consumer, Jira provider admission and downstream
+Chat delivery still require implementation and evidence. All 55 complete ACs
+remain open. ADR-0181 records the new host decision; affected existing ADRs and
+package/dependency documentation are updated in the same change.

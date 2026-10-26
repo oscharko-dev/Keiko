@@ -300,6 +300,9 @@ The shape (ADR-0019):
 - **`keiko-activity-log`** owns the writer, segmented store, and reader engine. It depends only on
   contracts + security; server and CLI compose it, while domain packages keep injected log ports
   and UI never imports it (ADR-0179).
+- **`keiko-mcp`** owns the shared managed MCP protocol host (ADR-0181). Its only internal
+  dependencies are contracts and security; official MCP SDK imports are confined to this package.
+  Server composition supplies provider/log ports and retains catalog/binder admission.
 - **`keiko-model-gateway`** is the _only_ place provider SDKs (`openai`, `@anthropic-ai/*`,
   `*-ai-sdk`) may be imported. This isolation is a hard gate — do not import a model SDK anywhere
   else (ADR-0019 trust-1).

@@ -862,6 +862,10 @@
     "./runtime/activity-log-diagnostic-fields": {
       "types": "./dist/activity-log-diagnostic-fields.d.ts",
       "import": "./dist/activity-log-diagnostic-fields.js"
+    },
+    "./runtime/managed-mcp": {
+      "types": "./dist/managed-mcp.d.ts",
+      "import": "./dist/managed-mcp.js"
     }
   },
   "scripts": {

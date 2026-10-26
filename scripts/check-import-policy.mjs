@@ -333,6 +333,14 @@ const IMPORT_POLICY_RULES = [
     matchesSpecifier: (specifier) => PROVIDER_SDK_PATTERN.test(specifier),
   },
   {
+    name: "adr-0181-mcp-sdk-isolation",
+    matchesFile: (path, mode) =>
+      mode === "fixtures"
+        ? path.startsWith(`${FIXTURE_ROOT}/mcp-sdk-isolation/`)
+        : /^(packages\/keiko-|src\/)/.test(path) && !path.startsWith("packages/keiko-mcp/src/"),
+    matchesSpecifier: (specifier) => /^@modelcontextprotocol\//.test(specifier),
+  },
+  {
     name: "adr-0019-trust-4-no-direct-fs-outside-workspace",
     matchesFile: (path, mode) =>
       mode === "fixtures"

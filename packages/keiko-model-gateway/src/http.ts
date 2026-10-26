@@ -552,7 +552,7 @@ function nodeResponseBody(
 function resolveNodeResponse(
   res: IncomingMessage,
   resolve: (response: Response) => void,
-  reject: (error: Error) => void,
+  reject: Parameters<ConstructorParameters<PromiseConstructor>[0]>[1],
   onCancel: () => void,
   maxBytes: number,
   onDone?: () => void,
@@ -561,7 +561,7 @@ function resolveNodeResponse(
     resolve(streamingResponseFromNode(res, onCancel, maxBytes, onDone));
   } catch (error) {
     onCancel();
-    reject(error instanceof Error ? error : new TypeError("Invalid HTTP response"));
+    reject(error);
   }
 }
 

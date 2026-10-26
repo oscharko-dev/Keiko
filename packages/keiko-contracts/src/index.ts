@@ -5286,3 +5286,13 @@ export type {
   McpServerRegistryRefusal,
   McpToolRisk,
 } from "./mcp-servers.js";
+
+export type {
+  ManagedMcpHost,
+  ManagedMcpInvocationContext,
+  ManagedMcpProvider,
+  ManagedMcpTool,
+  ManagedMcpToolResult,
+  ManagedMcpLogPort,
+  ManagedMcpFailure,
+} from "./managed-mcp.js";

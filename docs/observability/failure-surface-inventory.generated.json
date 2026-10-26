@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "dcd70ea51bef7eb662959f920e9661fe3fbd71ecd6f6b886038b6d779e5e5bfb"
+    "catalogDigest": "2b8ccf41b60ce6375028d469d0be8f8f4f4b436cfed3ef47b7f71f64ae927bbe"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -59,10 +59,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 592,
-    "proofCount": 605,
-    "resolvedProofCount": 605,
-    "failureClassCount": 370,
+    "operationCount": 593,
+    "proofCount": 606,
+    "resolvedProofCount": 606,
+    "failureClassCount": 371,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -291,8 +291,8 @@
     },
     {
       "surface": "tools-workflows",
-      "owners": ["keiko-server"],
-      "ports": ["ServerLogSink"],
+      "owners": ["keiko-mcp", "keiko-server"],
+      "ports": ["ManagedMcpLogPort", "ServerLogSink"],
       "operations": [
         "coding-app-session.browser-approval.state",
         "coding-app-session.channel.closed",
@@ -421,6 +421,7 @@
         "git.ci-repair.budget",
         "git.verified-commit.authority",
         "harness.context.compacted",
+        "mcp.managed.lifecycle",
         "mcp.oauth.issuer.checked",
         "mcp.registry.loaded",
         "portable.runtime.native-helper-bound",
@@ -770,6 +771,7 @@
     }
   ],
   "failureClassScenarios": {
+    "mcp-managed": ["tools-workflows.dependency-failure"],
     "chat-creation-intent": ["bff.dependency-failure"],
     "chat-draft-persistence": ["bff.dependency-failure"],
     "markdown-skill-library": ["bff.dependency-failure"],
@@ -2365,6 +2367,7 @@
     "lsp.spawn.failed.emitted-line": [
       "packages/keiko-server/src/editor/lsp/lspNodeAdapter.test.ts"
     ],
+    "mcp.managed.lifecycle.line": ["packages/keiko-mcp/src/host.test.ts"],
     "mcp.oauth.issuer.checked.emitted-line": [
       "packages/keiko-server/src/mcp/mcpOAuthIssuer.test.ts"
     ],

@@ -31,6 +31,29 @@ describe("checkArchitectureImportPolicy", () => {
     }
   });
 
+  it("isolates all official MCP SDK imports to the managed host", async () => {
+    root = makeRoot("mcp-import-policy-");
+    writeText(
+      root,
+      "packages/keiko-server/src/leak.ts",
+      'import { Client } from "@modelcontextprotocol/client";\nexport const leaked = Client;',
+    );
+    writeText(
+      root,
+      "packages/keiko-connectors/src/leak.ts",
+      'export const leaked = import("@modelcontextprotocol/server");',
+    );
+    writeText(
+      root,
+      "packages/keiko-mcp/src/allowed.ts",
+      'import { Client } from "@modelcontextprotocol/client";\nexport const allowed = Client;',
+    );
+    const violations = await checkArchitectureImportPolicy(root);
+    expect(violations.filter((entry) => entry.rule === "adr-0181-mcp-sdk-isolation")).toHaveLength(
+      2,
+    );
+  });
+
   it("passes on the live production source tree", async () => {
     await expect(checkArchitectureImportPolicy(REPO_ROOT)).resolves.toEqual([]);
   }, 60_000);
@@ -175,6 +198,7 @@ describe("checkArchitectureImportPolicy", () => {
       "adr-0005-owned-root-mint-allowed-callers": 1,
       "adr-0005-owned-root-preserve-allowed-callers": 1,
       "adr-0019-trust-1-provider-sdk-isolation": 1,
+      "adr-0181-mcp-sdk-isolation": 1,
       "adr-0019-trust-4-no-direct-fs-outside-workspace": 1,
       "adr-0019-trust-5-patch-routes-through-tools": 1,
       "adr-0019-trust-9-local-knowledge-no-egress": 1,

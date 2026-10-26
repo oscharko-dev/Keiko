@@ -124,6 +124,8 @@ const EXPECTED_DEPCRUISER_RULE_COUNTS = {
   // keeps the dependency-cruiser layer live: drop the includeOnly widening or the fixture path
   // from either rule's from.path and the expected count falls to 0 and this gate goes red.
   "adr-0019-trust-1-provider-sdk-isolation": 1,
+  "adr-0181-mcp-sdk-isolation": 1,
+  "adr-0181-mcp-only-contracts-security": 1,
   "adr-0019-trust-2-ui-no-provider-config": 1,
   "adr-0019-trust-3-ui-no-gateway-internals": 1,
   "adr-0019-trust-4-no-direct-fs-outside-workspace": 1,
@@ -184,6 +186,7 @@ const EXPECTED_IMPORT_POLICY_RULE_COUNTS = {
   "adr-0005-owned-root-preserve-allowed-callers": 1,
   "gen-perf-cli-001-cli-heavy-graphs-load-lazily": 1,
   "adr-0019-trust-1-provider-sdk-isolation": 1,
+  "adr-0181-mcp-sdk-isolation": 1,
   "adr-0019-trust-4-no-direct-fs-outside-workspace": 1,
   "adr-0019-trust-5-patch-routes-through-tools": 1,
   "adr-0019-trust-9-local-knowledge-no-egress": 1,

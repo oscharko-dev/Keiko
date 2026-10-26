@@ -49,6 +49,7 @@ The first architecture sprint should converge on the following package map. Name
 | `@oscharko-dev/keiko-contracts` | Shared public contracts, branded IDs, event envelopes, model capability schema, BFF wire types, workflow descriptors. | Runtime IO, provider calls, UI components, persistence. |
 | `@oscharko-dev/keiko-security` | Redaction, secret handling, safe error shaping, content hashing, trust-boundary helpers. | Product workflows, provider routing, UI state. |
 | `@oscharko-dev/keiko-activity-log` | Activity Log writer, segmented store, and support reader engine. | HTTP routes, CLI parsing/rendering, domain logging ports, UI code. |
+| `@oscharko-dev/keiko-mcp` | Shared managed MCP protocol host; official SDK client/server imports; injected provider/log ports (ADR-0181). | Credentials, policy, catalog compilation, domain HTTP and conversation storage. |
 | `@oscharko-dev/keiko-model-gateway` | Provider abstraction, OpenAI-compatible calls, discovery, capability probing, routing, resilience, TLS handling. | UI components, workspace file reads, tool execution, direct persistence of customer UI state. |
 | `@oscharko-dev/keiko-workspace` | Workspace discovery, path containment, safe file reads, context packs, retrieval seams. | Provider calls, browser UI, patch application. |
 | `@oscharko-dev/keiko-tools` | Controlled tool execution, terminal/browser adapters, patch parsing, patch writing boundaries. | Model selection, workflow policy decisions, credential storage. |

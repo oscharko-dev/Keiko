@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 370,
-  "completeClassCount": 370,
+  "supportedClassCount": 371,
+  "completeClassCount": 371,
   "completeness": "complete",
   "classes": [
     {
@@ -33903,6 +33903,87 @@
             "causeChain": false
           },
           "proofIds": ["skills.workflow.attached.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "mcp-managed",
+      "requirementContract": "mcp-managed",
+      "productSurfaces": ["keiko-mcp"],
+      "lifecycleTransitions": ["state"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": ["mcp.managed.lifecycle"],
+        "end": [],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "mcp.managed.lifecycle",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["mcp.managed.lifecycle"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "mcp.managed.lifecycle",
+          "owner": "keiko-mcp",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "invocationId",
+              "type": "string",
+              "dataClass": "opaque-id",
+              "required": false
+            },
+            {
+              "name": "phase",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "registrySha256",
+              "type": "string",
+              "dataClass": "digest",
+              "required": true
+            },
+            {
+              "name": "toolCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "digest",
+            "loss-state",
+            "opaque-id"
+          ],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["mcp.managed.lifecycle.line"],
           "replayReferences": [],
           "missingObligations": []
         }

@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { basicAuth, checked, labRequest, loadSession, requireLicense } from "./lab-client.mjs";
 
@@ -49,9 +49,13 @@ async function ensureIssues(session, auth) {
     if (!/^KEIKO-\d+$/.test(issue.key)) throw new TypeError("Invalid synthetic issue identity");
     keys.push(issue.key);
   }
+  const manifestPath = join(session.directory, "fixture.json");
+  const previous = existsSync(manifestPath) ? JSON.parse(readFileSync(manifestPath, "utf8")) : {};
+  if (previous === null || typeof previous !== "object" || Array.isArray(previous))
+    throw new TypeError("Invalid synthetic fixture manifest");
   writeFileSync(
-    join(session.directory, "fixture.json"),
-    JSON.stringify({ project: "KEIKO", issueKeys: keys, issueTypeId: type.id }) + "\n",
+    manifestPath,
+    JSON.stringify({ ...previous, project: "KEIKO", issueKeys: keys, issueTypeId: type.id }) + "\n",
     { mode: 0o600 },
   );
   return keys;

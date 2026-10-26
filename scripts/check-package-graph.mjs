@@ -37,6 +37,7 @@ const ALLOWED_WORKSPACE_DEPENDENCIES = new Map([
     "@oscharko-dev/keiko-connectors",
     ["@oscharko-dev/keiko-contracts", "@oscharko-dev/keiko-security"],
   ],
+  ["@oscharko-dev/keiko-mcp", ["@oscharko-dev/keiko-contracts", "@oscharko-dev/keiko-security"]],
   ["@oscharko-dev/keiko-contracts", []],
   [
     "@oscharko-dev/keiko-activity-log",

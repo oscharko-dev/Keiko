@@ -818,3 +818,11 @@ Safety-state publication does not grant an agent a live bridge or an executable 
 Chat repository search and the separate Coding Workbench keep their own existing behavior; shared
 runtime code still used by those consumers is not part of this retirement. See
 [ADR-0061](docs/adr/ADR-0061-browser-editor-agent-bridge.md).
+
+### Managed MCP provider changes (ADR-0181)
+
+Keep official MCP SDK imports inside `keiko-mcp`, whose internal dependencies are contracts
+and security only. Provider and log ports come from server composition; catalog/binder
+admission remains mandatory. Verify modern protocol metadata, request-local context, schema
+and drift refusal, cancellation, registered Activity Log evidence and the architecture
+negative fixtures. Preserve the operator MCP registry and OpenCode compatibility.

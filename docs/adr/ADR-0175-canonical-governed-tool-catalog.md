@@ -397,8 +397,7 @@ a real, unambiguous production catalog descriptor: `discover`, `search`, `edit`,
 (`propose` -> `keiko.git.stage`, `execute` -> `keiko.git.execute`)/`ci` operations, and `delivery`'s
 `commit`/`push`/`pull-request` intents (`propose` -> their own proposal tool, `execute` -> the one
 shared `keiko.git.execute` redemption tool regardless of which intent is being redeemed). An action
-request this bridge does not cover -- `read` (below), `command` and `connector` (no catalog
-descriptor models either one yet), `git`'s low-level `read`/`write` operations, `delivery`'s
+request this bridge does not cover -- `read` (below), `command` (no catalog descriptor yet) and `connector` (available only after provider descriptors and handler bindings are admitted under ADR-0181), `git`'s low-level `read`/`write` operations, `delivery`'s
 `merge` intent (no proposal tool models it) and a `delivery` request with no `phase` (not
 model-facing) -- keeps its exact prior dispatch behaviour AND now records one body-free
 `tool-catalog.dispatch-unbound` line (the dispatched `action` only) instead of running with zero

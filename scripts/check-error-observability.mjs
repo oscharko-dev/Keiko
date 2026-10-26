@@ -125,10 +125,6 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
     "Pure bounded remote-JSON validation returns the closed invalid-response outcome, never remote text or a parser diagnostic. The credential route owns atlassian.connection.checked; the real Cloud client/route integration asserts exactly one registered invalid-response event for Jira and Confluence HTML responses.",
   ],
   [
-    "packages/keiko-model-gateway/src/http.ts:resolveNodeResponse",
-    "The native response callback forwards construction failures to its request rejection callback after retiring the connection. gatewayFetch owns http.gateway.fetch.failed; gateway-bodyless-response.integration.test.ts verifies an actual invalid native status rejects, executes once and produces exactly one registered failure event.",
-  ],
-  [
     "packages/keiko-cli/src/ui.ts:prepareUiProcessScope",
     "Native identity refusal precedes all durable writers. Fixed content-free CLI stderr reports the refusal and startup returns before constructing state; actual absent-port and SQLite controls verify this boundary.",
   ],
