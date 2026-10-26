@@ -86,6 +86,16 @@ Two diagnostic Vitest selections were also executed:
   `runtime.confinement.failed` event and refusal before spawn. These are unit tests, not a live
   Workbench service run.
 
+The eight pure `runtime-gateway` policy failures were subsequently isolated and repaired: the
+POSIX filesystem capability used the inspecting host's `node:path` implementation. It now uses
+explicit POSIX semantics, including normalization and descendant checks, on every host. The full
+file passes on Windows (**37 passed, 25 existing macOS OS-proof skips**), including Windows drive,
+UNC/device path, root, normalization and sibling/traversal refusal controls. This does not admit a
+Windows filesystem capability or enable a native launch. The broader selection still reports
+**20 failed, 132 passed, 25 skipped**: those remaining tests construct macOS/Linux native services
+using real Windows temporary paths, and one requires unavailable symbolic-link privilege. They are
+not represented as successful native Windows or foreign-platform execution.
+
 Final checks of this increment: the five directly affected supervisor/logging/build/native-quality
 test files pass (**58 tests, zero skips**); the separately diagnosed macOS abstraction case above
 is not included in that scoped count. Typecheck, targeted ESLint/Prettier, MSVC `/W4 /WX /analyze`
