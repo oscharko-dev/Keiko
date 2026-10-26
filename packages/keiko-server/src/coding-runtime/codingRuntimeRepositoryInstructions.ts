@@ -494,6 +494,15 @@ async function remoteSources(
   cache: Map<string, string | undefined>,
 ): Promise<{ sources: InstructionSourceText[]; refused: InstructionSourceRefusal[] }> {
   const pull = input.discovery?.remote;
+  if (pull !== undefined) {
+    // The admitted sources are independent pulls, made together: an unreachable network costs one
+    // fetch timeout, not one per source. Each URL is pulled once.
+    const pending = [...new Set(urls.slice(0, REMOTE_SOURCES_MAX))].filter(
+      (url) => !cache.has(url),
+    );
+    const texts = await Promise.all(pending.map((url) => remoteText(input, request, pull, url)));
+    pending.forEach((url, index) => cache.set(url, texts[index]));
+  }
   const sources: InstructionSourceText[] = [];
   const refused: InstructionSourceRefusal[] = [];
   for (const [index, url] of urls.entries()) {
@@ -501,7 +510,6 @@ async function remoteSources(
       refused.push(pull === undefined ? "remote-unavailable" : "limit-exceeded");
       continue;
     }
-    if (!cache.has(url)) cache.set(url, await remoteText(input, request, pull, url));
     const text = cache.get(url);
     if (text === undefined) refused.push("remote-unavailable");
     else sources.push({ kind: "remote", label: url, text });

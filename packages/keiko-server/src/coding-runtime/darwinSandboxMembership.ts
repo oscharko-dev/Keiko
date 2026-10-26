@@ -139,9 +139,8 @@ class ChannelSandboxMembership implements SandboxMembership {
     const found: SandboxMember[] = [];
     for (let start = 0; start < pids.length; start += MEMBERS_PER_QUESTION) {
       const asked = pids.slice(start, start + MEMBERS_PER_QUESTION);
-      found.push(
-        ...this.parsedMembers(await this.ask(`members ${asked.join(" ")}`, MEMBERS), asked),
-      );
+      const answer = await this.ask(`members ${asked.join(" ")}`, MEMBERS); // NOSONAR typescript:S9382 -- the member answers one question at a time; a concurrent one is a protocol error
+      found.push(...this.parsedMembers(answer, asked));
     }
     return found;
   }

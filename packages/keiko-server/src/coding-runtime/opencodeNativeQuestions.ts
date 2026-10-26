@@ -122,10 +122,10 @@ export function createNativeQuestionPort(deps: NativeQuestionPortDeps): NativeQu
 async function routeForms(deps: NativeQuestionPortDeps): Promise<FormRouting> {
   const { client, tree } = deps;
   const byId = new Map<string, V2Form>();
-  for (const directory of new Set([tree.workspaceRoot, ...(tree.locations ?? [])])) {
-    for (const form of await client.forms(directory))
-      if (typeof form.id === "string") byId.set(form.id, form);
-  }
+  const directories = [...new Set([tree.workspaceRoot, ...(tree.locations ?? [])])];
+  // Each location's forms are an independent read; they are merged in the locations' order.
+  const listedForms = await Promise.all(directories.map((directory) => client.forms(directory)));
+  for (const form of listedForms.flat()) if (typeof form.id === "string") byId.set(form.id, form);
   const listed = [...byId.values()];
   const asking = [...new Set(listed.flatMap(formSession))].filter((id) => id !== tree.sessionId);
   const children = new Set(await admitNativeChildren(client, tree, asking, undefined));

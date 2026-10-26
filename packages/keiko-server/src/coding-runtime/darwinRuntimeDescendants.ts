@@ -257,8 +257,8 @@ export class RuntimeDescendantTracker {
       if (this.counters.rounds >= KILL_ROUNDS)
         return this.result(proof === "members" ? "survivors" : "unproven");
       const settleMs = this.options.settleMs ?? SETTLE_MS;
-      await membership.killAll();
-      await delay(Math.min(MAX_SETTLE_MS, settleMs * 2 ** this.counters.rounds));
+      await membership.killAll(); // NOSONAR typescript:S9382 -- each round acts on the previous round's kernel proof
+      await delay(Math.min(MAX_SETTLE_MS, settleMs * 2 ** this.counters.rounds)); // NOSONAR typescript:S9382 -- the backoff before the next proof
       this.counters.rounds += 1;
     }
   }

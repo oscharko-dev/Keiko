@@ -451,7 +451,7 @@ export async function reviewStageSelection(
   for (const change of selection.filter((entry) => entry.pending)) {
     if (!context.stillAuthorized() || context.signal?.aborted === true)
       throw new Error("git-runtime-authority-denied");
-    const sides = await readSides(context, execution, change.path, scope);
+    const sides = await readSides(context, execution, change.path, scope); // NOSONAR typescript:S9382 -- authority and cancellation are checked again before each path is read
     if (sides.binary || sides.same) continue;
     const before = lineDiffSide(sides.before);
     const after = lineDiffSide(sides.after);

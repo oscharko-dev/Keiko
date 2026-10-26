@@ -254,10 +254,8 @@ async function workspaceEntry(
     : [segments.join("/")];
   for (const relativePath of paths) {
     if (relativePath === INSTRUCTION_SOURCE_FILE_NAME) continue;
-    const result = await input.workspace.readText({
-      relativePath,
-      ...(input.signal === undefined ? {} : { signal: input.signal }),
-    });
+    const read = { relativePath, ...(input.signal === undefined ? {} : { signal: input.signal }) };
+    const result = await input.workspace.readText(read); // NOSONAR typescript:S9382 -- reads go through the helper, which refuses more than eight live reads, into one ordered tally
     if (result.ok)
       tally.add(join(input.workspaceRoot, relativePath), {
         kind: "configured",
@@ -322,13 +320,14 @@ async function walkPattern(
     // Zero segments here, or one more directory and the same `**` again.
     await walkPattern(walk, directory, rest);
     for (const child of await listed(walk, directory, "directory"))
-      await walkPattern(walk, child, segments);
+      await walkPattern(walk, child, segments); // NOSONAR typescript:S9382 -- a depth-first walk: which matches the cap keeps depends on its order
     return;
   }
   const expression = segmentExpression(segment);
   for (const name of await listed(walk, directory, rest.length === 0 ? "file" : "directory")) {
     if (expression?.test(name.slice(name.lastIndexOf("/") + 1)) !== true) continue;
-    if (rest.length > 0) await walkPattern(walk, name, rest);
+    if (rest.length > 0)
+      await walkPattern(walk, name, rest); // NOSONAR typescript:S9382 -- a depth-first walk: which matches the cap keeps depends on its order
     else addMatch(walk, name);
   }
 }
@@ -372,10 +371,10 @@ export async function discoverInstructionSources(
   ancestorAgents(input, tally);
   const global = readGlobalConfigDocuments(input.globalConfigDirectory);
   for (const entry of documentEntries(global.documents, global.refused, tally))
-    await configuredEntry(input, entry, true, tally);
+    await configuredEntry(input, entry, true, tally); // NOSONAR typescript:S9382 -- entries resolve into one tally in the producer's order
   const project = await readProjectConfigDocuments(input.workspace, input.signal);
   for (const entry of documentEntries(project.documents, project.refused, tally))
-    await configuredEntry(input, entry, false, tally);
+    await configuredEntry(input, entry, false, tally); // NOSONAR typescript:S9382 -- entries resolve into one tally in the producer's order
   return { sources: tally.sources, remote: tally.remote, refused: tally.refused };
 }
 

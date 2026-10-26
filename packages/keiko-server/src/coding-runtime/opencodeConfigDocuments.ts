@@ -92,10 +92,8 @@ export async function readProjectConfigDocuments(
   const documents: Readonly<Record<string, unknown>>[] = [];
   const refused: ConfigDocumentRefusal[] = [];
   for (const relativePath of PROJECT_CONFIG_FILES) {
-    const result = await workspace.readText({
-      relativePath,
-      ...(signal === undefined ? {} : { signal }),
-    });
+    const read = { relativePath, ...(signal === undefined ? {} : { signal }) };
+    const result = await workspace.readText(read); // NOSONAR typescript:S9382 -- reads go through the helper, which refuses more than eight live reads
     if (!result.ok) continue;
     const document = parsedConfigDocument(
       result.text,

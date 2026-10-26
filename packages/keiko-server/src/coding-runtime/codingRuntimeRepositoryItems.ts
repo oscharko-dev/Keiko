@@ -356,7 +356,7 @@ async function projectConfigCandidates(
 ): Promise<Readonly<Record<"agent" | "command", readonly Candidate[]>>> {
   const found: Record<"agent" | "command", Candidate[]> = { agent: [], command: [] };
   for (const path of PROJECT_CONFIG_FILES) {
-    const text = await readConfigFile(scan, path);
+    const text = await readConfigFile(scan, path); // NOSONAR typescript:S9382 -- reads share the scan's stop checks and the helper's eight-live-read limit
     if (text !== undefined) admitConfigFile(scan, path, text, found);
   }
   return found;

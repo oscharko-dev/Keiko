@@ -276,7 +276,7 @@ async function admission(
   const admitted: OperatorPluginDefinition[] = [];
   const refusals: PluginRefusal[] = [];
   for (const plugin of registry.plugins) {
-    const read = await pluginContent(input, plugin, request.signal);
+    const read = await pluginContent(input, plugin, request.signal); // NOSONAR typescript:S9382 -- workspace plugins are read through the helper, which refuses more than eight live reads
     if (typeof read === "string") refusals.push(read);
     else if (read.sha256 !== plugin.sha256) refusals.push("digest-mismatch");
     else {

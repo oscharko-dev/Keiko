@@ -112,12 +112,10 @@ function gitRunner(root) {
  */
 export async function provideApprovedSourceCommits(entries, root, deps = {}) {
   const git = deps.git ?? gitRunner(root);
-  const commits = new Set();
-  for (const entry of entries) {
-    commits.add(
-      (await (deps.loadApproval ?? loadRuntimeApproval)(entry.target)).helperSourceCommit,
-    );
-  }
+  const loadApproval = deps.loadApproval ?? loadRuntimeApproval;
+  // Each target's approval is an independent read of the reviewed release metadata.
+  const approvals = await Promise.all(entries.map((entry) => loadApproval(entry.target)));
+  const commits = new Set(approvals.map((approval) => approval.helperSourceCommit));
   for (const commit of commits) {
     if (!COMMIT.test(commit ?? "")) throw new TypeError("invalid helper source commit");
     const present = () => git(["cat-file", "-e", `${commit}^{commit}`]) === 0;
@@ -143,7 +141,7 @@ async function awaitRegistryIntegrity(entry, version, deps) {
   const attempts = deps.verifyAttempts ?? VERIFY_ATTEMPTS;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     if (registryIntegrity(entry.name, version, deps.npm) === entry.integrity) return;
-    if (attempt < attempts) await (deps.wait ?? delay)(deps.verifyDelayMs ?? VERIFY_DELAY_MS);
+    if (attempt < attempts) await (deps.wait ?? delay)(deps.verifyDelayMs ?? VERIFY_DELAY_MS); // NOSONAR javascript:S9382 -- a retry: the next registry read follows this delay
   }
   throw new Error(`npm does not serve the pinned ${entry.name}@${version}`);
 }
@@ -181,12 +179,12 @@ export async function publishCodingRuntimePackages({ root, version, assetDir, en
   await provideApprovedSourceCommits(entries, root, deps);
   const tarballs = [];
   for (const entry of entries) {
-    tarballs.push(await verifyDownloadedRuntime(entry, version, assetDir, deps));
+    tarballs.push(await verifyDownloadedRuntime(entry, version, assetDir, deps)); // NOSONAR javascript:S9382 -- one candidate is unpacked and verified at a time; the first failure stops the rest
   }
   const publishDeps = { npm: npmRunner(env), log: console.log, ...deps };
   const outcomes = [];
   for (const [index, entry] of entries.entries()) {
-    outcomes.push(await publishRuntime(entry, version, tarballs[index], publishDeps));
+    outcomes.push(await publishRuntime(entry, version, tarballs[index], publishDeps)); // NOSONAR javascript:S9382 -- a publish is irreversible: a failed target stops every later one
   }
   return outcomes;
 }

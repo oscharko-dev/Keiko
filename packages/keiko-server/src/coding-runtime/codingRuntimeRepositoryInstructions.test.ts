@@ -970,6 +970,37 @@ describe("additional instruction sources in the native copy", () => {
     expect(lines[0]?.extra?.frames).toEqual(expect.any(Array));
   });
 
+  it("pulls the remote sources together, so an unreachable network costs one wait, not one each", async () => {
+    const tree = homeTree();
+    const urls = ["one", "two", "three"].map((name) => `https://rules.example.test/${name}.md`);
+    writeFileSync(join(tree.config, "opencode.json"), JSON.stringify({ instructions: urls }));
+    // Every pull is held until all of them are in flight: pulls made one after another never are.
+    let inFlight = 0;
+    let release = (): void => undefined;
+    const allInFlight = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const fetchImpl = vi.fn<typeof fetch>(async (input) => {
+      const url = input instanceof Request ? input.url : String(input);
+      inFlight += 1;
+      if (inFlight === urls.length) release();
+      await allInFlight;
+      return new Response(`RULE ${new URL(url).pathname}\n`, { status: 200 });
+    });
+    const { port, records } = discoveringPort(tree, { fetchImpl });
+    const targetPath = copyAt();
+
+    await expect(port.materializeForRun(request(targetPath))).resolves.toBe(true);
+    expect(fetchImpl).toHaveBeenCalledTimes(urls.length);
+    const copy = readFileSync(targetPath, "utf8");
+    const order = urls.map((url) => copy.indexOf(`RULE ${new URL(url).pathname}`));
+    expect(order.every((position) => position >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(records.filter((record) => record.op === OP).at(-1)).toMatchObject({
+      extra: { remoteSourceCount: urls.length, refusedSourceCount: 0 },
+    });
+  });
+
   it("records a discovery failure with its frames and still copies the root file", async () => {
     const tree = homeTree();
     writeFileSync(join(tree.workspace, "AGENTS.md"), "ROOT-RULE\n");

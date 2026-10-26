@@ -40,11 +40,12 @@ export async function seedMcpCredentials(
     for (const [server, admitted] of servers) {
       const stored = store.load({ server, url: admitted.url, oauth: admitted.oauth });
       if (stored === undefined) continue;
-      await client.createMcpCredential({
+      const credential = {
         integrationId: stored.integrationId,
         label: server,
         value: stored.value,
-      });
+      };
+      await client.createMcpCredential(credential); // NOSONAR typescript:S9382 -- written in order, stopping at the first failure, so the seeded count is exact
       seeded += 1;
     }
     recordMcpCredentials(activityLog, run.runId, {

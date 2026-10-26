@@ -185,7 +185,7 @@ async function admitRemoteSkills(
       return;
     }
     const pull: Pull = { names: repositorySkillNames(request.discoveryRoot), files: [] };
-    for (const source of registry.sources) await pullSource(input, request, source, pull);
+    for (const source of registry.sources) await pullSource(input, request, source, pull); // NOSONAR typescript:S9382 -- an earlier source's skills take their names first, and the cap spans sources
     writeAdmittedRepositoryItems(request.discoveryRoot, pull.files);
   } catch (error) {
     recordRemoteSkills(
@@ -267,11 +267,8 @@ async function pullSkills(
       refusals.push(refusal);
       continue;
     }
-    const text = await fetchText(
-      input,
-      new URL(`${encodeURIComponent(entry.name)}/SKILL.md`, source).href,
-      request.signal,
-    );
+    const url = new URL(`${encodeURIComponent(entry.name)}/SKILL.md`, source).href;
+    const text = await fetchText(input, url, request.signal); // NOSONAR typescript:S9382 -- whether a later entry fits the cap depends on this one's outcome
     const outcome =
       text === undefined
         ? ({ ok: false, reason: "skill-unavailable" } as const)

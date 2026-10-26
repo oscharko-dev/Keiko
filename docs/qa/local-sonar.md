@@ -35,6 +35,16 @@ the pinned local analyzer contains the rules; a clean local scan cannot check an
 | `S9027`    | Use `getBy*` queries for positive presence assertions. | Preserve Testing Library's missing-element diagnostics; retain `queryBy*` for absence assertions.                             |
 | `S8784`    | Keep assertions inside a test or lifecycle hook.       | A standalone native qualification converted to `node:test` keeps its platform, input and probe assertions in the owning test. |
 
+PR #4064 encountered 21 `S9382` findings, each reviewed against its owning source. Three loops
+were independent and now run together: the approval reads of the npm runtime publisher, the
+question-form listing per runtime location, and the remote instruction pulls (proven red-then-green:
+an unreachable network now costs one fetch wait, not one per source). The other 18 keep their order,
+and each carries an in-line `NOSONAR typescript:S9382` / `javascript:S9382` reason naming the
+dependency: the sandbox member's one-question protocol, retries and kill rounds that act on the
+previous answer, irreversible publishes that stop at the first failure, per-path authority checks,
+the secure read helper's eight-live-read limit, a depth-first walk whose match cap depends on order,
+tallies that keep the producer's order, and credential writes whose seeded count must stay exact.
+
 PR #4056 encountered `javascript:S8784` for four module-level precondition assertions in the native
 macOS test. The pinned local scan passed that source; Cloud rejected those assertions. All four
 checks now execute inside the owning test, with their predicates and native probe unchanged.
