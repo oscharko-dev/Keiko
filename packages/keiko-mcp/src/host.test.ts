@@ -127,6 +127,23 @@ function fixture(
   };
 }
 
+describe("admitted catalog metadata", () => {
+  it("publishes only admitted immutable declarations and refuses drift or a closed host", async () => {
+    const f = fixture();
+    expect(() => f.host.catalog()).toThrow();
+    await f.host.admit("catalog-admission");
+    const tools = f.host.catalog();
+    expect(tools).toHaveLength(1);
+    expect(Object.keys(tools[0] ?? {}).sort()).toEqual(["descriptor", "name", "risk"]);
+    expect(Object.isFrozen(tools)).toBe(true);
+    expect(Object.isFrozen(tools[0]?.descriptor.inputSchema)).toBe(true);
+    f.change();
+    expect(() => f.host.catalog()).toThrow();
+    await f.host.close();
+    expect(() => f.host.catalog()).toThrow();
+  });
+});
+
 describe("managed MCP protocol", () => {
   it("uses real modern discovery, listing and calls without dialing a network endpoint", async () => {
     const network = vi

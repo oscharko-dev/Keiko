@@ -8,6 +8,7 @@ import {
   type ManagedMcpLogPort,
   type ManagedMcpProvider,
   type ManagedMcpTool,
+  type ManagedMcpToolDeclaration,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import {
   TOOL_CATALOG_LIMITS,
@@ -16,6 +17,8 @@ import {
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { recordManagedMcp } from "./activity.js";
 import { ManagedMcpError, definitionIdentity, toolDefinition, toolsOf } from "./definitions.js";
+
+import { deepFreeze } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
 
 const INTERNAL_URL = "https://keiko-managed.invalid/mcp";
 const SERVER_INFO = { name: "keiko-managed", version: "1" };
@@ -57,6 +60,7 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
   readonly #declarations: string;
   readonly #registrySha256: string;
   readonly #toolCount: number;
+  readonly #catalog: readonly ManagedMcpToolDeclaration[];
   readonly #lifetime = new AbortController();
   #admission: Promise<void> | undefined;
   #admitted = false;
@@ -67,6 +71,13 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
     private readonly log: ManagedMcpLogPort,
   ) {
     const tools = toolsOf(providers);
+    this.#catalog = deepFreeze(
+      tools.map(({ name, risk, descriptor }) => ({
+        name,
+        risk,
+        descriptor: structuredClone(descriptor),
+      })),
+    );
     this.#expected = definitionIdentity(tools.map(toolDefinition));
     this.#declarations = this.declarationIdentity(tools);
     this.#registrySha256 = sha256Hex(this.#declarations);
@@ -213,6 +224,13 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
       );
       throw refused;
     }
+  }
+
+  public catalog(): readonly ManagedMcpToolDeclaration[] {
+    if (this.#closed) throw new ManagedMcpError("closed");
+    if (!this.#admitted) throw new ManagedMcpError("not-admitted");
+    this.currentTools();
+    return this.#catalog;
   }
 
   public protocolEra(): "modern" | undefined {

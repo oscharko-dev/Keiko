@@ -742,7 +742,7 @@ module.exports = {
       name: "adr-0019-direction-6a-server-only-contracts-security-model-gateway-workspace-tools-harness-workflows-evidence",
       comment:
         "ADR-0019 direction rule 6 (server boundary): keiko-server may depend on " +
-        "keiko-activity-log, keiko-contracts, keiko-git, keiko-security, keiko-model-gateway, " +
+        "keiko-activity-log, keiko-contracts, keiko-git, keiko-security, keiko-mcp (ADR-0181), keiko-model-gateway, " +
         "keiko-workspace, keiko-sandbox, keiko-tools, keiko-harness, keiko-workflows, " +
         "keiko-verification, keiko-evidence, " +
         "keiko-sdk, keiko-local-knowledge, keiko-memory-vault, keiko-memory-governance, " +
@@ -776,9 +776,9 @@ module.exports = {
       },
       to: {
         path:
-          "^((\\.\\./)*packages/keiko-(?!activity-log|contracts|security|model-gateway|workspace|sandbox|tools|harness|workflows|verification|evidence|sdk|local-knowledge|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server|git|connectors|tool-catalog)|" +
-          "node_modules/@oscharko-dev/keiko-(?!activity-log|contracts|security|model-gateway|workspace|sandbox|tools|harness|workflows|verification|evidence|sdk|local-knowledge|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server|git|connectors|tool-catalog)|" +
-          "@oscharko-dev/keiko-(?!activity-log|contracts|security|model-gateway|workspace|sandbox|tools|harness|workflows|verification|evidence|sdk|local-knowledge|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server|git|connectors|tool-catalog)|" +
+          "^((\\.\\./)*packages/keiko-(?!activity-log|contracts|security|mcp|model-gateway|workspace|sandbox|tools|harness|workflows|verification|evidence|sdk|local-knowledge|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server|git|connectors|tool-catalog)|" +
+          "node_modules/@oscharko-dev/keiko-(?!activity-log|contracts|security|mcp|model-gateway|workspace|sandbox|tools|harness|workflows|verification|evidence|sdk|local-knowledge|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server|git|connectors|tool-catalog)|" +
+          "@oscharko-dev/keiko-(?!activity-log|contracts|security|mcp|model-gateway|workspace|sandbox|tools|harness|workflows|verification|evidence|sdk|local-knowledge|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server|git|connectors|tool-catalog)|" +
           "src/(ui|cli|evaluations|gateway|workspace|tools|harness|workflows|audit|verification))",
       },
     },

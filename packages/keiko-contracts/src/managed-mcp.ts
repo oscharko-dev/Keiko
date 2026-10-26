@@ -16,11 +16,16 @@ export interface ManagedMcpToolResult {
   readonly isError?: boolean;
 }
 
-export interface ManagedMcpTool<Context extends ManagedMcpInvocationContext> {
+export interface ManagedMcpToolDeclaration {
   readonly name: string;
   /** Descriptive protocol hint; the server-owned action/authority port remains authoritative. */
   readonly risk: "read" | "write";
   readonly descriptor: ToolDescriptor;
+}
+
+export interface ManagedMcpTool<
+  Context extends ManagedMcpInvocationContext,
+> extends ManagedMcpToolDeclaration {
   readonly execute: (
     argumentsValue: CatalogJsonObject,
     context: Context,
@@ -50,6 +55,8 @@ export type ManagedMcpFailure =
 
 export interface ManagedMcpHost<Context extends ManagedMcpInvocationContext> {
   readonly admit: (correlationId: string) => Promise<void>;
+  /** Verified metadata only; no handlers, credentials or consumer context. */
+  readonly catalog: () => readonly ManagedMcpToolDeclaration[];
   readonly protocolEra: () => "modern" | undefined;
   readonly call: (
     name: string,

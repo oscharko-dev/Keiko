@@ -596,7 +596,7 @@ existing invocation registry, approval/budget ports and terminal lifecycle remai
 
 Six new consumer tests cover successful settlement, changed chat/actor/generation,
 re-offer during a delayed invocation, and model-supplied chat routing rejection. The
-201 Coding binder regressions remain required alongside these tests. This consumer does
+201 Coding binder regressions remain required alongside these tests. At that checkpoint the consumer did
 not yet invoke the managed MCP host: provider composition and the complete #4089 AC7
 path remain open. No full acceptance criterion is marked complete by this increment.
 
@@ -604,3 +604,36 @@ Focused validation also passes: 97 gateway catalog tests, 97 registry drift test
 package build, root typecheck, changed-file lint, governed-tool contract, regenerated
 catalog conformance and error observability. The operation inventory has 606/606
 proofs, 30/30 scenarios and no violations. Full final qualification remains pending.
+
+## Managed provider composition — #4089 (partial)
+
+Server composition now admits one SDK host and converts its verified metadata into
+an existing `createKeikoToolCatalog` registration set. Only that compiled projection
+feeds the bound gateway advertisement. The shared binder invokes SDK tools through
+captured server routes, validates canonical results and retains its authority,
+approval, budget and settlement ports. No Pod creates a separate host. Provider
+declaration drift refuses new offers and calls. Host metadata contains no handler or
+consumer context and is immutable; its absence was demonstrated by a failing test
+before the catalog method was added.
+
+The hermetic non-Coding consumer now traverses the actual gateway/binder/SDK/provider
+path. Two differently bound consumers complete in reverse order; cancelling the
+first leaves exactly one effect in the second and one settlement per consumer.
+Unknown model tools are rejected. Existing Coding authority and approval suites run
+alongside the binder tests. This qualifies the scoped runtime path, not the unfinished
+Jira provider, Chat authority/mode composition or the full #4089 acceptance.
+
+Additional review coverage exercises captured action/effect/scope/approval decoders
+and rejects every missing/non-function port member. ADR-0019 now records the MCP
+boundary revision and SDK confinement. The dependency matrix distinguishes actual
+client/server declarations from their reviewed transitive closure; all rows render
+as tables. The server-to-host edge is explicit in both package and architecture
+gates; the host remains restricted to contracts/security and all SDK import
+confinement rules remain active.
+
+Focused results: 353 server tests across 16 suites (220 catalog/consumer tests plus
+133 Coding authority/approval tests), 12 actual-SDK tests, 5 integration/package-graph
+tests and 97 registry tests pass. Package build, root typecheck, changed lint, package
+graph, dependency hygiene/currency, supply-chain decision matrix, ADR index and error
+observability pass. Full final performance, SBOM/assembled-package, coverage, Linux,
+Sonar and GitHub qualification remain open.
