@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { withImmediateTransaction } from "./transaction.js";
 import type { DatabaseSync } from "node:sqlite";
 import type {
@@ -73,6 +74,18 @@ export interface CodingHistoryFork extends CodingHistoryForkPlan {
   readonly task: CodingHistoryTask;
 }
 
+/** One message of an imported file, already sanitized and within the message bound. */
+export interface CodingHistoryImportedMessage {
+  readonly role: "user" | "assistant";
+  readonly content: string;
+  /** The time the file says it was written; absent stamps it at import. */
+  readonly timestamp?: number | undefined;
+}
+
+export interface CodingHistoryImportInput extends CodingHistoryCreateInput {
+  readonly messages: readonly CodingHistoryImportedMessage[];
+}
+
 export interface CodingHistoryStore {
   readonly begin: (input: CodingHistoryBeginInput) => CodingHistoryTask;
   /** What a fork of the source would inherit, or `undefined` when it cannot be made. */
@@ -84,6 +97,11 @@ export interface CodingHistoryStore {
    */
   readonly fork: (input: CodingHistoryForkInput) => CodingHistoryFork;
   readonly create: (input: CodingHistoryCreateInput) => CodingHistoryTask;
+  /**
+   * Creates a task from an imported file (#3904 AC4): its messages are bound to a run of its own,
+   * which no runtime ever executed, so the task reads as `imported` and is continued by a fork.
+   */
+  readonly importTask: (input: CodingHistoryImportInput) => CodingHistoryTask;
   readonly get: (id: string, operatorDigest?: string) => CodingHistoryTask | undefined;
   readonly list: (operatorDigest: string) => readonly CodingHistoryTask[];
   readonly messagesBeforeRun: (id: string, runId: string) => readonly ChatMessage[];
@@ -124,7 +142,18 @@ interface HistoryRow {
 }
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u;
+/** Run ids that hold an imported file's messages; no runtime run is ever given one. */
+const IMPORT_RUN_PREFIX = "import-";
 export const CODING_HISTORY_MESSAGE_MAX_CHARS = 65_536;
+
+/**
+ * Where the stored message that starts at `offset` ends: at most one message's length, and never
+ * between the two halves of a UTF-16 surrogate pair, so a long text splits into whole characters.
+ */
+export function codingHistoryChunkEnd(content: string, offset: number): number {
+  const end = Math.min(content.length, offset + CODING_HISTORY_MESSAGE_MAX_CHARS);
+  return (content.codePointAt(end - 1) ?? 0) > 0xffff ? end - 1 : end;
+}
 
 function assertId(value: string): void {
   if (!SAFE_ID.test(value)) throw invalidRequest("Invalid Coding History identity.");
@@ -143,11 +172,6 @@ function readTask(
     return undefined;
   const chat = store.findChatById(id);
   if (chat === undefined) return undefined;
-  const latest = db
-    .prepare(
-      "SELECT run_id FROM coding_history_runs WHERE chat_id = ? ORDER BY sequence DESC LIMIT 1",
-    )
-    .get(id);
   return {
     id,
     title: chat.title,
@@ -159,8 +183,27 @@ function readTask(
     status: row.status,
     createdAt: chat.createdAt,
     updatedAt: chat.updatedAt,
-    ...(typeof latest?.run_id === "string" ? { latestRunId: latest.run_id } : {}),
+    ...latestRun(db, id),
   };
+}
+
+/**
+ * The task's newest run. An imported task's only run is the synthetic one its import bound, which
+ * is no run to continue, so it is named only as the task's origin (#3904 AC4).
+ */
+function latestRun(
+  db: DatabaseSync,
+  id: string,
+): Pick<CodingHistoryTask, "latestRunId" | "origin"> {
+  const latest = db
+    .prepare(
+      "SELECT run_id FROM coding_history_runs WHERE chat_id = ? ORDER BY sequence DESC LIMIT 1",
+    )
+    .get(id);
+  if (typeof latest?.run_id !== "string") return {};
+  return latest.run_id.startsWith(IMPORT_RUN_PREFIX)
+    ? { origin: "imported" }
+    : { latestRunId: latest.run_id };
 }
 
 function requireTask(db: DatabaseSync, store: UiStore, id: string): CodingHistoryTask {
@@ -329,6 +372,30 @@ function forkTask(
       content: input.intent,
     });
     return { task: requireTask(db, store, task.id), ...selection.plan };
+  });
+}
+
+function importTask(
+  db: DatabaseSync,
+  store: UiStore,
+  now: () => number,
+  input: CodingHistoryImportInput,
+): CodingHistoryTask {
+  return withImmediateTransaction(db, () => {
+    const task = createTask(db, store, input);
+    const runId = `${IMPORT_RUN_PREFIX}${randomUUID()}`;
+    bindRun(db, store, task.id, runId, now);
+    input.messages.forEach((message, index) => {
+      appendMessage(db, store, now, {
+        id: task.id,
+        runId,
+        sourceId: `imported-${String(index)}`,
+        role: message.role,
+        content: message.content,
+        ...(message.timestamp === undefined ? {} : { timestamp: message.timestamp }),
+      });
+    });
+    return requireTask(db, store, task.id);
   });
 }
 
@@ -535,6 +602,7 @@ export function createCodingHistoryStore(
     planFork: (input) => selectFork(db, store, input)?.plan,
     fork: (input) => forkTask(db, store, now, input),
     create: (input) => createTask(db, store, input),
+    importTask: (input) => importTask(db, store, now, input),
     get: (id, operator) => readTask(db, store, id, operator),
     list: (operator) =>
       db

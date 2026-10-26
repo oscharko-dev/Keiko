@@ -1,10 +1,13 @@
 "use client";
 import {
   CODING_TASK_EXPORT_MAX_BYTES,
+  CODING_TASK_IMPORT_MAX_BYTES,
+  CODING_TASK_IMPORT_SOURCES,
   type CodingHistoryDetail,
   type CodingHistoryTask,
   type CodingTaskExportFormat,
   type CodingTaskExportResponse,
+  type CodingTaskImportResponse,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { ApiError } from "./api";
 import { bffFetchJson } from "./http";
@@ -108,6 +111,61 @@ export async function exportCodingTask(
       ...(correlationId === undefined ? {} : { correlationId }),
     },
   );
+}
+
+const IMPORT_SOURCES: ReadonlySet<unknown> = new Set(CODING_TASK_IMPORT_SOURCES);
+
+function isImportedTask(value: unknown): value is CodingHistoryTask {
+  if (typeof value !== "object" || value === null) return false;
+  const task: Record<string, unknown> = Object.fromEntries(Object.entries(value));
+  return (
+    typeof task.id === "string" &&
+    task.id.length > 0 &&
+    typeof task.title === "string" &&
+    task.origin === "imported"
+  );
+}
+
+function isImportResponse(value: unknown): value is CodingTaskImportResponse {
+  if (typeof value !== "object" || value === null) return false;
+  const result: Record<string, unknown> = Object.fromEntries(Object.entries(value));
+  return (
+    isImportedTask(result.task) &&
+    IMPORT_SOURCES.has(result.source) &&
+    isCount(result.messageCount) &&
+    result.messageCount > 0 &&
+    isCount(result.omittedMessageCount) &&
+    isCount(result.skippedMessageCount)
+  );
+}
+
+/**
+ * The user-controlled local import of a saved task (#3904 AC4): the file the person picked goes to
+ * the local server only, which stores its cleaned conversation as a new task. A file above the
+ * bound is refused before it is read.
+ */
+export async function importCodingTask(
+  file: Blob,
+  correlationId?: string,
+): Promise<CodingTaskImportResponse> {
+  if (file.size > CODING_TASK_IMPORT_MAX_BYTES)
+    throw new ApiError("CODING_HISTORY_IMPORT_TOO_LARGE", "The file is too large to import", 413);
+  const text = await file.text();
+  await codingAppSessionPairingSettled();
+  const result = await bffFetchJson(
+    `${ROOT}/import`,
+    { method: "POST", body: text, signal: AbortSignal.timeout(60_000) },
+    {
+      validator: (_path, value): CodingTaskImportResponse => {
+        if (!isImportResponse(value))
+          throw new ApiError("CONTRACT_VALIDATION_FAILED", "Invalid coding task import", 502);
+        return value;
+      },
+      ...(correlationId === undefined ? {} : { correlationId }),
+    },
+  );
+  window.dispatchEvent(new Event(CODING_HISTORY_CHANGED));
+  return result;
 }
 
 // Some browser engines cancel a programmatic Blob download when the object URL is revoked in the

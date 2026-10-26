@@ -51,6 +51,10 @@ import {
   scriptedTranscript,
   type ScriptState,
 } from "../../../packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.functional/_support.js";
+import {
+  FUNCTIONAL_REPOSITORY_SKILL_NAME,
+  functionalRepositorySkillText,
+} from "../../../packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.functional/skillDiscoveryProof.js";
 import { readProductionWorkspaceHead } from "../../../packages/keiko-server/src/coding-runtime/productionWorkspaceHeadReader.js";
 import { researchRequestLineText } from "../../../packages/keiko-server/src/coding-runtime/researchEgressPort.js";
 import {
@@ -233,6 +237,14 @@ function configureFixtureCommitSigning(repository: string, stateDir: string, ema
   git(repository, ["config", "commit.gpgsign", "true"]);
 }
 
+// #3897: a native run lists the repository's skills from the sanitized copies Keiko admits (#3903),
+// so the skill-discovery proof needs a real repository skill to find in the runtime's own listing.
+function writeRepositorySkillFixture(repository: string): void {
+  const directory = join(repository, ".opencode", "skills", FUNCTIONAL_REPOSITORY_SKILL_NAME);
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(join(directory, "SKILL.md"), functionalRepositorySkillText());
+}
+
 function createRepositoryFixture(config: CodingRuntimeJourneyServerConfig, stateDir: string): void {
   const repository = config.repositoryRoot(stateDir);
   mkdirSync(dirname(join(repository, config.targetRelativePath)), { recursive: true });
@@ -250,6 +262,7 @@ function createRepositoryFixture(config: CodingRuntimeJourneyServerConfig, state
       },
     }),
   );
+  if (config.proveSkillDiscovery === true) writeRepositorySkillFixture(repository);
   git(repository, ["add", "."]);
   git(repository, ["commit", "-q", "-m", `${config.fixtureId} fixture`]);
   if (config.commit === true) {
@@ -802,11 +815,17 @@ interface ObservedGatewayCatalogBinding {
   readonly handlerSetDigest: string;
 }
 
+// #3897: a native run advertises the original runtime's own tool set, pinned by its digest, instead
+// of a bound catalog. The digest and the runtime version are the native counterpart of the binding.
+interface ObservedNativeToolSet {
+  readonly runtime: { readonly id: string; readonly version: string };
+  readonly toolSetDigest: string;
+}
+
 function observedGatewayCatalogBinding(
   request: GatewayRequest,
 ): ObservedGatewayCatalogBinding | undefined {
   const catalog = request.toolCatalog;
-  // The native advertisement (#3897) carries no catalog binding: nothing to observe.
   if (catalog?.kind !== "bound") return undefined;
   const { binding } = catalog.offered;
   return {
@@ -814,6 +833,15 @@ function observedGatewayCatalogBinding(
     profile: { id: binding.profile.id, version: binding.profile.version },
     projectionDigest: binding.projectionDigest,
     handlerSetDigest: binding.handlerSetDigest,
+  };
+}
+
+function observedNativeToolSet(request: GatewayRequest): ObservedNativeToolSet | undefined {
+  const catalog = request.toolCatalog;
+  if (catalog?.kind !== "native") return undefined;
+  return {
+    runtime: { id: catalog.runtime.id, version: catalog.runtime.version },
+    toolSetDigest: catalog.toolSetDigest,
   };
 }
 
@@ -830,12 +858,22 @@ function sameGatewayCatalogBinding(
   );
 }
 
+function sameNativeToolSet(left: ObservedNativeToolSet, right: ObservedNativeToolSet): boolean {
+  return (
+    left.runtime.id === right.runtime.id &&
+    left.runtime.version === right.runtime.version &&
+    left.toolSetDigest === right.toolSetDigest
+  );
+}
+
 export function gatewayObserver(): ((request: GatewayRequest) => void) | undefined {
   const outputPath = process.env.KEIKO_2483_GATEWAY_OBSERVATION_PATH;
   if (outputPath === undefined || outputPath.length === 0) return undefined;
   let requestCount = 0;
   let catalogBindingRequestCount = 0;
+  let nativeToolSetRequestCount = 0;
   let catalogBinding: ObservedGatewayCatalogBinding | undefined;
+  let nativeToolSet: ObservedNativeToolSet | undefined;
   const outputLimits = new Set<number>();
   return (request): void => {
     requestCount += 1;
@@ -851,6 +889,14 @@ export function gatewayObserver(): ((request: GatewayRequest) => void) | undefin
       catalogBinding = observedBinding;
       catalogBindingRequestCount += 1;
     }
+    const observedNative = observedNativeToolSet(request);
+    if (observedNative !== undefined) {
+      if (nativeToolSet !== undefined && !sameNativeToolSet(nativeToolSet, observedNative)) {
+        throw new TypeError("Real-binary native tool set changed during one journey");
+      }
+      nativeToolSet = observedNative;
+      nativeToolSetRequestCount += 1;
+    }
     mkdirSync(dirname(outputPath), { recursive: true, mode: 0o700 });
     writeFileSync(
       outputPath,
@@ -860,6 +906,8 @@ export function gatewayObserver(): ((request: GatewayRequest) => void) | undefin
         outputTokenLimits: [...outputLimits].sort((left, right) => left - right),
         catalogBinding: catalogBinding ?? null,
         catalogBindingRequestCount,
+        nativeToolSet: nativeToolSet ?? null,
+        nativeToolSetRequestCount,
         contentFieldsRecorded: false,
       })}\n`,
       { mode: 0o600 },

@@ -522,6 +522,13 @@ value, so an unthreaded path degrades to "unverified" and never to "verified". T
 Coding Workbench information panel, the run status's readiness details and the bootstrap setup
 screen all state plainly that the runtime is an unverified evaluation runtime; none of them renders
 it as plain green. This is the class audit finding F-01 closed, and it must not be reintroduced.
+Since #3904 an available runtime's readiness also carries the optional `runtimeVersion` facts: the
+verified upstream OpenCode version, the version this Keiko build pins, and the closed origin of the
+runtime (`portable-release`, `npm-runtime-package`, `dev-checkout`). The validator refuses them
+while the runtime is unavailable, and an absent value reads as "not reported", never as a version.
+The Workbench information panel shows them beside the latest Keiko release the existing update
+preflight reports; a version that differs from the pin is shown as a warning, not hidden. These
+facts describe the activated runtime only; they grant no update or install authority.
 Since #3873 the run status's live region announces the run's own state and revision first, and the
 readiness facts — this one included — sit in its collapsed readiness details, which assistive
 technology can open; the details never state a plain "Runtime ready." for an evaluation runtime.

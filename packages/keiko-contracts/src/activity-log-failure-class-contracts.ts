@@ -307,16 +307,32 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {
       start: [],
-      state: ["coding-runtime.history", "coding-runtime.history.export"],
+      state: [
+        "coding-runtime.history",
+        "coding-runtime.history.export",
+        "coding-runtime.history.import",
+      ],
       end: [],
       failure: [],
       loss: [],
     },
-    requiredCausalOperations: ["coding-runtime.history", "coding-runtime.history.export"],
+    requiredCausalOperations: [
+      "coding-runtime.history",
+      "coding-runtime.history.export",
+      "coding-runtime.history.import",
+    ],
     requiredLossOperations: [],
-    requiredProofOperations: ["coding-runtime.history", "coding-runtime.history.export"],
+    requiredProofOperations: [
+      "coding-runtime.history",
+      "coding-runtime.history.export",
+      "coding-runtime.history.import",
+    ],
     requiredReplayProofIds: [],
-    requiredResourceOperations: ["coding-runtime.history", "coding-runtime.history.export"],
+    requiredResourceOperations: [
+      "coding-runtime.history",
+      "coding-runtime.history.export",
+      "coding-runtime.history.import",
+    ],
     requiredEvidenceClasses: [
       "closed-enum",
       "completeness-state",
@@ -327,8 +343,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "opaque-id",
       "safe-platform-class",
     ],
-    requiredFrameOperations: ["coding-runtime.history", "coding-runtime.history.export"],
-    requiredCauseOperations: ["coding-runtime.history", "coding-runtime.history.export"],
+    requiredFrameOperations: [
+      "coding-runtime.history",
+      "coding-runtime.history.export",
+      "coding-runtime.history.import",
+    ],
+    requiredCauseOperations: [
+      "coding-runtime.history",
+      "coding-runtime.history.export",
+      "coding-runtime.history.import",
+    ],
   },
   {
     contractKind: "activity-log-failure-class",

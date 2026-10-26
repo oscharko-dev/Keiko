@@ -41,6 +41,7 @@ import {
 import { createCodingRuntimeRepositoryInstructionsPort } from "./codingRuntimeRepositoryInstructions.js";
 import { resolveNativeExternalReadRoots } from "./opencodeNativeExternalRoots.js";
 import { nativeLinkedFilesField } from "./opencodeNativeLinkedFiles.js";
+import { openCodeNativeEgress, type OpenCodeNativeEgress } from "./opencodeNativeEgress.js";
 import { resolveOpenCodeRipgrep } from "./opencodeRipgrepLaunch.js";
 import type {
   SecureWorkspaceNativeFileIO,
@@ -355,6 +356,11 @@ interface LaunchOptions {
   readonly prepare?: ((fixture: Fixture) => void | Promise<void>) | undefined;
   /** The tool profile the run is launched with; production's macOS profile unless a test names one. */
   readonly toolProfile?: OpenCodeToolProfile | undefined;
+  /**
+   * The kernel's egress for the tree. Loopback only unless a test opens it as production opens
+   * Full access (`openCodeNativeEgress`), so no other test here can reach beyond this machine.
+   */
+  readonly egress?: OpenCodeNativeEgress | undefined;
 }
 
 const PRODUCTION_LAUNCH: LaunchOptions = {
@@ -520,6 +526,7 @@ function launch(
         ...external,
       ]),
     },
+    ...(options.egress === undefined ? {} : { egress: options.egress }),
   });
   const command = buildRuntimeGatewaySeatbeltCommand(policy, binary, profile.args, git.path);
   const password = profile.env.OPENCODE_SERVER_PASSWORD;
@@ -3037,6 +3044,12 @@ describe("pinned native OpenCode accepted external references (C08, #3900 AC5)",
 // The original `webfetch` is internet use: in Full access the policy allows it with inherited egress
 // and the producer fetches; below Full access the policy refuses at once with an explanation and the
 // kernel reaches loopback only. The page here is a fixture-owned loopback listener.
+const OFFLINE_FETCH_TIMEOUT_SECONDS = 2;
+// The fetch's own two seconds plus a scripted model turn on each side; far below the 120 seconds
+// the tool would wait at most, and below scriptedTurn's own 60-second poll.
+const OFFLINE_TURN_BOUND_MS = 30_000;
+const OFFLINE_FAILURE = /^(?:Transport error \(GET [^)]+\)|Request timed out)$/u;
+
 describe("pinned native OpenCode webfetch and websearch (T14, T15, #3903 AC3)", () => {
   const skip = BINARY === undefined || RESOURCE_ROOT === undefined;
 
@@ -3089,6 +3102,46 @@ describe("pinned native OpenCode webfetch and websearch (T14, T15, #3903 AC3)", 
             effect: "deny",
             reason: "unsupported-action",
           }),
+        );
+      });
+    },
+    180_000,
+  );
+
+  // #3907 AC10: without a network the original webfetch fails, the model reads the failure and the
+  // turn goes on; the policy still allows the fetch, so unavailable means the network, never a silent
+  // refusal. Three shapes of "no network": a kernel that lets the tree reach loopback only (a machine
+  // without a route fails at once); production's Full access egress towards 192.0.2.1 (TEST-NET-1,
+  // RFC 5737, never routed, so a connected machine's packets are dropped and the tool's own timeout
+  // ends the wait); and a name under `.invalid` (RFC 2606) no resolver answers. None of them depends
+  // on this machine's connectivity, and none reaches beyond it.
+  it.skipIf(skip).each([
+    ["a kernel without a network", "http://192.0.2.1/notes.txt", undefined],
+    ["an address no route reaches", "http://192.0.2.1/notes.txt", "autonomous-delivery"],
+    [
+      "a name no resolver answers",
+      "http://keiko-offline-proof.invalid/notes.txt",
+      "autonomous-delivery",
+    ],
+  ] as const)(
+    "ends a fetch towards %s within its timeout, and the turn goes on",
+    async (_case, url, egressMode) => {
+      const egress = egressMode === undefined ? undefined : openCodeNativeEgress(egressMode);
+      await withRun({ mode: "autonomous-delivery", egress }, async (run) => {
+        const started = Date.now();
+        const result = await scriptedTurn(run, {
+          name: "webfetch",
+          arguments: { url, format: "text", timeout: OFFLINE_FETCH_TIMEOUT_SECONDS },
+        });
+        expect(Date.now() - started).toBeLessThan(OFFLINE_TURN_BOUND_MS);
+        // The producer's own words: a refused or unresolved connection is a transport error, a
+        // dropped one its timeout (a machine without a route fails at once instead).
+        const failure = JSON.parse(result) as { error?: { message?: unknown }; content?: unknown };
+        expect(failure.content).toEqual([]);
+        expect(String(failure.error?.message)).toMatch(OFFLINE_FAILURE);
+        expect(result).not.toContain("WEBFETCH-PAGE-CANARY");
+        expect(run.facade.decisions).toContainEqual(
+          expect.objectContaining({ permission: "webfetch", resources: [url], effect: "allow" }),
         );
       });
     },

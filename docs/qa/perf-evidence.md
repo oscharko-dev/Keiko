@@ -522,6 +522,34 @@ After the op catalog was regenerated at `363d2cb5d` it was measured again: p95 1
 2.08 and 130.3 ms, each below its committed ceiling.
 After the search key redaction and the process-table mark at `37367b1cc` it was measured again:
 p95 1497.9, 2.17, 2.11 and 139.2 ms, each below its committed ceiling.
+After the task import, the version facts and the offline network deadlines at `e8a6d5ec7` it
+was measured again: p95 1533.3, 1.93, 2.20 and 131.6 ms, each below its committed ceiling.
+After the shared Coding History transfer line at `08fbb9bec` it was measured again: p95 1534.6,
+2.11, 2.57 and 129.0 ms, each below its committed ceiling.
+After the bounded DNS lookups at `7789da5c4` it was measured again: p95 1524.8, 1.95, 2.37 and
+142.6 ms, each below its committed ceiling.
+After the support code inventory was regenerated at `def82bff7` it was measured again: p95
+1465.6, 1.86, 2.02 and 128.5 ms, each below its committed ceiling.
+After the optional runtime packages were pinned to 1.1.4 at `05bb62655` (the lockfile is part of
+the subject) it was measured again: p95 1551.9, 1.93, 2.32 and 136.6 ms, each below its committed
+ceiling.
+
+**Ruler recalibrated, 2026-10-26 (#3897, nightly real-binary journey).** The functional test support
+now scripts the runtime's own `grep`, `read`, `skill` and `edit` tools instead of the mapped
+`keiko_*` tools a native run no longer offers, so the ruler moved again. The recorded environment is
+unchanged, so the shrink-only `--recalibrate` ran at `15af8b5c3`, followed by an independent
+measurement and the freshness check. No ceiling widened; one tightened.
+
+| Metric                | Previous ceiling (2026-10-26) | Fresh calibration ceiling | Committed ceiling | Measured p95 |
+| --------------------- | ----------------------------- | ------------------------- | ----------------- | ------------ |
+| `coldStartMs`         | 1614.3                        | 1798.4                    | 1614.3            | 1512.6       |
+| `readinessMs`         | 3.26                          | 3.59                      | 3.26              | 1.91         |
+| `sseFirstByteMs`      | 4.65                          | 4.48                      | 4.48              | 2.42         |
+| `boundedThroughputMs` | 160.0                         | 179.3                     | 160.0             | 129.6        |
+
+The three follow-up branches (task import and offline network tools, the 1.1.4 runtime pin and this
+journey repair) were combined into one delivery at `6bfb9e129` and measured again against this
+calibration: p95 1547.2, 1.92, 2.51 and 138.9 ms, each below its committed ceiling.
 
 The PR lane runs `check:perf-evidence:coding-runtime` and the hermetic ruler tests
 (`test:perf:coding-runtime`). It checks integrity and budgets unconditionally. Set

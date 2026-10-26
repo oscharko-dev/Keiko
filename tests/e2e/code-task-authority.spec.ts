@@ -36,6 +36,7 @@ import {
   FUNCTIONAL_PLAN_STEP_READ,
   FUNCTIONAL_PLAN_STEP_VERIFY,
 } from "../../packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.functional/_support.js";
+import { FUNCTIONAL_REPOSITORY_SKILL_NAME } from "../../packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.functional/skillDiscoveryProof.js";
 
 import {
   AUTHORITY_APP_SESSION_LAUNCHER_SECRET,
@@ -232,28 +233,6 @@ function worktreeRootForTarget(target: string): string {
   return AUTHORITY_TARGET_RELATIVE_PATH.split("/").reduce((root) => dirname(root), target);
 }
 
-interface ChangesetAuditProjection {
-  readonly actionId?: string;
-  readonly actionType?: string;
-  readonly disposition?: string;
-  readonly conflictCode?: string;
-  readonly failureCode?: string;
-  readonly outcome?: string;
-  readonly sessionId?: string;
-}
-
-async function latestChangesetAudit(page: Page): Promise<ChangesetAuditProjection | null> {
-  const response = await page.request.get("/api/editor/agent/audit");
-  if (!response.ok()) return null;
-  const body = (await response.json()) as {
-    readonly records?: readonly ChangesetAuditProjection[];
-  };
-  return (
-    [...(body.records ?? [])].reverse().find((record) => record.actionType === "applyChangeset") ??
-    null
-  );
-}
-
 async function openRealBinaryManualEditor(page: Page): Promise<void> {
   if (!realBinaryJourney) return;
   const targets = findManagedTargetFiles(managedRoot, 4);
@@ -319,22 +298,18 @@ async function assertInheritedWorkspaceTrust(page: Page): Promise<void> {
   await expect(page.getByTestId("workspace-trust-banner-editor")).toHaveCount(0);
 }
 
-async function proveRealBinaryChangesetApplied(page: Page, runId: string): Promise<void> {
+// #3897: the pinned runtime edits natively. The run's accepted supervised authority permits this
+// routine contained edit, so the runtime's own `edit` tool applies it to the managed worktree
+// without a per-action approval and no review surface is ever raised for it. The applied file in
+// the managed worktree is the proof; no Workbench changeset bridge is involved.
+async function proveRealBinaryEditApplied(page: Page): Promise<void> {
   if (!realBinaryJourney) return;
-  // The run's accepted supervised authority permits this routine contained edit. Its own
-  // Workbench bridge applies it; an ordinary manual Editor must not be needed for execution.
-  const review = workbench(page).getByRole("region", { name: "Review the proposed file change" });
   await expect
-    .poll(() => latestChangesetAudit(page))
-    .toMatchObject({
-      actionType: "applyChangeset",
-      disposition: "allowed",
-      outcome: "succeeded",
-    });
-  const audit = await latestChangesetAudit(page);
-  expect(audit?.actionId).toMatch(/^ses_[^:]+:tool-keiko_changeset_edit-6$/u);
-  expect(audit?.sessionId).toContain(runId);
-  await expect(review).toHaveCount(0);
+    .poll(() => findManagedTargetFiles(managedRoot, 4).map((file) => readFileSync(file, "utf8")))
+    .toEqual([AUTHORITY_EDITED_CONTENT]);
+  await expect(
+    workbench(page).getByRole("region", { name: "Review the proposed file change" }),
+  ).toHaveCount(0);
 }
 
 async function proveVerificationActivity(timeline: Locator): Promise<void> {
@@ -485,14 +460,10 @@ async function proveLiveActivityTimeline(
   }
   await expect(timeline.getByRole("region", { name: "Runtime questions" })).toBeVisible();
   await expect(timeline.getByText(FUNCTIONAL_PLAN_STEP_READ, { exact: true })).toBeVisible();
-  const completedRead = timeline
-    .locator('[data-tool-state="succeeded"]')
-    .filter({ hasText: "workspace" });
-  await expect(completedRead).toHaveCount(1);
-  await expect(completedRead).toContainText("workspace");
+  if (!realBinaryJourney) await proveScriptedWorkspaceRead(timeline);
   await proveUnpairedClientReadsNoQuestionText(request, new URL(page.url()).origin, runId);
   await answerVisibleQuestion(page);
-  await proveRealBinaryChangesetApplied(page, runId);
+  await proveRealBinaryEditApplied(page);
   await openRealBinaryManualEditor(page);
   await proveVerificationActivity(timeline);
   await expect(
@@ -510,6 +481,12 @@ async function proveLiveActivityTimeline(
   expect(edited).toHaveLength(1);
   expect(readFileSync(edited[0] ?? "", "utf8")).toBe(AUTHORITY_EDITED_CONTENT);
   if (!realBinaryJourney) await proveRunChangesView(page, request, edited[0] ?? "");
+}
+
+// The scripted (mapped) engine reads through Keiko's own workspace tool; the real binary reads
+// through its own `read`, which `proveRepositorySearchConsumption` already asserts.
+async function proveScriptedWorkspaceRead(timeline: Locator): Promise<void> {
+  await expect(toolActivity(timeline, "keiko_workspace_read")).toHaveCount(1);
 }
 
 function toolActivity(timeline: Locator, tool: string): Locator {
@@ -539,7 +516,7 @@ async function proveRepositorySearchConsumption(timeline: Locator): Promise<void
     endLine: 1,
     readTargetDerivedFromResult: true,
   });
-  for (const tool of ["keiko_repository_search", "keiko_workspace_read"]) {
+  for (const tool of ["grep", "read"]) {
     const succeeded = toolActivity(timeline, tool);
     await expect(succeeded).toHaveCount(1);
     await expect(succeeded).toBeVisible();
@@ -548,9 +525,9 @@ async function proveRepositorySearchConsumption(timeline: Locator): Promise<void
   }
 }
 
-// #3417: the real binary discovered the approved skills through production composition and
-// invoked the one skill the runtime's own listing named; the timeline carries both governed calls
-// and the audited skill invocation.
+// #3417, #3897: the real binary listed the repository skill Keiko admitted (#3903) in its own prompt
+// and invoked the one that listing named with its own `skill` tool, so the skill id it passed came
+// from the runtime's listing and not from a fixture. The timeline carries the completed call.
 async function proveSkillDiscoveryConsumption(timeline: Locator): Promise<void> {
   const path = join(stateDir, "skill-discovery-consumption.json");
   await expect.poll(() => existsSync(path)).toBe(true);
@@ -558,19 +535,15 @@ async function proveSkillDiscoveryConsumption(timeline: Locator): Promise<void> 
   expect(proof).toMatchObject({
     schemaVersion: 1,
     toolCallId: "skill-real-binary-discovery",
-    listedCount: 1,
-    skillIdDigest: createHash("sha256").update("skl_repo-structure-summary@1").digest("hex"),
+    skillIdDigest: createHash("sha256").update(FUNCTIONAL_REPOSITORY_SKILL_NAME).digest("hex"),
     invokedSkillDerivedFromResult: true,
   });
-  for (const tool of ["keiko_skill_discover", "keiko_skill"]) {
-    // Match the exact tool identifier inside its user-expandable card, so invoking a skill
-    // cannot also match the distinct skill-discovery card.
-    const succeeded = toolActivity(timeline, tool);
-    await expect(succeeded).toHaveCount(1);
-    await succeeded.locator("summary").click();
-    await expect(succeeded.getByText(tool, { exact: true })).toBeVisible();
-  }
-  await expect(timeline.getByText("Skill invoked", { exact: true }).first()).toBeVisible();
+  expect((proof as { readonly listedCount: number }).listedCount).toBeGreaterThanOrEqual(1);
+  // Match the exact tool identifier inside its user-expandable card.
+  const succeeded = toolActivity(timeline, "skill");
+  await expect(succeeded).toHaveCount(1);
+  await succeeded.locator("summary").click();
+  await expect(succeeded.getByText("skill", { exact: true })).toBeVisible();
 }
 
 async function settleRealBinaryRun(page: Page, runId: string): Promise<void> {

@@ -6221,7 +6221,11 @@
       "lifecycleTransitions": ["state"],
       "lifecycleOperations": {
         "start": [],
-        "state": ["coding-runtime.history", "coding-runtime.history.export"],
+        "state": [
+          "coding-runtime.history",
+          "coding-runtime.history.export",
+          "coding-runtime.history.import"
+        ],
         "end": [],
         "failure": [],
         "loss": []
@@ -6234,10 +6238,18 @@
         {
           "op": "coding-runtime.history.export",
           "mode": "correlation"
+        },
+        {
+          "op": "coding-runtime.history.import",
+          "mode": "correlation"
         }
       ],
       "lossSignals": [],
-      "resourceSignals": ["coding-runtime.history", "coding-runtime.history.export"],
+      "resourceSignals": [
+        "coding-runtime.history",
+        "coding-runtime.history.export",
+        "coding-runtime.history.import"
+      ],
       "replayReferences": [],
       "operations": [
         {
@@ -6464,6 +6476,104 @@
             "causeChain": true
           },
           "proofIds": ["coding-runtime.history.export.emitted-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "coding-runtime.history.import",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "byteCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "causeChain",
+              "type": "string-array",
+              "dataClass": "error-kind",
+              "required": false
+            },
+            {
+              "name": "conversationId",
+              "type": "string",
+              "dataClass": "opaque-id",
+              "required": false
+            },
+            {
+              "name": "errorClass",
+              "type": "string",
+              "dataClass": "error-kind",
+              "required": false
+            },
+            {
+              "name": "event",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "frames",
+              "type": "string-array",
+              "dataClass": "safe-platform-class",
+              "required": false
+            },
+            {
+              "name": "messageCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "omittedMessageCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "redactedMessageCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "skippedMessageCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "source",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            }
+          ],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "error-kind",
+            "loss-state",
+            "opaque-id",
+            "safe-platform-class"
+          ],
+          "frameCauseEvidence": {
+            "frames": true,
+            "causeChain": true
+          },
+          "proofIds": ["coding-runtime.history.import.emitted-line"],
           "replayReferences": [],
           "missingObligations": []
         }
