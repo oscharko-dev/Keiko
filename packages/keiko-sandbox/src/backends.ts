@@ -54,13 +54,34 @@ function roBindTryArgs(paths: readonly string[]): readonly string[] {
   return paths.flatMap((path) => ["--ro-bind-try", path, path]);
 }
 
+// The child's /tmp inside the mounted execution root. The root is the caller's real directory, so
+// whatever the child writes there (npm logs, Node's compile cache) stays behind after the run; a
+// caller that owns a per-run directory names it here and removes it once the run settles.
+function executionTmpMount(plan: IsolatedRunPlan): string {
+  const executionTmp = plan.executionTmp;
+  if (executionTmp === undefined) return EXECUTION_ROOT_TMP;
+  const name = basename(executionTmp);
+  if (
+    executionTmp.includes("\0") ||
+    dirname(executionTmp) !== plan.cwd ||
+    name === "" ||
+    name === "." ||
+    name === ".."
+  ) {
+    throw new TypeError("sandbox-execution-tmp-invalid");
+  }
+  return `${EXECUTION_ROOT_MOUNT}/${name}`;
+}
+
 function strictBubblewrapArgs(plan: IsolatedRunPlan): readonly string[] {
   // Execution-root mode is for untrusted generated tests. It exposes the disposable root read-write,
   // enough read-only system/toolchain paths to execute Node tooling, and /tmp + /dev + /proc.
   // Its private PID namespace denies host process access and reaps detached descendants on exit.
-  // /tmp is a symlink back into the disposable root so hardcoded temp writes stay contained.
+  // /tmp is a symlink back into the disposable root so hardcoded temp writes stay contained; a
+  // caller's per-run `executionTmp` takes the place of the shared directory.
   // It deliberately does not bind /home, /run, /var/run, or the host root as a writable filesystem.
   const commandDir = dirname(plan.command);
+  const tmpMount = executionTmpMount(plan);
   const readonlyBinds = isAbsolute(commandDir)
     ? [...EXECUTION_ROOT_READONLY_BINDS, commandDir]
     : EXECUTION_ROOT_READONLY_BINDS;
@@ -89,9 +110,9 @@ function strictBubblewrapArgs(plan: IsolatedRunPlan): readonly string[] {
     plan.cwd,
     EXECUTION_ROOT_MOUNT,
     "--dir",
-    EXECUTION_ROOT_TMP,
+    tmpMount,
     "--symlink",
-    EXECUTION_ROOT_TMP,
+    tmpMount,
     "/tmp",
     "--chdir",
     EXECUTION_ROOT_MOUNT,
