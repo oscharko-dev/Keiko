@@ -1014,6 +1014,12 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   `direct` until a native boundary is qualified there); no request field can select a profile. The mapped `direct` and `code-mode` profiles remain available to tests and to an
   explicit server selection, and the governed `keiko_*` catalog, the tool facade and Chat
   repository search stay in place for the surfaces that use them.
+- **Windows qualification (#4068, 2026-10-26).** The task owner explicitly retained the mapped
+  `direct` profile for this qualification. Profile selection alone does not establish availability:
+  production Windows gateway confinement still refuses before spawn. The
+  [Windows record](../qa/opencode-windows-qualification.md) distinguishes executed helper proofs,
+  unavailable native capabilities and remaining install/service blockers. No mapped result may be
+  labeled native or close unexecuted Windows acceptance criteria.
 - **The runtime keeps its own tools, agents and configuration.** The launch configuration of the
   native profile (`opencodeLaunchProfile.ts`) names no ordinary action: it denies only the
   mode-independent `external_directory` escape (admitting the run's own plan directory), keeps

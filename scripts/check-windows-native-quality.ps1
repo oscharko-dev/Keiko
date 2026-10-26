@@ -381,6 +381,11 @@ process.exit(41);
   & cl.exe @c11Flags $productionMTFlag "/Fo:$supervisorObject" "/Fe:$supervisorOut" $supervisor /link @productionLinkFlags
   if ($LASTEXITCODE -ne 0) { throw "MSVC runtime-supervisor quality analysis failed" }
 
+  # #4068 W2/W5: compiling a Job Object supervisor does not prove descendant cleanup. Exercise
+  # the exact helper built above, including detached children and loss of the owning control pipe.
+  node (Join-Path $root "native/runtime-supervisor/test-protocol.mjs") --helper $supervisorOut
+  if ($LASTEXITCODE -ne 0) { throw "Windows runtime-supervisor process-tree qualification failed" }
+
   # The default invocation validates policy inputs only; it never opens WFP or changes filters.
   node (Join-Path $root "scripts/testing/test-windows-gateway-filters.mjs")
   if ($LASTEXITCODE -ne 0) { throw "Windows gateway policy validation failed" }

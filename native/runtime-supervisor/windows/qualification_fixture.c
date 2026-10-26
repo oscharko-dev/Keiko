@@ -19,6 +19,7 @@ int wmain(int argc, wchar_t **argv) {
   wchar_t *executable, *command;
   unsigned char observation[12] = {'K', 'R', 'Q', '1', 0, 0, 0, 0, 0, 0, 0, 0};
   DWORD length;
+  DWORD creation_flags = 0;
   BOOL created;
   if (argc == 2 && wcscmp(argv[1], L"--descendant") == 0) {
     Sleep(INFINITE);
@@ -41,7 +42,12 @@ int wmain(int argc, wchar_t **argv) {
   memset(&startup, 0, sizeof(startup));
   memset(&child, 0, sizeof(child));
   startup.cb = sizeof(startup);
-  created = CreateProcessW(executable, command, NULL, NULL, FALSE, 0, NULL, NULL, &startup, &child);
+  /* Console detachment must never detach a descendant from its owning Job Object (#4068 W2). */
+  if (argc == 3 && wcscmp(argv[1], L"--qualified-detached") == 0) {
+    creation_flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP;
+  }
+  created = CreateProcessW(executable, command, NULL, NULL, FALSE, creation_flags, NULL, NULL,
+                           &startup, &child);
   free(executable);
   free(command);
   if (!created) {

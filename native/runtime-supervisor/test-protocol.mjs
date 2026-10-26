@@ -42,7 +42,7 @@ const fixtureSource = fileURLToPath(new URL("./windows/qualification_fixture.c",
 const DEADLINE_MS = 10_000;
 
 // Windows-specific env pairs (the supervised child needs SystemRoot for Win32/CRT plumbing).
-function launchPacket(executable, cwd) {
+function launchPacket(executable, cwd, detached) {
   return sharedLaunchPacket(
     executable,
     cwd,
@@ -51,7 +51,7 @@ function launchPacket(executable, cwd) {
       ["KEIKO_BETA", "two"],
       ["SystemRoot", process.env.SystemRoot ?? String.raw`C:\Windows`],
     ],
-    ["--qualified", "second-argument"],
+    [detached ? "--qualified-detached" : "--qualified", "second-argument"],
   );
 }
 
@@ -115,7 +115,7 @@ function hermeticWindowsEnv() {
   return { SystemRoot: process.env.SystemRoot ?? String.raw`C:\Windows` };
 }
 
-async function qualifyWindows(helper, runtime, root) {
+async function qualifyWindows(helper, runtime, root, detached) {
   const child = spawn(helper, [], {
     env: hermeticWindowsEnv(),
     stdio: ["pipe", "pipe", "pipe", "pipe", "pipe"],
@@ -134,7 +134,7 @@ async function qualifyWindows(helper, runtime, root) {
   const deadline = setTimeout(() => child.kill(), DEADLINE_MS);
   let completed = false;
   try {
-    child.stdio[3].write(launchPacket(runtime, root));
+    child.stdio[3].write(launchPacket(runtime, root, detached));
     const acknowledgement = await explained(
       "launch acknowledgement",
       response(responses),
@@ -142,19 +142,12 @@ async function qualifyWindows(helper, runtime, root) {
       stderr,
     );
     assert.deepEqual(acknowledgement, { kind: 1, payload: Buffer.alloc(0) });
-    const observation = await explained(
-      "fixture observation",
-      readBytes(output, 12),
-      exited,
-      stderr,
-    );
-    assert.equal(observation.subarray(0, 4).toString("ascii"), "KRQ1");
-    const [rootProcess, descendant] = [observation.readUInt32LE(4), observation.readUInt32LE(8)];
+    const pids = await observedLiveProcesses(output, exited, stderr);
     await writeSplitControlFrame(child.stdio[3]);
     const reap = await explained("reap response", response(responses), exited, stderr);
     assert.equal(reap.kind, 2);
     assert.equal(reap.payload.readUInt32LE(4), 0, "Job Object must report zero active processes");
-    await Promise.all([waitForExit(rootProcess), waitForExit(descendant)]);
+    await Promise.all(pids.map(waitForExit));
     assert.equal(await exited, 0);
     assert.equal(Buffer.concat(stderr).length, 0, "helper diagnostics must remain content-free");
     completed = true;
@@ -164,6 +157,18 @@ async function qualifyWindows(helper, runtime, root) {
     await exited.catch(() => undefined);
   }
   raiseControlPipeErrorIfIncomplete("qualifyWindows", controlPipeErrorState, completed);
+}
+
+async function observedLiveProcesses(output, exited, stderr) {
+  const observation = await explained("fixture observation", readBytes(output, 12), exited, stderr);
+  assert.equal(observation.subarray(0, 4).toString("ascii"), "KRQ1");
+  const pids = [observation.readUInt32LE(4), observation.readUInt32LE(8)];
+  assert.equal(new Set(pids).size, 2, "fixture must report two distinct processes");
+  for (const pid of pids) {
+    assert.ok(pid > 0, "fixture process id must be positive");
+    process.kill(pid, 0); // Positive control: both processes exist before cancellation.
+  }
+  return pids;
 }
 
 /** Writes a control frame in two chunks, so the supervisor's reader has to reassemble a header it
@@ -195,7 +200,7 @@ async function assertControlEofFinalization(exited, stderr) {
   );
 }
 
-async function assertControlEofFailsClosed(helper, runtime, root) {
+async function assertControlEofFailsClosed(helper, runtime, root, detached) {
   const child = spawn(helper, [], {
     env: hermeticWindowsEnv(),
     stdio: ["pipe", "pipe", "pipe", "pipe", "pipe"],
@@ -213,7 +218,7 @@ async function assertControlEofFailsClosed(helper, runtime, root) {
   const deadline = setTimeout(() => child.kill(), DEADLINE_MS);
   let completed = false;
   try {
-    child.stdio[3].write(launchPacket(runtime, root));
+    child.stdio[3].write(launchPacket(runtime, root, detached));
     const acknowledgement = await explained(
       "eof-probe acknowledgement",
       response(responses),
@@ -221,13 +226,7 @@ async function assertControlEofFailsClosed(helper, runtime, root) {
       stderr,
     );
     assert.equal(acknowledgement.kind, 1);
-    const observation = await explained(
-      "eof-probe observation",
-      readBytes(output, 12),
-      exited,
-      stderr,
-    );
-    const pids = [observation.readUInt32LE(4), observation.readUInt32LE(8)];
+    const pids = await observedLiveProcesses(output, exited, stderr);
     child.stdio[3].end();
     const closure = await explained("eof-probe closure", response(responses), exited, stderr);
     assert.equal(closure.kind, 3);
@@ -361,9 +360,16 @@ if (process.platform === "win32") {
     const runtime = join(root, "qualification-fixture.exe");
     if (suppliedHelper === undefined) await compile(source, helper);
     await compile(fixtureSource, runtime);
-    await qualifyWindows(helper, runtime, root);
-    await assertControlEofFailsClosed(helper, runtime, root);
+    for (const detached of [false, true]) {
+      await qualifyWindows(helper, runtime, root, detached);
+      await assertControlEofFailsClosed(helper, runtime, root, detached);
+      console.log(
+        `windows-runtime-supervisor: PASS (${detached ? "detached" : "ordinary"} descendant; cancellation and control EOF)`,
+      );
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+} else {
+  console.log("windows-runtime-supervisor: SKIP (source contracts only; requires native Windows)");
 }

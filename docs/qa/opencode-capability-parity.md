@@ -541,7 +541,10 @@ The order is by developer impact, not a schedule.
   and qualified there. All Windows-machine execution and qualification of the epic moved to #4068 by
   the owner's transfer of 2026-10-24 (its register names the source checkpoints per issue and
   destination W1–W15); a transferred checkpoint is closed by scope transfer, not by a Windows pass.
-  #4068 starts only after this pull request is merged into `dev`. Shared defects reproducible on
+  #4064 merged into `dev` on 2026-10-26. The task owner selected continued mapped-profile
+  qualification for Windows; the [Windows qualification record](opencode-windows-qualification.md)
+  records executed component proofs and the still-blocked production gateway and npm paths.
+  No W1–W15 group is closed by those component results. Shared defects reproducible on
   macOS or Linux, the other platforms, publication and the required exact-head checks stay with
   their original issues.
 - **B10. Real-binary controls for unexercised rows** (T14, T15, T16, S08). Add opt-in cases beside
