@@ -1732,6 +1732,7 @@
     "keiko-server/relationship-activity-broadcast",
     "keiko-server/relationship-handlers",
     "keiko-server/request-cancellation",
+    "keiko-server/request-deps-root",
     "keiko-server/retrieval/contextAssembly",
     "keiko-server/route-error",
     "keiko-server/route-outcome",
