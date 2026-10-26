@@ -274,7 +274,7 @@ describe("coding task import", () => {
         [
           { role: "user", text: `key ${API_KEY} and ${SECRET}` },
           { role: "assistant", text: "edited /Users/someone/private/notes.md" },
-          { role: "assistant", text: "safe‮txt.exe" },
+          { role: "assistant", text: "safe\u202Etxt.exe" },
           { role: "user", text: "plain" },
         ],
         { task: { id: "x", title: `Line one\n\nline ${"two ".repeat(60)}`, runIds: [] } },
@@ -286,7 +286,7 @@ describe("coding task import", () => {
     expect(contents.join("\n")).not.toContain(API_KEY);
     expect(contents.join("\n")).not.toContain(SECRET);
     expect(contents.join("\n")).not.toContain("/Users/someone");
-    expect(contents.join("\n")).not.toContain("‮");
+    expect(contents.join("\n")).not.toContain("\u202E");
     expect(contents[3]).toBe("plain");
     expect(task?.title).not.toContain("\n");
     expect(task?.title.length).toBeLessThanOrEqual(100);
