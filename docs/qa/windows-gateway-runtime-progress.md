@@ -134,6 +134,15 @@ booleans, never raw events, filters or OS-supplied strings. It temporarily enabl
 only in the disposable-runner experiment and restores the prior engine option on cleanup. This
 diagnostic cannot turn a failed socket assertion into a pass.
 
+[Run 40376126192](https://github.com/oscharko-dev/Keiko/actions/runs/40376126192) returned no
+matching recent WFP events while both inbound connections remained unavailable. Absence of an
+event is not proof that no OS policy blocked the connection. The fixture now also retains the real
+Winsock error beside its closed control-route failure and reads back the system utility's bounded
+filter summary. A non-privileged host-socket control checks successful TCP and a reserved,
+non-listening port in both families; refusal or the bounded timeout must prevent a connection
+independently of AppContainer. On the local host the reserved negative port times out (10060).
+No raw filter, provider name or event contents are printed by these diagnostics.
+
 Local protocol validation also ran the complete existing `runtime-gateway.test.ts`: 29 passed,
 eight failed on existing POSIX filesystem fixtures rejected by Windows path canonicalization, and
 25 macOS tests skipped. The new cross-language vector case passes individually. These baseline

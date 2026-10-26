@@ -21,7 +21,7 @@ DWORD gateway_diagnostics_start(const wchar_t *executable, struct gateway_diagno
 DWORD gateway_diagnostics_read(struct gateway_diagnostics *owner, PSID sid);
 DWORD gateway_diagnostics_stop(struct gateway_diagnostics *owner);
 
-static int listen_target(int family, struct socket_target *target) {
+static int bind_target(int family, struct socket_target *target) {
   memset(target, 0, sizeof(*target));
   target->listener = socket(family, SOCK_STREAM, IPPROTO_TCP);
   if (target->listener == INVALID_SOCKET) return 0;
@@ -37,21 +37,27 @@ static int listen_target(int family, struct socket_target *target) {
     target->size = sizeof(*address);
   }
   if (bind(target->listener, (SOCKADDR *)&target->address, target->size) != 0 ||
-      listen(target->listener, 8) != 0 ||
       getsockname(target->listener, (SOCKADDR *)&target->address, &target->size) != 0) return 0;
   target->port = family == AF_INET ? ntohs(((SOCKADDR_IN *)&target->address)->sin_port)
                                   : ntohs(((SOCKADDR_IN6 *)&target->address)->sin6_port);
   return 1;
 }
 
-static int connect_target(int family, UINT16 port) {
+static int listen_target(int family, struct socket_target *target) {
+  return bind_target(family, target) && listen(target->listener, 8) == 0;
+}
+
+static int connect_target(int family, UINT16 port, int *failure) {
   SOCKADDR_STORAGE storage = {0};
   int length, result, error = 0, error_size = sizeof(error);
   SOCKET client = socket(family, SOCK_STREAM, IPPROTO_TCP);
   u_long nonblocking = 1;
   fd_set write_set, error_set;
   struct timeval timeout = {2, 0};
-  if (client == INVALID_SOCKET) return 0;
+  if (client == INVALID_SOCKET) {
+    if (failure != NULL) *failure = WSAGetLastError();
+    return 0;
+  }
   if (family == AF_INET) {
     SOCKADDR_IN *address = (SOCKADDR_IN *)&storage;
     address->sin_family = AF_INET;
@@ -65,17 +71,45 @@ static int connect_target(int family, UINT16 port) {
     address->sin6_addr.u.Byte[15] = 1;
     length = sizeof(*address);
   }
-  if (ioctlsocket(client, FIONBIO, &nonblocking) != 0) { closesocket(client); return 0; }
-  result = connect(client, (SOCKADDR *)&storage, length);
-  if (result != 0 && WSAGetLastError() == WSAEWOULDBLOCK) {
+  if (ioctlsocket(client, FIONBIO, &nonblocking) != 0) {
+    error = WSAGetLastError();
+  } else if (connect(client, (SOCKADDR *)&storage, length) != 0) {
+    error = WSAGetLastError();
+  }
+  if (error == WSAEWOULDBLOCK) {
     FD_ZERO(&write_set); FD_ZERO(&error_set);
     FD_SET(client, &write_set); FD_SET(client, &error_set);
     result = select(0, NULL, &write_set, &error_set, &timeout);
-    result = result > 0 && FD_ISSET(client, &write_set) &&
-      getsockopt(client, SOL_SOCKET, SO_ERROR, (char *)&error, &error_size) == 0 && error == 0 ? 0 : -1;
+    if (result == 0) error = WSAETIMEDOUT;
+    else if (result < 0) error = WSAGetLastError();
+    else if (getsockopt(client, SOL_SOCKET, SO_ERROR, (char *)&error, &error_size) != 0)
+      error = WSAGetLastError();
   }
   closesocket(client);
-  return result == 0;
+  if (failure != NULL) *failure = error;
+  return error == 0;
+}
+
+int gateway_socket_client_tests(void) {
+  WSADATA data;
+  int ok = 1;
+  if (WSAStartup(MAKEWORD(2, 2), &data) != 0) return 1;
+  for (int family = AF_INET; family <= AF_INET6; family += AF_INET6 - AF_INET) {
+    struct socket_target server = {0}, refused = {0};
+    int success_error = -1, refused_error = -1;
+    server.listener = INVALID_SOCKET; refused.listener = INVALID_SOCKET;
+    /* Reserve the negative control's port without listening so it cannot be reassigned. */
+    if (!listen_target(family, &server) || !bind_target(family, &refused) ||
+        !connect_target(family, server.port, &success_error) || success_error != 0 ||
+        connect_target(family, refused.port, &refused_error) ||
+        (refused_error != WSAECONNREFUSED && refused_error != WSAETIMEDOUT)) ok = 0;
+    if (server.listener != INVALID_SOCKET) closesocket(server.listener);
+    if (refused.listener != INVALID_SOCKET) closesocket(refused.listener);
+    printf("gateway-host-socket-client: family=%d accepted=%d refused=%d\n",
+           family, success_error, refused_error);
+  }
+  WSACleanup();
+  return ok ? 0 : 1;
 }
 
 static int udp_send(int family, UINT16 port) {
@@ -116,7 +150,7 @@ int gateway_socket_leaf(int family, UINT16 gateway, UINT16 hostile) {
   WSADATA data;
   int result;
   if (!appcontainer_member() || WSAStartup(MAKEWORD(2, 2), &data) != 0) return 82;
-  result = (connect_target(family, gateway) ? 1 : 0) | (connect_target(family, hostile) ? 2 : 0) |
+  result = (connect_target(family, gateway, NULL) ? 1 : 0) | (connect_target(family, hostile, NULL) ? 2 : 0) |
            (udp_send(family, gateway) ? 4 : 0);
   WSACleanup();
   return result;
@@ -182,7 +216,7 @@ static DWORD control_route_probe(PSID sid, const wchar_t *executable, int family
   wchar_t *command = calloc(33000, sizeof(wchar_t));
   DWORD result = ERROR_INVALID_DATA, code = 99;
   UINT16 port = 0;
-  int initialized = 0;
+  int initialized = 0, socket_error = 0;
   if (command == NULL) return ERROR_OUTOFMEMORY;
   if (!CreatePipe(&output, &inherited[1], &inheritable, 0) ||
       !SetHandleInformation(output, HANDLE_FLAG_INHERIT, 0)) { result = GetLastError(); goto done; }
@@ -221,7 +255,7 @@ static DWORD control_route_probe(PSID sid, const wchar_t *executable, int family
       ResumeThread(child.hThread) == (DWORD)-1) { result = GetLastError(); goto done; }
   CloseHandle(inherited[1]); inherited[1] = NULL;
   result = read_server_port(output, family, &port);
-  if (result == ERROR_SUCCESS && !connect_target(family, port)) result = ERROR_CONNECTION_REFUSED;
+  if (result == ERROR_SUCCESS && !connect_target(family, port, &socket_error)) result = ERROR_CONNECTION_REFUSED;
   if (result == ERROR_SUCCESS && (WaitForSingleObject(child.hProcess, 5000) != WAIT_OBJECT_0 ||
       !GetExitCodeProcess(child.hProcess, &code) || code != 0)) result = ERROR_INVALID_DATA;
 done:
@@ -240,7 +274,8 @@ done:
   for (size_t index = 0; index < 3; index++)
     if (inherited[index] != NULL && inherited[index] != INVALID_HANDLE_VALUE) CloseHandle(inherited[index]);
   free(command);
-  printf("socket-host-control-route: phase=%s family=%d code=%lu child=%lu\n", phase, family, result, code);
+  printf("socket-host-control-route: phase=%s family=%d code=%lu child=%lu winsock=%d\n",
+         phase, family, result, code, socket_error);
   return result;
 }
 

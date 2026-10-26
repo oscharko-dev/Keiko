@@ -7,6 +7,7 @@
 #include <stdlib.h>
 
 int gateway_socket_proof(int inbound_experiment);
+int gateway_socket_client_tests(void);
 int gateway_socket_child(int family, UINT16 gateway, UINT16 hostile);
 int gateway_socket_leaf(int family, UINT16 gateway, UINT16 hostile);
 int gateway_socket_server(int family);
@@ -233,7 +234,7 @@ static int guarded_lifecycle_test(UINT16 family) {
 int main(int argc, char **argv) {
   if (argc == 3 && strcmp(argv[1], "--request-proof") == 0) return gateway_request_tests(argv[2]);
   if (argc == 1) {
-    if (validation_tests() != 0 || gateway_journal_tests() != 0) return 1;
+    if (validation_tests() != 0 || gateway_journal_tests() != 0 || gateway_socket_client_tests() != 0) return 1;
     return gateway_peer_tests() == 0 ? gateway_identity_tests() : 1;
   }
   if (argc == 4 && strcmp(argv[1], "--peer-client") == 0)

@@ -11,6 +11,57 @@ struct gateway_inbound_fixture {
   PROCESS_INFORMATION process;
 };
 
+static DWORD inbound_readback(PSID sid) {
+  HANDLE engine = NULL, enumeration = NULL;
+  DWORD result, closed;
+  UINT32 seen = 0, matched = 0;
+  result = FwpmEngineOpen0(NULL, RPC_C_AUTHN_WINNT, NULL, NULL, &engine);
+  if (result == ERROR_SUCCESS) result = FwpmFilterCreateEnumHandle0(engine, NULL, &enumeration);
+  for (unsigned page = 0; result == ERROR_SUCCESS && page < 32; page++) {
+    FWPM_FILTER0 **filters = NULL;
+    UINT32 count = 0;
+    result = FwpmFilterEnum0(engine, enumeration, 64, &filters, &count);
+    if (result == ERROR_SUCCESS) {
+      seen += count;
+      for (UINT32 index = 0; index < count; index++) {
+        const FWPM_FILTER0 *filter = filters[index];
+        int package = 0, loopback = 0;
+        /* These fixed names come from the trusted system utility, never from output interpolation.
+         * A localization mismatch is reported as zero matches, never treated as enforcement. */
+        if (filter->displayData.name == NULL ||
+            (wcscmp(filter->displayData.name, L"Allow AC loopback Inbound") != 0 &&
+             wcscmp(filter->displayData.name, L"Allow inbound AppContainer loopback") != 0)) continue;
+        matched++;
+        for (UINT32 item = 0; item < filter->numFilterConditions; item++) {
+          const FWPM_FILTER_CONDITION0 *condition = &filter->filterCondition[item];
+          if (IsEqualGUID(&condition->fieldKey, &FWPM_CONDITION_ALE_PACKAGE_ID) &&
+              condition->matchType == FWP_MATCH_EQUAL && condition->conditionValue.type == FWP_SID &&
+              condition->conditionValue.sid != NULL && EqualSid(condition->conditionValue.sid, sid)) package = 1;
+          if (IsEqualGUID(&condition->fieldKey, &FWPM_CONDITION_FLAGS) &&
+              condition->conditionValue.type == FWP_UINT32 &&
+              (condition->conditionValue.uint32 & FWP_CONDITION_FLAG_IS_LOOPBACK) != 0) loopback = 1;
+        }
+        printf("socket-inbound-filter: package=%d loopback=%d action=%lu flags=%lu conditions=%lu\n",
+               package, loopback, (unsigned long)filter->action.type, (unsigned long)filter->flags,
+               (unsigned long)filter->numFilterConditions);
+      }
+    }
+    if (filters != NULL) FwpmFreeMemory0((void **)&filters);
+    if (count < 64) break;
+  }
+  if (enumeration != NULL) {
+    closed = FwpmFilterDestroyEnumHandle0(engine, enumeration);
+    if (closed != ERROR_SUCCESS) result = closed;
+  }
+  if (engine != NULL) {
+    closed = FwpmEngineClose0(engine);
+    if (closed != ERROR_SUCCESS) result = closed;
+  }
+  printf("socket-inbound-readback: code=%lu matched=%lu bounded=%d\n",
+         result, (unsigned long)matched, seen == 2048);
+  return result;
+}
+
 DWORD gateway_inbound_stop(struct gateway_inbound_fixture *fixture) {
   DWORD result = ERROR_SUCCESS;
   if (fixture == NULL) return result;
@@ -76,6 +127,7 @@ DWORD gateway_inbound_start(PSID sid, struct gateway_inbound_fixture **owned) {
       ResumeThread(fixture->process.hThread) == (DWORD)-1) { result = GetLastError(); goto done; }
   /* Bounded diagnostic readiness window; socket behavior, not process existence, is the oracle. */
   if (WaitForSingleObject(fixture->process.hProcess, 1000) != WAIT_TIMEOUT) result = ERROR_NOT_READY;
+  if (result == ERROR_SUCCESS) result = inbound_readback(sid);
 done:
   if (attributes_ready) DeleteProcThreadAttributeList(startup.lpAttributeList);
   free(startup.lpAttributeList);
