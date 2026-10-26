@@ -1076,7 +1076,7 @@ const FUNCTIONAL_PROVIDER_ORIGIN = "https://provider.invalid";
  * scripted chat seam; the fixture provider answers it the way a working endpoint would. Any other
  * destination fails like an unreachable host, so the probe can never pass for a different provider.
  */
-function functionalReadinessFetch(input: string | URL | Request): Promise<Response> {
+export function functionalReadinessFetch(input: string | URL | Request): Promise<Response> {
   const url = new URL(input instanceof Request ? input.url : input);
   if (url.origin !== FUNCTIONAL_PROVIDER_ORIGIN)
     return Promise.reject(new TypeError("functional-readiness-destination-unknown"));

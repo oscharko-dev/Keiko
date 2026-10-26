@@ -45,6 +45,7 @@ import type { ProductionCodingRuntimeResolverInput } from "../../../packages/kei
 import {
   createFunctionalRuntimeResolver,
   functionalGatewayConfig,
+  functionalReadinessFetch,
   productionDiscoveryBffDeps,
   scriptedResponse,
   scriptedTranscript,
@@ -432,10 +433,10 @@ function scriptedModelDeps(
   // The PR-description application cache is scoped to that graph, so returning a spread clone
   // would retain the generated artifact in one cache and make the mounted HTTP review route read
   // an empty cache even though both resolve the same authority binding.
+  // The configuration and its runtime holder stay the composed server's own: the holder carries
+  // the readiness probe's fresh basic-chat evidence that admits a new run (ADR-0171). Replacing
+  // either with a copy leaves that evidence unreadable and the Workbench never enables Start.
   return Object.assign(deps, {
-    config: scriptedGatewayConfig(),
-    configPresent: true,
-    gatewayConfig: undefined,
     codingSidecarGatewayChatFactory: () => chat,
     codingSidecarGatewayChatStreamFactory: () =>
       async function* (request: GatewayRequest): AsyncIterable<GatewayStreamChunk> {
@@ -570,6 +571,11 @@ function scriptedUiHandlerDepsOptions(
     codingRuntimeDeploymentCeiling: "autonomous-delivery",
     codingRuntimeServerPrincipal: () => `${config.fixtureId}-operator`,
     autonomousDeliveryDeploymentCeiling: "autonomous-delivery",
+    // The fixture provider answers the readiness probes for the default journey configuration; a
+    // journey with its own provider (a local model mock) is probed over the real transport.
+    ...(config.gatewayConfig === undefined
+      ? { gatewayReadinessFetch: functionalReadinessFetch }
+      : {}),
     ...(chatResponse === undefined
       ? {}
       : {
@@ -619,14 +625,17 @@ function scriptedJourneyModelDeps(
   );
 }
 
-function writeChatGatewayConfig(
+/**
+ * The journey's provider profile as the composed server's own gateway configuration file, which
+ * `buildUiHandlerDeps` loads like any other, so its runtime holder owns the readiness evidence.
+ */
+function writeJourneyGatewayConfig(
   config: CodingRuntimeJourneyServerConfig,
   bffStateRoot: string,
 ): void {
-  if (config.chatResponse === undefined) return;
   writeFileSync(
     join(bffStateRoot, "ui-db", "keiko.config.json"),
-    `${JSON.stringify(config.gatewayConfig ?? functionalGatewayConfig(), null, 2)}\n`,
+    `${JSON.stringify(config.gatewayConfig ?? scriptedGatewayConfig(), null, 2)}\n`,
     { encoding: "utf8", mode: 0o600 },
   );
 }
@@ -654,7 +663,7 @@ function scriptedComposition(
   for (const dir of ["state", "ui-db", "evidence"]) {
     mkdirSync(join(bffStateRoot, dir), { recursive: true, mode: 0o700 });
   }
-  writeChatGatewayConfig(config, bffStateRoot);
+  writeJourneyGatewayConfig(config, bffStateRoot);
   const script = journeyScript(config, stateDir);
   const holder: { deps?: UiHandlerDeps } = {};
   const commit = commitFixtureFor(config, stateDir, services, holder);
