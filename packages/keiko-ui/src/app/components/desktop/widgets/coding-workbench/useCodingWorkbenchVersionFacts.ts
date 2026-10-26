@@ -70,7 +70,7 @@ function useLatestKeikoRelease(): LatestKeikoRelease {
 }
 
 /** The runtime that runs, as its verified release metadata names it, and what this build pins. */
-export function runtimeVersionFact(
+function runtimeVersionFact(
   version: CodingWorkbenchRuntimeVersion | undefined,
   t: CodingWorkbenchTranslate,
 ): VersionFact {
@@ -86,7 +86,7 @@ export function runtimeVersionFact(
   };
 }
 
-export function latestKeikoReleaseFact(
+function latestKeikoReleaseFact(
   latest: LatestKeikoRelease,
   t: CodingWorkbenchTranslate,
 ): VersionFact {

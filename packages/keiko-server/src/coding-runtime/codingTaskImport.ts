@@ -1,4 +1,3 @@
-import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import {
   CODING_TASK_EXPORT_SCHEMA,
@@ -17,11 +16,15 @@ import {
   redactAbsolutePaths,
   stripUnsafeFormatChars,
 } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
-import { contentFreeErrorClass } from "../diagnostics-log.js";
 import {
   codingHistoryChunkEnd,
   type CodingHistoryImportedMessage,
 } from "../store/codingHistory.js";
+import {
+  CODING_HISTORY_TRANSFER_FIELDS,
+  codingHistoryTransferLine,
+  type CodingHistoryTransferInput,
+} from "./codingHistoryTransferLog.js";
 
 /**
  * The user-controlled local import of one saved task (#3904 AC4, parity S05): the counterpart of the
@@ -68,29 +71,8 @@ const IMPORT_OPERATION = defineActivityLogOperation({
         "failed",
       ],
     },
-    conversationId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
-    messageCount: { type: "integer", dataClass: "count", required: false },
-    omittedMessageCount: { type: "integer", dataClass: "count", required: false },
     skippedMessageCount: { type: "integer", dataClass: "count", required: false },
-    redactedMessageCount: { type: "integer", dataClass: "count", required: false },
-    byteCount: { type: "integer", dataClass: "count", required: false },
-    errorClass: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
-    frames: {
-      type: "string-array",
-      dataClass: "safe-platform-class",
-      required: false,
-      maxLength: 512,
-      maxItems: 8,
-    },
-    causeChain: {
-      type: "string-array",
-      dataClass: "error-kind",
-      required: false,
-      maxLength: 128,
-      maxItems: 5,
-    },
-    completeness: { type: "string", dataClass: "completeness-state", required: true },
-    loss: { type: "string", dataClass: "loss-state", required: true },
+    ...CODING_HISTORY_TRANSFER_FIELDS,
   },
   causal: "correlation",
   lifecycle: "state",
@@ -122,17 +104,9 @@ const REFUSAL_ERROR_KIND: Readonly<Record<CodingTaskImportRefusal, ActivityLogEr
   failed: "internal",
 };
 
-interface ImportLogInput {
-  readonly correlationId: string;
+interface ImportLogInput extends CodingHistoryTransferInput<CodingTaskImportRefusal> {
   readonly source?: CodingTaskImportSource;
-  readonly reason?: CodingTaskImportRefusal;
-  readonly conversationId?: string;
-  readonly messageCount?: number;
-  readonly omittedMessageCount?: number;
   readonly skippedMessageCount?: number;
-  readonly redactedMessageCount?: number;
-  readonly byteCount?: number;
-  readonly error?: unknown;
 }
 
 function recordImport(
@@ -140,34 +114,13 @@ function recordImport(
   event: "requested" | "completed" | "refused",
   input: ImportLogInput,
 ): void {
-  const { correlationId, reason, error, ...fields } = input;
-  const refused = event === "refused";
-  const incomplete = refused || (input.omittedMessageCount ?? 0) > 0;
-  log?.write(
-    activityLogEvent(
-      IMPORT_OPERATION,
-      {
-        correlationId,
-        ...(refused
-          ? ({ level: "warn", errorKind: REFUSAL_ERROR_KIND[reason ?? "failed"] } as const)
-          : {}),
-      },
-      {
-        event,
-        ...fields,
-        ...(reason === undefined ? {} : { reason }),
-        ...(error === undefined
-          ? {}
-          : {
-              errorClass: contentFreeErrorClass(error),
-              frames: keikoStackFrames(error),
-              causeChain: causeChain(error),
-            }),
-        completeness: incomplete ? "partial" : "complete",
-        loss: incomplete ? "event-dropped" : "none",
-      },
-    ),
+  const line = codingHistoryTransferLine(
+    event,
+    input,
+    REFUSAL_ERROR_KIND,
+    (input.omittedMessageCount ?? 0) > 0,
   );
+  log?.write(activityLogEvent(IMPORT_OPERATION, line.envelope, line.fields));
 }
 
 /** One message of the file, before it is cleaned; `timestamp` is what the file claims. */

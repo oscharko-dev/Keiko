@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "a65fc918608d9f624e389d1f1fa0c665588cb9800c1c6625807dfea487f27b17",
+    "catalogDigest": "c79bcb9b2d7151bdd17302d415bc2d90ab52c218611a07eaa6ffb185c31d42b0",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -8102,6 +8102,11 @@
             "required": false,
             "values": ["unauthenticated", "unavailable", "invalid-format", "too-large", "failed"]
           },
+          "truncated": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": false
+          },
           "conversationId": {
             "type": "string",
             "dataClass": "opaque-id",
@@ -8126,11 +8131,6 @@
           "byteCount": {
             "type": "integer",
             "dataClass": "count",
-            "required": false
-          },
-          "truncated": {
-            "type": "boolean",
-            "dataClass": "closed-enum",
             "required": false
           },
           "errorClass": {
@@ -8160,8 +8160,8 @@
         "failureClasses": ["coding-history-persistence"],
         "proofIds": ["coding-runtime.history.export.emitted-line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/codingTaskExport.ts:32",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingTaskExport.ts:124"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/codingTaskExport.ts:35",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingTaskExport.ts:100"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -8208,6 +8208,11 @@
               "failed"
             ]
           },
+          "skippedMessageCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
           "conversationId": {
             "type": "string",
             "dataClass": "opaque-id",
@@ -8220,11 +8225,6 @@
             "required": false
           },
           "omittedMessageCount": {
-            "type": "integer",
-            "dataClass": "count",
-            "required": false
-          },
-          "skippedMessageCount": {
             "type": "integer",
             "dataClass": "count",
             "required": false
@@ -8266,8 +8266,8 @@
         "failureClasses": ["coding-history-persistence"],
         "proofIds": ["coding-runtime.history.import.emitted-line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/codingTaskImport.ts:36",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingTaskImport.ts:147"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/codingTaskImport.ts:39",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingTaskImport.ts:123"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -101193,13 +101193,13 @@
     {
       "op": "coding-runtime.history.export",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingTaskExport.ts:35",
+      "site": "packages/keiko-server/src/coding-runtime/codingTaskExport.ts:38",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.history.import",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingTaskImport.ts:39",
+      "site": "packages/keiko-server/src/coding-runtime/codingTaskImport.ts:42",
       "package": "keiko-server"
     },
     {

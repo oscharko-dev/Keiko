@@ -7743,6 +7743,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
         values: ["unauthenticated", "unavailable", "invalid-format", "too-large", "failed"],
       },
+      truncated: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
       conversationId: {
         type: "string",
         dataClass: "opaque-id",
@@ -7767,11 +7772,6 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       byteCount: {
         type: "integer",
         dataClass: "count",
-        required: false,
-      },
-      truncated: {
-        type: "boolean",
-        dataClass: "closed-enum",
         required: false,
       },
       errorClass: {
@@ -7847,6 +7847,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "failed",
         ],
       },
+      skippedMessageCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       conversationId: {
         type: "string",
         dataClass: "opaque-id",
@@ -7859,11 +7864,6 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
       omittedMessageCount: {
-        type: "integer",
-        dataClass: "count",
-        required: false,
-      },
-      skippedMessageCount: {
         type: "integer",
         dataClass: "count",
         required: false,
