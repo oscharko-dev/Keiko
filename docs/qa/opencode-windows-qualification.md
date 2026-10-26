@@ -163,6 +163,43 @@ outputs comparable. The six native Windows qualifier tests pass again after this
 The full macOS native-quality step on `c758a9e1e` also passed, including the previously failing
 coalesced-handoff case; no handoff production code or timeout was changed.
 
+The corrected-basename rebuilds on `abffb2e942c561da20932db4f05ab2343407ed90` both pass native
+qualification, but neither reproduces its existing approved binary hash:
+
+| Target      | Rebuilt SHA-256                                                    | Bytes  | Hosted evidence                                                                                     |
+| ----------- | ------------------------------------------------------------------ | ------ | --------------------------------------------------------------------------------------------------- |
+| macOS ARM64 | `a94c71bd6ca2bafdf00148e0ce585c082d88d9c0ad3230262cc315170c95621a` | 34,888 | [job 121844786821](https://github.com/oscharko-dev/Keiko/actions/runs/40399793207/job/121844786821) |
+| macOS x64   | `27c246af9d5967711d39e7fec2513af7495c52fe25d4d12e32fad8a3babd9eb8` | 18,160 | [job 121844786855](https://github.com/oscharko-dev/Keiko/actions/runs/40399793207/job/121844786855) |
+
+Both receipts bind source tree `29f5e262d3d268b9785a1a2ae7a2875107a5ce106f1cb7d655ec37e97bf0249b`.
+The retained approvals are `1c758e0c05e90daac97ed6615ed4f6cc0a324c0304b5ea0d40417fdeb759b6a7`
+and `2b722685dc1059a9eec75164e8f5157602a7802cf6a5b27da6f2a9fd78e07ac6`, respectively.
+Fetching their pinned source commit `330a71436d0d739bac2cfe7f8dd4c577f6344cf9` and comparing the
+whole helper directory confirms that only `test-protocol.mjs` changed; the productive C input is
+byte-identical. The build recipe is not identical: since that commit,
+`scripts/build-secure-workspace-read.mjs` added `-mmacosx-version-min=13.0` for both macOS targets.
+The existing calibration also records Darwin 27, while these rebuilds used macOS 15. The receipts
+do not isolate the contribution of compiler, SDK and deployment-target differences. Successful
+smoke execution does not by itself approve different binary bytes. The npm source-pin gate therefore
+remains unresolved pending the governed runtime-package rebuild/qualification/approval path;
+neither the binary trust anchors nor the source-consistency assertion were relaxed. The qualifier
+basename correction passes all six local tests, ESLint/Prettier and local Sonar (analysis task
+`e7d4bd5d-94b5-43ba-8cab-a941ef0168fd`).
+
+On the same head, all four portable secure-read jobs pass (Windows x64, Linux x64, macOS ARM64
+and x64), and the macOS cross-platform job passes. The
+[package coverage shard](https://github.com/oscharko-dev/Keiko/actions/runs/40399793207/job/121844427340)
+still fails only the source-pin assertion: **15,542 passed, one failed, 101 skipped**. These are
+head-specific component results, not a green required-check set or completed Windows acceptance.
+
+Before this PR can merge, the release owner must reconcile the source pin through the existing
+runtime-package builder and candidate qualification. Use the measured helper identities above as
+review inputs, verify the complete package candidates, and preserve compatibility with already
+published packages (the main package selects runtime version 1.1.4). Merely replacing the current
+binary pins can refuse an installed package; merely changing the source hash misstates the old
+binary's provenance. Issue #4068 W13 reserves release-approval changes to the owner release step.
+No package was published and no runtime approval was changed in this qualification increment.
+
 The follow-up diff passes typecheck/package-graph, targeted ESLint/Prettier and local documentation
 link checks. The required local Sonar gate was rerun against this diff and again reported no
 unresolved finding (analysis task `8a95a402-03d2-4345-863a-be1b9673b34a`).
