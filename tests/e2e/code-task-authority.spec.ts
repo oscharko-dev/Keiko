@@ -36,6 +36,10 @@ import {
   FUNCTIONAL_PLAN_STEP_READ,
   FUNCTIONAL_PLAN_STEP_VERIFY,
 } from "../../packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.functional/_support.js";
+import {
+  activityLogDirectory,
+  readActivityLogText,
+} from "../../scripts/lib/activity-log-files.mjs";
 import { FUNCTIONAL_REPOSITORY_SKILL_NAME } from "../../packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.functional/skillDiscoveryProof.js";
 
 import {
@@ -301,25 +305,53 @@ async function assertInheritedWorkspaceTrust(page: Page): Promise<void> {
 // #3897: the pinned runtime edits natively. The run's accepted supervised authority permits this
 // routine contained edit, so the runtime's own `edit` tool applies it to the managed worktree
 // without a per-action approval and no review surface is ever raised for it. The applied file in
-// the managed worktree is the proof; no Workbench changeset bridge is involved.
-async function proveRealBinaryEditApplied(page: Page): Promise<void> {
+// the managed worktree shows the write; the run's own allowed native `edit` decision binds it to
+// this run and to Keiko's native policy. No Workbench changeset bridge is involved.
+async function proveRealBinaryEditApplied(page: Page, runId: string): Promise<void> {
   if (!realBinaryJourney) return;
   await expect
     .poll(() => findManagedTargetFiles(managedRoot, 4).map((file) => readFileSync(file, "utf8")))
     .toEqual([AUTHORITY_EDITED_CONTENT]);
+  await expect.poll(() => allowedNativeDecisionCount(runId, "edit")).toBeGreaterThan(0);
   await expect(
     workbench(page).getByRole("region", { name: "Review the proposed file change" }),
   ).toHaveCount(0);
 }
 
+// The runtime asks Keiko's native policy before each of its own tool calls, and every decision is
+// persisted on the Activity Log under the run's id (`coding-runtime.native-policy.decided`, the
+// record the real-binary runner's native governance proof reads). The real-binary runner points
+// KEIKO_STATE_DIR at the journey's Activity Log, so its absence there is a broken lane, not a skip.
+function allowedNativeDecisionCount(runId: string, permission: string): number {
+  const keikoStateDir = process.env.KEIKO_STATE_DIR;
+  if (keikoStateDir === undefined || keikoStateDir.length === 0) {
+    throw new Error("The real-binary journey requires KEIKO_STATE_DIR for its Activity Log.");
+  }
+  return readActivityLogText(activityLogDirectory(keikoStateDir))
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as Record<string, unknown>)
+    .filter(
+      (record) =>
+        record.op === "coding-runtime.native-policy.decided" &&
+        record.correlationId === runId &&
+        record.permission === permission &&
+        record.effect === "allow" &&
+        record.outcome === "allowed",
+    ).length;
+}
+
+// #3901 (parity T10): the native journey verifies through the runtime's own `shell`, running the
+// fixture's project check. Keiko's governed verifier needs a container backend and fails closed
+// without one; the native check reaches the same verification owner, so the run's verification
+// summary is the same card either way.
 async function proveVerificationActivity(timeline: Locator): Promise<void> {
   if (realBinaryJourney) {
-    const verification = toolActivity(timeline, "keiko_verification");
+    const verification = toolActivity(timeline, "shell");
     await expect(verification).toHaveCount(1, { timeout: 90_000 });
     await expandCompletedActivity(timeline);
     await verification.locator("summary").click();
-    await expect(verification.getByText("keiko_verification", { exact: true })).toBeVisible();
-    return;
+    await expect(verification.getByText("shell", { exact: true })).toBeVisible();
   }
   await expect(timeline.getByText("Verification summarized", { exact: true })).toBeVisible({
     timeout: 90_000,
@@ -463,7 +495,7 @@ async function proveLiveActivityTimeline(
   if (!realBinaryJourney) await proveScriptedWorkspaceRead(timeline);
   await proveUnpairedClientReadsNoQuestionText(request, new URL(page.url()).origin, runId);
   await answerVisibleQuestion(page);
-  await proveRealBinaryEditApplied(page);
+  await proveRealBinaryEditApplied(page, runId);
   await openRealBinaryManualEditor(page);
   await proveVerificationActivity(timeline);
   await expect(
