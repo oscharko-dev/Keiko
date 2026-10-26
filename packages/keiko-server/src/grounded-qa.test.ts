@@ -2990,6 +2990,61 @@ describe("handleGroundedAsk", () => {
     },
   );
 
+  // A connected Git change is admitted (description authority) and answered by the ordinary Chat
+  // route, never by this one. A chat whose only scope is a Git change must therefore fail closed
+  // here, before retrieval or a model call, instead of running as an unadmitted grounded turn; the
+  // browser selects the ordinary route for it (`hasGroundedRouteScope` in useChatSession.ts).
+  it("refuses a grounded turn for a chat whose only scope is a Git change before any model call", async () => {
+    const { chatId } = await setupChatWithScope();
+    store.updateChat(chatId, {
+      connectedScope: null,
+      connectedScopes: null,
+      gitChangeScopes: [
+        {
+          kind: "git-change",
+          relationshipId: "rel-grounded-refusal",
+          remoteDigest: "d".repeat(64),
+          comparisonLabel: "main...feature/x",
+          baseRef: "main",
+          headRef: "feature/x",
+          baseSha: "a".repeat(40),
+          headSha: "b".repeat(40),
+          mergeBaseSha: "a".repeat(40),
+          snapshotDigest: "e".repeat(64),
+          fileCount: 1,
+          totalFiles: 1,
+          omittedFiles: 0,
+          truncatedFiles: 0,
+          descriptionStatus: "current",
+          connectedAtMs: 1,
+        },
+      ],
+    });
+    const seenRequests: GatewayRequest[] = [];
+    const scopedRunner = vi.fn(runner(emptyPack(), "must not run"));
+    const result = await handleGroundedAsk(
+      {
+        ...ctx(
+          JSON.stringify({
+            chatId,
+            content: "git-change-only-grounded-refusal",
+            clientTurnId: "git-change-only-grounded-refusal",
+            expectedGroundingScopeIdentity: deriveChatGroundingScopeIdentity(requiredChat(chatId)),
+          }),
+        ),
+        correlationId: "git-change-only-grounded-refusal",
+      },
+      deps(fakeModel("must not run", seenRequests)),
+      scopedRunner,
+    );
+    expect(result).toMatchObject({
+      status: 409,
+      body: { error: { code: "GROUNDING_SCOPE_CHANGED" } },
+    });
+    expect(scopedRunner).not.toHaveBeenCalled();
+    expect(seenRequests).toEqual([]);
+  });
+
   it("exports the scope admission cause through the real diagnostic sink and worker at full quota", async () => {
     const { chatId } = await setupChatWithScope();
     const expectedGroundingScopeIdentity = deriveChatGroundingScopeIdentity(requiredChat(chatId));
