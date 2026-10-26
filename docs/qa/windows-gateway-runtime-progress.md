@@ -52,6 +52,13 @@ These are tested building blocks, not an installed service or production launch 
   tests, real named-pipe positive/negative peer tests and exact AppContainer SID inheritance by a
   root and its descendant. The fixture reaps its tree, restores its executable ACL and deletes its
   temporary profile. This proves no network isolation.
+- `gateway_request.c` admits one bounded, versioned request per cryptographic challenge. Every
+  attempt consumes the challenge, including malformed input; replay and cross-connection reuse
+  fail. It recomputes the existing mapped `RuntimeGatewayConfinement` digest using the shared
+  native SHA-256 implementation. Shared IPv4/IPv6 vectors are checked against the actual
+  TypeScript producer and the native consumer, including truncated/oversized frames, altered
+  bindings, invalid run IDs and reserved bytes. Admission still requires authenticated IPC and
+  independent Job Object/installation checks; this component grants no OS authority by itself.
 
 A profile-free identity experiment did **not** launch on this Windows 11 host (`CreateProcessW`
 reported error 2). The same identity fixture passed with the documented temporary profile lifecycle.
@@ -78,6 +85,27 @@ another provider's deny must still win. This follows Microsoft's
 [provider installation contract](https://learn.microsoft.com/en-us/windows/win32/fwp/installing-a-provider)
 and [filter arbitration](https://learn.microsoft.com/en-us/windows/win32/fwp/filter-arbitration).
 The privileged socket proof still must pass; this readback repair alone proves no connectivity.
+
+[Run 40368260526](https://github.com/oscharko-dev/Keiko/actions/runs/40368260526), at
+`d3b758ada`, passed dynamic cleanup and durable-deny recovery for both address families. Its IPv4
+socket controls passed: both trees reached both loopback ports before filtering, then each root
+and descendant reached only its own gateway, and neither UDP receiver observed a datagram. The
+host-to-AppContainer control route failed with `ERROR_CONNECTION_REFUSED` (1225). IPv6 sockets were
+not reached in that run. The fixture now collects unfiltered and filtered control-route evidence
+for both families while retaining failure for any unavailable route.
+
+This is a production integration blocker: OpenCode's original HTTP server needs that inbound
+route. The pinned binary's `serve --stdio` mode still serves HTTP; stdin is its lifetime lease,
+not an alternate request transport. The upstream
+[pinned server process](https://github.com/anomalyco/opencode/blob/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/cli/src/server-process.ts)
+and Microsoft's separate [inbound/outbound loopback configuration](https://learn.microsoft.com/en-us/windows/security/operating-system-security/network-security/windows-firewall/troubleshooting-uwp-firewall)
+explain why outbound gateway proof alone is insufficient. No broad allow, hard-permit firewall
+override or unconfined fallback was added to make the control-route assertion pass.
+
+Local protocol validation also ran the complete existing `runtime-gateway.test.ts`: 29 passed,
+eight failed on existing POSIX filesystem fixtures rejected by Windows path canonicalization, and
+25 macOS tests skipped. The new cross-language vector case passes individually. These baseline
+failures remain visible; no suite-wide Windows skip or policy-validation relaxation was introduced.
 
 Platform contracts used by these components:
 [registry flush durability](https://learn.microsoft.com/en-us/windows/win32/api/winreg/nf-winreg-regflushkey),

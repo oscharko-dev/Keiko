@@ -16,6 +16,7 @@ int gateway_peer_client(const char *pipe_name, int anonymous);
 int gateway_identity_tests(void);
 int gateway_identity_child(const char *expected);
 int gateway_identity_leaf(const char *expected);
+int gateway_request_tests(const char *filename);
 
 static int validation_tests(void) {
   struct keiko_gateway_filters filters = {0};
@@ -230,6 +231,7 @@ static int guarded_lifecycle_test(UINT16 family) {
 }
 
 int main(int argc, char **argv) {
+  if (argc == 3 && strcmp(argv[1], "--request-proof") == 0) return gateway_request_tests(argv[2]);
   if (argc == 1) {
     if (validation_tests() != 0 || gateway_journal_tests() != 0) return 1;
     return gateway_peer_tests() == 0 ? gateway_identity_tests() : 1;

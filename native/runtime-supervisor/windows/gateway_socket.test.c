@@ -162,7 +162,7 @@ static DWORD read_server_port(HANDLE output, int family, UINT16 *port) {
   return ERROR_TIMEOUT;
 }
 
-static DWORD control_route_probe(PSID sid, const wchar_t *executable, int family) {
+static DWORD control_route_probe(PSID sid, const wchar_t *executable, int family, const char *phase) {
   STARTUPINFOEXW startup = {0};
   PROCESS_INFORMATION child = {0};
   SECURITY_CAPABILITIES capabilities = {0};
@@ -229,7 +229,7 @@ done:
   for (size_t index = 0; index < 3; index++)
     if (inherited[index] != NULL && inherited[index] != INVALID_HANDLE_VALUE) CloseHandle(inherited[index]);
   free(command);
-  printf("socket-host-control-route: family=%d code=%lu child=%lu\n", family, result, code);
+  printf("socket-host-control-route: phase=%s family=%d code=%lu child=%lu\n", phase, family, result, code);
   return result;
 }
 
@@ -386,7 +386,7 @@ int gateway_socket_proof(void) {
   PSID sid = NULL, peer_sid = NULL;
   PSID_AND_ATTRIBUTES previous = NULL, configured = NULL;
   PSECURITY_DESCRIPTOR original = NULL, intermediate = NULL;
-  DWORD count = 0, result = ERROR_SUCCESS, index;
+  DWORD count = 0, result = ERROR_SUCCESS, control_result = ERROR_SUCCESS, index;
   int exemption_changed = 0, profile_created = 0, peer_created = 0, sockets_started = 0, family;
   if (executable == NULL) return 1;
   firewall = LoadLibraryExW(L"FirewallAPI.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
@@ -457,6 +457,10 @@ int gateway_socket_proof(void) {
             (observed != 7 || udp_received(peer_udp) != 1 || udp_received(peer_udp) != 1))
           result = ERROR_INVALID_DATA;
       }
+      if (result == ERROR_SUCCESS) {
+        DWORD route = control_route_probe(sid, executable, family, "unfiltered");
+        if (route != ERROR_SUCCESS) control_result = route;
+      }
       if (result == ERROR_SUCCESS)
         result = keiko_gateway_filters_open(sid, (UINT16)family, gateway.port, &filters);
       if (result == ERROR_SUCCESS)
@@ -489,7 +493,10 @@ int gateway_socket_proof(void) {
           printf("socket-udp-reception: family=%d first=%d peer=%d expected=0\n", family, received, peer_received);
           if (received != 0 || peer_received != 0) result = ERROR_INVALID_DATA;
         }
-        if (result == ERROR_SUCCESS) result = control_route_probe(sid, executable, family);
+        if (result == ERROR_SUCCESS) {
+          DWORD route = control_route_probe(sid, executable, family, "filtered");
+          if (route != ERROR_SUCCESS) control_result = route;
+        }
       }
     }
     closed = keiko_gateway_filters_close(&filters);
@@ -502,6 +509,8 @@ int gateway_socket_proof(void) {
     if (peer_udp != INVALID_SOCKET) closesocket(peer_udp);
     if (result != ERROR_SUCCESS) break;
   }
+  /* Collect both families' evidence, but never convert an unavailable control route to success. */
+  if (result == ERROR_SUCCESS) result = control_result;
 done:
   if (exemption_changed) {
     DWORD restored = set_config.call(count, previous);
