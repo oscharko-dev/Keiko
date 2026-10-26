@@ -115,7 +115,7 @@ function hermeticWindowsEnv() {
   return { SystemRoot: process.env.SystemRoot ?? String.raw`C:\Windows` };
 }
 
-async function qualifyWindows(helper, runtime, root, detached) {
+async function withWindowsFixture(helper, runtime, root, detached, probeName, verify) {
   const child = spawn(helper, [], {
     env: hermeticWindowsEnv(),
     stdio: ["pipe", "pipe", "pipe", "pipe", "pipe"],
@@ -143,20 +143,33 @@ async function qualifyWindows(helper, runtime, root, detached) {
     );
     assert.deepEqual(acknowledgement, { kind: 1, payload: Buffer.alloc(0) });
     const pids = await observedLiveProcesses(output, exited, stderr);
-    await writeSplitControlFrame(child.stdio[3]);
-    const reap = await explained("reap response", response(responses), exited, stderr);
-    assert.equal(reap.kind, 2);
-    assert.equal(reap.payload.readUInt32LE(4), 0, "Job Object must report zero active processes");
-    await Promise.all(pids.map(waitForExit));
-    assert.equal(await exited, 0);
-    assert.equal(Buffer.concat(stderr).length, 0, "helper diagnostics must remain content-free");
+    await verify({ child, responses, exited, stderr, pids });
     completed = true;
   } finally {
     clearTimeout(deadline);
     if (!completed) child.kill("SIGKILL");
     await exited.catch(() => undefined);
   }
-  raiseControlPipeErrorIfIncomplete("qualifyWindows", controlPipeErrorState, completed);
+  raiseControlPipeErrorIfIncomplete(probeName, controlPipeErrorState, completed);
+}
+
+async function qualifyWindows(helper, runtime, root, detached) {
+  await withWindowsFixture(
+    helper,
+    runtime,
+    root,
+    detached,
+    "qualifyWindows",
+    async ({ child, responses, exited, stderr, pids }) => {
+      await writeSplitControlFrame(child.stdio[3]);
+      const reap = await explained("reap response", response(responses), exited, stderr);
+      assert.equal(reap.kind, 2);
+      assert.equal(reap.payload.readUInt32LE(4), 0, "Job Object must report zero active processes");
+      await Promise.all(pids.map(waitForExit));
+      assert.equal(await exited, 0);
+      assert.equal(Buffer.concat(stderr).length, 0, "helper diagnostics must remain content-free");
+    },
+  );
 }
 
 async function observedLiveProcesses(output, exited, stderr) {
@@ -201,47 +214,19 @@ async function assertControlEofFinalization(exited, stderr) {
 }
 
 async function assertControlEofFailsClosed(helper, runtime, root, detached) {
-  const child = spawn(helper, [], {
-    env: hermeticWindowsEnv(),
-    stdio: ["pipe", "pipe", "pipe", "pipe", "pipe"],
-  });
-  const exited = new Promise((resolveExit, reject) => {
-    child.once("error", reject);
-    child.once("close", resolveExit);
-  });
-  const stderr = [];
-  child.stderr.on("data", (chunk) => stderr.push(chunk));
-  const responses = streamReader(child.stdio[4]);
-  const output = streamReader(child.stdout);
-  const controlPipeErrorState = installControlPipeErrorGuard(child);
-  // KEIKO-0278: this probe had NO watchdog at all.
-  const deadline = setTimeout(() => child.kill(), DEADLINE_MS);
-  let completed = false;
-  try {
-    child.stdio[3].write(launchPacket(runtime, root, detached));
-    const acknowledgement = await explained(
-      "eof-probe acknowledgement",
-      response(responses),
-      exited,
-      stderr,
-    );
-    assert.equal(acknowledgement.kind, 1);
-    const pids = await observedLiveProcesses(output, exited, stderr);
-    child.stdio[3].end();
-    const closure = await explained("eof-probe closure", response(responses), exited, stderr);
-    assert.equal(closure.kind, 3);
-    await Promise.all(pids.map(waitForExit));
-    await assertControlEofFinalization(exited, stderr);
-    completed = true;
-  } finally {
-    clearTimeout(deadline);
-    if (!completed) child.kill("SIGKILL");
-    await exited.catch(() => undefined);
-  }
-  raiseControlPipeErrorIfIncomplete(
+  await withWindowsFixture(
+    helper,
+    runtime,
+    root,
+    detached,
     "assertControlEofFailsClosed",
-    controlPipeErrorState,
-    completed,
+    async ({ child, responses, exited, stderr, pids }) => {
+      child.stdio[3].end();
+      const closure = await explained("eof-probe closure", response(responses), exited, stderr);
+      assert.equal(closure.kind, 3);
+      await Promise.all(pids.map(waitForExit));
+      await assertControlEofFinalization(exited, stderr);
+    },
   );
 }
 
