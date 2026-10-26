@@ -431,3 +431,20 @@ instance. The admin API then reported `valid: true`, `expired: false` and 10,553
 seconds remaining. This resolves the expired-instance prerequisite for the current
 session without changing clocks or licensing code. Automated setup, complete
 synthetic fixtures and licensed read/write/model/browser qualification remain open.
+
+### Licensed basic fixture and Compose TLS checkpoint (#4082 AC3/AC5/AC6, partial)
+
+The digest-pinned Compose frontend now exposes only loopback HTTPS, mounts its server
+key/certificate read-only, and leaves the development CA key on the host. The basic
+seed checked license validity, created the non-admin PAT actor and three synthetic
+issues, and independently read all three back. Repeating the seed reused the PAT and
+issues without another creation. The production vault/adapter/verifier then passed
+trusted HTTPS, untrusted-CA refusal and revoked-admission refusal through this
+frontend. License checks remained valid before and after the group. Script lint,
+formatting and actual Compose startup passed.
+
+This supersedes the original expired-instance transport-only checkpoint for these
+three cases. Fixture administration currently uses the private loopback admin path;
+product qualification uses HTTPS. Required permission/custom-field/transition-screen,
+pagination, hostile-content and isolation classes, automated setup, product mutations,
+model/browser qualification and the remaining complete ACs are still pending.

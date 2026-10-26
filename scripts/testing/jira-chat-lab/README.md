@@ -1,44 +1,80 @@
 # Synthetic Jira HTTPS laboratory
 
-This harness is development/qualification tooling for #4081/#4082. It is not part of
-the product's MCP transport. It never opens a public listener or accepts arbitrary
-proxy destinations. Use only disposable synthetic Jira data and credentials.
+This development/qualification harness supports #4081/#4082. It uses synthetic
+data only and is independent of the product’s in-process MCP host. Jira Software
+Data Center 10.3.26, PostgreSQL 16 and the TLS frontend have digest-pinned images.
+Published ports bind loopback only; the frontend forwards to one fixed Jira service.
 
-Prerequisites: the repository's supported Node version, OpenSSL, built workspace
-packages, and Jira Software Data Center **10.3.26** on loopback HTTP port 18080.
-The current local fixture is under `$HOME/.local/share/keiko-jira-dev`; no state,
-tokens, passwords, license text or certificate keys belong in this repository.
+Prerequisites: Docker Compose, the repository’s supported Node version, OpenSSL
+and built workspace packages. State, passwords, PATs, license material and private
+keys stay outside the repository in a private session directory.
 
-Start a TLS frontend in a separate terminal:
+## Start an isolated session
+
+The directory’s parent must already exist. Initialization refuses an existing directory.
+
+```sh
+node scripts/testing/jira-chat-lab/session.mjs init "$HOME/.local/share/keiko-jira-4081-new"
+node scripts/testing/jira-chat-lab/session.mjs start "$HOME/.local/share/keiko-jira-4081-new"
+node scripts/testing/jira-chat-lab/session.mjs status "$HOME/.local/share/keiko-jira-4081-new"
+```
+
+Every initialization creates an independent Compose project, persistent volumes,
+three independent private passwords, and a private seven-day development CA and
+server certificate under `secrets/tls`. The frontend container receives only its
+server key/certificate as read-only mounts; the CA key remains on the host. System
+trust is unchanged. HTTP administration uses port 18081 (an optional final `init`
+argument changes it); product-path qualification uses HTTPS port 18443. Stop the
+previous session before starting another frontend on that port.
+
+Complete Jira’s normal first-run setup on the local HTTP administration port:
+private access mode, the published test license, administrator `keiko-admin` with
+the generated `secrets/admin-password`, and email delivery disabled. Setup automation
+is still pending; never paste secrets into tracked files, commands or evidence.
+
+The [published test license](https://developer.atlassian.com/platform/marketplace/timebomb-licenses-for-testing-server-apps/)
+has a three-hour lifetime. A healthy container or successful read does not establish
+write availability. Each qualification group requires license/read/write/HTTPS
+preflight and completion within the valid session. An expired group must be repeated
+in full. Never change clocks, licensing code or license data. A normal update did
+not renew the original expired laboratory; its data remains retained.
+
+`session.mjs stop <directory>` stops only that manifest’s containers and retains
+its volumes. This harness does not delete existing laboratories or renew licenses
+in the background. Use a new directory/project for an independent session.
+
+## Seed and inspect basic fixtures
+
+```sh
+node scripts/testing/jira-chat-lab/seed.mjs "$HOME/.local/share/keiko-jira-4081-new"
+```
+
+The seed verifies license validity before and after its work, creates the synthetic
+project and non-admin API actor, stores its PAT privately, creates three issues and
+reads each back. Repeated runs locate existing identities/issues and reuse the PAT.
+A marker prevents repeating PAT creation after a lost response. No failed mutation
+is automatically retried. Output contains case names, status codes and counts only.
+
+Restricted identities, independent permission grants, required-field and transition
+screen fixtures, pagination, hostile content and second-project isolation remain
+pending. This basic seed does not yet satisfy #4082 AC5.
+
+## Verify the actual product HTTPS path
 
 ```sh
 npm run build:packages
-node scripts/testing/jira-chat-lab/tls-front.mjs \
-  "$HOME/.local/share/keiko-jira-dev/tls-4081"
-```
-
-The frontend binds `127.0.0.1:18443` and forwards to the fixed loopback backend.
-Optional third/fourth command arguments select frontend/backend ports. It creates
-a private seven-day laboratory CA and server certificate; it does not modify any
-system trust store. Existing complete TLS material is reused; partial material is
-rejected. Stop the frontend with Ctrl-C. The generated keys remain in the private
-directory for subsequent runs.
-
-Run the real production custody/HTTP adapter/domain verifier:
-
-```sh
 node scripts/testing/jira-chat-lab/verify-connection.mjs \
-  "$HOME/.local/share/keiko-jira-dev/secrets/api-token" \
-  "$HOME/.local/share/keiko-jira-dev/tls-4081"
+  "$HOME/.local/share/keiko-jira-4081-new/secrets/api-token" \
+  "$HOME/.local/share/keiko-jira-4081-new/secrets/tls"
 ```
 
-The PAT file must be regular and private. The script uses a temporary encrypted
-vault, removes its temporary state afterwards, and emits only case names, closed
-outcomes and pass/fail. It checks trusted HTTPS, rejection without CA trust, and
-immediate refusal after operator admission is removed. It does not qualify model
-calls, Jira mutations, full fixture coverage or Chat UX.
+The PAT must be a private regular file. The harness invokes the production custody,
+encrypted vault, HTTP adapter and domain verifier, then removes its temporary vault.
+It checks trusted HTTPS, rejection without CA trust, and refusal after exact admission
+is removed. It emits only closed outcomes. It does not qualify mutations through the
+product, model calls, complete fixture coverage or Chat UX.
 
-The equivalent operator block is:
+The equivalent operator-owned configuration is:
 
 ```json
 {
@@ -49,44 +85,9 @@ The equivalent operator block is:
 ```
 
 Use the existing gateway `egress.caBundlePath` setting for the generated `ca.pem`.
-Do not turn off certificate validation or enable global private-network access.
+Never disable certificate validation or enable global private-network access.
 
-Before an acceptance session, verify the license, HTTPS, identity, read and write
-preflights. A healthy container or successful read does not prove a usable license.
-The [official test licenses](https://developer.atlassian.com/platform/marketplace/timebomb-licenses-for-testing-server-apps/)
-have bounded lifetimes. Treat an expired session as incomplete and rerun its entire
-scenario group under a valid license; never change clocks or licensing code.
-
-Current status (2026-10-26): all three transport probes pass against the existing
-Jira 10.3.26 fixture. Its license is expired, and a normal license update did not
-renew it. These are exploratory transport results, not completed live acceptance.
-Fresh-session provisioning, additional fixture classes and the full live lane
-remain outstanding in `docs/qa/jira-chat-pods-4081.md`.
-
-## Fresh isolated sessions
-
-The pinned Compose definition provides independent database/Jira volumes per
-session. Initialize a new private directory (its parent must already exist):
-
-```sh
-node scripts/testing/jira-chat-lab/session.mjs init "$HOME/.local/share/keiko-jira-4081-new"
-node scripts/testing/jira-chat-lab/session.mjs start "$HOME/.local/share/keiko-jira-4081-new"
-node scripts/testing/jira-chat-lab/session.mjs status "$HOME/.local/share/keiko-jira-4081-new"
-```
-
-Each initialization creates a distinct project name and three private, independently
-randomized passwords. The default HTTP port is 18081; an optional final `init`
-argument selects another unprivileged port. Complete Jira's normal first-run setup
-with the published test license, a `keiko-admin` account using the private
-`secrets/admin-password`, and email delivery disabled. Do not reuse an expired
-instance as an accepted test session. Automated setup and complete fixture seeding
-are the next increment.
-
-`stop` stops this manifest's containers and retains its volumes. The harness does
-not delete an existing instance or its data. Use a new directory/project for the
-next independent session. No background renewal or clock changes are performed.
-
-Fresh-session checkpoint: the isolated instance provisioned on 2026-10-26 accepted
-the official license through its normal setup flow. Its admin API reported
-`valid: true`, `expired: false` and 10,553 seconds remaining at the checkpoint.
-Full identity/read/write preflight and fixture coverage still need to run there.
+Checkpoint (2026-10-26): the fresh licensed instance passed basic PAT/non-admin,
+three-create/three-read and repeat-seed checks. All three production HTTPS probes
+then passed through the Compose frontend. The remaining acceptance work is recorded
+in `docs/qa/jira-chat-pods-4081.md`; no full criterion is closed by this checkpoint.

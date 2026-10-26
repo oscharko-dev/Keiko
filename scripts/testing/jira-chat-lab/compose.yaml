@@ -1,4 +1,21 @@
 services:
+  tls:
+    image: node:24.22.0-bookworm-slim@sha256:91acba91b842bec0bf7ea6f5e09c644c7ccad72c4996ed9616d861d1c7cd60d4
+    restart: "no"
+    depends_on:
+      jira: { condition: service_started }
+    ports: ["127.0.0.1:18443:18443"]
+    command: [node, /opt/tls-front.mjs, /tls, "18443", "8080", compose]
+    volumes:
+      - ./tls-front.mjs:/opt/tls-front.mjs:ro
+      - ${KEIKO_JIRA_LAB_STATE_DIR:?private laboratory state directory required}/secrets/tls/server.key:/tls/server.key:ro
+      - ${KEIKO_JIRA_LAB_STATE_DIR:?private laboratory state directory required}/secrets/tls/server.pem:/tls/server.pem:ro
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 128m
+    logging:
+      options: { max-size: 1m, max-file: "2" }
   database:
     image: library/postgres:16-bookworm@sha256:2b429c90204d3dc581371d2ce267ffb0aeeddf4968e176de5003037b4d0de8a9
     restart: "no"

@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { initializeLabTls } from "./tls-front.mjs";
 
 const [action, requestedDirectory, requestedPort = "18081"] = process.argv.slice(2);
 if (!requestedDirectory || !new Set(["init", "start", "stop", "status"]).has(action))
@@ -17,6 +18,7 @@ if (!Number.isSafeInteger(port) || port < 1024 || port > 65535)
 if (action === "init") {
   mkdirSync(directory, { mode: 0o700 });
   mkdirSync(join(directory, "secrets"), { mode: 0o700 });
+  initializeLabTls(join(directory, "secrets", "tls"));
   for (const name of ["database-password", "admin-password", "api-user-password"])
     writeFileSync(join(directory, "secrets", name), randomBytes(24).toString("base64url"), {
       mode: 0o600,
@@ -45,6 +47,7 @@ if (action === "init") {
   )
     throw new TypeError("Invalid synthetic session manifest");
   const command = action === "start" ? ["up", "-d"] : [action === "status" ? "ps" : "stop"];
+  if (action === "start") initializeLabTls(join(directory, "secrets", "tls"));
   execFileSync(
     "docker",
     [

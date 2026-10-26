@@ -1,4 +1,4 @@
-// Synthetic local Jira laboratory only. The fixed loopback backend never becomes a general proxy.
+// Synthetic local Jira laboratory only. The fixed Jira backend never becomes a general proxy.
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:https";
@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url";
 function requirePrivateFile(path) {
   const stat = lstatSync(path);
   if (!stat.isFile() || stat.isSymbolicLink()) throw new TypeError("Lab TLS file must be regular");
-  chmodSync(path, 0o600);
+  if ((stat.mode & 0o777) !== 0o600) chmodSync(path, 0o600);
 }
 
 export function initializeLabTls(directory) {
@@ -100,7 +100,7 @@ function portNumber(value) {
   return port;
 }
 
-function forward(req, res, backendPort) {
+function forward(req, res, backendPort, compose) {
   if (!req.url?.startsWith("/") || req.url.startsWith("//")) {
     res.writeHead(400).end();
     return;
@@ -114,7 +114,7 @@ function forward(req, res, backendPort) {
   delete headers["proxy-connection"];
   const upstream = request(
     {
-      hostname: "127.0.0.1",
+      hostname: compose ? "jira" : "127.0.0.1",
       port: backendPort,
       method: req.method,
       path: req.url,
@@ -142,11 +142,19 @@ function forward(req, res, backendPort) {
   req.pipe(upstream);
 }
 
-export function startLabTlsFront(directory, listenPort = 18443, backendPort = 18080) {
+export function startLabTlsFront(
+  directory,
+  listenPort = 18443,
+  backendPort = 18080,
+  compose = false,
+) {
   portNumber(listenPort);
   portNumber(backendPort);
   if (listenPort === backendPort) throw new TypeError("Lab frontend and backend ports must differ");
-  const files = initializeLabTls(directory);
+  const files = compose
+    ? { "server.key": join(directory, "server.key"), "server.pem": join(directory, "server.pem") }
+    : initializeLabTls(directory);
+  Object.values(files).forEach(requirePrivateFile);
   const server = createServer(
     {
       key: readFileSync(files["server.key"]),
@@ -158,12 +166,12 @@ export function startLabTlsFront(directory, listenPort = 18443, backendPort = 18
         res.writeHead(421).end();
         return;
       }
-      forward(req, res, backendPort);
+      forward(req, res, backendPort, compose);
     },
   );
   server.requestTimeout = 35_000;
   server.headersTimeout = 10_000;
-  server.listen(listenPort, "127.0.0.1");
+  server.listen(listenPort, compose ? "0.0.0.0" : "127.0.0.1");
   return server;
 }
 
@@ -177,6 +185,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     resolve(directory),
     portNumber(process.argv[3] ?? 18443),
     portNumber(process.argv[4] ?? 18080),
+    process.argv[5] === "compose",
   );
   server.on("listening", () =>
     console.log(JSON.stringify({ operation: "jira-lab-tls", ready: true })),
