@@ -161,6 +161,16 @@ a workload-neutral module is a cosmetic follow-up that requires its own ADR beca
 public package surface; until then, non-coding surfaces import the existing vocabulary. Semantics
 defined here and in ADR-0124/ADR-0125 take precedence over module naming.
 
+Ordinary Chat tool authority uses the additive `ChatToolAuthorityEnvelope` contract
+(Epic #4081, #4084). Its subject binds the server-owned actor digest, Chat, Jira Pod and
+binding/credential generations. It reuses the existing mode resolver, action-class vocabulary
+and budget dimensions; file-patch capacity is exactly zero. Only Jira connector scopes are
+admissible, with a narrower read-only scope supported. No synthetic repository, branch or
+Coding/Editor session is needed. Unknown fields, invalid generations, inconsistent effective
+modes and non-Jira capabilities fail structural validation with content-free diagnostics.
+This contract does not itself confer authority: registration, current-state revalidation,
+read consent, approvals and budget reservation remain server responsibilities.
+
 ### D6 — Forward rule for decision records
 
 New ADRs and epics for autonomy-capable surfaces must cite this record and document their

@@ -1399,3 +1399,18 @@ proof now ties all its binding effects and cancellation records to the HTTP resp
 proof similarly reconstructs both shared-Pod Chat updates under each credential update's request.
 All 122 custody/HTTP tests, 97 registry tests, package build, root typecheck, changed lint/format,
 staged semantic and ADR checks pass. Final acceptance and remaining lifecycle/Chat/UI work stay open.
+
+### Ordinary Chat authority contract checkpoint — #4084 AC2–AC4
+
+The additive `ChatToolAuthorityEnvelope` and subject validator bind actor digest, Chat,
+Pod, binding generation and credential generation without a repository, branch or Coding
+session. The existing mode ordering and budget dimensions remain authoritative. Only Jira
+scopes and connector/network action classes are accepted; file-patch capacity is zero.
+Malformed or widened inputs fail with closed diagnostics, including unknown hostile keys.
+
+The new contract suite initially failed to load because this capability was absent
+(`/tmp/keiko-4081-chat-authority-contract-before.log`). The new and retained Coding contract
+suites pass 198 tests after implementation. This is a structural contract checkpoint:
+registry admission, current-state enforcement, consent, approvals and the ordinary Chat
+execution loop are not yet implemented or accepted. Final assembled-package qualification
+remains pending and runs after the other gates because it prunes the live dependency tree.
