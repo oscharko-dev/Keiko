@@ -189,6 +189,7 @@ import {
   type DesktopChatStreamDoneEvent,
   type DesktopChatStreamErrorEvent,
   type DesktopChatStreamEventType,
+  type DesktopChatStreamReadConsentEvent,
   type GitChangeConnectResponse,
   type GitChangeRefreshResponse,
   type MarkdownSkillReference,
@@ -1503,6 +1504,7 @@ export type SseDonePayload = DesktopChatStreamDoneEvent["data"];
 export type SseErrorPayload = DesktopChatStreamErrorEvent["data"];
 
 export interface StreamHandlers {
+  readonly onReadConsent?: (payload: DesktopChatStreamReadConsentEvent["data"]) => void;
   readonly onStarted?: (correlationId: string) => void;
   readonly onToken: (text: string) => void;
   readonly onDone: (payload: SseDonePayload) => void;
@@ -1537,6 +1539,9 @@ function dispatchSseEvent(
   const candidate = { event: eventName, data: parsed };
   if (!isDesktopChatStreamEvent(candidate)) throw malformedDesktopChatStreamError();
   switch (candidate.event) {
+    case "tool-read-consent":
+      handlers.onReadConsent?.(candidate.data);
+      break;
     case "token": {
       handlers.onToken(candidate.data.text);
       break;
@@ -1660,6 +1665,7 @@ async function fetchWithinIdleLimit(
 function terminalAwareHandlers(handlers: StreamHandlers, onTerminal: () => void): StreamHandlers {
   return {
     onToken: handlers.onToken,
+    ...(handlers.onReadConsent === undefined ? {} : { onReadConsent: handlers.onReadConsent }),
     onDone: (payload): void => {
       onTerminal();
       handlers.onDone(payload);

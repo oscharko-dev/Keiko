@@ -88,7 +88,7 @@ export class JiraChatToolTurn {
   private readonly binder: ReturnType<typeof createCatalogToolBinder<JiraChatCatalogConsumer>>;
   private readonly continuation: GatewayMessage[] = [];
   private readonly callIds = new Set<string>();
-  private notify: ((message: ChatMessage) => Promise<void>) | undefined;
+  private notify: ((message: ChatMessage) => void | Promise<void>) | undefined;
   private uncertainBudget = false;
   private promptTokens = 0;
   private completionTokens = 0;
@@ -137,7 +137,7 @@ export class JiraChatToolTurn {
       },
     );
   }
-  public onTranscript(listener: (message: ChatMessage) => Promise<void>): void {
+  public onTranscript(listener: (message: ChatMessage) => void | Promise<void>): void {
     this.notify = listener;
   }
   private async publish(): Promise<void> {
@@ -313,6 +313,24 @@ export class JiraChatToolTurn {
     );
   }
 
+  public async *stream(
+    callStream: NonNullable<ModelPort["callStream"]>,
+    request: GatewayCallRequest,
+    signal: AbortSignal,
+  ): AsyncIterable<GatewayStreamChunk> {
+    const response = await this.call(
+      {
+        call: (round, abort): Promise<NormalizedResponse> =>
+          collectToolRound(callStream({ ...round, stream: true }, abort)),
+      },
+      request,
+      signal,
+    );
+    requireDispatch(!signal.aborted && !this.context.signal.aborted, "denied", "authority-invalid");
+    if (response.content.length > 0) yield { type: "delta", token: response.content };
+    yield { type: "done", response };
+  }
+
   private admitRound(modelId: string, signal: AbortSignal): void {
     this.counters.iterations++;
     requireDispatch(
@@ -372,6 +390,14 @@ export class JiraChatToolTurn {
     }
     requireDispatch(false, "denied", "budget-exhausted");
   }
+}
+
+/** Tool rounds are withheld until their complete result identifies final text or an invocation. */
+async function collectToolRound(
+  stream: AsyncIterable<GatewayStreamChunk>,
+): Promise<NormalizedResponse> {
+  for await (const chunk of stream) if (chunk.type === "done") return chunk.response;
+  throw new Error("Jira Chat provider stream ended without completion.");
 }
 
 export async function createJiraChatToolTurn(

@@ -1,8 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { ChatToolExchange, ChatToolTranscript } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { isChatToolReadGrantView } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ChatToolReadGrantView } from "@oscharko-dev/keiko-contracts";
 import type { ToolResultEnvelope } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import { CHAT_TOOL_READ_DISCLOSURE_VERSION } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
 import { canonicalise, deepRedactStrings, sha256Hex } from "@oscharko-dev/keiko-security";
 import {
   captureCatalogJson,
@@ -101,39 +101,6 @@ function validExchange(value: unknown): value is StoredExchange {
   else if (value.resultBinding !== undefined) return false;
   return true;
 }
-const GRANT_STATES = new Set(["pending", "granted", "rejected", "expired", "revoked"]);
-function validReadGrant(value: unknown): value is ChatToolReadGrantView {
-  if (
-    !object(value) ||
-    !exact(value, [
-      "kind",
-      "grantId",
-      "chatId",
-      "podId",
-      "bindingGeneration",
-      "authenticationGeneration",
-      "state",
-      "disclosureVersion",
-      "requestedAt",
-      "expiresAt",
-    ])
-  )
-    return false;
-  return (
-    value.kind === "jira-chat-read" &&
-    value.disclosureVersion === CHAT_TOOL_READ_DISCLOSURE_VERSION &&
-    [value.grantId, value.chatId, value.podId].every(
-      (id) => typeof id === "string" && /^[\w-]{1,128}$/.test(id),
-    ) &&
-    [value.bindingGeneration, value.authenticationGeneration].every(
-      (n) => Number.isSafeInteger(n) && Number(n) > 0,
-    ) &&
-    [value.requestedAt, value.expiresAt].every((n) => Number.isSafeInteger(n) && Number(n) >= 0) &&
-    Number(value.expiresAt) > Number(value.requestedAt) &&
-    typeof value.state === "string" &&
-    GRANT_STATES.has(value.state)
-  );
-}
 function validTranscript(value: unknown): value is StoredTranscript {
   if (!object(value) || !exact(value, ["schemaVersion", "exchanges", "readGrant"])) return false;
   if (
@@ -146,7 +113,7 @@ function validTranscript(value: unknown): value is StoredTranscript {
   return (
     new Set(value.exchanges.map((exchange: ChatToolExchange) => exchange.call.id)).size ===
       value.exchanges.length &&
-    (value.readGrant === undefined || validReadGrant(value.readGrant))
+    (value.readGrant === undefined || isChatToolReadGrantView(value.readGrant))
   );
 }
 export function decodeChatToolTranscript(json: string | null): ChatToolTranscript | undefined {
@@ -254,7 +221,8 @@ function redactUpdate(
             },
           }),
     };
-  if (!validReadGrant(update.grant)) throw invalidRequest("Invalid tool consent projection.");
+  if (!isChatToolReadGrantView(update.grant))
+    throw invalidRequest("Invalid tool consent projection.");
   return update;
 }
 

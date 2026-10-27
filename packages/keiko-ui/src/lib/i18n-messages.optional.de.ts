@@ -1,5 +1,22 @@
 import type { OptionalWidgetMessageCatalog } from "./i18n-messages.optional.en";
 export const OPTIONAL_WIDGET_DE_MESSAGES = {
+  "chat.jira.title": "Jira in diesem Chat lesen",
+  "chat.jira.disclosure":
+    "Jira-Inhalte werden an das ausgewählte Modell übermittelt und in diesem Gespräch gespeichert. Die Freigabe gilt für diesen Chat bis zum Ablauf oder einer Änderung der Verbindung oder Berechtigungen. Sie erlaubt keine Schreibaktionen.",
+  "chat.jira.approve": "Lesen erlauben",
+  "chat.jira.reject": "Nicht erlauben",
+  "chat.jira.working": "Entscheidung wird gespeichert…",
+  "chat.jira.failed": "Die Entscheidung konnte nicht gespeichert werden. Bitte erneut versuchen.",
+  "chat.jira.pending": "Wartet auf deine Freigabe",
+  "chat.jira.granted": "Lesen erlaubt",
+  "chat.jira.rejected": "Lesen abgelehnt",
+  "chat.jira.expired": "Freigabe abgelaufen",
+  "chat.jira.revoked": "Freigabe widerrufen",
+  "chat.jira.tool": "Jira-Aktion",
+  "chat.jira.complete": "Abgeschlossen",
+  "chat.jira.running": "Wird ausgeführt",
+  "chat.jira.unavailable": "Konnte nicht abgeschlossen werden",
+  "chat.jira.details": "Jira-Ergebnis ansehen",
   "browserApproval.title": "Diesen Browser verbinden",
   "browserApproval.close": "Schließen",
   "browserApproval.notice":

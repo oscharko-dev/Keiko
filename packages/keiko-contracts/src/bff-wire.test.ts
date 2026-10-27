@@ -1513,3 +1513,38 @@ describe("connected-context omission groups", () => {
     expect(JSON.stringify(summary)).not.toContain("private/canary");
   });
 });
+
+it("admits only the public Jira read-consent SSE projection", () => {
+  const grant = {
+    kind: "jira-chat-read",
+    grantId: "grant-1",
+    chatId: "chat-1",
+    podId: "pod-1",
+    bindingGeneration: 1,
+    authenticationGeneration: 1,
+    state: "pending",
+    disclosureVersion: "jira-chat-read-v1",
+    requestedAt: 1000,
+    expiresAt: 2000,
+  };
+  const frame = { event: "tool-read-consent", data: { messageId: "message-1", grant } };
+  expect(isDesktopChatStreamEvent(frame)).toBe(true);
+  expect(
+    isDesktopChatStreamEvent({
+      ...frame,
+      data: { ...frame.data, grant: { ...grant, actorDigest: "private" } },
+    }),
+  ).toBe(false);
+  expect(
+    isDesktopChatStreamEvent({
+      ...frame,
+      data: { ...frame.data, grant: { ...grant, disclosureVersion: "unknown" } },
+    }),
+  ).toBe(false);
+  expect(
+    isDesktopChatStreamEvent({
+      ...frame,
+      data: { ...frame.data, grant: { ...grant, expiresAt: 500 } },
+    }),
+  ).toBe(false);
+});

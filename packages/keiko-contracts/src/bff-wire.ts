@@ -1,6 +1,11 @@
 import type { NormalizedToolCall } from "./gateway.js";
 import type { ToolResultEnvelope } from "./governed-tool-catalog.js";
-import type { ChatToolReadGrantView } from "./chat-tool-authority.js";
+import { exactKeys } from "./contract-validation-primitives.js";
+import {
+  CHAT_TOOL_READ_DISCLOSURE_VERSION,
+  CHAT_TOOL_READ_GRANT_STATES,
+  type ChatToolReadGrantView,
+} from "./chat-tool-authority.js";
 // Wire-safe entity types for the BFF (Back-For-Frontend) layer (ADR-0013 D4). These types
 // travel over the HTTP wire between the BFF and the React UI. The DI port interfaces
 // (UiStore, UiStoreFactoryOptions) remain in src/ui/store/types.ts to avoid a contracts→ui
@@ -1023,7 +1028,13 @@ export interface DesktopChatSendResponse {
   readonly attachmentDeliveries?: readonly ConversationImageDeliveryWire[];
 }
 
-export const DESKTOP_CHAT_STREAM_EVENT_TYPES = ["token", "done", "error", "cancelled"] as const;
+export const DESKTOP_CHAT_STREAM_EVENT_TYPES = [
+  "token",
+  "done",
+  "error",
+  "cancelled",
+  "tool-read-consent",
+] as const;
 export type DesktopChatStreamEventType = (typeof DESKTOP_CHAT_STREAM_EVENT_TYPES)[number];
 
 export const DESKTOP_CHAT_STREAM_TERMINAL_EVENT_TYPES = ["done", "error", "cancelled"] as const;
@@ -1059,11 +1070,17 @@ export interface DesktopChatStreamCancelledEvent {
   readonly data: Readonly<Record<string, never>>;
 }
 
+export interface DesktopChatStreamReadConsentEvent {
+  readonly event: "tool-read-consent";
+  readonly data: { readonly messageId: string; readonly grant: ChatToolReadGrantView };
+}
+
 export type DesktopChatStreamEvent =
   | DesktopChatStreamTokenEvent
   | DesktopChatStreamDoneEvent
   | DesktopChatStreamErrorEvent
-  | DesktopChatStreamCancelledEvent;
+  | DesktopChatStreamCancelledEvent
+  | DesktopChatStreamReadConsentEvent;
 
 export type DesktopChatStreamTerminalEvent = Extract<
   DesktopChatStreamEvent,
@@ -1098,10 +1115,54 @@ function isDesktopChatDoneData(data: unknown): boolean {
   return isWireRecord(data) && isWireRecord(data.chat) && Array.isArray(data.messages);
 }
 
+export function isChatToolReadGrantView(value: unknown): value is ChatToolReadGrantView {
+  if (
+    !isWireRecord(value) ||
+    exactKeys(
+      value,
+      [
+        "kind",
+        "grantId",
+        "chatId",
+        "podId",
+        "bindingGeneration",
+        "authenticationGeneration",
+        "state",
+        "disclosureVersion",
+        "requestedAt",
+        "expiresAt",
+      ],
+      "readGrant",
+    ).length !== 0
+  )
+    return false;
+  return (
+    value.kind === "jira-chat-read" &&
+    value.disclosureVersion === CHAT_TOOL_READ_DISCLOSURE_VERSION &&
+    [value.grantId, value.chatId, value.podId].every(
+      (id) => typeof id === "string" && /^[\w-]{1,128}$/.test(id),
+    ) &&
+    [value.bindingGeneration, value.authenticationGeneration].every(
+      (n) => Number.isSafeInteger(n) && Number(n) > 0,
+    ) &&
+    [value.requestedAt, value.expiresAt].every((n) => Number.isSafeInteger(n) && Number(n) >= 0) &&
+    Number(value.expiresAt) > Number(value.requestedAt) &&
+    typeof value.state === "string" &&
+    CHAT_TOOL_READ_GRANT_STATES.some((state) => state === value.state)
+  );
+}
+
 export function isDesktopChatStreamEvent(value: unknown): value is DesktopChatStreamEvent {
   if (!isWireRecord(value)) return false;
   const { event, data } = value;
   switch (event) {
+    case "tool-read-consent":
+      return (
+        isWireRecord(data) &&
+        typeof data.messageId === "string" &&
+        /^[\w-]{1,128}$/.test(data.messageId) &&
+        isChatToolReadGrantView(data.grant)
+      );
     case "token":
       return isDesktopChatTokenData(data);
     case "error":

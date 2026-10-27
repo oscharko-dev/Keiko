@@ -1,5 +1,6 @@
 "use client";
 
+import { watchChatToolConsent } from "@/lib/chat-tool-consent";
 import { useChatDraft, useChatDraftUnloadGuard, type ChatDraftPersistence } from "./useChatDraft";
 import type { ChatCreationModelChoice } from "./chatCreationModelChoice";
 import {
@@ -4103,6 +4104,26 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           context.kind = "sse-error";
           context.correlationId = correlationId;
         },
+        onReadConsent: ({ messageId, grant }): void => {
+          if (isSupersededOrAborted(chatId, signal) || grant.chatId !== chatId) return;
+          setState((previous) => ({
+            ...previous,
+            messages: previous.messages.map((message) =>
+              message.id === optimisticId || message.id === messageId
+                ? {
+                    ...message,
+                    id: messageId,
+                    toolTranscript: {
+                      ...message.toolTranscript,
+                      schemaVersion: 1,
+                      exchanges: message.toolTranscript?.exchanges ?? [],
+                      readGrant: grant,
+                    },
+                  }
+                : message,
+            ),
+          }));
+        },
         onToken: (text: string): void => {
           if (isSupersededOrAborted(chatId, signal)) return;
           if (!statusFlippedToStreaming) {
@@ -4267,9 +4288,32 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   // Issue #152 Layer 3 — non-streaming fallback path (canStream=false or
   // StreamingUnavailableError pre-stream). Kept separate so sendUngrounded
   // stays within the 50-line function limit.
+  const watchBufferedConsent = useCallback((request: UngroundedSendRequest): (() => void) => {
+    const clientTurnId = request.clientTurnId;
+    return watchChatToolConsent(
+      request.chat,
+      request.project.path,
+      clientTurnId === undefined
+        ? undefined
+        : (): Promise<string> => canonicalTurnReferenceForClient(request.chat.id, clientTurnId),
+      request.signal,
+      (message) => {
+        if (isSupersededOrAborted(request.chat.id, request.signal)) return;
+        setState((previous) => ({
+          ...previous,
+          messages: replaceCanonicalTurnMessages(
+            previous.messages,
+            [request.optimisticId],
+            [message],
+          ),
+        }));
+      },
+    );
+  }, []);
   const sendUngroundedBuffered = useCallback(
     async (request: UngroundedSendRequest): Promise<SendAttemptOutcome> => {
       const { chat, optimisticId, signal } = request;
+      const stopConsentWatch = watchBufferedConsent(request);
       try {
         updateOwnedSendStatus(signal, "contacting");
         // Issue #148 — byte-bounded document context on the request body.
@@ -4306,9 +4350,11 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         const failure = canonicalTurnInProgressFailure(error_);
         if (failure.canonicalTurnInProgress !== true) setError(errorMessage(error_));
         return failure;
+      } finally {
+        stopConsentWatch();
       }
     },
-    [updateOwnedSendStatus],
+    [updateOwnedSendStatus, watchBufferedConsent],
   );
 
   const sendUngrounded = useCallback(

@@ -1,3 +1,4 @@
+import { handleSendDesktopChatStream } from "../chat-stream-handlers.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,6 +9,7 @@ import {
   parseGatewayConfig,
   toolCallingConfigurationFingerprint,
   type GatewayCallRequest,
+  type GatewayStreamChunk,
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
@@ -56,6 +58,7 @@ function configure(deps: UiHandlerDeps, verified = true): void {
         {
           ...createDefaultChatCapability(MODEL),
           toolCalling: true,
+          streaming: true,
           toolCallingVerification: {
             status: verified ? "verified" : "unverified",
             checkedAt: new Date().toISOString(),
@@ -132,7 +135,16 @@ function syntheticModel(calls: GatewayCallRequest[]): ModelPort {
       ],
     };
   };
-  return { call: (request): Promise<NormalizedResponse> => Promise.resolve(respond(request)) };
+  const call = (request: GatewayCallRequest): Promise<NormalizedResponse> =>
+    Promise.resolve(respond(request));
+  return { call, callStream: (request) => syntheticStream(call(request)) };
+}
+async function* syntheticStream(
+  response: Promise<NormalizedResponse>,
+): AsyncIterable<GatewayStreamChunk> {
+  const resolved = await response;
+  if (resolved.content.length > 0) yield { type: "delta", token: resolved.content };
+  yield { type: "done", response: resolved };
 }
 function fixture(): {
   deps: UiHandlerDeps;
@@ -188,17 +200,17 @@ function send(
   f: ReturnType<typeof fixture>,
   clientTurnId: string,
 ): ReturnType<typeof handleSendDesktopChat> {
-  return handleSendDesktopChat(
-    context({
-      chatId: f.chatId,
-      projectPath: f.root,
-      modelId: MODEL,
-      content: "List Jira projects",
-      clientTurnId,
-      memory: { enabled: false, budgetTokens: 0, mode: "governed-assist", context: {} },
-    }),
-    f.deps,
-  );
+  return handleSendDesktopChat(sendContext(f, clientTurnId), f.deps);
+}
+function sendContext(f: ReturnType<typeof fixture>, clientTurnId: string): RouteContext {
+  return context({
+    chatId: f.chatId,
+    projectPath: f.root,
+    modelId: MODEL,
+    content: "List Jira projects",
+    clientTurnId,
+    memory: { enabled: false, budgetTokens: 0, mode: "governed-assist", context: {} },
+  });
 }
 describe("normal buffered Chat through the owned Jira catalog", () => {
   it("waits for real consent, executes through MCP, persists pairs and reuses consent next turn", async () => {
@@ -250,5 +262,55 @@ describe("normal buffered Chat through the owned Jira catalog", () => {
     expect((await send(f, "unverified-model-turn")).status).toBe(200);
     expect(f.calls.every((request) => request.toolCatalog === undefined)).toBe(true);
     expect(f.requests()).toBe(0);
+  });
+});
+
+describe("normal streamed Chat through the owned Jira catalog", () => {
+  it("publishes consent while waiting, then completes through the same MCP loop", async () => {
+    const f = fixture();
+    const response = mockResponse({ captureBody: true });
+    const pending = handleSendDesktopChatStream(
+      { ...sendContext(f, "streamed-human-turn"), res: response.res },
+      f.deps,
+    );
+    void pending.catch(() => undefined);
+    await vi.waitFor(() => {
+      expect(response.body()).toContain("event: tool-read-consent");
+    });
+    expect(f.requests()).toBe(0);
+    const grant = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.readGrant;
+    if (grant === undefined) throw new Error("Missing streamed grant");
+    await handleDecideChatReadConsent(
+      context(
+        { decision: "approve", disclosureVersion: grant.disclosureVersion },
+        { approvalId: grant.grantId },
+      ),
+      f.deps,
+    );
+    await pending;
+    expect(f.requests()).toBe(1);
+    expect(response.body()).toContain('"state":"granted"');
+    expect(response.body()).toContain("event: done");
+    expect(response.body()).toContain("No Jira projects are visible.");
+    expect(response.body()).not.toContain("resultBinding");
+    expect(f.deps.store.listMessages(f.chatId)[0]?.turnState).toBe("completed");
+  });
+  it("cancels a disconnected consent wait without a Jira request", async () => {
+    const f = fixture();
+    const response = mockResponse({ captureBody: true });
+    const pending = handleSendDesktopChatStream(
+      { ...sendContext(f, "disconnected-human-turn"), res: response.res },
+      f.deps,
+    );
+    void pending.catch(() => undefined);
+    await vi.waitFor(() => {
+      expect(response.body()).toContain("event: tool-read-consent");
+    });
+    response.res.destroy();
+    await pending;
+    expect(f.requests()).toBe(0);
+    await vi.waitFor(() => {
+      expect(f.deps.store.listMessages(f.chatId)[0]?.turnState).toBe("cancelled");
+    });
   });
 });

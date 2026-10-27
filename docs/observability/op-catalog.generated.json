@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "b5f3376bcbb439baca0054daa000c24f8d622caaddec35c3816557d7315730f9",
+    "catalogDigest": "36f43fddb5eea2dbde7c7b8ecec1a8437a93ef4467705d8a83fe15b454321cdd",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -2665,7 +2665,7 @@
         "proofIds": ["chat.tool-transcript.updated.line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/store/chatToolTranscript.ts:38",
-        "emitterSites": ["packages/keiko-server/src/store/chatToolTranscript.ts:289"]
+        "emitterSites": ["packages/keiko-server/src/store/chatToolTranscript.ts:257"]
       },
       {
         "contractKind": "activity-log-operation",

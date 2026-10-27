@@ -1,4 +1,21 @@
 export const OPTIONAL_WIDGET_EN_MESSAGES = {
+  "chat.jira.title": "Read Jira in this chat",
+  "chat.jira.disclosure":
+    "Jira content will be sent to the selected model and retained in this conversation. Permission applies to this chat until it expires or the connection or authority changes. It does not grant permission to write.",
+  "chat.jira.approve": "Allow reading",
+  "chat.jira.reject": "Do not allow",
+  "chat.jira.working": "Saving your decision…",
+  "chat.jira.failed": "Your decision could not be saved. Try again.",
+  "chat.jira.pending": "Waiting for your permission",
+  "chat.jira.granted": "Reading allowed",
+  "chat.jira.rejected": "Reading declined",
+  "chat.jira.expired": "Permission expired",
+  "chat.jira.revoked": "Permission revoked",
+  "chat.jira.tool": "Jira action",
+  "chat.jira.complete": "Completed",
+  "chat.jira.running": "Running",
+  "chat.jira.unavailable": "Could not complete",
+  "chat.jira.details": "View Jira result",
   "browserApproval.title": "Connect this browser",
   "browserApproval.close": "Close",
   "browserApproval.notice":

@@ -15,6 +15,7 @@
 import { bffFetchJson } from "./http";
 import type {
   AtlassianConnectionVerificationStatus,
+  ChatToolReadGrantView,
   AtlassianCredentialMetadata,
   AtlassianCredentialCreateRequest,
   AtlassianConnectorActionExecutionResult,
@@ -283,3 +284,16 @@ export const defaultAtlassianConnectorsClient: AtlassianConnectorsClient = {
   approveAction: approveAtlassianConnectorAction,
   rejectAction: rejectAtlassianConnectorAction,
 };
+
+export async function decideJiraChatReadConsent(
+  grant: ChatToolReadGrantView,
+  decision: "approve" | "reject",
+): Promise<ChatToolReadGrantView> {
+  const response = await fetchJson<{
+    approval: ChatToolReadGrantView;
+  }>(approvalPath(grant.grantId, "/chat-read-consent"), {
+    method: "POST",
+    body: JSON.stringify({ decision, disclosureVersion: grant.disclosureVersion }),
+  });
+  return response.approval;
+}

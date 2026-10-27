@@ -1,5 +1,6 @@
 "use client";
 
+import { JiraChatTools } from "./JiraChatTools";
 import { ChatDraftStatus } from "./ChatDraftStatus";
 import { MissingEvidenceActions } from "./MissingEvidenceActions";
 import { mergeRepositoryFileScope, MAX_REPOSITORY_FOCUS_PATHS } from "./repositoryFileScope";
@@ -1151,6 +1152,7 @@ function ChatBubbleImpl({
           openRepositoryReference={openRepositoryReference}
           citationPreview={citationPreview}
         />
+        <JiraChatTools transcript={message.toolTranscript} />
         <ResponseVersionSelector
           message={message}
           selectedVersion={selectedResponseVersion}

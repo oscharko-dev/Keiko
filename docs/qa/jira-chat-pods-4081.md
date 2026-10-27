@@ -1815,3 +1815,29 @@ regressions covered acceptance, rejection/revocation, reset, cancellation and ex
 Package build, root typecheck and scoped lint pass. Streaming, concrete mutation
 approval/journal wiring, UI and real-model/browser qualification remain pending;
 this checkpoint does not complete an acceptance criterion.
+
+### SSE and visible read-consent checkpoint — #4091, #4086, #4084 / #4081
+
+The existing SSE Chat route now owns the same bounded Jira turn object and metered
+model port as buffered Chat. The provider uses its real streaming interface; tool
+round text is withheld until the completed round distinguishes an invocation from
+a final answer. The final answer then uses the existing redactor/chunk/backpressure
+writer. Context-window retries retain the same tool/usage counters and observations.
+Disconnect during a pending grant cancels the canonical turn and dispatches no Jira request.
+
+A bounded `tool-read-consent` SSE event carries only the public consent projection.
+Its shared closed validator rejects private authority fields and unknown disclosure
+versions. The ordinary Chat UI displays translated consent and result cards. Explicit
+approval/rejection calls the authenticated existing owner; failed requests never imply
+consent. Buffered sends observe only their scoped canonical turn digest through the
+existing GET messages API. Cancellation suppresses late reads; observation never
+replays the send POST. Fresh server revocation overrides an earlier local response.
+
+Checks: 356 wire, normal Chat/SSE, transcript and operation-registry tests pass;
+228 UI/API/observer tests pass, including keyboard activation, disclosure text,
+actual decision payload, rejection, failure, stale updates and an accessibility scan.
+Package build, root/UI typechecks, server lint and complete UI lint pass. Existing
+lint suppressions were preserved unchanged. The loaded local model
+`keiko-qwen36-35b-8bit:latest` passed the real production tool-calling probe; this alone
+is not a live Jira Chat or browser acceptance. Hub creation/binding, write approvals,
+live journeys and final full gates remain open.
