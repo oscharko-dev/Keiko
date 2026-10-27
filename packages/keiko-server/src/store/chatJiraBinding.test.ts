@@ -67,6 +67,29 @@ describe("Chat Jira binding persistence", () => {
     expect(store.findChatById(other.id)).toEqual(unrelated);
   });
 
+  it("invalidates valid bindings despite unrelated corrupt JSON without making the corrupt Chat readable", () => {
+    store.close();
+    const dbPath = join(project, "corrupt-lifecycle.db");
+    store = createNodeUiStore(dbPath);
+    store.createProject(project);
+    const valid = store.updateChat(
+      store.createChat(project, "Valid", "model").id,
+      { jiraPodId: FIRST },
+      target(),
+    );
+    const broken = store.createChat(project, "Corrupted", "model");
+    const raw = new DatabaseSync(dbPath);
+    try {
+      raw.prepare("UPDATE chats SET jira_state_json = ? WHERE id = ?").run("{invalid", broken.id);
+    } finally {
+      raw.close();
+    }
+    expect(store.invalidateJiraPod(FIRST, null)).toHaveLength(1);
+    expect(store.findChatById(valid.id)?.jiraPodBinding).toBeUndefined();
+    expect(store.findChatById(valid.id)?.jiraBindingGeneration).toBe(2);
+    expect(() => store.findChatById(broken.id)).toThrow("Stored Jira Chat state is invalid");
+  });
+
   it("rolls back every matching Chat when one generation cannot advance", () => {
     store.close();
     const dbPath = join(project, "lifecycle.db");

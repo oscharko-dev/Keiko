@@ -1380,3 +1380,11 @@ Focused results: 130 custody/credential-route/activity tests, 109 route-table/di
 and 97 registry tests pass. Package build, root typecheck, changed lint/format, semantic membership
 comparison and refreshed gate, ADR index and error-observability checks pass. Full aggregate,
 assembled-package, management UI and licensed live checks remain pending.
+
+### Corrupt-row isolation during invalidation — review of #4084 AC3 / #4085 AC4
+
+Confirmed the review finding that syntactically invalid JSON in an unrelated Chat could abort the
+bulk query. A guarded SQL expression now excludes unreadable JSON from binding selection. The
+regression fails before the change and passes afterward: a valid matching binding is revoked while
+the corrupt Chat remains unreadable and its state is not reset. All 70 binding/credential-route
+tests, package build, root typecheck, changed lint/format and staged semantic checks pass.

@@ -1232,7 +1232,7 @@ export function invalidateJiraPod(
   const changes = withImmediateTransaction(db, () => {
     const rows = db
       .prepare(
-        `SELECT ${SELECT_COLUMNS} FROM chats WHERE json_extract(jira_state_json, '$.binding.podId') = ?`,
+        `SELECT ${SELECT_COLUMNS} FROM chats WHERE CASE WHEN json_valid(jira_state_json) THEN json_extract(jira_state_json, '$.binding.podId') END = ?`,
       )
       .all(podId) as unknown as ChatRow[];
     const changed: { previous: Chat; current: Chat }[] = [];
