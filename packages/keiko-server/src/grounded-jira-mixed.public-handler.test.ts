@@ -339,6 +339,7 @@ type ProviderStep = "tool" | "write" | "answer" | "uncited" | "overflow";
 function provider(
   steps: readonly ProviderStep[] = ["tool", "answer"],
   answerContent?: string,
+  commentBody = "Synthetic approved comment",
 ): string[] {
   const requests: string[] = [];
   vi.stubGlobal(
@@ -382,7 +383,7 @@ function provider(
                             step === "write"
                               ? JSON.stringify({
                                   issueKey: "KEIKO-1",
-                                  body: "Synthetic approved comment",
+                                  body: commentBody,
                                 })
                               : "{}",
                         },
@@ -403,6 +404,44 @@ function provider(
   );
   return requests;
 }
+
+it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
+  "refuses an unreviewable secret-bearing write after additional store redaction in %s",
+  async (mode) => {
+    const secret = "synthetic-opaque-value-4081";
+    const f = runtime(true, { FIGMA_ACCESS_TOKEN: secret });
+    f.deps.store.updateChat(f.chatId, { toolMode: mode });
+    const update = f.deps.store.updateChatToolTranscript;
+    const boundBodies: unknown[] = [];
+    vi.spyOn(f.deps.store, "updateChatToolTranscript").mockImplementation((...args) => {
+      if (args[1].kind === "started") boundBodies.push(args[1].call.arguments.body);
+      update(...args);
+    });
+    const requests = provider(["write", "answer"], undefined, secret);
+    const response = await handleSendDesktopChat(
+      context({
+        chatId: f.chatId,
+        projectPath: f.root,
+        content: "Explain src/Feature.ts.",
+        modelId: MODEL,
+        clientTurnId: `redacted-action-${mode}`,
+      }),
+      f.deps,
+    );
+    expect(response.status).toBe(200);
+    // The real gateway bound this opaque value; only the broader store secret floor knows it.
+    expect(boundBodies).toEqual([secret]);
+    const messages = f.deps.store.listMessages(f.chatId);
+    const exchange = messages[0]?.toolTranscript?.exchanges[0];
+    expect(exchange?.call.arguments.body).not.toBe(secret);
+    expect(exchange?.result?.status).toBe("denied");
+    expect(exchange?.approval).toBeUndefined();
+    expect(f.jiraRequests).toEqual([]);
+    expect(requests).toHaveLength(2);
+    expect(JSON.stringify(messages)).not.toContain(secret);
+    expect(requests.join("\n")).not.toContain(secret);
+  },
+);
 
 describe("mixed Jira and Data scope through the production gateway", () => {
   it("retrieves the existing evidence pack before Jira orchestration and preserves separate citations", async () => {
@@ -468,6 +507,16 @@ it("charges physical overflow before a tool response and denies a third synthesi
   expect((response.body as GroundedAnswer).content).not.toContain("Jira tool result");
 });
 
+function assertPreservedWriteContinuation(requests: readonly string[]): void {
+  for (const request of requests.slice(1)) {
+    expect(request).toContain('"id":"mixed-call-1"');
+    expect(request).toContain('"tool_call_id":"mixed-call-1"');
+    expect(request).toContain('"role":"tool"');
+  }
+  expect(outputCap(requests[1] ?? "{}")).toBeLessThan(outputCap(requests[0] ?? "{}"));
+  expect(outputCap(requests[2] ?? "{}")).toBeLessThanOrEqual(outputCap(requests[1] ?? "{}"));
+}
+
 it.each(["answer", "uncited"] as const)(
   "retains a committed mutation across context overflow and bounded %s synthesis",
   async (answer) => {
@@ -495,13 +544,7 @@ it.each(["answer", "uncited"] as const)(
       mutationOutcome: "succeeded",
       result: { status: "completed" },
     });
-    for (const request of requests.slice(1)) {
-      expect(request).toContain('"id":"mixed-call-1"');
-      expect(request).toContain('"tool_call_id":"mixed-call-1"');
-      expect(request).toContain('"role":"tool"');
-    }
-    expect(outputCap(requests[1] ?? "{}")).toBeLessThan(outputCap(requests[0] ?? "{}"));
-    expect(outputCap(requests[2] ?? "{}")).toBeLessThanOrEqual(outputCap(requests[1] ?? "{}"));
+    assertPreservedWriteContinuation(requests);
     expect((await handleSendDesktopChat(context(body), f.deps)).status).toBe(200);
     expect(requests).toHaveLength(3);
     expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);

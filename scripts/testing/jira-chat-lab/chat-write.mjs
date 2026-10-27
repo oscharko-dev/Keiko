@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 import { basicAuth, labRequest, loadSession, requireLicense } from "./lab-client.mjs";
 import { jsonRequest, prepareChat, request, withLiveChat } from "./chat-read.mjs";
 import { privateJson } from "./private-json.mjs";
-export { privateJson };
+export { privateJson, payload as chatToolRequest };
 
 const MODES = new Set(["governed-assist", "supervised-coding", "autonomous-delivery"]);
 const CONNECTIONS = new Set(["dropdown", "keyboard", "drag"]);

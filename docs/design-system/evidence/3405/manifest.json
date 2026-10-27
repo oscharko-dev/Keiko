@@ -1,7 +1,7 @@
 {
   "issue": 3405,
   "epic": 3403,
-  "generatedAt": "2026-10-27T20:59:40.801Z",
+  "generatedAt": "2026-10-27T22:45:32.161Z",
   "command": "npm run test:e2e:update-ui-1696",
   "requiredCiCommand": "npm run test:e2e:update-ui-1696 -- --grep @real-bff-outage",
   "artifacts": [

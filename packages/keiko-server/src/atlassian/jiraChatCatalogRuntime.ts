@@ -23,6 +23,9 @@ import { executeJiraChatMutation } from "./jiraChatMutation.js";
 import { createJiraChatMutationIntent } from "./jiraChatMutationIntent.js";
 
 type ChatCatalog = ManagedProviderCatalog<JiraChatCatalogConsumer>;
+type CatalogInitialization =
+  | { readonly ok: true; readonly value: ChatCatalog }
+  | { readonly ok: false; readonly error: unknown };
 type MutationExecutor = JiraManagedMutationExecutor<CatalogHandlerContext<JiraChatCatalogConsumer>>;
 export interface JiraChatCatalogRuntime {
   readonly get: () => Promise<ChatCatalog>;
@@ -95,42 +98,64 @@ function connection(
   };
 }
 
+function initializeCatalog(
+  deps: UiHandlerDeps,
+  log: CatalogLifecycleLogPort,
+): Promise<ChatCatalog> {
+  return createManagedProviderCatalog<JiraChatCatalogConsumer>({
+    providers: [
+      createJiraProviderForCatalog(
+        (context) => connection(deps, context),
+        JIRA_CHAT_TOOLS,
+        mutationExecutor(deps),
+      ),
+    ],
+    routes: jiraChatCatalogRoutes(),
+    profile: { id: "jira-chat", version: 1 },
+    log,
+    correlationId: randomUUID(),
+    now: Date.now,
+  });
+}
+
 /** One lazy SDK host per application graph; neither Pods nor turns own protocol transports. */
 export function createJiraChatCatalogRuntime(
   deps: UiHandlerDeps,
   log: CatalogLifecycleLogPort,
 ): JiraChatCatalogRuntime {
-  let catalog: Promise<ChatCatalog> | undefined;
+  let catalog: Promise<CatalogInitialization> | undefined;
   let closing: Promise<void> | undefined;
   let closed = false;
   const requireOpen = (): void => {
     if (closed) throw new CatalogDispatchFault("failed", "handler-unavailable");
   };
+  const initialize = (): Promise<CatalogInitialization> => {
+    const pending: Promise<CatalogInitialization> = initializeCatalog(deps, log).then(
+      (value) => ({ ok: true, value }),
+      (error: unknown) => {
+        // The managed initializer logs and disposes this failed host. Preserve the error for
+        // its waiting callers, but never let that attempt poison a later initialization.
+        if (catalog === pending) catalog = undefined;
+        return { ok: false, error };
+      },
+    );
+    return pending;
+  };
   return {
     get: async (): Promise<ChatCatalog> => {
       requireOpen();
-      catalog ??= createManagedProviderCatalog<JiraChatCatalogConsumer>({
-        providers: [
-          createJiraProviderForCatalog(
-            (context) => connection(deps, context),
-            JIRA_CHAT_TOOLS,
-            mutationExecutor(deps),
-          ),
-        ],
-        routes: jiraChatCatalogRoutes(),
-        profile: { id: "jira-chat", version: 1 },
-        log,
-        correlationId: randomUUID(),
-        now: Date.now,
-      });
+      catalog ??= initialize();
       const admitted = await catalog;
+      if (!admitted.ok) throw admitted.error;
       requireOpen();
-      return admitted;
+      return admitted.value;
     },
     close: (): Promise<void> => {
       closed = true;
       closing ??=
-        catalog === undefined ? Promise.resolve() : catalog.then((value) => value.close());
+        catalog === undefined
+          ? Promise.resolve()
+          : catalog.then((admitted) => (admitted.ok ? admitted.value.close() : undefined));
       return closing;
     },
   };

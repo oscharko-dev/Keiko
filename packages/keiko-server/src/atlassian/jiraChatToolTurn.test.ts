@@ -25,6 +25,7 @@ import type {
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "../deps.js";
 import { handleSendDesktopChat } from "../chat-handlers.js";
+import { CatalogDispatchFault } from "../tool-catalog/catalogToolErrors.js";
 import { mockRequest, mockResponse } from "../_support.js";
 import type { RouteContext, RouteResult } from "../routes.js";
 import type {
@@ -738,3 +739,61 @@ it.each([false, true])(
     }
   },
 );
+
+type PreparationFailure = "tool-proof" | "authority" | "catalog";
+const PREPARATION_RESPONSES: Record<PreparationFailure, readonly [number, string]> = {
+  "tool-proof": [400, "CONVERSATION_UNAVAILABLE_MODEL"],
+  authority: [403, "FORBIDDEN"],
+  catalog: [503, "CHAT_TOOL_UNAVAILABLE"],
+};
+function preparationFailureDeps(
+  f: ReturnType<typeof fixture>,
+  failure: PreparationFailure,
+  record: NonNullable<UiHandlerDeps["diagnostics"]>["record"],
+): UiHandlerDeps {
+  const deps: UiHandlerDeps = {
+    ...f.deps,
+    diagnostics: { record },
+    ...(failure === "authority" ? { atlassianConnectorCredentials: undefined } : {}),
+  };
+  if (failure === "tool-proof") configure(deps, false);
+  if (failure === "catalog") {
+    if (deps.jiraChatCatalog === undefined) throw new Error("Missing catalog runtime");
+    vi.spyOn(deps.jiraChatCatalog, "get").mockRejectedValueOnce(
+      new CatalogDispatchFault("failed", "handler-unavailable", new Error("Bearer fixture-secret")),
+    );
+  }
+  return deps;
+}
+
+describe.each([false, true])("Jira preparation failure settlement (stream=%s)", (stream) => {
+  describe.each([false, true])("legacy request=%s", (legacy) => {
+    it.each(["tool-proof", "authority", "catalog"] as const)(
+      "settles %s rejection before any provider output",
+      async (failure) => {
+        const f = fixture();
+        const record = vi.fn();
+        const deps = preparationFailureDeps(f, failure, record);
+        const before = deps.store.findChatById(f.chatId);
+        const body = sendBody(f, "preparation-failed-turn");
+        if (legacy) delete body.clientTurnId;
+        const response = mockResponse({ captureBody: true });
+        const request = { ...context(body), res: response.res };
+        const result = stream
+          ? await handleSendDesktopChatStream(request, deps)
+          : await handleSendDesktopChat(request, deps);
+        const [status, code] = PREPARATION_RESPONSES[failure];
+        expect(result).toMatchObject({ status, body: { error: { code } } });
+        expect(f.calls).toHaveLength(0);
+        expect(f.requests()).toBe(0);
+        expect(response.body()).toBe("");
+        const messages = deps.store.listMessages(f.chatId);
+        expect(messages).toHaveLength(legacy ? 0 : 1);
+        if (legacy) expect(deps.store.findChatById(f.chatId)?.updatedAt).toBe(before?.updatedAt);
+        else expect(messages[0]?.turnState).toBe("failed");
+        expect(record).toHaveBeenCalledTimes(failure === "tool-proof" ? 0 : 1);
+        expect(JSON.stringify([result, record.mock.calls])).not.toContain("fixture-secret");
+      },
+    );
+  });
+});

@@ -1529,6 +1529,10 @@ it("admits only the public Jira read-consent SSE projection", () => {
   };
   const frame = { event: "tool-read-consent", data: { messageId: "message-1", grant } };
   expect(isDesktopChatStreamEvent(frame)).toBe(true);
+  expect.soft(isDesktopChatStreamEvent({ ...frame, authorityId: "private" })).toBe(false);
+  expect
+    .soft(isDesktopChatStreamEvent({ ...frame, data: { ...frame.data, actorDigest: "private" } }))
+    .toBe(false);
   expect(
     isDesktopChatStreamEvent({
       ...frame,

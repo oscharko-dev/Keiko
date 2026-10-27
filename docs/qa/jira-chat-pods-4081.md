@@ -2316,3 +2316,41 @@ The architecture aggregate now reaches the catalog performance gate: dependency 
 imports, contract boundaries and catalog conformance pass, but the inherited paired measurement
 does not bind the merged producer. It must be reproduced on the committed subject using the
 canonical paired-host procedure and unchanged thresholds; no evidence digest is hand-edited.
+
+### Review corrections and stable-artifact qualification
+
+For #4089/#4091, failed lazy catalog initialization now clears only its own cached attempt so a
+later request can retry. Shutdown handles failed initialization and pending admission without
+masking a real host-close error. Buffered Chat settles already-admitted legacy and canonical turns
+when preparation fails, restores legacy recency, and returns the existing bounded catalog error
+classification. The affected server suites pass 345 cases; the final catalog lifecycle suite
+passes five cases and reconstructs actual formatted events without claiming the MCP package's
+proof ownership. Canonical operation/failure generation has zero violations.
+
+For #4084/#4086, read-consent SSE events reject extra outer and data fields. The UI validates the
+grant contract and its exact Chat, Pod, generation, disclosure and time bindings before accepting
+it. Negative cases failed before the fixes. Contract and client suites pass 124 and 47 cases.
+History tests through the real disk store and production redactor preserve distinct Jira browse
+URLs for identical issue keys across Pod replacement and restart: 18 store and 14 UI cases pass.
+Both root and UI typechecks pass on the final fixture source.
+
+The proposed raw-argument digest bypass is deliberately rejected. The real gateway, store and
+binder path proves that additional configured-secret redaction of the saved proposal prevents
+both approval creation and Jira dispatch in all three modes. Thirty mixed-source tests pass,
+including these three regressions and the existing post-write overflow/repair budget controls.
+The invariant is documented at the existing write guard; no hidden payload acquires authority.
+
+For #4082/#4087, all lab browser imports use the declared Playwright dependency. A browser launch
+failure before any Jira request removes only the setup helper's own pending marker; uncertainty
+after launch and replaced markers remain protected. The setup, actor, restricted-case and
+failure-report tests pass 56 cases. Browser fault drivers share the existing lifecycle reporter;
+26 driver/fault tests and the semantic duplication gate pass with the unchanged 927-entry
+baseline. The new restricted and browser fault runners are ready, but their live groups are still
+pending. Their outcomes must not be inferred from harness tests.
+
+The canonical paired Linux catalog performance producer measured committed `d3fc521a9404` against
+`44cfbbb3e` in independent clean checkouts. The two evidence files and the budget's calibration
+reference were regenerated; all numerical ceilings remain unchanged. Architecture checking now
+passes. Current updater evidence was regenerated through its canonical nine-case browser suite;
+the three-case wired Jira browser lane also passes. These checks do not replace final aggregate,
+Sonar, current-head CI, Linux editor qualification or the remaining licensed live groups.

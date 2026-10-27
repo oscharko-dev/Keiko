@@ -8,6 +8,7 @@ import {
   approveAtlassianConnectorAction,
   cancelAtlassianConnectorSyncJob,
   createAtlassianConnector,
+  decideJiraChatReadConsent,
   decideJiraChatWriteApproval,
   getJiraChatWriteApproval,
   defaultAtlassianConnectorsClient,
@@ -298,3 +299,67 @@ it.each([null, {}, { state: "pending" }])(
     });
   },
 );
+
+const READ_GRANT = {
+  kind: "jira-chat-read",
+  grantId: "grant-1",
+  chatId: "chat-1",
+  podId: "11111111-1111-4111-8111-111111111111",
+  bindingGeneration: 1,
+  authenticationGeneration: 1,
+  state: "pending",
+  disclosureVersion: "jira-chat-read-v1",
+  requestedAt: 1000,
+  expiresAt: 2000,
+} as const;
+
+it.each(["approve", "reject"] as const)(
+  "validates the read-consent %s response against the exact requested scope",
+  async (decision) => {
+    const approval = { ...READ_GRANT, state: decision === "approve" ? "granted" : "rejected" };
+    const calls = stubFetch(200, { approval });
+    expect(await decideJiraChatReadConsent(READ_GRANT, decision)).toEqual(approval);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      url: "/api/atlassian-connectors/action-approvals/grant-1/chat-read-consent",
+      method: "POST",
+      headers: { "X-Keiko-CSRF": "1" },
+    });
+    expect(JSON.parse(calls[0]?.body ?? "null")).toEqual({
+      decision,
+      disclosureVersion: READ_GRANT.disclosureVersion,
+    });
+  },
+);
+
+it.each([
+  null,
+  {},
+  { ...READ_GRANT, state: "unexpected" },
+  { ...READ_GRANT, actorDigest: "private" },
+  { ...READ_GRANT, authorityId: "private" },
+  { ...READ_GRANT, expiresAt: 500 },
+])("rejects malformed or private read-consent projection %j", async (approval) => {
+  stubFetch(200, { approval });
+  await expect(decideJiraChatReadConsent(READ_GRANT, "approve")).rejects.toMatchObject({
+    code: "CONTRACT_VALIDATION_FAILED",
+    status: 502,
+  });
+});
+
+it.each([
+  { grantId: "another-grant" },
+  { chatId: "another-chat" },
+  { podId: "22222222-2222-4222-8222-222222222222" },
+  { bindingGeneration: 2 },
+  { authenticationGeneration: 2 },
+  { disclosureVersion: "unknown-disclosure" },
+  { requestedAt: 1001 },
+  { expiresAt: 2001 },
+])("rejects read-consent subject substitution %j", async (changed) => {
+  stubFetch(200, { approval: { ...READ_GRANT, state: "granted", ...changed } });
+  await expect(decideJiraChatReadConsent(READ_GRANT, "approve")).rejects.toMatchObject({
+    code: "CONTRACT_VALIDATION_FAILED",
+    status: 502,
+  });
+});

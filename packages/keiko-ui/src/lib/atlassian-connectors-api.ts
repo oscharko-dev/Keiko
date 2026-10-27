@@ -14,7 +14,10 @@
 
 import { bffFetchJson } from "./http";
 import { ApiError } from "./api";
-import { isChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  isChatToolReadGrantView,
+  isChatToolWriteApprovalView,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import type {
   AtlassianConnectionVerificationStatus,
   ChatToolReadGrantView,
@@ -312,17 +315,40 @@ export const defaultAtlassianConnectorsClient: AtlassianConnectorsClient = {
   rejectAction: rejectAtlassianConnectorAction,
 };
 
+function checkedReadGrant(value: unknown, expected: ChatToolReadGrantView): ChatToolReadGrantView {
+  const grant =
+    typeof value === "object" && value !== null && "approval" in value ? value.approval : undefined;
+  const identity = [
+    "grantId",
+    "chatId",
+    "podId",
+    "bindingGeneration",
+    "authenticationGeneration",
+    "disclosureVersion",
+    "requestedAt",
+    "expiresAt",
+  ] as const;
+  if (!isChatToolReadGrantView(grant) || !identity.every((key) => grant[key] === expected[key]))
+    throw new ApiError("CONTRACT_VALIDATION_FAILED", "Chat read consent response is invalid.", 502);
+  return grant;
+}
+
 export async function decideJiraChatReadConsent(
   grant: ChatToolReadGrantView,
   decision: "approve" | "reject",
 ): Promise<ChatToolReadGrantView> {
-  const response = await fetchJson<{
-    approval: ChatToolReadGrantView;
-  }>(approvalPath(grant.grantId, "/chat-read-consent"), {
-    method: "POST",
-    body: JSON.stringify({ decision, disclosureVersion: grant.disclosureVersion }),
-  });
-  return response.approval;
+  return bffFetchJson(
+    approvalPath(grant.grantId, "/chat-read-consent"),
+    {
+      method: "POST",
+      cache: "no-store",
+      body: JSON.stringify({ decision, disclosureVersion: grant.disclosureVersion }),
+    },
+    {
+      parseFailureMessage: friendlyParseFailureMessage,
+      validator: (_path, value) => checkedReadGrant(value, grant),
+    },
+  );
 }
 
 function checkedWriteApproval(value: unknown, approvalId: string): ChatToolWriteApprovalView {

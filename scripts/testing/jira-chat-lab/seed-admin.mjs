@@ -1,6 +1,5 @@
 // Supported Jira UI administration for fixture configuration absent from its public REST API.
-import { chromium } from "playwright";
-import { expect } from "@playwright/test";
+import { chromium, expect } from "@playwright/test";
 import { join } from "node:path";
 import { readPrivateFile } from "./lab-client.mjs";
 

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
-import { chromium } from "playwright";
+import { chromium } from "@playwright/test";
 import { readPrivateFile } from "./lab-client.mjs";
 
 function stage(value) {

@@ -50,7 +50,7 @@ async function sendPrompt(page, chat, prompt, onIntent) {
   const body = request.postDataJSON();
   assert.equal(body.content, prompt);
   assert.match(body.clientTurnId, /^[0-9a-f-]{36}$/u);
-  onIntent(body.clientTurnId);
+  onIntent(body.clientTurnId, body);
   stage("sent");
 }
 
@@ -126,7 +126,14 @@ export async function runBrowserWrite({
   beforeDecision,
   onIntent,
   observe,
+  expectedMutationOutcome = "succeeded",
+  afterCompleted,
 }) {
+  const outcomeLabel = new Map([
+    ["succeeded", "Jira change confirmed"],
+    ["unknown", "Jira outcome unknown"],
+  ]).get(expectedMutationOutcome);
+  assert.ok(outcomeLabel, "Unsupported browser qualification outcome");
   const { browser, page } = await openBrowser(chat);
   try {
     const fragment = encodeCodingAppSessionPairingFragment(
@@ -143,11 +150,12 @@ export async function runBrowserWrite({
     await decideRead(region, beforeDecision);
     const approvals = await decideWrite(region, intent, beforeDecision);
     const completed = await completedTurn(observe);
-    await region.getByText("Jira change confirmed", { exact: true }).waitFor();
+    await region.getByText(outcomeLabel, { exact: true }).waitFor();
     assert.equal(
       await region.getByRole("region", { name: "Review Jira action", exact: true }).count(),
       approvals,
     );
+    await afterCompleted?.({ page, region, completed });
     await recordBrowserProof(page, region, context, chat, intent, completed);
     stage("complete");
     return { completed, decisions: { grants: 1, approvals } };

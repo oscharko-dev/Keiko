@@ -4,6 +4,21 @@ import {
   runSerializedChatTurn,
 } from "../../../packages/keiko-server/dist/chat-turn-serializer.js";
 
+/** Report only known harness source coordinates; failed intents always remain private. */
+export function reportFaultQualificationFailure(qualification, error) {
+  const location =
+    error instanceof Error
+      ? (error.stack?.match(
+          /(?:restricted-(?:chat|cases|catalog-cases)|browser-(?:faults|write|connections|lifecycle)|chat-(?:faults|fault-transport|read|write|lifecycle)|private-json)\.mjs:\d+:\d+/gu,
+        ) ?? [])
+      : [];
+  console.error(JSON.stringify({ qualification, passed: false, location }));
+  console.error(
+    "Incomplete group retained privately. Reconcile read-only; never replay a pending mutation.",
+  );
+  process.exitCode = 1;
+}
+
 /** The existing serializer owns underlying work after the HTTP caller has cancelled. */
 export async function drainLiveChatTurns(deps, projectPath, timeoutMs = 15_000) {
   const chats = deps.store.listChats(projectPath);

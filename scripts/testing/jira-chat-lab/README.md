@@ -264,8 +264,13 @@ Chat disconnection; the workspace edge must disappear too. This optional group r
 ## Read through the actual browser
 
 Build the UI with `npm run build --workspace @oscharko-dev/keiko-ui`, complete a
-fresh license/read/write/HTTPS preflight, then append `--browser` to the command
-above. The harness serves that static build with its actual CSP, redeems a fresh
+fresh license/read/write/HTTPS preflight, then invoke the read harness explicitly:
+
+```sh
+node scripts/testing/jira-chat-lab/chat-read.mjs /absolute/private/session actual-model-id --browser
+```
+
+The harness serves that static build with its actual CSP, redeems a fresh
 launcher pairing fragment in Chromium, creates and verifies a Jira Pod in the
 Knowledge Hub, and connects an existing empty Chat through the visible controls.
 It sends a prompt through the normal composer, approves the read disclosure,
@@ -326,3 +331,74 @@ the replacement fails. On cancellation, the harness interrupts its Chat generati
 drains their existing serializer gates before disposing the database. A bounded drain
 failure preserves the open store and retained state; it must never be treated as a completed
 shutdown or as permission to replay the pending action.
+
+## Browser response-loss, reload and Regenerate qualification
+
+After building the current UI and completing the same licensed preflight, run this separate
+finite two-case group while holding exclusive laboratory mutation ownership:
+
+```sh
+node scripts/testing/jira-chat-lab/browser-faults.mjs "$HOME/.local/share/keiko-jira-4081-new" \
+  keiko-qwen36-35b-8bit
+```
+
+Both cases use the existing real browser Hub/workspace/Chat journey in Ask for approval:
+keyboard connection for lost-response observation, native drag/drop for committed-503
+observation. The exact comment preview and read disclosure require visible decisions.
+The same production HTTP decorator described above injects the journal-visible observation
+after one real Jira comment succeeds; it does not cut the browser socket or claim that Jira
+itself returned 503. The browser must display `Jira outcome unknown`.
+
+The harness captures and durably saves the browser's actual canonical request before either
+decision. It repeats that exact delivery from the browser, reloads the page, and presses
+the visible Regenerate button. Independent Jira reads after each stage must show exactly
+one matching comment and a total increase of one; canonical call/result identity and unknown
+outcome remain intact. The second-mutation guard must never fire. Screenshots and the full
+receipt remain in the private session, and every case checks license validity at completion.
+
+`browser-fault.pending.json` prevents accidental reruns after interruption. The same command
+with `--reconcile` only reads the independent comment state and writes a private reconciliation
+receipt; it never resumes a mutation. Preserve an unresolved marker and its retained product
+state. These cases supplement the fresh-process API matrix rather than claiming browser
+restart or physical network-failure coverage that they do not execute.
+
+## Restricted identities and required-field refusals through ordinary Chat
+
+After the current licensed HTTPS/read/write preflight, run these finite groups serially
+with the fault and browser groups stopped:
+
+```sh
+node scripts/testing/jira-chat-lab/restricted-chat.mjs /absolute/private/session actual-model-id buffered focused
+node scripts/testing/jira-chat-lab/restricted-chat.mjs /absolute/private/session actual-model-id stream focused
+node scripts/testing/jira-chat-lab/restricted-chat.mjs /absolute/private/session actual-model-id buffered catalog
+node scripts/testing/jira-chat-lab/restricted-chat.mjs /absolute/private/session actual-model-id stream catalog
+```
+
+The focused group contains eight cases: the isolated identity's visible and hidden issues,
+its denied comment, the editor identity's read/edit and denied transition, and omitted required
+create/transition fields under the API identity. The latter refusals require **zero attempted
+mutation dispatch**; an earlier validation refusal does not invent a write approval. The allowed
+editor edit must produce exactly one history increment. Independent administrator reads compare
+both projects and their comments, so a denied or locally refused case must leave remote state
+unchanged.
+
+The catalog group exercises all fourteen operations under the seeded `restricted` identity.
+An independent read-only oracle verifies its identity and lack of all five write permissions,
+and records the real read endpoint's bounded identifiers or native refusal. Empty permitted
+metadata remains distinct from a hidden/forbidden resource. Every operation then goes through
+the actual model, normal authenticated Chat API, first-read grant, catalog binder, MCP host and
+credential custody. The oracle is a reference, not a replacement for that product invocation.
+
+The audited mutation certainty rules remain unchanged: a known pre-dispatch refusal is
+`rejected`; a dispatched native 400/403/404 retains `unknown` plus its actual validation,
+permission or missing-resource diagnostic. An HTTP status alone does not prove that an effect
+was never committed. Independent zero-effect observations belong to this controlled fixture;
+they do not silently promote the product's outcome. Canonical duplicate delivery of each unknown
+turn must preserve user/call/result identities and cause no additional dispatch. The pass-through
+observer never alters an HTTP result and refuses an unexpected or repeated write before forwarding.
+
+Each group fsyncs a private intent before sending its model request and retains the product database
+and `restricted-chat.pending.json` after an incomplete group. Reconcile those records and Jira
+read-only before starting another group; never repeat a possibly executed mutation. A completed
+private receipt requires the entire selected group and the closing license check. Preparing or
+unit-testing this harness does not count as live acceptance.

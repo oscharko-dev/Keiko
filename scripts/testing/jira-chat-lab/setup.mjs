@@ -1,8 +1,9 @@
 // Drives Jira's normal first-run forms with private synthetic credentials. No licensing shortcuts.
 import { writeFileSync, unlinkSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { URL, pathToFileURL } from "node:url";
-import { chromium } from "playwright";
+import { chromium } from "@playwright/test";
 import { loadSession, readPrivateFile, requireLicense } from "./lab-client.mjs";
 
 function setupStage(stage) {
@@ -122,6 +123,35 @@ function loadTestLicense(path) {
   return value;
 }
 
+function removeUnstartedMarker(pending, marker) {
+  try {
+    if (readPrivateFile(pending) === marker) unlinkSync(pending);
+    else setupStage("different-pending-marker-retained");
+  } catch (error) {
+    if (error?.code !== "ENOENT") setupStage("pending-marker-cleanup-unavailable");
+  }
+}
+
+export async function launchSetupBrowser(
+  directory,
+  launch = () => chromium.launch({ headless: true }),
+) {
+  const pending = join(directory, "setup-pending");
+  const marker = JSON.stringify({
+    schemaVersion: 1,
+    owner: randomUUID(),
+    reconcileBeforeRetry: true,
+  });
+  writeFileSync(pending, `${marker}\n`, { mode: 0o600, flag: "wx" });
+  try {
+    return { browser: await launch(), pending };
+  } catch (error) {
+    // No page or form can have been opened by this helper before launch returns.
+    removeUnstartedMarker(pending, marker);
+    throw error;
+  }
+}
+
 async function main() {
   const [directory, licensePath] = process.argv.slice(2);
   if (!directory || !licensePath)
@@ -129,9 +159,7 @@ async function main() {
   const session = loadSession(directory);
   const license = loadTestLicense(licensePath);
   await waitForFirstRun(session);
-  const pending = join(session.directory, "setup-pending");
-  writeFileSync(pending, "Reconcile setup before retrying.\n", { mode: 0o600, flag: "wx" });
-  const browser = await chromium.launch({ headless: true });
+  const { browser, pending } = await launchSetupBrowser(session.directory);
   try {
     const page = await browser.newPage();
     page.setDefaultTimeout(30_000);

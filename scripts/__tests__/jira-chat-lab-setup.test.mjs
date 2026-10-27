@@ -1,6 +1,13 @@
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { URL } from "node:url";
-import { describe, expect, it, vi } from "vitest";
-import { applicationProperties, licenseSetup } from "../testing/jira-chat-lab/setup.mjs";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  applicationProperties,
+  licenseSetup,
+  launchSetupBrowser,
+} from "../testing/jira-chat-lab/setup.mjs";
 
 const origin = "http://127.0.0.1:18082";
 
@@ -113,4 +120,61 @@ describe("synthetic Jira normal license wizard", () => {
       expect(page.goto).not.toHaveBeenCalled();
     },
   );
+});
+
+const setupRoots = [];
+afterEach(() => {
+  for (const directory of setupRoots.splice(0)) rmSync(directory, { recursive: true, force: true });
+});
+function launchFixture() {
+  const directory = mkdtempSync(join(tmpdir(), "keiko-jira-setup-launch-"));
+  setupRoots.push(directory);
+  return { directory, pending: join(directory, "setup-pending") };
+}
+
+describe("synthetic Jira setup browser admission", () => {
+  it("removes only its own marker when launching fails before a form can be opened", async () => {
+    const f = launchFixture();
+    const launch = vi.fn(async () => {
+      throw new Error("Synthetic browser unavailable");
+    });
+    await expect(launchSetupBrowser(f.directory, launch)).rejects.toThrow(
+      "Synthetic browser unavailable",
+    );
+    expect(launch).toHaveBeenCalledTimes(1);
+    expect(existsSync(f.pending)).toBe(false);
+  });
+
+  it("never launches or removes another operation's existing pending marker", async () => {
+    const f = launchFixture();
+    writeFileSync(f.pending, "existing operation", { mode: 0o600 });
+    const launch = vi.fn();
+    await expect(launchSetupBrowser(f.directory, launch)).rejects.toThrow();
+    expect(launch).not.toHaveBeenCalled();
+    expect(readFileSync(f.pending, "utf8")).toBe("existing operation");
+  });
+
+  it("does not remove a replaced marker while handling its own launch failure", async () => {
+    const f = launchFixture();
+    const launch = async () => {
+      writeFileSync(f.pending, "other owner", { mode: 0o600 });
+      throw new Error("Synthetic browser unavailable");
+    };
+    await expect(launchSetupBrowser(f.directory, launch)).rejects.toThrow(
+      "Synthetic browser unavailable",
+    );
+    expect(readFileSync(f.pending, "utf8")).toBe("other owner");
+  });
+
+  it("retains the marker after browser admission when setup could have begun", async () => {
+    const f = launchFixture();
+    const browser = {
+      newPage: vi.fn(async () => {
+        throw new Error("Synthetic post-launch failure");
+      }),
+    };
+    const launched = await launchSetupBrowser(f.directory, async () => browser);
+    await expect(launched.browser.newPage()).rejects.toThrow("Synthetic post-launch failure");
+    expect(existsSync(launched.pending)).toBe(true);
+  });
 });

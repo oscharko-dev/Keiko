@@ -3,6 +3,7 @@ import {
   scopeJiraChatToolTurn,
   type JiraChatToolTurn,
 } from "./atlassian/jiraChatToolTurn.js";
+import { CatalogDispatchFault } from "./tool-catalog/catalogToolErrors.js";
 import {
   deploymentContentPolicy,
   currentContentRedactor,
@@ -523,6 +524,29 @@ class ChatPromptPreparationRejection extends Error {
   }
 }
 
+const CHAT_TOOL_ERROR_RESPONSES: Readonly<
+  Record<CatalogDispatchFault["status"], readonly [number, string, string]>
+> = {
+  denied: [403, "FORBIDDEN", "Chat tool access is not authorized for this turn."],
+  invalid: [400, "INVALID_REQUEST", "Chat tool preparation was refused."],
+  busy: [409, "CONFLICT", "Chat tools are busy. Wait for the active operation to finish."],
+  cancelled: [499, "REQUEST_CANCELLED", "Request was cancelled."],
+  timeout: [504, "CHAT_TOOL_TIMEOUT", "Chat tool preparation timed out."],
+  failed: [503, "CHAT_TOOL_UNAVAILABLE", "Chat tools are currently unavailable."],
+};
+
+function catalogDispatchErrorResult(
+  error: CatalogDispatchFault,
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+  emitDiagnostic: boolean,
+): RouteResult {
+  if (emitDiagnostic)
+    emitGatewayErrorDiagnostic(deps, error, correlationId, "POST /api/desktop/chat", "chat.send");
+  const [status, code, message] = CHAT_TOOL_ERROR_RESPONSES[error.status];
+  return { status, body: errorBody(code, message, correlationId) };
+}
+
 export function desktopChatErrorResult(
   error: unknown,
   deps: UiHandlerDeps,
@@ -541,6 +565,8 @@ export function desktopChatErrorResult(
   if (error instanceof GatewayError) {
     return gatewayErrorResult(error, deps, correlationId, emitDiagnostic);
   }
+  if (error instanceof CatalogDispatchFault)
+    return catalogDispatchErrorResult(error, deps, correlationId, emitDiagnostic);
   if (error instanceof UiStoreError) {
     return {
       status: error.status,
@@ -2572,6 +2598,27 @@ async function assembleAndCallBuffered(
   return { assembly, response };
 }
 
+async function prepareBufferedToolTurn(
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatSend,
+  admitted: AdmittedTurnHandle,
+  signal: AbortSignal,
+  correlationId: string | undefined,
+): Promise<JiraChatToolTurn | undefined> {
+  try {
+    return await createJiraChatToolTurn(
+      deps,
+      prepared.modelId,
+      admitted.userMessage,
+      signal,
+      correlationId,
+    );
+  } catch (error) {
+    settleFailedChatPromptPreparation(deps, prepared, admitted, error, signal);
+    throw error;
+  }
+}
+
 async function executeBufferedModelTurn(
   deps: UiHandlerDeps,
   prepared: PreparedDesktopChatSend,
@@ -2581,16 +2628,14 @@ async function executeBufferedModelTurn(
   correlationId: string | undefined,
   onAdmitted: () => void,
 ): Promise<RouteResult> {
-  const { modelId } = prepared;
   const outcome = admitBufferedModelTurn(deps, prepared, correlationId);
   if (isRouteResult(outcome)) return outcome;
   onAdmitted();
   const { admitted } = outcome;
-  const { userMessage } = admitted;
-  const toolTurn = await createJiraChatToolTurn(
+  const toolTurn = await prepareBufferedToolTurn(
     deps,
-    modelId,
-    userMessage,
+    prepared,
+    admitted,
     abortSignal,
     correlationId,
   );

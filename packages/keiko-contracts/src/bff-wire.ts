@@ -1224,6 +1224,7 @@ export function isChatToolReadGrantView(value: unknown): value is ChatToolReadGr
 function isDesktopChatReadConsentData(data: unknown): boolean {
   return (
     isWireRecord(data) &&
+    exactKeys(data, ["messageId", "grant"], "data").length === 0 &&
     typeof data.messageId === "string" &&
     /^[\w-]{1,128}$/u.test(data.messageId) &&
     isChatToolReadGrantView(data.grant)
@@ -1240,7 +1241,10 @@ export function isDesktopChatStreamEvent(value: unknown): value is DesktopChatSt
         isDesktopChatWriteApprovalData(data)
       );
     case "tool-read-consent":
-      return isDesktopChatReadConsentData(data);
+      return (
+        exactKeys(value, ["event", "data"], "event").length === 0 &&
+        isDesktopChatReadConsentData(data)
+      );
     case "token":
       return isDesktopChatTokenData(data);
     case "error":

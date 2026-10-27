@@ -17,6 +17,14 @@ import {
 import { previewChatScopeUpdate } from "./chats.js";
 import { deriveChatGroundingScopeIdentity } from "./chat-grounding-scope-identity.js";
 import { decodeJiraChatState } from "./chatJiraBinding.js";
+import { buildRedactor } from "../deps.js";
+import { createJiraProviderForCatalog } from "../atlassian/jiraManagedProvider.js";
+import {
+  createKeikoToolCatalog,
+  compileToolProjection,
+  type ToolResultValidationBinding,
+} from "@oscharko-dev/keiko-tool-catalog";
+import { NATIVE_TOOL_CATALOG_RUNTIME } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 
 const FIRST = "aa6262ad-003d-4440-8519-5b84c3f87f01";
 const SECOND = "aa6262ad-003d-4440-8519-5b84c3f87f02";
@@ -40,6 +48,109 @@ function target(
 } {
   return { verifiedJiraPod: { podId, authenticationGeneration } };
 }
+
+function historicalIssueBinding(): ToolResultValidationBinding {
+  const tool = createJiraProviderForCatalog(() => {
+    throw new Error("Persistence proof must not call Jira");
+  }, ["jira.issue"]).tools()[0];
+  if (tool === undefined) throw new Error("Missing real Jira issue descriptor");
+  const profile = { id: "historical-jira", version: 1 };
+  const catalog = createKeikoToolCatalog(
+    [
+      {
+        profile,
+        adapterDialect: { id: "gateway-json-schema", version: 1 },
+        adapterRuntime: NATIVE_TOOL_CATALOG_RUNTIME,
+        entries: [{ alias: "jira_issue", descriptor: tool.descriptor }],
+      },
+    ],
+    [],
+    { referenceTimeMs: 0 },
+  );
+  return {
+    descriptor: tool.descriptor,
+    projectionDigest: compileToolProjection(catalog, profile).projectionDigest,
+  };
+}
+
+function historicalIssue(chatId: string, podId: string, browseUrl: string): void {
+  const binding = historicalIssueBinding();
+  const data = {
+    outcome: "succeeded",
+    items: [{ id: "10001", key: "SYN-1", summary: "Synthetic", browseUrl }],
+  };
+  store.updateChat(chatId, { jiraPodId: podId }, target(podId));
+  const message = store.createMessage({
+    chatId,
+    role: "user",
+    content: "Read SYN-1",
+    timestamp: Date.now(),
+    runId: undefined,
+    workflowId: undefined,
+    workflowStatus: undefined,
+    shortResult: undefined,
+    taskType: undefined,
+  });
+  const call = { id: `call-${podId}`, name: "jira_issue", arguments: { issueKey: "SYN-1" } };
+  store.updateChatToolTranscript(message.id, { kind: "started", call }, "historical-source");
+  store.updateChatToolTranscript(
+    message.id,
+    {
+      kind: "settled",
+      callId: call.id,
+      binding,
+      result: {
+        schemaVersion: 1,
+        invocationId: `invocation-${podId}`,
+        toolRef: binding.descriptor.toolRef,
+        projectionDigest: binding.projectionDigest,
+        status: "completed",
+        reason: "none",
+        effectStarted: false,
+        page: { truncated: false, reason: "none", cursor: null },
+        data,
+        metrics: {
+          inputBytes: 10,
+          outputBytes: Buffer.byteLength(JSON.stringify(data)),
+          resultCount: 1,
+          durationMs: 1,
+        },
+      },
+    },
+    "historical-source",
+  );
+}
+
+it("keeps identical ticket keys attributable to their original Jira instance after replacement and reopen", () => {
+  store.close();
+  const dbPath = join(project, "historical-sources.db");
+  const redactor = buildRedactor({});
+  const options = { redactString: (value: string): string => String(redactor(value)) };
+  store = createNodeUiStore(dbPath, options);
+  store.createProject(project);
+  const chat = store.createChat(project, "Historical Jira sources", "model");
+  const urls = [
+    "https://10.1.2.3:8443/context/browse/SYN-1",
+    "https://10.4.5.6:8443/context/browse/SYN-1",
+  ] as const;
+  historicalIssue(chat.id, FIRST, urls[0]);
+  historicalIssue(chat.id, SECOND, urls[1]);
+  const messages = store.listMessages(chat.id);
+  expect(messages.map((message) => message.toolTranscript?.exchanges[0]?.result?.data)).toEqual(
+    urls.map((browseUrl) => ({
+      outcome: "succeeded",
+      items: [{ id: "10001", key: "SYN-1", summary: "Synthetic", browseUrl }],
+    })),
+  );
+  expect(store.findChatById(chat.id)?.jiraPodBinding).toMatchObject({
+    podId: SECOND,
+    bindingGeneration: 2,
+  });
+  store.close();
+  store = createNodeUiStore(dbPath, options);
+  expect(store.listMessages(chat.id)).toEqual(messages);
+  expect(store.findChatById(chat.id)?.jiraPodBinding?.podId).toBe(SECOND);
+});
 
 describe("Chat Jira binding persistence", () => {
   it("revokes all matching bindings atomically, retaining association across credential changes", () => {

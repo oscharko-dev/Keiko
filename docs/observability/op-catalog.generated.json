@@ -102320,7 +102320,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:1746",
+      "site": "packages/keiko-server/src/chat-handlers.ts:1772",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -102829,7 +102829,7 @@
     {
       "op": "chat.compaction.summary.scheduled",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:2097",
+      "site": "packages/keiko-server/src/chat-handlers.ts:2123",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -102902,7 +102902,7 @@
     {
       "op": "chat.memory.auto-maintenance",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:1441",
+      "site": "packages/keiko-server/src/chat-handlers.ts:1467",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

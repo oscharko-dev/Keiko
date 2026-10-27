@@ -9,6 +9,7 @@ import { jsonRequest, prepareChat, withLiveChat } from "./chat-read.mjs";
 import { privateJson, runObservedChatTurn } from "./chat-write.mjs";
 import { projectState } from "./catalog-state.mjs";
 import { observedMutationFault } from "./chat-fault-transport.mjs";
+import { reportFaultQualificationFailure } from "./chat-lifecycle.mjs";
 import {
   applyForeignPut,
   observeFaultEffect,
@@ -283,12 +284,4 @@ async function main() {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === SCRIPT)
-  await main().catch((error) => {
-    const location =
-      error instanceof Error ? (error.stack?.match(/chat-fault[^\s]*\.mjs:\d+:\d+/g) ?? []) : [];
-    console.error(JSON.stringify({ qualification: "jira-chat-faults", passed: false, location }));
-    console.error(
-      "Incomplete group retained privately. Reconcile read-only; never replay a pending mutation.",
-    );
-    process.exitCode = 1;
-  });
+  await main().catch((error) => reportFaultQualificationFailure("jira-chat-faults", error));

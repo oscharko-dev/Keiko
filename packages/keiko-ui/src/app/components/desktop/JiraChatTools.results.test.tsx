@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { JiraChatTools } from "./JiraChatTools";
@@ -20,6 +21,50 @@ function exchange(outcome: string | undefined): ChatToolExchange {
     },
   };
 }
+
+it("shows distinct saved Jira instance URLs for historical results with the same ticket key", async () => {
+  const urls = [
+    "https://10.1.2.3:8443/context/browse/SYN-1",
+    "https://10.4.5.6:8443/context/browse/SYN-1",
+  ];
+  const original = exchange("succeeded");
+  if (original.result?.status !== "completed") throw new Error("Missing completed test result");
+  const result = original.result;
+  render(
+    <>
+      {urls.map((browseUrl, index) => (
+        <JiraChatTools
+          key={browseUrl}
+          transcript={{
+            schemaVersion: 1,
+            exchanges: [
+              {
+                call: {
+                  id: `historical-${String(index)}`,
+                  name: "jira_issue",
+                  arguments: { issueKey: "SYN-1" },
+                },
+                result: {
+                  ...result,
+                  data: {
+                    outcome: "succeeded",
+                    items: [{ id: "10001", key: "SYN-1", summary: "Synthetic", browseUrl }],
+                  },
+                },
+              },
+            ],
+          }}
+          turnState="completed"
+        />
+      ))}
+    </>,
+  );
+  const user = userEvent.setup();
+  for (const disclosure of screen.getAllByText("View Jira result", { exact: true }))
+    await user.click(disclosure);
+  for (const url of urls)
+    expect(screen.getByText((content) => content.includes(url))).toBeVisible();
+});
 
 describe("Jira Chat mutation outcomes", () => {
   it.each([

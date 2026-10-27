@@ -215,6 +215,8 @@ export class JiraChatToolTurn {
           invocationId,
       );
   }
+  // A raw digest must not authorize bytes omitted by the store's broader secret redaction.
+  // The actual action must remain identical to its persisted, reviewable preview in every mode.
   private reviewableWrite(action: JiraChatCatalogAction): boolean {
     const exchange = this.writeExchange(action.actionId);
     return (
