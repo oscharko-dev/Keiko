@@ -3371,6 +3371,7 @@
     "codex-subscription",
     "coding-app-session-routes",
     "coding-app-session.channel.subscribe",
+    "coding-app-session.operation.state",
     "coding-app-session.session-channel.publish",
     "coding-context.handleCodingContextPack",
     "coding-context.handleCodingWorkbenchIssuePreview",
