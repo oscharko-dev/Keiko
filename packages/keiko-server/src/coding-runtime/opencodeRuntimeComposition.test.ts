@@ -4607,7 +4607,7 @@ describe("native tool evidence from the runtime's own history (#3873, #3897 revi
   }
 
   it.each([0, 7])(
-    "projects a native shell terminal state without run-only exit evidence (%i)",
+    "projects a native shell terminal state with its exit status, not its check evidence (%i)",
     async (exitCode) => {
       const projection = createCodingSafeActivityProjection({ now: () => Date.parse(RUNTIME_NOW) });
       projection.open({
@@ -4670,6 +4670,11 @@ describe("native tool evidence from the runtime's own history (#3873, #3897 revi
         expect(terminal).toBeDefined();
         expect(terminal).not.toHaveProperty("exitCode");
         expect(terminal).not.toHaveProperty("exitStatusCheck");
+        // The timeline says why a command failed: its exit status, a number, and nothing else.
+        expect(terminal).toHaveProperty("presentation", { exitCode });
+        const feed = projection.currentContent()?.feed;
+        const projected = feed?.availability === "available" ? feed.turns[0]?.tools[0] : undefined;
+        expect(projected?.presentation).toEqual({ exitCode });
       } finally {
         await fixture.stop();
       }

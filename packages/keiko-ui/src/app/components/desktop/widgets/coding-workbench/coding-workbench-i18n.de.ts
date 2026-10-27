@@ -669,7 +669,6 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.reasoningBoundary":
     "Diese Zeitleiste zeigt die Konversation, die Arbeitsaktivität und, wenn das Modell sie liefert, die Überlegungen des Modells. Diese Überlegungen sind ungeprüft und werden weder im Verlauf noch in Nachweisen gespeichert.",
   "codingWorkbench.activity.reasoning.title": "Überlegungen des Modells",
-  "codingWorkbench.activity.reasoning.badge": "Ungeprüft",
   "codingWorkbench.activity.reasoning.note":
     "Ungeprüfte Überlegungen des Modells: So ist es an diesen Schritt herangegangen. Sie können falsch sein; für dich zählen die Antwort und die Änderungen.",
   "codingWorkbench.activity.status.idle": "Noch kein Lauf gestartet.",
@@ -1277,6 +1276,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.editRefusal": "Edit abgelehnt: {reason}",
   "codingWorkbench.activity.affectedFile": "Betroffene Datei: {path}",
   "codingWorkbench.activity.serviceDuration": "Tool-Verarbeitung: {duration} ms",
+  "codingWorkbench.activity.exitCode": "Der Befehl wurde mit Code {code} beendet.",
+  "codingWorkbench.activity.toolError": "Das Tool hat dem Modell einen Fehler gemeldet.",
   "codingWorkbench.event.detailOutcome": "Ergebnis: {outcome}.",
   "codingWorkbench.event.detailUntrustedContent":
     "Nicht vertrauenswürdiger Inhalt: Die abgerufene Seite wurde als Daten isoliert, nicht als Anweisungen.",

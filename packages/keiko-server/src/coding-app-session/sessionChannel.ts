@@ -77,6 +77,8 @@ export interface CodingAppSessionChannel {
   /** Explicit request activity protects only idle expiry and returns idempotent cleanup. */
   readonly beginOperation: (cookieToken: string | undefined) => (() => void) | undefined;
   readonly inspectOperationCount?: (cookieToken: string | undefined) => number | undefined;
+  /** Non-touching: whether an issued session id still names a live session; never refreshes it. */
+  readonly isSessionLive?: (sessionId: string) => boolean;
   readonly subscribe: (
     cookieToken: string | undefined,
     listener: (snapshot: CodingAppSessionChannelSnapshot) => boolean,
@@ -86,6 +88,12 @@ export interface CodingAppSessionChannel {
     readonly live: boolean;
     readonly stop: () => void;
     readonly detach: () => void;
+    /**
+     * The transport found its peer not draining within its bound (KEIKO-0225): record one
+     * body-free `sse-backpressure` diagnostic and stop publishing, exactly as for a listener that
+     * answered `false`. A no-op once the subscription is no longer live.
+     */
+    readonly reportBackpressure: () => void;
   };
 }
 
@@ -206,6 +214,7 @@ function inactiveSubscription(
     live: false,
     stop: (): void => undefined,
     detach: (): void => undefined,
+    reportBackpressure: (): void => undefined,
   };
 }
 
@@ -243,14 +252,31 @@ function makeDetach(lifecycle: LiveLifecycle, admission: LiveSubscriptionAdmissi
   };
 }
 
+function makeBackpressureReport(
+  lifecycle: LiveLifecycle,
+  detach: () => void,
+  diagnostics: ServerDiagnosticSink | undefined,
+  correlationId: string,
+  deferAdmissionReleaseOnBackpressure: boolean,
+): () => void {
+  return (): void => {
+    if (!lifecycle.active) return;
+    // KEIKO-0225: previously a stream that dropped for backpressure detached with nothing to
+    // diagnose. Report it once so operators can see a stream that dropped.
+    recordSseFailure(diagnostics, correlationId, "sse-backpressure", "Error");
+    if (deferAdmissionReleaseOnBackpressure) stopLiveSource(lifecycle);
+    else detach();
+  };
+}
+
 function makePublish(
   lifecycle: LiveLifecycle,
   validity: () => boolean,
   listener: (snapshot: CodingAppSessionChannelSnapshot) => boolean,
   detach: () => void,
+  reportBackpressure: () => void,
   diagnostics: ServerDiagnosticSink | undefined,
   correlationId: string,
-  deferAdmissionReleaseOnBackpressure: boolean,
 ): (content: CodingAppSessionChannelContent | null) => void {
   return (content: CodingAppSessionChannelContent | null): void => {
     if (!lifecycle.active) return;
@@ -259,15 +285,8 @@ function makePublish(
       const accepted = listener(
         valid ? snapshotForContent(content) : contentFreeCodingAppSessionChannelSnapshot(),
       );
-      if (!valid) {
-        detach();
-      } else if (!accepted) {
-        // KEIKO-0225: previously a listener returning `false` silently detached with nothing to
-        // diagnose. Report backpressure once so operators can see a stream that dropped.
-        recordSseFailure(diagnostics, correlationId, "sse-backpressure", "Error");
-        if (deferAdmissionReleaseOnBackpressure) stopLiveSource(lifecycle);
-        else detach();
-      }
+      if (!valid) detach();
+      else if (!accepted) reportBackpressure();
     } catch (error) {
       recordSseFailure(
         diagnostics,
@@ -292,20 +311,41 @@ interface LiveSubscriptionInput {
   readonly deferAdmissionReleaseOnBackpressure: boolean;
 }
 
+// The publish path and its backpressure report share one lifecycle: a refused write and a stall
+// reported by the stream writer end the subscription the same way.
+function livePublisher(
+  input: LiveSubscriptionInput,
+  lifecycle: LiveLifecycle,
+  detach: () => void,
+  validity: () => boolean,
+): {
+  readonly publish: (content: CodingAppSessionChannelContent | null) => void;
+  readonly reportBackpressure: () => void;
+} {
+  const { diagnostics, correlationId } = input;
+  const reportBackpressure = makeBackpressureReport(
+    lifecycle,
+    detach,
+    diagnostics,
+    correlationId,
+    input.deferAdmissionReleaseOnBackpressure,
+  );
+  const publish = makePublish(
+    lifecycle,
+    validity,
+    input.listener,
+    detach,
+    reportBackpressure,
+    diagnostics,
+    correlationId,
+  );
+  return { publish, reportBackpressure };
+}
+
 function liveSubscription(
   input: LiveSubscriptionInput,
 ): ReturnType<CodingAppSessionChannel["subscribe"]> {
-  const {
-    registry,
-    contentSource,
-    cookieToken,
-    snapshot,
-    listener,
-    admission,
-    diagnostics,
-    correlationId,
-    deferAdmissionReleaseOnBackpressure,
-  } = input;
+  const { registry, contentSource, cookieToken, snapshot, admission } = input;
   if (!admission.acquire()) return inactiveSubscription(snapshot);
   const lifecycle: LiveLifecycle = {
     active: true,
@@ -317,28 +357,20 @@ function liveSubscription(
     stopLiveSource(lifecycle);
   };
   const validity = (): boolean => registry.inspect(cookieToken) !== undefined;
-  const publish = makePublish(
-    lifecycle,
-    validity,
-    listener,
-    detach,
-    diagnostics,
-    correlationId,
-    deferAdmissionReleaseOnBackpressure,
-  );
+  const { publish, reportBackpressure } = livePublisher(input, lifecycle, detach, validity);
   const sourceSubscription = contentSource.subscribeContent?.(publish);
   if (!sourceSubscription?.admitted)
     return rejectedSourceSubscription(sourceSubscription, detach, snapshot);
   if (!lifecycle.active) {
     sourceSubscription.detach();
-    return { snapshot, live: false, stop, detach };
+    return { snapshot, live: false, stop, detach, reportBackpressure };
   }
   lifecycle.sourceDetach = sourceSubscription.detach;
   lifecycle.expiryTimer = setInterval(() => {
     if (!validity()) publish(null);
   }, 1_000);
   lifecycle.expiryTimer.unref();
-  return { snapshot, live: true, stop, detach };
+  return { snapshot, live: true, stop, detach, reportBackpressure };
 }
 
 function makeLiveSubscriptionAdmission(): LiveSubscriptionAdmission {
@@ -429,6 +461,7 @@ export function createCodingAppSessionChannel(
       registry.verify(cookieToken),
     inspectOperationCount: (cookieToken: string | undefined): number | undefined =>
       registry.inspectOperationCount(cookieToken),
+    isSessionLive: (sessionId: string): boolean => registry.inspectSession(sessionId) !== undefined,
     beginOperation: (cookieToken: string | undefined): (() => void) | undefined =>
       registry.beginOperation(cookieToken),
     subscribe: (cookieToken, listener, options) =>

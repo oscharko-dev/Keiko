@@ -1863,7 +1863,42 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
-  it("emits a body-free operator diagnostic when a loopback candidate is accepted (KEIKO-0884, #3333)", async () => {
+  // KEIKO-0884 pins, relocated (#3897): the acceptance record moved from an error-level
+  // `server.diagnostic.failure` to its own registered info line, because a successful local setup
+  // is not a failure. Each pin keeps its invariant — every accepted loopback target leaves exactly
+  // one body-free record on the request's correlation, or the sanctioned unknown id — and now also
+  // proves that no failure diagnostic is left behind.
+  async function loopbackAcceptance(
+    run: () => Promise<{ readonly status: number; readonly body: unknown }>,
+    diagnostics: readonly ServerDiagnosticRecord[],
+  ): Promise<ReturnType<typeof createBufferedServerLogSink>["events"][number]> {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      const result = await run();
+      expect(result.status, JSON.stringify(result.body)).toBe(200);
+    } finally {
+      resetServerLogger();
+    }
+    const accepted = sink.events.filter((event) => event.op === "gateway.setup.target.accepted");
+    expect(accepted).toHaveLength(1);
+    const event = accepted[0];
+    if (event === undefined) throw new Error("Expected a loopback acceptance line.");
+    expect(event.level).toBe("info");
+    expect(event.errorKind).toBeUndefined();
+    expect(
+      expectActivityLogProof(
+        "gateway.setup.target.accepted.line",
+        formatActivityLogProofLine(event),
+      ),
+    ).toMatchObject({ targetClass: "loopback", completeness: "complete", loss: "none" });
+    expect(diagnostics.map((record) => record.code)).not.toContain(
+      "GATEWAY_SETUP_LOOPBACK_TARGET_ACCEPTED",
+    );
+    return event;
+  }
+
+  it("records a body-free activity line when a loopback candidate is accepted (KEIKO-0884, #3333)", async () => {
     // Loopback is the only egress class Gateway Setup accepts with no configuration signal, no log
     // line, and no opt-in trail (a deliberate product choice, not a defect). The gap is purely
     // observability: an operator investigating an unexpected acceptance has no record that a
@@ -1882,26 +1917,20 @@ describe("handleGatewaySetup", () => {
       diagnostics: { record: (record): void => void diagnostics.push(record) },
     });
 
-    const result = await handleGatewaySetup(
-      ctx(
-        { baseUrl: "http://127.0.0.1:11434/v1", apiKey: "local-token" },
-        "corr-gw-loopback-diagnostic",
-      ),
-      deps,
+    const accepted = await loopbackAcceptance(
+      () =>
+        handleGatewaySetup(
+          ctx(
+            { baseUrl: "http://127.0.0.1:11434/v1", apiKey: "local-token" },
+            "corr-gw-loopback-diagnostic",
+          ),
+          deps,
+        ),
+      diagnostics,
     );
-    expect(result.status, JSON.stringify(result.body)).toBe(200);
-
-    expect(diagnostics).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          correlationId: "corr-gw-loopback-diagnostic",
-          operation: "POST /api/gateway/setup",
-          code: "GATEWAY_SETUP_LOOPBACK_TARGET_ACCEPTED",
-        }),
-      ]),
-    );
-    // Body-free by construction: a count/code only, never the raw baseUrl/host/port.
-    const serialized = JSON.stringify(diagnostics);
+    expect(accepted.correlationId).toBe("corr-gw-loopback-diagnostic");
+    // Body-free by construction: a closed class only, never the raw baseUrl/host/port.
+    const serialized = JSON.stringify([accepted, diagnostics]);
     expect(serialized).not.toContain("127.0.0.1");
     expect(serialized).not.toContain("11434");
     expect(serialized).not.toContain("local-token");
@@ -1928,18 +1957,17 @@ describe("handleGatewaySetup", () => {
     });
 
     // No correlation id argument: ctx() omits the field entirely, so RouteContext carries none.
-    const result = await handleGatewaySetup(
-      ctx({ baseUrl: "http://127.0.0.1:11434/v1", apiKey: "local-token" }),
-      deps,
+    const loopbackLine = await loopbackAcceptance(
+      () =>
+        handleGatewaySetup(
+          ctx({ baseUrl: "http://127.0.0.1:11434/v1", apiKey: "local-token" }),
+          deps,
+        ),
+      diagnostics,
     );
-    expect(result.status, JSON.stringify(result.body)).toBe(200);
-
-    const loopbackDiag = diagnostics.find(
-      (record) => record.code === "GATEWAY_SETUP_LOOPBACK_TARGET_ACCEPTED",
-    );
-    expect(loopbackDiag?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+    expect(loopbackLine.correlationId).toBe(UNKNOWN_CORRELATION_ID);
     // Guards against a future re-mint: a UUID never satisfies this shape.
-    expect(loopbackDiag?.correlationId).not.toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-/);
+    expect(loopbackLine.correlationId).not.toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-/);
 
     // The PERSISTED audit record must key to the same identity as the diagnostics above. A minted
     // UUID here would split one request across two correlation identities, so the audit evidence
@@ -1954,7 +1982,7 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
-  it("emits the loopback diagnostic for a trailing-dot localhost target over https (Codex, #3348)", async () => {
+  it("records the loopback acceptance for a trailing-dot localhost target over https (Codex, #3348)", async () => {
     // classifyOutboundHost does exact string equality against "localhost" with no trailing-dot
     // normalization; gatewaySetupTargetClass (used by the success audit) already strips it, but
     // reportLoopbackTargetAccepted used to call classifyOutboundHost directly, so an accepted
@@ -1974,30 +2002,24 @@ describe("handleGatewaySetup", () => {
       diagnostics: { record: (record): void => void diagnostics.push(record) },
     });
 
-    const result = await handleGatewaySetup(
-      ctx(
-        { baseUrl: "https://localhost.:8443/v1", apiKey: "local-token" },
-        "corr-gw-dotted-loopback",
-      ),
-      deps,
+    const accepted = await loopbackAcceptance(
+      () =>
+        handleGatewaySetup(
+          ctx(
+            { baseUrl: "https://localhost.:8443/v1", apiKey: "local-token" },
+            "corr-gw-dotted-loopback",
+          ),
+          deps,
+        ),
+      diagnostics,
     );
-    expect(result.status, JSON.stringify(result.body)).toBe(200);
-
-    expect(diagnostics).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          correlationId: "corr-gw-dotted-loopback",
-          operation: "POST /api/gateway/setup",
-          code: "GATEWAY_SETUP_LOOPBACK_TARGET_ACCEPTED",
-        }),
-      ]),
-    );
+    expect(accepted.correlationId).toBe("corr-gw-dotted-loopback");
     const auditFiles = readdirSync(evidenceDir).filter((name) => name.startsWith("gateway-setup-"));
     expect(auditFiles).toHaveLength(1);
     const record = JSON.parse(
       readFileSync(join(evidenceDir, auditFiles[0] ?? ""), "utf8"),
     ) as Record<string, unknown>;
-    // The diagnostic and the success audit must agree on the same request's classification.
+    // The activity line and the success audit must agree on the same request's classification.
     expect(record.targetClass).toBe("loopback");
     deps.store.close();
   });

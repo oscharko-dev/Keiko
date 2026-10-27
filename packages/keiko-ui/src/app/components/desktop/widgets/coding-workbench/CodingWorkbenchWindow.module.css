@@ -1340,14 +1340,6 @@
   color: var(--text-secondary);
 }
 
-.cmpReasoningBadge {
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-pill);
-  padding: 0 var(--space-2);
-  color: var(--feedback-warning);
-  font-size: var(--text-caption);
-}
-
 .cmpReasoningNote {
   margin: var(--space-1) 0 0;
   color: var(--text-tertiary);
@@ -1485,6 +1477,13 @@ details[open] > .cmpActivitySummary::after {
   text-overflow: ellipsis;
   vertical-align: top;
   white-space: nowrap;
+}
+
+/* Why a call ended as it did: a plain fact in the card's secondary text, not a second alarm. */
+.cmpToolOutcome {
+  margin: var(--space-1) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--text-body-sm);
 }
 
 .toolCount {

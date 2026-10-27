@@ -1026,6 +1026,36 @@ describe("CodingToolFacade", () => {
     });
   });
 
+  // Keiko 1.3.0 test on macOS (#3897): a check the isolated verifier cannot install for is named
+  // as one to run in the runtime's own shell, and the guidance says that result counts.
+  it("tells the model to run a check its isolated verifier cannot install for in its own shell", async () => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({
+        outcome: "failed",
+        reasonCode: "VERIFICATION_NOT_RUN",
+        notRun: [{ kind: "typecheck", reason: "native-shell-required" }],
+      }),
+    );
+    const subject = createCodingToolFacade(ports);
+
+    await expect(
+      subject.execute({
+        body: requestBody({ action: "verification", verifierId: "unit" }),
+        capability,
+      }),
+    ).resolves.toEqual({
+      status: "failed",
+      evidence: [{ kind: "governed-delegate", code: "VERIFICATION_NOT_RUN" }],
+      reasonCode: "VERIFICATION_NOT_RUN",
+      detail:
+        "These verification steps did not run: typecheck (the isolated verifier cannot install dependencies for this host; run this check in your own shell).",
+      guidance: expect.stringContaining(
+        "run the repository's own command for that check (its package script, or the tool itself) in your shell, where its result counts as that verification",
+      ) as string,
+    });
+  });
+
   // An empty not-run list names no step, so the facade forwards no detail; the guidance still stands
   // (PR #3452 review).
   it("forwards no detail for an empty not-run list", async () => {

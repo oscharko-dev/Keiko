@@ -641,7 +641,6 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.reasoningBoundary":
     "This timeline shows the conversation, the work activity and, when the model provides it, the model's own reasoning. Model reasoning is unverified and is never kept in history or evidence.",
   "codingWorkbench.activity.reasoning.title": "Model reasoning",
-  "codingWorkbench.activity.reasoning.badge": "Unverified",
   "codingWorkbench.activity.reasoning.note":
     "Unverified model reasoning: how the model approached this step. It can be wrong; the answer and the changes are what count.",
   "codingWorkbench.activity.status.idle": "No run yet.",
@@ -1238,6 +1237,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.editRefusal": "Edit refusal: {reason}",
   "codingWorkbench.activity.affectedFile": "Affected file: {path}",
   "codingWorkbench.activity.serviceDuration": "Tool service: {duration} ms",
+  "codingWorkbench.activity.exitCode": "The command exited with code {code}.",
+  "codingWorkbench.activity.toolError": "The tool reported an error to the model.",
   "codingWorkbench.event.detailOutcome": "Outcome: {outcome}.",
   "codingWorkbench.event.detailUntrustedContent":
     "Untrusted content: the fetched page was quarantined as data, not instructions.",

@@ -1151,6 +1151,48 @@ describe("VerificationRunnerManager — runToReport's dependency-bootstrap and s
     });
   });
 
+  // Keiko 1.3.0 test on macOS (#3897): the line said only `refused`, so the log could not tell a
+  // container that cannot install for this host from a refused source. It now names the closed reason.
+  it("names a refused bootstrap's closed reason on the dependencies line", async () => {
+    const events: ServerLogEvent[] = [];
+    const refused: VerificationReport = {
+      ...report(["targeted-test"]),
+      dependencies: {
+        state: "refused",
+        lockfile: "present",
+        exitCode: null,
+        durationMs: 0,
+        detail: "dependency installation refused",
+        refusalReason: "install-target-foreign",
+      },
+    };
+    const manager = makeManager({
+      activityLog: { write: (event): void => void events.push(event) },
+      execute: fakePort(refused).port,
+    });
+
+    await manager.runToReport(
+      input({
+        kinds: ["targeted-test"],
+        targetPath: "src/a.test.ts",
+        correlationId: "deps-foreign",
+      }),
+      new AbortController().signal,
+    );
+
+    const line = events.find((event) => event.op === "editor.verification.dependencies");
+    expect(line).toMatchObject({
+      correlationId: "deps-foreign",
+      extra: { state: "refused", refusalReason: "install-target-foreign" },
+    });
+    expect(
+      expectActivityLogProof(
+        "editor.verification.dependencies.emitted-line",
+        formatActivityLogProofLine(line ?? {}),
+      ),
+    ).toMatchObject({ state: "refused", refusalReason: "install-target-foreign" });
+  });
+
   it("writes no editor.verification.dependencies line when the report carries no dependencies summary", async () => {
     const events: ServerLogEvent[] = [];
     const manager = makeManager({
