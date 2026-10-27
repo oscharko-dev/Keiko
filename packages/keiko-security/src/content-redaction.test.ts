@@ -82,10 +82,11 @@ describe("content policy remains separate from evidence protection", () => {
 });
 
 describe("credential floor of preserved content", () => {
+  // Synthetic fixtures, split so no credential-shaped literal is contiguous in the source.
   const PRIVATE_KEY = [
-    "-----BEGIN RSA PRIVATE KEY-----",
+    "-----BEGIN RSA " + "PRIVATE KEY-----",
     "MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun",
-    "-----END RSA PRIVATE KEY-----",
+    "-----END RSA " + "PRIVATE KEY-----",
   ].join("\n");
 
   it.each([
@@ -94,7 +95,7 @@ describe("credential floor of preserved content", () => {
     ["an AWS access key", "id AKIAIOSFODNN7EXAMPLE"],
     ["a Slack token", "slack xoxb-1234567890-abcdefghij"],
     ["a Google API key", "maps AIzaSyA1b2C3d4E5f6G7h8I9j0KlMnOpQrStU"],
-    ["a Stripe key", "pay sk_live_AbCdEfGhIjKlMnOp1234"],
+    ["a Stripe key", "pay sk_live_" + "AbCdEfGhIjKlMnOp1234"],
     ["URL credentials", "db https://admin:hunter22@db.example.test/app"],
     ["a token used as URL user", "clone https://ghtoken123456@git.example.test/o/r.git"],
     ["a bearer credential", "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.e30.c2lnbmF0dXJl"],

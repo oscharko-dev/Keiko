@@ -116,10 +116,11 @@ describe("Chat-only content preservation in the evidence lane", () => {
   });
 
   it("keeps physical line coordinates after a removed private key block", () => {
+    // A synthetic key block, split so no credential-shaped literal is contiguous in the source.
     const key = [
-      "-----BEGIN RSA PRIVATE KEY-----",
+      "-----BEGIN RSA " + "PRIVATE KEY-----",
       "MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun",
-      "-----END RSA PRIVATE KEY-----",
+      "-----END RSA " + "PRIVATE KEY-----",
     ].join("\n");
     const text = `line1\n${key}\nline6\nline7\n`;
     const preserved = redactWorkspaceSource(text, "notes.txt", true, "preserve");
