@@ -2297,7 +2297,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["register", "resolve", "reserve", "revoke"],
+        values: ["register", "resolve", "reserve", "revoke", "current-state"],
       },
       outcome: {
         type: "string",
@@ -2310,6 +2310,22 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "digest",
         required: false,
         maxLength: 64,
+      },
+      readiness: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: [
+          "ready",
+          "chat-unavailable",
+          "not-bound",
+          "pod-unavailable",
+          "verification-required",
+          "generation-changed",
+          "mode-changed",
+          "authority-unavailable",
+          "authority-denied",
+        ],
       },
       actorDigest: {
         type: "string",
@@ -2359,7 +2375,10 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     lifecycle: "state",
     analyzerProjection: "capability",
     failureClasses: ["chat-tool-authority"],
-    proofIds: ["chat.tool-authority.operation.lifecycle"],
+    proofIds: [
+      "chat.tool-authority.operation.current-state",
+      "chat.tool-authority.operation.lifecycle",
+    ],
     releaseImpact: "minor",
   },
   {

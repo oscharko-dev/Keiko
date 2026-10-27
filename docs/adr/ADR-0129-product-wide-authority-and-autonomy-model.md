@@ -189,6 +189,14 @@ credential owner's invalidation callback revoke affected Chat authorities. A pre
 update conflict or unchanged mode does not revoke them. Current-state checking at dispatch
 remains mandatory in addition to this lifecycle invalidation.
 
+The private Jira/Chat resolver loads current Chat and owned credential facts from their existing
+owners for each resolution, including verification/custody readiness and the current principal.
+It compares the current mode and generations before returning the registry-approved envelope
+and private connection metadata. Connection PATCH shares the same readiness predicate, so a
+previous successful verification cannot authorize attachment while a new probe is pending.
+This resolver alone does not grant read consent, approve an action, reserve a budget or dispatch
+an external effect; consumers must compose those existing gates before execution.
+
 ### D6 — Forward rule for decision records
 
 New ADRs and epics for autonomy-capable surfaces must cite this record and document their

@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "00c33391c260e9e5d6873b445c67f326fcf17bd1de53db572fb8dd8c025a3793"
+    "catalogDigest": "8c4cc5c0b7a70f8a8dc009df426fd0fd8f0fb1969c016d044550547f62b7f38e"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -68,8 +68,8 @@
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
     "operationCount": 598,
-    "proofCount": 611,
-    "resolvedProofCount": 611,
+    "proofCount": 612,
+    "resolvedProofCount": 612,
     "failureClassCount": 374,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -1269,6 +1269,9 @@
       "packages/keiko-server/src/store/chatJiraBinding.test.ts"
     ],
     "chat.send.rejected.reason": ["packages/keiko-server/src/chat-activity.test.ts"],
+    "chat.tool-authority.operation.current-state": [
+      "packages/keiko-server/src/atlassian/jiraChatAuthority.test.ts"
+    ],
     "chat.tool-authority.operation.lifecycle": [
       "packages/keiko-server/src/editor/agentAuthorityRegistry.test.ts"
     ],

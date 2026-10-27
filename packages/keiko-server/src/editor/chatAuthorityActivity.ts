@@ -10,7 +10,17 @@ import { processServerLogSink } from "../process-log-sink.js";
 
 type Failure = "invalid" | "expired" | "budget-exceeded" | "revoked";
 type Outcome = { readonly ok: true } | { readonly ok: false; readonly reason: Failure };
-type Phase = "register" | "resolve" | "reserve" | "revoke";
+type Phase = "register" | "resolve" | "reserve" | "revoke" | "current-state";
+export type ChatAuthorityReadiness =
+  | "ready"
+  | "chat-unavailable"
+  | "not-bound"
+  | "pod-unavailable"
+  | "verification-required"
+  | "generation-changed"
+  | "mode-changed"
+  | "authority-unavailable"
+  | "authority-denied";
 
 const OPTIONAL_DIGEST = {
   type: "string",
@@ -31,7 +41,7 @@ const CHAT_AUTHORITY_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["register", "resolve", "reserve", "revoke"],
+      values: ["register", "resolve", "reserve", "revoke", "current-state"],
     },
     outcome: {
       type: "string",
@@ -40,6 +50,22 @@ const CHAT_AUTHORITY_OPERATION = defineActivityLogOperation({
       values: ["allowed", "invalid", "expired", "budget-exceeded", "revoked"],
     },
     authorityDigest: OPTIONAL_DIGEST,
+    readiness: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "ready",
+        "chat-unavailable",
+        "not-bound",
+        "pod-unavailable",
+        "verification-required",
+        "generation-changed",
+        "mode-changed",
+        "authority-unavailable",
+        "authority-denied",
+      ],
+    },
     actorDigest: OPTIONAL_DIGEST,
     chatDigest: OPTIONAL_DIGEST,
     podDigest: OPTIONAL_DIGEST,
@@ -55,11 +81,15 @@ const CHAT_AUTHORITY_OPERATION = defineActivityLogOperation({
   lifecycle: "state",
   analyzerProjection: "capability",
   failureClasses: ["chat-tool-authority"],
-  proofIds: ["chat.tool-authority.operation.lifecycle"],
+  proofIds: [
+    "chat.tool-authority.operation.current-state",
+    "chat.tool-authority.operation.lifecycle",
+  ],
   releaseImpact: "minor",
 });
 
 interface AuthorityEvidence {
+  readonly readiness?: ChatAuthorityReadiness | undefined;
   readonly authorityDigest?: string | undefined;
   readonly subject?: ChatToolAuthoritySubject | undefined;
   readonly chatId?: string | undefined;
@@ -102,6 +132,7 @@ export function recordChatAuthorityResult<T extends Outcome>(
       {
         phase,
         outcome: result.ok ? "allowed" : result.reason,
+        ...(evidence.readiness === undefined ? {} : { readiness: evidence.readiness }),
         ...(digest !== undefined && /^[a-f0-9]{64}$/.test(digest)
           ? { authorityDigest: digest }
           : {}),

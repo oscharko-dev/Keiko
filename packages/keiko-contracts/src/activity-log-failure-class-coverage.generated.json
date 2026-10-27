@@ -2759,6 +2759,12 @@
               "required": false
             },
             {
+              "name": "readiness",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "toolCalls",
               "type": "integer",
               "dataClass": "count",
@@ -2770,7 +2776,10 @@
             "frames": false,
             "causeChain": false
           },
-          "proofIds": ["chat.tool-authority.operation.lifecycle"],
+          "proofIds": [
+            "chat.tool-authority.operation.current-state",
+            "chat.tool-authority.operation.lifecycle"
+          ],
           "replayReferences": [],
           "missingObligations": []
         }

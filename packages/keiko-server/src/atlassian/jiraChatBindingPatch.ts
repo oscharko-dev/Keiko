@@ -5,7 +5,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import type { UiHandlerDeps } from "../deps.js";
 import { invalidRequest, type UpdateChatOptions, type UpdateChatPatch } from "../store/index.js";
-import { ownsAtlassianCredential } from "./jiraPodAccess.js";
+import { findOwnedJiraPod, isReadyJiraPod } from "./jiraPodAccess.js";
 import { logChatScopeUpdate } from "../chat-scope-update-log.js";
 import type { Chat } from "../store/index.js";
 
@@ -58,15 +58,8 @@ export function jiraChatUpdateOptions(
   correlationId: string | undefined,
 ): Pick<UpdateChatOptions, "verifiedJiraPod"> {
   if (patch.jiraPodId === undefined || patch.jiraPodId === null) return {};
-  const credential = deps.atlassianConnectorCredentials?.custody
-    .list()
-    .find(
-      (metadata) =>
-        metadata.deployment === "data-center" &&
-        metadata.livePod?.podId === patch.jiraPodId &&
-        ownsAtlassianCredential(deps, metadata),
-    );
-  if (credential?.deployment !== "data-center" || credential.livePod?.verificationStatus !== "ok") {
+  const credential = findOwnedJiraPod(deps, patch.jiraPodId);
+  if (credential === undefined || !isReadyJiraPod(credential)) {
     logChatScopeUpdate("denied", chat, chat, patch, correlationId);
     throw invalidRequest("The Jira Pod is unavailable or requires verification.");
   }

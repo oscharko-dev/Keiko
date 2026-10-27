@@ -1101,6 +1101,29 @@ function retainedChatAuthority(chat: Chat): () => ChatToolAuthorityResolution {
 }
 
 describe("normal Chat Jira binding through authenticated PATCH", () => {
+  it("does not attach a previously verified Pod while a fresh verification is pending", async () => {
+    const podId = await readyJiraPod();
+    const credential = wiring.custody
+      .list()
+      .find((row) => row.deployment === "data-center" && row.livePod?.podId === podId);
+    if (credential?.deployment !== "data-center") throw new Error("Expected credential");
+    const ticket = wiring.custody.beginVerification(credential.authRef, credential.generation);
+    if (ticket === undefined) throw new Error("Expected verification ticket");
+    const unbound = jiraChat();
+    expect((await patchJiraChat(unbound, { jiraPodId: podId })).status).toBe(400);
+    expect(
+      wiring.custody.finishVerification(
+        credential.authRef,
+        credential.generation,
+        ticket.revision,
+        "ok",
+      ),
+    ).toBe(true);
+    expect((await updatedJiraChat(unbound, { jiraPodId: podId })).jiraPodBinding?.podId).toBe(
+      podId,
+    );
+  });
+
   it("revokes authority only after committed mode, binding or closed-state changes", async () => {
     const podId = await readyJiraPod();
     const bound = await updatedJiraChat(jiraChat(), { jiraPodId: podId });

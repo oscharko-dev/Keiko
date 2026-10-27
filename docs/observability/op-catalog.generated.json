@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "00c33391c260e9e5d6873b445c67f326fcf17bd1de53db572fb8dd8c025a3793",
+    "catalogDigest": "8c4cc5c0b7a70f8a8dc009df426fd0fd8f0fb1969c016d044550547f62b7f38e",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -2399,7 +2399,7 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["register", "resolve", "reserve", "revoke"]
+            "values": ["register", "resolve", "reserve", "revoke", "current-state"]
           },
           "outcome": {
             "type": "string",
@@ -2412,6 +2412,22 @@
             "dataClass": "digest",
             "required": false,
             "maxLength": 64
+          },
+          "readiness": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "ready",
+              "chat-unavailable",
+              "not-bound",
+              "pod-unavailable",
+              "verification-required",
+              "generation-changed",
+              "mode-changed",
+              "authority-unavailable",
+              "authority-denied"
+            ]
           },
           "actorDigest": {
             "type": "string",
@@ -2461,10 +2477,13 @@
         "lifecycle": "state",
         "analyzerProjection": "capability",
         "failureClasses": ["chat-tool-authority"],
-        "proofIds": ["chat.tool-authority.operation.lifecycle"],
+        "proofIds": [
+          "chat.tool-authority.operation.current-state",
+          "chat.tool-authority.operation.lifecycle"
+        ],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/editor/chatAuthorityActivity.ts:22",
-        "emitterSites": ["packages/keiko-server/src/editor/chatAuthorityActivity.ts:96"]
+        "registrationSite": "packages/keiko-server/src/editor/chatAuthorityActivity.ts:32",
+        "emitterSites": ["packages/keiko-server/src/editor/chatAuthorityActivity.ts:126"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -55464,6 +55483,12 @@
                   "required": false
                 },
                 {
+                  "name": "readiness",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "toolCalls",
                   "type": "integer",
                   "dataClass": "count",
@@ -55481,7 +55506,10 @@
                 "frames": false,
                 "causeChain": false
               },
-              "proofIds": ["chat.tool-authority.operation.lifecycle"],
+              "proofIds": [
+                "chat.tool-authority.operation.current-state",
+                "chat.tool-authority.operation.lifecycle"
+              ],
               "replayReferences": [],
               "missingObligations": []
             }
@@ -101932,7 +101960,7 @@
     {
       "op": "chat.tool-authority.operation",
       "category": "security",
-      "site": "packages/keiko-server/src/editor/chatAuthorityActivity.ts:25",
+      "site": "packages/keiko-server/src/editor/chatAuthorityActivity.ts:35",
       "package": "keiko-server"
     },
     {

@@ -1461,3 +1461,26 @@ pending; no AC is accepted by this checkpoint alone.
 The final focused registry rerun passes 48 tests and the regenerated operation catalog passes
 all 97 gate tests. Regeneration was repeated after the dependency interface extraction moved
 source positions; neither operation definitions nor the duplicate baseline were relaxed.
+
+### Current-state authority checkpoint — #4084 AC2–AC5, #4085 AC4
+
+The private Chat authority resolver reloads the current Chat, server principal and owned
+credential metadata on every call. Closed/deleted/unbound Chats, changed ownership or
+generations, pending/failed verification, pending custody work, absent authority ownership,
+mode drift and narrowed deployment ceilings fail closed. It returns private credential metadata
+only after the shared registry accepts the current subject. Consent, action approval, budget
+reservation and actual Chat dispatch are separate gates and remain to be composed.
+
+The Chat binding PATCH now shares that readiness check. A real HTTP regression returns 200
+instead of the required 400 on the previous implementation when a previously verified Pod is
+undergoing re-verification. After the repair it refuses attachment until verification finishes.
+The new resolver suite first fails to load before its implementation. Afterward all 119 resolver,
+actual credential/Chat HTTP and registry tests pass. The real Activity Log writer/reader proof
+reconstructs ready, verification-required, authority-denied and unbound decisions under one
+correlation without raw subject identifiers or credential metadata.
+
+Build, root typecheck, changed lint and staged semantic checks pass; the 938-group semantic
+baseline is unchanged. All 97 operation-catalog tests pass; generation resolves 612 proofs and
+30 scenarios with zero violations. Logs: `/tmp/keiko-4081-jira-current-authority-*.log` and
+`/tmp/keiko-4081-jira-pending-verification-before.log`. No complete AC is accepted here; full
+normal Chat execution, licensed live acceptance and final aggregate gates remain pending.

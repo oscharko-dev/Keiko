@@ -1,6 +1,49 @@
 import { createHash } from "node:crypto";
-import type { AtlassianCredentialMetadata } from "@oscharko-dev/keiko-connectors";
+import type {
+  AtlassianCredentialMetadata,
+  AtlassianCredentialCustody,
+} from "@oscharko-dev/keiko-connectors";
+import type { JiraLivePodMetadata } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { UiHandlerDeps } from "../deps.js";
+
+export type JiraLivePodCredential = Extract<
+  AtlassianCredentialMetadata,
+  { deployment: "data-center" }
+> & {
+  readonly livePod: JiraLivePodMetadata;
+};
+
+export type JiraPodAccessDeps = Pick<UiHandlerDeps, "serverPrincipal"> & {
+  readonly atlassianConnectorCredentials?:
+    | {
+        readonly custody: Pick<AtlassianCredentialCustody, "list">;
+      }
+    | undefined;
+};
+
+export function findOwnedJiraPod(
+  deps: JiraPodAccessDeps,
+  podId: string,
+): JiraLivePodCredential | undefined {
+  const actorDigest = jiraChatActorDigest(deps);
+  if (actorDigest === undefined) return undefined;
+  return deps.atlassianConnectorCredentials?.custody
+    .list()
+    .find(
+      (metadata): metadata is JiraLivePodCredential =>
+        metadata.deployment === "data-center" &&
+        metadata.livePod?.podId === podId &&
+        metadata.livePod.ownerDigest === actorDigest,
+    );
+}
+
+export function isReadyJiraPod(credential: JiraLivePodCredential): boolean {
+  return (
+    credential.livePod.verificationStatus === "ok" &&
+    !credential.livePod.verificationInProgress &&
+    credential.livePod.credentialOperation === undefined
+  );
+}
 
 export function jiraChatActorDigest(
   deps: Pick<UiHandlerDeps, "serverPrincipal">,
