@@ -9,7 +9,7 @@ import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widge
 // client is injectable (`client` prop) so tests substitute a mock; production binds the real
 // same-origin BFF client.
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useId, useState, type ReactNode } from "react";
 import { ApiError } from "@/lib/api";
 
 import {
@@ -25,9 +25,11 @@ import styles from "./connectors.module.css";
 export interface AtlassianConnectorsPanelProps {
   readonly client?: AtlassianConnectorsClient;
   readonly pollIntervalMs?: number;
+  readonly jiraLive?: boolean;
 }
 
 interface ConnectorsController {
+  readonly reload: () => void;
   readonly connectors: readonly AtlassianConnectorMetadata[];
   readonly loading: boolean;
   readonly error: string | undefined;
@@ -39,6 +41,7 @@ function useConnectors(client: AtlassianConnectorsClient): ConnectorsController 
   const t = useTranslate();
   const [connectors, setConnectors] = useState<readonly AtlassianConnectorMetadata[]>([]);
   const [loading, setLoading] = useState(true);
+  const [revision, setRevision] = useState(0);
   const [error, setError] = useState<string | undefined>();
   useEffect(() => {
     let active = true;
@@ -58,8 +61,8 @@ function useConnectors(client: AtlassianConnectorsClient): ConnectorsController 
     return () => {
       active = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot load on mount by design.
-  }, [client]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- explicit lifecycle refresh only; translation changes do not refetch.
+  }, [client, revision]);
   const onCreated = (metadata: AtlassianConnectorMetadata): void => {
     setConnectors((current) => [
       metadata,
@@ -69,40 +72,55 @@ function useConnectors(client: AtlassianConnectorsClient): ConnectorsController 
   const onDeleted = (authRef: string): void => {
     setConnectors((current) => current.filter((connector) => connector.authRef !== authRef));
   };
-  return { connectors, loading, error, onCreated, onDeleted };
+  return {
+    connectors,
+    loading,
+    error,
+    onCreated,
+    onDeleted,
+    reload: () => setRevision((value) => value + 1),
+  };
 }
 
 function ConnectorsSection({
   client,
   pollIntervalMs,
+  jiraLive,
 }: {
   readonly client: AtlassianConnectorsClient;
   readonly pollIntervalMs: number | undefined;
+  readonly jiraLive: boolean;
 }): ReactNode {
   const t = useTranslate();
   const ctrl = useConnectors(client);
+  const headingId = useId();
+  const Heading = jiraLive ? "h4" : "h2";
+  const connectors = ctrl.connectors.filter(
+    (item) => !jiraLive || (item.deployment === "data-center" && item.livePod !== undefined),
+  );
   const [adding, setAdding] = useState(false);
   return (
-    <section className="acx-section" aria-labelledby="acx-connectors-title">
-      <h2 className="acx-section-title" id="acx-connectors-title">
+    <section className="acx-section" aria-labelledby={headingId}>
+      <Heading className="acx-section-title" id={headingId}>
         {t("atlassianConnectors.section.connectors")}
-      </h2>
+      </Heading>
       {ctrl.error !== undefined ? (
         <p className="acx-error" role="alert">
           {ctrl.error}
         </p>
       ) : null}
       {ctrl.loading ? <p className="acx-muted">{t("atlassianConnectors.loading")}</p> : null}
-      {!ctrl.loading && ctrl.connectors.length === 0 && !adding ? (
+      {!ctrl.loading && connectors.length === 0 && !adding ? (
         <p className="acx-empty">{t("atlassianConnectors.empty")}</p>
       ) : null}
       <ul className="acx-list">
-        {ctrl.connectors.map((connector) => (
+        {connectors.map((connector) => (
           <ConnectorCard
-            key={connector.authRef}
+            key={`${connector.authRef}:${connector.generation ?? 1}`}
             connector={connector}
             client={client}
             onDeleted={ctrl.onDeleted}
+            onChanged={ctrl.reload}
             {...(pollIntervalMs === undefined ? {} : { pollIntervalMs })}
           />
         ))}
@@ -111,12 +129,16 @@ function ConnectorsSection({
         <AddConnectorForm
           client={client}
           onCreated={ctrl.onCreated}
-          onClose={() => setAdding(false)}
+          jiraLive={jiraLive}
+          onClose={() => {
+            setAdding(false);
+            ctrl.reload();
+          }}
         />
       ) : (
         <div className="acx-actions">
           <button type="button" className="lk-btn lk-btn-primary" onClick={() => setAdding(true)}>
-            {t("atlassianConnectors.add.open")}
+            {t(jiraLive ? "atlassianConnectors.live.add" : "atlassianConnectors.add.open")}
           </button>
         </div>
       )}
@@ -127,16 +149,22 @@ function ConnectorsSection({
 export function AtlassianConnectorsPanel({
   client = defaultAtlassianConnectorsClient,
   pollIntervalMs,
+  jiraLive = false,
 }: AtlassianConnectorsPanelProps): ReactNode {
   const t = useTranslate();
+  const Heading = jiraLive ? "h3" : "h1";
   return (
     <div className={`acx-panel ${styles.scope}`} data-testid="acx-panel">
       <header>
-        <h1 className="acx-title">{t("atlassianConnectors.title")}</h1>
-        <p className="acx-subtitle">{t("atlassianConnectors.subtitle")}</p>
+        <Heading className="acx-title">
+          {t(jiraLive ? "atlassianConnectors.live.title" : "atlassianConnectors.title")}
+        </Heading>
+        <p className="acx-subtitle">
+          {t(jiraLive ? "atlassianConnectors.live.subtitle" : "atlassianConnectors.subtitle")}
+        </p>
       </header>
-      <ConnectorsSection client={client} pollIntervalMs={pollIntervalMs} />
-      <ConnectorApprovalsPanel client={client} />
+      <ConnectorsSection client={client} pollIntervalMs={pollIntervalMs} jiraLive={jiraLive} />
+      {jiraLive ? null : <ConnectorApprovalsPanel client={client} />}
     </div>
   );
 }

@@ -1874,3 +1874,22 @@ a failed run instead of accepting a successful read with lost diagnostics.
 This is one live buffered read journey, not complete AC acceptance. Normal Chat
 writes/approvals, Hub management and binding UI, full browser/mixed-grounding journeys,
 all-operation failure/isolation/restart qualification and final gates remain open.
+
+### Existing Hub creation surface — #4085, #4086 / #4081
+
+The Knowledge Pods Hub now composes the existing connector panel in a Jira Live Pod
+mode. The existing write-only form accepts name, HTTPS address and PAT, omits the
+Cloud-only email/provider fields, and leaves exact private-target authorization to
+the server. One stable creation intent survives a failed response/retry; a synchronous
+submit lock prevents a second request before React renders the disabled button.
+The token is cleared on confirmed creation. Existing verification/removal owners and
+controls are reused. The Hub filters the returned public Live Pods, uses authoritative
+verification state, reloads after verification, and exposes neither Data Center sync
+nor legacy Coding approvals. All Cloud defaults remain unchanged.
+
+The new creation test failed before implementation. The affected connector/Hub suite
+passes 121 tests including duplicate submit, retry identity, existing Cloud behavior,
+Live Pod filtering, verification refresh, keyboard interactions and accessibility.
+The status-rendering test now exhaustively covers the existing nine-member verification
+contract. Full UI typecheck and lint pass. Management rename/token controls, Chat source
+connection/mode controls, drag/drop and the real browser group remain pending.

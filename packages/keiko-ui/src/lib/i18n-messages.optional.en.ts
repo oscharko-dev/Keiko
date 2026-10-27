@@ -1,4 +1,8 @@
 export const OPTIONAL_WIDGET_EN_MESSAGES = {
+  "atlassianConnectors.live.title": "Jira Live Pods",
+  "atlassianConnectors.live.subtitle":
+    "Read current Jira data in a connected Chat with explicit read consent. Live access does not create an index or stored document collection.",
+  "atlassianConnectors.live.add": "Create Jira Pod",
   "chat.jira.title": "Read Jira in this chat",
   "chat.jira.disclosure":
     "Jira content will be sent to the selected model and retained in this conversation. Permission applies to this chat until it expires or the connection or authority changes. It does not grant permission to write.",

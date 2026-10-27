@@ -111,3 +111,36 @@ describe("AtlassianConnectorsPanel", () => {
     document.documentElement.removeAttribute("data-theme");
   });
 });
+
+it("shows only owned Live Pods in the Hub without sync or legacy approvals", async () => {
+  const user = userEvent.setup();
+  const live: AtlassianConnectorMetadata = {
+    ...DOCS,
+    provider: "jira",
+    deployment: "data-center",
+    authScheme: "bearer-pat",
+    generation: 1,
+    displayName: "Live Jira",
+    livePod: {
+      kind: "jira-live",
+      podId: "pod-one",
+      authenticationGeneration: 1,
+      verificationRevision: 1,
+      verificationStatus: "ok",
+      verificationInProgress: false,
+      capabilities: ["live-read"],
+    },
+  };
+  const client = makeClient({ listConnectors: vi.fn(async () => [DOCS, live]) });
+  const { container } = render(<AtlassianConnectorsPanel client={client} jiraLive />);
+  const card = await screen.findByTestId("acx-connector");
+  expect(card).toHaveTextContent("Live Jira");
+  expect(card).toHaveTextContent("Connection verified");
+  expect(screen.queryByText("Docs")).toBeNull();
+  expect(screen.queryByRole("button", { name: /manage/i })).toBeNull();
+  expect(client.listApprovals).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Create Jira Pod" })).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Verify connection" }));
+  await waitFor(() => expect(client.listConnectors).toHaveBeenCalledTimes(2));
+  expect(await axe(container)).toHaveNoViolations();
+});

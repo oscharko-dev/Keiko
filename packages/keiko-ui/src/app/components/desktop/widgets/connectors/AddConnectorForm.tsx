@@ -13,12 +13,13 @@ import {
 // (`isSafeAtlassianConnectorBaseUrl`) with immediate inline feedback. After save, an inline
 // verify-connection step renders the closed status union as actionable copy.
 
-import { useId, useState, type ReactNode, type SubmitEvent } from "react";
+import { useId, useRef, useState, type ReactNode, type SubmitEvent } from "react";
 import type { AtlassianConnectorProvider } from "@oscharko-dev/keiko-contracts";
 import { isSafeAtlassianConnectorBaseUrl } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { ApiError } from "@/lib/api";
 
 import type {
+  CreateAtlassianConnectorInput,
   AtlassianConnectorMetadata,
   AtlassianConnectorsClient,
   AtlassianConnectorVerifyStatus,
@@ -36,6 +37,7 @@ export interface AddConnectorFormProps {
   readonly client: AddConnectorClient;
   readonly onCreated: (metadata: AtlassianConnectorMetadata) => void;
   readonly onClose: () => void;
+  readonly jiraLive?: boolean;
 }
 
 interface EntryFields {
@@ -96,20 +98,53 @@ const TEXT_FIELDS: readonly TextFieldConfig[] = [
   },
 ];
 
-function validateEntry(fields: EntryFields): FieldErrors {
+// Input syntax only: exact private-target admission stays with the server's operator policy.
+function hasHttpsAddress(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && !url.username && !url.password && !url.search && !url.hash;
+  } catch {
+    return false;
+  }
+}
+function connectorInput(
+  fields: EntryFields,
+  jiraLive: boolean,
+  creationId: string,
+): CreateAtlassianConnectorInput {
+  const common = {
+    displayName: fields.displayName.trim(),
+    baseUrl: fields.baseUrl,
+    apiToken: fields.token,
+  };
+  return jiraLive
+    ? {
+        ...common,
+        provider: "jira",
+        deployment: "data-center",
+        authScheme: "bearer-pat",
+        livePodCreationRequestId: creationId,
+      }
+    : { ...common, provider: fields.provider, accountEmail: fields.email };
+}
+function validateEntry(fields: EntryFields, jiraLive: boolean): FieldErrors {
   const errors: FieldErrors = {};
   if (fields.displayName.trim().length === 0) {
     errors.displayName = "atlassianConnectors.validation.displayName";
   }
-  if (!isSafeAtlassianConnectorBaseUrl(fields.baseUrl)) {
+  if (
+    !(jiraLive ? hasHttpsAddress(fields.baseUrl) : isSafeAtlassianConnectorBaseUrl(fields.baseUrl))
+  ) {
     errors.baseUrl = "atlassianConnectors.validation.baseUrl";
   }
-  if (!EMAIL_PATTERN.test(fields.email)) errors.email = "atlassianConnectors.validation.email";
+  if (!jiraLive && !EMAIL_PATTERN.test(fields.email))
+    errors.email = "atlassianConnectors.validation.email";
   if (fields.token.length === 0) errors.token = "atlassianConnectors.validation.token";
   return errors;
 }
 
 interface EntryController {
+  readonly jiraLive: boolean;
   readonly fields: EntryFields;
   readonly errors: FieldErrors;
   readonly submitError: string | undefined;
@@ -123,9 +158,12 @@ function useAddConnectorEntry(
   client: AddConnectorClient,
   onCreated: (metadata: AtlassianConnectorMetadata) => void,
   onVerifyPhase: (authRef: string) => void,
+  jiraLive: boolean,
 ): EntryController {
   const t = useTranslate();
   const [fields, setFields] = useState<EntryFields>(DEFAULT_FIELDS);
+  const locked = useRef(false);
+  const [creationId] = useState(() => crypto.randomUUID());
   const [errors, setErrors] = useState<FieldErrors>({});
   const [submitError, setSubmitError] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
@@ -136,16 +174,12 @@ function useAddConnectorEntry(
     setFields((current) => ({ ...current, provider }));
   };
   const run = async (): Promise<void> => {
+    if (locked.current) return;
+    locked.current = true;
     setBusy(true);
     setSubmitError(undefined);
     try {
-      const metadata = await client.createConnector({
-        provider: fields.provider,
-        displayName: fields.displayName.trim(),
-        baseUrl: fields.baseUrl,
-        accountEmail: fields.email,
-        apiToken: fields.token,
-      });
+      const metadata = await client.createConnector(connectorInput(fields, jiraLive, creationId));
       // Token is dropped from state and unmounted here — the create request was its only hop.
       setFields(DEFAULT_FIELDS);
       onCreated(metadata);
@@ -153,16 +187,17 @@ function useAddConnectorEntry(
     } catch (error_) {
       setSubmitError(error_ instanceof ApiError ? error_.message : t("atlassianConnectors.retry"));
     } finally {
+      locked.current = false;
       setBusy(false);
     }
   };
   const submit = (event: SubmitEvent): void => {
     event.preventDefault();
-    const nextErrors = validateEntry(fields);
+    const nextErrors = validateEntry(fields, jiraLive);
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length === 0) void run();
   };
-  return { fields, errors, submitError, busy, setText, setProvider, submit };
+  return { fields, errors, submitError, busy, setText, setProvider, submit, jiraLive };
 }
 
 function ProviderSelect({
@@ -207,12 +242,14 @@ function EntryForm({
   const { fields, errors, submitError, busy } = controller;
   return (
     <form className="acx-form" data-testid="acx-add-form" onSubmit={controller.submit}>
-      <ProviderSelect
-        id={`${prefix}-provider`}
-        value={fields.provider}
-        onChange={controller.setProvider}
-      />
-      {TEXT_FIELDS.map((cfg) => (
+      {!controller.jiraLive ? (
+        <ProviderSelect
+          id={`${prefix}-provider`}
+          value={fields.provider}
+          onChange={controller.setProvider}
+        />
+      ) : null}
+      {TEXT_FIELDS.filter((cfg) => !controller.jiraLive || cfg.name !== "email").map((cfg) => (
         <TextField
           key={cfg.name}
           id={`${prefix}-${cfg.name}`}
@@ -294,11 +331,21 @@ function VerifyPhase({
   );
 }
 
-export function AddConnectorForm({ client, onCreated, onClose }: AddConnectorFormProps): ReactNode {
+export function AddConnectorForm({
+  client,
+  onCreated,
+  onClose,
+  jiraLive = false,
+}: AddConnectorFormProps): ReactNode {
   const [phase, setPhase] = useState<Phase>({ kind: "entry" });
-  const controller = useAddConnectorEntry(client, onCreated, (authRef) => {
-    setPhase({ kind: "verify", authRef });
-  });
+  const controller = useAddConnectorEntry(
+    client,
+    onCreated,
+    (authRef) => {
+      setPhase({ kind: "verify", authRef });
+    },
+    jiraLive,
+  );
   if (phase.kind === "verify") {
     return <VerifyPhase client={client} authRef={phase.authRef} onClose={onClose} />;
   }

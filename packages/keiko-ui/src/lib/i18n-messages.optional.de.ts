@@ -1,5 +1,9 @@
 import type { OptionalWidgetMessageCatalog } from "./i18n-messages.optional.en";
 export const OPTIONAL_WIDGET_DE_MESSAGES = {
+  "atlassianConnectors.live.title": "Jira Live-Pods",
+  "atlassianConnectors.live.subtitle":
+    "Aktuelle Jira-Daten im verbundenen Chat nach ausdrücklicher Lesefreigabe lesen. Der Live-Zugriff erstellt keinen Index und keine Dokumentensammlung.",
+  "atlassianConnectors.live.add": "Jira-Pod erstellen",
   "chat.jira.title": "Jira in diesem Chat lesen",
   "chat.jira.disclosure":
     "Jira-Inhalte werden an das ausgewählte Modell übermittelt und in diesem Gespräch gespeichert. Die Freigabe gilt für diesen Chat bis zum Ablauf oder einer Änderung der Verbindung oder Berechtigungen. Sie erlaubt keine Schreibaktionen.",

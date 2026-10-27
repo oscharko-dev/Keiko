@@ -56,6 +56,7 @@ import type {
 import { STATUS_LABEL_KEYS } from "./connector-graph-types";
 import { useConnectorGraph } from "./connector-graph-state";
 import { CapsuleSetComposeDialog } from "./capsule-set-compose";
+import { AtlassianConnectorsPanel } from "@/app/components/desktop/widgets/connectors/AtlassianConnectorsPanel";
 import { HtmlManualPodCreate } from "./html-manual-pod-create";
 import { CapsuleDetail } from "./[capsuleId]/capsule-detail";
 import {
@@ -1841,6 +1842,7 @@ export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
         {/* Create a live HTML Manual Knowledge Pod from a site origin (Issue #2063); refresh of an
             existing pod lives on the pod detail. Reloads the catalog when the job settles. */}
         <HtmlManualPodCreate onCreateComplete={reload} />
+        <AtlassianConnectorsPanel jiraLive />
         <CapsuleSection
           capsules={capsules}
           isLoading={isLoading}

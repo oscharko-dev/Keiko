@@ -22,6 +22,7 @@ export interface ConnectorCardProps {
   readonly connector: AtlassianConnectorMetadata;
   readonly client: AtlassianConnectorsClient;
   readonly onDeleted: (authRef: string) => void;
+  readonly onChanged?: () => void;
   readonly pollIntervalMs?: number;
 }
 
@@ -42,6 +43,7 @@ function useConnectorCard(
   client: AtlassianConnectorsClient,
   connector: AtlassianConnectorMetadata,
   onDeleted: (authRef: string) => void,
+  onChanged: (() => void) | undefined,
 ): CardController {
   const t = useTranslate();
   const [expanded, setExpanded] = useState(false);
@@ -49,15 +51,17 @@ function useConnectorCard(
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>();
-  const fail = (error_: unknown): void => {
+  const fail = (error_: unknown): void =>
     setError(error_ instanceof ApiError ? error_.message : t("atlassianConnectors.retry"));
-  };
   const verify = (): void => {
     setBusy(true);
     setError(undefined);
     client
       .verifyConnector(connector.authRef)
-      .then((result) => setVerifyStatus(result.status))
+      .then((result) => {
+        setVerifyStatus(result.status);
+        onChanged?.();
+      })
       .catch(fail)
       .finally(() => setBusy(false));
   };
@@ -167,7 +171,13 @@ function DeleteConfirm({
   );
 }
 
-function CardActions({ ctrl }: { readonly ctrl: CardController }): ReactNode {
+function CardActions({
+  ctrl,
+  canSync,
+}: {
+  readonly ctrl: CardController;
+  readonly canSync: boolean;
+}): ReactNode {
   const t = useTranslate();
   return (
     <div className="acx-actions">
@@ -176,9 +186,16 @@ function CardActions({ ctrl }: { readonly ctrl: CardController }): ReactNode {
           ? t("atlassianConnectors.verify.verifying")
           : t("atlassianConnectors.verify.button")}
       </button>
-      <button type="button" className="lk-btn" aria-expanded={ctrl.expanded} onClick={ctrl.toggle}>
-        {t("atlassianConnectors.list.manage")}
-      </button>
+      {canSync ? (
+        <button
+          type="button"
+          className="lk-btn"
+          aria-expanded={ctrl.expanded}
+          onClick={ctrl.toggle}
+        >
+          {t("atlassianConnectors.list.manage")}
+        </button>
+      ) : null}
       <button type="button" className="lk-btn lk-btn-danger" onClick={ctrl.askDelete}>
         {t("atlassianConnectors.list.delete")}
       </button>
@@ -186,25 +203,37 @@ function CardActions({ ctrl }: { readonly ctrl: CardController }): ReactNode {
   );
 }
 
+function currentVerifyStatus(
+  connector: AtlassianConnectorMetadata,
+  local: AtlassianConnectorVerifyStatus | undefined,
+): AtlassianConnectorVerifyStatus | undefined {
+  if (connector.deployment !== "data-center" || connector.livePod === undefined) return local;
+  const pod = connector.livePod;
+  return pod.verificationInProgress || pod.verificationStatus === "unverified"
+    ? undefined
+    : pod.verificationStatus;
+}
+
 export function ConnectorCard({
   connector,
   client,
   onDeleted,
+  onChanged,
   pollIntervalMs,
 }: ConnectorCardProps): ReactNode {
-  const ctrl = useConnectorCard(client, connector, onDeleted);
+  const ctrl = useConnectorCard(client, connector, onDeleted, onChanged);
+  const canSync = connector.deployment !== "data-center";
+  const verifyStatus = currentVerifyStatus(connector, ctrl.verifyStatus);
   const syncPollProps = pollIntervalMs === undefined ? {} : { pollIntervalMs };
   return (
     <li className="acx-card" data-testid="acx-connector" data-auth-ref={connector.authRef}>
-      <CardHeader connector={connector} verifyStatus={ctrl.verifyStatus} />
+      <CardHeader connector={connector} verifyStatus={verifyStatus} />
       {ctrl.error !== undefined ? (
         <p className="acx-error" role="alert">
           {ctrl.error}
         </p>
       ) : null}
-      {ctrl.verifyStatus !== undefined ? (
-        <VerifyConnectionStatus status={ctrl.verifyStatus} />
-      ) : null}
+      {verifyStatus !== undefined ? <VerifyConnectionStatus status={verifyStatus} /> : null}
       {ctrl.confirming ? (
         <DeleteConfirm
           busy={ctrl.busy}
@@ -212,9 +241,9 @@ export function ConnectorCard({
           onConfirm={ctrl.confirmDelete}
         />
       ) : (
-        <CardActions ctrl={ctrl} />
+        <CardActions ctrl={ctrl} canSync={canSync} />
       )}
-      {ctrl.expanded ? (
+      {ctrl.expanded && canSync ? (
         <ConnectorSyncPanel
           client={client}
           authRef={connector.authRef}
