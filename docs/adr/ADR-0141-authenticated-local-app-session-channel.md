@@ -316,7 +316,10 @@ operation lease on the `coding-run` surface, correlated by the run id, once per 
 A run-state observation every five seconds only releases that lease once the run has left those
 states (paused, settled, taken over, recovery-required or gone); it never renews, extends or
 re-acquires anything, and holding the session again after a pause takes a new admitted mutation.
-The lease protects only inactivity, like every other: revocation, rotation, restart, capacity
+A rotation replaces the session record without its operations, so the rotated credential holds the
+lease again on its next admitted mutation, which first ends the predecessor's lease. An unreadable
+run state counts as settled, each lease releases independently, and either failure records a
+body-free server diagnostic. The lease protects only inactivity, like every other: revocation, rotation, restart, capacity
 eviction and the absolute lifetime still end the session at once. Leases are bounded per composed
 channel (eight runs, four sessions per run) and graph disposal releases every one as `aborted`. The
 existing `coding-app-session.operation.state` acquisition and release lines record it.
