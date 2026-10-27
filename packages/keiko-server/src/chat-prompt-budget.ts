@@ -1,4 +1,5 @@
 import type {
+  ContentRedactionPolicy,
   ContextAssemblyDiagnostics,
   ContextCompactionRecord,
   ContextProfile,
@@ -30,9 +31,9 @@ import {
 import {
   CONVERSATION_CONTEXT_BLOCK_HEADER,
   CONVERSATION_MEMORY_BLOCK_HEADER,
-  CONVERSATION_SYSTEM_PROMPT,
   CONVERSATION_USER_BLOCK_HEADER,
   composeConversationPrompt,
+  conversationSystemPrompt,
   renderConversationDocumentContextBlock,
 } from "./conversation-prompt.js";
 import { composeDiscussionDirectiveBlock } from "./discussion-prompt.js";
@@ -83,6 +84,7 @@ interface PromptAssemblyInput {
   readonly totalDocumentEntries: number;
   readonly redactionSecrets: readonly string[];
   readonly allocatorDiagnostics?: ContextAssemblyDiagnostics | undefined;
+  readonly contentRedaction?: ContentRedactionPolicy | undefined;
 }
 
 export interface PromptLaneSelection {
@@ -234,6 +236,11 @@ function historyLaneItems(historyPrefix: readonly ChatMessage[]): ContextLaneInp
   }));
 }
 
+function systemContractLane(contentRedaction?: ContentRedactionPolicy): ContextLaneInput {
+  const text = conversationSystemPrompt(contentRedaction);
+  return { laneId: "system-contract", items: [{ id: "system-contract", text, score: 1 }] };
+}
+
 function buildPromptAllocatorLanes(input: {
   readonly protectedSkill?: MarkdownSkillDocument | undefined;
   readonly request: PromptAssemblyInput["request"];
@@ -241,12 +248,10 @@ function buildPromptAllocatorLanes(input: {
   readonly memoryEntries: readonly ConversationMemoryContextEntryWire[];
   readonly compactionContextText?: string | undefined;
   readonly documentContext: readonly ConversationDocumentContextWire[];
+  readonly contentRedaction?: ContentRedactionPolicy | undefined;
 }): readonly ContextLaneInput[] {
   return [
-    {
-      laneId: "system-contract",
-      items: [{ id: "system-contract", text: CONVERSATION_SYSTEM_PROMPT, score: 1 }],
-    },
+    systemContractLane(input.contentRedaction),
     {
       laneId: "user-task",
       items: [
@@ -292,6 +297,7 @@ function selectPromptLanes(input: {
   readonly memoryEntries: readonly ConversationMemoryContextEntryWire[];
   readonly compactionContextText?: string | undefined;
   readonly documentContext: readonly ConversationDocumentContextWire[];
+  readonly contentRedaction?: ContentRedactionPolicy | undefined;
 }): PromptLaneSelection {
   const allocation = allocateContext({
     profile: input.profile,
@@ -385,6 +391,7 @@ function compactHistoryForBudget(
       effectiveInputBudget: historyBudget,
       preserveNewestTurn: false,
       redactionSecrets: input.redactionSecrets,
+      contentRedaction: input.contentRedaction,
     });
   } catch (error) {
     if (error instanceof ContextOverflowError) {
@@ -532,6 +539,7 @@ function assembleSelectedGatewayPrompt(input: {
   readonly compactionContextText?: string | undefined;
   readonly documentContext: readonly ConversationDocumentContextWire[];
   readonly redactionSecrets: readonly string[];
+  readonly contentRedaction?: ContentRedactionPolicy | undefined;
 }): GatewayPromptAssembly | undefined {
   const baseInput = {
     protectedSkill: input.protectedSkill,
@@ -546,6 +554,7 @@ function assembleSelectedGatewayPrompt(input: {
     totalDocumentEntries: input.documentContext.length,
     compactionContextText: input.compactionContextText,
     redactionSecrets: input.redactionSecrets,
+    contentRedaction: input.contentRedaction,
   };
   const selection = selectPromptLanes(input);
   for (const variant of promptLaneSelectionVariants(selection)) {
@@ -616,7 +625,7 @@ function adjustLatestPromptOutputBudget<
   if (input.protectedSkill !== undefined) return input;
   const messages = gatewayConversationImageAccounting(
     [
-      { role: "system", content: CONVERSATION_SYSTEM_PROMPT },
+      { role: "system", content: conversationSystemPrompt(input.contentRedaction) },
       {
         role: "user",
         content: composeConversationPrompt(

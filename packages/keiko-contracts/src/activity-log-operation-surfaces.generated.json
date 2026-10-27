@@ -12,6 +12,7 @@
   "activity-log.writer-rejected": "lifecycle-crash",
   "atlassian.credential.rejected": "bff",
   "chat.compaction.facts.classified": "bff",
+  "chat.content-policy.resolved": "lifecycle-crash",
   "chat.context.failed": "bff",
   "chat.context.management": "bff",
   "chat.context.selected": "bff",

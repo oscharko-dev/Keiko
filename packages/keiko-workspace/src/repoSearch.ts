@@ -24,6 +24,8 @@ import {
   readWorkspaceFileForEditing,
   readWorkspaceFileBytesPrefixForInternalUse,
   type WorkspaceContentLane,
+  workspaceContentPolicy,
+  workspaceContentSecrets,
 } from "./discovery.js";
 import {
   FileTooLargeError,
@@ -3980,13 +3982,14 @@ function excerptFileLines(
     { maxBytes: MAX_EXCERPT_FILE_BYTES },
     fs,
   ).rawText;
-  return excerptTextLines(raw, request.scopePath, lane);
+  return excerptTextLines(raw, request.scopePath, lane, scope.workspace);
 }
 
 function excerptTextLines(
   raw: string,
   scopePath: string,
   lane: WorkspaceContentLane,
+  workspace: WorkspaceInfo,
 ): readonly string[] {
   if (raw.includes("\0")) {
     throw new RepoSearchUnsupportedFileError(
@@ -3994,7 +3997,14 @@ function excerptTextLines(
       "binary",
     );
   }
-  return (lane === "editor" ? raw : redactWorkspaceSource(raw, scopePath)).split("\n");
+  if (lane === "editor") return raw.split("\n");
+  return redactWorkspaceSource(
+    raw,
+    scopePath,
+    true,
+    workspaceContentPolicy(workspace),
+    workspaceContentSecrets(workspace),
+  ).split("\n");
 }
 
 async function readExcerptLines(
@@ -4030,7 +4040,7 @@ async function readExcerptLines(
         "binary",
       );
     }
-    return excerptTextLines(decoded.text, request.scopePath, lane);
+    return excerptTextLines(decoded.text, request.scopePath, lane, scope.workspace);
   } catch (error) {
     if (error instanceof WorkspaceReadError) throw excerptUnreadable(request.scopePath);
     throw error;
