@@ -1082,6 +1082,43 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "atlassian.credential.updated",
+    category: "setup",
+    owner: "keiko-server",
+    emitter: "atlassian.credentialActivity.recordCredentialUpdated",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      action: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["rename", "replace-token", "rename-and-replace-token"],
+      },
+      authenticationGeneration: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "end",
+    analyzerProjection: "timeline",
+    failureClasses: ["atlassian-credential-custody"],
+    proofIds: ["atlassian.credential.updated.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "chat.compaction.facts.classified",
     category: "gateway",
     owner: "keiko-server",

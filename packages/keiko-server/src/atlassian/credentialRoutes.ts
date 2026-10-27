@@ -42,7 +42,11 @@ import {
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
-import { recordCredentialCreated, recordCredentialsListed } from "./credentialActivity.js";
+import {
+  recordCredentialCreated,
+  recordCredentialsListed,
+  recordCredentialUpdated,
+} from "./credentialActivity.js";
 import {
   jiraChatActorDigest,
   ownsAtlassianCredential,
@@ -408,5 +412,33 @@ export function handleVerifyAtlassianConnectorCredential(
       ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
     );
     return { status: 200, body: { authRef: metadata.authRef, status } };
+  });
+}
+
+/** PATCH updates the owned Live-Pod resource; secret-bearing input never enters the response. */
+export function handleUpdateAtlassianConnectorCredential(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> | RouteResult {
+  const guard = requireCustody(deps, ctx.correlationId);
+  if (isRouteResult(guard)) return guard;
+  return runHandler(guard, ctx, async () => {
+    const body = await readJsonObject(ctx.req);
+    const authRef = decodeAuthRefParam(ctx);
+    const metadata = authRef === undefined ? undefined : guard.custody.getMetadata(authRef);
+    if (metadata === undefined || !ownsAtlassianCredential(deps, metadata))
+      throw new AtlassianCredentialCustodyError("credential-not-found");
+    const updated = guard.custody.updateLivePod(metadata.authRef, body);
+    recordCredentialUpdated(
+      guard,
+      ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+      updated.generation ?? 1,
+      body.apiToken === undefined
+        ? "rename"
+        : body.displayName === undefined
+          ? "replace-token"
+          : "rename-and-replace-token",
+    );
+    return { status: 200, body: publicAtlassianCredential(updated) };
   });
 }

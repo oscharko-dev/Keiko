@@ -145,7 +145,7 @@ Status: **Partial — not accepted**. All three mode selections persist through 
 
 - [ ] **AC3:** Disconnect, replacement, Pod deletion and Keiko-managed token rotation/revocation revoke read grants and invalidate pending approvals and queued calls. Jira-side token revocation is enforced on the next Jira call; observed auth failure invalidates local readiness and pending work without introducing polling or webhooks. Tests cover these changes during approval and before effect; no stale request uses the old or newly substituted credential.
 
-Status: **Partial — not accepted**. HTTP generation capture, verification ticket settlement and atomic binding generations prevent the implemented stale credential/probe/update paths. Retained real-route proofs are recorded below. Credential deletion and failed/aborted re-verification now atomically invalidate dependent Chat bindings and cancel their active/queued turns through the existing serializer, including direct credential routes. Generation-checked replacement now exists in custody with durable failure states; authenticated rotation integration, observed tool-call failures and grant/approval invalidation remain pending.
+Status: **Partial — not accepted**. HTTP generation capture, verification ticket settlement and atomic binding generations prevent the implemented stale credential/probe/update paths. Retained real-route proofs are recorded below. Credential deletion and failed/aborted re-verification now atomically invalidate dependent Chat bindings and cancel their active/queued turns through the existing serializer, including direct credential routes. Generation-checked replacement now exists in custody with durable failure states; management UI, observed tool-call failures and grant/approval invalidation remain pending.
 
 - [ ] **AC4:** Two chats using different Pods are isolated; two chats deliberately using the same Pod share neither grants nor approval state; a new or copied Chat identity cannot inherit grants or approvals. Data-Pod-only grounding is byte-for-byte unchanged in behaviour and existing Workbench MCP works unchanged.
 
@@ -201,7 +201,7 @@ Status: **Partial — not accepted**. Bounded Data Center probes and generation/
 
 - [ ] **AC4:** Rename, reverify, token replacement and removal survive reload and use the existing server owner. Tests delete/replace a Pod-owned credential through the existing credential route while two Chats share the Pod and deliver stale verification replies after rotation; neither alternate entry points nor late replies restore stale access. Removal deletes the owned credential and dependent Chat bindings; token rotation preserves their visible association but invalidates authorization, read grants and pending work until re-verification; deleting one Pod never damages unrelated credentials or Data Pods.
 
-Status: **Partial — not accepted**. Owned credential deletion and stale-verification refusal are exercised through actual routes; binding/readiness generations persist in existing owners. Dependent-Chat cleanup and cancellation now run from the custody owner, including direct credential deletion and failed/aborted verification; unrelated Pods remain unchanged. Rename/rotation custody primitives now retain safe pending states; their authenticated endpoint/UI, startup coordination and grant/approval invalidations remain pending.
+Status: **Partial — not accepted**. Owned credential deletion and stale-verification refusal are exercised through actual routes; binding/readiness generations persist in existing owners. Dependent-Chat cleanup and cancellation now run from the custody owner, including direct credential deletion and failed/aborted verification; unrelated Pods remain unchanged. Rename/rotation custody primitives now retain safe pending states; their authenticated PATCH endpoint now covers owner/CSRF checks, stale generations, both shared-Pod Chats and late verification. Management UI, startup coordination and grant/approval invalidations remain pending.
 
 - [ ] **AC5:** The ordinary Jira form requires no email, MCP configuration or vector-index setup. The initial implemented ticket capabilities are explained plainly without claiming all Jira APIs or guaranteed write permissions.
 
@@ -1358,3 +1358,25 @@ pending. All affected acceptance criteria remain partial.
 Focused checkpoint results: 329 custody, metadata, Chat binding, credential/write/search route and
 policy-regression tests pass. Package build, root typecheck, changed lint/format, staged semantic,
 ADR-index and 97 registry tests pass. Final aggregate/live/UI qualification remains pending.
+
+### Authenticated rename/token replacement — #4085 AC2/AC4, #4084 AC3
+
+The existing credential resource now accepts generation-checked PATCH through the standard
+CSRF/body-size/owner/error paths. It accepts only name/token changes to owned Live-Pod credentials;
+responses use the public metadata projection. Rotation preserves two shared-Pod Chat associations,
+advances their generations and leaves another Pod untouched. Old updates and delayed verification
+cannot restore prior access. Two HTTP regressions fail against the previous route table. Additional
+HTTP coverage checks CSRF and a paused verification during replacement.
+
+The new registered `atlassian.credential.updated` event reconstructs rename, token replacement and
+combined update with generation counts only. Real writer/reader proof checks the absence of token
+and credential reference; logging failure after mutation does not turn success into a retryable
+operation. Canonical failure-class obligations and generated inventories include the event. The
+existing semantic baseline needed a location refresh: all 938 group membership multisets were
+compared and remained identical; no group or exception was added. Management UI, startup
+reconciliation, grants/approvals and full live qualification remain pending.
+
+Focused results: 130 custody/credential-route/activity tests, 109 route-table/diagnostic regressions
+and 97 registry tests pass. Package build, root typecheck, changed lint/format, semantic membership
+comparison and refreshed gate, ADR index and error-observability checks pass. Full aggregate,
+assembled-package, management UI and licensed live checks remain pending.

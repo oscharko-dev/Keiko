@@ -384,6 +384,7 @@ import {
 import {
   handleCreateAtlassianConnectorCredential,
   handleDeleteAtlassianConnectorCredential,
+  handleUpdateAtlassianConnectorCredential,
   handleListAtlassianConnectorCredentials,
   handleVerifyAtlassianConnectorCredential,
 } from "./atlassian/credentialRoutes.js";
@@ -1416,7 +1417,7 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // Issue #2241 (Epic #2238, ADR-0128) — Atlassian connector credential custody. Write-only
   // after creation: create answers authRef + metadata (never the secret), list is metadata-only,
   // delete removes ciphertext + metadata and invalidates the authRef, and verify runs one bounded
-  // probe against the configured base URL returning the closed status union. POST/DELETE inherit
+  // probe against the configured base URL returning the closed status union. POST/PATCH/DELETE inherit
   // the server CSRF + JSON content-type gate.
   {
     method: "GET",
@@ -1427,6 +1428,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/atlassian-connectors/credentials",
     handler: handleCreateAtlassianConnectorCredential,
+  },
+  {
+    method: "PATCH",
+    pattern: "/api/atlassian-connectors/credentials/:authRef",
+    handler: handleUpdateAtlassianConnectorCredential,
   },
   {
     method: "DELETE",

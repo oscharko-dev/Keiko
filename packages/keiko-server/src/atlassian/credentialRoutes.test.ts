@@ -1272,3 +1272,155 @@ describe("normal Chat Jira binding through authenticated PATCH", () => {
     expect(fixtureStore.findChatById(other.id)).toEqual(other);
   });
 });
+
+function updateJiraCredential(authRef: string, patch: Record<string, unknown>): Promise<Response> {
+  return fetch(`${baseUrl()}/api/atlassian-connectors/credentials/${authRef}`, {
+    method: "PATCH",
+    headers: csrfHeaders(),
+    body: JSON.stringify(patch),
+  });
+}
+
+function credentialForPod(podId: string): AtlassianCredentialMetadata {
+  const metadata = wiring.custody
+    .list()
+    .find((row) => row.deployment === "data-center" && row.livePod?.podId === podId);
+  if (metadata === undefined) throw new Error("Expected synthetic credential");
+  return metadata;
+}
+
+describe("authenticated Live Pod credential updates", () => {
+  it("a delayed verification cannot restore readiness after the token replacement route", async () => {
+    const credential = credentialForPod(await readyJiraPod());
+    const entered = probeSignal();
+    const release = probeSignal();
+    await rebuild({
+      ...wiring,
+      httpBodyPortFactory:
+        () =>
+        async (request): Promise<AtlassianHttpBodyResult> => {
+          entered.resolve();
+          await release.promise;
+          return jiraProbeResponse(request);
+        },
+    });
+    const pending = verifyCredentialRequest(credential.authRef);
+    await entered.promise;
+    const changed = await updateJiraCredential(credential.authRef, {
+      expectedGeneration: 1,
+      apiToken: SYNTHETIC_TOKEN + "rotated",
+    }).finally(release.resolve);
+    const stale = await pending;
+    expect(changed.status).toBe(200);
+    expect(stale.status).toBe(409);
+    expect(wiring.custody.getMetadata(credential.authRef)).toMatchObject({
+      generation: 2,
+      livePod: { verificationStatus: "unverified", verificationInProgress: false },
+    });
+  });
+
+  it("applies the existing CSRF guard before token replacement", async () => {
+    const credential = credentialForPod(await readyJiraPod());
+    const response = await fetch(
+      `${baseUrl()}/api/atlassian-connectors/credentials/${credential.authRef}`,
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ expectedGeneration: 1, apiToken: SYNTHETIC_TOKEN }),
+      },
+    );
+    expect(response.status).toBe(403);
+    expect(wiring.custody.getMetadata(credential.authRef)).toEqual(credential);
+  });
+
+  it("renames and replaces tokens without losing the Pod association or exposing private state", async () => {
+    const podId = await readyJiraPod();
+    const credential = credentialForPod(podId);
+    const first = await updatedJiraChat(jiraChat(), { jiraPodId: podId });
+    const second = await updatedJiraChat(jiraChat(), { jiraPodId: podId });
+    const otherId = await readyJiraPod();
+    const other = await updatedJiraChat(jiraChat(), { jiraPodId: otherId });
+    const sink = createFileServerLogSink(configDir, { level: "debug" });
+    await rebuild({ ...wiring, activityLog: sink });
+    try {
+      const renamed = await updateJiraCredential(credential.authRef, {
+        expectedGeneration: 1,
+        displayName: "Renamed Jira",
+      });
+      expect(renamed.status).toBe(200);
+      expect(await renamed.json()).toMatchObject({ generation: 1, displayName: "Renamed Jira" });
+      const replaced = await updateJiraCredential(credential.authRef, {
+        expectedGeneration: 1,
+        apiToken: SYNTHETIC_TOKEN + "new",
+      });
+      expect(replaced.status).toBe(200);
+      const response = await replaced.text();
+      expect(JSON.parse(response)).toMatchObject({ authRef: credential.authRef, generation: 2 });
+      expect(response).not.toContain("livePod");
+      expect(response).not.toContain(SYNTHETIC_TOKEN);
+      const both = await updateJiraCredential(credential.authRef, {
+        expectedGeneration: 2,
+        displayName: "Renamed Again",
+        apiToken: SYNTHETIC_TOKEN + "newer",
+      });
+      expect(both.status).toBe(200);
+      expect(
+        (
+          await updateJiraCredential(credential.authRef, {
+            expectedGeneration: 1,
+            apiToken: SYNTHETIC_TOKEN,
+          })
+        ).status,
+      ).toBe(409);
+      for (const chat of [first, second])
+        expect(fixtureStore.findChatById(chat.id)?.jiraPodBinding).toMatchObject({
+          podId,
+          authenticationGeneration: 3,
+          bindingGeneration: 3,
+        });
+      expect(fixtureStore.findChatById(other.id)).toEqual(other);
+      expect(wiring.custody.getMetadata(credential.authRef)).toMatchObject({
+        generation: 3,
+        livePod: { verificationStatus: "unverified" },
+      });
+    } finally {
+      sink.close?.();
+    }
+    const lines = persistedActivityLogLines(
+      readPersistedActivityLog(configDir),
+      "atlassian.credential.updated",
+    );
+    const events = lines.map((line) =>
+      expectActivityLogProof("atlassian.credential.updated.line", line),
+    );
+    expect(events.map((event) => event.action)).toEqual([
+      "rename",
+      "replace-token",
+      "rename-and-replace-token",
+    ]);
+    expect(events.map((event) => event.authenticationGeneration)).toEqual([1, 2, 3]);
+    expect(lines.join("\n")).not.toContain(credential.authRef);
+    expect(lines.join("\n")).not.toContain(SYNTHETIC_TOKEN);
+  });
+
+  it("refuses foreign Pod updates and malformed bodies without changing custody", async () => {
+    const credential = credentialForPod(await readyJiraPod());
+    activePrincipal = "another-operator";
+    expect(
+      (
+        await updateJiraCredential(credential.authRef, {
+          expectedGeneration: 1,
+          apiToken: SYNTHETIC_TOKEN,
+        })
+      ).status,
+    ).toBe(404);
+    activePrincipal = "synthetic-operator";
+    for (const patch of [
+      {},
+      { expectedGeneration: 1, apiToken: "short" },
+      { expectedGeneration: 1, baseUrl: "https://other.invalid" },
+    ])
+      expect((await updateJiraCredential(credential.authRef, patch)).status).toBe(400);
+    expect(wiring.custody.getMetadata(credential.authRef)).toEqual(credential);
+  });
+});

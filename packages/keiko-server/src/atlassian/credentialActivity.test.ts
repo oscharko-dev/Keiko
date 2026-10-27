@@ -7,7 +7,11 @@ import {
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
-import { recordCredentialCreated, recordConnectionCheck } from "./credentialActivity.js";
+import {
+  recordCredentialCreated,
+  recordConnectionCheck,
+  recordCredentialUpdated,
+} from "./credentialActivity.js";
 
 const metadata: AtlassianCredentialMetadata = {
   schemaVersion: "1",
@@ -20,6 +24,35 @@ const metadata: AtlassianCredentialMetadata = {
 };
 
 describe("credential creation activity", () => {
+  it("does not turn an applied update into a retryable failure when logging fails", () => {
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    expect(() => {
+      recordCredentialUpdated(
+        {
+          activityLog: {
+            write: (): never => {
+              throw new Error("synthetic sink failure");
+            },
+          },
+          diagnostics: {
+            record: (record): void => {
+              diagnostics.push(record);
+            },
+          },
+        },
+        "credential-update-fixture",
+        2,
+        "replace-token",
+      );
+    }).not.toThrow();
+    expect(diagnostics).toMatchObject([
+      {
+        correlationId: "credential-update-fixture",
+        message: "atlassian-credential-updated-activity-log-failed",
+      },
+    ]);
+  });
+
   it.each(["ok", "auth-failed", "invalid-response", "tls-failed", "sync-unsupported"] as const)(
     "records the closed connection outcome %s",
     (result) => {

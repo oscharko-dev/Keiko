@@ -431,7 +431,12 @@ Execution and verification refuse these pending records before reading the vault
 settles only after the new sealed value and metadata are both written; a failed replacement requires
 an explicit replacement at the current generation. Deletion may retry its retained intent. Rename
 keeps authorization stable. These custody primitives preserve Pod identity and reject stale updates.
-Restart reconciliation of dependent UI state, authenticated update routes and Chat grant/approval
+The authenticated credential resource accepts PATCH with `expectedGeneration` and `displayName`,
+`apiToken`, or both. The existing CSRF and owner checks apply before custody mutation; the response
+uses the same public metadata allowlist and cannot expose the private lifecycle block or token.
+Applied rename/replacement events record only action and generation on the existing Activity Log.
+A logging fault after commit produces a diagnostic without converting success into a retryable
+mutation failure. Restart reconciliation of dependent UI state, management UI and Chat grant/approval
 revocation remain separate completion work.
 
 Both outbound HTTP factories capture the selected credential generation by value. The custody

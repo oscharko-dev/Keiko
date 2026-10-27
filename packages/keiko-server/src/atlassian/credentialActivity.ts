@@ -194,3 +194,55 @@ export function recordCredentialCreated(
     });
   }
 }
+
+const ATLASSIAN_CREDENTIAL_UPDATED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "atlassian.credential.updated",
+  category: "setup",
+  owner: "keiko-server",
+  emitter: "atlassian.credentialActivity.recordCredentialUpdated",
+  fields: {
+    action: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["rename", "replace-token", "rename-and-replace-token"],
+    },
+    authenticationGeneration: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["atlassian-credential-custody"],
+  proofIds: ["atlassian.credential.updated.line"],
+  releaseImpact: "patch",
+});
+
+export function recordCredentialUpdated(
+  deps: Pick<AtlassianConnectorCredentialDeps, "activityLog" | "diagnostics">,
+  correlationId: string,
+  authenticationGeneration: number,
+  action: "rename" | "replace-token" | "rename-and-replace-token",
+): void {
+  try {
+    deps.activityLog?.write(
+      activityLogEvent(
+        ATLASSIAN_CREDENTIAL_UPDATED_OPERATION,
+        { correlationId, status: 200 },
+        { action, authenticationGeneration, completeness: "complete", loss: "none" },
+      ),
+    );
+  } catch (error) {
+    emitServerDiagnostic(deps.diagnostics, {
+      correlationId,
+      timestamp: new Date().toISOString(),
+      operation: "atlassian.credential.updated",
+      source: "atlassian.credential-activity.record-updated",
+      errorClass: contentFreeErrorClass(error),
+      message: "atlassian-credential-updated-activity-log-failed",
+    });
+  }
+}

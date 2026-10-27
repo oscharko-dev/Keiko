@@ -1625,7 +1625,8 @@
         "end": [
           "atlassian.connection.checked",
           "atlassian.credential.created",
-          "atlassian.credential.listed"
+          "atlassian.credential.listed",
+          "atlassian.credential.updated"
         ],
         "failure": ["atlassian.credential.rejected"],
         "loss": []
@@ -1646,13 +1647,18 @@
         {
           "op": "atlassian.credential.rejected",
           "mode": "none"
+        },
+        {
+          "op": "atlassian.credential.updated",
+          "mode": "correlation"
         }
       ],
       "lossSignals": [],
       "resourceSignals": [
         "atlassian.connection.checked",
         "atlassian.credential.created",
-        "atlassian.credential.listed"
+        "atlassian.credential.listed",
+        "atlassian.credential.updated"
       ],
       "replayReferences": [],
       "operations": [
@@ -1767,6 +1773,36 @@
             "causeChain": false
           },
           "proofIds": ["atlassian.credential.rejected.reason"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "atlassian.credential.updated",
+          "owner": "keiko-server",
+          "category": "setup",
+          "lifecycle": "end",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "action",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "authenticationGeneration",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["atlassian.credential.updated.line"],
           "replayReferences": [],
           "missingObligations": []
         }

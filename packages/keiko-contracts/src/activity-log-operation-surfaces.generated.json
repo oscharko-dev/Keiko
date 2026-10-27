@@ -15,6 +15,7 @@
   "atlassian.credential.created": "bff",
   "atlassian.credential.listed": "bff",
   "atlassian.credential.rejected": "bff",
+  "atlassian.credential.updated": "bff",
   "chat.compaction.facts.classified": "bff",
   "chat.context.failed": "bff",
   "chat.context.management": "bff",
