@@ -253,8 +253,11 @@ Accepted-turn authority minting reads the persisted human user message and curre
 verified Chat binding. It derives mode/ceiling and acceptance evidence server-side, retains
 the existing authority registry and grants no read consent or concrete write approval. The
 same turn deadline bounds `expiresAt` and runtime; the initial limits are five minutes,
-30 tool calls and 100,000 cumulative prompt tokens. The caller must retain this single
-registration across tool, model and retry phases. Registration does not revoke a previous
+30 tool calls and 100,000 cumulative prompt tokens. A deterministic identity derived from the stored Chat/message pair makes duplicate minting
+idempotent, with the registry refusing any changed envelope under that identity. The stored human
+message must still be the latest accepted pending turn (or the current legacy user message); its
+stored timestamp fixes the deadline. The caller retains this registration across tool, model and
+retry phases. Registration does not revoke a previous
 turn's valid consent issuer. Component tests prove grant reuse across independently accepted
 turns; the ordinary Chat entrypoint still needs the integrated lifecycle proof.
 

@@ -81,7 +81,7 @@ function acceptedTurnEnvelope(
   deploymentCeiling: CodingWorkbenchMode,
 ): ChatToolAuthorityEnvelope {
   const requestedMode = facts.chat.toolMode ?? "governed-assist";
-  const runId = randomUUID();
+  const runId = `chat-${sha256Hex(canonicalise({ chatId: turn.chatId, userMessageId: turn.userMessageId }))}`;
   return {
     schemaVersion: "1",
     kind: "chat-tool-authority",
@@ -112,13 +112,25 @@ function acceptedTurnEnvelope(
   };
 }
 
-/** Called once after authenticated human-turn admission; retain the result across every phase. */
-function validAcceptedTurn(deps: JiraChatAuthorityDeps, turn: AcceptedJiraChatTurn): boolean {
+function isCurrentAcceptedMessage(
+  deps: JiraChatAuthorityDeps,
+  turn: AcceptedJiraChatTurn,
+): boolean {
   const message = deps.store.findMessageById(turn.userMessageId);
-  const deadline = turn.startedAtMs + DEFAULT_LIMITS.maxWallTimeMs;
   return (
     message?.role === "user" &&
     message.chatId === turn.chatId &&
+    message.timestamp === turn.startedAtMs &&
+    (message.turnState === undefined || message.turnState === "pending") &&
+    deps.store.listMessages(turn.chatId, 1).at(-1)?.id === message.id
+  );
+}
+
+/** Retain the same canonical admission and deadline across duplicate calls and every phase. */
+function validAcceptedTurn(deps: JiraChatAuthorityDeps, turn: AcceptedJiraChatTurn): boolean {
+  const deadline = turn.startedAtMs + DEFAULT_LIMITS.maxWallTimeMs;
+  return (
+    isCurrentAcceptedMessage(deps, turn) &&
     Number.isSafeInteger(turn.startedAtMs) &&
     Number.isSafeInteger(turn.nowMs) &&
     Number.isFinite(new Date(deadline).getTime()) &&

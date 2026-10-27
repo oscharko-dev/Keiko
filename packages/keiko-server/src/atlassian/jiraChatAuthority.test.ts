@@ -196,6 +196,73 @@ describe("accepted ordinary Chat turn authority", () => {
     );
   });
 
+  it("reuses one canonical admission and cumulative budget on duplicate minting", async () => {
+    const admitted = store.admitChatTurn("accepted-canonical-turn", {
+      chatId: chat.id,
+      role: "user",
+      content: "Accepted canonical task",
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+      timestamp: Date.parse(CHAT_AUTHORITY_TEST_NOW),
+    });
+    if (admitted.kind !== "admitted") throw new Error("Expected fresh admission");
+    const first = mint(admitted.userMessage.id);
+    if (!first.ok) throw new Error("Expected authority");
+    const registry = deps.agentAuthorityRegistry;
+    if (registry === undefined) throw new Error("Missing registry");
+    expect(
+      registry.reserveForChat(
+        first.reference,
+        first.envelope.subject,
+        "autonomous-delivery",
+        { toolCalls: 30, promptTokens: 0, patchBytes: 0 },
+        CHAT_AUTHORITY_TEST_NOW,
+      ).ok,
+    ).toBe(true);
+    const duplicates = await Promise.all([
+      Promise.resolve().then(() => mint(admitted.userMessage.id)),
+      Promise.resolve().then(() => mint(admitted.userMessage.id)),
+    ]);
+    expect(duplicates).toEqual([first, first]);
+    expect(
+      registry.reserveForChat(
+        first.reference,
+        first.envelope.subject,
+        "autonomous-delivery",
+        { toolCalls: 1, promptTokens: 0, patchBytes: 0 },
+        CHAT_AUTHORITY_TEST_NOW,
+      ),
+    ).toEqual({ ok: false, reason: "budget-exceeded" });
+  });
+
+  it("does not replace the same turn budget after a mode change or revocation", () => {
+    const id = acceptedMessage();
+    const first = mint(id);
+    if (!first.ok) throw new Error("Expected authority");
+    deps.agentAuthorityRegistry?.revoke(first.reference);
+    expect(mint(id)).toEqual({ ok: false, reason: "revoked" });
+    store.updateChat(chat.id, { toolMode: "autonomous-delivery" });
+    expect(mint(id)).toEqual({ ok: false, reason: "invalid" });
+  });
+
+  it("refuses replay with a caller-renewed clock or a superseded human message", () => {
+    const id = acceptedMessage();
+    expect(
+      mintAcceptedJiraChatAuthority(deps, {
+        chatId: chat.id,
+        userMessageId: id,
+        startedAtMs: Date.parse(CHAT_AUTHORITY_TEST_NOW) + 1,
+        nowMs: Date.parse(CHAT_AUTHORITY_TEST_NOW) + 1,
+        correlationId: "renewed-clock",
+      }).ok,
+    ).toBe(false);
+    acceptedMessage();
+    expect(mint(id).ok).toBe(false);
+  });
+
   it("refuses missing/nonhuman turns, missing binding and unverified credentials", () => {
     expect(mint("missing").ok).toBe(false);
     expect(mint(acceptedMessage("assistant")).ok).toBe(false);

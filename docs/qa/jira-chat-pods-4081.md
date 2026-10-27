@@ -1759,3 +1759,14 @@ action fixed that reproducibly; the complete fields group was rerun successfully
 normal-first-run setup script now retains a private pending marker on uncertain completion. Its
 individual form operations established this session; fresh end-to-end script qualification is still
 pending. These live groups do not yet establish normal Chat, model or browser acceptance.
+
+### Auditor correction — canonical accepted-turn mint (#4084, #4081)
+
+The auditor found that the helper's random run identity and caller-provided start could create
+fresh budgets from the same stored message. Two focused regressions failed before correction.
+Minting now requires the latest persisted accepted user message, pending canonical state (or the
+current legacy message) and its exact stored timestamp. The deterministic Chat/message identity
+makes duplicate admission consumers share the existing registry budget; a changed envelope under
+the same identity fails closed. Revoked authority cannot be replaced. The canonical store admission
+regression runs two concurrent mint callers after exhausting the first budget and proves neither
+gets another budget. Normal HTTP Chat orchestration is still the next integration step.

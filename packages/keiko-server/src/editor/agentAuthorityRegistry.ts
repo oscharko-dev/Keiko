@@ -213,13 +213,26 @@ export class EditorAgentAuthorityRegistry {
     const record = { kind: "chat", ...initialRecord(chatSnapshot(parsed.value), nowIso) } as const;
     return recordChatAuthorityResult(
       "register",
-      this.retain(record, nowIso),
+      this.retainChat(record, nowIso),
       {
         subject: record.envelope.subject,
         authorityDigest: record.digest,
       },
       correlationId,
     );
+  }
+
+  private retainChat(
+    record: ChatAuthorityRecord,
+    nowIso: string,
+  ): EditorAgentAuthorityRegistration {
+    // A canonical turn cannot acquire a second budget by changing its envelope facts.
+    const existing = Array.from(this.records.values()).find(
+      (candidate) => candidate.envelope.runId === record.envelope.runId,
+    );
+    if (existing !== undefined && (existing.kind !== "chat" || existing.digest !== record.digest))
+      return { ok: false, reason: "invalid" };
+    return this.retain(record, nowIso);
   }
 
   public resolveChat(
