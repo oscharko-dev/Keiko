@@ -1,3 +1,4 @@
+import { currentContentRedactor } from "./content-redactor.js";
 import { withMarkdownSkillRequestAuthority } from "./markdown-skill-authority.js";
 import { promptFitRedactor } from "./grounded-prompt-redactor.js";
 import {
@@ -1815,7 +1816,7 @@ async function groundedGatewayAttempt(
     throw new CallerAttemptAdmissionError("Grounded synthesis attempt allowance exhausted");
   const remaining = groundedRemainingOptions(ctx, pack, options);
   const promptOptions = groundedPromptOptions(ctx.deps, ctx.modelId, ctx.tokenAccounting);
-  const sent = fittedGroundedGatewayPrompt(question, pack, ctx.deps.redactor, {
+  const sent = fittedGroundedGatewayPrompt(question, pack, currentContentRedactor(ctx.deps), {
     ...promptOptions,
     protectedSkill:
       ctx.userMessageId === undefined
@@ -2482,8 +2483,8 @@ function singleAnswerContextSummary(
 // single-source folder ask. Split out of runAsk to keep both under the LOC bound.
 function finalizeGroundedAnswer(workerCtx: AskWorkerCtx, output: OrchestratorOutput): RouteResult {
   const { chat, content, deps } = workerCtx;
-  const userContent = redactString(deps.redactor, content);
-  const assistantContent = redactString(deps.redactor, output.assistantContent);
+  const userContent = redactString(currentContentRedactor(deps), content);
+  const assistantContent = redactString(currentContentRedactor(deps), output.assistantContent);
   // Citation checks follow model invocation, including answer-only context. Evidence persistence
   // and grounded-turn registration follow source availability so an ungrounded model answer can
   // never be mislabeled as durable source evidence.
@@ -2493,7 +2494,7 @@ function finalizeGroundedAnswer(workerCtx: AskWorkerCtx, output: OrchestratorOut
     ? buildAnswerCitations(
         singleSentEvidencePack(output, output.pack),
         output.assistantContent,
-        deps.redactor,
+        currentContentRedactor(deps),
       )
     : [];
   const evidenceRunId = sourceEvidenceAvailable
@@ -2514,7 +2515,7 @@ function finalizeGroundedAnswer(workerCtx: AskWorkerCtx, output: OrchestratorOut
     content: assistantContent,
     ...singleAnswerEvidenceDeclaration(output),
     citations,
-    uncertainty: buildUncertainty(output.pack, deps.redactor),
+    uncertainty: buildUncertainty(output.pack, currentContentRedactor(deps)),
     omittedCount: connectedContextOmittedCount(output.pack),
     elapsedMs: output.elapsedMs,
     contextPack: singleAnswerContextSummary(workerCtx, output, citations.length),
@@ -2985,7 +2986,7 @@ function admitGroundedUser(
   const newUserMessage = {
     chatId: prepared.chat.id,
     role: "user",
-    content: redactString(deps.redactor, prepared.input.content),
+    content: redactString(currentContentRedactor(deps), prepared.input.content),
     timestamp: Date.now(),
     runId: undefined,
     workflowId: undefined,
@@ -3077,7 +3078,7 @@ function compactGroundedCurrentPrompt(
     ),
     signal: prepared.signal,
     correlationId: prepared.correlationId,
-    redact: (value) => redactedString(deps.redactor, value),
+    redact: (value) => redactedString(currentContentRedactor(deps), value),
     call: (request, signal) => {
       const model = resolveGroundedAnswerModel(deps, modelId, groundedReadinessAdmission(prepared));
       if (isRouteResult(model))
@@ -3625,7 +3626,7 @@ function groundedAnswerWithMemoryUncertainty(
     ...body,
     uncertainty: [
       ...body.uncertainty,
-      { kind: marker.kind, claim: redactString(deps.redactor, marker.claim) },
+      { kind: marker.kind, claim: redactString(currentContentRedactor(deps), marker.claim) },
     ],
   };
 }

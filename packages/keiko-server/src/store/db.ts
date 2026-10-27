@@ -10,6 +10,7 @@ import { isolateCodingHistory } from "./codingHistoryIsolation.js";
 // 0o700/0o600 permission hardening (Unix), and reopen-safe migrations.
 
 import { DatabaseSync } from "node:sqlite";
+import { contentRedactionEnabled, redactContent } from "@oscharko-dev/keiko-security";
 import { createCodingHistoryStore } from "./codingHistory.js";
 import { existsSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
@@ -187,6 +188,7 @@ interface ResolvedFactoryOptions {
   // A chat id is persisted by the browser as a window reference (#3557 review).
   readonly newChatId: (correlationId: string | undefined) => string;
   readonly redactString: (s: string) => string;
+  readonly redactContentString: (s: string) => string;
 }
 
 // An injected id source (tests) keeps its ids; otherwise a chat id is a reference id.
@@ -197,12 +199,18 @@ function chatIdFactory(
   return (correlationId): string => newReferenceId({ kind: "chat", correlationId });
 }
 
+function contentRedactorOption(opts: UiStoreFactoryOptions | undefined): (value: string) => string {
+  if (opts?.redactContentString !== undefined) return opts.redactContentString;
+  return contentRedactionEnabled() ? (opts?.redactString ?? DEFAULT_REDACT) : redactContent;
+}
+
 function resolveOptions(opts: UiStoreFactoryOptions | undefined): ResolvedFactoryOptions {
   return {
     now: opts?.now ?? ((): number => Date.now()),
     newId: opts?.newId ?? randomUUID,
     newChatId: chatIdFactory(opts?.newId),
     redactString: opts?.redactString ?? DEFAULT_REDACT,
+    redactContentString: contentRedactorOption(opts),
   };
 }
 
@@ -270,7 +278,7 @@ function createMessageRecord(
       db,
       messageId,
       msg,
-      options.redactString,
+      options,
       clientTurnId,
       clientTurnState,
       clientTurnContentDigest,
@@ -613,7 +621,7 @@ function persistStagedAssistant(
         assistantMessageId,
         pending.draft.groundedAnswer,
         pending.previewCitations,
-        options.redactString,
+        options.redactContentString,
       )
     : assistant;
 }
@@ -835,7 +843,7 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
         id,
         answer,
         previewCitations,
-        options.redactString,
+        options.redactContentString,
       ),
     findGroundedPreviewCitations: (id: string) => sqlFindGroundedPreviewCitations(db, id),
     createAssistantResponseVersion: (id: string, content: string, timestamp: number): ChatMessage =>

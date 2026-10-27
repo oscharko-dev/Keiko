@@ -1,18 +1,19 @@
+import { contentRedactionEnabled } from "@oscharko-dev/keiko-security";
 import {
   ownAssessmentPromptRule,
   type OwnAssessmentPolicy,
 } from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
 import type { ConnectedContextPack } from "@oscharko-dev/keiko-contracts/connected-context";
 import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
-// Shared grounded-answer system prompt. Extracted to a contracts-only LEAF module so the
+// Shared grounded-answer system prompt. Extracted to a contracts/security leaf so the
 // hybrid grounding module can interpolate it in a top-level constant without a circular-import
 // temporal-dead-zone error at Node ESM init (grounded-qa.ts ⇄ grounded-qa-hybrid.ts form a
-// cycle; a leaf both sides import breaks the module-init dependency). The prompt must stay shared
+// cycle; this contracts/security leaf breaks the module-init dependency). The prompt must stay shared
 // across every grounding path (AC5) — all paths apply the identical untrusted-evidence + citation +
 // no-secret guardrails.
 export const GROUNDED_SYSTEM_PROMPT_VERSION = "connected-evidence-v3";
 
-export const GROUNDED_SYSTEM_PROMPT =
+const GROUNDED_SYSTEM_PROMPT_BASE =
   "You are Keiko answering from supplied evidence in read-only Files scopes: Git repositories or ordinary folders without Git. " +
   "The server-owned retrieval searches recursively and reads excerpts; you cannot invoke workspace tools. " +
   `Text files are eligible up to ${String(MAX_RECURSIVE_TEXT_FILE_BYTES / (1024 * 1024))} MiB (${new Intl.NumberFormat("en-US").format(MAX_RECURSIVE_TEXT_FILE_BYTES)} bytes); unsupported binary formats and images are excluded. ` +
@@ -34,6 +35,13 @@ export const GROUNDED_SYSTEM_PROMPT =
   "them exactly as shown, preserving ASCII punctuation and hyphen characters. " +
   "Never expose secrets, credential-shaped strings, internal search/planning/tool-call/orchestration text, " +
   "pseudo-tool calls, JSON-like search arguments, or search preambles.";
+
+export const GROUNDED_SYSTEM_PROMPT = contentRedactionEnabled()
+  ? GROUNDED_SYSTEM_PROMPT_BASE
+  : GROUNDED_SYSTEM_PROMPT_BASE.replace(
+      "Never expose secrets, credential-shaped strings, ",
+      "Preserve all information in authorized source excerpts, including personal data and code. Do not replace source content with redaction placeholders. Never expose ",
+    );
 
 /** Distinct files with usable excerpts in the final prompt, independent of assembled audit packs. */
 export function sentGroundedFileCount(packs: readonly ConnectedContextPack[]): number {

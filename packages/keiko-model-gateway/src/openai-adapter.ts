@@ -62,7 +62,12 @@ import {
   reasoningText,
   textFromContent,
 } from "./normalize.js";
-import { redact, redactSecretLiterals } from "@oscharko-dev/keiko-security";
+import {
+  contentRedactionEnabled,
+  redact,
+  redactContent,
+  redactSecretLiterals,
+} from "@oscharko-dev/keiko-security";
 import {
   CODE_REDACTION_REVISION,
   createStreamingRedactor,
@@ -139,6 +144,7 @@ const CHAT_REQUEST_DISPATCH_OPERATION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: false,
     },
+    contentRedactionEnabled: { type: "boolean", dataClass: "closed-enum", required: false },
     // Historical chat.request.dispatch lines predate this diagnostic; old bundles remain readable.
     toolCount: { type: "integer", dataClass: "count", required: false },
     readBudgetMs: { type: "number", dataClass: "duration", required: false },
@@ -411,6 +417,7 @@ interface ChatDispatchFields {
   // a streamed read, the budget of a buffered one), `readBudgetMs` its budget.
   readonly timeoutMs: number;
   readonly stream: boolean;
+  readonly contentRedactionEnabled: boolean;
   readonly streamUsageRequested?: boolean;
   readonly toolCount: number;
   readonly readBudgetMs?: number;
@@ -472,6 +479,7 @@ function chatDispatchFields(
     bodyBytes: Buffer.byteLength(body, "utf8"),
     timeoutMs: bounds?.silenceMs ?? config.timeoutMs,
     stream,
+    contentRedactionEnabled: contentRedactionEnabled(),
     ...(stream ? { streamUsageRequested: includeUsage } : {}),
     toolCount: request.tools?.length ?? 0,
     ...(bounds === undefined ? {} : { readBudgetMs: bounds.budgetMs }),
@@ -957,7 +965,11 @@ function redactRecord(
 ): Record<string, unknown> | null {
   return value === null
     ? null
-    : (redactUnknown(value, heuristicScrub(secrets)) as Record<string, unknown>);
+    : (redactUnknown(value, {
+        secrets,
+        text: (text) => redactContent(text, secrets),
+        changed: 0,
+      }) as Record<string, unknown>);
 }
 
 // A tool call's name is matched against the offered catalog. The governed changeset edit executes
@@ -993,12 +1005,14 @@ function redactResponse(
   const exactContent = literalScrub(secrets);
   const redacted: NormalizedResponse = {
     ...response,
-    content: redact(response.content, secrets),
+    content: redactContent(response.content, secrets),
     toolCalls: response.toolCalls.map((call) =>
       redactToolCall(call, secrets, exactContent, isExactContentTool),
     ),
     structuredOutput: redactRecord(response.structuredOutput, secrets),
-    ...(response.reasoning === undefined ? {} : { reasoning: redact(response.reasoning, secrets) }),
+    ...(response.reasoning === undefined
+      ? {}
+      : { reasoning: redactContent(response.reasoning, secrets) }),
   };
   return { response: redacted, toolArgumentsRedacted: exactContent.changed };
 }
@@ -1798,7 +1812,7 @@ export class OpenAiAdapter implements ProviderAdapter {
     report: StreamReport,
   ): AsyncGenerator<StreamTextChunk> {
     const project = (text: string): string =>
-      redact(text, read.secrets, {
+      redactContent(text, read.secrets, {
         onCodeProjection: (projection): void => {
           report.redaction.streamCodeRegions += projection.regions;
           report.redaction.streamCodeDepthRefusals += projection.depthRefusals;

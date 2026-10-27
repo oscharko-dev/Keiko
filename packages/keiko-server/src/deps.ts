@@ -86,8 +86,10 @@ import {
 } from "@oscharko-dev/keiko-evidence";
 import {
   bindSecurityLogCorrelation,
+  contentRedactionEnabled,
   keikoApiKeySecretValues,
   redact,
+  redactContent,
 } from "@oscharko-dev/keiko-security";
 import type { PortableReleaseTrustedKey } from "@oscharko-dev/keiko-security/portable-release-trust";
 import type {
@@ -2208,6 +2210,18 @@ export function buildRedactor(env: EnvSource, config?: GatewayConfig): Redactor 
   return (value: unknown): unknown => deepRedactStrings(value, redactString);
 }
 
+function runtimeContentRedactString(
+  env: EnvSource,
+  runtimeConfig: RuntimeGatewayConfig,
+  egress: GatewayConfig["egress"],
+  redactString: (value: string) => string,
+): (value: string) => string {
+  return (value): string =>
+    contentRedactionEnabled()
+      ? redactString(value)
+      : redactContent(value, runtimeRedactionSecrets(env, runtimeConfig, egress));
+}
+
 export function currentRedactionSecrets(deps: UiHandlerDeps): readonly string[] {
   return redactionSecrets(
     deps.env,
@@ -2735,6 +2749,15 @@ interface PersistenceRuntimeContext {
   readonly env: EnvSource;
   readonly diagnostics: ServerDiagnosticSink | undefined;
   readonly bootstrapCorrelationId: string;
+  readonly redactContentString: (value: string) => string;
+}
+
+function privateUiStore(
+  db: DatabaseSync,
+  redactString: (value: string) => string,
+  redactContentString: (value: string) => string,
+): UiStore {
+  return buildUiStoreOverDatabase(db, { redactString, redactContentString });
 }
 
 function composePersistence(
@@ -2761,7 +2784,7 @@ function composePersistence(
     runtime.diagnostics,
     runtime.bootstrapCorrelationId,
   );
-  const store = buildUiStoreOverDatabase(db, { redactString });
+  const store = privateUiStore(db, redactString, runtime.redactContentString);
   const relationship: RelationshipHandlerDeps = {
     scopeResolver: (): { readonly workspaceId: string } => ({
       workspaceId: resolveLoopbackWorkspaceId(runtime.env),
@@ -4318,14 +4341,15 @@ function buildPersistenceBundle(
   redactString: (value: string) => string,
   evidenceStore: EvidenceStore,
   bootstrapCorrelationId: string,
+  redactContentString: (value: string) => string,
 ): PersistenceBundle {
   const persistence = composeUiPersistence(
     options,
     resolvedUiDbPath,
     redactString,
     bootstrapCorrelationId,
+    redactContentString,
   );
-  const { store, dispose, relationship } = persistence;
   try {
     const { workspaceScriptTrust, services } = composePersistenceTaskWorkspaceServices(
       options,
@@ -4335,10 +4359,10 @@ function buildPersistenceBundle(
       redactString,
     );
     return {
-      uiStore: store,
+      uiStore: persistence.store,
       workspaceScriptTrust,
-      dispose,
-      relationship,
+      dispose: persistence.dispose,
+      relationship: persistence.relationship,
       codingRuntimeSnapshotStore: persistence.codingRuntimeSnapshotStore,
       codingRuntimeDescriptionJobStore: persistence.codingRuntimeDescriptionJobStore,
       ...services,
@@ -4348,7 +4372,7 @@ function buildPersistenceBundle(
         options.diagnostics,
       ),
       preferredProjectPath: seedInitialProject(
-        store,
+        persistence.store,
         resolvedUiDbPath,
         options.initialProjectPath,
         workspaceScriptTrust,
@@ -4357,7 +4381,7 @@ function buildPersistenceBundle(
       ),
     };
   } catch (error) {
-    dispose?.();
+    persistence.dispose?.();
     throw error;
   }
 }
@@ -4387,6 +4411,7 @@ function composeUiPersistence(
   resolvedUiDbPath: string,
   redactString: (value: string) => string,
   bootstrapCorrelationId: string,
+  redactContentString: (value: string) => string,
 ): ReturnType<typeof composePersistence> {
   return composePersistence(
     options.store,
@@ -4394,7 +4419,12 @@ function composeUiPersistence(
     options.codingRuntimeDescriptionJobStore,
     resolvedUiDbPath,
     redactString,
-    { env: options.env, diagnostics: options.diagnostics, bootstrapCorrelationId },
+    {
+      env: options.env,
+      diagnostics: options.diagnostics,
+      bootstrapCorrelationId,
+      redactContentString,
+    },
   );
 }
 
@@ -6484,6 +6514,10 @@ function buildCodingSessionContinuity(
   });
 }
 
+function localKnowledgeKeys(env: EnvSource): ReturnType<typeof createLocalKnowledgeKeyProvider> {
+  return createLocalKnowledgeKeyProvider({ env, securityLogSink: processServerLogSink() });
+}
+
 export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerDeps {
   const bootstrapCorrelationId = newCorrelationId();
   const { resolvedUiDbPath, runtimeConfigPath } = runtimePathFields(options);
@@ -6500,16 +6534,14 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     createNodeEvidenceStore(join(resolvedEvidenceDir, "coding-workbench"));
   const redactString = runtimeRedactString(options.env, runtimeConfig, egress);
   const liveRedactor = (value: unknown): unknown => deepRedactStrings(value, redactString);
-  const localKnowledgeKeyProvider = createLocalKnowledgeKeyProvider({
-    env: options.env,
-    securityLogSink: processServerLogSink(),
-  });
+  const localKnowledgeKeyProvider = localKnowledgeKeys(options.env);
   const bundle = buildPersistenceBundle(
     options,
     resolvedUiDbPath,
     redactString,
     evidenceStore,
     bootstrapCorrelationId,
+    runtimeContentRedactString(options.env, runtimeConfig, egress, redactString),
   );
   const contextProfileForModel = buildContextProfileResolver(() => runtimeConfig.current());
   reconcileNodeStoreAtStartup(options, bundle, bootstrapCorrelationId);

@@ -3,7 +3,7 @@
 // byte budget. The extractor is mocked so the redaction step and the budget arithmetic are
 // exercised deterministically without crafting secret-bearing or 32 KiB binary documents.
 
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 
 import {
   DEFAULT_EXPLORATION_BUDGET,
@@ -110,7 +110,33 @@ beforeEach(() => {
   extractMock.mockReset();
 });
 
+afterEach(() => vi.unstubAllEnvs());
+
 describe("collectConnectedDocumentEvidence with a mocked extractor", () => {
+  it.each(["pdf", "docx", "xlsx"] as const)(
+    "preserves authorized %s content under the deployment opt-out",
+    async (format) => {
+      vi.stubEnv("KEIKO_CONTENT_REDACTION", "off");
+      const text = 'Contact: +49 30 12345678\npassword: "customer-owned-example"';
+      extractMock.mockResolvedValue({
+        outcome: "extracted",
+        format,
+        text,
+        extractedBytes: Buffer.byteLength(text),
+        truncated: false,
+        diagnostics: [],
+      });
+      const path = `docs/customer.${format}`;
+      const result = await run([path]);
+      expect(
+        result.excerpts
+          .get(path)
+          ?.map((window) => window.content)
+          .join("\n"),
+      ).toBe(text);
+    },
+  );
+
   it.each([
     { label: "redaction expansion", text: "api_key=a", excerptBytesMax: 9 },
     { label: "window separators", text: "x".repeat(8193), excerptBytesMax: 8193 },

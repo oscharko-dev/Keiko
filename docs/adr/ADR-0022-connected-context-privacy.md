@@ -1487,6 +1487,20 @@ retains a single `no-evidence` marker, and budget clipping remains `budget-clipp
 
 ### D4 — The summary is structurally redaction-free, and we prove it
 
+**Authorized content amendment (owner decision, 2026-10-27).** A user permitted to read connected
+documents must be able to receive their contents under the deployment's processing policy.
+`KEIKO_CONTENT_REDACTION=off` explicitly disables heuristic content masking for document extraction,
+guarded workspace reads, single-source, multi-source and hybrid prompt content, and private chat
+answers. Configured infrastructure-secret literals remain protected. Missing or other values
+retain the original content redaction. The existing `redacted` atom state means the guarded
+content policy has been applied; it is not a claim that all personal data was anonymized.
+`raw-internal` packs remain rejected. The same policy applies before model invocation and to
+streamed, completed and privately persisted answers. Conversation and grounded system prompts in
+this mode request source fidelity while retaining untrusted-source and citation instructions.
+This does not widen source authorization or any read/output budget. Counts-only summaries and
+audit manifests retain their existing unconditional redaction and body-free contracts.
+Already masked historic chat text cannot be recovered: re-read sources and generate a new answer.
+
 The wire boundary is asserted by `grounded-qa.redaction.test.ts`: an attacker-controlled
 pack with secret-shaped strings (`sk-…`, `ghp_…`, `AKIA…`, `xoxb-…`, `Bearer …`, PEM
 blocks) in every string field flows through `runAsk`, and the test asserts:

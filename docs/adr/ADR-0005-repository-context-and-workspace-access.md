@@ -91,6 +91,15 @@ advisory metadata instead of falling back to an unbounded raw content read.
 
 ### D2 — Lexical containment plus canonical identity at guarded content-read IO edges
 
+**Authorized content amendment (2026-10-27).** The existing public read remains the guarded content
+lane. The deployment setting `KEIKO_CONTENT_REDACTION=off` disables its content-redaction heuristics
+and source-projection refusals, preserving authorized source bytes for model context. It does not
+select the editor raw-read lane or change path, root, descriptor, deny-list or byte-budget checks.
+Default installations retain the existing redaction and projection refusals. Audit artifacts,
+diagnostics and support exports still redact at their own unconditional boundaries; an authorized
+private context pack is not permission to persist raw source in those artifacts. See ADR-0003 D7
+and ADR-0022 D4 for the separate content and evidence policies.
+
 `resolveWithinWorkspace(root, candidate)` is a PURE function that rejects NUL bytes, `..` escapes,
 and absolute paths outside the root, returning the normalised absolute path inside the root.
 Containment is decided by `path.relative(root, candidate)`: a result of `""` is the root itself; a

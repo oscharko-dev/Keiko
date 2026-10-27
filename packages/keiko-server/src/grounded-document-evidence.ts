@@ -38,7 +38,7 @@ import {
   type UncertaintyMarker,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
-import { redact } from "@oscharko-dev/keiko-security";
+import { redactContent } from "@oscharko-dev/keiko-security";
 import {
   containedRealPathInfo,
   evidenceAtomStableId,
@@ -633,7 +633,7 @@ function boundedDocumentProjection(
   acc: MutableEvidence,
   nowMs: number,
 ): { readonly windows: readonly ExcerptWindow[]; readonly truncated: boolean } {
-  const windows = windowExtractedText(redact(stripUnsafeFormatChars(extraction.text)));
+  const windows = windowExtractedText(redactContent(stripUnsafeFormatChars(extraction.text)));
   if (inputs.budget === undefined || windows.length === 0)
     return { windows, truncated: extraction.truncated };
   const content = documentProjectionText(windows);

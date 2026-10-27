@@ -1,4 +1,4 @@
-import { redact } from "@oscharko-dev/keiko-security";
+import { redactContent } from "@oscharko-dev/keiko-security";
 import type { CodingRepositoryHit } from "@oscharko-dev/keiko-contracts/runtime/coding-repository-search";
 import { RepoSearchInvalidRangeError } from "./errors.js";
 import { clampToBytes } from "./repoSearch.js";
@@ -66,7 +66,7 @@ export function codingRepositoryExcerpt(
   maxBytes: number,
 ): CodingRepositoryHit {
   const window = sourceWindow(raw, startLine, endLine);
-  const safe = redact(raw);
+  const safe = redactContent(raw);
   const projected = safeSourceWindow(raw, safe, window);
   const { excerpt: snippet, truncated: snippetTruncated } = clampToBytes(projected, maxBytes);
   return {

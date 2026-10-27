@@ -13,6 +13,13 @@
 
 ## Context
 
+The owner decision of 2026-10-27, recorded in ADR-0005 D2 and ADR-0022 D4, permits a deployment-wide
+content-policy opt-out through `KEIKO_CONTENT_REDACTION=off`. In that mode the existing guarded
+public read preserves authorized content; it does not expose or substitute the editor raw-read
+subpath. The lane separation, coordinate ownership and filesystem guards in this ADR remain in
+force. References below to an always-redacting evidence/content read describe the default policy;
+audit, diagnostic and support artifact redaction remains unconditional in both modes.
+
 ADR-0005 D2 established one workspace read, `readWorkspaceFile`, which redacts at the IO boundary.
 That single-lane shape was correct while every consumer was a **reader**: context packs, retrieval,
 evidence atoms, the workspace index, audit summaries, and diagnostics all persist or display what

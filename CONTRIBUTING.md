@@ -49,8 +49,16 @@ remain truthful and cannot become a hidden prerequisite for an unsigned update.
 
 ### Activity Log runtime changes
 
+The deployment operator can set `KEIKO_CONTENT_REDACTION=off` before startup to preserve authorized
+document context and model answers through private chat persistence. The default retains content
+redaction. Configured infrastructure credentials, diagnostics, audit evidence, support exports and
+tool-argument protections remain unconditional. This setting applies to the whole deployment,
+including any external models configured later; it does not infer trust from a provider hostname.
+The `chat.request.dispatch` Activity Log records `contentRedactionEnabled` without source text.
+See [the operator procedure](docs/troubleshooting/chat-content-redaction.md).
+
 Source redaction uses the shared security owner to preserve language syntax while masking credential
-values, including escaped JSON/JSONC and YAML scalars. An unsafe or ambiguous projection, or an
+values when content redaction is enabled, including escaped JSON/JSONC and YAML scalars. An unsafe or ambiguous projection, or an
 existing source-size limit, produces a body-free refusal; connected retrieval treats that source as
 unavailable. EOF-only JSON prefixes and public, unquoted Java fragments retain their safe text
 projection under the documented guards (ADR-0022). Gateway

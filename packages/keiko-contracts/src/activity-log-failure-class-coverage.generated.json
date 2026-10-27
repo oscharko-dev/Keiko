@@ -22185,6 +22185,12 @@
               "required": true
             },
             {
+              "name": "contentRedactionEnabled",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "endpointDigest",
               "type": "string",
               "dataClass": "digest",

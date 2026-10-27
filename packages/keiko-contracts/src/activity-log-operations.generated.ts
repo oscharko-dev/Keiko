@@ -1674,6 +1674,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: false,
       },
+      contentRedactionEnabled: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
       toolCount: {
         type: "integer",
         dataClass: "count",

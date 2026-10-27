@@ -1,3 +1,4 @@
+import { currentContentRedactor } from "./content-redactor.js";
 import { withMarkdownSkillAdmission } from "./markdown-skill-admission.js";
 import {
   markdownSkillPromptUsage,
@@ -958,7 +959,7 @@ async function multiSourceGatewayAttempt(
   const sent = fittedMultiSourcePrompt(
     question,
     packs,
-    ctx.deps.redactor,
+    currentContentRedactor(ctx.deps),
     options,
     ctx.correlationId,
   );
@@ -1069,7 +1070,7 @@ function multiSourceRepairPrompt(
     const fitted = fittedMultiSourcePrompt(
       `${question}\n\n${buildCitationRepairPrompt(original)}`,
       packs,
-      ctx.deps.redactor,
+      currentContentRedactor(ctx.deps),
       {
         ...promptOptions,
         protectedSkill:
@@ -1655,7 +1656,7 @@ function assembleMultiSourceAnswer(
     readonly abstained: boolean;
   },
 ): GroundedAnswer {
-  const { redactor } = ctx.deps;
+  const redactor = currentContentRedactor(ctx.deps);
   const modelInvoked =
     assistant.modelInvoked ?? (!ids.abstained || ctx.answerOnlyContextAvailable === true);
   const citationBundles = sourceCitationBundles(
@@ -1784,7 +1785,7 @@ async function applyMultiSourceEntailment(
     stage,
     assistant.content,
     finalMultiSourceEvidence(assistant, retrieved),
-    ctx.deps.redactor,
+    currentContentRedactor(ctx.deps),
   );
 }
 
@@ -1800,8 +1801,8 @@ function persistMultiSourceExchange(
   const [userMessage, assistantMessage] = persistGroundedExchange(
     ctx.deps,
     ctx.chat.id,
-    redactString(ctx.deps.redactor, ctx.content),
-    redactString(ctx.deps.redactor, assistant.content),
+    redactString(currentContentRedactor(ctx.deps), ctx.content),
+    redactString(currentContentRedactor(ctx.deps), assistant.content),
     ctx.userMessage,
   );
   return {

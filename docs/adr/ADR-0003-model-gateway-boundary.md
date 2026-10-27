@@ -167,6 +167,17 @@ name the Workbench's run phase while a provider outage is ridden out.
 
 ### D7 — Secret redaction at the boundary
 
+**Authorized content amendment (owner decision, 2026-10-27).** Content redaction is a deployment
+policy, distinct from infrastructure-secret and diagnostic protection. The exact process setting
+`KEIKO_CONTENT_REDACTION=off` preserves authorized model response content, reasoning and structured
+output; the default retains the existing heuristic redaction. Configured provider credential and
+endpoint literals remain scrubbed in either mode. The BFF uses the same content policy for source
+context, answer publication and private grounded-answer persistence. Streaming keeps the existing
+configured-secret buffering, and cancellation discards pending text. Tool arguments, error
+constructors, logs, support reports and audit artifacts retain their unconditional redactors.
+`chat.request.dispatch.contentRedactionEnabled` records the selected policy as a boolean. This
+setting applies equally to internal and external providers and cannot be set by a model or request.
+
 A `redact()` helper in `src/gateway/redaction.ts` strips known secret patterns (API keys, bearer
 tokens, header values) from strings before they reach any error message, log call, or serialised
 artefact. All error constructors call `redact()` on provider-derived strings. Config serialisation

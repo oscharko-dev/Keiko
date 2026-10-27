@@ -1,3 +1,4 @@
+import { currentContentRedactor } from "./content-redactor.js";
 import { isAbsolute, relative, resolve } from "node:path";
 import { createHash } from "node:crypto";
 
@@ -1199,7 +1200,7 @@ export function configuredRepoSemanticSearchProviderFor(
     ...options,
     semanticRefreshFilesMax: configuredRefreshFileLimit(deps, options),
     fs,
-    redactText: (text): string => String(deps.redactor(text)),
+    redactText: (text): string => String(currentContentRedactor(deps)(text)),
     signal,
     maxCandidates: Math.max(
       0,

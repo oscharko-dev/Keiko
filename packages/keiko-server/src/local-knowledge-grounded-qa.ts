@@ -1,3 +1,4 @@
+import { currentContentRedactor } from "./content-redactor.js";
 import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { withMarkdownSkillAdmission } from "./markdown-skill-admission.js";
 import {
@@ -1459,7 +1460,7 @@ function resolveModel(
 }
 
 function redactText(deps: UiHandlerDeps, value: string): string {
-  const redacted = deps.redactor(value);
+  const redacted = currentContentRedactor(deps)(value);
   return typeof redacted === "string" ? redacted : stripUnsafeFormatChars(value);
 }
 
@@ -2793,7 +2794,7 @@ export function mapGroundedAskError(
   // failure during the scoped answer can echo a provider endpoint or token). Scrub it through the
   // same redactor the content path uses before it reaches the wire; the fixed fallback is static.
   const message =
-    error instanceof Error ? redactText(deps, error.message) : "Local knowledge ask failed.";
+    error instanceof Error ? String(deps.redactor(error.message)) : "Local knowledge ask failed.";
   return { status: 500, body: errorBody("INTERNAL", message, correlationId) };
 }
 

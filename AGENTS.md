@@ -103,6 +103,14 @@ This shapes the product _and_ how you work on it:
   Optional Apple signing evidence must remain truthful and cannot become a hidden update gate.
 - Secrets stay out of code, logs, evidence, config, and tests. Evidence and diagnostics are
   body-free: counts, hashes, redacted summaries — never raw content, keys, endpoints, or PII.
+- **Authorized content preservation (owner decision, 2026-10-27):** the deployment operator may
+  set `KEIKO_CONTENT_REDACTION=off` before starting Keiko to preserve permitted document context,
+  model answers, and private chat history. Only that exact opt-out disables content heuristics;
+  absent or other values retain them. This is a deployment-wide choice, independent of model
+  provider, and is not a request-controlled permission. Preserve configured infrastructure-secret
+  literals, all workspace authority/containment/deny/budget checks, unconditional audit/log/support
+  redaction, and tool-argument protections. The private content path and evidence path must not
+  share a switchable redactor. See the existing ADR-0003 D7 and ADR-0022 D4 amendments.
 - Source redaction preserves TypeScript/JavaScript and Java syntax at the shared security boundary;
   syntax metadata never exempts credential literal data or configured secrets. JSON/JSONC and YAML
   use parsed value boundaries. Ordinary unified diffs reuse the canonical parser at the contracts

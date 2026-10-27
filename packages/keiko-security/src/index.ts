@@ -6,6 +6,8 @@
 
 export { KEIKO_SECURITY_VERSION } from "./version.js";
 
+export { contentRedactionEnabled, redactContent } from "./content-redaction.js";
+
 export {
   bindProcessScope,
   createProcessScope,

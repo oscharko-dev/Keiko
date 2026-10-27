@@ -1,5 +1,5 @@
 import { extname } from "node:path";
-import { redact } from "@oscharko-dev/keiko-security";
+import { contentRedactionEnabled, redactContent } from "@oscharko-dev/keiko-security";
 import { isEcosystemSourceFile, workspaceLanguageForPath } from "./ecosystems.js";
 import { WorkspaceReadError } from "./errors.js";
 
@@ -15,16 +15,14 @@ export function redactWorkspaceSource(
   scopePath: string,
   preserveSourceLineBreaks = true,
 ): string {
+  if (!contentRedactionEnabled()) return redactContent(text);
   const sourceFile = isEcosystemSourceFile(scopePath);
   const language = sourceFile ? workspaceLanguageForPath(scopePath) : undefined;
-  const sourceLanguage =
-    language === "typescript" || language === "javascript" || language === "java"
-      ? language
-      : DOCUMENT_FORMATS.get(extname(scopePath).toLowerCase());
+  const sourceLanguage = projectionLanguage(language, scopePath);
   if (hasUnsupportedCsharpLiteral(language, text))
     throw new WorkspaceReadError("code source redaction is unavailable", scopePath);
   const status = { unavailable: false };
-  const safe = redact(text, [], {
+  const safe = redactContent(text, [], {
     preserveSourceLineBreaks,
     inferSourceLanguage: !sourceFile || sourceLanguage !== undefined,
     ...(sourceLanguage === undefined ? {} : { sourceLanguage }),
@@ -35,6 +33,15 @@ export function redactWorkspaceSource(
   if (status.unavailable)
     throw new WorkspaceReadError("code source redaction is unavailable", scopePath);
   return safe;
+}
+
+function projectionLanguage(
+  language: ReturnType<typeof workspaceLanguageForPath>,
+  scopePath: string,
+): "typescript" | "javascript" | "java" | "json" | "yaml" | undefined {
+  return language === "typescript" || language === "javascript" || language === "java"
+    ? language
+    : DOCUMENT_FORMATS.get(extname(scopePath).toLowerCase());
 }
 
 function hasUnsupportedCsharpLiteral(

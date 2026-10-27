@@ -563,7 +563,11 @@ Grounded answer metadata uses the existing `deepRedactStrings(value, redactor)` 
 leaves before JSON serialization. A free-text redactor must never consume serialized JSON:
 escaped quotes in code or quoted assignments can otherwise corrupt its structure. Retrieval
 activity validation still runs before and after that redaction. The BFF uses the same
-redactor for live payloads (ADR-0011 D9). No reasoning traces, no evidence
+content-policy redactor for live payloads (ADR-0011 D9). Under the explicit deployment setting
+`KEIKO_CONTENT_REDACTION=off`, private grounded-answer metadata preserves authorized content while
+still removing configured infrastructure-secret literals. The store receives this content redactor
+separately from the unconditional redactor used for `short_result` and audit data. Default content
+redaction remains unchanged; no database migration or historical unmasking is performed. No reasoning traces, no evidence
 payloads, no SSE event data are stored in the DB.
 
 **DB location never inside a target repository.** The default path is
