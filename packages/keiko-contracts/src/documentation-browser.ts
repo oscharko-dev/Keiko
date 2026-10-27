@@ -393,7 +393,13 @@ function validateOptionalNavigationPort(
   return port === undefined || validateNavigationPort(port, errors);
 }
 
-function collectNavigationRequestErrors(value: Record<string, unknown>): string[] {
+// Only these two untrusted fields are read here; absence and each value still require validation.
+interface RawNavigationRequestFields {
+  readonly target?: unknown;
+  readonly cdpPort?: unknown;
+}
+
+function collectNavigationRequestErrors(value: RawNavigationRequestFields): string[] {
   const errors: string[] = [];
   validateNavigationTarget(value.target, errors);
   if (value.cdpPort !== undefined) validateNavigationPort(value.cdpPort, errors);
