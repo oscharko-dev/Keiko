@@ -108,6 +108,8 @@ Connected folders do not need Git metadata or a `package.json`. Run `keiko init`
 
 Updating from 1.2.7 or 1.3.0 needs no action, and your tasks and Coding History carry over unchanged.
 
+An installation on 1.2.6 or earlier must run the verified updater bootstrap once before automatic updates. Back up local state and preserve private keys during that step; the [repair evidence](https://github.com/oscharko-dev/Keiko/blob/dev/docs/qa/portable-updater-repair-4055.md) describes it.
+
 ## What's new in 1.3.0
 
 - **A stronger coding engine, still under your control.** On macOS the Coding Workbench now runs the original OpenCode 2.1.4 engine with its own tools for searching, reading, editing and running checks. Keiko's three modes — Ask for approval, Supervised workspace and Full access — still decide what it may do, and models are reached only through your configured gateway.
