@@ -239,3 +239,70 @@ describe("Jira scalar, reference and metadata edge cases", () => {
     ).toBe(false);
   });
 });
+
+it.each(["versions", "fixVersions", "components"])(
+  "contains an oversized %s choice list to that field",
+  (id) => {
+    const result = parseJiraFieldMetadata([
+      field("summary", "string", { required: true }),
+      field(id, "array", {
+        schema: { type: "array", system: id, items: id === "components" ? "component" : "version" },
+        allowedValues: Array.from({ length: 501 }, (_, index) => ({ id: String(index) })),
+      }),
+    ]);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("Unrelated field lost");
+    expect(result.fields[1]).toMatchObject({ kind: "unsupported", operations: [] });
+    expect(result.fields[1]).not.toHaveProperty("allowedValues");
+    expect(
+      validateJiraFieldChanges(result.fields, { summary: "Issue" }, "create", "data-center"),
+    ).toMatchObject({ ok: true });
+    expect(
+      validateJiraFieldChanges(result.fields, { [id]: [{ id: "1" }] }, "edit", "data-center"),
+    ).toMatchObject({ ok: false, reason: "unsupported-field", fieldId: id });
+    const required = result.fields.map((item) =>
+      item.id === id ? { ...item, required: true } : item,
+    );
+    expect(
+      validateJiraFieldChanges(required, { summary: "Issue" }, "create", "data-center"),
+    ).toMatchObject({ ok: false, reason: "unsupported-field", fieldId: id });
+  },
+);
+
+it("does not parse plugin-specific choice structures for unsupported field kinds", () => {
+  const result = parseJiraFieldMetadata([
+    field("summary", "string"),
+    field("customfield_9", "string", {
+      schema: { type: "string", custom: "vendor:compound" },
+      operations: ["set", "add"],
+      allowedValues: [{ nested: { arbitraryPluginValue: true } }],
+    }),
+  ]);
+  expect(result.ok).toBe(true);
+  if (!result.ok) throw new Error("Unrelated field lost");
+  expect(result.fields[1]).toMatchObject({ kind: "unsupported", operations: [] });
+  expect(result.fields[1]).not.toHaveProperty("allowedValues");
+});
+
+it("offers only the field/verb pairs implemented by the bounded mutation matrix", () => {
+  const result = parseJiraFieldMetadata([
+    field("components", "array", {
+      schema: { type: "array", system: "components", items: "component" },
+      operations: ["set", "add", "remove"],
+    }),
+    metadata[2],
+  ]);
+  expect(result.ok).toBe(true);
+  if (!result.ok) throw new Error("Invalid fixture");
+  expect(result.fields.map((item) => item.operations)).toEqual([["set"], ["set", "add", "remove"]]);
+});
+
+it.each([{ allowedValues: { invalid: "not-a-list" } }, { allowedValues: [{}] }])(
+  "still refuses structurally invalid references on a supported field",
+  ({ allowedValues }) => {
+    expect(parseJiraFieldMetadata([field("priority", "priority", { allowedValues })])).toEqual({
+      ok: false,
+      reason: "malformed-metadata",
+    });
+  },
+);

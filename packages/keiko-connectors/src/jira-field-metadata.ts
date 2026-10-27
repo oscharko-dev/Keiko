@@ -113,6 +113,31 @@ function allowedReferences(value: unknown): readonly JiraFieldReference[] | unde
   }
   return result;
 }
+function boundedReferences(
+  kind: JiraFieldKind,
+  value: unknown,
+): Pick<JiraFieldMetadata, "kind" | "allowedValues"> | undefined {
+  if (kind === "unsupported" || value === undefined) return { kind };
+  const values = asArray(value);
+  if (values === undefined) return undefined;
+  if (values.length > 500) return { kind: "unsupported" };
+  const allowedValues = allowedReferences(values);
+  return allowedValues === undefined ? undefined : { kind, allowedValues };
+}
+function supportedOperations(
+  id: string,
+  kind: JiraFieldKind,
+  operations: readonly JiraFieldOperation[],
+): readonly JiraFieldOperation[] {
+  if (kind === "unsupported") return [];
+  return [
+    ...new Set(
+      operations.filter(
+        (operation) => operation === "set" || (id === "labels" && kind === "strings"),
+      ),
+    ),
+  ];
+}
 function operationList(value: unknown): readonly JiraFieldOperation[] | undefined {
   const values = asArray(value);
   if (values === undefined || values.length > 10 || values.some((op) => typeof op !== "string"))
@@ -141,19 +166,17 @@ function metadataFieldDetails(
   const schema = asRecord(raw.schema);
   const operations = operationList(raw.operations);
   if (schema === undefined || operations === undefined) return undefined;
-  const allowedValues =
-    raw.allowedValues === undefined ? undefined : allowedReferences(raw.allowedValues);
-  if (raw.allowedValues !== undefined && allowedValues === undefined) return undefined;
+  const definition = boundedReferences(fieldKind(id, schema), raw.allowedValues);
+  if (definition === undefined) return undefined;
   return {
     id,
     name,
     required,
     hasDefaultValue: raw.hasDefaultValue === true,
-    kind: fieldKind(id, schema),
+    ...definition,
     richText:
       id === "description" || id === "environment" || schema.custom === `${CUSTOM_PREFIX}textarea`,
-    operations: [...new Set(operations)],
-    ...(allowedValues === undefined ? {} : { allowedValues }),
+    operations: supportedOperations(id, definition.kind, operations),
   };
 }
 

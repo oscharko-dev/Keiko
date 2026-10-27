@@ -801,3 +801,18 @@ the already-open clean-revision catalog performance measurement. This is not an 
 claim; final architecture/performance qualification remains outstanding. Review prose about
 Supervised workspace was corrected to match the D4 table and ADR-0138. The newly reported oversized
 Jira allowed-values field issue remains queued for the next metadata increment.
+
+## Bounded metadata review repair — #4083 AC3 / #4081
+
+An oversized allowed-values list now disables only its field, preserving other valid metadata.
+Versions, fix versions and components above 500 choices become unsupported with no values or
+advertised verbs; requesting that field fails before mutation, and a required unsupported field
+without a server default still prevents creation. Unknown plugin choice structures are not
+interpreted. Supported fields with structurally invalid reference metadata still fail closed.
+The metadata offer now intersects Jira verbs with the implemented matrix: add/remove is offered
+only for labels, and unsupported fields offer no verbs.
+
+Five regressions failed before this repair. The metadata and existing Jira/Confluence write tests,
+plus the unchanged ADF composer baseline, pass (69 tests total). Package build, root typecheck,
+changed lint and semantic duplication pass; no baseline or gate rule changed. This repairs review
+comment 4383946211. It does not complete the still-pending provider metadata/live-operation matrix.

@@ -320,7 +320,11 @@ owners of per-request and terminal evidence.
 for its managed Jira provider. It admits standard text, finite numbers, calendar dates,
 millisecond datetime values, user/option references and explicit bounded list types. Core Jira
 custom-field types are named explicitly; an unknown plugin type is unsupported even if its base
-schema looks familiar. Current metadata operations and allowed references constrain values.
+schema looks familiar. A choice list above 500 entries makes only that field unsupported; other
+fields remain usable, and a required unsupported field without a server default still blocks
+creation. Unsupported plugin choice structures are not interpreted. Known-field structural errors
+remain malformed metadata. Offered verbs are intersected with the implemented field/verb matrix;
+unsupported fields advertise no operations. Current metadata operations and allowed references constrain values.
 Omission preserves an edit; null/empty clearing requires an optional field and an allowed set.
 Create may leave a Jira-declared default omitted without copying or fabricating it. Add/remove is
 limited to labels; replacement and additive changes cannot target the same field in one action.
