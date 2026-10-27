@@ -480,6 +480,7 @@ import { createBrowserApprovalService } from "./coding-app-session/browserApprov
 import type { SessionPairingPort } from "./coding-app-session/sessionPairingPort.js";
 import { resolveLauncherSessionPairingPort } from "./coding-app-session/launcherSessionPairingPort.js";
 import { CodingAppSessionDenialWindows } from "./coding-app-session/denialWindows.js";
+import { abortCodingRunSessionLeases } from "./coding-app-session/codingRunSessionLease.js";
 import {
   admitCodingRunModel,
   createOpenCodeGatewayReadinessRegistry,
@@ -5691,6 +5692,25 @@ async function runTeardownSteps(steps: readonly (() => void | Promise<void>)[]):
   if (failures.length > 1) throw new TeardownFaults(failures, "runtime-teardown-faulted");
 }
 
+// Coding run state ends with its graph: the projection is purged, and a run lease must not outlive
+// the graph either, so each held one ends as aborted and its observation stops.
+function codingRunTeardownSteps(
+  services: UiHandlerRuntimeServices,
+  correlationId: string,
+): readonly (() => void)[] {
+  return [
+    (): void => {
+      services.codingRuntimeControlPlane?.safeActivityProjection?.purgeAll(
+        "shutdown",
+        correlationId,
+      );
+    },
+    (): void => {
+      abortCodingRunSessionLeases(services.codingAppSessionChannel);
+    },
+  ];
+}
+
 async function disposeRuntimeServices(
   args: UiHandlerDepsAssemblyArgs,
   services: UiHandlerRuntimeServices,
@@ -5705,12 +5725,7 @@ async function disposeRuntimeServices(
     (): void => {
       services.runtimeComposition.dispose?.();
     },
-    (): void => {
-      services.codingRuntimeControlPlane?.safeActivityProjection?.purgeAll(
-        "shutdown",
-        correlationId,
-      );
-    },
+    ...codingRunTeardownSteps(services, correlationId),
     async (): Promise<void> => {
       await shutdownHostLspPool();
     },

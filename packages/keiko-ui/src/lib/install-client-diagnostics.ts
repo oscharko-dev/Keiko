@@ -258,6 +258,21 @@ function structuredPostBody(
   return undefined;
 }
 
+// The Coding Workbench's closed report fields, forwarded unchanged.
+function codingReportFields(
+  meta: ClientDiagnosticMeta,
+): Pick<
+  ClientDiagnosticIngestRequest,
+  "codingRunRestore" | "codingWorkbenchInteraction" | "codingHistoryScope" | "codingIssueOutcome"
+> {
+  return {
+    codingRunRestore: meta.codingRunRestore,
+    codingWorkbenchInteraction: meta.codingWorkbenchInteraction,
+    codingHistoryScope: meta.codingHistoryScope,
+    codingIssueOutcome: meta.codingIssueOutcome,
+  };
+}
+
 // Builds the wire body for one already-bounded diagnostic message. `clientTs` is stamped at send
 // time (not at the original `reportClientDiagnostic` call), which is close enough for an operator
 // diagnostic and avoids threading a timestamp through the sink's string-only contract.
@@ -303,13 +318,11 @@ function clientMessagePostBody(
     supportReportPreparation: meta.supportReportPreparation,
     filesScopeDecision: meta.filesScopeDecision,
     updateNotice: meta.updateNotice,
-    codingRunRestore: meta.codingRunRestore,
+    ...codingReportFields(meta),
     composerActivity: meta.composerActivity,
     composerSubmission: meta.composerSubmission,
     composerFocusIndicator: meta.composerFocusIndicator,
     composerCodeStage: meta.composerCodeStage,
-    codingHistoryScope: meta.codingHistoryScope,
-    codingIssueOutcome: meta.codingIssueOutcome,
     loss,
   };
   const readyStateDigit = SSE_DIAGNOSTIC_MESSAGE_PATTERN.exec(message)?.[1];
@@ -392,6 +405,7 @@ function routineSupportReportEvidence(meta: ClientDiagnosticMeta): boolean {
     meta.filesScopeDecision !== undefined ||
     meta.updateNotice !== undefined ||
     meta.codingRunRestore !== undefined ||
+    meta.codingWorkbenchInteraction !== undefined ||
     meta.citationActivation !== undefined ||
     meta.scopeNotice !== undefined
   );

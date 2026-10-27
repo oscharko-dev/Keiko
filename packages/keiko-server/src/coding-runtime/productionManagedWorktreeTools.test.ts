@@ -2106,6 +2106,77 @@ describe("production managed worktree tools", () => {
     },
   );
 
+  // Keiko 1.3.0 test on macOS (#3897): the governed verifier's container refused to install
+  // dependencies for a host whose runtime holds them (`install-target-foreign`). The model is told
+  // to run the repository's own check in its shell, which counts for the same target, instead of a
+  // blocker it cannot clear; every other refused bootstrap stays `dependencies-unavailable`.
+  it.each([
+    [
+      "install-target-foreign",
+      "native-shell-required",
+      "the isolated verifier cannot install dependencies for this host; run this check in your own shell",
+    ],
+    ["project-npm-config", "dependencies-unavailable", "dependencies did not install"],
+    [undefined, "dependencies-unavailable", "dependencies did not install"],
+  ] as const)(
+    "names a step behind a bootstrap refused for %s as %s",
+    async (refusalReason, reason, word) => {
+      const log: ServerLogEvent[] = [];
+      const [template] = failedVerificationReport().results;
+      if (template === undefined) throw new TypeError("fixture result missing");
+      const facade = verificationFacade({
+        runToReport: () =>
+          Promise.resolve({
+            ...verificationReport("skipped"),
+            dependencies: {
+              state: "refused",
+              lockfile: "present",
+              exitCode: null,
+              durationMs: 0,
+              detail: "dependency installation refused",
+              ...(refusalReason === undefined ? {} : { refusalReason }),
+            },
+            results: [
+              {
+                ...template,
+                kind: "typecheck",
+                scriptName: undefined,
+                status: "skipped",
+                exitCode: null,
+                durationMs: 0,
+                outputSummary: "",
+                locations: undefined,
+                detail: "dependencies unavailable: bootstrap refused",
+              },
+            ],
+          }),
+        records: [],
+        log,
+      });
+
+      await expect(
+        executeVerification(facade, `verification-bootstrap-${reason}`),
+      ).resolves.toMatchObject({
+        status: "failed",
+        reasonCode: "VERIFICATION_NOT_RUN",
+        detail: `These verification steps did not run: typecheck (${word}).`,
+      });
+      expect(log).toContainEqual(
+        expect.objectContaining({
+          op: "coding-runtime.verification",
+          errorKind: "unavailable",
+          extra: {
+            completeness: "complete",
+            loss: "none",
+            state: "not-run",
+            stepCount: 1,
+            steps: [`typecheck:${reason}`],
+          },
+        }),
+      );
+    },
+  );
+
   it("refuses an empty passed report rather than claiming a check ran", async () => {
     const log: ServerLogEvent[] = [];
     const facade = verificationFacade({

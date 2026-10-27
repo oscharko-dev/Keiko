@@ -1382,6 +1382,27 @@ it("posts a restored coding run's counts on the wire and spends the routine budg
   expect(lastPostedBody(fetchMock)).toMatchObject({ message: "boundary caught TypeError" });
 });
 
+// #3897: what the human did on the Coding Workbench page is routine evidence. A burst of opened
+// details reaches the wire as closed reports and never spends the failure budget.
+it("posts Coding Workbench interactions on the wire and spends the routine budget", () => {
+  vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+  vi.stubGlobal("fetch", fetchMock);
+  const codingWorkbenchInteraction = {
+    interaction: "details-toggled",
+    section: "tool",
+    expanded: true,
+  } as const;
+  for (let index = 1; index <= 25; index += 1) {
+    fanOutClientDiagnostic("[keiko] coding workbench interaction: details-toggled", {
+      codingWorkbenchInteraction,
+    });
+  }
+  expect(lastPostedBody(fetchMock)).toMatchObject({ codingWorkbenchInteraction });
+  fanOutClientDiagnostic("boundary caught TypeError", { kind: "boundary" });
+  expect(lastPostedBody(fetchMock)).toMatchObject({ message: "boundary caught TypeError" });
+});
+
 it("posts reduced production frames and closed causes through the existing transport", () => {
   vi.spyOn(console, "warn").mockImplementation(() => undefined);
   const fetchMock = vi.fn().mockResolvedValue(jsonResponse());

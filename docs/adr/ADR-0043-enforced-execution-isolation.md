@@ -636,7 +636,12 @@ the host platform (`sharedHostPlatform`), and the bootstrap refuses an install w
 target has another operating system or CPU (`install-target-foreign`) before npm writes the tree.
 The refusal tells the model to run the project's own checks in the native shell, which the native
 policy reads as verification evidence (#3901). A run without a host-native consumer installs for
-its measured target as before.
+its measured target as before. Every refused bootstrap carries its closed `refusalReason` on the
+dependency summary and on `editor.verification.dependencies`. The coding facade names a step behind
+an `install-target-foreign` refusal `native-shell-required` instead of `dependencies-unavailable`,
+with guidance to run the repository's own command for that check in the shell: in the Keiko 1.3.0
+test on macOS the generic reason left the model without a check it could run, and the run settled
+`verification-not-evidenced` (#3897). Isolation, the refusal and its evidence rules are unchanged.
 
 Host network makes every source npm would contact part of that boundary (PR #3452 review: CWE-918,
 CWE-494). Before npm runs, the bootstrap checks every source it would be handed. Each specifier in

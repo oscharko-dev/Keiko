@@ -156,26 +156,31 @@ const CODING_VERIFICATION_STEP_NAMES = [
   "test:denied",
   "test:cancelled",
   "test:dependencies-unavailable",
+  "test:native-shell-required",
   "test:script-missing",
   "test:skipped",
   "targeted-test:denied",
   "targeted-test:cancelled",
   "targeted-test:dependencies-unavailable",
+  "targeted-test:native-shell-required",
   "targeted-test:script-missing",
   "targeted-test:skipped",
   "typecheck:denied",
   "typecheck:cancelled",
   "typecheck:dependencies-unavailable",
+  "typecheck:native-shell-required",
   "typecheck:script-missing",
   "typecheck:skipped",
   "lint:denied",
   "lint:cancelled",
   "lint:dependencies-unavailable",
+  "lint:native-shell-required",
   "lint:script-missing",
   "lint:skipped",
   "build:denied",
   "build:cancelled",
   "build:dependencies-unavailable",
+  "build:native-shell-required",
   "build:script-missing",
   "build:skipped",
 ] as const;
@@ -2042,17 +2047,33 @@ const NOT_RUN_STATUSES: ReadonlySet<VerificationStatus> = new Set([
 ]);
 
 function notRunSteps(report: VerificationReport): readonly VerificationNotRunStep[] {
+  const dependencies = dependenciesNotRunReason(report);
   return report.results
     .filter((result) => NOT_RUN_STATUSES.has(result.status))
     .slice(0, NOT_RUN_STEP_LIMIT)
-    .map((result) => ({ kind: result.kind, reason: notRunReason(result) }));
+    .map((result) => ({ kind: result.kind, reason: notRunReason(result, dependencies) }));
 }
 
-function notRunReason(result: VerificationResult): VerificationNotRunReason {
+// The governed verifier's container cannot install for this host without replacing the native
+// runtime's dependencies (`install-target-foreign`, Keiko 1.3.0 test on macOS): the same check run
+// in the runtime's own shell is the verification that can run, and it is recorded as one for the
+// same target. Every other bootstrap that did not complete remains a blocker to report.
+function dependenciesNotRunReason(
+  report: VerificationReport,
+): Extract<VerificationNotRunReason, "dependencies-unavailable" | "native-shell-required"> {
+  return report.dependencies?.refusalReason === "install-target-foreign"
+    ? "native-shell-required"
+    : "dependencies-unavailable";
+}
+
+function notRunReason(
+  result: VerificationResult,
+  dependencies: ReturnType<typeof dependenciesNotRunReason>,
+): VerificationNotRunReason {
   if (result.status === "denied") return "denied";
   if (result.status === "cancelled") return "cancelled";
   const detail = result.detail ?? "";
-  if (detail.startsWith("dependencies unavailable: bootstrap ")) return "dependencies-unavailable";
+  if (detail.startsWith("dependencies unavailable: bootstrap ")) return dependencies;
   return /^no [a-z-]+ script detected in package\.json$/u.test(detail)
     ? "script-missing"
     : "skipped";

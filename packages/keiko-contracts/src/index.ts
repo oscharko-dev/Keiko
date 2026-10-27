@@ -2404,6 +2404,7 @@ export type {
   VerificationResult,
   VerificationFailureLocation,
   VerificationReport,
+  VerificationDependencyRefusalReason,
   VerificationDependencyState,
   VerificationDependencySummary,
   VerificationLockfileState,

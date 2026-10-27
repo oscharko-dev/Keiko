@@ -115,6 +115,15 @@ messages cut to the per-message bound and `historyTruncated` says Coding History
 task's messages: only those two leave text shown nowhere, so only they make the page say "Activity
 truncated.". Counts only — never a message, path or run name.
 
+`client.coding-workbench.interaction` records, at info and on the routine budget, what the human
+did on the Coding Workbench page (#3897): a disclosure opened or closed (`section`, `expanded`), the
+progress state (`progressState`), the agent picked (`build`, `plan` or `custom`, never a custom
+agent's name), a jump to a pending decision, a repository bound for trust (its two body-free ids)
+and a changeset received for review (`fileCount`). These were warn/unknown `client.diagnostic`
+notes before and buried the rare real browser failures. `gateway.setup.target.accepted` records,
+at info, that Gateway Setup accepted a loopback target (KEIKO-0884), with the request correlation
+and the closed `targetClass`; it is no longer an error-level `server.diagnostic.failure`.
+
 `gateway.conversation.admission` records the closed decision before a conversation model call,
 with admitted and current configuration generations and the request correlation. A fresh probe
 and a turn-local successful-call continuation remain distinct; failed, cancelled or filtered terminal

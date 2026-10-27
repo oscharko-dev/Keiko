@@ -27,6 +27,15 @@ import {
 
 const RESYNC_DEBOUNCE_MS = 400;
 const STREAM_BATCH_MS = 32;
+// A dropped live channel reconnects by itself, a bounded number of times with growing pauses, so a
+// quiet run does not leave the page showing a lost connection until the next runtime event or a
+// click (Keiko 1.3.0 test, #3897). After the last attempt the Reconnect action remains.
+export const CODING_SAFE_ACTIVITY_RECONNECT_DELAYS_MS: readonly number[] = [
+  1_000, 2_000, 4_000, 8_000, 16_000,
+];
+// The attempts start over only once a reconnected channel has stayed live this long, so a channel
+// that closes as soon as it opens cannot reconnect forever.
+export const CODING_SAFE_ACTIVITY_RECONNECT_RESET_MS = 30_000;
 
 export type CodingWorkbenchSafeActivityStatus =
   | "idle"
@@ -78,6 +87,7 @@ export function useCodingWorkbenchSafeActivity(
   }, [runState]);
   useActivityConnection({ runId, epoch, batch, runStateRef, setState });
   useActivityResync({ runId, runtimeEventSignal, status: state.status, retry });
+  useActivityAutoReconnect({ runId, status: state.status, retry });
   return { ...state, retry };
 }
 
@@ -303,4 +313,39 @@ function useActivityResync(input: {
     const timer = setTimeout(retry, RESYNC_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [retry, runId, runtimeEventSignal, status]);
+}
+
+/** A channel that was open or tried to open and stopped; `unavailable` waits for a runtime event. */
+function reconnectableStatus(status: CodingWorkbenchSafeActivityStatus): boolean {
+  return status === "disconnected" || status === "offline" || status === "error";
+}
+
+function useActivityAutoReconnect(input: {
+  readonly runId: string | undefined;
+  readonly status: CodingWorkbenchSafeActivityStatus;
+  readonly retry: () => void;
+}): void {
+  const { retry, runId, status } = input;
+  const attemptsRef = useRef(0);
+  useEffect(() => {
+    attemptsRef.current = 0;
+  }, [runId]);
+  useEffect(() => {
+    if (runId === undefined) return undefined;
+    if (status === "live" || status === "paused" || status === "recovery") {
+      const settled = setTimeout(() => {
+        attemptsRef.current = 0;
+      }, CODING_SAFE_ACTIVITY_RECONNECT_RESET_MS);
+      return (): void => clearTimeout(settled);
+    }
+    const delay = reconnectableStatus(status)
+      ? CODING_SAFE_ACTIVITY_RECONNECT_DELAYS_MS[attemptsRef.current]
+      : undefined;
+    if (delay === undefined) return undefined;
+    const timer = setTimeout(() => {
+      attemptsRef.current += 1;
+      retry();
+    }, delay);
+    return (): void => clearTimeout(timer);
+  }, [retry, runId, status]);
 }

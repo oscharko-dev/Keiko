@@ -1560,6 +1560,109 @@ describe("POST /api/diagnostics/client", () => {
     ).toBeUndefined();
   });
 
+  // #3897 (Keiko 1.3.0 test): 174 of 180 browser diagnostics were Coding Workbench notes — a detail
+  // opened, the progress state, a trust binding — persisted as warn/unknown failures. Each is now a
+  // closed report on its own info line and the routine budget.
+  it.each([
+    { interaction: "details-toggled", section: "tool", expanded: true },
+    { interaction: "progress-state", progressState: "working" },
+    { interaction: "agent-selected", agent: "custom" },
+    { interaction: "pending-decision-focused" },
+    {
+      interaction: "repository-trust-bound",
+      repositoryId: "repo_trust-1",
+      workspaceId: `local:${"a".repeat(64)}`,
+    },
+    { interaction: "changeset-review-prepared", fileCount: 3 },
+  ])("persists the Coding Workbench interaction $interaction at info", async (interaction) => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({
+      message: "[keiko] coding workbench interaction: tool details opened in /secret/path",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_coding-interaction-0001",
+      codingWorkbenchInteraction: interaction,
+    });
+
+    expect(await handleClientDiagnosticIngest(context(body))).toEqual({ status: 204, body: null });
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    const event = sink.events.find(
+      (candidate) => candidate.op === "client.coding-workbench.interaction",
+    );
+    expect(event?.level).toBe("info");
+    expect(event?.errorKind).toBeUndefined();
+    const record = expectActivityLogProof(
+      "client.coding-workbench.interaction.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(record).toMatchObject({
+      correlationId: "ui_coding-interaction-0001",
+      ...interaction,
+      completeness: "complete",
+      loss: "none",
+    });
+    // Closed values only: the free-text note is never kept.
+    expect(JSON.stringify(record)).not.toContain("secret");
+  });
+
+  it.each([
+    { interaction: "details-toggled", section: "tool" },
+    { interaction: "details-toggled", section: "terminal", expanded: true },
+    { interaction: "progress-state", progressState: "working", agent: "build" },
+    { interaction: "agent-selected", agent: "my-private-agent" },
+    { interaction: "pending-decision-focused", fileCount: 1 },
+    { interaction: "repository-trust-bound", repositoryId: "repo/../x", workspaceId: "w" },
+    { interaction: "changeset-review-prepared", fileCount: -1 },
+    { interaction: "tool-name", tool: "bash" },
+  ])("refuses a Coding Workbench interaction outside its closed shape: %o", async (interaction) => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({
+      message: "[keiko] coding workbench interaction",
+      clientTs: CLIENT_TS,
+      codingWorkbenchInteraction: interaction,
+    });
+
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(400);
+    expect(
+      sink.events.find((candidate) => candidate.op === "client.coding-workbench.interaction"),
+    ).toBeUndefined();
+  });
+
+  it("refuses a Coding Workbench interaction that also carries failure context", async () => {
+    const body = JSON.stringify({
+      message: "[keiko] coding workbench interaction",
+      clientTs: CLIENT_TS,
+      kind: "boundary",
+      codingWorkbenchInteraction: { interaction: "pending-decision-focused" },
+    });
+
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(400);
+  });
+
+  it("keeps the failure budget available after a burst of Coding Workbench interactions", async () => {
+    const sink = captureServerLog();
+    const toggled = JSON.stringify({
+      message: "[keiko] coding workbench interaction: details-toggled",
+      clientTs: CLIENT_TS,
+      codingWorkbenchInteraction: {
+        interaction: "details-toggled",
+        section: "event",
+        expanded: false,
+      },
+    });
+    // One more than a budget admits in a window: the burst spends the routine budget alone.
+    for (let index = 1; index <= 61; index += 1) {
+      await handleClientDiagnosticIngest(context(toggled));
+    }
+
+    const failure = JSON.stringify({ message: "boundary", clientTs: CLIENT_TS, kind: "boundary" });
+    expect((await handleClientDiagnosticIngest(context(failure))).status).toBe(204);
+    expect(
+      clientDiagnosticEvents(sink).some((event) => event.extra?.clientKind === "boundary"),
+    ).toBe(true);
+    const notices = sink.events.filter((event) => event.op === "client.diagnostic.rate-limited");
+    expect(notices.map((event) => event.extra?.budget)).toEqual(["routine"]);
+  });
+
   // PR #3678 review: the copy button's changed transformation must be reconstructable: one line per
   // copy with its outcome and marker counts, and a failed copy with its error kind and frames.
   it("persists a chat answer copy and its failure as client.answer.copied", async () => {

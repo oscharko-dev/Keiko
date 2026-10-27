@@ -1076,6 +1076,18 @@ describe("CodingWorkbenchTimeline model reasoning", () => {
   });
 
   it("reports every toggle, which is always the reader's, and nothing else", () => {
+    // #3897: a toggle is routine evidence on its own closed report, never a free-text note.
+    const toggled = (expanded: boolean): readonly unknown[] => [
+      "[keiko] coding workbench interaction: details-toggled",
+      {
+        codingWorkbenchInteraction: {
+          interaction: "details-toggled",
+          section: "model-reasoning",
+          expanded,
+        },
+        correlationId: undefined,
+      },
+    ];
     const writer = vi.fn();
     setClientDiagnosticWriter(writer);
     try {
@@ -1087,17 +1099,11 @@ describe("CodingWorkbenchTimeline model reasoning", () => {
           questions={IDLE_QUESTIONS}
         />,
       );
-      expect(writer).not.toHaveBeenCalledWith(
-        "[keiko] coding workbench model reasoning toggled",
-        undefined,
-      );
+      expect(writer).not.toHaveBeenCalled();
       const block = reasoningBlock(container);
       block.open = true;
       fireEvent(block, new Event("toggle"));
-      expect(writer).toHaveBeenCalledWith(
-        "[keiko] coding workbench model reasoning toggled",
-        undefined,
-      );
+      expect(writer).toHaveBeenCalledExactlyOnceWith(...toggled(true));
       writer.mockClear();
       rerender(
         <Timeline
@@ -1107,10 +1113,7 @@ describe("CodingWorkbenchTimeline model reasoning", () => {
           questions={IDLE_QUESTIONS}
         />,
       );
-      expect(writer).not.toHaveBeenCalledWith(
-        "[keiko] coding workbench model reasoning toggled",
-        undefined,
-      );
+      expect(writer).not.toHaveBeenCalled();
     } finally {
       resetClientDiagnosticWriter();
     }

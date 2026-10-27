@@ -45,6 +45,7 @@ import {
 import { isRootRelativeFileIdentifier } from "@oscharko-dev/keiko-contracts/runtime/editor-workspace-path";
 import {
   DEPENDENCY_INSTALL_LIMITS,
+  type VerificationDependencyRefusalReason,
   type VerificationDependencyState,
   type VerificationDependencySummary,
   type VerificationLockfileState,
@@ -130,15 +131,11 @@ const INSTALL_LOCATION = /(?:^|\/)node_modules\//u;
 // One Subresource Integrity hash in an algorithm npm verifies; an entry may list several.
 const INTEGRITY_HASH = /^sha(?:1|256|384|512)-[A-Za-z0-9+/]+={0,2}$/u;
 
-export type DependencyBootstrapRefusal =
-  | "project-npm-config"
-  | "manifest-unreadable"
-  | "lockfile-unreadable"
-  | "unapproved-source"
-  | "workspaces-unresolved"
-  | "install-inspection-unavailable"
-  | "install-target-invalid"
-  | "install-target-foreign";
+// The plan's own refusals; the contract's closed vocabulary adds the egress and installed-tree ones.
+export type DependencyBootstrapRefusal = Exclude<
+  VerificationDependencyRefusalReason,
+  "egress-destination-refused" | "installed-lockfile-unreadable" | "installed-unapproved-source"
+>;
 
 export type DependencyBootstrapPlan =
   | { readonly kind: "none" }
@@ -795,6 +792,13 @@ const INSTALLED_TREE_REFUSAL_DETAIL: Readonly<
     "the installed tree names a source other than the approved HTTPS registry; verification refused",
 };
 
+const INSTALLED_TREE_REFUSAL_REASON: Readonly<
+  Record<Exclude<LockfileVerdict, "approved">, VerificationDependencyRefusalReason>
+> = {
+  "lockfile-unreadable": "installed-lockfile-unreadable",
+  "unapproved-source": "installed-unapproved-source",
+};
+
 function checkedInstall(
   outcome: DependencyBootstrapOutcome,
   deps: DependencyBootstrapDeps,
@@ -807,6 +811,7 @@ function checkedInstall(
       ...outcome.summary,
       state: "refused",
       detail: INSTALLED_TREE_REFUSAL_DETAIL[refusal],
+      refusalReason: INSTALLED_TREE_REFUSAL_REASON[refusal],
     },
   };
 }
@@ -815,6 +820,7 @@ function settled(
   state: VerificationDependencyState,
   lockfile: VerificationLockfileState,
   detail?: string,
+  refusalReason?: VerificationDependencyRefusalReason,
 ): DependencyBootstrapOutcome {
   return {
     summary: {
@@ -823,6 +829,7 @@ function settled(
       exitCode: null,
       durationMs: 0,
       ...(detail === undefined ? {} : { detail }),
+      ...(state === "refused" && refusalReason !== undefined ? { refusalReason } : {}),
     },
   };
 }
@@ -906,7 +913,7 @@ async function executeDependencyBootstrap(
   if (plan.kind === "none") return settled("none", "absent");
   if (plan.kind === "current") return settled("current", plan.lockfile);
   if (plan.kind === "refused")
-    return settled("refused", plan.lockfile, REFUSAL_DETAIL[plan.reason]);
+    return settled("refused", plan.lockfile, REFUSAL_DETAIL[plan.reason], plan.reason);
   const startedAt = deps.now();
   completedInstalls.delete(deps.workspace.root);
   let proxy: RegistryEgressProxy;
@@ -973,7 +980,14 @@ function withEgress(
   const reachedOut = egress.refused > 0 && (state === "installed" || state === "failed");
   return {
     ...outcome,
-    summary: reachedOut ? { ...summary, state: "refused", detail: EGRESS_REFUSAL_DETAIL } : summary,
+    summary: reachedOut
+      ? {
+          ...summary,
+          state: "refused",
+          detail: EGRESS_REFUSAL_DETAIL,
+          refusalReason: "egress-destination-refused",
+        }
+      : summary,
   };
 }
 
@@ -1048,7 +1062,8 @@ function targetResolutionFailure(
   return settled(
     error instanceof DependencyTargetError ? "refused" : rejectedInstallState(error),
     plan.lockfile,
-    "dependency execution target unavailable; verification refused",
+    REFUSAL_DETAIL["install-target-invalid"],
+    "install-target-invalid",
   );
 }
 

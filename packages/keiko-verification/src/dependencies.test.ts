@@ -742,6 +742,7 @@ describe("runDependencyBootstrap — settled plans (no spawn)", () => {
         exitCode: null,
         durationMs: 0,
         detail: "project npm config present; dependency installation refused",
+        refusalReason: "project-npm-config",
       },
     });
     expect(rec.calls()).toHaveLength(0);
@@ -754,6 +755,7 @@ describe("runDependencyBootstrap — settled plans (no spawn)", () => {
       bootstrapDepsFor(tempRoot(), rec.fn),
     );
     expect(outcome.summary.detail).toBe("package.json unreadable; dependency installation refused");
+    expect(outcome.summary.refusalReason).toBe("manifest-unreadable");
     expect(rec.calls()).toHaveLength(0);
   });
 
@@ -850,6 +852,7 @@ describe("runDependencyBootstrap — install exec outcomes", () => {
       durationMs: expect.any(Number) as number,
       detail: expect.stringContaining("approved HTTPS registry") as string,
       egress: { allowed: 0, refused: 0 },
+      refusalReason: "installed-unapproved-source",
     });
     expect(outcome.excerpt).toBeUndefined();
   });
@@ -865,6 +868,7 @@ describe("runDependencyBootstrap — install exec outcomes", () => {
 
     expect(outcome.summary.state).toBe("refused");
     expect(outcome.summary.detail).toContain("lockfile");
+    expect(outcome.summary.refusalReason).toBe("installed-lockfile-unreadable");
   });
 
   it("maps a non-zero npm exit to failed, with a redacted excerpt of the captured output", async () => {
@@ -1397,6 +1401,7 @@ describe("runDependencyBootstrap — registry egress", () => {
       exitCode: 1,
       egress: { allowed: 1, refused: 2 },
       detail: expect.stringContaining("source other than the approved HTTPS registry") as string,
+      refusalReason: "egress-destination-refused",
     });
     expect(proxy.closed()).toBe(1);
   });
@@ -1438,6 +1443,7 @@ describe("runDependencyBootstrap — registry egress", () => {
       exitCode: 0,
       egress: { allowed: 6, refused: 1 },
       detail: expect.stringContaining("source other than the approved HTTPS registry") as string,
+      refusalReason: "egress-destination-refused",
     });
   });
 
@@ -1579,8 +1585,30 @@ describe("dependency bootstrap for a workspace shared with a host-native runtime
         sharedHostPlatform: DARWIN,
       },
     );
-    expect(result.summary).toMatchObject({ state: "refused" });
+    // Keiko 1.3.0 test on macOS (#3897): the closed reason is what tells the coding runtime to run
+    // the check in its own shell instead of reporting a blocker.
+    expect(result.summary).toMatchObject({
+      state: "refused",
+      refusalReason: "install-target-foreign",
+    });
     expect(result.summary.detail).toContain("native shell");
+    expect(rec.calls()).toEqual([]);
+  });
+
+  it("refuses an install target that cannot describe one platform, with its closed reason", async () => {
+    const root = installedTargetFixture();
+    const rec = recordingSpawn();
+    const result = await runDependencyBootstrap(
+      { kind: "install", lockfile: "absent" },
+      {
+        ...bootstrapDepsFor(root, rec.fn),
+        dependencyInstallTarget: installTarget({ libc: "none" }),
+      },
+    );
+    expect(result.summary).toMatchObject({
+      state: "refused",
+      refusalReason: "install-target-invalid",
+    });
     expect(rec.calls()).toEqual([]);
   });
 

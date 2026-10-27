@@ -20,7 +20,10 @@ import type {
 
 import type { UseCodingWorkbenchQuestionsResult } from "@/lib/useCodingWorkbenchQuestions";
 import type { UseCodingWorkbenchSafeActivityResult } from "@/lib/useCodingWorkbenchSafeActivity";
-import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import {
+  reportCodingWorkbenchDetailsToggled,
+  reportCodingWorkbenchInteraction,
+} from "@/lib/coding-workbench-interaction";
 import { useLocale } from "@/lib/i18n";
 import { SafeMarkdownBoundary } from "../../SafeMarkdown";
 import {
@@ -236,7 +239,11 @@ function RunDetailsToggle({
       aria-expanded={expanded}
       onClick={() => {
         onToggle();
-        reportClientDiagnostic("[keiko] coding workbench run details toggled");
+        reportCodingWorkbenchInteraction({
+          interaction: "details-toggled",
+          section: "run",
+          expanded: !expanded,
+        });
       }}
     >
       {t("codingWorkbench.timeline.details")}
@@ -851,7 +858,7 @@ function ModelReasoning({
     <details
       className={styles.cmpReasoning}
       aria-live="off"
-      onToggle={() => reportClientDiagnostic("[keiko] coding workbench model reasoning toggled")}
+      onToggle={(event) => reportCodingWorkbenchDetailsToggled("model-reasoning", event)}
     >
       <summary className={styles.cmpActivitySummary}>
         <span>{t("codingWorkbench.activity.reasoning.title")}</span>
@@ -940,7 +947,7 @@ function ToolRow({
         className={styles.toolCard}
         data-tool-state={item.tool.state}
         open={item.tool.state === "failed" || item.tool.state === "denied"}
-        onToggle={() => reportClientDiagnostic("[keiko] coding workbench tool details toggled")}
+        onToggle={(event) => reportCodingWorkbenchDetailsToggled("tool", event)}
       >
         <summary className={styles.cmpActivitySummary}>
           <span className={styles.toolIcon} aria-hidden="true" />
@@ -1023,7 +1030,7 @@ function ToolGroupRow({
     >
       <details
         className={styles.cmpToolGroup}
-        onToggle={() => reportClientDiagnostic("[keiko] coding workbench activity group toggled")}
+        onToggle={(event) => reportCodingWorkbenchDetailsToggled("activity-group", event)}
       >
         <summary className={styles.cmpActivitySummary}>
           {t("codingWorkbench.activity.groupCount", { count })}
@@ -1081,7 +1088,7 @@ function PlanRow({
       <details
         className={styles.planCard}
         open={item.open}
-        onToggle={() => reportClientDiagnostic("[keiko] coding workbench plan details toggled")}
+        onToggle={(event) => reportCodingWorkbenchDetailsToggled("plan", event)}
       >
         <summary className={styles.cmpActivitySummary}>
           <p className={styles.timelineTitle}>{t("codingWorkbench.activity.plan.title")}</p>
@@ -1147,7 +1154,7 @@ function EventRow({
       <details
         className={styles.eventCard}
         open={tone === "attention"}
-        onToggle={() => reportClientDiagnostic("[keiko] coding workbench event details toggled")}
+        onToggle={(event) => reportCodingWorkbenchDetailsToggled("event", event)}
       >
         <summary className={styles.cmpActivitySummary}>{eventTitle(item.event, t)}</summary>
         {detail.length > 0 ? <p className={styles.timelineDetail}>{detail}</p> : null}
