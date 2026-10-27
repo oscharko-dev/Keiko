@@ -123,6 +123,8 @@ function guardWith(
   override?: (request: AtlassianHttpBodyRequest) => AtlassianHttpBodyResult | undefined,
 ): AtlassianConnectorCredentialDeps {
   const custody = {
+    beginVerification: (): undefined => undefined,
+    finishVerification: (): boolean => false,
     create: (): never => {
       throw new Error("create not exercised");
     },

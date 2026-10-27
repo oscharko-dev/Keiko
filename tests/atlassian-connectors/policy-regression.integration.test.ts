@@ -235,6 +235,8 @@ function guard(): AtlassianConnectorCredentialDeps {
   const jira = credentialMeta("jira");
   const confluence = credentialMeta("confluence");
   const custody = {
+    beginVerification: (): undefined => undefined,
+    finishVerification: (): boolean => false,
     create: (): never => {
       throw new Error("create is not exercised");
     },

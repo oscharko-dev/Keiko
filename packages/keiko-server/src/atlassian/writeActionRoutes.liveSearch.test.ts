@@ -139,6 +139,8 @@ function guardWith(
     return fixture(request);
   };
   const custody = {
+    beginVerification: (): undefined => undefined,
+    finishVerification: (): boolean => false,
     create: (): never => {
       throw new Error("create not exercised");
     },

@@ -64,6 +64,8 @@ const ATLASSIAN_CREDENTIAL_REJECTED_OPERATION = defineActivityLogOperation({
         "unsupported-auth-scheme",
         "credential-not-found",
         "credential-limit-exceeded",
+        "creation-conflict",
+        "credential-changed",
         "credential-unreadable",
         "vault-unavailable",
       ],
@@ -201,6 +203,10 @@ function custodyErrorResult(
       };
     case "credential-not-found":
       return { status: 404, body: errorBody("CREDENTIAL_NOT_FOUND", error.message, correlationId) };
+    case "creation-conflict":
+      return { status: 409, body: errorBody("CREATION_CONFLICT", error.message, correlationId) };
+    case "credential-changed":
+      return { status: 409, body: errorBody("CREDENTIAL_CHANGED", error.message, correlationId) };
     // KEIKO-0826: reject once the custody storage cap
     // (ATLASSIAN_CREDENTIAL_CUSTODY_MAX_ENTRIES) is reached. 429 (Too Many Requests) is the
     // conventional shape for a per-resource rate/cap ceiling — distinct from a validation
@@ -264,6 +270,8 @@ function custodyRejectionErrorKind(
       return "read-failed";
     case "invalid-input":
     case "unsupported-auth-scheme":
+    case "creation-conflict":
+    case "credential-changed":
       return "validation-failed";
   }
 }

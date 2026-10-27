@@ -395,6 +395,22 @@ reserves the existing catalog envelope budget. When a page exceeds that budget, 
 is returned with `nextStartAt` pointing to its first unreturned item; an item that cannot fit alone
 produces the existing bounded failure instead of a misleading empty page.
 
+The existing private credential metadata owner also holds optional Jira Live-Pod identity:
+an independent Pod UUID, server-supplied owner digest, creation-request UUID and bounded verification
+revision/status. The creation intent is unique within its owner and is checked before another vault
+write; reuse returns an explicit conflict, never a claim that a different submitted token was applied.
+No Pod identity or verification status confers Chat authority. Verification completion is single-use
+and checks the current credential generation and latest probe revision against the retained record;
+it cannot recreate deleted metadata. Failed verification advances the authorization generation.
+Starting a new check retains previously observed readiness until that check has a result.
+
+Both outbound HTTP factories capture the selected credential generation by value. The custody
+resolver checks it against current private metadata before reading ciphertext, so an old transport
+cannot silently materialize a replacement credential. The existing typed rejection event and 409
+mapping cover creation conflicts and changed credentials. The authenticated Pod lifecycle routes
+must compose these primitives with owner checks, invalidation, grants and approvals; the metadata
+and transport primitives alone do not expose a Live Pod in ordinary Chat.
+
 ### D4 — Action-class mapping table
 
 **Shared deployment ceiling (#4083).** Production composition resolves one ceiling for Coding and

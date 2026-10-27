@@ -1217,3 +1217,21 @@ persisted flattened record; it was corrected and the full selection rerun. The *
 also pass; regeneration resolves 608 proofs and 30 scenarios without violations. This checkpoint
 does **not** claim authenticated Pod route resolution, current credential readiness, read grants,
 approval redemption, ordinary Chat execution or any complete acceptance criterion.
+
+## Private Live-Pod identity and generation capture — #4084 AC3/#4085 AC2/AC3/AC4
+
+The existing custody owns optional Data Center Live-Pod metadata and single-use verification
+tickets. Creation needs a trusted owner digest and rejects duplicate creation intent before another
+vault write. Latest-probe and credential-generation checks prevent stale completion and deleted-row
+resurrection. Failed verification advances the generation. These are owner primitives; normal create
+and verification routes still require their Live-Pod composition and authenticated ownership wiring.
+
+All existing production HTTP factories now snapshot the selected generation. Resolution checks that
+generation before reading ciphertext, including when the caller later mutates its metadata object.
+Three new lifecycle tests failed before implementation, followed by a separate stale-resolver test
+and a real-factory regression that failed before the generation capture. The **282-test custody,
+metadata, route, legacy-write/live-search and policy selection** passes; the new rejection reasons
+also pass the real registered formatter/reader proof. All **97 registry tests** pass. Package build,
+root typecheck and changed lint pass. Final package, full coverage and product/live qualification
+remain open. Token rotation, deletion-driven Chat invalidation and actual binding admission are
+not yet claimed by this checkpoint.

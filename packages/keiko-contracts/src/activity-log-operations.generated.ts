@@ -1027,6 +1027,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "unsupported-auth-scheme",
           "credential-not-found",
           "credential-limit-exceeded",
+          "creation-conflict",
+          "credential-changed",
           "credential-unreadable",
           "vault-unavailable",
         ],

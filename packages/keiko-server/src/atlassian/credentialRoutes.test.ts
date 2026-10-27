@@ -37,7 +37,10 @@ import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import type { ServerLogEvent, ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { mockRequest, mockResponse } from "../_support.js";
 import type { RouteContext } from "../routes.js";
-import { atlassianCredentialMetadataPath } from "./credentialMetadataStore.js";
+import {
+  atlassianCredentialMetadataPath,
+  createAtlassianCredentialMetadataStore,
+} from "./credentialMetadataStore.js";
 import { buildAtlassianConnectorCredentialDeps } from "./wiring.js";
 import {
   handleCreateAtlassianConnectorCredential,
@@ -324,6 +327,8 @@ describe("POST /api/atlassian-connectors/credentials", () => {
   // ceiling as a server fault. Uses a stub custody instead of filling 64 real vault entries.
   it("answers 429 CREDENTIAL_LIMIT_EXCEEDED when custody has hit the storage cap", async () => {
     const stubCustody: AtlassianCredentialCustody = {
+      beginVerification: (): undefined => undefined,
+      finishVerification: (): boolean => false,
       create: (): never => {
         throw new AtlassianCredentialCustodyError("credential-limit-exceeded");
       },
@@ -387,10 +392,16 @@ describe("POST /api/atlassian-connectors/credentials", () => {
   // through the real formatter/registry path rather than only asserted field-by-field, so the
   // `atlassian.credential.rejected.reason` proof id resolves against a production-computed event —
   // never a hand-built one (this task's rule 1).
-  it("persists atlassian.credential.rejected as a registered Activity Log proof line", async () => {
+  it.each([
+    { code: "credential-limit-exceeded", status: 429, errorKind: "rate-limited" },
+    { code: "creation-conflict", status: 409, errorKind: "validation-failed" },
+    { code: "credential-changed", status: 409, errorKind: "validation-failed" },
+  ] as const)("persists the registered credential rejection: $code", async (failure) => {
     const stubCustody: AtlassianCredentialCustody = {
+      beginVerification: (): undefined => undefined,
+      finishVerification: (): boolean => false,
       create: (): never => {
-        throw new AtlassianCredentialCustodyError("credential-limit-exceeded");
+        throw new AtlassianCredentialCustodyError(failure.code);
       },
       getMetadata: (): undefined => undefined,
       list: (): readonly AtlassianCredentialMetadata[] => [],
@@ -422,7 +433,7 @@ describe("POST /api/atlassian-connectors/credentials", () => {
       headers: csrfHeaders(),
       body: createBody(),
     });
-    expect(res.status).toBe(429);
+    expect(res.status).toBe(failure.status);
 
     const rejection = activityEvents.find((e) => e.op === "atlassian.credential.rejected");
     if (rejection === undefined) throw new Error("expected a rejection event");
@@ -430,9 +441,9 @@ describe("POST /api/atlassian-connectors/credentials", () => {
     const persisted = expectActivityLogProof("atlassian.credential.rejected.reason", line);
     expect(persisted).toMatchObject({
       category: "security",
-      errorKind: "rate-limited",
-      status: 429,
-      reason: "credential-limit-exceeded",
+      errorKind: failure.errorKind,
+      status: failure.status,
+      reason: failure.code,
     });
   });
 
@@ -452,6 +463,8 @@ describe("POST /api/atlassian-connectors/credentials", () => {
 describe("Atlassian credential route in-memory failure handling", () => {
   it("preserves the typed 429 when activity logging fails", async (): Promise<void> => {
     const custody: AtlassianCredentialCustody = {
+      beginVerification: (): undefined => undefined,
+      finishVerification: (): boolean => false,
       create: (): never => {
         throw new AtlassianCredentialCustodyError("credential-limit-exceeded");
       },
@@ -656,6 +669,39 @@ describe("redaction under failure", () => {
 });
 
 describe("end-to-end verify through the gateway transport adapter", () => {
+  it("pins the selected generation in both HTTP factories before credential materialization", async () => {
+    let calls = 0;
+    const realWiring = buildAtlassianConnectorCredentialDeps({
+      configPath,
+      env: vaultEnv(),
+      egress: () => undefined,
+      fetchImpl: (): Promise<Response> => {
+        calls++;
+        return Promise.resolve(new Response("{}"));
+      },
+    });
+    const metadata = realWiring.custody.create({
+      provider: "jira",
+      displayName: "Synthetic Jira",
+      baseUrl: "https://acme.example",
+      authScheme: "basic-api-token",
+      accountEmail: SYNTHETIC_EMAIL,
+      apiToken: SYNTHETIC_TOKEN,
+    });
+    const port = realWiring.httpPortFactory(metadata);
+    const bodyPort = realWiring.httpBodyPortFactory(metadata);
+    createAtlassianCredentialMetadataStore({ configPath }).insert({ ...metadata, generation: 2 });
+    Object.assign(metadata, { generation: 2 });
+    const request = {
+      method: "GET",
+      url: "https://acme.example/rest/api/3/myself",
+      timeoutMs: 1_000,
+      maxBodyBytes: 4096,
+    } as const;
+    await expect(port(request)).rejects.toMatchObject({ code: "credential-changed" });
+    await expect(bodyPort(request)).rejects.toMatchObject({ code: "credential-changed" });
+    expect(calls).toBe(0);
+  });
   it("resolves the stored credential into Basic auth and contacts the configured host only", async () => {
     const seen: { url: string; authorization: string | null }[] = [];
     const fetchImpl = ((input: string | URL | Request, init?: RequestInit): Promise<Response> => {

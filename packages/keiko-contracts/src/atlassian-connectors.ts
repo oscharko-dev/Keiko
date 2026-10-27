@@ -73,6 +73,16 @@ interface AtlassianCredentialMetadataBase {
   readonly generation?: number;
 }
 
+/** Private-custody identity and verification facts, never a Chat authorization grant. */
+export interface JiraLivePodMetadata {
+  readonly podId: string;
+  readonly ownerDigest: string;
+  readonly creationRequestId: string;
+  readonly verificationRevision: number;
+  readonly verificationInProgress: boolean;
+  readonly verificationStatus: "unverified" | AtlassianConnectionVerificationStatus;
+}
+
 /** A secret-free projection. An absent legacy deployment always means Cloud. */
 export type AtlassianCredentialMetadata = AtlassianCredentialMetadataBase &
   (
@@ -86,6 +96,7 @@ export type AtlassianCredentialMetadata = AtlassianCredentialMetadataBase &
         readonly deployment: "data-center";
         readonly authScheme: "bearer-pat";
         readonly generation: number;
+        readonly livePod?: JiraLivePodMetadata;
       }
   );
 
@@ -109,6 +120,7 @@ export type AtlassianCredentialCreateRequest = AtlassianCredentialCreateBase &
         readonly deployment: "data-center";
         readonly authScheme: "bearer-pat";
         readonly accountEmail?: never;
+        readonly livePodCreationRequestId?: string;
       }
   );
 

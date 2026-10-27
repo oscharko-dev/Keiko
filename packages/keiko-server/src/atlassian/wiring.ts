@@ -10,6 +10,7 @@
 import {
   createAtlassianCredentialCustody,
   type AtlassianCredentialVaultPort,
+  type AtlassianCredentialExecutionResolver,
 } from "@oscharko-dev/keiko-connectors";
 import type {
   LocalSecretVault,
@@ -97,7 +98,7 @@ export function buildAtlassianConnectorCredentialDeps(
         deniedLoopbackPorts: () => [...listenerPorts],
         baseUrl: metadata.baseUrl,
         authRef: metadata.authRef,
-        credentials: executionResolver,
+        credentials: generationBoundResolver(executionResolver, metadata.generation ?? 1),
         egress: options.egress,
         correlationId,
         ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
@@ -111,11 +112,18 @@ export function buildAtlassianConnectorCredentialDeps(
         deniedLoopbackPorts: () => [...listenerPorts],
         baseUrl: metadata.baseUrl,
         authRef: metadata.authRef,
-        credentials: executionResolver,
+        credentials: generationBoundResolver(executionResolver, metadata.generation ?? 1),
         egress: options.egress,
         correlationId,
         ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
       }),
     ...(options.activityLog === undefined ? {} : { activityLog: options.activityLog }),
   };
+}
+
+function generationBoundResolver(
+  resolver: AtlassianCredentialExecutionResolver,
+  generation: number,
+): AtlassianCredentialExecutionResolver {
+  return { resolveForExecution: (authRef) => resolver.resolveForExecution(authRef, generation) };
 }

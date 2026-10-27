@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "d8ef0a57db97cb314bf84d9b4336da10fd169c7067e82019348904992fc28423",
+    "catalogDigest": "33208f2b450970bcb0236bf0356653c264de1f7c87347df074f82be21b6b4fbb",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -1080,6 +1080,8 @@
               "unsupported-auth-scheme",
               "credential-not-found",
               "credential-limit-exceeded",
+              "creation-conflict",
+              "credential-changed",
               "credential-unreadable",
               "vault-unavailable"
             ]
@@ -1092,7 +1094,7 @@
         "proofIds": ["atlassian.credential.rejected.reason"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/atlassian/credentialRoutes.ts:50",
-        "emitterSites": ["packages/keiko-server/src/atlassian/credentialRoutes.ts:232"]
+        "emitterSites": ["packages/keiko-server/src/atlassian/credentialRoutes.ts:238"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -101358,7 +101360,7 @@
     {
       "op": "atlassian.credential.rejected",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/credentialRoutes.ts:246",
+      "site": "packages/keiko-server/src/atlassian/credentialRoutes.ts:252",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
