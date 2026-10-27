@@ -3824,12 +3824,6 @@
       "count": 1
     },
     {
-      "path": "packages/keiko-server/src/editor/lsp/hostLanguageOperation.ts",
-      "owner": "runHostLanguageSemanticTokens",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-server/src/editor/lsp/hostLanguageProviders.ts",
       "owner": "requiredExecutableAvailable",
       "kind": "unregistered-catch",
