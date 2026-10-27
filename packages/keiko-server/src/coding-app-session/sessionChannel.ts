@@ -77,6 +77,8 @@ export interface CodingAppSessionChannel {
   /** Explicit request activity protects only idle expiry and returns idempotent cleanup. */
   readonly beginOperation: (cookieToken: string | undefined) => (() => void) | undefined;
   readonly inspectOperationCount?: (cookieToken: string | undefined) => number | undefined;
+  /** Non-touching: whether an issued session id still names a live session; never refreshes it. */
+  readonly isSessionLive?: (sessionId: string) => boolean;
   readonly subscribe: (
     cookieToken: string | undefined,
     listener: (snapshot: CodingAppSessionChannelSnapshot) => boolean,
@@ -459,6 +461,7 @@ export function createCodingAppSessionChannel(
       registry.verify(cookieToken),
     inspectOperationCount: (cookieToken: string | undefined): number | undefined =>
       registry.inspectOperationCount(cookieToken),
+    isSessionLive: (sessionId: string): boolean => registry.inspectSession(sessionId) !== undefined,
     beginOperation: (cookieToken: string | undefined): (() => void) | undefined =>
       registry.beginOperation(cookieToken),
     subscribe: (cookieToken, listener, options) =>

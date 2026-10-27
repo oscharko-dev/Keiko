@@ -321,7 +321,9 @@ lease again on its next admitted mutation, which first ends the predecessor's le
 run state counts as settled, each lease releases independently, and either failure records a
 body-free server diagnostic. The lease protects only inactivity, like every other: revocation, rotation, restart, capacity
 eviction and the absolute lifetime still end the session at once. Leases are bounded per composed
-channel (eight runs, four sessions per run) and graph disposal releases every one as `aborted`. The
+channel (eight runs, four sessions per run); a session the registry revoked, evicted or expired
+gives up its place before that bound refuses another session, and graph disposal releases every one
+as `aborted`. The
 existing `coding-app-session.operation.state` acquisition and release lines record it.
 
 The same admitted-operation protection covers normal Chat regeneration and Git-description work.

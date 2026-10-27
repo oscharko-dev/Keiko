@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "4eaa5a5ef92c9a0846d87ed1ce8ae303a1ae4313dc2c4f9eff4b21e352d97172",
+    "catalogDigest": "d60dd3f2ebb4ad8add59040ea1645467efaaab6bb8e614bfc13470f242d6bc0b",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -13836,9 +13836,9 @@
         "registrationSite": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:340",
         "emitterSites": [
           "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1980",
-          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2087",
-          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2215",
-          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2370"
+          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2100",
+          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2228",
+          "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2383"
         ]
       },
       {
@@ -101233,7 +101233,7 @@
     {
       "op": "coding-app-session.channel.subscribe",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-app-session/sessionChannel.ts:192",
+      "site": "packages/keiko-server/src/coding-app-session/sessionChannel.ts:194",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -101345,7 +101345,7 @@
     {
       "op": "coding-runtime.accepted-initialization",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2824",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2837",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -102117,7 +102117,7 @@
     {
       "op": "coding-runtime.verification",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2420",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:2433",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

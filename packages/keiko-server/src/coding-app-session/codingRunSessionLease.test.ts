@@ -225,6 +225,32 @@ describe("a Coding Workbench run keeps its window's session active (ADR-0141 D5)
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  // A run holds at most four sessions. One the registry revoked, evicted or expired keeps no place
+  // there, so it cannot refuse the run's next valid session (PR #4096 review).
+  it("frees the places of ended sessions before refusing a run's next session", () => {
+    const fixture = leaseFixture();
+    const holdAs = (cookieToken: string): void => {
+      fixture.request.headers.cookie = `${APP_SESSION_COOKIE_NAME}=${cookieToken}`;
+      fixture.hold();
+    };
+    const mint = (): string => fixture.registry.mint("coding-run-lease").cookieToken;
+    const held = [fixture.token, mint(), mint(), mint()];
+    for (const token of held) holdAs(token);
+    const refused = mint();
+    holdAs(refused);
+    expect(fixture.registry.inspectOperationCount(refused)).toBe(0);
+
+    for (const token of held) {
+      const sessionId = fixture.registry.inspect(token)?.sessionId;
+      if (sessionId === undefined) throw new Error("session missing");
+      fixture.registry.revoke(sessionId);
+    }
+    const next = mint();
+    holdAs(next);
+    expect(fixture.registry.inspectOperationCount(next)).toBe(1);
+    abortCodingRunSessionLeases(fixture.deps.codingAppSessionChannel);
+  });
+
   // Rotation re-issues the session as a new registry record whose operation count starts at zero,
   // so the lease its predecessor held no longer protects it (PR #4096 review).
   it("holds a rotated session again on the run's next admitted mutation", () => {

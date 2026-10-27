@@ -2006,6 +2006,7 @@ const EXECUTED_RED_STATUSES = ["failed", "timed-out", "resource-exceeded"] as co
 // (PR #3452 review). The not-run path is left to runs in which no step went red.
 function modelFacingStatus(report: VerificationReport): Exclude<VerificationStatus, "passed"> {
   const overall = report.overallStatus as Exclude<VerificationStatus, "passed">;
+  if (refusedOnlyForThisHost(report)) return "skipped";
   if (VERIFICATION_OUTCOME_REASON_CODES[overall] !== "VERIFICATION_NOT_RUN") return overall;
   const executedRed = EXECUTED_RED_STATUSES.find((status) =>
     report.results.some((result) => result.status === status),
@@ -2029,6 +2030,18 @@ function failedVerificationOutcome(
     ...(verificationFailure === undefined ? {} : { verificationFailure }),
     ...(notRun === undefined ? {} : { notRun }),
   };
+}
+
+// A refused bootstrap fails the report (ADR-0043 D17), but `install-target-foreign` refuses only
+// because this host's runtime holds the dependencies: when no step ran, the model is told to run
+// the check in its own shell (native-shell-required), not a failure it cannot repair (PR #4096).
+function refusedOnlyForThisHost(report: VerificationReport): boolean {
+  return (
+    report.overallStatus === "failed" &&
+    report.dependencies?.refusalReason === "install-target-foreign" &&
+    report.results.length > 0 &&
+    report.results.every((result) => result.status === "skipped")
+  );
 }
 
 // A run that never executed used to reach the model as a bare VERIFICATION_NOT_RUN, and the model

@@ -104,6 +104,20 @@ function releaseLease(runId: string, run: LeasedRun, lease: SessionLease): void 
   }
 }
 
+// A session the registry revoked, evicted or expired protects nothing: it gives up its place, so
+// only live sessions count against the run's bound.
+function hasPlace(runId: string, run: LeasedRun, deps: LeaseDeps): boolean {
+  if (run.sessions.size < MAX_SESSIONS_PER_RUN) return true;
+  const isSessionLive = deps.codingAppSessionChannel?.isSessionLive;
+  if (isSessionLive === undefined) return false;
+  for (const [sessionId, lease] of run.sessions) {
+    if (isSessionLive(sessionId)) continue;
+    run.sessions.delete(sessionId);
+    releaseLease(runId, run, lease);
+  }
+  return run.sessions.size < MAX_SESSIONS_PER_RUN;
+}
+
 function credentialDigest(req: IncomingMessage): string {
   return createHash("sha256")
     .update(readSessionCookie(req) ?? "")
@@ -126,7 +140,7 @@ class CodingRunSessionLeases {
     const credential = credentialDigest(input.req);
     const held = run.sessions.get(input.sessionId);
     if (held?.credential === credential) return;
-    if (held === undefined && run.sessions.size >= MAX_SESSIONS_PER_RUN) return;
+    if (held === undefined && !hasPlace(input.runId, run, input.deps)) return;
     // The predecessor of a rotated session no longer protects it: end that lease, hold this one.
     if (held !== undefined) releaseLease(input.runId, run, held);
     const abort = new AbortController();

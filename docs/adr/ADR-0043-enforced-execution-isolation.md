@@ -647,7 +647,11 @@ dependency summary and on `editor.verification.dependencies`. The coding facade 
 an `install-target-foreign` refusal `native-shell-required` instead of `dependencies-unavailable`,
 with guidance to run the repository's own command for that check in the shell: in the Keiko 1.3.0
 test on macOS the generic reason left the model without a check it could run, and the run settled
-`verification-not-evidenced` (#3897). Isolation, the refusal and its evidence rules are unchanged.
+`verification-not-evidenced` (#3897). The refused bootstrap still fails the report (D17), so the
+port presents such a report, in which every step was skipped, to the model as not run: the reason
+and its guidance reach the model instead of a generic verification failure. Every other refused
+bootstrap remains a failed verification. Isolation, the refusal and its evidence rules are
+unchanged.
 
 Host network makes every source npm would contact part of that boundary (PR #3452 review: CWE-918,
 CWE-494). Before npm runs, the bootstrap checks every source it would be handed. Each specifier in
