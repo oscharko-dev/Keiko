@@ -1893,3 +1893,22 @@ Live Pod filtering, verification refresh, keyboard interactions and accessibilit
 The status-rendering test now exhaustively covers the existing nine-member verification
 contract. Full UI typecheck and lint pass. Management rename/token controls, Chat source
 connection/mode controls, drag/drop and the real browser group remain pending.
+
+### Chat connection and selected mode — #4086, #4084 / #4081
+
+The existing Chat source header now exposes a keyboard-operable Jira disclosure.
+It lists public verified Live Pods, persists one binding and the selected canonical
+three-mode value through the existing PATCH/scope-conflict helper, and only publishes
+the server-confirmed Chat. Replacing a non-empty Pod requires explicit confirmation.
+Unavailable Pods cannot be selected; failed refreshes cannot admit a new stale choice.
+The default remains Ask for approval, and the disclosure explains that read consent
+and narrower server limits still apply. Memory authority is not reused or widened.
+The mode control reuses the canonical mode enum and existing translated mode labels.
+
+Scoped view identity suppresses late success and conflict-refresh callbacks after
+context replacement/unmount, a synchronous mutation lock prevents duplicate PATCH,
+and external scope changes discard the stale local draft. Escape closes the control
+and restores summary focus. The new cases and existing Chat/API/scope suites pass
+398 tests; UI typecheck, lint and production static build pass. Browser qualification,
+drag/drop, effective-ceiling presentation, rename/token controls and the complete
+write/mixed-source workflows remain pending. No full AC acceptance is claimed.

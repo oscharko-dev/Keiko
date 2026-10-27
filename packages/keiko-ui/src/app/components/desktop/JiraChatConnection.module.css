@@ -1,0 +1,30 @@
+.root {
+  max-inline-size: 100%;
+}
+.root > summary {
+  cursor: pointer;
+}
+.panel {
+  padding: 12px;
+  max-inline-size: 28rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+}
+.fields {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 12px;
+  min-inline-size: 0;
+}
+.fields label {
+  display: grid;
+  gap: 4px;
+}
+.fields select {
+  max-inline-size: 100%;
+}
+.fields p {
+  margin: 0;
+}

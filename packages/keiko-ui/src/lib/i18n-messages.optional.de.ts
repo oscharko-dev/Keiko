@@ -1,5 +1,20 @@
 import type { OptionalWidgetMessageCatalog } from "./i18n-messages.optional.en";
 export const OPTIONAL_WIDGET_DE_MESSAGES = {
+  "chat.jira.connection": "Jira-Verbindung",
+  "chat.jira.podLabel": "Jira-Pod",
+  "chat.jira.noPod": "Kein Jira-Pod",
+  "chat.jira.podUnavailable": "Aktueller Pod nicht verfügbar",
+  "chat.jira.verifyRequired": "Verifikation erforderlich",
+  "chat.jira.modeLabel": "Autonomiemodus des Chats",
+  "chat.jira.modeHelp":
+    "Der erste Jira-Lesezugriff benötigt immer eine Freigabe. Installationsgrenzen und die aktuellen Chat-Berechtigungen gelten weiterhin.",
+  "chat.jira.replaceConfirm":
+    "Den bisherigen Jira-Pod ersetzen und seine ausstehenden Freigaben widerrufen.",
+  "chat.jira.apply": "Jira-Einstellungen übernehmen",
+  "chat.jira.connectionFailed":
+    "Jira-Einstellungen konnten nicht geladen oder gespeichert werden. Für eine erneute Prüfung und Wiederholung dieses Menü neu öffnen.",
+  "chat.jira.bound": "Jira-Pod vom Server verbunden",
+  "chat.jira.unbound": "Kein Jira-Pod verbunden",
   "atlassianConnectors.live.title": "Jira Live-Pods",
   "atlassianConnectors.live.subtitle":
     "Aktuelle Jira-Daten im verbundenen Chat nach ausdrücklicher Lesefreigabe lesen. Der Live-Zugriff erstellt keinen Index und keine Dokumentensammlung.",

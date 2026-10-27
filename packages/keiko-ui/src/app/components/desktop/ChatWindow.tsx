@@ -1,5 +1,6 @@
 "use client";
 
+import { JiraChatConnection } from "./JiraChatConnection";
 import { JiraChatTools } from "./JiraChatTools";
 import { ChatDraftStatus } from "./ChatDraftStatus";
 import { MissingEvidenceActions } from "./MissingEvidenceActions";
@@ -4522,6 +4523,7 @@ function ChatScopeHeaderImpl({
         catalog={catalog}
         connected={connected}
       />
+      <JiraChatConnection key={chat.id} chat={chat} onChatChanged={onChatChanged} />
       {memoryControl !== undefined ? (
         <div className="chat-scope-header-actions">{memoryControl}</div>
       ) : null}

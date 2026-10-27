@@ -1,4 +1,18 @@
 export const OPTIONAL_WIDGET_EN_MESSAGES = {
+  "chat.jira.connection": "Jira connection",
+  "chat.jira.podLabel": "Jira Pod",
+  "chat.jira.noPod": "No Jira Pod",
+  "chat.jira.podUnavailable": "Current Pod unavailable",
+  "chat.jira.verifyRequired": "Verification required",
+  "chat.jira.modeLabel": "Chat autonomy mode",
+  "chat.jira.modeHelp":
+    "The first Jira read always requires consent. Deployment limits and the current Chat permissions continue to apply.",
+  "chat.jira.replaceConfirm": "Replace the current Jira Pod and revoke its pending permissions.",
+  "chat.jira.apply": "Apply Jira settings",
+  "chat.jira.connectionFailed":
+    "Jira settings could not be loaded or saved. Reopen this control to refresh and retry.",
+  "chat.jira.bound": "Jira Pod connected by the server",
+  "chat.jira.unbound": "No Jira Pod connected",
   "atlassianConnectors.live.title": "Jira Live Pods",
   "atlassianConnectors.live.subtitle":
     "Read current Jira data in a connected Chat with explicit read consent. Live access does not create an index or stored document collection.",
