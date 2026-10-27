@@ -92,6 +92,11 @@ const ATLASSIAN_CREDENTIAL_REJECTED_OPERATION = defineActivityLogOperation({
 // write-only; the narrow execution resolver is NOT here — it lives inside the two port-factory
 // closures, so no route can reach a stored secret (ADR-0128 D2). The body-less port serves the
 // verify probe; the bounded-body port serves the sync lane (Issue #2242).
+export interface AtlassianCredentialHttpOptions extends AtlassianHttpLifecycleOptions {
+  /** Server-owned invocation purpose; explicit probes own their verification observation. */
+  readonly purpose?: "request" | "verification";
+}
+
 export interface AtlassianConnectorCredentialDeps {
   /** Listener lifecycle owned by the BFF, never exposed through an HTTP request. */
   readonly registerListener?: (port: number) => () => void;
@@ -99,12 +104,12 @@ export interface AtlassianConnectorCredentialDeps {
   readonly httpPortFactory: (
     metadata: AtlassianCredentialMetadata,
     correlationId?: string,
-    lifecycle?: AtlassianHttpLifecycleOptions,
+    lifecycle?: AtlassianCredentialHttpOptions,
   ) => AtlassianHttpPort;
   readonly httpBodyPortFactory: (
     metadata: AtlassianCredentialMetadata,
     correlationId?: string,
-    lifecycle?: AtlassianHttpLifecycleOptions,
+    lifecycle?: AtlassianCredentialHttpOptions,
   ) => AtlassianHttpBodyPort;
   // KEIKO-0826 follow-up: optional sink for body-free activity events emitted on every typed
   // custody-error path (`credential-not-found` 404, `unsupported-auth-scheme` 400, `invalid-input`

@@ -1,6 +1,6 @@
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { recordConnectionCheck } from "./credentialActivity.js";
-import type { AtlassianHttpLifecycleOptions } from "./httpRequestLifecycle.js";
+import type { AtlassianCredentialHttpOptions } from "./credentialRoutes.js";
 import type { CreateAtlassianHttpPortOptions } from "./httpPort.js";
 import type {
   AtlassianCredentialMetadata,
@@ -167,11 +167,14 @@ function credentialTransportOptions(
   owner: CredentialTransportOwner,
   metadata: AtlassianCredentialMetadata,
   correlationId: string | undefined,
-  lifecycle: AtlassianHttpLifecycleOptions = {},
+  lifecycle: AtlassianCredentialHttpOptions = {},
 ): CreateAtlassianHttpPortOptions {
   const { options, listenerPorts, executionResolver } = owner;
   const dataCenter = metadata.deployment === "data-center";
-  const observe = observedAuthentication(owner, metadata, correlationId ?? UNKNOWN_CORRELATION_ID);
+  const observe =
+    lifecycle.purpose === "verification"
+      ? (): void => undefined
+      : observedAuthentication(owner, metadata, correlationId ?? UNKNOWN_CORRELATION_ID);
   const beforeDispatch = lifecycle.beforeDispatch;
   const onResponse = lifecycle.onResponse;
   return {

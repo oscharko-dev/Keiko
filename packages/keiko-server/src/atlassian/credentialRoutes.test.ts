@@ -778,6 +778,46 @@ describe("redaction under failure", () => {
 });
 
 describe("end-to-end verify through the gateway transport adapter", () => {
+  it("records a failed verification only as a probe through the real credential transport", async () => {
+    const sink = createFileServerLogSink(configDir, { level: "debug" });
+    try {
+      const real = buildAtlassianConnectorCredentialDeps({
+        configPath,
+        env: vaultEnv(),
+        egress: () => undefined,
+        activityLog: sink,
+        fetchImpl: (): Promise<Response> => Promise.resolve(new Response("{}", { status: 401 })),
+      });
+      await rebuild(real);
+      const created = real.custody.create(
+        livePodCreateInput(),
+        jiraChatActorDigest(baseDeps(real)),
+      );
+      expect(await (await verifyCredentialRequest(created.authRef)).json()).toMatchObject({
+        status: "auth-failed",
+      });
+      const lines = persistedActivityLogLines(
+        readPersistedActivityLog(configDir),
+        "atlassian.connection.checked",
+      );
+      expect(lines).toHaveLength(1);
+      expect(
+        expectActivityLogProof("atlassian.connection.checked.line", lines[0] ?? ""),
+      ).toMatchObject({
+        action: "verify",
+        outcome: "auth-failed",
+        verificationState: "applied",
+      });
+      expect(real.custody.getMetadata(created.authRef)).toMatchObject({
+        generation: 2,
+        livePod: { verificationStatus: "auth-failed", verificationInProgress: false },
+      });
+      expectNoSecretBytes(lines.join("\n"));
+    } finally {
+      sink.close?.();
+    }
+  });
+
   it("retains successful verification and revokes the generation after a failed recheck", async () => {
     const created = wiring.custody.create(
       livePodCreateInput(),

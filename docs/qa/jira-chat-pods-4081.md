@@ -1704,3 +1704,16 @@ Generation resolves 620 proofs and 30 scenarios without violations. Logs:
 
 The production graph, ordinary Chat/model loop, concrete write approvals and UI still require
 composition and complete qualification; this component checkpoint accepts no complete AC.
+
+### Verification observation repair — 2026-10-27 (#4082, #4081)
+
+CodeRabbit identified that a verification HTTP 401 also emitted a stale ordinary-request
+observation. The real authenticated verification route reproduces two connection-check records
+before the fix. Server-owned port purpose now excludes the request observer for explicit probes;
+the verification owner still records its applied/stale outcome and invalidates the generation.
+Ordinary request acknowledgement, 401 invalidation and 403/stale-response isolation are unchanged.
+
+The regression fails before and passes after the correction. All 89 credential-route tests,
+package build, root typecheck and changed-file lint pass. Existing Activity Log writer/reader
+proof verifies exactly one `verify` record without secret bytes. Final full gates/Sonar remain
+pending; this checkpoint does not close an acceptance criterion.

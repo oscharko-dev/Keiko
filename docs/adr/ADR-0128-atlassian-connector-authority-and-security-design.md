@@ -448,7 +448,10 @@ An observed 401 invalidates only that still-current verified credential, advance
 and notifies the existing dependent-Chat lifecycle owner. A newer/pending verification, rotation,
 deletion or 403 permission denial cannot revoke another/current credential. Response acknowledgement
 runs before invalidation and body consumption; the existing Activity Log distinguishes observed
-request status from an explicit verification probe. This does not introduce credential polling.
+request status from an explicit verification probe. Probe construction marks its server-owned
+purpose explicitly and omits the observed-request handler; its existing verification owner records
+the result once. This classification does not depend on a possibly stale metadata snapshot.
+This does not introduce credential polling.
 
 Both outbound HTTP factories capture the selected credential generation by value. The custody
 resolver checks it against current private metadata before reading ciphertext, so an old transport

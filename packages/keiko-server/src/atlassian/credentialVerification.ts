@@ -16,7 +16,7 @@ function probeCredential(
   metadata: AtlassianCredentialMetadata,
   correlationId: string,
 ): Promise<AtlassianConnectionVerificationStatus> {
-  const port = deps.httpBodyPortFactory(metadata, correlationId);
+  const port = deps.httpBodyPortFactory(metadata, correlationId, { purpose: "verification" });
   return metadata.deployment === "data-center"
     ? verifyJiraDataCenterConnection(port, metadata.baseUrl)
     : verifyAtlassianConnection(port, { provider: metadata.provider, baseUrl: metadata.baseUrl });
