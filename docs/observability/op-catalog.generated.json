@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "65a8a02fd9ab10593171bf4eb15667906e4581b1058ef4cb50fc5619a1055a6f",
+    "catalogDigest": "6e5221701b692fb9735d7e4cb137f08bec9223d4147aa3377924fc7bd69bb3f2",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -2406,7 +2406,8 @@
               "revoke",
               "current-state",
               "action-policy",
-              "read-grant"
+              "read-grant",
+              "catalog-read"
             ]
           },
           "outcome": {
@@ -2545,11 +2546,12 @@
           "chat.tool-authority.operation.read-grant",
           "chat.tool-authority.operation.read-grant-admission",
           "chat.tool-authority.operation.read-grant-lifecycle",
-          "chat.tool-authority.operation.read-consent-route"
+          "chat.tool-authority.operation.read-consent-route",
+          "chat.tool-authority.operation.catalog-read"
         ],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/editor/chatAuthorityActivity.ts:38",
-        "emitterSites": ["packages/keiko-server/src/editor/chatAuthorityActivity.ts:203"]
+        "registrationSite": "packages/keiko-server/src/editor/chatAuthorityActivity.ts:45",
+        "emitterSites": ["packages/keiko-server/src/editor/chatAuthorityActivity.ts:212"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -55603,7 +55605,8 @@
                 "chat.tool-authority.operation.read-grant",
                 "chat.tool-authority.operation.read-grant-admission",
                 "chat.tool-authority.operation.read-grant-lifecycle",
-                "chat.tool-authority.operation.read-consent-route"
+                "chat.tool-authority.operation.read-consent-route",
+                "chat.tool-authority.operation.catalog-read"
               ],
               "replayReferences": [],
               "missingObligations": []
@@ -102055,7 +102058,7 @@
     {
       "op": "chat.tool-authority.operation",
       "category": "security",
-      "site": "packages/keiko-server/src/editor/chatAuthorityActivity.ts:41",
+      "site": "packages/keiko-server/src/editor/chatAuthorityActivity.ts:48",
       "package": "keiko-server"
     },
     {

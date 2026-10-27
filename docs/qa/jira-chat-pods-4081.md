@@ -1625,3 +1625,39 @@ Generation resolves 617 proofs and 30 scenarios without violations. Logs:
 This primitive neither reserves a tool budget nor dispatches a tool. The trusted non-Coding
 consumer and ordinary Chat still need the complete catalog → policy → consent/approval → budget
 → MCP/provider → settlement composition. No complete AC is accepted by this checkpoint.
+
+### Private Chat read consumer checkpoint — #4084 AC2/AC4/AC5, #4089 AC4, #4091 foundation
+
+The private ordinary-Chat consumer now binds the nine read routes to the shared canonical binder
+and actual SDK host, using the existing Harness counter owner through its public composition
+seam. No workspace or Coding session is fabricated. Catalog offers do not create consent
+requests. Dispatch requests consent before reserving a budget; the notification callback cannot
+approve a grant. Admission requires the existing owner to retain actual accepted consent in all
+three modes. It rechecks authority, binding, credential readiness and consent at the final HTTP
+effect. The catalog owns single settlement, pre-effect refund and receipt validation; its existing
+invocation registry and cancellation path remain in use. Paginated results explicitly report
+truncation and retain the provider's nextStartAt instead of claiming a complete result.
+
+185 scoped authority/consumer, Harness-budget, real HTTP credential/consent and non-Coding
+catalog tests pass. They exercise SDK calls after approval in all three modes, grant reuse,
+notification without approval, argument authority/routing injection, last-slot budget refusal and
+invalidation after connection selection but before HTTP. A real Activity Log writer/reader proof
+reconstructs review-required, allowed and refused read admission without private facts. Build,
+root typecheck, changed lint/format, ADR, native ESM imports and semantic checks pass; the 938-group
+semantic baseline is unchanged. The 97 operation-catalog tests pass. Disabling only the final
+read guard in an isolated synthetic fault-injection run makes all four late-invalidation cases
+fail; restoring the exact source makes all four pass. This is a negative guard proof, not a
+claim about an earlier product Chat path. Operation generation resolves 618 proofs and 30
+scenarios without violations. Logs:
+`/tmp/keiko-4081-catalog-consent-*.log`.
+
+The tests compose the production consumer/binder/SDK and budget owners with a synthetic Jira HTTP
+port and retained server authority. Application graph composition, accepted-human authority
+minting, concrete write approvals, normal Chat/model orchestration and UI remain pending. The
+issuing-authority lifetime across actual normal-Chat turn settlement remains an explicit auditor
+integration point. The complete assembled-package gate for the additive Harness export remains
+part of final qualification. No complete criterion or current licensed live pass is claimed.
+
+The laboratory was rechecked at 15:35 Berlin on 2026-10-27: the production HTTPS/PAT verifier
+passes, untrusted TLS is rejected and revoked target admission is unreachable. The license check
+still reports invalid; current licensed live-write/model/browser acceptance remains blocked.

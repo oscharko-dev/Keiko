@@ -2305,6 +2305,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "current-state",
           "action-policy",
           "read-grant",
+          "catalog-read",
         ],
       },
       outcome: {
@@ -2444,6 +2445,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       "chat.tool-authority.operation.read-grant-admission",
       "chat.tool-authority.operation.read-grant-lifecycle",
       "chat.tool-authority.operation.read-consent-route",
+      "chat.tool-authority.operation.catalog-read",
     ],
     releaseImpact: "minor",
   },

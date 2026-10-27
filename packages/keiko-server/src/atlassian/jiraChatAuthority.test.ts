@@ -4,6 +4,22 @@ import {
   ATLASSIAN_ACTION_APPROVAL_MAX_PENDING,
 } from "./actionApprovals.js";
 import type { JiraLivePodMetadata } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { randomUUID } from "node:crypto";
+import { createHarnessCatalogBudget, DEFAULT_LIMITS } from "@oscharko-dev/keiko-harness";
+import type { ChatToolReadGrantView, RunCounters } from "@oscharko-dev/keiko-contracts";
+import type { CatalogHandlerContext } from "../tool-catalog/catalogToolPorts.js";
+import { createManagedProviderCatalog } from "../tool-catalog/managedProviderCatalog.js";
+import { createCatalogToolBinder } from "../tool-catalog/catalogToolDispatch.js";
+import { createCodingToolInvocationRegistry } from "../coding-runtime/codingToolInvocationRegistry.js";
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+import { createJiraProviderForCatalog } from "./jiraManagedProvider.js";
+import {
+  createJiraChatCatalogAdmission,
+  jiraChatCatalogConsumerPort,
+  jiraChatReadCatalogRoutes,
+  type JiraChatCatalogConsumer,
+  type JiraChatCatalogContext,
+} from "./jiraChatCatalogConsumer.js";
 import {
   createFileServerLogSink,
   createServerLogger,
@@ -523,5 +539,270 @@ describe("ordinary Chat first-read consent admission", () => {
       ).toBe(true);
     }
     expect(request()).toEqual({ kind: "denied", reason: "capacity-exhausted" });
+  });
+});
+
+describe("ordinary Chat catalog read admission", () => {
+  const now = Date.parse(CHAT_AUTHORITY_TEST_NOW);
+  let grants: AtlassianActionApprovalRegistry;
+  let requests: number;
+  let notifications: number;
+  let beforeConnection: () => void;
+  let consent: (grant: ChatToolReadGrantView) => void;
+  const hosts: { close: () => Promise<void> }[] = [];
+
+  beforeEach(() => {
+    grants = new AtlassianActionApprovalRegistry(() => now);
+    requests = 0;
+    notifications = 0;
+    beforeConnection = (): void => undefined;
+    consent = (view): void => {
+      const entry = grants.getChatReadGrant(view.grantId);
+      if (entry === undefined) throw new Error("Expected retained grant");
+      expect(
+        grants.acceptChatReadGrant(
+          view.grantId,
+          entry.grant.subject,
+          entry.authority,
+          "f".repeat(64),
+          "catalog-consent-proof",
+        ).ok,
+      ).toBe(true);
+    };
+  });
+  afterEach(async () => {
+    await Promise.all(hosts.splice(0).map((host) => host.close()));
+  });
+
+  function context(): JiraChatCatalogContext {
+    return {
+      runId: "ordinary-chat-turn",
+      correlationId: "catalog-consent-proof",
+      chatId: chat.id,
+      authority: reference.envelopeDigest,
+      authorityReference: reference,
+      authorityExpiresAt: "2026-07-09T13:00:00.000Z",
+      deadlineAt: new Date(now + 60_000).toISOString(),
+      signal: new AbortController().signal,
+    };
+  }
+
+  async function catalogFixture(maxToolCalls = 3): Promise<{
+    binder: ReturnType<typeof createCatalogToolBinder>;
+    budget: ReturnType<typeof createHarnessCatalogBudget>;
+    counters: RunCounters;
+    managed: Awaited<ReturnType<typeof createManagedProviderCatalog<JiraChatCatalogConsumer>>>;
+  }> {
+    const current = context();
+    const counters: RunCounters = {
+      iterations: 0,
+      modelCalls: 0,
+      toolCalls: 0,
+      commandExecutions: 0,
+      failureAttempts: 0,
+      browserNavigations: 0,
+    };
+    const budget = createHarnessCatalogBudget({
+      ...current,
+      counters,
+      now: () => now,
+      deadlineAt: now + 60_000,
+      limits: { ...DEFAULT_LIMITS, maxToolCalls },
+    });
+    const log = {
+      primary: createBufferedServerLogSink(),
+      diagnostics: { record: (): void => undefined },
+    };
+    const provider = createJiraProviderForCatalog<CatalogHandlerContext<JiraChatCatalogConsumer>>(
+      () => {
+        beforeConnection();
+        return {
+          baseUrl: "https://jira.example.invalid/context",
+          deployment: "data-center",
+          http: (): Promise<import("@oscharko-dev/keiko-connectors").AtlassianHttpBodyResult> => {
+            requests++;
+            return Promise.resolve({
+              kind: "response",
+              status: 200,
+              bodyText: "[]",
+              bodyBytes: 2,
+              truncated: false,
+            });
+          },
+        };
+      },
+    );
+    const managed = await createManagedProviderCatalog<JiraChatCatalogConsumer>({
+      providers: [provider],
+      profile: { id: "jira-chat", version: 1 },
+      log,
+      correlationId: current.correlationId,
+      now: () => now,
+      routes: jiraChatReadCatalogRoutes(),
+    });
+    hosts.push(managed);
+    const admission = createJiraChatCatalogAdmission({
+      deps: { ...deps, atlassianActionApprovalRegistry: grants },
+      context: () => current,
+      now: () => now,
+      requestReadConsent: (view): Promise<void> => {
+        notifications++;
+        expect(requests).toBe(0);
+        expect(counters.toolCalls).toBe(0);
+        consent(view);
+        return Promise.resolve();
+      },
+    });
+    const binder = createCatalogToolBinder<JiraChatCatalogConsumer>(
+      {
+        ...admission,
+        consumerPort: jiraChatCatalogConsumerPort,
+        projection: managed.projection,
+        handlerBindings: managed.handlerBindings,
+        budgetPort: budget.port,
+        logPort: log,
+      },
+      {
+        catalog: managed.catalog,
+        context: () => current,
+        now: () => now,
+        mintId: randomUUID,
+        invocationRegistry: createCodingToolInvocationRegistry({ now: () => now }),
+      },
+    );
+    return { binder, budget, counters, managed };
+  }
+
+  async function dispatch(
+    f: Awaited<ReturnType<typeof catalogFixture>>,
+    suffix: string,
+    args: unknown = {},
+  ): Promise<Awaited<ReturnType<typeof f.binder.dispatch>>> {
+    const offered = f.binder.offer();
+    const descriptor = f.managed.catalog.descriptors.find(
+      (entry) => entry.toolRef.canonicalId === "keiko.jira.projects",
+    );
+    if (descriptor === undefined) throw new Error("Expected project descriptor");
+    const result = await f.binder.dispatch(
+      {
+        kind: "bound",
+        toolRef: descriptor.toolRef,
+        projectionDigest: offered.binding.projectionDigest,
+        offerId: offered.offerId,
+        arguments: args,
+      },
+      { actionId: `read-${suffix}`, idempotencyKey: `read-key-${suffix}` },
+    );
+    if (result.kind === "settled") f.budget.acceptReceipt(result.receipt, descriptor);
+    return result;
+  }
+
+  it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
+    "reads through the SDK only after consent in %s",
+    async (mode) => {
+      store.updateChat(chat.id, { toolMode: mode });
+      registerCurrentAuthority();
+      const f = await catalogFixture();
+      expect(f.binder.offer().toolRefs).toHaveLength(9);
+      expect(notifications).toBe(0);
+      expect(await dispatch(f, "first")).toMatchObject({
+        kind: "settled",
+        result: { status: "completed", data: { items: [] } },
+      });
+      expect(requests).toBe(1);
+      expect(f.counters.toolCalls).toBe(1);
+      expect(await dispatch(f, "second")).toMatchObject({
+        kind: "settled",
+        result: { status: "completed" },
+      });
+      expect(notifications).toBe(1);
+      expect(requests).toBe(2);
+      expect(f.counters.toolCalls).toBe(2);
+    },
+  );
+
+  it("does not treat a completed notification as human consent", async () => {
+    consent = (): void => undefined;
+    const f = await catalogFixture();
+    expect(await dispatch(f, "unapproved")).toMatchObject({
+      kind: "settled",
+      result: { status: "denied" },
+      receipt: { effectStarted: false, budgetDisposition: "not-reserved" },
+    });
+    expect(requests).toBe(0);
+    expect(f.counters.toolCalls).toBe(0);
+  });
+
+  it("rejects model authority and routing overrides before requesting consent", async () => {
+    const f = await catalogFixture();
+    expect(await dispatch(f, "override", { chatId: "other", authority: reference })).toMatchObject({
+      kind: "settled",
+      result: { status: "invalid" },
+    });
+    expect(notifications).toBe(0);
+    expect(requests).toBe(0);
+  });
+
+  it.each(["disconnect", "reverify", "actor", "revoke"] as const)(
+    "stops at the final HTTP boundary after %s",
+    async (change) => {
+      const f = await catalogFixture();
+      beforeConnection = (): void => {
+        if (change === "disconnect") store.updateChat(chat.id, { jiraPodId: null });
+        if (change === "reverify") updatePod({ verificationInProgress: true });
+        if (change === "actor") actor = "other-operator";
+        if (change === "revoke") grants.revokeChatReadGrants(chat.id);
+      };
+      const result = await dispatch(f, change);
+      expect(result).not.toMatchObject({ result: { status: "completed" } });
+      expect(requests).toBe(0);
+      expect(f.counters.toolCalls).toBe(0);
+    },
+  );
+
+  it("reconstructs consent admission and a refused effect through the real Activity Log", async () => {
+    const sink = createFileServerLogSink(project, { level: "debug" });
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    try {
+      const f = await catalogFixture();
+      expect(await dispatch(f, "logged")).toMatchObject({ result: { status: "completed" } });
+      beforeConnection = (): void => {
+        updatePod({ verificationInProgress: true });
+      };
+      expect(await dispatch(f, "refused")).not.toMatchObject({ result: { status: "completed" } });
+      const lines = persistedActivityLogLines(
+        readPersistedActivityLog(project),
+        "chat.tool-authority.operation",
+      );
+      const records = lines.map((line) =>
+        expectActivityLogProof("chat.tool-authority.operation.catalog-read", line),
+      );
+      const outcomes = new Set(
+        records.filter((line) => line.phase === "catalog-read").map((line) => line.outcome),
+      );
+      expect([...outcomes].sort()).toEqual(["allowed", "invalid", "review-required"]);
+      expect(requests).toBe(1);
+      for (const value of [
+        chat.id,
+        POD,
+        actor,
+        "private-credential-reference",
+        "jira.example.invalid",
+      ])
+        expect(lines.join("\n")).not.toContain(value);
+    } finally {
+      sink.close?.();
+      resetServerLogger();
+    }
+  });
+
+  it("uses the existing Harness counter and stops at its last slot", async () => {
+    const f = await catalogFixture(1);
+    expect(await dispatch(f, "one")).toMatchObject({ result: { status: "completed" } });
+    expect(await dispatch(f, "two")).toMatchObject({
+      result: { status: "denied", reason: "budget-exhausted" },
+    });
+    expect(requests).toBe(1);
+    expect(f.counters.toolCalls).toBe(1);
   });
 });

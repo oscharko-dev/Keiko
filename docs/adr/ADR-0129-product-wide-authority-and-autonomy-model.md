@@ -236,8 +236,16 @@ existing retained record and never dispatches a tool. The current-state authorit
 requests/reuses consent through that same bounded approval owner. It preserves a retained
 request's issuing authority and expiry, validates both current and issuing authority on reuse,
 and does not automatically repeat a rejected request within the same authority. Expiry is
-bounded by the issuing authority and existing approval TTL. Catalog admission/dispatch and the
-ordinary Chat/UI consumers remain separate integration requirements.
+bounded by the issuing authority and existing approval TTL. The private ordinary-Chat read
+consumer uses the shared catalog binder and MCP routes without a Coding session. Its admission
+ports require that consent in every mode, re-resolve current authority before reservation and
+recheck consent/authority at each HTTP effect. A completed UI notification is not approval; the
+existing approval owner must contain the accepted record. Catalog offers create no consent
+requests. The existing Harness counter owner is available to non-Coding compositions; the binder
+retains reservation, cancellation and settlement ownership. Concrete write approval, application
+graph/ordinary Chat orchestration and UI composition remain integration requirements. Turn
+settlement must preserve valid Chat consent within its retained scope and expiry; the normal-Chat
+lifecycle must still prove that it does not revoke the issuing authority at each turn boundary.
 
 ### D6 — Forward rule for decision records
 

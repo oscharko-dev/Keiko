@@ -16,7 +16,14 @@ type Failure =
   "invalid" | "expired" | "budget-exceeded" | "revoked" | "review-required" | "policy-denied";
 type Outcome = { readonly ok: true } | { readonly ok: false; readonly reason: Failure };
 type Phase =
-  "register" | "resolve" | "reserve" | "revoke" | "current-state" | "action-policy" | "read-grant";
+  | "register"
+  | "resolve"
+  | "reserve"
+  | "revoke"
+  | "current-state"
+  | "action-policy"
+  | "read-grant"
+  | "catalog-read";
 export type ChatAuthorityReadiness =
   | "ready"
   | "chat-unavailable"
@@ -55,6 +62,7 @@ const CHAT_AUTHORITY_OPERATION = defineActivityLogOperation({
         "current-state",
         "action-policy",
         "read-grant",
+        "catalog-read",
       ],
     },
     outcome: {
@@ -146,6 +154,7 @@ const CHAT_AUTHORITY_OPERATION = defineActivityLogOperation({
     "chat.tool-authority.operation.read-grant-admission",
     "chat.tool-authority.operation.read-grant-lifecycle",
     "chat.tool-authority.operation.read-consent-route",
+    "chat.tool-authority.operation.catalog-read",
   ],
   releaseImpact: "minor",
 });

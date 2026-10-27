@@ -2807,7 +2807,8 @@
             "chat.tool-authority.operation.read-grant",
             "chat.tool-authority.operation.read-grant-admission",
             "chat.tool-authority.operation.read-grant-lifecycle",
-            "chat.tool-authority.operation.read-consent-route"
+            "chat.tool-authority.operation.read-consent-route",
+            "chat.tool-authority.operation.catalog-read"
           ],
           "replayReferences": [],
           "missingObligations": []
