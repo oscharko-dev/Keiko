@@ -31,3 +31,18 @@
   overflow-wrap: anywhere;
   font-size: inherit;
 }
+
+.preview {
+  width: 100%;
+  resize: vertical;
+  padding: 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-primary);
+  color: inherit;
+  font: inherit;
+}
+.preview:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 2px;
+}

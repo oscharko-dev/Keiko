@@ -1,4 +1,36 @@
 export const OPTIONAL_WIDGET_EN_MESSAGES = {
+  "chat.jira.writeApproval.unavailable": "Action approval is currently unavailable",
+  "chat.jira.writeApproval.title": "Review Jira action",
+  "chat.jira.writeApproval.pending": "Waiting for your decision",
+  "chat.jira.writeApproval.approved": "Approved for this action",
+  "chat.jira.writeApproval.claimed": "Approval used for this action",
+  "chat.jira.writeApproval.rejected": "Action declined",
+  "chat.jira.writeApproval.expired": "Action approval expired",
+  "chat.jira.writeApproval.revoked": "Action approval revoked",
+  "chat.jira.writeApproval.disclosure":
+    "Review the proposed action and its exact details below. Approval applies only to this action. An approval is not confirmation that Jira was changed.",
+  "chat.jira.writeApproval.preview": "Proposed action details",
+  "chat.jira.writeApproval.working": "Checking this action…",
+  "chat.jira.writeApproval.failed":
+    "The current action state could not be confirmed. Refresh it before making a decision.",
+  "chat.jira.writeApproval.allow": "Approve this action",
+  "chat.jira.writeApproval.deny": "Decline this action",
+  "chat.jira.writeApproval.refresh": "Refresh action state",
+
+  "chat.jira.resultUnavailable": "Result unavailable",
+  "chat.jira.write.notDispatched": "Not sent to Jira",
+  "chat.jira.write.rejected": "Jira action rejected",
+  "chat.jira.write.succeeded": "Jira change confirmed",
+  "chat.jira.write.unconfirmed": "Jira accepted the change; confirmation incomplete",
+  "chat.jira.write.unknown": "Jira outcome unknown",
+  "chat.jira.write.pending": "Awaiting a confirmed Jira outcome",
+  "chat.jira.write.unconfirmedHelp":
+    "Check the current Jira state before requesting another change. This action is not retried automatically.",
+  "chat.jira.write.unknownHelp":
+    "The change may have been applied. Check Jira before requesting another change. This action is not retried automatically.",
+  "chat.jira.write.pendingHelp":
+    "No final outcome is available. This does not confirm an active execution, and the action is not retried automatically.",
+
   "atlassianConnectors.live.empty": "No Jira Pods yet. Create one to connect Jira to a Chat.",
   "chat.jira.connection": "Jira connection",
   "chat.jira.podLabel": "Jira Pod",

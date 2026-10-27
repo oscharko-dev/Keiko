@@ -190,6 +190,7 @@ import {
   type DesktopChatStreamErrorEvent,
   type DesktopChatStreamEventType,
   type DesktopChatStreamReadConsentEvent,
+  type DesktopChatStreamWriteApprovalEvent,
   type GitChangeConnectResponse,
   type GitChangeRefreshResponse,
   type MarkdownSkillReference,
@@ -1506,6 +1507,7 @@ export type SseDonePayload = DesktopChatStreamDoneEvent["data"];
 export type SseErrorPayload = DesktopChatStreamErrorEvent["data"];
 
 export interface StreamHandlers {
+  readonly onWriteApproval?: (payload: DesktopChatStreamWriteApprovalEvent["data"]) => void;
   readonly onReadConsent?: (payload: DesktopChatStreamReadConsentEvent["data"]) => void;
   readonly onStarted?: (correlationId: string) => void;
   readonly onToken: (text: string) => void;
@@ -1541,6 +1543,9 @@ function dispatchSseEvent(
   const candidate = { event: eventName, data: parsed };
   if (!isDesktopChatStreamEvent(candidate)) throw malformedDesktopChatStreamError();
   switch (candidate.event) {
+    case "tool-write-approval":
+      handlers.onWriteApproval?.(candidate.data);
+      break;
     case "tool-read-consent":
       handlers.onReadConsent?.(candidate.data);
       break;
@@ -1668,6 +1673,9 @@ function terminalAwareHandlers(handlers: StreamHandlers, onTerminal: () => void)
   return {
     onToken: handlers.onToken,
     ...(handlers.onReadConsent === undefined ? {} : { onReadConsent: handlers.onReadConsent }),
+    ...(handlers.onWriteApproval === undefined
+      ? {}
+      : { onWriteApproval: handlers.onWriteApproval }),
     onDone: (payload): void => {
       onTerminal();
       handlers.onDone(payload);

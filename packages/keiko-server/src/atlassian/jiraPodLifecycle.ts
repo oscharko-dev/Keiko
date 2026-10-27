@@ -14,7 +14,7 @@ export function revokeJiraChatAccess(
   correlationId?: string,
 ): void {
   owners.agentAuthorityRegistry?.revokeChatAuthorities(chatId, correlationId);
-  owners.atlassianActionApprovalRegistry?.revokeChatReadGrants(chatId, correlationId);
+  owners.atlassianActionApprovalRegistry?.revokeChatApprovals(chatId, correlationId);
 }
 
 /** Shared by credential management and Live Pod management through the custody owner. */

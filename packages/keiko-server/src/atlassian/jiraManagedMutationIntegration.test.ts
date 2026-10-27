@@ -1,4 +1,8 @@
 import { DatabaseSync } from "node:sqlite";
+import { randomBytes, randomUUID } from "node:crypto";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { createGatewayToolCatalogBridge } from "@oscharko-dev/keiko-model-gateway";
@@ -7,7 +11,10 @@ import {
   type JiraMutationOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import type { JiraManagedMutationExecutor } from "@oscharko-dev/keiko-connectors";
+import type {
+  AtlassianCredentialMetadata,
+  JiraManagedMutationExecutor,
+} from "@oscharko-dev/keiko-connectors";
 import {
   fixtureRead,
   fixtureWrite,
@@ -26,6 +33,7 @@ import { createManagedProviderCatalog } from "../tool-catalog/managedProviderCat
 import type {
   CatalogHandlerContext,
   CatalogHandlerResult,
+  CatalogToolDispatchOutcome,
 } from "../tool-catalog/catalogToolPorts.js";
 import {
   createConversationConsumerFixture,
@@ -34,6 +42,10 @@ import {
 } from "../tool-catalog/__fixtures__/conversationConsumer.js";
 import { createJiraProviderForCatalog } from "./jiraManagedProvider.js";
 import { executeJiraChatMutation } from "./jiraChatMutation.js";
+import { buildAtlassianConnectorCredentialDeps } from "./wiring.js";
+import type { AtlassianConnectorCredentialDeps } from "./credentialRoutes.js";
+import type { ChatToolMutationIntent } from "../store/chatToolMutationTypes.js";
+import { jiraChatMutationOutcome } from "./jiraChatMutationOutcome.js";
 
 const cleanup: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
@@ -129,6 +141,7 @@ function remote(
     writes: () => writes,
     fetch: async (input, init): Promise<Response> => {
       const request = new Request(input, init);
+      expect(request.headers.get("authorization")).toBe(["Bearer", "synthetic-test-pat"].join(" "));
       const path = new URL(request.url).pathname;
       if (request.method !== "GET") {
         beforeWrite();
@@ -150,8 +163,43 @@ function remote(
     },
   };
 }
-async function fixture(mode: RemoteMode = "confirmed"): Promise<{
-  invoke: (operation: JiraMutationOperation, args?: CatalogJsonObject) => Promise<unknown>;
+function mutationCredentials(fetchImpl: typeof fetch): {
+  credentials: AtlassianConnectorCredentialDeps;
+  metadata: AtlassianCredentialMetadata;
+} {
+  const directory = mkdtempSync(join(realpathSync(tmpdir()), "keiko-jira-mutation-custody-"));
+  cleanup.push(() => {
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const credentials = buildAtlassianConnectorCredentialDeps({
+    configPath: join(directory, "gateway.json"),
+    env: { KEIKO_ATLASSIAN_CONNECTOR_CREDENTIALS_KEY: randomBytes(32).toString("base64") },
+    egress: () => undefined,
+    fetchImpl,
+  });
+  const metadata = credentials.custody.create(
+    {
+      provider: "jira",
+      deployment: "data-center",
+      authScheme: "bearer-pat",
+      displayName: "Synthetic mutation Jira",
+      baseUrl: "https://jira.example.invalid/context",
+      apiToken: ["synthetic", "test", "pat"].join("-"),
+      livePodCreationRequestId: randomUUID(),
+    },
+    "a".repeat(64),
+  );
+  return { credentials, metadata };
+}
+async function fixture(
+  mode: RemoteMode = "confirmed",
+  afterAcknowledgement?: "binding-revoked" | "cancelled",
+): Promise<{
+  invoke: (
+    operation: JiraMutationOperation,
+    args?: CatalogJsonObject,
+  ) => Promise<CatalogToolDispatchOutcome>;
+  intent: () => ChatToolMutationIntent;
   journal: ReturnType<typeof createChatToolMutationStore>;
   writes: () => number;
   state: SyntheticJira;
@@ -160,38 +208,44 @@ async function fixture(mode: RemoteMode = "confirmed"): Promise<{
 }> {
   const db = database();
   let activeInvocation = "";
+  let activeIntent: ChatToolMutationIntent | undefined;
+  let invalidate = (): void => undefined;
   const jira = remote(mode, () => {
     expect(db.journal.find(activeInvocation)?.phase).toBe("dispatched");
   });
+  const { credentials, metadata } = mutationCredentials(jira.fetch);
   const executeMutation: JiraManagedMutationExecutor<
     CatalogHandlerContext<ConversationConsumer>
   > = (operation, args, context, execute) => {
     activeInvocation = context.invocationId;
+    activeIntent = Object.freeze({
+      invocationId: context.invocationId,
+      chatId: context.chatId,
+      userMessageId: db.userMessageId,
+      turnRef: db.turnRef,
+      actorId: context.actorId,
+      podId: "synthetic-pod",
+      bindingGeneration: context.binding.generation,
+      credentialGeneration: 1,
+      authorityDigest: sha256Hex(context.authority),
+      actionDigest: sha256Hex(canonicalise({ operation, args })),
+      operation,
+      correlationId: context.correlationId,
+    });
     return executeJiraChatMutation({
       journal: db.journal,
-      intent: {
-        invocationId: context.invocationId,
-        chatId: context.chatId,
-        userMessageId: db.userMessageId,
-        turnRef: db.turnRef,
-        actorId: context.actorId,
-        podId: "synthetic-pod",
-        bindingGeneration: context.binding.generation,
-        credentialGeneration: 1,
-        authorityDigest: sha256Hex(context.authority),
-        actionDigest: sha256Hex(canonicalise({ operation, args })),
-        operation,
-        correlationId: context.correlationId,
-      },
-      transport: {
-        baseUrl: "https://jira.example.invalid/context",
-        authRef: "synthetic-ref",
-        credentials: {
-          resolveForExecution: () => ({ scheme: "bearer-pat", apiToken: "synthetic-test-pat" }),
-        },
-        fetchImpl: jira.fetch,
-      },
+      intent: activeIntent,
+      httpPortFactory: (lifecycle) =>
+        credentials.httpBodyPortFactory(metadata, context.correlationId, {
+          ...lifecycle,
+          onResponse: (request, status): boolean => {
+            const observed = lifecycle.onResponse?.(request, status) === true;
+            if (request.method !== "GET" && observed) invalidate();
+            return observed;
+          },
+        }),
       beforeEffect: context.beforeEffect,
+      beforeMutation: context.beforeEffect,
       execute,
     });
   };
@@ -236,6 +290,10 @@ async function fixture(mode: RemoteMode = "confirmed"): Promise<{
   cleanup.push(() => managed.close());
   const consumer = createConversationConsumerFixture(undefined, managed);
   consumer.context.chatId = db.chatId;
+  invalidate = (): void => {
+    if (afterAcknowledgement === "cancelled") consumer.abort();
+    if (afterAcknowledgement === "binding-revoked") consumer.context.binding.generation++;
+  };
   cleanup.push(consumer.dispose);
   let serial = 0;
   const gateway = createGatewayToolCatalogBridge(
@@ -253,18 +311,46 @@ async function fixture(mode: RemoteMode = "confirmed"): Promise<{
     db.logs,
   );
   return {
+    intent: (): ChatToolMutationIntent => {
+      if (activeIntent === undefined) throw new Error("Expected mutation intent");
+      return activeIntent;
+    },
     journal: db.journal,
     writes: jira.writes,
     state: jira.state,
     logs: db.logs,
     offered: gateway.tools,
-    invoke: async (operation, args = ARGUMENTS[operation]): Promise<unknown> => {
+    invoke: async (operation, args = ARGUMENTS[operation]): Promise<CatalogToolDispatchOutcome> => {
       const id = `model-call-${String(++serial)}`;
       const call = gateway.bind({ id, name: operation.replace(".", "_"), arguments: args });
       return consumer.binder.dispatch(call.invocation, { actionId: id, idempotencyKey: id });
     },
   };
 }
+
+it.each(["binding-revoked", "cancelled"] as const)(
+  "preserves the durable effect after %s interrupts the actual SDK/binder call",
+  async (interruption) => {
+    const f = await fixture("confirmed", interruption);
+    const outcome = await f.invoke("jira.create");
+    if (outcome.kind !== "settled") throw new Error("Expected settled invocation");
+    expect(outcome.result).toMatchObject({
+      status: interruption === "cancelled" ? "cancelled" : "invalid",
+      data: null,
+    });
+    const expected = f.intent();
+    expect(
+      jiraChatMutationOutcome({
+        result: outcome.result,
+        record: f.journal.find(expected.invocationId),
+        expected,
+      }),
+    ).toBe("succeeded-unconfirmed");
+    expect(outcome.receipt).toMatchObject({ effectStarted: true, budgetDisposition: "committed" });
+    expect(f.writes()).toBe(1);
+    expect(f.state).toMatchObject(REMOTE_STATE["jira.create"]);
+  },
+);
 
 it.each(JIRA_MUTATION_OPERATIONS)(
   "executes %s through the real gateway/binder/SDK and durable journal",

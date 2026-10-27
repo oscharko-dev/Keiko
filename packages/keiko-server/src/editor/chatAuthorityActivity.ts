@@ -3,6 +3,7 @@ import { sha256Hex } from "@oscharko-dev/keiko-security";
 import type {
   ChatToolAuthoritySubject,
   ChatToolReadGrantState,
+  ChatToolWriteApprovalState,
 } from "@oscharko-dev/keiko-contracts";
 import { validateChatToolAuthoritySubject } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
 import {
@@ -23,7 +24,9 @@ type Phase =
   | "current-state"
   | "action-policy"
   | "read-grant"
-  | "catalog-read";
+  | "catalog-read"
+  | "catalog-write"
+  | "write-approval";
 export type ChatAuthorityReadiness =
   | "ready"
   | "chat-unavailable"
@@ -63,6 +66,8 @@ const CHAT_AUTHORITY_OPERATION = defineActivityLogOperation({
         "action-policy",
         "read-grant",
         "catalog-read",
+        "catalog-write",
+        "write-approval",
       ],
     },
     outcome: {
@@ -114,6 +119,14 @@ const CHAT_AUTHORITY_OPERATION = defineActivityLogOperation({
       required: false,
       values: ["pending", "granted", "rejected", "expired", "revoked"],
     },
+    approvalDigest: OPTIONAL_DIGEST,
+    actionDigest: OPTIONAL_DIGEST,
+    approvalState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["pending", "approved", "claimed", "rejected", "expired", "revoked"],
+    },
     authorityDigest: OPTIONAL_DIGEST,
     readiness: {
       type: "string",
@@ -156,11 +169,15 @@ const CHAT_AUTHORITY_OPERATION = defineActivityLogOperation({
     "chat.tool-authority.operation.read-consent-route",
     "chat.tool-authority.operation.catalog-read",
     "chat.tool-authority.operation.late-read-result",
+    "chat.tool-authority.operation.write-approval",
   ],
   releaseImpact: "minor",
 });
 
 interface AuthorityEvidence {
+  readonly approvalId?: string | undefined;
+  readonly approvalState?: ChatToolWriteApprovalState | undefined;
+  readonly actionDigest?: string | undefined;
   readonly grantId?: string | undefined;
   readonly grantState?: ChatToolReadGrantState | undefined;
   readonly consentProofDigest?: string | undefined;
@@ -200,6 +217,11 @@ function grantFields(evidence: AuthorityEvidence): Record<string, string> {
     ...(evidence.grantId === undefined ? {} : { grantDigest: sha256Hex(evidence.grantId) }),
     ...(evidence.grantState === undefined ? {} : { grantState: evidence.grantState }),
     ...digestField("consentProofDigest", evidence.consentProofDigest),
+    ...(evidence.approvalId === undefined
+      ? {}
+      : { approvalDigest: sha256Hex(evidence.approvalId) }),
+    ...(evidence.approvalState === undefined ? {} : { approvalState: evidence.approvalState }),
+    ...digestField("actionDigest", evidence.actionDigest),
   };
 }
 

@@ -3,7 +3,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { mkdtempSync, mkdirSync, rmSync, realpathSync, writeFileSync, readFileSync } from "node:fs";
 import { fileURLToPath, URL } from "node:url";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { createServer } from "node:net";
 import {
   buildUiHandlerDeps,
@@ -46,7 +46,7 @@ async function unusedPort() {
   );
   return port;
 }
-async function request(origin, cookie, name, path, body, method = "POST", signal) {
+export async function request(origin, cookie, name, path, body, method = "POST", signal) {
   const response = await globalThis.fetch(origin + path, {
     method,
     signal,
@@ -72,7 +72,7 @@ async function request(origin, cookie, name, path, body, method = "POST", signal
   }
   return response;
 }
-async function jsonRequest(origin, cookie, name, path, body, method, signal) {
+export async function jsonRequest(origin, cookie, name, path, body, method, signal) {
   return (await request(origin, cookie, name, path, body, method, signal)).json();
 }
 async function configureModel(deps, modelId, session, configPath) {
@@ -117,7 +117,7 @@ async function configureModel(deps, modelId, session, configPath) {
   );
   console.log(JSON.stringify({ operation: "jira-chat-live-model", verified: true }));
 }
-async function prepareChat(origin, cookie, session, projectPath, modelId) {
+export async function prepareChat(origin, cookie, session, projectPath, modelId) {
   const credential = await jsonRequest(
     origin,
     cookie,
@@ -265,7 +265,10 @@ async function readTurn(origin, cookie, chat, projectPath, modelId) {
     controller.abort();
   }
 }
-function createLiveDeps(root, session, secret) {
+function createLiveDeps(root, session, secret, retainState) {
+  const credentialKey = randomBytes(32).toString("base64");
+  if (retainState)
+    writeFileSync(join(root, "credential-key"), credentialKey, { mode: 0o600, flag: "wx" });
   const activityLog = createFileServerLogSink(join(session.directory, "chat-read-logs"), {
     level: "debug",
   });
@@ -276,7 +279,7 @@ function createLiveDeps(root, session, secret) {
     uiDbPath: join(root, "ui.db"),
     env: {
       [SESSION_PAIRING_LAUNCHER_SECRET_ENV]: secret,
-      KEIKO_ATLASSIAN_CONNECTOR_CREDENTIALS_KEY: randomBytes(32).toString("base64"),
+      KEIKO_ATLASSIAN_CONNECTOR_CREDENTIALS_KEY: credentialKey,
     },
     activityLog,
   });
@@ -316,16 +319,18 @@ async function runSelectedJourney(origin, cookie, session, projectPath, modelId,
       ),
   });
 }
-async function main() {
-  const session = loadSession(process.argv[2]);
-  const modelId = process.argv[3];
+/** Reuse the paired production server, vault, real model probe and ordinary Chat routes. */
+export async function withLiveChat({ session, modelId, run, retainState = false, stateReady }) {
   if (!modelId) throw new TypeError("A locally installed model is required");
   await requireLicense(session);
-  const root = mkdtempSync(join(realpathSync(tmpdir()), "keiko-jira-live-chat-"));
+  const root = mkdtempSync(
+    join(retainState ? session.directory : realpathSync(tmpdir()), "keiko-jira-live-chat-"),
+  );
   const projectPath = join(root, "workspace");
   mkdirSync(projectPath);
   const secret = randomBytes(48).toString("hex");
-  const deps = createLiveDeps(root, session, secret);
+  stateReady?.(root);
+  const deps = createLiveDeps(root, session, secret, retainState);
   let server;
   try {
     await configureModel(deps, modelId, session, join(root, "keiko.config.json"));
@@ -355,24 +360,34 @@ async function main() {
       .map((value) => value.split(";")[0])
       .join("; ");
     assert.ok(cookie.length > 0);
-    await runSelectedJourney(origin, cookie, session, projectPath, modelId, secret);
+    await run({ origin, cookie, session, projectPath, modelId, secret, root });
     await requireLicense(session);
+    assert.notEqual(process.exitCode, 1);
   } finally {
     server?.closeAllConnections();
     if (server) await new Promise((resolve) => server.close(resolve));
     await deps.dispose?.();
-    rmSync(root, { recursive: true, force: true });
+    if (!retainState) rmSync(root, { recursive: true, force: true });
   }
 }
-await main().catch((error) => {
-  console.log(
-    JSON.stringify({
-      operation: "jira-chat-live-read",
-      passed: false,
-      errorType: error instanceof Error ? error.name : "unknown",
-      sourceLine:
-        error instanceof Error ? Number(error.stack?.match(/chat-read\.mjs:(\d+)/)?.[1] ?? 0) : 0,
-    }),
-  );
-  process.exitCode = 1;
-});
+async function main() {
+  await withLiveChat({
+    session: loadSession(process.argv[2]),
+    modelId: process.argv[3],
+    run: ({ origin, cookie, session, projectPath, modelId, secret }) =>
+      runSelectedJourney(origin, cookie, session, projectPath, modelId, secret),
+  });
+}
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url))
+  await main().catch((error) => {
+    console.log(
+      JSON.stringify({
+        operation: "jira-chat-live-read",
+        passed: false,
+        errorType: error instanceof Error ? error.name : "unknown",
+        sourceLine:
+          error instanceof Error ? Number(error.stack?.match(/chat-read\.mjs:(\d+)/)?.[1] ?? 0) : 0,
+      }),
+    );
+    process.exitCode = 1;
+  });

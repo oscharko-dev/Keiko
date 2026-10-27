@@ -1,5 +1,37 @@
 import type { OptionalWidgetMessageCatalog } from "./i18n-messages.optional.en";
 export const OPTIONAL_WIDGET_DE_MESSAGES = {
+  "chat.jira.writeApproval.unavailable": "Aktionsfreigabe derzeit nicht verfügbar",
+  "chat.jira.writeApproval.title": "Jira-Aktion prüfen",
+  "chat.jira.writeApproval.pending": "Deine Entscheidung steht aus",
+  "chat.jira.writeApproval.approved": "Für diese Aktion genehmigt",
+  "chat.jira.writeApproval.claimed": "Freigabe für diese Aktion verwendet",
+  "chat.jira.writeApproval.rejected": "Aktion abgelehnt",
+  "chat.jira.writeApproval.expired": "Aktionsfreigabe abgelaufen",
+  "chat.jira.writeApproval.revoked": "Aktionsfreigabe widerrufen",
+  "chat.jira.writeApproval.disclosure":
+    "Prüfe die vorgeschlagene Aktion und ihre genauen Details unten. Die Freigabe gilt nur für diese Aktion. Sie bestätigt keine Änderung in Jira.",
+  "chat.jira.writeApproval.preview": "Details der vorgeschlagenen Aktion",
+  "chat.jira.writeApproval.working": "Aktion wird geprüft…",
+  "chat.jira.writeApproval.failed":
+    "Der aktuelle Aktionsstatus konnte nicht bestätigt werden. Aktualisiere ihn, bevor du entscheidest.",
+  "chat.jira.writeApproval.allow": "Diese Aktion genehmigen",
+  "chat.jira.writeApproval.deny": "Diese Aktion ablehnen",
+  "chat.jira.writeApproval.refresh": "Aktionsstatus aktualisieren",
+
+  "chat.jira.resultUnavailable": "Ergebnis nicht verfügbar",
+  "chat.jira.write.notDispatched": "Nicht an Jira gesendet",
+  "chat.jira.write.rejected": "Jira-Aktion abgelehnt",
+  "chat.jira.write.succeeded": "Jira-Änderung bestätigt",
+  "chat.jira.write.unconfirmed": "Jira hat die Änderung angenommen; Bestätigung unvollständig",
+  "chat.jira.write.unknown": "Ausgang der Jira-Aktion unbekannt",
+  "chat.jira.write.pending": "Bestätigtes Jira-Ergebnis steht aus",
+  "chat.jira.write.unconfirmedHelp":
+    "Prüfe den aktuellen Stand in Jira, bevor du eine weitere Änderung anforderst. Diese Aktion wird nicht automatisch wiederholt.",
+  "chat.jira.write.unknownHelp":
+    "Die Änderung wurde möglicherweise ausgeführt. Prüfe Jira, bevor du eine weitere Änderung anforderst. Diese Aktion wird nicht automatisch wiederholt.",
+  "chat.jira.write.pendingHelp":
+    "Es liegt kein abschließendes Ergebnis vor. Das bestätigt keine laufende Ausführung. Die Aktion wird nicht automatisch wiederholt.",
+
   "atlassianConnectors.live.empty":
     "Noch keine Jira-Pods. Erstelle einen Pod, um Jira mit einem Chat zu verbinden.",
   "chat.jira.connection": "Jira-Verbindung",

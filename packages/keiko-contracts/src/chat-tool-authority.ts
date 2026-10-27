@@ -1,3 +1,4 @@
+import { JIRA_MUTATION_OPERATIONS, type JiraMutationOperation } from "./jira-tool-execution.js";
 import { isChatJiraPodId } from "./bff-wire.js";
 import { exactKeys, isRecord } from "./contract-validation-primitives.js";
 import {
@@ -272,5 +273,90 @@ export function validateChatToolReadGrant(
   )
     errors.push("chatReadGrant lifetime is invalid");
   validateReadGrantState(value, errors);
+  return result(value, errors);
+}
+
+export const CHAT_TOOL_WRITE_APPROVAL_STATES = [
+  "pending",
+  "approved",
+  "claimed",
+  "rejected",
+  "expired",
+  "revoked",
+] as const;
+export type ChatToolWriteApprovalState = (typeof CHAT_TOOL_WRITE_APPROVAL_STATES)[number];
+
+/** The corresponding stored tool call owns the redacted action preview; private authority stays server-side. */
+export interface ChatToolWriteApprovalView {
+  readonly kind: "jira-chat-write";
+  readonly approvalId: string;
+  readonly chatId: string;
+  readonly podId: string;
+  readonly bindingGeneration: number;
+  readonly authenticationGeneration: number;
+  readonly invocationId: string;
+  readonly operation: JiraMutationOperation;
+  readonly actionDigest: string;
+  readonly requestedAt: number;
+  readonly expiresAt: number;
+  readonly state: ChatToolWriteApprovalState;
+}
+export interface ChatToolWriteApprovalDecision {
+  readonly decision: "approve" | "reject";
+  readonly actionDigest: string;
+}
+const WRITE_APPROVAL_KEYS = [
+  "kind",
+  "approvalId",
+  "chatId",
+  "podId",
+  "bindingGeneration",
+  "authenticationGeneration",
+  "invocationId",
+  "operation",
+  "actionDigest",
+  "requestedAt",
+  "expiresAt",
+  "state",
+] as const;
+const WRITE_APPROVAL_STATES: ReadonlySet<unknown> = new Set(CHAT_TOOL_WRITE_APPROVAL_STATES);
+const WRITE_OPERATIONS: ReadonlySet<unknown> = new Set(JIRA_MUTATION_OPERATIONS);
+
+function validateWriteApprovalLifetime(value: Record<string, unknown>, errors: string[]): void {
+  for (const key of ["bindingGeneration", "authenticationGeneration", "requestedAt", "expiresAt"])
+    if (!positiveCount(value[key])) errors.push(`chatWriteApproval.${key} is invalid`);
+  if (
+    typeof value.expiresAt === "number" &&
+    typeof value.requestedAt === "number" &&
+    value.expiresAt <= value.requestedAt
+  )
+    errors.push("chatWriteApproval lifetime is invalid");
+}
+
+export function validateChatToolWriteApprovalView(
+  value: unknown,
+): CodingWorkbenchValidationResult<ChatToolWriteApprovalView> {
+  if (!isRecord(value)) return invalid("chatWriteApproval must be an object");
+  const errors: string[] = [];
+  validateKeys(value, WRITE_APPROVAL_KEYS, errors, "chatWriteApproval");
+  if (value.kind !== "jira-chat-write") errors.push("chatWriteApproval.kind is invalid");
+  for (const key of ["approvalId", "chatId", "invocationId"])
+    validateSafeId(value[key], `chatWriteApproval.${key}`, errors, 128);
+  if (!isChatJiraPodId(value.podId)) errors.push("chatWriteApproval.podId is invalid");
+  validateWriteApprovalLifetime(value, errors);
+  if (!WRITE_OPERATIONS.has(value.operation)) errors.push("chatWriteApproval.operation is invalid");
+  if (!WRITE_APPROVAL_STATES.has(value.state)) errors.push("chatWriteApproval.state is invalid");
+  validateDigest(value.actionDigest, "chatWriteApproval.actionDigest", errors);
+  return result(value, errors);
+}
+export function validateChatToolWriteApprovalDecision(
+  value: unknown,
+): CodingWorkbenchValidationResult<ChatToolWriteApprovalDecision> {
+  if (!isRecord(value)) return invalid("chatWriteDecision must be an object");
+  const errors: string[] = [];
+  validateKeys(value, ["decision", "actionDigest"], errors, "chatWriteDecision");
+  if (value.decision !== "approve" && value.decision !== "reject")
+    errors.push("chatWriteDecision.decision is invalid");
+  validateDigest(value.actionDigest, "chatWriteDecision.actionDigest", errors);
   return result(value, errors);
 }

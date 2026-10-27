@@ -1,3 +1,4 @@
+import { gatewayMessagesForToolExchange } from "../conversation-gateway.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { randomUUID } from "node:crypto";
 import {
@@ -16,9 +17,15 @@ import { isToolCallingVerificationFresh } from "@oscharko-dev/keiko-contracts/ru
 import type {
   ChatMessage as GatewayMessage,
   ChatToolReadGrantView,
+  ChatToolWriteApprovalView,
   RunCounters,
 } from "@oscharko-dev/keiko-contracts";
 import type { ChatMessage } from "../store/index.js";
+import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  JIRA_MUTATION_OPERATIONS,
+  type JiraMutationOutcome,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { UiHandlerDeps } from "../deps.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { defaultServerDiagnosticSink } from "../diagnostics-log.js";
@@ -36,9 +43,13 @@ import {
   jiraChatCatalogConsumerPort,
   type JiraChatCatalogConsumer,
   type JiraChatCatalogContext,
+  type JiraChatCatalogAction,
 } from "./jiraChatCatalogConsumer.js";
 import type { ManagedProviderCatalog } from "../tool-catalog/managedProviderCatalog.js";
 import { projectChatReadGrant } from "./chatReadGrantState.js";
+import { createJiraChatMutationIntent } from "./jiraChatMutationIntent.js";
+import { jiraChatMutationOutcome } from "./jiraChatMutationOutcome.js";
+import type { ToolResultEnvelope } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 
 type TurnDeps = JiraChatAuthorityDeps &
   Pick<
@@ -98,6 +109,7 @@ export class JiraChatToolTurn {
       runId: authority.envelope.runId,
       correlationId,
       chatId: message.chatId,
+      userMessageId: message.id,
       authority: authority.reference.envelopeDigest,
       authorityReference: authority.reference,
       authorityExpiresAt: authority.envelope.expiresAt,
@@ -118,6 +130,8 @@ export class JiraChatToolTurn {
           context: () => this.context,
           now: Date.now,
           requestReadConsent: (grant) => this.waitForConsent(grant),
+          requestWriteConsent: (approval) => this.waitForWriteConsent(approval),
+          reviewableWrite: (action) => this.reviewableWrite(action),
         }),
         consumerPort: jiraChatCatalogConsumerPort,
         projection: managed.projection,
@@ -177,6 +191,80 @@ export class JiraChatToolTurn {
         correlationId,
       ).ok
     );
+  }
+
+  private writeExchange(invocationId: string): ChatToolExchange | undefined {
+    const { deps, message } = this.options;
+    return deps.store
+      .findMessageById(message.id)
+      ?.toolTranscript?.exchanges.find(
+        (exchange) =>
+          sha256Hex(canonicalise({ messageId: message.id, callId: exchange.call.id })) ===
+          invocationId,
+      );
+  }
+  private reviewableWrite(action: JiraChatCatalogAction): boolean {
+    const exchange = this.writeExchange(action.actionId);
+    return (
+      exchange !== undefined &&
+      sha256Hex(canonicalise(exchange.call.arguments)) === action.argumentsDigest
+    );
+  }
+  private async waitForWriteConsent(approval: ChatToolWriteApprovalView): Promise<void> {
+    const { deps, message, correlationId, signal } = this.options;
+    const registry = deps.atlassianActionApprovalRegistry;
+    const exchange = this.writeExchange(approval.invocationId);
+    requireDispatch(
+      registry !== undefined && exchange !== undefined,
+      "denied",
+      "approval-required",
+    );
+    const save = (view: ChatToolWriteApprovalView): void => {
+      deps.store.updateChatToolTranscript(
+        message.id,
+        { kind: "write-approval", callId: exchange.call.id, approval: view },
+        correlationId,
+      );
+    };
+    save(approval);
+    await this.publish();
+    await registry.waitForChatWriteApproval(approval.approvalId, signal);
+    save(
+      registry.getChatWriteApproval(approval.approvalId, correlationId)?.approval ?? {
+        ...approval,
+        state: "expired",
+      },
+    );
+    await this.publish();
+  }
+
+  private observedMutation(
+    call: NormalizedResponse["toolCalls"][number],
+    identity: string,
+    result: ToolResultEnvelope,
+  ): JiraMutationOutcome | undefined {
+    const operation = JIRA_MUTATION_OPERATIONS.find(
+      (value) => result.toolRef?.canonicalId === `keiko.${value}`,
+    );
+    if (operation === undefined) return undefined;
+    const { message, authority, correlationId, deps } = this.options;
+    const expected = createJiraChatMutationIntent(
+      message,
+      authority.envelope.subject,
+      authority.reference,
+      {
+        tool: operation,
+        actionId: identity,
+        idempotencyKey: identity,
+        argumentsDigest: sha256Hex(canonicalise(call.arguments)),
+      },
+      correlationId,
+    );
+    return jiraChatMutationOutcome({
+      result,
+      expected,
+      record: deps.store.chatToolMutations?.find(identity),
+    });
   }
   private readonly admitAttempt: ModelAttempt = ({ promptTokens }) => {
     if (
@@ -289,6 +377,7 @@ export class JiraChatToolTurn {
     );
     requireDispatch(descriptor !== undefined, "invalid", "recovery-required");
     this.budget.acceptReceipt(outcome.receipt, descriptor);
+    const mutationOutcome = this.observedMutation(call, identity, outcome.result);
     deps.store.updateChatToolTranscript(
       message.id,
       {
@@ -296,6 +385,7 @@ export class JiraChatToolTurn {
         callId: call.id,
         result: outcome.result,
         binding: { descriptor, projectionDigest: managed.projection.projectionDigest },
+        ...(mutationOutcome === undefined ? {} : { mutationOutcome }),
       },
       correlationId,
     );
@@ -307,10 +397,7 @@ export class JiraChatToolTurn {
       .findMessageById(this.options.message.id)
       ?.toolTranscript?.exchanges.find((exchange) => exchange.call.id === id);
     requireDispatch(stored?.result !== undefined, "invalid", "recovery-required");
-    this.continuation.push(
-      { role: "assistant", content: "", toolCalls: [stored.call] },
-      { role: "tool", toolCallId: id, content: JSON.stringify(stored.result) },
-    );
+    this.continuation.push(...gatewayMessagesForToolExchange(stored));
   }
 
   public async *stream(

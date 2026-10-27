@@ -1,6 +1,8 @@
+import { randomUUID } from "node:crypto";
 import type {
   ChatToolAuthoritySubject,
   ChatToolReadGrant,
+  ChatToolWriteApprovalView,
   EditorAgentGovernedAuthorityReference,
 } from "@oscharko-dev/keiko-contracts";
 import {
@@ -15,6 +17,24 @@ import {
   type RetainedChatReadGrant,
 } from "./chatReadGrantState.js";
 export type { ChatReadGrantEntry } from "./chatReadGrantState.js";
+import {
+  invalidWriteApproval,
+  recordWriteApproval,
+  sameWriteAction,
+  snapshotWriteApproval,
+  validWriteApprovalRequest,
+  type ChatWriteApprovalEntry,
+  type ChatWriteApprovalClaim,
+  type ChatWriteApprovalResult,
+  type JiraChatWriteActionIdentity,
+  type RetainedChatWriteApproval,
+} from "./chatWriteApprovalState.js";
+export type {
+  ChatWriteApprovalEntry,
+  ChatWriteApprovalClaim,
+  JiraChatWriteActionIdentity,
+} from "./chatWriteApprovalState.js";
+
 // Server-side pending-approval state for review-required connector actions (Issue #2244, Epic
 // #2238, ADR-0128 D4; rendered by the #2245 UI).
 //
@@ -206,11 +226,12 @@ export type PendingApprovalCreation =
 
 type RetainedApproval =
   | { readonly kind: "connector"; readonly entry: PendingAtlassianActionEntry }
-  | RetainedChatReadGrant;
+  | RetainedChatReadGrant
+  | RetainedChatWriteApproval;
 
 export class AtlassianActionApprovalRegistry {
   private readonly entries = new Map<string, RetainedApproval>();
-  private readonly readWaiters = new Map<string, Set<() => void>>();
+  private readonly waiters = new Map<string, Set<() => void>>();
   private readonly now: () => number;
 
   public constructor(now: () => number = Date.now) {
@@ -221,7 +242,8 @@ export class AtlassianActionApprovalRegistry {
     this.evictExpired();
     if (
       this.entries.size >= ATLASSIAN_ACTION_APPROVAL_MAX_PENDING ||
-      this.entries.get(entry.approval.approvalId)?.kind === "chat-read"
+      (this.entries.has(entry.approval.approvalId) &&
+        this.entries.get(entry.approval.approvalId)?.kind !== "connector")
     )
       return { ok: false, reason: "capacity-exhausted" };
     this.entries.set(entry.approval.approvalId, { kind: "connector", entry });
@@ -249,6 +271,205 @@ export class AtlassianActionApprovalRegistry {
 
   public reject(approvalId: string): PendingAtlassianActionEntry | undefined {
     return this.consume(approvalId);
+  }
+
+  public createChatWriteApproval(
+    entry: ChatWriteApprovalEntry,
+    correlationId?: string,
+  ): PendingApprovalCreation | { readonly ok: false; readonly reason: "invalid" } {
+    this.evictExpired(correlationId);
+    if (
+      !validWriteApprovalRequest(entry, this.now(), ATLASSIAN_ACTION_APPROVAL_TTL_MS) ||
+      this.entries.has(entry.approval.approvalId)
+    )
+      return invalidWriteApproval(correlationId);
+    if (this.entries.size >= ATLASSIAN_ACTION_APPROVAL_MAX_PENDING) {
+      invalidWriteApproval(correlationId);
+      return { ok: false, reason: "capacity-exhausted" };
+    }
+    this.retainWriteApproval(entry, correlationId);
+    return { ok: true };
+  }
+
+  public getChatWriteApproval(
+    approvalId: string,
+    correlationId?: string,
+  ): ChatWriteApprovalEntry | undefined {
+    this.evictExpired(correlationId);
+    const record = this.entries.get(approvalId);
+    return record?.kind === "chat-write" ? record.entry : undefined;
+  }
+
+  public findChatWriteApproval(
+    subject: ChatToolAuthoritySubject,
+    authority: EditorAgentGovernedAuthorityReference,
+    invocationId: string,
+    correlationId?: string,
+  ): ChatWriteApprovalEntry | undefined {
+    this.evictExpired(correlationId);
+    for (const record of this.entries.values())
+      if (
+        record.kind === "chat-write" &&
+        record.entry.approval.invocationId === invocationId &&
+        sameReadGrantSubject(record.entry, subject) &&
+        sameReadGrantAuthority(record.entry, authority)
+      )
+        return record.entry;
+    return undefined;
+  }
+
+  public acceptChatWriteApproval(
+    approvalId: string,
+    subject: ChatToolAuthoritySubject,
+    authority: EditorAgentGovernedAuthorityReference,
+    action: JiraChatWriteActionIdentity,
+    proofDigest: string,
+    correlationId?: string,
+  ): ChatWriteApprovalResult {
+    const entry = this.currentWriteApproval(approvalId, subject, authority, action, correlationId);
+    if (entry === undefined || !/^[a-f0-9]{64}$/u.test(proofDigest))
+      return invalidWriteApproval(correlationId);
+    if (entry.approval.state === "approved") return { ok: true, approval: entry.approval };
+    if (entry.approval.state !== "pending") return invalidWriteApproval(correlationId);
+    return {
+      ok: true,
+      approval: this.retainWriteApproval(
+        {
+          ...entry,
+          approval: { ...entry.approval, state: "approved" },
+          approvalProofDigest: proofDigest,
+        },
+        correlationId,
+      ),
+    };
+  }
+
+  public rejectChatWriteApproval(
+    approvalId: string,
+    subject: ChatToolAuthoritySubject,
+    authority: EditorAgentGovernedAuthorityReference,
+    action: JiraChatWriteActionIdentity,
+    correlationId?: string,
+  ): ChatWriteApprovalResult {
+    const entry = this.currentWriteApproval(approvalId, subject, authority, action, correlationId);
+    if (entry?.approval.state !== "pending") return invalidWriteApproval(correlationId);
+    return {
+      ok: true,
+      approval: this.retainWriteApproval(
+        { ...entry, approval: { ...entry.approval, state: "rejected" } },
+        correlationId,
+      ),
+    };
+  }
+
+  /** Called only within the durable journal's begin-dispatch transaction. */
+  public claimChatWriteApproval(
+    approvalId: string,
+    subject: ChatToolAuthoritySubject,
+    authority: EditorAgentGovernedAuthorityReference,
+    action: JiraChatWriteActionIdentity,
+    correlationId?: string,
+  ):
+    | { readonly ok: true; readonly claim: ChatWriteApprovalClaim }
+    | { readonly ok: false; readonly reason: "invalid" } {
+    const entry = this.currentWriteApproval(approvalId, subject, authority, action, correlationId);
+    if (entry?.approval.state !== "approved") return invalidWriteApproval(correlationId);
+    const claimId = randomUUID();
+    this.retainWriteApproval(
+      { ...entry, approval: { ...entry.approval, state: "claimed" } },
+      correlationId,
+      claimId,
+    );
+    return { ok: true, claim: Object.freeze({ approvalId, claimId }) };
+  }
+
+  public isChatWriteClaimCurrent(
+    claim: ChatWriteApprovalClaim,
+    subject: ChatToolAuthoritySubject,
+    authority: EditorAgentGovernedAuthorityReference,
+    action: JiraChatWriteActionIdentity,
+    correlationId?: string,
+  ): boolean {
+    const entry = this.currentWriteApproval(
+      claim.approvalId,
+      subject,
+      authority,
+      action,
+      correlationId,
+    );
+    const record = this.entries.get(claim.approvalId);
+    if (
+      entry?.approval.state !== "claimed" ||
+      record?.kind !== "chat-write" ||
+      record.claimId !== claim.claimId
+    ) {
+      invalidWriteApproval(correlationId);
+      return false;
+    }
+    recordWriteApproval(record, 0);
+    return true;
+  }
+
+  public revokeChatWriteApproval(approvalId: string, correlationId?: string): boolean {
+    this.evictExpired(correlationId);
+    const record = this.entries.get(approvalId);
+    return record?.kind === "chat-write" && this.revokeWriteApproval(record, correlationId);
+  }
+
+  public revokeChatApprovals(chatId: string, correlationId?: string): number {
+    let count = this.revokeChatReadGrants(chatId, correlationId);
+    for (const record of this.entries.values())
+      if (
+        record.kind === "chat-write" &&
+        record.entry.subject.chatId === chatId &&
+        this.revokeWriteApproval(record, correlationId)
+      )
+        count++;
+    return count;
+  }
+
+  private currentWriteApproval(
+    approvalId: string,
+    subject: ChatToolAuthoritySubject,
+    authority: EditorAgentGovernedAuthorityReference,
+    action: JiraChatWriteActionIdentity,
+    correlationId?: string,
+  ): ChatWriteApprovalEntry | undefined {
+    const entry = this.getChatWriteApproval(approvalId, correlationId);
+    return entry !== undefined &&
+      sameReadGrantSubject(entry, subject) &&
+      sameReadGrantAuthority(entry, authority) &&
+      sameWriteAction(entry.approval, action)
+      ? entry
+      : undefined;
+  }
+
+  private retainWriteApproval(
+    entry: ChatWriteApprovalEntry,
+    correlationId?: string,
+    claimId?: string,
+  ): ChatToolWriteApprovalView {
+    const record = snapshotWriteApproval(entry, correlationId, claimId);
+    this.entries.set(entry.approval.approvalId, record);
+    recordWriteApproval(record);
+    if (entry.approval.state !== "pending") this.wakeWaiters(entry.approval.approvalId);
+    return record.entry.approval;
+  }
+
+  private revokeWriteApproval(record: RetainedChatWriteApproval, correlationId?: string): boolean {
+    if (!new Set(["pending", "approved", "claimed"]).has(record.entry.approval.state)) return false;
+    this.retainWriteApproval(
+      { ...record.entry, approval: { ...record.entry.approval, state: "revoked" } },
+      correlationId ?? record.correlationId,
+    );
+    return true;
+  }
+
+  public waitForChatWriteApproval(approvalId: string, signal: AbortSignal): Promise<void> {
+    const entry = this.getChatWriteApproval(approvalId);
+    return entry?.approval.state === "pending"
+      ? this.waitForDecision(approvalId, entry.approval.expiresAt, signal)
+      : Promise.resolve();
   }
 
   public createChatReadGrant(
@@ -378,33 +599,39 @@ export class AtlassianActionApprovalRegistry {
   /** Wake on a state change; completion itself is never proof of consent. */
   public waitForChatReadGrant(grantId: string, signal: AbortSignal): Promise<void> {
     const entry = this.getChatReadGrant(grantId);
-    if (entry?.grant.state !== "pending" || signal.aborted) return Promise.resolve();
-    const waiters = this.readWaiters.get(grantId) ?? new Set<() => void>();
+    return entry?.grant.state === "pending"
+      ? this.waitForDecision(grantId, entry.grant.expiresAt, signal)
+      : Promise.resolve();
+  }
+
+  private waitForDecision(grantId: string, expiresAt: number, signal: AbortSignal): Promise<void> {
+    if (signal.aborted) return Promise.resolve();
+    const waiters = this.waiters.get(grantId) ?? new Set<() => void>();
     if (waiters.size >= ATLASSIAN_ACTION_APPROVAL_MAX_PENDING) return Promise.resolve();
     return new Promise((resolve) => {
       const finish = (): void => {
         clearTimeout(timer);
         signal.removeEventListener("abort", finish);
         waiters.delete(finish);
-        if (waiters.size === 0) this.readWaiters.delete(grantId);
+        if (waiters.size === 0) this.waiters.delete(grantId);
         resolve();
       };
-      const timer = setTimeout(finish, Math.max(0, entry.grant.expiresAt - this.now()));
+      const timer = setTimeout(finish, Math.max(0, expiresAt - this.now()));
       waiters.add(finish);
-      this.readWaiters.set(grantId, waiters);
+      this.waiters.set(grantId, waiters);
       signal.addEventListener("abort", finish, { once: true });
     });
   }
 
-  private wakeReadWaiters(grantId: string): void {
-    for (const finish of this.readWaiters.get(grantId) ?? []) finish();
+  private wakeWaiters(grantId: string): void {
+    for (const finish of this.waiters.get(grantId) ?? []) finish();
   }
 
   private retainReadGrant(entry: ChatReadGrantEntry, correlationId?: string): ChatToolReadGrant {
     const record = snapshotReadGrant(entry, correlationId);
     this.entries.set(entry.grant.grantId, record);
     recordReadGrant(record);
-    if (record.entry.grant.state !== "pending") this.wakeReadWaiters(entry.grant.grantId);
+    if (record.entry.grant.state !== "pending") this.wakeWaiters(entry.grant.grantId);
     return record.entry.grant;
   }
 
@@ -420,8 +647,10 @@ export class AtlassianActionApprovalRegistry {
 
   public reset(correlationId?: string): void {
     this.evictExpired(correlationId);
-    for (const record of this.entries.values())
+    for (const record of this.entries.values()) {
       if (record.kind === "chat-read") this.revokeReadGrant(record, correlationId);
+      if (record.kind === "chat-write") this.revokeWriteApproval(record, correlationId);
+    }
     this.entries.clear();
   }
 
@@ -429,9 +658,9 @@ export class AtlassianActionApprovalRegistry {
     const cutoff = this.now();
     for (const [id, record] of this.entries) {
       const expiresAt =
-        record.kind === "connector"
-          ? record.entry.approval.expiresAt
-          : record.entry.grant.expiresAt;
+        record.kind === "chat-read"
+          ? record.entry.grant.expiresAt
+          : record.entry.approval.expiresAt;
       if (expiresAt > cutoff) continue;
       if (record.kind === "chat-read") {
         const grant = { ...record.entry.grant, state: "expired" } as const;
@@ -440,8 +669,15 @@ export class AtlassianActionApprovalRegistry {
           record.entry.grant.state === "pending" || record.entry.grant.state === "granted" ? 1 : 0,
         );
       }
+      if (record.kind === "chat-write")
+        recordWriteApproval(
+          snapshotWriteApproval(
+            { ...record.entry, approval: { ...record.entry.approval, state: "expired" } },
+            correlationId ?? record.correlationId,
+          ),
+        );
       this.entries.delete(id);
-      this.wakeReadWaiters(id);
+      this.wakeWaiters(id);
     }
   }
 }

@@ -1548,3 +1548,52 @@ it("admits only the public Jira read-consent SSE projection", () => {
     }),
   ).toBe(false);
 });
+
+it("admits closed write-approval SSE frames and rejects private or mismatched projections", () => {
+  const approval = {
+    kind: "jira-chat-write",
+    approvalId: "approval-1",
+    chatId: "chat-1",
+    podId: "d5f5681e-ce98-4c3c-b27e-51d707c9d018",
+    bindingGeneration: 1,
+    authenticationGeneration: 1,
+    invocationId: "invocation-1",
+    operation: "jira.comment",
+    actionDigest: "a".repeat(64),
+    requestedAt: 1000,
+    expiresAt: 2000,
+    state: "pending",
+  };
+  const call = {
+    id: "call-1",
+    name: "jira_comment",
+    arguments: { issueKey: "SYN-1", body: "text" },
+  };
+  const data = { messageId: "message-1", call, approval };
+  for (const state of ["pending", "approved", "claimed", "rejected", "expired", "revoked"])
+    expect(
+      isDesktopChatStreamEvent({
+        event: "tool-write-approval",
+        data: { ...data, approval: { ...approval, state } },
+      }),
+    ).toBe(true);
+  for (const frame of [
+    { event: "tool-write-approval", data, credential: "private" },
+    { event: "tool-write-approval", data: { ...data, claimId: "private" } },
+    {
+      event: "tool-write-approval",
+      data: { ...data, approval: { ...approval, actorDigest: "b".repeat(64) } },
+    },
+    {
+      event: "tool-write-approval",
+      data: { ...data, approval: { ...approval, state: "succeeded" } },
+    },
+    { event: "tool-write-approval", data: { ...data, call: { ...call, name: "jira_edit" } } },
+    { event: "tool-write-approval", data: { ...data, call: { ...call, authRef: "private" } } },
+    {
+      event: "tool-write-approval",
+      data: { ...data, call: { ...call, arguments: { body: "x".repeat(262144) } } },
+    },
+  ])
+    expect(isDesktopChatStreamEvent(frame)).toBe(false);
+});

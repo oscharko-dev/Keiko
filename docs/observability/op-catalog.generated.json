@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "0d682933c78244b610ee17c789eff70de05eac797f8c6bae18c2cc6413b12335",
+    "catalogDigest": "305020052220d3e4834ae17f0422d0f393938054dc72ab1bb0d7b05aa8aabf82",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -2410,7 +2410,9 @@
               "current-state",
               "action-policy",
               "read-grant",
-              "catalog-read"
+              "catalog-read",
+              "catalog-write",
+              "write-approval"
             ]
           },
           "outcome": {
@@ -2471,6 +2473,24 @@
             "dataClass": "closed-enum",
             "required": false,
             "values": ["pending", "granted", "rejected", "expired", "revoked"]
+          },
+          "approvalDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": false,
+            "maxLength": 64
+          },
+          "actionDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": false,
+            "maxLength": 64
+          },
+          "approvalState": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["pending", "approved", "claimed", "rejected", "expired", "revoked"]
           },
           "authorityDigest": {
             "type": "string",
@@ -2551,11 +2571,12 @@
           "chat.tool-authority.operation.read-grant-lifecycle",
           "chat.tool-authority.operation.read-consent-route",
           "chat.tool-authority.operation.catalog-read",
-          "chat.tool-authority.operation.late-read-result"
+          "chat.tool-authority.operation.late-read-result",
+          "chat.tool-authority.operation.write-approval"
         ],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/editor/chatAuthorityActivity.ts:45",
-        "emitterSites": ["packages/keiko-server/src/editor/chatAuthorityActivity.ts:213"]
+        "registrationSite": "packages/keiko-server/src/editor/chatAuthorityActivity.ts:48",
+        "emitterSites": ["packages/keiko-server/src/editor/chatAuthorityActivity.ts:235"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -2650,7 +2671,7 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["started", "settled", "read-consent"]
+            "values": ["started", "settled", "read-consent", "write-approval"]
           },
           "exchangeCount": {
             "type": "integer",
@@ -2664,8 +2685,8 @@
         "failureClasses": ["chat-tool-transcript"],
         "proofIds": ["chat.tool-transcript.updated.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/store/chatToolTranscript.ts:38",
-        "emitterSites": ["packages/keiko-server/src/store/chatToolTranscript.ts:257"]
+        "registrationSite": "packages/keiko-server/src/store/chatToolTranscript.ts:54",
+        "emitterSites": ["packages/keiko-server/src/store/chatToolTranscript.ts:329"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -55570,6 +55591,12 @@
               "analyzerProjection": "capability",
               "safeContextFields": [
                 {
+                  "name": "actionDigest",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": false
+                },
+                {
                   "name": "actionType",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -55585,6 +55612,18 @@
                   "name": "affectedCount",
                   "type": "integer",
                   "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "approvalDigest",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": false
+                },
+                {
+                  "name": "approvalState",
+                  "type": "string",
+                  "dataClass": "closed-enum",
                   "required": false
                 },
                 {
@@ -55686,7 +55725,8 @@
                 "chat.tool-authority.operation.read-grant-lifecycle",
                 "chat.tool-authority.operation.read-consent-route",
                 "chat.tool-authority.operation.catalog-read",
-                "chat.tool-authority.operation.late-read-result"
+                "chat.tool-authority.operation.late-read-result",
+                "chat.tool-authority.operation.write-approval"
               ],
               "replayReferences": [],
               "missingObligations": []
@@ -101563,28 +101603,28 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:140",
+      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:139",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:156",
+      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:155",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:194",
+      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:192",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:200",
+      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:198",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -102206,7 +102246,7 @@
     {
       "op": "chat.tool-authority.operation",
       "category": "security",
-      "site": "packages/keiko-server/src/editor/chatAuthorityActivity.ts:48",
+      "site": "packages/keiko-server/src/editor/chatAuthorityActivity.ts:51",
       "package": "keiko-server"
     },
     {
@@ -102218,7 +102258,7 @@
     {
       "op": "chat.tool-transcript.updated",
       "category": "process",
-      "site": "packages/keiko-server/src/store/chatToolTranscript.ts:41",
+      "site": "packages/keiko-server/src/store/chatToolTranscript.ts:57",
       "package": "keiko-server"
     },
     {

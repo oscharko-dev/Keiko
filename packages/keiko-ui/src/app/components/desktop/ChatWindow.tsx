@@ -1153,7 +1153,7 @@ function ChatBubbleImpl({
           openRepositoryReference={openRepositoryReference}
           citationPreview={citationPreview}
         />
-        <JiraChatTools transcript={message.toolTranscript} />
+        <JiraChatTools transcript={message.toolTranscript} turnState={message.turnState} />
         <ResponseVersionSelector
           message={message}
           selectedVersion={selectedResponseVersion}

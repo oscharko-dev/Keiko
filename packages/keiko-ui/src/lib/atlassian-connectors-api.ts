@@ -13,9 +13,12 @@
 // server shapes the contract layer does not name.
 
 import { bffFetchJson } from "./http";
+import { ApiError } from "./api";
+import { isChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type {
   AtlassianConnectionVerificationStatus,
   ChatToolReadGrantView,
+  ChatToolWriteApprovalView,
   AtlassianCredentialPublicMetadata,
   AtlassianCredentialCreateRequest,
   AtlassianConnectorActionExecutionResult,
@@ -296,4 +299,43 @@ export async function decideJiraChatReadConsent(
     body: JSON.stringify({ decision, disclosureVersion: grant.disclosureVersion }),
   });
   return response.approval;
+}
+
+function checkedWriteApproval(value: unknown, approvalId: string): ChatToolWriteApprovalView {
+  const approval =
+    typeof value === "object" && value !== null && "approval" in value ? value.approval : undefined;
+  if (!isChatToolWriteApprovalView(approval) || approval.approvalId !== approvalId)
+    throw new ApiError(
+      "CONTRACT_VALIDATION_FAILED",
+      "Chat action approval response is invalid.",
+      502,
+    );
+  return approval;
+}
+function writeApprovalRequest(
+  approvalId: string,
+  init?: RequestInit,
+): Promise<ChatToolWriteApprovalView> {
+  return bffFetchJson(
+    approvalPath(approvalId, "/chat-write-approval"),
+    { ...init, cache: "no-store" },
+    {
+      parseFailureMessage: friendlyParseFailureMessage,
+      validator: (_path, value) => checkedWriteApproval(value, approvalId),
+    },
+  );
+}
+export async function getJiraChatWriteApproval(
+  approvalId: string,
+): Promise<ChatToolWriteApprovalView> {
+  return writeApprovalRequest(approvalId);
+}
+export async function decideJiraChatWriteApproval(
+  approval: ChatToolWriteApprovalView,
+  decision: "approve" | "reject",
+): Promise<ChatToolWriteApprovalView> {
+  return writeApprovalRequest(approval.approvalId, {
+    method: "POST",
+    body: JSON.stringify({ decision, actionDigest: approval.actionDigest }),
+  });
 }

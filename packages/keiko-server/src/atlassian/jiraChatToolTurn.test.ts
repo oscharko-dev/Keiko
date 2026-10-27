@@ -1,3 +1,4 @@
+import { handleDecideChatWriteApproval } from "./chatWriteApprovalRoutes.js";
 import { handleSendDesktopChatStream } from "../chat-stream-handlers.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -101,7 +102,7 @@ function metadata(deps: UiHandlerDeps): AtlassianCredentialMetadata {
     },
   };
 }
-function syntheticModel(calls: GatewayCallRequest[]): ModelPort {
+function syntheticModel(calls: GatewayCallRequest[], mutation: boolean): ModelPort {
   const respond = (request: GatewayCallRequest): NormalizedResponse => {
     calls.push(request);
     const reservation = request.attemptAdmission?.({ promptTokens: 100, maxOutputTokens: 500 });
@@ -124,7 +125,8 @@ function syntheticModel(calls: GatewayCallRequest[]): ModelPort {
     expect(reservation).toBeDefined();
     const bridge = createGatewayToolCatalogBridge({ ...request, stream: false }, Date.now);
     const tool = request.toolCatalog.projection.tools.find(
-      (entry) => entry.toolRef.canonicalId === "keiko.jira.projects",
+      (entry) =>
+        entry.toolRef.canonicalId === (mutation ? "keiko.jira.comment" : "keiko.jira.projects"),
     );
     if (tool === undefined) throw new Error("Missing offered Jira projects tool");
     return {
@@ -132,7 +134,11 @@ function syntheticModel(calls: GatewayCallRequest[]): ModelPort {
       content: "",
       finishReason: "tool_calls",
       toolCalls: [
-        bridge.bind({ id: `call-${String(calls.length)}`, name: tool.alias, arguments: {} }),
+        bridge.bind({
+          id: `call-${String(calls.length)}`,
+          name: tool.alias,
+          arguments: mutation ? { issueKey: "KEIKO-1", body: "Synthetic approved comment" } : {},
+        }),
       ],
     };
   };
@@ -147,16 +153,17 @@ async function* syntheticStream(
   if (resolved.content.length > 0) yield { type: "delta", token: resolved.content };
   yield { type: "done", response: resolved };
 }
-function fixture(): {
+function fixture(mutation = false): {
   deps: UiHandlerDeps;
   chatId: string;
   root: string;
   calls: GatewayCallRequest[];
   requests: () => number;
+  writes: () => number;
 } {
   const root = mkdtempSync(join(tmpdir(), "keiko-jira-chat-turn-"));
   const calls: GatewayCallRequest[] = [];
-  const model = syntheticModel(calls);
+  const model = syntheticModel(calls, mutation);
   const deps = buildUiHandlerDeps({
     configPath: undefined,
     evidenceDir: join(root, "evidence"),
@@ -180,22 +187,30 @@ function fixture(): {
   if (credentials === undefined) throw new Error("Missing credential owner");
   vi.spyOn(credentials.custody, "list").mockImplementation(() => [metadata(deps)]);
   let requests = 0;
+  let writes = 0;
   vi.spyOn(credentials, "httpBodyPortFactory").mockImplementation(
     (_metadata, _correlationId, lifecycle) =>
       (request): ReturnType<AtlassianHttpBodyPort> => {
         if (lifecycle?.beforeDispatch?.(request) !== true)
           throw new Error("Expected dispatch admission");
         requests++;
+        const write = request.method !== "GET";
+        if (write) writes++;
+        const status = write ? 201 : 200;
+        lifecycle.onResponse?.(request, status);
+        const bodyText = mutation
+          ? JSON.stringify({ id: "10001", body: "Synthetic approved comment" })
+          : "[]";
         return Promise.resolve({
           kind: "response",
-          status: 200,
-          bodyText: "[]",
-          bodyBytes: 2,
+          status,
+          bodyText,
+          bodyBytes: Buffer.byteLength(bodyText),
           truncated: false,
         });
       },
   );
-  return { deps, chatId: chat.id, root, calls, requests: () => requests };
+  return { deps, chatId: chat.id, root, calls, requests: () => requests, writes: () => writes };
 }
 function send(
   f: ReturnType<typeof fixture>,
@@ -316,4 +331,122 @@ describe("normal streamed Chat through the owned Jira catalog", () => {
       expect(f.deps.store.listMessages(f.chatId)[0]?.turnState).toBe("cancelled");
     });
   });
+});
+
+it("discovers the five governed mutations through the ordinary Chat-owned MCP catalog", async () => {
+  const f = fixture();
+  const managed = await f.deps.jiraChatCatalog?.get();
+  expect(managed?.catalog.descriptors.map((entry) => entry.toolRef.canonicalId)).toEqual(
+    expect.arrayContaining([
+      "keiko.jira.create",
+      "keiko.jira.edit",
+      "keiko.jira.assign",
+      "keiko.jira.comment",
+      "keiko.jira.transition",
+    ]),
+  );
+});
+
+async function approveReadForWrite(f: ReturnType<typeof fixture>): Promise<void> {
+  await vi.waitFor(() => {
+    expect(f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.readGrant?.state).toBe(
+      "pending",
+    );
+  });
+  expect(f.writes()).toBe(0);
+  const grant = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.readGrant;
+  if (grant === undefined) throw new Error("Missing write-turn read consent");
+  await handleDecideChatReadConsent(
+    context(
+      { decision: "approve", disclosureVersion: grant.disclosureVersion },
+      { approvalId: grant.grantId },
+    ),
+    f.deps,
+  );
+}
+async function decidePendingWrite(
+  f: ReturnType<typeof fixture>,
+  decision: "approve" | "reject",
+): Promise<void> {
+  await vi.waitFor(() => {
+    expect(
+      f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges[0]?.approval?.state,
+    ).toBe("pending");
+  });
+  expect(f.writes()).toBe(0);
+  const approval = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges[0]?.approval;
+  if (approval === undefined) throw new Error("Missing exact write approval");
+  expect(
+    (
+      await handleDecideChatWriteApproval(
+        context(
+          { decision, actionDigest: approval.actionDigest },
+          { approvalId: approval.approvalId },
+        ),
+        f.deps,
+      )
+    ).status,
+  ).toBe(200);
+}
+
+function assertObservedWrite(f: ReturnType<typeof fixture>): void {
+  const exchange = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges[0];
+  expect(exchange?.mutationOutcome).toBe("succeeded");
+  expect(exchange?.result?.status).toBe("completed");
+  expect(f.calls[1]?.messages.find((message) => message.role === "tool")?.content).toContain(
+    '"mutationOutcome":"succeeded"',
+  );
+}
+
+describe("normal Chat write approval and durable outcome", () => {
+  it.each(
+    (["governed-assist", "supervised-coding", "autonomous-delivery"] as const).flatMap((mode) => [
+      { mode, streamed: false },
+      { mode, streamed: true },
+    ]),
+  )(
+    "executes one approved effect in mode $mode (streamed=$streamed) through the production catalog",
+    async ({ mode, streamed }) => {
+      const f = fixture(true);
+      f.deps.store.updateChat(f.chatId, { toolMode: mode });
+      const response = mockResponse({ captureBody: true });
+      const request = sendContext(f, `write-${mode}-${String(streamed)}`);
+      const pending = streamed
+        ? handleSendDesktopChatStream({ ...request, res: response.res }, f.deps)
+        : handleSendDesktopChat(request, f.deps);
+      void pending.catch(() => undefined);
+      await approveReadForWrite(f);
+      if (mode !== "autonomous-delivery") await decidePendingWrite(f, "approve");
+      const completed = await pending;
+      if (streamed) {
+        expect(response.body()).toContain("event: done");
+        if (mode !== "autonomous-delivery")
+          expect(response.body()).toContain("event: tool-write-approval");
+      } else expect(completed).toMatchObject({ status: 200 });
+      expect(f.writes()).toBe(1);
+      assertObservedWrite(f);
+      const modelCalls = f.calls.length;
+      const replay = await handleSendDesktopChat(
+        sendContext(f, `write-${mode}-${String(streamed)}`),
+        f.deps,
+      );
+      expect(replay.status).toBe(200);
+      expect(f.calls).toHaveLength(modelCalls);
+      expect(f.writes()).toBe(1);
+    },
+  );
+});
+
+it("keeps a rejected normal Chat write free of remote effects", async () => {
+  const f = fixture(true);
+  const pending = handleSendDesktopChat(sendContext(f, "rejected-write"), f.deps);
+  void pending.catch(() => undefined);
+  await approveReadForWrite(f);
+  await decidePendingWrite(f, "reject");
+  await pending;
+  expect(f.writes()).toBe(0);
+  expect(f.requests()).toBe(0);
+  const exchange = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges[0];
+  expect(exchange?.approval?.state).toBe("rejected");
+  expect(exchange?.result?.status).toBe("denied");
 });

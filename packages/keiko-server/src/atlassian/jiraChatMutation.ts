@@ -20,17 +20,17 @@ import type {
   ChatToolMutationStore,
 } from "../store/chatToolMutationTypes.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
-import {
-  createGatewayAtlassianHttpBodyPort,
-  type CreateAtlassianHttpPortOptions,
-} from "./httpPort.js";
+import type { AtlassianHttpLifecycleOptions } from "./httpRequestLifecycle.js";
 
 export interface JiraChatMutationExecution {
   readonly journal: ChatToolMutationStore | undefined;
   readonly intent: ChatToolMutationIntent;
-  readonly transport: CreateAtlassianHttpPortOptions;
-  /** Current binding, authority, approval and budget admission, checked again in the journal transaction. */
+  /** The custody owner keeps credentials private and composes the journal's final HTTP hooks. */
+  readonly httpPortFactory: (lifecycle: AtlassianHttpLifecycleOptions) => AtlassianHttpBodyPort;
+  /** Current binding, authority, approval and budget admission for metadata and confirmation reads. */
   readonly beforeEffect: () => boolean;
+  /** Claim this exact mutation's approval inside the journal transaction, only before POST/PUT. */
+  readonly beforeMutation: () => boolean;
   readonly execute: (http: AtlassianHttpBodyPort) => Promise<JiraMutationAttempt>;
 }
 const REASONS: ReadonlySet<string> = new Set(ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS);
@@ -108,22 +108,21 @@ function mutationTransport(
   input: JiraChatMutationExecution,
   journal: ChatToolMutationStore,
 ): AtlassianHttpBodyPort {
-  const { transport, intent } = input;
-  return createGatewayAtlassianHttpBodyPort({
-    ...transport,
-    correlationId: intent.correlationId,
+  const { intent } = input;
+  return input.httpPortFactory({
     beforeDispatch: (request): boolean => {
-      const admit = (): boolean =>
-        (transport.beforeDispatch === undefined || confirmed(transport.beforeDispatch(request))) &&
-        confirmed(input.beforeEffect());
-      return request.method === "GET" ? admit() : journal.beginDispatch(intent.invocationId, admit);
+      if (request.method === "GET") return confirmed(input.beforeEffect());
+      return journal.beginDispatch(
+        intent.invocationId,
+        () => confirmed(input.beforeEffect()) && confirmed(input.beforeMutation()),
+      );
     },
     onResponse: (
       request: AtlassianHttpRequest | AtlassianHttpBodyRequest,
       status: number,
     ): boolean => {
       if (request.method !== "GET") journal.acknowledge(intent.invocationId, status);
-      return transport.onResponse === undefined || confirmed(transport.onResponse(request, status));
+      return true;
     },
   });
 }
@@ -176,7 +175,6 @@ export async function executeJiraChatMutation(
   const input = {
     ...source,
     intent: Object.freeze({ ...source.intent }),
-    transport: Object.freeze({ ...source.transport }),
   };
   const { journal, intent } = input;
   if (journal === undefined) return result("pending", "unavailable");

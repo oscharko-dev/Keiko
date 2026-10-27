@@ -1,3 +1,6 @@
+import { validateToolResultEnvelope } from "@oscharko-dev/keiko-tool-catalog";
+import type { ChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts";
+import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { buildUiStoreOverDatabase, type UiStore } from "./index.js";
@@ -190,5 +193,213 @@ describe("ordinary Chat structured tool transcript", () => {
     expect(analyzeLogText(line).timelines).toMatchObject([
       { correlationId: "transcript-proof", lines: [{ op: "chat.tool-transcript.updated" }] },
     ]);
+  });
+});
+
+const mutationCall = {
+  id: "mutation-call",
+  name: "jira_comment",
+  arguments: { issueKey: "SYN-1", body: "comment" },
+};
+function approval(f: ReturnType<typeof fixture>): ChatToolWriteApprovalView {
+  return {
+    kind: "jira-chat-write",
+    approvalId: "approval-1",
+    chatId: f.chatId,
+    podId: "d5f5681e-ce98-4c3c-b27e-51d707c9d018",
+    bindingGeneration: 1,
+    authenticationGeneration: 1,
+    invocationId: sha256Hex(canonicalise({ messageId: f.id, callId: mutationCall.id })),
+    operation: "jira.comment",
+    actionDigest: sha256Hex(
+      canonicalise({
+        operation: "jira.comment",
+        argumentsDigest: sha256Hex(canonicalise(mutationCall.arguments)),
+      }),
+    ),
+    state: "pending",
+    requestedAt: 1000,
+    expiresAt: 2000,
+  };
+}
+function mutationResult(): ToolResultEnvelope {
+  return validateToolResultEnvelope({
+    ...result(),
+    invocationId: "catalog-invocation-1",
+    toolRef: { canonicalId: "keiko.jira.comment", contractVersion: 1 },
+    projectionDigest: "c".repeat(64),
+  });
+}
+function startWrite(f: ReturnType<typeof fixture>): ChatToolWriteApprovalView {
+  const view = approval(f);
+  f.store.updateChatToolTranscript(
+    f.id,
+    { kind: "started", call: mutationCall },
+    "write-transcript",
+  );
+  f.store.updateChatToolTranscript(
+    f.id,
+    { kind: "write-approval", callId: mutationCall.id, approval: view },
+    "write-transcript",
+  );
+  return view;
+}
+function saveApproval(f: ReturnType<typeof fixture>, view: ChatToolWriteApprovalView): void {
+  f.store.updateChatToolTranscript(
+    f.id,
+    { kind: "write-approval", callId: mutationCall.id, approval: view },
+    "write-transcript",
+  );
+}
+
+describe("durable Chat mutation projections", () => {
+  it("pins a settlement's independent mutation outcome across duplicate delivery", () => {
+    const f = fixture();
+    startWrite(f);
+    const settled = {
+      kind: "settled",
+      callId: mutationCall.id,
+      result: mutationResult(),
+      mutationOutcome: "unknown",
+    } as const;
+    f.store.updateChatToolTranscript(f.id, settled, "mutation-outcome");
+    f.store.updateChatToolTranscript(f.id, settled, "mutation-outcome");
+    expect(() => {
+      f.store.updateChatToolTranscript(
+        f.id,
+        { ...settled, mutationOutcome: "succeeded" },
+        "mutation-outcome",
+      );
+    }).toThrow("identity conflict");
+    expect(() => {
+      f.store.updateChatToolTranscript(
+        f.id,
+        { kind: "settled", callId: mutationCall.id, result: mutationResult() },
+        "mutation-outcome",
+      );
+    }).toThrow("identity conflict");
+    expect(f.store.findMessageById(f.id)?.toolTranscript?.exchanges[0]?.mutationOutcome).toBe(
+      "unknown",
+    );
+  });
+
+  it.each(["approved", "claimed", "rejected", "expired", "revoked"] as const)(
+    "refuses a late pending update after %s",
+    (state) => {
+      const f = fixture();
+      const view = startWrite(f);
+      saveApproval(f, { ...view, state });
+      expect(() => {
+        saveApproval(f, view);
+      }).toThrow("identity conflict");
+      expect(f.store.findMessageById(f.id)?.toolTranscript?.exchanges[0]?.approval?.state).toBe(
+        state,
+      );
+    },
+  );
+
+  it("allows observed forward states but never resurrects a terminal decision", () => {
+    const f = fixture();
+    const view = startWrite(f);
+    for (const state of ["approved", "claimed", "revoked"] as const)
+      saveApproval(f, { ...view, state });
+    saveApproval(f, { ...view, state: "revoked" });
+    expect(() => {
+      saveApproval(f, { ...view, state: "approved" });
+    }).toThrow();
+    expect(() => {
+      saveApproval(f, { ...view, state: "claimed" });
+    }).toThrow();
+  });
+
+  it.each([
+    "chatId",
+    "invocationId",
+    "actionDigest",
+    "operation",
+    "approvalId",
+    "bindingGeneration",
+  ] as const)("rejects changed %s in a retained approval", (key) => {
+    const f = fixture();
+    const view = startWrite(f);
+    const changes = {
+      chatId: "other-chat",
+      invocationId: "other-turn",
+      actionDigest: "f".repeat(64),
+      operation: "jira.edit",
+      approvalId: "other-approval",
+      bindingGeneration: 2,
+    };
+    expect(() => {
+      saveApproval(f, { ...view, [key]: changes[key] });
+    }).toThrow();
+  });
+
+  it.each([
+    "chat",
+    "turn",
+    "arguments",
+    "operation",
+    "unknown-outcome",
+    "unsettled-outcome",
+    "read-outcome",
+    "result-tool",
+  ] as const)("fails closed when durable %s linkage is corrupt", (kind) => {
+    const f = fixture();
+    const view = startWrite(f);
+    const row: Record<string, unknown> = { call: mutationCall, approval: view };
+    if (kind === "chat") row.approval = { ...view, chatId: "another-chat" };
+    if (kind === "turn") row.approval = { ...view, invocationId: "another-turn" };
+    if (kind === "arguments") row.call = { ...mutationCall, arguments: { body: "another effect" } };
+    if (kind === "operation") row.call = { ...mutationCall, name: "jira_edit" };
+    if (kind === "unknown-outcome")
+      Object.assign(row, { result: mutationResult(), mutationOutcome: "pending" });
+    if (kind === "unsettled-outcome") row.mutationOutcome = "unknown";
+    if (kind === "result-tool")
+      Object.assign(row, {
+        result: {
+          ...mutationResult(),
+          toolRef: { canonicalId: "keiko.jira.edit", contractVersion: 1 },
+        },
+        mutationOutcome: "unknown",
+      });
+    if (kind === "read-outcome")
+      Object.assign(row, {
+        call,
+        approval: undefined,
+        result: mutationResult(),
+        mutationOutcome: "unknown",
+      });
+    f.db
+      .prepare("UPDATE chat_messages SET tool_transcript_json = ? WHERE id = ?")
+      .run(JSON.stringify({ schemaVersion: 1, exchanges: [row] }), f.id);
+    expect(() => f.store.findMessageById(f.id)).toThrow("Stored Chat tool transcript is invalid");
+  });
+
+  it("keeps a cancelled envelope and observed mutation outcome independently readable", () => {
+    const f = fixture();
+    startWrite(f);
+    const cancelled = validateToolResultEnvelope({
+      ...mutationResult(),
+      status: "cancelled",
+      reason: "explicit-cancellation",
+      effectStarted: true,
+      toolRef: { canonicalId: "keiko.jira.comment", contractVersion: 1 },
+      projectionDigest: "c".repeat(64),
+    });
+    f.store.updateChatToolTranscript(
+      f.id,
+      {
+        kind: "settled",
+        callId: mutationCall.id,
+        result: cancelled,
+        mutationOutcome: "succeeded-unconfirmed",
+      },
+      "cancelled-mutation",
+    );
+    expect(f.store.findMessageById(f.id)?.toolTranscript?.exchanges[0]).toMatchObject({
+      result: { status: "cancelled", data: null },
+      mutationOutcome: "succeeded-unconfirmed",
+    });
   });
 });

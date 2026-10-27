@@ -25,6 +25,9 @@ export type {
   ChatToolReadGrantState,
   ChatToolReadGrantView,
   ChatToolReadConsentDecision,
+  ChatToolWriteApprovalView,
+  ChatToolWriteApprovalState,
+  ChatToolWriteApprovalDecision,
 } from "./chat-tool-authority.js";
 export type { KEIKO_UI_LAUNCH_ID_ENV, UI_LAUNCH_ID_FLAG, isKeikoUiLaunchId } from "./ui-launch.js";
 

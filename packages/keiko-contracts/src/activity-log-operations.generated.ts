@@ -2309,6 +2309,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "action-policy",
           "read-grant",
           "catalog-read",
+          "catalog-write",
+          "write-approval",
         ],
       },
       outcome: {
@@ -2369,6 +2371,24 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: false,
         values: ["pending", "granted", "rejected", "expired", "revoked"],
+      },
+      approvalDigest: {
+        type: "string",
+        dataClass: "digest",
+        required: false,
+        maxLength: 64,
+      },
+      actionDigest: {
+        type: "string",
+        dataClass: "digest",
+        required: false,
+        maxLength: 64,
+      },
+      approvalState: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["pending", "approved", "claimed", "rejected", "expired", "revoked"],
       },
       authorityDigest: {
         type: "string",
@@ -2450,6 +2470,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       "chat.tool-authority.operation.read-consent-route",
       "chat.tool-authority.operation.catalog-read",
       "chat.tool-authority.operation.late-read-result",
+      "chat.tool-authority.operation.write-approval",
     ],
     releaseImpact: "minor",
   },
@@ -2544,7 +2565,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["started", "settled", "read-consent"],
+        values: ["started", "settled", "read-consent", "write-approval"],
       },
       exchangeCount: {
         type: "integer",

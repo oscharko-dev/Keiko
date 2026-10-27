@@ -48,6 +48,10 @@ import {
   chatAuthorityFixture,
   CHAT_AUTHORITY_TEST_NOW,
 } from "../editor/chatAuthority.test-support.js";
+import {
+  isCurrentJiraChatWriteApproval,
+  requestJiraChatWriteApproval,
+} from "./jiraChatWriteApproval.js";
 import { jiraChatActorDigest } from "./jiraPodAccess.js";
 import {
   requestJiraChatReadGrant,
@@ -1050,5 +1054,154 @@ describe("ordinary Chat catalog read admission", () => {
     });
     expect(requests).toBe(1);
     expect(f.counters.toolCalls).toBe(1);
+  });
+});
+
+describe("ordinary Chat exact-action write approval admission", () => {
+  let approvals: AtlassianActionApprovalRegistry;
+  const now = Date.parse(CHAT_AUTHORITY_TEST_NOW);
+  const action = {
+    invocationId: "canonical-turn-call",
+    operation: "jira.comment",
+    actionDigest: "a".repeat(64),
+  } as const;
+  beforeEach(() => {
+    approvals = new AtlassianActionApprovalRegistry(() => now);
+  });
+
+  function request(digest = action.actionDigest): ReturnType<typeof requestJiraChatWriteApproval> {
+    return requestJiraChatWriteApproval(
+      { ...deps, atlassianActionApprovalRegistry: approvals },
+      chat.id,
+      reference,
+      { ...action, actionDigest: digest },
+      CHAT_AUTHORITY_TEST_NOW,
+      "write-admission",
+    );
+  }
+
+  function grantRead(): string {
+    const value = requestJiraChatReadGrant(
+      { ...deps, atlassianActionApprovalRegistry: approvals },
+      chat.id,
+      reference,
+      CHAT_AUTHORITY_TEST_NOW,
+      "write-read-consent",
+    );
+    if (value.kind === "denied") throw new Error("Expected read consent request");
+    const retained = approvals.getChatReadGrant(value.grant.grantId);
+    if (retained === undefined) throw new Error("Expected retained read consent");
+    expect(
+      approvals.acceptChatReadGrant(
+        value.grant.grantId,
+        retained.grant.subject,
+        retained.authority,
+        "b".repeat(64),
+      ).ok,
+    ).toBe(true);
+    return value.grant.grantId;
+  }
+
+  function pending(): NonNullable<
+    ReturnType<AtlassianActionApprovalRegistry["getChatWriteApproval"]>
+  > {
+    const value = request();
+    if (value.kind === "denied" || value.kind === "allowed")
+      throw new Error("Expected approval request");
+    const entry = approvals.getChatWriteApproval(value.approval.approvalId);
+    if (entry === undefined) throw new Error("Expected retained write approval");
+    return entry;
+  }
+
+  it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
+    "requires current read consent before writes and obeys the %s policy",
+    (mode) => {
+      store.updateChat(chat.id, { toolMode: mode });
+      registerCurrentAuthority();
+      expect(request()).toEqual({ kind: "denied", reason: "authority-denied" });
+      grantRead();
+      expect(request().kind).toBe(mode === "autonomous-delivery" ? "allowed" : "review-required");
+    },
+  );
+
+  it("reuses the exact pending, approved and claimed action without authorizing changed arguments", () => {
+    grantRead();
+    const entry = pending();
+    expect(pending()).toEqual(entry);
+    expect(request("f".repeat(64))).toEqual({ kind: "denied", reason: "invalid" });
+    expect(
+      approvals.acceptChatWriteApproval(
+        entry.approval.approvalId,
+        entry.subject,
+        entry.authority,
+        action,
+        "c".repeat(64),
+      ).ok,
+    ).toBe(true);
+    expect(request().kind).toBe("approved");
+    expect(
+      approvals.claimChatWriteApproval(
+        entry.approval.approvalId,
+        entry.subject,
+        entry.authority,
+        action,
+      ).ok,
+    ).toBe(true);
+    expect(request().kind).toBe("claimed");
+  });
+
+  it("cannot silently recreate a rejected exact action", () => {
+    grantRead();
+    const entry = pending();
+    expect(
+      approvals.rejectChatWriteApproval(
+        entry.approval.approvalId,
+        entry.subject,
+        entry.authority,
+        action,
+      ).ok,
+    ).toBe(true);
+    expect(request()).toEqual({ kind: "denied", reason: "rejected" });
+  });
+
+  it("never widens read-only authority even in Full access", () => {
+    store.updateChat(chat.id, { toolMode: "autonomous-delivery" });
+    registerCurrentAuthority({ connectorScopes: ["issue-tracker.read"] });
+    grantRead();
+    expect(request()).toEqual({ kind: "denied", reason: "authority-denied" });
+  });
+
+  it.each(["actor", "credential", "binding", "read-consent", "authority", "expiry"] as const)(
+    "invalidates pending writes when current %s changes",
+    (kind) => {
+      const readId = grantRead();
+      const entry = pending();
+      let at = CHAT_AUTHORITY_TEST_NOW;
+      if (kind === "actor") actor = "another-actor";
+      if (kind === "credential") metadata = metadata.map((value) => ({ ...value, generation: 2 }));
+      if (kind === "binding") store.updateChat(chat.id, { jiraPodId: null });
+      if (kind === "read-consent") approvals.revokeChatReadGrant(readId);
+      if (kind === "authority") deps.agentAuthorityRegistry?.revoke(reference);
+      if (kind === "expiry") at = new Date(entry.approval.expiresAt).toISOString();
+      expect(
+        isCurrentJiraChatWriteApproval(
+          { ...deps, atlassianActionApprovalRegistry: approvals },
+          entry,
+          at,
+          "write-invalidated",
+        ),
+      ).toBe(false);
+    },
+  );
+
+  it("bounds pending expiry to the retained read consent and emits no private approval context", () => {
+    const readId = grantRead();
+    const entry = pending();
+    expect(entry.approval.expiresAt).toBeLessThanOrEqual(
+      approvals.getChatReadGrant(readId)?.grant.expiresAt ?? 0,
+    );
+    expect(JSON.stringify(request())).not.toMatch(
+      /actorDigest|approvalProofDigest|authority|claimId|baseUrl|authRef/,
+    );
   });
 });

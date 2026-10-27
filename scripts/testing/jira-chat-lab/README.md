@@ -178,6 +178,37 @@ state is removed; the lab and its credentials remain untouched.
 This group qualifies one buffered read journey. It does not qualify Chat writes,
 streaming/browser journeys, mixed grounding or the full acceptance matrix.
 
+## Real ordinary Chat write groups
+
+After a successful licensed HTTPS/read/write preflight, qualify one mode and transport:
+
+```sh
+node scripts/testing/jira-chat-lab/chat-write.mjs "$HOME/.local/share/keiko-jira-4081-new" \
+  keiko-qwen36-35b-8bit governed-assist buffered
+```
+
+Supported modes are `governed-assist`, `supervised-coding` and `autonomous-delivery`;
+the transport argument is `buffered` or `stream`. Run groups sequentially with no other
+stateful laboratory consumer. Each group uses the existing real model probe, authenticated
+normal Chat API, verified HTTPS Live Pod and shared gateway/binder/MCP execution path.
+It requests one unique synthetic comment and independently checks Jira before and after:
+exactly one matching comment and a total count increase of one. Every mode must first
+request its Chat read disclosure; the first two modes additionally require exactly one
+approval whose preview matches the proposed comment. Full access must require no write
+approval. Streaming must emit the corresponding consent/approval events and one terminal
+response without a buffered fallback. Reloaded history must retain the confirmed mutation
+outcome. License checks bracket the complete group.
+
+Before dispatch, a private, synchronized `chat-write.pending.json` records the canonical
+turn, unique comment and baseline. Its exclusive creation prevents another run after an
+interruption. Failed runs retain the private product database, vault and credential key
+inside the laboratory directory. Inspect the recorded canonical turn/journal and Jira
+using read-only requests before deciding how to reconcile the marker; never rerun a
+possibly executed comment. A successful group writes a private receipt and removes its
+pending marker. Output contains closed stages, counts and mode names only. These groups
+qualify normal Chat comment execution; other mutation operations, browser approvals and
+the complete acceptance matrix require their own evidence.
+
 ## Read through the actual browser
 
 Build the UI with `npm run build --workspace @oscharko-dev/keiko-ui`, complete a

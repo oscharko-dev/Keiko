@@ -1,5 +1,6 @@
 "use client";
 
+import { applyChatWriteApproval } from "@/lib/chat-tool-events";
 import { watchChatToolConsent } from "@/lib/chat-tool-consent";
 import { useChatDraft, useChatDraftUnloadGuard, type ChatDraftPersistence } from "./useChatDraft";
 import type { ChatCreationModelChoice } from "./chatCreationModelChoice";
@@ -4103,6 +4104,17 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         onStarted: (correlationId): void => {
           context.kind = "sse-error";
           context.correlationId = correlationId;
+        },
+        onWriteApproval: (event): void => {
+          if (isSupersededOrAborted(chatId, signal) || event.approval.chatId !== chatId) return;
+          setState((previous) => ({
+            ...previous,
+            messages: previous.messages.map((message) =>
+              message.id === optimisticId || message.id === event.messageId
+                ? applyChatWriteApproval(message, event)
+                : message,
+            ),
+          }));
         },
         onReadConsent: ({ messageId, grant }): void => {
           if (isSupersededOrAborted(chatId, signal) || grant.chatId !== chatId) return;

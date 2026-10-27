@@ -62,7 +62,7 @@ export function snapshotReadGrant(
 }
 
 export function sameReadGrantSubject(
-  grant: ChatToolReadGrant,
+  grant: Pick<ChatToolReadGrant, "subject">,
   subject: ChatToolAuthoritySubject,
 ): boolean {
   return (
@@ -72,7 +72,7 @@ export function sameReadGrantSubject(
 }
 
 export function sameReadGrantAuthority(
-  entry: ChatReadGrantEntry,
+  entry: Pick<ChatReadGrantEntry, "authority">,
   authority: EditorAgentGovernedAuthorityReference,
 ): boolean {
   return (

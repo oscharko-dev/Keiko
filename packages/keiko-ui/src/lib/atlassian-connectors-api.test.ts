@@ -8,6 +8,8 @@ import {
   approveAtlassianConnectorAction,
   cancelAtlassianConnectorSyncJob,
   createAtlassianConnector,
+  decideJiraChatWriteApproval,
+  getJiraChatWriteApproval,
   defaultAtlassianConnectorsClient,
   deleteAtlassianConnector,
   getAtlassianConnectorApproval,
@@ -194,3 +196,52 @@ describe("atlassian-connectors-api — body-safe errors", () => {
     expect((error as ApiError).code).toBe("INTERNAL");
   });
 });
+
+it("observes a Chat write approval with GET and posts only its concrete decision and digest", async () => {
+  const approval = {
+    kind: "jira-chat-write",
+    approvalId: "approval-1",
+    chatId: "chat-1",
+    podId: "11111111-1111-4111-8111-111111111111",
+    bindingGeneration: 1,
+    authenticationGeneration: 1,
+    invocationId: "action-1",
+    operation: "jira.edit",
+    actionDigest: "a".repeat(64),
+    requestedAt: 1000,
+    expiresAt: 2000,
+    state: "pending",
+  } as const;
+  const getCalls = stubFetch(200, { approval });
+  expect(await getJiraChatWriteApproval(approval.approvalId)).toEqual(approval);
+  expect(getCalls).toHaveLength(1);
+  expect(getCalls[0]).toMatchObject({
+    url: "/api/atlassian-connectors/action-approvals/approval-1/chat-write-approval",
+    method: "GET",
+    body: undefined,
+  });
+  const postCalls = stubFetch(200, { approval: { ...approval, state: "approved" } });
+  expect(await decideJiraChatWriteApproval(approval, "approve")).toMatchObject({
+    state: "approved",
+  });
+  expect(postCalls).toHaveLength(1);
+  expect(postCalls[0]).toMatchObject({
+    url: "/api/atlassian-connectors/action-approvals/approval-1/chat-write-approval",
+    method: "POST",
+    headers: { "X-Keiko-CSRF": "1" },
+  });
+  expect(JSON.parse(postCalls[0]?.body ?? "null")).toEqual({
+    decision: "approve",
+    actionDigest: approval.actionDigest,
+  });
+});
+
+it.each([null, {}, { state: "pending" }])(
+  "fails closed on malformed Chat approval data %j",
+  async (approval) => {
+    stubFetch(200, { approval });
+    await expect(getJiraChatWriteApproval("approval-1")).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+    });
+  },
+);

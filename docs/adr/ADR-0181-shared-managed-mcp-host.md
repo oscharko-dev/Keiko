@@ -106,6 +106,22 @@ owner retain durable intent and observed outcomes; confirmed, unconfirmed, rejec
 unknown-effect states remain distinguishable. Arbitrary provider errors are replaced
 before the SDK can render them into content. Explicit structured provider failures are byte-bounded, captured before asynchronous validation and checked against the admitted result schema, including when MCP marks the result as an error. Their immutable data is available only through a non-enumerable error accessor; error messages and Activity Log records retain only closed classifications. Consumer result settlement must preserve the distinction between protocol failure and the observed remote effect.
 
+The ordinary Chat consumer exposes all admitted Jira read and mutation declarations through
+that same catalog. Mutation execution receives the existing credential owner's HTTP port
+factory, never a raw token resolver. Every metadata and confirmation read rechecks current
+authority and the Chat read grant. The exact action approval is claimed atomically inside
+the durable journal's dispatch boundary, immediately before the first mutating HTTP request;
+metadata reads and duplicate deliveries cannot consume or reapply that claim. Full access
+uses the same boundary with its currently validated allowed disposition.
+
+HTTP acknowledgement is recorded before parsing a response or evaluating late cancellation.
+A cancelled or denied catalog result retains its original closed envelope and null data;
+its separately validated, canonical journal observation is retained as `mutationOutcome`
+on the existing Chat exchange. The same projection reaches the live model continuation,
+reloaded history, compaction, and result card. Approval state reports consent only and does
+not imply a remote effect. A failed UI decision request requires an explicit state refresh;
+it never causes an automatic mutation or approval POST retry.
+
 A failed pre-effect log write fails closed. A failed terminal write never changes an
 already observed execution outcome: it increments the existing process-wide Activity
 Log loss ledger, whose registered heartbeat/exit summary reports missing evidence.

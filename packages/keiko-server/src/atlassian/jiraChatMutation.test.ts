@@ -10,6 +10,7 @@ import { createChatToolMutationStore } from "../store/chatToolMutations.js";
 import type { ChatToolMutationIntent } from "../store/chatToolMutationTypes.js";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import { executeJiraChatMutation, type JiraChatMutationExecution } from "./jiraChatMutation.js";
+import { createGatewayAtlassianHttpBodyPort } from "./httpPort.js";
 
 const cleanup: (() => void)[] = [];
 afterEach(() => {
@@ -68,15 +69,19 @@ function fixture(path = ":memory:"): {
   const input: JiraChatMutationExecution = {
     journal,
     intent,
-    transport: {
-      baseUrl: "https://jira.example.invalid",
-      authRef: "synthetic-ref",
-      credentials: {
-        resolveForExecution: () => ({ scheme: "bearer-pat", apiToken: "synthetic-test-pat" }),
-      },
-      fetchImpl: effects,
-    },
+    httpPortFactory: (lifecycle) =>
+      createGatewayAtlassianHttpBodyPort({
+        ...lifecycle,
+        correlationId: intent.correlationId,
+        baseUrl: "https://jira.example.invalid",
+        authRef: "synthetic-ref",
+        credentials: {
+          resolveForExecution: () => ({ scheme: "bearer-pat", apiToken: "synthetic-test-pat" }),
+        },
+        fetchImpl: effects,
+      }),
     beforeEffect: () => true,
+    beforeMutation: () => true,
     execute: async (http): Promise<JiraMutationAttempt> => {
       const response = await http({
         method: "POST",
@@ -118,6 +123,29 @@ it("commits before sending, records acknowledgement, and never repeats a complet
     "replayed",
   ]);
   expect(f.logs.lines().join()).not.toMatch(/synthetic-test-pat|jira\.example|SYN-1/u);
+});
+it("uses the injected custody transport factory with journal-owned lifecycle hooks", async () => {
+  const f = fixture();
+  const httpPortFactory = vi.fn(f.input.httpPortFactory);
+  const input = { ...f.input, httpPortFactory };
+  expect(await executeJiraChatMutation(input)).toMatchObject({ data: { outcome: "succeeded" } });
+  expect(httpPortFactory).toHaveBeenCalledOnce();
+  expect(httpPortFactory.mock.calls[0]?.[0].beforeDispatch).toBeTypeOf("function");
+  expect(httpPortFactory.mock.calls[0]?.[0].onResponse).toBeTypeOf("function");
+  expect(f.effects).toHaveBeenCalledOnce();
+});
+it("refuses a write when concrete approval cannot be claimed at final dispatch", async () => {
+  const f = fixture();
+  const beforeMutation = vi.fn(() => false);
+  const input = { ...f.input, beforeMutation };
+  expect(await executeJiraChatMutation(input)).toMatchObject({ data: { outcome: "rejected" } });
+  expect(beforeMutation).toHaveBeenCalledOnce();
+  expect(f.effects).not.toHaveBeenCalled();
+  expect(f.input.journal?.find(f.input.intent.invocationId)).toMatchObject({
+    phase: "settled",
+    outcome: "rejected",
+    httpStatus: null,
+  });
 });
 it.each([400, 401, 403, 429, 500, 503])(
   "keeps committed-then-%s unknown and does not repeat the mutation",
@@ -295,6 +323,86 @@ it("does not treat metadata responses as mutation acknowledgements", async () =>
     data: { outcome: "succeeded" },
   });
   expect(f.effects).toHaveBeenCalledTimes(2);
+});
+it("claims only the mutation, keeping metadata, confirmation and replay separate", async () => {
+  const f = fixture();
+  const beforeMutation = vi.fn(() => {
+    expect(f.input.journal?.find(f.input.intent.invocationId)?.phase).toBe("prepared");
+    expect(f.effects).toHaveBeenCalledOnce();
+    return true;
+  });
+  const write = f.effects.getMockImplementation();
+  f.effects.mockImplementation((url, init) => {
+    if (init?.method === "GET") return Promise.resolve(new Response("{}"));
+    if (write === undefined) throw new Error("Expected write implementation");
+    expect(beforeMutation).toHaveBeenCalledOnce();
+    return write(url, init);
+  });
+  const input: JiraChatMutationExecution = {
+    ...f.input,
+    beforeMutation,
+    execute: async (http) => {
+      const read = {
+        method: "GET",
+        url: "https://jira.example.invalid/rest/api/2/issue/createmeta",
+        timeoutMs: 1000,
+        maxBodyBytes: 1000,
+      } as const;
+      await http(read);
+      expect(beforeMutation).not.toHaveBeenCalled();
+      const outcome = await f.input.execute(http);
+      await http(read);
+      return outcome;
+    },
+  };
+  expect(await executeJiraChatMutation(input)).toMatchObject({ data: { outcome: "succeeded" } });
+  expect(await executeJiraChatMutation(input)).toMatchObject({ data: { replayed: true } });
+  expect(beforeMutation).toHaveBeenCalledOnce();
+  expect(f.effects).toHaveBeenCalledTimes(3);
+});
+it("rejects an asynchronous mutation claim before any credential-bearing dispatch", async () => {
+  const f = fixture();
+  const beforeMutation = (() => Promise.resolve(true)) as unknown as () => boolean;
+  expect(await executeJiraChatMutation({ ...f.input, beforeMutation })).toMatchObject({
+    data: { outcome: "rejected" },
+  });
+  expect(f.effects).not.toHaveBeenCalled();
+});
+it("retains acknowledged success uncertainty when authority is lost before confirmation", async () => {
+  const f = fixture();
+  let current = true;
+  const input: JiraChatMutationExecution = {
+    ...f.input,
+    beforeEffect: () => current,
+    httpPortFactory: (lifecycle) =>
+      f.input.httpPortFactory({
+        ...lifecycle,
+        onResponse: (request, status) => {
+          const observed = lifecycle.onResponse?.(request, status);
+          expect(f.input.journal?.find(f.input.intent.invocationId)).toMatchObject({
+            phase: "acknowledged",
+            httpStatus: 201,
+          });
+          current = false;
+          return observed === true;
+        },
+      }),
+    execute: async (http) => {
+      const result = await f.input.execute(http);
+      await http({
+        method: "GET",
+        url: "https://jira.example.invalid/rest/api/2/issue/SYN-1",
+        timeoutMs: 1000,
+        maxBodyBytes: 1000,
+      });
+      return result;
+    },
+  };
+  expect(await executeJiraChatMutation(input)).toMatchObject({
+    data: { outcome: "succeeded-unconfirmed" },
+  });
+  expect(f.effects).toHaveBeenCalledOnce();
+  expect(f.input.journal?.find(f.input.intent.invocationId)?.outcome).toBe("succeeded-unconfirmed");
 });
 it("does not confirm creation without its required returned identities", async () => {
   const f = fixture();

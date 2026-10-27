@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
-import type { JiraManagedConnection } from "@oscharko-dev/keiko-connectors";
+import type {
+  JiraManagedConnection,
+  JiraManagedMutationExecutor,
+} from "@oscharko-dev/keiko-connectors";
+import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type { UiHandlerDeps } from "../deps.js";
 import type { CatalogHandlerContext } from "../tool-catalog/catalogToolPorts.js";
 import type { CatalogLifecycleLogPort } from "../tool-catalog/catalogToolLifecycle.js";
@@ -11,14 +15,62 @@ import {
 import { createJiraProviderForCatalog } from "./jiraManagedProvider.js";
 import { resolveCurrentJiraChatAuthority } from "./jiraChatAuthority.js";
 import {
-  jiraChatReadCatalogRoutes,
+  jiraChatCatalogRoutes,
+  JIRA_CHAT_TOOLS,
   type JiraChatCatalogConsumer,
 } from "./jiraChatCatalogConsumer.js";
+import { executeJiraChatMutation } from "./jiraChatMutation.js";
+import { createJiraChatMutationIntent } from "./jiraChatMutationIntent.js";
 
 type ChatCatalog = ManagedProviderCatalog<JiraChatCatalogConsumer>;
+type MutationExecutor = JiraManagedMutationExecutor<CatalogHandlerContext<JiraChatCatalogConsumer>>;
 export interface JiraChatCatalogRuntime {
   readonly get: () => Promise<ChatCatalog>;
   readonly close: () => Promise<void>;
+}
+
+function mutationExecutor(deps: UiHandlerDeps): MutationExecutor {
+  return (operation, args, context, execute) => {
+    const current = resolveCurrentJiraChatAuthority(
+      deps,
+      context.chatId,
+      context.authorityReference,
+      new Date().toISOString(),
+      context.correlationId,
+    );
+    const credentials = deps.atlassianConnectorCredentials;
+    const write = context.mutationGuard.write;
+    const message =
+      context.userMessageId === undefined
+        ? undefined
+        : deps.store.findMessageById(context.userMessageId);
+    requireDispatch(
+      current.ok && credentials !== undefined && write !== undefined && message !== undefined,
+      "denied",
+      "authority-invalid",
+    );
+    requireDispatch(
+      write.action.tool === operation &&
+        write.action.argumentsDigest === sha256Hex(canonicalise(args)),
+      "invalid",
+      "invalid-arguments",
+    );
+    return executeJiraChatMutation({
+      journal: deps.store.chatToolMutations,
+      intent: createJiraChatMutationIntent(
+        message,
+        current.envelope.subject,
+        context.authorityReference,
+        write.action,
+        context.correlationId,
+      ),
+      httpPortFactory: (lifecycle) =>
+        credentials.httpBodyPortFactory(current.credential, context.correlationId, lifecycle),
+      beforeEffect: context.beforeEffect,
+      beforeMutation: write.beforeMutation,
+      execute,
+    });
+  };
 }
 
 function connection(
@@ -58,8 +110,14 @@ export function createJiraChatCatalogRuntime(
     get: async (): Promise<ChatCatalog> => {
       requireOpen();
       catalog ??= createManagedProviderCatalog<JiraChatCatalogConsumer>({
-        providers: [createJiraProviderForCatalog((context) => connection(deps, context))],
-        routes: jiraChatReadCatalogRoutes(),
+        providers: [
+          createJiraProviderForCatalog(
+            (context) => connection(deps, context),
+            JIRA_CHAT_TOOLS,
+            mutationExecutor(deps),
+          ),
+        ],
+        routes: jiraChatCatalogRoutes(),
         profile: { id: "jira-chat", version: 1 },
         log,
         correlationId: randomUUID(),

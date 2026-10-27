@@ -1,76 +1,34 @@
+import type { ChatToolReadConsentDecision } from "@oscharko-dev/keiko-contracts";
+import {
+  getChatConsent,
+  readCurrentChatDecision,
+  chatConsentFailure,
+  type ChatConsentRouteOwner,
+} from "./chatConsentRouteOwner.js";
 import { validateChatToolReadConsentDecision } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
-import { isSafeAtlassianIdentifier } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type { UiHandlerDeps } from "../deps.js";
-import { readJsonObject } from "../files.js";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
-import { errorBody } from "../route-error.js";
-import { correlationIdOrUnknown } from "../correlation.js";
-import { recordChatAuthorityResult } from "../editor/chatAuthorityActivity.js";
 import { isCurrentJiraChatReadGrant } from "./jiraChatAuthority.js";
 import { projectChatReadGrant, type ChatReadGrantEntry } from "./chatReadGrantState.js";
-import type { AtlassianActionApprovalRegistry } from "./actionApprovals.js";
 
-function currentConsent(
-  ctx: RouteContext,
-  deps: UiHandlerDeps,
-  nowIso: string,
-): { entry: ChatReadGrantEntry; registry: AtlassianActionApprovalRegistry } | undefined {
-  const id = ctx.params.approvalId;
-  const registry = deps.atlassianActionApprovalRegistry;
-  if (registry === undefined || !isSafeAtlassianIdentifier(id)) return undefined;
-  const entry = registry.getChatReadGrant(id, ctx.correlationId);
-  if (entry === undefined) return undefined;
-  if (!isCurrentJiraChatReadGrant(deps, entry, nowIso, correlationIdOrUnknown(ctx.correlationId)))
-    return undefined;
-  return { entry, registry };
-}
-
-const CONSENT_ERROR_CODES = {
-  400: "VALIDATION_FAILED",
-  404: "CHAT_READ_CONSENT_UNAVAILABLE",
-  409: "CHAT_READ_CONSENT_UNAVAILABLE",
-  413: "PAYLOAD_TOO_LARGE",
-} as const;
-
-function consentFailure(ctx: RouteContext, status: keyof typeof CONSENT_ERROR_CODES): RouteResult {
-  recordChatAuthorityResult(
-    "read-grant",
-    { ok: false, reason: "invalid" },
-    { grantId: ctx.params.approvalId },
-    ctx.correlationId,
-  );
-  const code = CONSENT_ERROR_CODES[status];
-  return {
-    status,
-    body: errorBody(
-      code,
-      "The Chat read consent is not available for this request.",
-      ctx.correlationId,
-    ),
-  };
-}
-
-export function handleGetChatReadConsent(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
-  const consent = currentConsent(ctx, deps, new Date().toISOString());
-  if (consent === undefined) return consentFailure(ctx, 404);
-  return { status: 200, body: { approval: projectChatReadGrant(consent.entry.grant) } };
-}
+const OWNER: ChatConsentRouteOwner<ChatReadGrantEntry, ChatToolReadConsentDecision> = {
+  phase: "read-grant",
+  project: (entry) => projectChatReadGrant(entry.grant),
+  retained: (registry, id, correlation) => registry.getChatReadGrant(id, correlation),
+  isCurrent: isCurrentJiraChatReadGrant,
+  validate: validateChatToolReadConsentDecision,
+};
+export const handleGetChatReadConsent = getChatConsent(OWNER);
 
 /** Human-only consent endpoint. It changes the existing grant record and never executes a tool. */
 export async function handleDecideChatReadConsent(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  const body = await readJsonObject(ctx.req, 4096);
-  if (body.status === 413) return consentFailure(ctx, 413);
-  const parsed = validateChatToolReadConsentDecision(body);
-  if (!parsed.ok) return consentFailure(ctx, 400);
-  // Re-resolve after the asynchronous body read: rotation or a binding change may have intervened.
-  const nowIso = new Date().toISOString();
-  const consent = currentConsent(ctx, deps, nowIso);
-  if (consent === undefined) return consentFailure(ctx, 404);
-  const { entry, registry } = consent;
+  const parsed = await readCurrentChatDecision(ctx, deps, OWNER);
+  if (!parsed.ok) return parsed.response;
+  const { entry, registry, nowIso } = parsed;
   const proof = sha256Hex(
     canonicalise({
       kind: "jira-chat-read-consent",
@@ -96,7 +54,7 @@ export async function handleDecideChatReadConsent(
           entry.authority,
           ctx.correlationId,
         );
-  if (!result.ok) return consentFailure(ctx, 409);
+  if (!result.ok) return chatConsentFailure(ctx, OWNER.phase, 409);
   return { status: 200, body: { approval: projectChatReadGrant(result.grant) } };
 }
 

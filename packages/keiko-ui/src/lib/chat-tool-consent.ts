@@ -12,9 +12,33 @@ async function readConsent(
     (entry) =>
       entry.role === "user" && entry.chatId === chatId && entry.canonicalTurnRef === reference,
   );
-  const grant = message?.toolTranscript?.readGrant;
-  if (message === undefined || grant === undefined || grant.chatId !== chatId) return undefined;
-  return { message, identity: `${message.id}:${grant.grantId}:${grant.state}` };
+  const transcript = message?.toolTranscript;
+  if (message === undefined || transcript === undefined) return undefined;
+  if (transcript.readGrant !== undefined && transcript.readGrant.chatId !== chatId)
+    return undefined;
+  if (
+    transcript.exchanges.some(
+      (entry) => entry.approval !== undefined && entry.approval.chatId !== chatId,
+    )
+  )
+    return undefined;
+  return {
+    message,
+    identity: JSON.stringify([
+      message.id,
+      message.turnState,
+      transcript.readGrant?.grantId,
+      transcript.readGrant?.state,
+      transcript.exchanges.map((entry) => [
+        entry.call.id,
+        entry.approval?.approvalId,
+        entry.approval?.state,
+        entry.mutationOutcome,
+        entry.result?.status,
+        entry.result?.reason,
+      ]),
+    ]),
+  };
 }
 /** Only observes the accepted canonical row; a GET never grants consent or resumes execution. */
 export function watchChatToolConsent(

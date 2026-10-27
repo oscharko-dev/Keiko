@@ -2189,7 +2189,7 @@ describe("public Live Pod projection", () => {
       verificationRevision: 0,
       verificationInProgress: false,
       verificationStatus: "unverified",
-      capabilities: ["live-read"],
+      capabilities: ["live-read", "live-write"],
     });
     expect(JSON.stringify(created)).not.toMatch(
       /ownerDigest|creationRequestId|credentialOperation/,

@@ -27,6 +27,9 @@ import {
   usableGatewayMessages,
 } from "./chat-handlers.js";
 import type { ChatMessage } from "./store/index.js";
+import type { JiraMutationOutcome } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { decodeChatToolTranscript } from "./store/chatToolTranscript.js";
+import { createToolRef } from "@oscharko-dev/keiko-tool-catalog";
 
 const NON_PATTERN_SECRET = "customer-secret-ABC-1234567890";
 const CURRENT_INSTRUCTION = "latest question";
@@ -513,6 +516,60 @@ describe("structured Chat tool transcript selection", () => {
       },
     };
   }
+  function mutationTurn(outcome: JiraMutationOutcome): ChatMessage {
+    const turn = toolTurn(1);
+    const exchange = turn.toolTranscript?.exchanges[0];
+    if (exchange?.result === undefined) throw new Error("Missing fixture exchange");
+    const toolTranscript = decodeChatToolTranscript(
+      JSON.stringify({
+        schemaVersion: 1,
+        exchanges: [
+          {
+            call: { id: exchange.call.id, name: "jira_create", arguments: { projectId: "10000" } },
+            result: {
+              ...exchange.result,
+              toolRef: createToolRef("keiko.jira.create", 3),
+              projectionDigest: "a".repeat(64),
+              status: "cancelled",
+              reason: "parent-cancelled",
+              effectStarted: true,
+            },
+            mutationOutcome: outcome,
+          },
+        ],
+      }),
+    );
+    return { ...turn, toolTranscript };
+  }
+  it.each(["succeeded", "succeeded-unconfirmed", "unknown"] as const)(
+    "retains a reloaded %s mutation observation despite cancelled execution",
+    (mutationOutcome) => {
+      const turn = mutationTurn(mutationOutcome);
+      const messages = conversationForGateway([turn]);
+      const call = messages.find((message) => message.toolCalls !== undefined);
+      const result = messages.find((message) => message.toolCallId === "call-1");
+      expect(call?.toolCalls).toEqual([turn.toolTranscript?.exchanges[0]?.call]);
+      expect(JSON.parse(result?.content ?? "null")).toEqual({
+        result: turn.toolTranscript?.exchanges[0]?.result,
+        mutationOutcome,
+      });
+    },
+  );
+  it("retains the remote outcome and unchanged pair when compacting an older history", () => {
+    const turn = mutationTurn("unknown");
+    const result = conversationForGatewayWithCompaction(
+      [msg("user", "older context ".repeat(20_000), 0), turn, msg("user", "continue", 2)],
+      { effectiveInputBudget: 2000 },
+    );
+    expect(result.compaction).toBeDefined();
+    expect(result.messages.filter((message) => message.toolCalls !== undefined)).toHaveLength(1);
+    const responses = result.messages.filter((message) => message.toolCallId === "call-1");
+    expect(responses).toHaveLength(1);
+    expect(JSON.parse(responses[0]?.content ?? "null")).toEqual({
+      result: turn.toolTranscript?.exchanges[0]?.result,
+      mutationOutcome: "unknown",
+    });
+  });
   it("retains actual assistant/tool roles with matching IDs when no compaction is needed", () => {
     const outcome = conversationForGatewayWithCompaction([
       toolTurn(1),

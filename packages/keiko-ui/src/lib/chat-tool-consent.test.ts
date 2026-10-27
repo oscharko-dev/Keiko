@@ -5,7 +5,7 @@ import { watchChatToolConsent } from "./chat-tool-consent";
 const chat = {
   id: "chat-1",
   jiraPodBinding: {
-    podId: "pod-1",
+    podId: "11111111-1111-4111-8111-111111111111",
     bindingGeneration: 1,
     authenticationGeneration: 1,
     connectedAtMs: 1000,
@@ -31,7 +31,7 @@ const message: ChatMessage = {
       kind: "jira-chat-read",
       grantId: "grant-1",
       chatId: "chat-1",
-      podId: "pod-1",
+      podId: "11111111-1111-4111-8111-111111111111",
       bindingGeneration: 1,
       authenticationGeneration: 1,
       state: "pending",
@@ -93,4 +93,68 @@ describe("buffered Chat consent observation", () => {
     expect(publish).not.toHaveBeenCalled();
     stop();
   });
+});
+
+it("publishes write approvals and their outcomes even when a read grant is unchanged", async () => {
+  vi.useFakeTimers();
+  const approval = {
+    kind: "jira-chat-write",
+    approvalId: "approval-1",
+    chatId: "chat-1",
+    podId: "11111111-1111-4111-8111-111111111111",
+    bindingGeneration: 1,
+    authenticationGeneration: 1,
+    invocationId: "action-1",
+    operation: "jira.edit",
+    actionDigest: "a".repeat(64),
+    requestedAt: 1000,
+    expiresAt: 2000,
+    state: "pending",
+  } as const;
+  const call = {
+    id: "call-1",
+    name: "jira_edit",
+    arguments: { issueKey: "LAB-1", fields: { summary: "Reviewed change" } },
+  };
+  const pending: ChatMessage = {
+    ...message,
+    toolTranscript: {
+      ...message.toolTranscript,
+      schemaVersion: 1,
+      exchanges: [{ call, approval }],
+    },
+  };
+  const claimed: ChatMessage = {
+    ...message,
+    toolTranscript: {
+      ...pending.toolTranscript,
+      schemaVersion: 1,
+      exchanges: [{ call, approval: { ...approval, state: "claimed" } }],
+    },
+  };
+  const succeeded: ChatMessage = {
+    ...message,
+    toolTranscript: {
+      ...claimed.toolTranscript,
+      schemaVersion: 1,
+      exchanges: [
+        { call, approval: { ...approval, state: "claimed" }, mutationOutcome: "succeeded" },
+      ],
+    },
+  };
+  vi.spyOn(api, "fetchChatMessages")
+    .mockResolvedValueOnce({ messages: [pending] })
+    .mockResolvedValueOnce({ messages: [claimed] })
+    .mockResolvedValue({ messages: [succeeded] });
+  const publish = vi.fn();
+  const stop = watchChatToolConsent(
+    chat,
+    "/repo",
+    () => Promise.resolve("scoped-digest"),
+    new AbortController().signal,
+    publish,
+  );
+  await vi.advanceTimersByTimeAsync(3500);
+  expect(publish.mock.calls.map(([entry]) => entry)).toEqual([pending, claimed, succeeded]);
+  stop();
 });

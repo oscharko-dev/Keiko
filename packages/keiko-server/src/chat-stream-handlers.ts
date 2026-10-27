@@ -722,25 +722,42 @@ function writeStreamFailure(
   writeTerminalFrame(ctx, sseMessage(event));
 }
 
+function toolTranscriptEvents(message: ChatMessage): readonly DesktopChatStreamEvent[] {
+  const transcript = message.toolTranscript;
+  const events: DesktopChatStreamEvent[] = [];
+  if (transcript?.readGrant !== undefined)
+    events.push({
+      event: "tool-read-consent",
+      data: { messageId: message.id, grant: transcript.readGrant },
+    });
+  for (const exchange of transcript?.exchanges ?? [])
+    if (exchange.approval !== undefined)
+      events.push({
+        event: "tool-write-approval",
+        data: { messageId: message.id, call: exchange.call, approval: exchange.approval },
+      });
+  return events;
+}
+
 function registerReadConsentStream(
   ctx: RouteContext,
   turn: AdmittedDesktopChatStream,
   controller: AbortController,
 ): void {
-  let last: string | undefined;
+  const sent = new Set<string>();
   turn.toolTurn?.onTranscript((message): void => {
-    const grant = message.toolTranscript?.readGrant;
-    if (grant === undefined || controller.signal.aborted) return;
-    const identity = `${grant.grantId}:${grant.state}`;
-    if (identity === last) return;
-    last = identity;
-    writeOrDestroy(
-      ctx.res,
-      sseMessage({ event: "tool-read-consent", data: { messageId: message.id, grant } }),
-      controller,
-      undefined,
-      ctx.correlationId,
-    );
+    if (controller.signal.aborted) return;
+    for (const event of toolTranscriptEvents(message)) {
+      const identity =
+        event.event === "tool-read-consent"
+          ? `read:${event.data.grant.grantId}:${event.data.grant.state}`
+          : event.event === "tool-write-approval"
+            ? `write:${event.data.approval.approvalId}:${event.data.approval.state}`
+            : undefined;
+      if (identity === undefined || sent.has(identity)) continue;
+      sent.add(identity);
+      writeOrDestroy(ctx.res, sseMessage(event), controller, undefined, ctx.correlationId);
+    }
   });
 }
 

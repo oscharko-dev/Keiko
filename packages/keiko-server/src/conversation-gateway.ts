@@ -2,6 +2,7 @@ import { CONVERSATION_SYSTEM_PROMPT } from "./conversation-prompt.js";
 import { isLegacyEmptyAssistantPlaceholder } from "./assistant-response.js";
 import type { ChatMessage } from "./store/index.js";
 import type { ChatMessageContentPart } from "@oscharko-dev/keiko-contracts";
+import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 
 export type GatewayConversationMessage = import("@oscharko-dev/keiko-contracts").ChatMessage;
 export interface GatewayConversationTurn {
@@ -20,25 +21,36 @@ export function gatewayMessagesForTurn(
     : [...turn.verbatim];
 }
 
+/** Historical observations never redispatch a call. Keep its remote outcome separate from the
+ * catalog settlement, since cancellation cannot roll back an already acknowledged mutation. */
+export function gatewayMessagesForToolExchange(
+  exchange: ChatToolExchange,
+): GatewayConversationMessage[] {
+  const result = exchange.result ?? {
+    status: "unavailable",
+    reason: "observation-unavailable",
+    effect: "unknown",
+  };
+  return [
+    { role: "assistant", content: "", toolCalls: [exchange.call] },
+    {
+      role: "tool",
+      toolCallId: exchange.call.id,
+      content: JSON.stringify(
+        exchange.mutationOutcome === undefined
+          ? result
+          : { result, mutationOutcome: exchange.mutationOutcome },
+      ),
+    },
+  ];
+}
+
 function transcriptMessages(message: ChatMessage): GatewayConversationMessage[] | undefined {
   const exchanges = message.toolTranscript?.exchanges;
   if (exchanges === undefined || exchanges.length === 0) return undefined;
   return [
     { role: message.role, content: message.content },
-    ...exchanges.flatMap((exchange): GatewayConversationMessage[] => [
-      { role: "assistant", content: "", toolCalls: [exchange.call] },
-      {
-        role: "tool",
-        toolCallId: exchange.call.id,
-        content: JSON.stringify(
-          exchange.result ?? {
-            status: "unavailable",
-            reason: "observation-unavailable",
-            effect: "unknown",
-          },
-        ),
-      },
-    ]),
+    ...exchanges.flatMap(gatewayMessagesForToolExchange),
   ];
 }
 

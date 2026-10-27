@@ -173,7 +173,10 @@ function rowToMessage(row: MessageRow): ChatMessage {
     shortResult: row.short_result ?? undefined,
     taskType: row.task_type ?? undefined,
     groundedAnswer,
-    toolTranscript: decodeChatToolTranscript(row.tool_transcript_json),
+    toolTranscript: decodeChatToolTranscript(row.tool_transcript_json, {
+      messageId: row.id,
+      chatId: row.chat_id,
+    }),
   };
 }
 

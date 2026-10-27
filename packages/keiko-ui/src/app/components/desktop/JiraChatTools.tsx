@@ -1,14 +1,20 @@
 "use client";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
+import { useJiraDecision } from "./useJiraDecision";
+import { JiraDecisionActions } from "./JiraDecisionActions";
+import { JiraWriteApproval } from "./JiraWriteApproval";
 import type { ChatToolReadGrantView } from "@oscharko-dev/keiko-contracts";
-import type { ChatToolExchange, ChatToolTranscript } from "@oscharko-dev/keiko-contracts/bff-wire";
-import { JIRA_MANAGED_READ_TOOLS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import type {
+  ChatToolExchange,
+  ChatToolTranscript,
+  ChatTurnState,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   useOptionalWidgetTranslate as useTranslate,
   type WidgetMessageKey,
 } from "@/lib/optional-widget-i18n";
 import { decideJiraChatReadConsent } from "@/lib/atlassian-connectors-api";
-import { actionTypeLabelKey } from "./widgets/connectors/connector-labels";
+import { jiraToolLabel, jiraToolState, jiraToolOutcomeHelp } from "./jira-tool-presentation";
 import styles from "./JiraChatTools.module.css";
 const STATE_KEYS: Readonly<Record<ChatToolReadGrantView["state"], WidgetMessageKey>> = {
   pending: "chat.jira.pending",
@@ -18,49 +24,6 @@ const STATE_KEYS: Readonly<Record<ChatToolReadGrantView["state"], WidgetMessageK
   revoked: "chat.jira.revoked",
 };
 
-function useConsent(
-  grant: ChatToolReadGrantView,
-  decide: typeof decideJiraChatReadConsent,
-): {
-  view: ChatToolReadGrantView;
-  busy: boolean;
-  failed: boolean;
-  submit: (decision: "approve" | "reject") => Promise<void>;
-} {
-  const [resolved, setResolved] = useState<ChatToolReadGrantView>();
-  const [busy, setBusy] = useState(false);
-  const [failed, setFailed] = useState(false);
-  const locked = useRef(false);
-  const [expired, setExpired] = useState(() => Date.now() >= grant.expiresAt);
-  useEffect(() => {
-    const timer = setTimeout(() => setExpired(true), Math.max(0, grant.expiresAt - Date.now()));
-    return (): void => {
-      clearTimeout(timer);
-    };
-  }, [grant.expiresAt]);
-  const current =
-    grant.state === "pending" && resolved?.grantId === grant.grantId ? resolved : grant;
-  const view =
-    expired && (current.state === "pending" || current.state === "granted")
-      ? { ...current, state: "expired" as const }
-      : current;
-  const submit = async (decision: "approve" | "reject"): Promise<void> => {
-    if (locked.current || view.state !== "pending") return;
-    locked.current = true;
-    setBusy(true);
-    setFailed(false);
-    try {
-      setResolved(await decide(grant, decision));
-    } catch {
-      setFailed(true);
-    } finally {
-      locked.current = false;
-      setBusy(false);
-    }
-  };
-  return { view, busy, failed, submit };
-}
-
 export function JiraReadConsent({
   grant,
   decide = decideJiraChatReadConsent,
@@ -69,7 +32,11 @@ export function JiraReadConsent({
   readonly decide?: typeof decideJiraChatReadConsent;
 }): ReactNode {
   const t = useTranslate();
-  const { view, busy, failed, submit } = useConsent(grant, decide);
+  const { view, busy, failed, submit } = useJiraDecision({
+    key: grant.grantId,
+    current: grant,
+    decide: (decision) => decide(grant, decision),
+  });
   return (
     <section className={styles.card} aria-label={t("chat.jira.title")}>
       <strong>{t("chat.jira.title")}</strong>
@@ -77,47 +44,31 @@ export function JiraReadConsent({
       <output aria-live="polite">{t(busy ? "chat.jira.working" : STATE_KEYS[view.state])}</output>
       {failed ? <p role="alert">{t("chat.jira.failed")}</p> : null}
       {view.state === "pending" ? (
-        <div className={styles.actions}>
-          <button
-            type="button"
-            className="lk-btn lk-btn-primary"
-            disabled={busy}
-            onClick={() => {
-              void submit("approve");
-            }}
-          >
-            {t("chat.jira.approve")}
-          </button>
-          <button
-            type="button"
-            className="lk-btn"
-            disabled={busy}
-            onClick={() => {
-              void submit("reject");
-            }}
-          >
-            {t("chat.jira.reject")}
-          </button>
-        </div>
+        <JiraDecisionActions
+          disabled={busy}
+          approve={t("chat.jira.approve")}
+          reject={t("chat.jira.reject")}
+          submit={submit}
+        />
       ) : null}
     </section>
   );
 }
-function JiraToolExchange({ exchange }: { readonly exchange: ChatToolExchange }): ReactNode {
+function JiraToolExchange({
+  exchange,
+  turnState,
+}: {
+  readonly exchange: ChatToolExchange;
+  readonly turnState: ChatTurnState | undefined;
+}): ReactNode {
   const t = useTranslate();
-  const tool = JIRA_MANAGED_READ_TOOLS.find(
-    (name) => name.replace(/[.-]/gu, "_") === exchange.call.name,
-  );
-  const state =
-    exchange.result === undefined
-      ? "chat.jira.running"
-      : exchange.result.status === "completed"
-        ? "chat.jira.complete"
-        : "chat.jira.unavailable";
+  const state = jiraToolState(exchange, turnState);
+  const help = jiraToolOutcomeHelp(state);
   return (
     <section className={styles.card} aria-label={t("chat.jira.tool")}>
-      <strong>{t(tool === undefined ? "chat.jira.tool" : actionTypeLabelKey(tool))}</strong>
+      <strong>{t(jiraToolLabel(exchange))}</strong>
       <output>{t(state)}</output>
+      {help === undefined ? null : <p>{t(help)}</p>}
       {exchange.result?.data == null ? null : (
         <details>
           <summary>{t("chat.jira.details")}</summary>
@@ -129,8 +80,10 @@ function JiraToolExchange({ exchange }: { readonly exchange: ChatToolExchange })
 }
 export function JiraChatTools({
   transcript,
+  turnState,
 }: {
   readonly transcript: ChatToolTranscript | undefined;
+  readonly turnState?: ChatTurnState | undefined;
 }): ReactNode {
   if (transcript === undefined) return null;
   return (
@@ -139,7 +92,17 @@ export function JiraChatTools({
         <JiraReadConsent key={transcript.readGrant.grantId} grant={transcript.readGrant} />
       )}
       {transcript.exchanges.map((exchange) => (
-        <JiraToolExchange key={exchange.call.id} exchange={exchange} />
+        <div key={exchange.call.id}>
+          {exchange.approval === undefined ? null : (
+            <JiraWriteApproval
+              key={exchange.approval.approvalId}
+              approval={exchange.approval}
+              call={exchange.call}
+              turnState={turnState}
+            />
+          )}
+          <JiraToolExchange exchange={exchange} turnState={turnState} />
+        </div>
       ))}
     </div>
   );

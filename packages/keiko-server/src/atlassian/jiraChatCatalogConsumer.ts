@@ -1,11 +1,15 @@
 import { requireDispatch } from "../tool-catalog/catalogToolErrors.js";
 import type {
   ChatToolReadGrantView,
+  ChatToolWriteApprovalView,
   EditorAgentGovernedAuthorityReference,
 } from "@oscharko-dev/keiko-contracts";
 import {
   JIRA_MANAGED_READ_TOOLS,
+  JIRA_MUTATION_OPERATIONS,
+  JIRA_MANAGED_ACTION_TYPES,
   type JiraManagedReadToolName,
+  type JiraMutationOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type {
   ToolAuthorityAvailability,
@@ -36,27 +40,41 @@ import {
   resolveCurrentJiraChatAuthority,
   type JiraChatAuthorityDeps,
 } from "./jiraChatAuthority.js";
+import {
+  claimJiraChatWrite,
+  jiraChatWritePermission,
+  requestCatalogWriteApproval,
+} from "./jiraChatCatalogWrite.js";
+import type { ChatWriteApprovalClaim } from "./chatWriteApprovalState.js";
 
 /** Private ordinary-Chat scope. Neither a workspace nor a Coding session is required. */
 export interface JiraChatCatalogContext extends ToolConsumerContext {
   readonly chatId: string;
   readonly authorityReference: EditorAgentGovernedAuthorityReference;
+  readonly userMessageId?: string;
 }
 export interface JiraChatCatalogAction extends ToolConsumerActionIdentity {
-  readonly tool: JiraManagedReadToolName;
+  readonly tool: JiraManagedReadToolName | JiraMutationOperation;
   readonly argumentsDigest: string;
 }
 export interface JiraChatCatalogConsumer extends CatalogConsumer {
   readonly context: JiraChatCatalogContext;
   readonly action: JiraChatCatalogAction;
-  readonly guard: ToolEffectGuard;
+  readonly guard: ToolEffectGuard & {
+    readonly write?: {
+      readonly action: JiraChatCatalogAction;
+      readonly beforeMutation: () => boolean;
+    };
+  };
 }
 const READ_TOOLS: ReadonlySet<string> = new Set(JIRA_MANAGED_READ_TOOLS);
+export const JIRA_CHAT_TOOLS = [...JIRA_MANAGED_READ_TOOLS, ...JIRA_MUTATION_OPERATIONS];
+const CHAT_TOOLS = new Set(JIRA_CHAT_TOOLS);
 
 function captureAction(value: CatalogJsonValue): JiraChatCatalogAction | undefined {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
   const action = value as CatalogJsonObject;
-  const tool = JIRA_MANAGED_READ_TOOLS.find((name) => name === action.tool);
+  const tool = JIRA_CHAT_TOOLS.find((name) => name === action.tool);
   if (
     Object.keys(action).sort().join() !== "actionId,argumentsDigest,idempotencyKey,tool" ||
     tool === undefined ||
@@ -92,7 +110,13 @@ export const jiraChatCatalogConsumerPort: CatalogConsumerPort<JiraChatCatalogCon
 
 /** Use with the application-owned managed catalog; this creates no MCP host or transport. */
 export function jiraChatReadCatalogRoutes(): readonly ManagedCatalogRoute<JiraChatCatalogConsumer>[] {
-  return JIRA_MANAGED_READ_TOOLS.map((tool) => ({
+  return jiraChatCatalogRoutes(JIRA_MANAGED_READ_TOOLS);
+}
+
+export function jiraChatCatalogRoutes(
+  tools: readonly JiraChatCatalogAction["tool"][] = JIRA_CHAT_TOOLS,
+): readonly ManagedCatalogRoute<JiraChatCatalogConsumer>[] {
+  return tools.map((tool) => ({
     name: tool,
     alias: tool.replace(/[.-]/gu, "_"),
     catalogAction: tool,
@@ -107,7 +131,7 @@ export function jiraChatReadCatalogRoutes(): readonly ManagedCatalogRoute<JiraCh
       argumentsDigest: sha256Hex(canonicalise(args)),
     }),
     resultFor: (data, context): CatalogHandlerResult => {
-      requireDispatch(context.beforeEffect(), "denied", "effect-denied");
+      if (READ_TOOLS.has(tool)) requireDispatch(context.beforeEffect(), "denied", "effect-denied");
       return {
         data,
         page: {
@@ -121,7 +145,7 @@ export function jiraChatReadCatalogRoutes(): readonly ManagedCatalogRoute<JiraCh
   }));
 }
 
-interface AdmissionOptions {
+export interface JiraChatAdmissionOptions {
   readonly deps: JiraChatAuthorityDeps & Pick<UiHandlerDeps, "atlassianActionApprovalRegistry">;
   readonly context: () => JiraChatCatalogContext;
   readonly now: () => number;
@@ -130,6 +154,11 @@ interface AdmissionOptions {
     grant: ChatToolReadGrantView,
     signal: AbortSignal,
   ) => Promise<void>;
+  readonly requestWriteConsent?: (
+    approval: ChatToolWriteApprovalView,
+    signal: AbortSignal,
+  ) => Promise<void>;
+  readonly reviewableWrite?: (action: JiraChatCatalogAction) => boolean;
 }
 type AdmissionPorts = Pick<
   CatalogToolBinderInput<JiraChatCatalogConsumer>,
@@ -140,7 +169,7 @@ const REVIEW = { ok: false, reason: "approval-required" } as const;
 const ALLOWED = { ok: true } as const;
 
 function readPermission(
-  options: AdmissionOptions,
+  options: JiraChatAdmissionOptions,
   action: JiraChatCatalogAction,
 ): ToolAuthorityAvailability {
   const context = options.context();
@@ -159,7 +188,10 @@ function readPermission(
     context.authorityExpiresAt !== current.envelope.expiresAt
   )
     return DENIED;
-  const policy = decideAtlassianEnvelopeAction(action.tool, current.envelope);
+  const policy = decideAtlassianEnvelopeAction(
+    JIRA_MANAGED_ACTION_TYPES[action.tool],
+    current.envelope,
+  );
   if (policy.kind !== "allowed" && policy.kind !== "review-required") return DENIED;
   const entry = registry.findChatReadGrantForRequest(
     current.envelope.subject,
@@ -170,7 +202,7 @@ function readPermission(
 }
 
 function grantPermission(
-  options: AdmissionOptions,
+  options: JiraChatAdmissionOptions,
   entry: ChatReadGrantEntry | undefined,
   nowIso: string,
 ): ToolAuthorityAvailability {
@@ -184,19 +216,24 @@ function grantPermission(
 }
 
 function preview(
-  options: AdmissionOptions,
+  options: JiraChatAdmissionOptions,
   capability: string | undefined,
   action: JiraChatCatalogAction,
+  claim?: ChatWriteApprovalClaim,
 ): ToolAuthorityAvailability {
   const context = options.context();
   const valid =
     capability === context.authority &&
     capability === context.authorityReference.envelopeDigest &&
-    READ_TOOLS.has(action.tool) &&
+    CHAT_TOOLS.has(action.tool) &&
     !context.signal.aborted;
-  const outcome = valid ? readPermission(options, action) : DENIED;
+  const read = valid ? readPermission(options, action) : DENIED;
+  const outcome =
+    read.ok && !READ_TOOLS.has(action.tool)
+      ? jiraChatWritePermission(options, action, claim)
+      : read;
   recordChatAuthorityResult(
-    "catalog-read",
+    READ_TOOLS.has(action.tool) ? "catalog-read" : "catalog-write",
     outcome.ok
       ? { ok: true }
       : {
@@ -209,14 +246,25 @@ function preview(
   return outcome;
 }
 
+function reviewableAction(
+  options: JiraChatAdmissionOptions,
+  action: JiraChatCatalogAction,
+): boolean {
+  return READ_TOOLS.has(action.tool) || options.reviewableWrite?.(action) === true;
+}
+
 async function requestConsent(
-  options: AdmissionOptions,
+  options: JiraChatAdmissionOptions,
   action: JiraChatCatalogAction,
   context: JiraChatCatalogContext,
 ): Promise<JiraChatCatalogAction | undefined> {
   const before = preview(options, context.authority, action);
   if (before.ok) return action;
-  if (before.reason !== "approval-required" || options.requestReadConsent === undefined)
+  if (
+    before.reason !== "approval-required" ||
+    options.requestReadConsent === undefined ||
+    !reviewableAction(options, action)
+  )
     return undefined;
   const request = requestJiraChatReadGrant(
     options.deps,
@@ -228,16 +276,19 @@ async function requestConsent(
   if (request.kind === "denied") return undefined;
   if (request.kind === "review-required")
     await options.requestReadConsent(request.grant, context.signal);
+  if (!readPermission(options, action).ok) return undefined;
+  if (!READ_TOOLS.has(action.tool)) await requestCatalogWriteApproval(options, action);
   return preview(options, context.authority, action).ok ? action : undefined;
 }
 
 /** Shared binder owns schema admission, budget reservation, cancellation and single settlement. */
-export function createJiraChatCatalogAdmission(options: AdmissionOptions): AdmissionPorts {
+export function createJiraChatCatalogAdmission(options: JiraChatAdmissionOptions): AdmissionPorts {
   return {
     authorityPort: {
       preview: (capability, action) => preview(options, capability, action),
       admit: (capability, action): ReturnType<AdmissionPorts["authorityPort"]["admit"]> => {
-        if (!preview(options, capability, action).ok) return DENIED;
+        if (!preview(options, capability, action).ok || !reviewableAction(options, action))
+          return DENIED;
         const context = options.context();
         const reservation = reserveCurrentJiraChatAuthority(
           options.deps,
@@ -248,18 +299,39 @@ export function createJiraChatCatalogAdmission(options: AdmissionOptions): Admis
           context.correlationId,
         );
         return reservation.ok
-          ? {
-              ok: true,
-              mutationGuard: {
-                check: (): boolean => preview(options, capability, action).ok,
-              },
-            }
+          ? { ok: true, mutationGuard: mutationGuard(options, capability, action) }
           : DENIED;
       },
     },
     approvalPort: {
-      available: () => options.requestReadConsent !== undefined,
+      available: (action) =>
+        options.requestReadConsent !== undefined &&
+        (READ_TOOLS.has(action.tool) || options.requestWriteConsent !== undefined),
       request: (action, context) => requestConsent(options, action, context),
     },
   };
+}
+
+function mutationGuard(
+  options: JiraChatAdmissionOptions,
+  capability: string | undefined,
+  action: JiraChatCatalogAction,
+): JiraChatCatalogConsumer["guard"] {
+  let claim: ChatWriteApprovalClaim | undefined;
+  const check = (): boolean => preview(options, capability, action, claim).ok;
+  return READ_TOOLS.has(action.tool)
+    ? { check }
+    : {
+        check,
+        write: {
+          action,
+          beforeMutation: (): boolean => {
+            if (!check()) return false;
+            const result = claimJiraChatWrite(options, action);
+            if (!result.ok) return false;
+            claim = result.claim;
+            return check();
+          },
+        },
+      };
 }
