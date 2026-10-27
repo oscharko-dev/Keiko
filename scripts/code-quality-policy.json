@@ -3727,7 +3727,7 @@
         },
         {
           "path": "packages/keiko-activity-log/src/reader/support-report-browser.test.ts",
-          "testName": "shared canonical browser report producer charges UTF-8 bytes identically to Node for \ud83d\ude00"
+          "testName": "shared canonical browser report producer charges UTF-8 bytes identically to Node for 😀"
         }
       ]
     },
@@ -5339,7 +5339,7 @@
       "id": "context-profile-diagnostic-public-proof",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "diagnostic-checker",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": ["anti-slop/no-unknown-parameters", "anti-slop/no-runtime-typeof"],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/context-engineering.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-validation",
@@ -5383,7 +5383,7 @@
       "id": "context-budget-diagnostic-public-proof",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "diagnostic-checker",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": ["anti-slop/no-unknown-parameters", "anti-slop/no-runtime-typeof"],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/context-engineering.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-validation",
@@ -5427,7 +5427,7 @@
       "id": "context-assembly-diagnostic-public-proof",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "diagnostic-checker",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": ["anti-slop/no-unknown-parameters", "anti-slop/no-runtime-typeof"],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/context-engineering.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-validation",
@@ -5515,7 +5515,7 @@
       "id": "shaped-command-diagnostic-public-proof",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "diagnostic-checker",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": ["anti-slop/no-unknown-parameters", "anti-slop/no-runtime-typeof"],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/context-observations.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/context-observations-validation",
@@ -5559,7 +5559,7 @@
       "id": "shaped-test-diagnostic-public-proof",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "diagnostic-checker",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": ["anti-slop/no-unknown-parameters", "anti-slop/no-runtime-typeof"],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/context-observations.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/context-observations-validation",
@@ -5603,7 +5603,7 @@
       "id": "shaped-search-diagnostic-public-proof",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "diagnostic-checker",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": ["anti-slop/no-unknown-parameters", "anti-slop/no-runtime-typeof"],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/context-observations.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/context-observations-validation",
@@ -5647,7 +5647,7 @@
       "id": "shaped-browser-diagnostic-public-proof",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "diagnostic-checker",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": ["anti-slop/no-unknown-parameters", "anti-slop/no-runtime-typeof"],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/context-observations.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/context-observations-validation",

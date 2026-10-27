@@ -1713,3 +1713,15 @@ Whole registered writer/query/report/analyzer proofs retain zero optional contex
 complete/degraded/loss outcomes. The five generated outputs require canonical regeneration and a
 rebuild. Source proposal, proof authorship and a scope allowance are not runtime qualification or
 whole-gate clearance; actual Original/SAME and all applicable gates remain required.
+
+The existing three context-core and four shaped-observation diagnostic responsibilities also
+declare `no-runtime-typeof` for their actual raw checking. Current structural assessment identifies
+16 additional native-matched coordinates: nine belong to assembly admission (including eight
+helper checks jointly owned by the core roots), and seven belong to command, test, search and
+browser diagnostic admission. The profile and budget roots contribute the helper admission
+contract; their own direct slot sets do not grow. Tool rehydration and tool observation retain
+their existing rule declarations. All 129 responsibility identities, original slots and proof
+selectors remain unchanged. Structural readiness permits these diagnostic slots to adapt under
+the existing checker. Combined canonical clearance still requires the complete core and observation
+proof owners and fresh semantic qualification. Dictionary checks, native census and scope activation
+retain their existing contracts.
