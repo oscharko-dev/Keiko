@@ -7,9 +7,15 @@
 
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { realpathSync } from "node:fs";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
+import type { Chat } from "../store/index.js";
 import { jiraChatActorDigest } from "./jiraPodAccess.js";
-import { createFileServerLogSink } from "../observability/index.js";
+import {
+  createFileServerLogSink,
+  createServerLogger,
+  setServerLogger,
+} from "../observability/index.js";
+import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
@@ -63,6 +69,7 @@ let configPath: string;
 let port: number;
 let diagnostics: ServerDiagnosticRecord[];
 let wiring: AtlassianConnectorCredentialDeps;
+let fixtureStore: ReturnType<typeof createInMemoryUiStore>;
 let fakePortResult: AtlassianHttpResult;
 let fakePortRequests: (AtlassianHttpRequest | AtlassianHttpBodyRequest)[];
 
@@ -114,7 +121,7 @@ function baseDeps(atlassian: AtlassianConnectorCredentialDeps | undefined): UiHa
     },
     registry: createRunRegistry(),
     modelPortFactory: (): undefined => undefined,
-    store: createInMemoryUiStore(),
+    store: fixtureStore,
     ...(atlassian === undefined ? {} : { atlassianConnectorCredentials: atlassian }),
   };
 }
@@ -257,6 +264,7 @@ function expectNoSecretBytes(text: string): void {
 }
 
 beforeEach(async () => {
+  fixtureStore = createInMemoryUiStore();
   activePrincipal = "synthetic-operator";
   // realpath: on macOS tmpdir() lives under the /var -> /private/var symlink, which the vault and
   // private-JSON writers' symlink-refusing path checks correctly reject.
@@ -284,6 +292,8 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await closeServer();
+  resetServerLogger();
+  fixtureStore.close();
   await rm(staticRoot, { recursive: true, force: true });
   await rm(configDir, { recursive: true, force: true });
 });
@@ -979,5 +989,173 @@ describe("end-to-end verify through the gateway transport adapter", () => {
     expect(seen[0]?.url).toBe("https://acme.example/rest/api/3/myself");
     const expectedBasic = `Basic ${Buffer.from(`${SYNTHETIC_EMAIL}:${SYNTHETIC_TOKEN}`, "utf8").toString("base64")}`;
     expect(seen[0]?.authorization).toBe(expectedBasic);
+  });
+});
+
+async function readyJiraPod(): Promise<string> {
+  await rebuild({
+    ...wiring,
+    httpBodyPortFactory:
+      () =>
+      (request): Promise<AtlassianHttpBodyResult> =>
+        Promise.resolve(jiraProbeResponse(request)),
+  });
+  const created = wiring.custody.create(
+    { ...livePodCreateInput(), livePodCreationRequestId: randomUUID() },
+    jiraChatActorDigest(baseDeps(wiring)),
+  );
+  expect((await verifyCredentialRequest(created.authRef)).status).toBe(200);
+  if (created.deployment !== "data-center" || created.livePod === undefined)
+    throw new Error("Expected synthetic Live Pod");
+  return created.livePod.podId;
+}
+
+function patchJiraChat(
+  chat: Chat,
+  patch: Record<string, unknown>,
+  includePrecondition = true,
+): Promise<Response> {
+  return fetch(`${baseUrl()}/api/chats?id=${encodeURIComponent(chat.id)}`, {
+    method: "PATCH",
+    headers: csrfHeaders(),
+    body: JSON.stringify({
+      ...patch,
+      ...(includePrecondition
+        ? { expectedGroundingScopeIdentity: chat.groundingScopeIdentity }
+        : {}),
+    }),
+  });
+}
+
+function jiraChat(): Chat {
+  fixtureStore.createProject(configDir);
+  return fixtureStore.createChat(configDir, "Jira Chat", "model");
+}
+
+async function updatedJiraChat(chat: Chat, patch: Record<string, unknown>): Promise<Chat> {
+  const response = await patchJiraChat(chat, patch);
+  expect(response.status).toBe(200);
+  return ((await response.json()) as { chat: Chat }).chat;
+}
+
+describe("normal Chat Jira binding through authenticated PATCH", () => {
+  it("records each binding effect once and reconstructs denials and conflicts without private facts", async () => {
+    const podId = await readyJiraPod();
+    const initial = jiraChat();
+    const sink = createFileServerLogSink(configDir, { level: "debug" });
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    try {
+      const connected = await updatedJiraChat(initial, { jiraPodId: podId });
+      expect((await patchJiraChat(connected, { toolMode: "invalid" })).status).toBe(400);
+      activePrincipal = "another-operator";
+      expect((await patchJiraChat(connected, { jiraPodId: podId })).status).toBe(400);
+      expect((await patchJiraChat(initial, { toolMode: "supervised-coding" })).status).toBe(409);
+    } finally {
+      sink.close?.();
+      resetServerLogger();
+    }
+    const lines = persistedActivityLogLines(
+      readPersistedActivityLog(configDir),
+      "chat.scope.update",
+    );
+    const events = lines.map((line) => expectActivityLogProof("chat.scope.update.outcome", line));
+    expect(events.map((entry) => entry.outcome)).toEqual([
+      "applied",
+      "denied",
+      "denied",
+      "conflict",
+    ]);
+    expect(events.map((entry) => entry.status)).toEqual([200, 400, 400, 409]);
+    expect(lines.join("\n")).not.toContain(podId);
+    expectNoSecretBytes(lines.join("\n"));
+  });
+  it("persists one verified owned Pod, replacement, disconnection and the chosen mode", async () => {
+    const first = await readyJiraPod();
+    const second = await readyJiraPod();
+    const initial = jiraChat();
+    expect(initial.toolMode).toBe("governed-assist");
+    const connected = await updatedJiraChat(initial, { jiraPodId: first });
+    expect(connected.jiraPodBinding).toMatchObject({
+      podId: first,
+      authenticationGeneration: 1,
+      bindingGeneration: 1,
+    });
+    expect(connected.groundingScopeIdentity).not.toBe(initial.groundingScopeIdentity);
+    const replaced = await updatedJiraChat(connected, {
+      jiraPodId: second,
+      toolMode: "supervised-coding",
+    });
+    expect(replaced.jiraPodBinding).toMatchObject({ podId: second, bindingGeneration: 2 });
+    expect(replaced.toolMode).toBe("supervised-coding");
+    const disconnected = await updatedJiraChat(replaced, { jiraPodId: null });
+    expect(disconnected.jiraPodBinding).toBeUndefined();
+    expect(disconnected.jiraBindingGeneration).toBe(3);
+    const full = await updatedJiraChat(disconnected, { toolMode: "autonomous-delivery" });
+    expect(full.toolMode).toBe("autonomous-delivery");
+    const list = await fetch(`${baseUrl()}/api/chats?projectPath=${encodeURIComponent(configDir)}`);
+    expect(await list.json()).toMatchObject({
+      chats: [{ id: initial.id, toolMode: "autonomous-delivery", jiraBindingGeneration: 4 }],
+    });
+  });
+
+  it.each(["unverified", "foreign", "unknown"])(
+    "rejects %s Pods without changing the Chat",
+    async (state) => {
+      const podId = state === "unknown" ? randomUUID() : await readyJiraPod();
+      if (state === "foreign") activePrincipal = "another-operator";
+      if (state === "unverified") {
+        const current = wiring.custody
+          .list()
+          .find((item) => item.deployment === "data-center" && item.livePod?.podId === podId);
+        if (current === undefined) throw new Error("Expected owned Pod");
+        const ticket = wiring.custody.beginVerification(current.authRef);
+        if (ticket === undefined) throw new Error("Expected verification ticket");
+        wiring.custody.finishVerification(
+          current.authRef,
+          current.generation ?? 1,
+          ticket.revision,
+          "auth-failed",
+        );
+      }
+      const chat = jiraChat();
+      expect(
+        (await patchJiraChat(chat, { jiraPodId: podId, title: "Must not apply" })).status,
+      ).toBe(400);
+      expect(fixtureStore.findChatById(chat.id)).toEqual(chat);
+    },
+  );
+
+  it.each([
+    { toolMode: "root" },
+    { jiraPodId: "invalid" },
+    { jiraPodBinding: {} },
+    { jiraBindingGeneration: 99 },
+  ])("rejects malformed or server-owned binding fields %j", async (patch) => {
+    const chat = jiraChat();
+    expect((await patchJiraChat(chat, patch)).status).toBe(400);
+    expect(fixtureStore.findChatById(chat.id)).toEqual(chat);
+  });
+
+  it("requires a scope precondition for Jira or mode changes", async () => {
+    const chat = jiraChat();
+    expect((await patchJiraChat(chat, { toolMode: "autonomous-delivery" }, false)).status).toBe(
+      400,
+    );
+    expect(fixtureStore.findChatById(chat.id)).toEqual(chat);
+  });
+
+  it("accepts only one competing binding update and leaves another Chat untouched", async () => {
+    const first = await readyJiraPod();
+    const second = await readyJiraPod();
+    const chat = jiraChat();
+    const other = fixtureStore.createChat(configDir, "Other Chat", "model");
+    const responses = await Promise.all([
+      patchJiraChat(chat, { jiraPodId: first, title: "First" }),
+      patchJiraChat(chat, { jiraPodId: second, title: "Second" }),
+    ]);
+    expect(responses.map((response) => response.status).sort()).toEqual([200, 409]);
+    const winner = responses[0].status === 200 ? first : second;
+    expect(fixtureStore.findChatById(chat.id)?.jiraPodBinding?.podId).toBe(winner);
+    expect(fixtureStore.findChatById(other.id)).toEqual(other);
   });
 });

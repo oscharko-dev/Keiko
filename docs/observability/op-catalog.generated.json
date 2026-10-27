@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "833211795bf77361fba02defb726df743fd84cbaa42b1b11a3a6028480037f25",
+    "catalogDigest": "a56b2f1dd9fa420eac9621e800f2f9c7fcd83a684059887076d0a2f6808d814c",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -2220,7 +2220,7 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["applied", "conflict", "cancellation-requested"]
+            "values": ["applied", "conflict", "cancellation-requested", "denied"]
           },
           "expectedScopeDigest": {
             "type": "string",
@@ -32087,8 +32087,8 @@
         "failureClasses": ["workspace-reconnect"],
         "proofIds": ["project.workspace.reconnect.outcome"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/store-handlers.ts:105",
-        "emitterSites": ["packages/keiko-server/src/store-handlers.ts:548"]
+        "registrationSite": "packages/keiko-server/src/store-handlers.ts:106",
+        "emitterSites": ["packages/keiko-server/src/store-handlers.ts:549"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -101214,7 +101214,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/store-handlers.ts:1312",
+      "site": "packages/keiko-server/src/store-handlers.ts:1323",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -104156,20 +104156,20 @@
     {
       "op": "project.create.trust.grant",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/store-handlers.ts:421",
+      "site": "packages/keiko-server/src/store-handlers.ts:422",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "project.workspace.reconnect",
       "category": "setup",
-      "site": "packages/keiko-server/src/store-handlers.ts:108",
+      "site": "packages/keiko-server/src/store-handlers.ts:109",
       "package": "keiko-server"
     },
     {
       "op": "project.workspace.reconnect",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/store-handlers.ts:564",
+      "site": "packages/keiko-server/src/store-handlers.ts:565",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

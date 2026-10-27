@@ -2124,7 +2124,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["applied", "conflict", "cancellation-requested"],
+        values: ["applied", "conflict", "cancellation-requested", "denied"],
       },
       expectedScopeDigest: {
         type: "string",

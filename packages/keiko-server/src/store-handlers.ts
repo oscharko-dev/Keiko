@@ -28,6 +28,7 @@ import {
   parseExpectedGroundingScopeIdentity,
 } from "./store/chat-grounding-scope-identity.js";
 import { logChatScopeUpdate } from "./chat-scope-update-log.js";
+import { jiraChatPatchFields, jiraChatUpdateOptions } from "./atlassian/jiraChatBindingPatch.js";
 import { containsPath } from "@oscharko-dev/keiko-git";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentGatewayConfig, currentGroundingLimits } from "./deps.js";
@@ -1138,6 +1139,7 @@ function buildChatPatch(
   deps: UiHandlerDeps,
   body: Record<string, unknown>,
   expectedGroundingScopeIdentity: string | undefined,
+  onJiraDenied: () => void,
 ): UpdateChatPatch {
   const title = optionalString(body, "title");
   const selectedModel = optionalChatModelId(deps, body, "selectedModel");
@@ -1148,6 +1150,7 @@ function buildChatPatch(
     ...(selectedModel !== undefined ? { selectedModel } : {}),
     ...(branchLabel !== undefined ? { branchLabel } : {}),
     ...groundingScopePatchFields(body, deps),
+    ...jiraChatPatchFields(body, expectedGroundingScopeIdentity, onJiraDenied),
     ...(expectedGroundingScopeIdentity === undefined ? {} : { expectedGroundingScopeIdentity }),
   };
   if (statusRaw === undefined) return patch;
@@ -1238,7 +1241,9 @@ function patchTouchesGroundingScope(patch: UpdateChatPatch): boolean {
     patch.connectedScope !== undefined ||
     patch.localKnowledgeScopes !== undefined ||
     patch.localKnowledgeScope !== undefined ||
-    patch.gitChangeScopes !== undefined
+    patch.gitChangeScopes !== undefined ||
+    patch.jiraPodId !== undefined ||
+    patch.toolMode !== undefined
   );
 }
 
@@ -1253,7 +1258,10 @@ export async function handleUpdateChat(
       const body = await readJsonObject(ctx.req);
       const expected = parseExpectedGroundingScopeIdentity(body.expectedGroundingScopeIdentity);
       if (expected !== undefined && typeof expected !== "string") return expected;
-      const patch = buildChatPatch(deps, body, expected);
+      const patch = buildChatPatch(deps, body, expected, () => {
+        const chat = findChatById(deps, id);
+        if (chat !== undefined) logChatScopeUpdate("denied", chat, chat, {}, ctx.correlationId);
+      });
       if (cancellation.signal.aborted)
         return { status: 499, body: errorBody("REQUEST_CANCELLED", "Request was cancelled.") };
       const denial = interruptChangedScopeTurn(deps, id, patch, ctx.req, ctx.correlationId);
@@ -1293,7 +1301,10 @@ function interruptChangedScopeTurn(
     req,
     canonicalizeConnectedScopePatch(deps, existing, patch),
   );
-  const preview = previewChatScopeUpdate(existing, safePatch, currentGroundingLimits(deps));
+  const preview = previewChatScopeUpdate(existing, safePatch, {
+    ...currentGroundingLimits(deps),
+    ...jiraChatUpdateOptions(deps, safePatch, existing, correlationId),
+  });
   interruptChangedChatGenerations(deps, existing, preview, correlationId, patch);
   return undefined;
 }
@@ -1345,15 +1356,27 @@ function applyChatUpdate(
   const chat = deps.store.updateChat(id, safePatch, {
     maxConnectedSources: limits.maxConnectedSources,
     maxLocalKnowledgeSources: limits.maxLocalKnowledgeSources,
+    ...jiraChatUpdateOptions(deps, safePatch, existing, correlationId),
+    ...(correlationId === undefined ? {} : { correlationId }),
   });
-  if (patchTouchesGroundingScope(safePatch) || patch.expectedGroundingScopeIdentity !== undefined) {
-    logChatScopeUpdate("applied", existing, chat, patch, correlationId);
-  }
+  recordAppliedChatUpdate(existing, chat, patch, correlationId);
   if (patchTouchesGroundingScope(safePatch) || safePatch.status !== undefined) {
     clearGroundedContextIndexesForConversation(id);
     clearGroundedTurnsForConversation(id);
   }
   return { status: 200, body: { chat } };
+}
+
+function recordAppliedChatUpdate(
+  existing: Chat,
+  chat: Chat,
+  patch: UpdateChatPatch,
+  correlationId: string | undefined,
+): void {
+  // The store already records Jira generation changes after their transaction commits.
+  if (existing.jiraBindingGeneration !== chat.jiraBindingGeneration) return;
+  if (patchTouchesGroundingScope(patch) || patch.expectedGroundingScopeIdentity !== undefined)
+    logChatScopeUpdate("applied", existing, chat, patch, correlationId);
 }
 
 // ──────────────────────────────────────────────────────────────────────────

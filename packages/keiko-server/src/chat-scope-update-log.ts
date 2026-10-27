@@ -22,7 +22,7 @@ const CHAT_SCOPE_UPDATE = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["applied", "conflict", "cancellation-requested"],
+      values: ["applied", "conflict", "cancellation-requested", "denied"],
     },
     expectedScopeDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
     actualScopeDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
@@ -51,7 +51,7 @@ const CHAT_SCOPE_UPDATE = defineActivityLogOperation({
 });
 
 export function logChatScopeUpdate(
-  outcome: "applied" | "conflict" | "cancellation-requested",
+  outcome: "applied" | "conflict" | "cancellation-requested" | "denied",
   existing: Chat,
   result: Chat,
   patch: UpdateChatPatch,
@@ -64,7 +64,7 @@ export function logChatScopeUpdate(
       CHAT_SCOPE_UPDATE,
       {
         correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
-        status: outcome === "conflict" ? 409 : 200,
+        status: outcome === "conflict" ? 409 : outcome === "denied" ? 400 : 200,
       },
       {
         outcome,

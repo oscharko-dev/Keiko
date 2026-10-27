@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "833211795bf77361fba02defb726df743fd84cbaa42b1b11a3a6028480037f25"
+    "catalogDigest": "a56b2f1dd9fa420eac9621e800f2f9c7fcd83a684059887076d0a2f6808d814c"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -1258,6 +1258,7 @@
       "packages/keiko-model-gateway/src/openai-adapter.stream-read.test.ts"
     ],
     "chat.scope.update.outcome": [
+      "packages/keiko-server/src/atlassian/credentialRoutes.test.ts",
       "packages/keiko-server/src/store-handlers.test.ts",
       "packages/keiko-server/src/store/chatJiraBinding.test.ts"
     ],

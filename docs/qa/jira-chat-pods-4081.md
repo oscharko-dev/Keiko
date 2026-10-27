@@ -1273,3 +1273,21 @@ All 107 focused custody/credential-route/Data-Center-verification tests and 97 r
 Package build, root typecheck, changed lint/format, ADR and staged semantic checks pass. Registry
 regeneration resolves 609 proofs and 30 scenarios without violations. Final integrated, live,
 coverage and aggregate gates remain pending as listed above.
+
+## Authenticated Chat binding PATCH — #4084 AC1/AC4/#4085 readiness boundary
+
+Ten actual HTTP regression cases first failed: connect/replace/disconnect and mode persistence,
+foreign/unverified/unknown Pod selection, malformed/server-owned fields, missing scope precondition
+and competing updates. The existing PATCH route now admits only an owned, verified Pod and passes
+its current generation to the existing atomic store. It requires the current scope identity for
+Jira/mode intent, rejects generation overrides, uses the existing turn serializer and rechecks the
+Pod during application. Another Chat remains unchanged. No Coding session is created.
+
+Store and route logging avoid duplicate applied events. A real writer/reader HTTP proof reconstructs
+one application, two denials and one conflict without Pod IDs or credential contents. This checkpoint
+adds binding admission; it does not mint authority, read grants or approvals. Those controls and the
+normal-Chat tool loop, Pod lifecycle coordination and UI remain incomplete.
+
+All 239 affected credential-route/Chat-handler/binding-store tests and 97 registry tests pass.
+Package build, root typecheck and changed lint pass. The regenerated registry resolves 609 proofs
+and 30 scenarios without violations. Final integrated and live acceptance remain pending.

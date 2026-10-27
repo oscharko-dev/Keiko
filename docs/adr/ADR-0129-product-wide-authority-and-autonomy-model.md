@@ -41,14 +41,18 @@ the shared request field. Existing description-scope and envelope validation sti
 
 Epic #4081 / #4084 adds ordinary Chat's persisted tool-mode selection, defaulting to Ask for
 approval, and one opaque Jira Pod binding with monotonic binding/authentication generations.
-The selection and binding are state, not an Authority Envelope or consent. They do not advertise
+The authenticated Chat PATCH path requires the current scope identity for Jira or mode intent,
+rejects server-owned generation fields, resolves only a verified Pod belonging to the server's
+current operator, and rechecks that selection inside the existing serialized application path.
+Its effects, denials and conflicts use the existing body-free Chat scope event without duplicate
+application records. The selection and binding are state, not an Authority Envelope or consent. They do not advertise
 or execute tools by themselves. Schema 49 keeps this state in the existing Chat row; an atomic
 update checks the current grounding identity and advances the binding generation for an effective
 mode, Pod or authentication-generation change. Disconnect retains that generation. Legacy Chats
 without Jira state retain their previous grounding identity. Endpoint and credential custody stay
 outside the Chat database. Registered scope-update evidence records counts, generation and mode,
-without Pod identifiers or content. Authenticated Pod resolution, grants and approvals must still
-compose through the shared authority owner before this persisted selection can authorize effects.
+without Pod identifiers or content. Read grants and approvals must still be composed with this Pod
+resolution through the shared authority owner before the persisted selection can authorize effects.
 
 ## Context
 
