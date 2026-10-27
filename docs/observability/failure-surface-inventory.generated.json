@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "224110a1a19839b9efdf67a7fcba0e208b4df7c4c83dfd12253f45b8a44a5e0a"
+    "catalogDigest": "997a2f22664ad5a17b8cdf6478cf5a14f8dd7b2d8841dcedd476a8e6eb0a5aed"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -59,10 +59,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 592,
-    "proofCount": 605,
-    "resolvedProofCount": 605,
-    "failureClassCount": 372,
+    "operationCount": 593,
+    "proofCount": 606,
+    "resolvedProofCount": 606,
+    "failureClassCount": 373,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -675,6 +675,7 @@
         "activity-log.segment.recovered",
         "activity-log.segment.sealed",
         "activity-log.writer-rejected",
+        "chat.content-policy.resolved",
         "memory.audit.state-cache.seeded",
         "portable.windows-alert.spawn-failed",
         "process.exiting",
@@ -1033,6 +1034,7 @@
     "lsp-process-runtime": ["editor-delivery.crash"],
     "lsp-process-spawn": ["editor-delivery.dependency-failure"],
     "lsp-process-termination": ["editor-delivery.crash"],
+    "chat-content-policy": ["lifecycle-crash.dependency-failure"],
     "memory-audit-state-cache": ["lifecycle-crash.dependency-failure"],
     "memory-capture-novelty": ["memory-knowledge.dependency-failure"],
     "memory-embedding-invalidation": ["memory-knowledge.dependency-failure"],
@@ -1194,6 +1196,7 @@
     "chat.compaction.facts.classified.line": [
       "packages/keiko-server/src/chat-compaction-model-summary.test.ts"
     ],
+    "chat.content-policy.resolved.setting": ["packages/keiko-server/src/deps-activity.test.ts"],
     "chat.context.failed.line": ["packages/keiko-server/src/chat-context-status.test.ts"],
     "chat.context.management.line": ["packages/keiko-server/src/chat-context-status.test.ts"],
     "chat.context.selected.budget": [

@@ -1,3 +1,4 @@
+import type { ContentRedactionPolicy } from "@oscharko-dev/keiko-contracts";
 import { currentContentRedactor } from "./content-redactor.js";
 import { isAbsolute, relative, resolve } from "node:path";
 import { createHash } from "node:crypto";
@@ -152,6 +153,11 @@ export interface ConfiguredRepoSemanticSearchOptions extends SemanticRefreshOpti
   readonly repositoryPod?: RepositoryPodSemanticSearchContext | undefined;
   readonly observePodRetrieval?:
     ((observation: RepositoryPodRetrievalObservation) => void) | undefined;
+  /**
+   * #4098: the content policy of the caller. Only a Chat retrieval passes `preserve`, and it takes
+   * effect only under the deployment opt-out; the Coding Workbench search keeps the default.
+   */
+  readonly contentRedaction?: ContentRedactionPolicy | undefined;
 }
 
 export interface RepositoryPodRetrievalObservation {
@@ -1174,6 +1180,16 @@ function refreshSpendReserver(
     );
 }
 
+// #4098: only a Chat lookup that carries the deployment opt-out projects refreshed text with it;
+// the Coding Workbench and every other caller keep the default projection.
+function refreshedTextRedactor(
+  deps: UiHandlerDeps,
+  contentRedaction: ContentRedactionPolicy | undefined,
+): (text: string) => string {
+  const redactor = contentRedaction === "preserve" ? currentContentRedactor(deps) : deps.redactor;
+  return (text) => String(redactor(text));
+}
+
 export function configuredRepoSemanticSearchProviderFor(
   deps: UiHandlerDeps,
   signal: AbortSignal | undefined,
@@ -1200,7 +1216,7 @@ export function configuredRepoSemanticSearchProviderFor(
     ...options,
     semanticRefreshFilesMax: configuredRefreshFileLimit(deps, options),
     fs,
-    redactText: (text): string => String(currentContentRedactor(deps)(text)),
+    redactText: refreshedTextRedactor(deps, options.contentRedaction),
     signal,
     maxCandidates: Math.max(
       0,

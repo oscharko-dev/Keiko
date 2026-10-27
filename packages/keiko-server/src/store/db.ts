@@ -10,7 +10,6 @@ import { isolateCodingHistory } from "./codingHistoryIsolation.js";
 // 0o700/0o600 permission hardening (Unix), and reopen-safe migrations.
 
 import { DatabaseSync } from "node:sqlite";
-import { contentRedactionEnabled, redactContent } from "@oscharko-dev/keiko-security";
 import { createCodingHistoryStore } from "./codingHistory.js";
 import { existsSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
@@ -199,18 +198,16 @@ function chatIdFactory(
   return (correlationId): string => newReferenceId({ kind: "chat", correlationId });
 }
 
-function contentRedactorOption(opts: UiStoreFactoryOptions | undefined): (value: string) => string {
-  if (opts?.redactContentString !== undefined) return opts.redactContentString;
-  return contentRedactionEnabled() ? (opts?.redactString ?? DEFAULT_REDACT) : redactContent;
-}
-
-function resolveOptions(opts: UiStoreFactoryOptions | undefined): ResolvedFactoryOptions {
+function resolveOptions(opts: UiStoreFactoryOptions = {}): ResolvedFactoryOptions {
+  const redactString = opts.redactString ?? DEFAULT_REDACT;
   return {
-    now: opts?.now ?? ((): number => Date.now()),
-    newId: opts?.newId ?? randomUUID,
-    newChatId: chatIdFactory(opts?.newId),
-    redactString: opts?.redactString ?? DEFAULT_REDACT,
-    redactContentString: contentRedactorOption(opts),
+    now: opts.now ?? ((): number => Date.now()),
+    newId: opts.newId ?? randomUUID,
+    newChatId: chatIdFactory(opts.newId),
+    redactString,
+    // #4098: a store keeps private Chat content only when its composer hands it the deployment's
+    // preserving redactor; every other store projects that content like everything else.
+    redactContentString: opts.redactContentString ?? redactString,
   };
 }
 

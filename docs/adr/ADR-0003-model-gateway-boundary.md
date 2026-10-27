@@ -167,16 +167,22 @@ name the Workbench's run phase while a provider outage is ridden out.
 
 ### D7 — Secret redaction at the boundary
 
-**Authorized content amendment (owner decision, 2026-10-27).** Content redaction is a deployment
-policy, distinct from infrastructure-secret and diagnostic protection. The exact process setting
-`KEIKO_CONTENT_REDACTION=off` preserves authorized model response content, reasoning and structured
-output; the default retains the existing heuristic redaction. Configured provider credential and
-endpoint literals remain scrubbed in either mode. The BFF uses the same content policy for source
-context, answer publication and private grounded-answer persistence. Streaming keeps the existing
+**Authorized content amendment (owner decision, 2026-10-27, #4098).** Content redaction is a
+per-call policy, distinct from infrastructure-secret and diagnostic protection. The gateway never
+reads the deployment environment: a call preserves authorized response content, reasoning and
+structured output only when its caller sets `GatewayCallRequest.contentRedaction: "preserve"`.
+The BFF resolves `KEIKO_CONTENT_REDACTION` once at startup and sets that field only on Chat answer
+model ports (conversation, connected-folder, Knowledge Pod, multi-source and hybrid answers) when
+the exact value `off` was configured. Every other caller, including the Coding Workbench sidecar
+route, compaction summaries and evaluation, keeps the default heuristic redaction. A preserved
+answer still loses its credential floor: configured provider and Keiko credential literals of at
+least four characters and their encoded spellings, PEM private-key blocks, URL credentials,
+credential-shaped Bearer/Basic values and the known issuer token shapes. Streaming keeps the
 configured-secret buffering, and cancellation discards pending text. Tool arguments, error
 constructors, logs, support reports and audit artifacts retain their unconditional redactors.
-`chat.request.dispatch.contentRedactionEnabled` records the selected policy as a boolean. This
-setting applies equally to internal and external providers and cannot be set by a model or request.
+`chat.request.dispatch.contentRedactionEnabled` records the policy the call actually used as a
+boolean. The setting applies equally to internal and external providers and cannot be set by a
+model or request.
 
 A `redact()` helper in `src/gateway/redaction.ts` strips known secret patterns (API keys, bearer
 tokens, header values) from strings before they reach any error message, log call, or serialised

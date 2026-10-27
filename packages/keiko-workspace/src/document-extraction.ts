@@ -26,7 +26,7 @@ import { Buffer } from "node:buffer";
 import { basename, extname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
-import { redactContent } from "@oscharko-dev/keiko-security";
+import { redact } from "@oscharko-dev/keiko-security";
 import { DEFAULT_BINARY_PROBE, looksBinary } from "./binaryDetect.js";
 import { PathEscapeError, PathDeniedError } from "./errors.js";
 import {
@@ -935,7 +935,7 @@ function buildContext(
     extractedBytes: capped.extractedBytes,
     truncated: capped.truncated,
     truncationMarker: marker,
-    text: redactContent(capped.text),
+    text: redact(capped.text),
   };
 }
 

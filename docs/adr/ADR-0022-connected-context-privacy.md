@@ -1487,19 +1487,25 @@ retains a single `no-evidence` marker, and budget clipping remains `budget-clipp
 
 ### D4 — The summary is structurally redaction-free, and we prove it
 
-**Authorized content amendment (owner decision, 2026-10-27).** A user permitted to read connected
-documents must be able to receive their contents under the deployment's processing policy.
-`KEIKO_CONTENT_REDACTION=off` explicitly disables heuristic content masking for document extraction,
-guarded workspace reads, single-source, multi-source and hybrid prompt content, and private chat
-answers. Configured infrastructure-secret literals remain protected. Missing or other values
-retain the original content redaction. The existing `redacted` atom state means the guarded
-content policy has been applied; it is not a claim that all personal data was anonymized.
-`raw-internal` packs remain rejected. The same policy applies before model invocation and to
-streamed, completed and privately persisted answers. Conversation and grounded system prompts in
-this mode request source fidelity while retaining untrusted-source and citation instructions.
-This does not widen source authorization or any read/output budget. Counts-only summaries and
-audit manifests retain their existing unconditional redaction and body-free contracts.
-Already masked historic chat text cannot be recovered: re-read sources and generate a new answer.
+**Authorized content amendment (owner decision, 2026-10-27, #4098).** A user permitted to read
+connected documents must be able to receive their contents under the deployment's processing
+policy. `KEIKO_CONTENT_REDACTION=off`, resolved once at server startup, gives Chat a preserving
+content policy for connected-folder reads and extracted documents, single-source, multi-source and
+hybrid prompt content, Chat semantic refresh, history rehydration and private chat answers. The
+policy travels explicitly (`WorkspaceInfo.contentRedaction`, `GatewayCallRequest.contentRedaction`
+and the deps graph); no lower layer reads the environment. Missing, empty or `on` values retain the
+original content redaction; any other value also retains it and records a `warn`-level
+`chat.content-policy.resolved` line. Preserved content still loses the credential floor (configured
+secret literals, private keys, URL credentials, credential-shaped Bearer/Basic values and known
+token shapes). The existing `redacted` atom state means the guarded content policy has been
+applied; it is not a claim that all personal data was anonymized. `raw-internal` packs remain
+rejected. The conversation and grounded system prompts in this mode request source fidelity, tell
+the model never to reconstruct `[REDACTED]` text, and keep the instruction not to expose API keys,
+tokens, private keys or URL credentials; the default prompts are byte-identical to the previous
+ones. This does not widen source authorization or any read/output budget. The Coding Workbench,
+counts-only summaries and audit manifests retain their existing redaction and body-free
+contracts, and compaction summaries keep the default projection. Already masked historic chat text
+cannot be recovered: re-read sources and generate a new answer.
 
 The wire boundary is asserted by `grounded-qa.redaction.test.ts`: an attacker-controlled
 pack with secret-shaped strings (`sk-…`, `ghp_…`, `AKIA…`, `xoxb-…`, `Bearer …`, PEM

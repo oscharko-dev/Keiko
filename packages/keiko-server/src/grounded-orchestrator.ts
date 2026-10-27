@@ -180,7 +180,7 @@ import {
   type UncertaintyMarker,
   type UncertaintyMarkerKind,
 } from "@oscharko-dev/keiko-contracts/connected-context";
-import type { ContextProfile } from "@oscharko-dev/keiko-contracts";
+import type { ContentRedactionPolicy, ContextProfile } from "@oscharko-dev/keiko-contracts";
 
 import {
   activityLogErrorKindOr,
@@ -1233,6 +1233,10 @@ export interface OrchestratorDeps {
   readonly fs?: WorkspaceFs;
   // Optional injected detector for tests so memFs fixtures don't need full WorkspaceInfo wiring.
   readonly detectWorkspace?: (root: string, fs: WorkspaceFs) => WorkspaceInfo;
+  // #4098: the Chat content policy of this retrieval. `preserve` (the deployment opt-out alone)
+  // lets the evidence lane read the connected folder's authorized content unmasked; absent keeps
+  // the default projection.
+  readonly contentRedaction?: ContentRedactionPolicy | undefined;
   // Called after a ready plan exists and before any workspace detection or repository IO starts.
   readonly recordPlan?: (plan: ExplorationPlan) => void;
   // Ephemeral #183 context-pack cache for one connected scope/session.
@@ -11942,6 +11946,16 @@ function detectConnectedContextWorkspace(root: string, fs: WorkspaceFs): Workspa
   return detectWorkspaceAt(root, fs, { scanSourceFilesForLanguages: false });
 }
 
+// The workspace a Chat retrieval reads carries the retrieval's content policy, so every read,
+// search hit, excerpt and index of that workspace follows it (#4098).
+function connectedContextDetector(
+  deps: OrchestratorDeps,
+): (root: string, fs: WorkspaceFs) => WorkspaceInfo {
+  const detect = deps.detectWorkspace ?? detectConnectedContextWorkspace;
+  if (deps.contentRedaction !== "preserve") return detect;
+  return (root, fs): WorkspaceInfo => ({ ...detect(root, fs), contentRedaction: "preserve" });
+}
+
 // #3347 P2: detection previously received the observed raw filesystem with no request signal or
 // deadline, so its first time check happened only after `detect` returned — a hostile or merely
 // huge workspace could stat past the deadline before the request noticed. Guard the sync core
@@ -12583,7 +12597,7 @@ export async function retrieveConnectedContextPack(
     const execution = await executeConnectedContextRetrieval(input, deps, {
       fs: workspaceIoActivity.fs,
       workspaceRoot: input.workspaceRoot,
-      detect: deps.detectWorkspace ?? detectConnectedContextWorkspace,
+      detect: connectedContextDetector(deps),
       nowMs,
       activity,
       progress,

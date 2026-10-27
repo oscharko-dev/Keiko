@@ -388,22 +388,63 @@ function redactIdentifiedPatterns(
   additionalSecrets: readonly string[],
   preserveSourceLineBreaks: boolean,
 ): string {
-  let output = redactPrivateKeyBlocks(
-    redactLiteralSpans(input, additionalSecrets, preserveSourceLineBreaks),
-    preserveSourceLineBreaks,
+  const output = redactUrlCredentials(
+    redactPrivateKeyBlocks(
+      redactLiteralSpans(input, additionalSecrets, preserveSourceLineBreaks),
+      preserveSourceLineBreaks,
+    ),
   )
+    .replace(GERMAN_IBAN_PATTERN, REDACTED)
+    .replace(INTERNATIONAL_GERMAN_PHONE_PATTERN, REDACTED)
+    .replace(DOMESTIC_GERMAN_PHONE_PATTERN, REDACTED);
+  return redactLiteralSpans(
+    redactIssuerTokens(output),
+    additionalSecrets,
+    preserveSourceLineBreaks,
+  );
+}
+
+function redactUrlCredentials(input: string): string {
+  return input
     .replace(URL_CREDENTIALS_PATTERN, `$1${REDACTED}@`)
     .replace(URL_USERINFO_PATTERN, (match, scheme: string) =>
       SSH_USERINFO_SCHEME.test(scheme.slice(scheme.search(/[a-z]/i)))
         ? match
         : `${scheme}${REDACTED}@`,
-    )
-    .replace(GERMAN_IBAN_PATTERN, REDACTED)
-    .replace(INTERNATIONAL_GERMAN_PHONE_PATTERN, REDACTED)
-    .replace(DOMESTIC_GERMAN_PHONE_PATTERN, REDACTED)
-    .replace(API_KEY_PATTERN, REDACTED);
+    );
+}
+
+function redactIssuerTokens(input: string): string {
+  let output = input.replace(API_KEY_PATTERN, REDACTED);
   for (const pattern of BUILTIN_PATTERNS) output = output.replace(pattern, REDACTED);
-  return redactLiteralSpans(output, additionalSecrets, preserveSourceLineBreaks);
+  return output;
+}
+
+// An authorization header value is a credential only when it looks like one: prose such as
+// "Bearer authentication" or "Basic configuration" stays readable under the content opt-out.
+const AUTHORIZATION_VALUE_PATTERN = /\b(Bearer|Basic)([ \t]+)([\w.\-+/=]{16,})/gi;
+
+function redactAuthorizationValues(input: string): string {
+  return input.replace(
+    AUTHORIZATION_VALUE_PATTERN,
+    (match, scheme: string, gap: string, value: string) =>
+      /[\d+/=]/u.test(value) ? `${scheme}${gap}${REDACTED}` : match,
+  );
+}
+
+/**
+ * The credential floor of authorized content (#4098, `KEIKO_CONTENT_REDACTION=off`): configured
+ * secret literals, private key blocks, URL credentials, credential-shaped authorization values and
+ * issuer-format tokens (`sk-`, `ghp_`, `AKIA`, Slack, Google, Stripe). It never masks personal
+ * data, account numbers, configuration values or code, and it is not a diagnostic redactor:
+ * logs, evidence and support artifacts keep `redact()`.
+ */
+export function redactCredentialShapes(input: string, secrets: readonly string[] = []): string {
+  const literals = keepLongEnough(secrets);
+  const output = redactAuthorizationValues(
+    redactUrlCredentials(redactPrivateKeyBlocks(redactLiteralSpans(input, literals, false), false)),
+  );
+  return redactLiteralSpans(redactIssuerTokens(output), literals, false);
 }
 
 /**

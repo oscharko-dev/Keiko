@@ -1,4 +1,5 @@
 import type { GatewayCallRequest } from "./gateway.js";
+import type { ContentRedactionPolicy } from "@oscharko-dev/keiko-contracts";
 import {
   callerAdmittedRequest,
   onceCallerReservation,
@@ -62,12 +63,7 @@ import {
   reasoningText,
   textFromContent,
 } from "./normalize.js";
-import {
-  contentRedactionEnabled,
-  redact,
-  redactContent,
-  redactSecretLiterals,
-} from "@oscharko-dev/keiko-security";
+import { redact, redactContent, redactSecretLiterals } from "@oscharko-dev/keiko-security";
 import {
   CODE_REDACTION_REVISION,
   createStreamingRedactor,
@@ -479,7 +475,7 @@ function chatDispatchFields(
     bodyBytes: Buffer.byteLength(body, "utf8"),
     timeoutMs: bounds?.silenceMs ?? config.timeoutMs,
     stream,
-    contentRedactionEnabled: contentRedactionEnabled(),
+    contentRedactionEnabled: contentPolicy(request) === "redact",
     ...(stream ? { streamUsageRequested: includeUsage } : {}),
     toolCount: request.tools?.length ?? 0,
     ...(bounds === undefined ? {} : { readBudgetMs: bounds.budgetMs }),
@@ -962,14 +958,22 @@ function redactUnknown(value: unknown, scrub: ValueScrub, depth = 0): unknown {
 function redactRecord(
   value: Record<string, unknown> | null,
   secrets: readonly string[],
+  policy: ContentRedactionPolicy,
 ): Record<string, unknown> | null {
   return value === null
     ? null
     : (redactUnknown(value, {
         secrets,
-        text: (text) => redactContent(text, secrets),
+        text: (text) => redactContent(text, policy, secrets),
         changed: 0,
       }) as Record<string, unknown>);
+}
+
+// #4098: a call keeps the default content projection unless its caller asked to preserve
+// authorized content (`GatewayCallRequest.contentRedaction`, set by Chat under the deployment
+// opt-out alone). Tool-call arguments never follow it.
+function contentPolicy(request: GatewayCallRequest): ContentRedactionPolicy {
+  return request.contentRedaction === "preserve" ? "preserve" : "redact";
 }
 
 // A tool call's name is matched against the offered catalog. The governed changeset edit executes
@@ -1001,18 +1005,19 @@ function redactResponse(
   response: NormalizedResponse,
   secrets: readonly string[],
   isExactContentTool: (alias: string) => boolean,
+  policy: ContentRedactionPolicy,
 ): RedactedResponse {
   const exactContent = literalScrub(secrets);
   const redacted: NormalizedResponse = {
     ...response,
-    content: redactContent(response.content, secrets),
+    content: redactContent(response.content, policy, secrets),
     toolCalls: response.toolCalls.map((call) =>
       redactToolCall(call, secrets, exactContent, isExactContentTool),
     ),
-    structuredOutput: redactRecord(response.structuredOutput, secrets),
+    structuredOutput: redactRecord(response.structuredOutput, secrets, policy),
     ...(response.reasoning === undefined
       ? {}
-      : { reasoning: redactContent(response.reasoning, secrets) }),
+      : { reasoning: redactContent(response.reasoning, policy, secrets) }),
   };
   return { response: redacted, toolArgumentsRedacted: exactContent.changed };
 }
@@ -1028,12 +1033,13 @@ function bindCatalogResponse(
   response: NormalizedResponse,
   secrets: readonly string[],
   catalog: GatewayToolCatalogBridge,
-  usageReported: boolean,
+  options: { readonly usageReported: boolean; readonly policy: ContentRedactionPolicy },
   onToolArgumentsRedacted: (redactedStringCount: number, toolCallCount: number) => void,
 ): NormalizedResponse {
+  const { usageReported, policy } = options;
   try {
     catalog.assertNativeTransport(response);
-    const redacted = redactResponse(response, secrets, catalog.isExactContentTool);
+    const redacted = redactResponse(response, secrets, catalog.isExactContentTool, policy);
     if (redacted.toolArgumentsRedacted > 0) {
       onToolArgumentsRedacted(redacted.toolArgumentsRedacted, response.toolCalls.length);
     }
@@ -1602,7 +1608,7 @@ function streamReadOutcome(error: unknown): StreamReadOutcome {
 
 // What one streamed read needs from its call.
 interface StreamRead {
-  readonly request: GatewayRequest;
+  readonly request: GatewayCallRequest;
   readonly config: ModelProviderConfig;
   readonly secrets: readonly string[];
   readonly signal: AbortSignal;
@@ -1812,7 +1818,7 @@ export class OpenAiAdapter implements ProviderAdapter {
     report: StreamReport,
   ): AsyncGenerator<StreamTextChunk> {
     const project = (text: string): string =>
-      redactContent(text, read.secrets, {
+      redactContent(text, contentPolicy(read.request), read.secrets, {
         onCodeProjection: (projection): void => {
           report.redaction.streamCodeRegions += projection.regions;
           report.redaction.streamCodeDepthRefusals += projection.depthRefusals;
@@ -1920,7 +1926,7 @@ export class OpenAiAdapter implements ProviderAdapter {
   // content filter, structured output, the usable-answer check, redaction and catalog binding.
   private finishedResponse(
     payload: unknown,
-    request: GatewayRequest,
+    request: GatewayCallRequest,
     config: ModelProviderConfig,
     secrets: readonly string[],
     catalog: GatewayToolCatalogBridge,
@@ -1941,7 +1947,7 @@ export class OpenAiAdapter implements ProviderAdapter {
       normalized,
       secrets,
       catalog,
-      providerReportedUsage(payload),
+      { usageReported: providerReportedUsage(payload), policy: contentPolicy(request) },
       (redactedStringCount, toolCallCount) => {
         this.logToolArgumentsRedacted(config.modelId, redactedStringCount, toolCallCount);
       },

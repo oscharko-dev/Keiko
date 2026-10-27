@@ -6,7 +6,13 @@
 
 export { KEIKO_SECURITY_VERSION } from "./version.js";
 
-export { contentRedactionEnabled, redactContent } from "./content-redaction.js";
+export {
+  CONTENT_REDACTION_ENV,
+  redactContent,
+  resolveContentRedactionPolicy,
+  type ContentRedactionSetting,
+  type ResolvedContentRedactionPolicy,
+} from "./content-redaction.js";
 
 export {
   bindProcessScope,
@@ -38,6 +44,7 @@ export {
   isCredentialKeyName,
   objectContainsCredentialKey,
   REDACTION_PLACEHOLDER,
+  redactCredentialShapes,
   redactSecretLiterals,
 } from "./redaction.js";
 export {

@@ -1,4 +1,4 @@
-import { currentContentRedactor } from "./content-redactor.js";
+import { currentContentRedactor, withChatContentPolicy } from "./content-redactor.js";
 import { setImmediate as yieldHttpWrites } from "node:timers/promises";
 import { createStreamingRedactor } from "@oscharko-dev/keiko-security/redaction";
 import { currentRedactionSecrets } from "./deps.js";
@@ -684,7 +684,9 @@ function resolveDesktopChatStreamCall(
     );
     return asCallableOrRouteResult<StreamCall>(invalidExecution);
   }
-  const model = deps.modelPortFactory(prepared.modelId);
+  const resolvedModel = deps.modelPortFactory(prepared.modelId);
+  const model =
+    resolvedModel === undefined ? undefined : withChatContentPolicy(deps, resolvedModel);
   return model?.callStream === undefined
     ? asCallableOrRouteResult<StreamCall>(streamingUnsupportedOutcome(correlationId))
     : asCallableOrRouteResult<StreamCall>(model.callStream.bind(model));

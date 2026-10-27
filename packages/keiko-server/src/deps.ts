@@ -86,10 +86,11 @@ import {
 } from "@oscharko-dev/keiko-evidence";
 import {
   bindSecurityLogCorrelation,
-  contentRedactionEnabled,
   keikoApiKeySecretValues,
   redact,
   redactContent,
+  resolveContentRedactionPolicy,
+  type ResolvedContentRedactionPolicy,
 } from "@oscharko-dev/keiko-security";
 import type { PortableReleaseTrustedKey } from "@oscharko-dev/keiko-security/portable-release-trust";
 import type {
@@ -99,6 +100,7 @@ import type {
   CodingWorkbenchRuntimeVersion,
   CodingWorkbenchRuntimeUnavailableReason,
   CommandTerminationEvidence,
+  ContentRedactionPolicy,
   DebugDeploymentPolicy,
   DebugProductSupport,
   DebugProvisioning,
@@ -157,6 +159,7 @@ import { newCorrelationId, UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { inspectWorkspaceRootIdentity } from "./workspace-root-identity.js";
 import type { WorkspaceRootIdentity } from "./workspace-root-identity.js";
 import {
+  logChatContentPolicyResolved,
   logMemoryAuditStateCacheSeeded,
   logRuntimeShutdown,
   logTaskWorkspaceManifestReconnected,
@@ -766,6 +769,9 @@ export interface UiHandlerDeps {
   readonly egress?: GatewayEgressConfig | undefined;
   // Live-payload redactor (D9). Applied to run reports, projections, and SSE event data.
   readonly redactor: Redactor;
+  // #4098: the Chat content policy resolved once at startup from `KEIKO_CONTENT_REDACTION`. Absent
+  // means `redact`; only Chat reads it, never diagnostics, evidence or another surface.
+  readonly contentRedaction?: ContentRedactionPolicy | undefined;
   // RB-6 (GEN-OBS-DIAGNOSTICS-901/602/603) — operator diagnostic sink for server-side error causes.
   // Optional: when undefined the server falls back to the default stderr sink. Tests inject a
   // capturing sink to assert that a handler throw / mid-stream failure emits a correlation-keyed,
@@ -2210,16 +2216,18 @@ export function buildRedactor(env: EnvSource, config?: GatewayConfig): Redactor 
   return (value: unknown): unknown => deepRedactStrings(value, redactString);
 }
 
+// #4098: the private Chat history redactor. Under the default policy it is the live redactor
+// itself; only the deployment opt-out keeps authorized content and removes the credential floor.
 function runtimeContentRedactString(
   env: EnvSource,
   runtimeConfig: RuntimeGatewayConfig,
   egress: GatewayConfig["egress"],
   redactString: (value: string) => string,
+  policy: ResolvedContentRedactionPolicy,
 ): (value: string) => string {
+  if (policy.policy === "redact") return redactString;
   return (value): string =>
-    contentRedactionEnabled()
-      ? redactString(value)
-      : redactContent(value, runtimeRedactionSecrets(env, runtimeConfig, egress));
+    redactContent(value, "preserve", runtimeRedactionSecrets(env, runtimeConfig, egress));
 }
 
 export function currentRedactionSecrets(deps: UiHandlerDeps): readonly string[] {
@@ -4504,6 +4512,8 @@ interface UiHandlerDepsAssemblyArgs {
   readonly bundle: PersistenceBundle;
   readonly contextProfileForModel: ContextProfileResolver;
   readonly bootstrapCorrelationId: string;
+  /** #4098: the Chat content policy resolved once from the deployment environment. */
+  readonly contentPolicy: ResolvedContentRedactionPolicy;
   /** The one native session continuity service the runtime host and the orchestrator share. */
   readonly codingSessionContinuity: CodingSessionContinuity;
   /** The one MCP relay the runtime host binds and the relay route serves (#3903 AC3). */
@@ -5468,6 +5478,7 @@ type BaseUiHandlerDeps = ReturnType<typeof gatewayConfigFields> &
     | "uiDbPath"
     | "preferredProjectPath"
     | "conversationAttachmentStore"
+    | "contentRedaction"
   >;
 
 function buildBaseUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): BaseUiHandlerDeps {
@@ -5478,6 +5489,7 @@ function buildBaseUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): BaseUiHandlerD
     env: args.options.env,
     egress: args.egress,
     redactor: args.liveRedactor,
+    contentRedaction: args.contentPolicy.policy,
     diagnostics: args.options.diagnostics,
     activityLog: args.options.activityLog ?? processServerLogSink(),
     store: args.bundle.uiStore,
@@ -6518,6 +6530,17 @@ function localKnowledgeKeys(env: EnvSource): ReturnType<typeof createLocalKnowle
   return createLocalKnowledgeKeyProvider({ env, securityLogSink: processServerLogSink() });
 }
 
+// #4098: the Chat content policy is resolved once per deps graph and recorded on the startup
+// correlation, so a misspelled opt-out is visible as a warning instead of a silent default.
+function resolveLoggedContentPolicy(
+  env: EnvSource,
+  correlationId: string,
+): ResolvedContentRedactionPolicy {
+  const policy = resolveContentRedactionPolicy(env);
+  logChatContentPolicyResolved(processServerLogSink(), correlationId, policy);
+  return policy;
+}
+
 export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerDeps {
   const bootstrapCorrelationId = newCorrelationId();
   const { resolvedUiDbPath, runtimeConfigPath } = runtimePathFields(options);
@@ -6535,13 +6558,14 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
   const redactString = runtimeRedactString(options.env, runtimeConfig, egress);
   const liveRedactor = (value: unknown): unknown => deepRedactStrings(value, redactString);
   const localKnowledgeKeyProvider = localKnowledgeKeys(options.env);
+  const contentPolicy = resolveLoggedContentPolicy(options.env, bootstrapCorrelationId);
   const bundle = buildPersistenceBundle(
     options,
     resolvedUiDbPath,
     redactString,
     evidenceStore,
     bootstrapCorrelationId,
-    runtimeContentRedactString(options.env, runtimeConfig, egress, redactString),
+    runtimeContentRedactString(options.env, runtimeConfig, egress, redactString, contentPolicy),
   );
   const contextProfileForModel = buildContextProfileResolver(() => runtimeConfig.current());
   reconcileNodeStoreAtStartup(options, bundle, bootstrapCorrelationId);
@@ -6562,6 +6586,7 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     bundle,
     contextProfileForModel,
     bootstrapCorrelationId,
+    contentPolicy,
     codingSessionContinuity,
     mcpCredentialRelay: createMcpCredentialRelay(),
   });

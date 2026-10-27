@@ -564,10 +564,15 @@ leaves before JSON serialization. A free-text redactor must never consume serial
 escaped quotes in code or quoted assignments can otherwise corrupt its structure. Retrieval
 activity validation still runs before and after that redaction. The BFF uses the same
 content-policy redactor for live payloads (ADR-0011 D9). Under the explicit deployment setting
-`KEIKO_CONTENT_REDACTION=off`, private grounded-answer metadata preserves authorized content while
-still removing configured infrastructure-secret literals. The store receives this content redactor
-separately from the unconditional redactor used for `short_result` and audit data. Default content
-redaction remains unchanged; no database migration or historical unmasking is performed. No reasoning traces, no evidence
+`KEIKO_CONTENT_REDACTION=off` (#4098), resolved once at startup, the BFF composes the store with a
+separate content redactor that preserves authorized private chat messages and grounded-answer
+metadata while removing the credential floor and configured infrastructure-secret literals. The
+unconditional redactor still serves `short_result` and audit data. The store never reads the
+environment: composed without a content redactor, it projects content with its unconditional
+redactor (fail closed). Default content redaction remains unchanged; no database migration or
+historical unmasking is performed. Text saved during the opt-out is not rewritten when the
+deployment returns to the default: history rehydration and compaction redact it again, while the
+recent verbatim turns of that conversation are resent as stored. No reasoning traces, no evidence
 payloads, no SSE event data are stored in the DB.
 
 **DB location never inside a target repository.** The default path is

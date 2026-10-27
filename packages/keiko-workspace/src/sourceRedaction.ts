@@ -1,5 +1,6 @@
 import { extname } from "node:path";
-import { contentRedactionEnabled, redactContent } from "@oscharko-dev/keiko-security";
+import type { ContentRedactionPolicy } from "@oscharko-dev/keiko-contracts";
+import { redactContent } from "@oscharko-dev/keiko-security";
 import { isEcosystemSourceFile, workspaceLanguageForPath } from "./ecosystems.js";
 import { WorkspaceReadError } from "./errors.js";
 
@@ -9,20 +10,23 @@ import { WorkspaceReadError } from "./errors.js";
  * a consumer that receives workspace text from another read boundary (the Coding runtime's secure
  * read helper, say) imports it through the `./source-redaction` subpath instead of a second copy.
  * Throws `WorkspaceReadError` when no safe projection is available, so callers fail closed.
+ * `preserve` (#4098) is the Chat-only content opt-out: it keeps the source as it is and removes only
+ * credential shapes, so no code projection can be unavailable.
  */
 export function redactWorkspaceSource(
   text: string,
   scopePath: string,
   preserveSourceLineBreaks = true,
+  policy: ContentRedactionPolicy = "redact",
 ): string {
-  if (!contentRedactionEnabled()) return redactContent(text);
+  if (policy === "preserve") return redactContent(text, "preserve");
   const sourceFile = isEcosystemSourceFile(scopePath);
   const language = sourceFile ? workspaceLanguageForPath(scopePath) : undefined;
   const sourceLanguage = projectionLanguage(language, scopePath);
   if (hasUnsupportedCsharpLiteral(language, text))
     throw new WorkspaceReadError("code source redaction is unavailable", scopePath);
   const status = { unavailable: false };
-  const safe = redactContent(text, [], {
+  const safe = redactContent(text, "redact", [], {
     preserveSourceLineBreaks,
     inferSourceLanguage: !sourceFile || sourceLanguage !== undefined,
     ...(sourceLanguage === undefined ? {} : { sourceLanguage }),

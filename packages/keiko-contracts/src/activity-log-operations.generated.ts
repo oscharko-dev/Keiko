@@ -889,6 +889,50 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "chat.content-policy.resolved",
+    category: "security",
+    owner: "keiko-server",
+    emitter: "deps-activity.logChatContentPolicyResolved",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      policy: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["redact", "preserve"],
+      },
+      setting: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["default", "on", "off", "invalid"],
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["chat-content-policy"],
+    proofIds: ["chat.content-policy.resolved.setting"],
+    releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "setting",
+        values: ["invalid"],
+      },
+    ],
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "chat.context.failed",
     category: "gateway",
     owner: "keiko-server",

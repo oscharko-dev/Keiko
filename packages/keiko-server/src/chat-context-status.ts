@@ -14,7 +14,8 @@ import {
   currentRedactionSecrets,
   type UiHandlerDeps,
 } from "./deps.js";
-import { CONVERSATION_SYSTEM_PROMPT, composeConversationPrompt } from "./conversation-prompt.js";
+import { composeConversationPrompt, conversationSystemPrompt } from "./conversation-prompt.js";
+import { chatContentPolicy } from "./content-redactor.js";
 import {
   conversationForGatewayWithCompaction,
   countConversationCheckpointTokens,
@@ -72,7 +73,7 @@ function countHistory(
   checkpoint: ContextCompactionRecord | undefined,
 ): CountedHistory {
   const systemTokens = countGatewayPromptTokens(
-    { messages: [{ role: "system", content: CONVERSATION_SYSTEM_PROMPT }] },
+    { messages: [{ role: "system", content: conversationSystemPrompt(chatContentPolicy(deps)) }] },
     profile.tokenAccounting,
   );
   let messageTokens = 0;
@@ -431,6 +432,7 @@ function compactionProjection(
       // The stored history holds no current request: like the send path's history prefix, even
       // its newest turn may be summarized — an answer larger than the window must not pin it.
       preserveNewestTurn: false,
+      contentRedaction: chatContentPolicy(deps),
     });
   } catch (error) {
     if (error instanceof ContextOverflowError) return undefined;
@@ -487,6 +489,7 @@ function manualCompactionCandidate(
       redactionSecrets: currentRedactionSecrets(deps),
       preserveNewestTurn: false,
       compactAllHistory: true,
+      contentRedaction: chatContentPolicy(deps),
     });
     const record = stampHistoryRevision(
       outcome.compaction,

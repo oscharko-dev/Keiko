@@ -1221,6 +1221,46 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
     }
   });
 
+  // #4098: the deployment opt-out reaches only a Chat retrieval that asks for it. The Coding
+  // Workbench binds the same provider without the option, so its refreshed text stays redacted.
+  it.each([
+    ["a Chat retrieval", "preserve", true],
+    ["the Coding Workbench search", undefined, false],
+  ] as const)(
+    "projects refreshed text for %s under its own content policy",
+    async (_caller, contentRedaction, kept) => {
+      const fixture = await staleFixture();
+      fixture.files["src/auth.ts"] =
+        "export const sessionState = 'session renewal changed +49 30 12345678';\n";
+      try {
+        const provider = configuredRepoSemanticSearchProviderFor(
+          { ...fixture.deps, contentRedaction: "preserve" },
+          undefined,
+          {
+            fs: fixture.fs,
+            repositoryPod: { store: fixture.store, repositoryRoot: ROOT },
+            deadlineAtMs: 1_001,
+            nowMs: (): number => 1,
+            observeSemanticFreshness: fixture.observed,
+            tryReserveRefreshUsage: refreshBudgetGrant().reserve,
+            semanticRefreshFilesMax: 1,
+            ...(contentRedaction === undefined ? {} : { contentRedaction }),
+          },
+        );
+        if (provider === undefined) throw new Error("expected configured refresh provider");
+        await searchStaleFixture(fixture, provider);
+        const fragments = fixture.embedding.mock.calls
+          .map(([request]) => request.input)
+          .filter((input) => input.startsWith("Path: "));
+        expect(fragments).toHaveLength(1);
+        expect(fragments[0]).toContain("export const sessionState");
+        expect(fragments[0]?.includes("+49 30 12345678")).toBe(kept);
+      } finally {
+        fixture.close();
+      }
+    },
+  );
+
   it("refreshes only explicitly enabled bounded live fragments", async () => {
     const fixture = await staleFixture({
       semanticRefreshFilesMax: 1,

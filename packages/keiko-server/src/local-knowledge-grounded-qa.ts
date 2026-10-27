@@ -1,4 +1,4 @@
-import { currentContentRedactor } from "./content-redactor.js";
+import { currentContentRedactor, withChatContentPolicy } from "./content-redactor.js";
 import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { withMarkdownSkillAdmission } from "./markdown-skill-admission.js";
 import {
@@ -1456,7 +1456,12 @@ function resolveModel(
   if (resolvedModel === undefined) {
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
   }
-  return withConversationReadinessAdmission(resolvedModel, modelId, readinessAdmission, deps);
+  return withConversationReadinessAdmission(
+    withChatContentPolicy(deps, resolvedModel),
+    modelId,
+    readinessAdmission,
+    deps,
+  );
 }
 
 function redactText(deps: UiHandlerDeps, value: string): string {

@@ -1,4 +1,8 @@
-import { currentContentRedactor } from "./content-redactor.js";
+import {
+  chatContentPolicy,
+  currentContentRedactor,
+  withChatContentPolicy,
+} from "./content-redactor.js";
 import { withMarkdownSkillRequestAuthority } from "./markdown-skill-authority.js";
 import { promptFitRedactor } from "./grounded-prompt-redactor.js";
 import {
@@ -126,7 +130,7 @@ import {
   type GroundedAnswerEvidenceDeclaration,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 
-import type { ContextProfile } from "@oscharko-dev/keiko-contracts";
+import type { ContentRedactionPolicy, ContextProfile } from "@oscharko-dev/keiko-contracts";
 import {
   deriveContextProfileFromCapability,
   DEFAULT_CONTEXT_PROFILE,
@@ -932,6 +936,8 @@ export function groundedPromptInputTokensForCapability(
 export interface GroundedGatewayPromptOptions {
   readonly protectedSkill?: MarkdownSkillDocument | undefined;
   readonly ownAssessmentPolicy?: OwnAssessmentPolicy | undefined;
+  /** #4098: the Chat content policy the system prompt states; absent keeps the default prompt. */
+  readonly contentRedaction?: ContentRedactionPolicy | undefined;
   readonly modelInputTokensMax?: number | undefined;
   readonly callerInputTokensMax?: number | undefined;
   readonly tokenAccounting?: ContextProfile["tokenAccounting"];
@@ -1433,6 +1439,7 @@ export function fittedGroundedGatewayPrompt(
       -1,
       options?.ownAssessmentPolicy,
       options?.protectedSkill,
+      options?.contentRedaction,
     ),
     sentReferenceCount: promptExcerptCount([fitted.pack]),
     availableReferenceCount: promptExcerptCount([pack]),
@@ -1616,6 +1623,7 @@ function buildRawGroundedGatewayMessages(
   omissionPathBytes?: number,
   ownAssessmentPolicy: OwnAssessmentPolicy = "disabled",
   protectedSkill?: MarkdownSkillDocument,
+  contentRedaction?: ContentRedactionPolicy,
 ): readonly GatewayChatMessage[] {
   const safeQuestion = redactedString(redactor, question);
   const userContent = [
@@ -1639,7 +1647,10 @@ function buildRawGroundedGatewayMessages(
     safeQuestion,
   ].join("\n");
   return [
-    { role: "system", content: groundedSystemPrompt(ownAssessmentPolicy) },
+    {
+      role: "system",
+      content: groundedSystemPrompt(ownAssessmentPolicy, "file", contentRedaction),
+    },
     { role: "user", content: withMarkdownSkillInstructions(userContent, protectedSkill) },
   ];
 }
@@ -1662,6 +1673,7 @@ function groundedPromptBuilder(options?: GroundedGatewayPromptOptions): Grounded
       omissionPathBytes,
       options?.ownAssessmentPolicy,
       options?.protectedSkill,
+      options?.contentRedaction,
     );
 }
 
@@ -1911,6 +1923,7 @@ export function groundedPromptOptions(
   const modelInputTokensMax = groundedPromptInputTokensForCapability(chatCapability(deps, modelId));
   return {
     ownAssessmentPolicy: currentOwnAssessmentPolicy(deps),
+    contentRedaction: chatContentPolicy(deps),
     ...(modelInputTokensMax === undefined ? {} : { modelInputTokensMax }),
     ...(tokenAccounting === undefined ? {} : { tokenAccounting }),
   };
@@ -1935,7 +1948,12 @@ function resolveGroundedAnswerModel(
   if (resolvedModel === undefined) {
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
   }
-  return withConversationReadinessAdmission(resolvedModel, modelId, readinessAdmission, deps);
+  return withConversationReadinessAdmission(
+    withChatContentPolicy(deps, resolvedModel),
+    modelId,
+    readinessAdmission,
+    deps,
+  );
 }
 
 interface DefaultRunnerContext {
@@ -1952,6 +1970,23 @@ interface DefaultRunnerContext {
 
 // Split out of defaultRunner to keep it within the line budget: the actual GroundedRunner closure
 // invoked once per exploration input.
+/** The deployment policies one grounded exploration runs under, all read from this deps graph. */
+function groundedExplorationPolicies(deps: UiHandlerDeps): {
+  readonly ownAssessmentPolicy: ReturnType<typeof currentOwnAssessmentPolicy>;
+  readonly contentRedaction: ContentRedactionPolicy;
+  readonly followUpConfigurationDisposition: ReturnType<
+    typeof connectedFollowUpConfiguration
+  >["disposition"];
+} {
+  return {
+    ownAssessmentPolicy: currentOwnAssessmentPolicy(deps),
+    contentRedaction: chatContentPolicy(deps),
+    followUpConfigurationDisposition: connectedFollowUpConfiguration(
+      deps.env.KEIKO_CONNECTED_FOLLOW_UP_PASSES_MAX,
+    ).disposition,
+  };
+}
+
 function runDefaultGroundedExploration(
   runnerCtx: DefaultRunnerContext,
   input: OrchestratorInput,
@@ -1973,10 +2008,7 @@ function runDefaultGroundedExploration(
     runnerCtx.refreshDocuments,
   );
   return runGroundedExploration(budgetedInput, {
-    ownAssessmentPolicy: currentOwnAssessmentPolicy(deps),
-    followUpConfigurationDisposition: connectedFollowUpConfiguration(
-      deps.env.KEIKO_CONNECTED_FOLLOW_UP_PASSES_MAX,
-    ).disposition,
+    ...groundedExplorationPolicies(deps),
     reliableCitationBehaviour: citationBehaviourFor(deps, modelId),
     observeCitationBehaviour: citationBehaviourObserverFor(deps, modelId, runnerCtx.correlationId),
     answerer: createGatewayAnswerer(
@@ -2674,7 +2706,7 @@ function resolveMultiSourceSeam(
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
   }
   const model = withConversationReadinessAdmission(
-    resolvedModel,
+    withChatContentPolicy(deps, resolvedModel),
     modelId,
     readinessAdmission,
     deps,
@@ -3074,7 +3106,7 @@ function compactGroundedCurrentPrompt(
     protectedInstructionTokens: markdownSkillCompactionReserve(
       skill,
       profile,
-      groundedSystemPrompt(currentOwnAssessmentPolicy(deps)),
+      groundedSystemPrompt(currentOwnAssessmentPolicy(deps), "file", chatContentPolicy(deps)),
     ),
     signal: prepared.signal,
     correlationId: prepared.correlationId,

@@ -1,4 +1,8 @@
-import { currentContentRedactor } from "./content-redactor.js";
+import {
+  chatContentPolicy,
+  currentContentRedactor,
+  withChatContentPolicy,
+} from "./content-redactor.js";
 import { withMarkdownSkillAdmission } from "./markdown-skill-admission.js";
 import {
   markdownSkillPromptUsage,
@@ -960,7 +964,7 @@ async function retrieveOneConnector(
 // The hybrid topology shares the folder prompt and deterministic localized abstention producer.
 function hybridSystemPrompt(deps: UiHandlerDeps): string {
   return (
-    `${groundedSystemPrompt(currentOwnAssessmentPolicy(deps), "numeric")} Connector excerpts are indexed-document citations: attribute every ` +
+    `${groundedSystemPrompt(currentOwnAssessmentPolicy(deps), "numeric", chatContentPolicy(deps))} Connector excerpts are indexed-document citations: attribute every ` +
     "connector claim to its source label and the matching [n] marker in addition to any file reference."
   );
 }
@@ -2315,7 +2319,7 @@ function resolveHybridAnswerer(ctx: HybridGroundedAskCtx): ResolvedAnswerer | Ro
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
   }
   const model = withConversationReadinessAdmission(
-    resolvedModel,
+    withChatContentPolicy(ctx.deps, resolvedModel),
     ctx.modelId,
     readinessAdmission,
     ctx.deps,

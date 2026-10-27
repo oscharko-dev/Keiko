@@ -2223,6 +2223,38 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     deps.memoryVault?.close();
   });
 
+  it.each([
+    [undefined, "redact", "default", "info"],
+    ["off", "preserve", "off", "info"],
+    ["OFF", "redact", "invalid", "warn"],
+  ] as const)(
+    "resolves KEIKO_CONTENT_REDACTION=%j once at startup into the Chat policy %s (#4098)",
+    async (value, policy, setting, level) => {
+      const stateDir = tmp("content-policy-state-");
+      const activityLog = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink: activityLog, level: "info" }));
+      const deps = buildUiHandlerDeps({
+        configPath: undefined,
+        evidenceDir: tmp("content-policy-evidence-"),
+        uiDbPath: join(stateDir, "keiko-ui.db"),
+        env: value === undefined ? {} : { KEIKO_CONTENT_REDACTION: value },
+      });
+      try {
+        expect(deps.contentRedaction).toBe(policy);
+        const lines = activityLog.events.filter(
+          (event) => event.op === "chat.content-policy.resolved",
+        );
+        expect(lines).toHaveLength(1);
+        expect(lines[0]).toMatchObject({ level, extra: { policy, setting } });
+        const opened = activityLog.events.find((event) => event.op === "store.opened");
+        expect(lines[0]?.correlationId).toBe(opened?.correlationId);
+      } finally {
+        await deps.dispose?.();
+        resetServerLogger();
+      }
+    },
+  );
+
   it("uses one valid correlation for production bootstrap store and memory events", async () => {
     const stateDir = tmp("bootstrap-correlation-state-");
     const activityLog = createBufferedServerLogSink();

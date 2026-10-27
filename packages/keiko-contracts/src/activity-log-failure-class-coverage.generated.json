@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 372,
-  "completeClassCount": 372,
+  "supportedClassCount": 373,
+  "completeClassCount": 373,
   "completeness": "complete",
   "classes": [
     {
@@ -1869,6 +1869,62 @@
             "causeChain": false
           },
           "proofIds": ["chat.send.rejected.reason"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "chat-content-policy",
+      "requirementContract": "chat-content-policy",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["state"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": ["chat.content-policy.resolved"],
+        "end": [],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "chat.content-policy.resolved",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["chat.content-policy.resolved"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "chat.content-policy.resolved",
+          "owner": "keiko-server",
+          "category": "security",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "policy",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "setting",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["chat.content-policy.resolved.setting"],
           "replayReferences": [],
           "missingObligations": []
         }

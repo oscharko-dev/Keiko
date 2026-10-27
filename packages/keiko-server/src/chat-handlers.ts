@@ -1,4 +1,8 @@
-import { currentContentRedactor } from "./content-redactor.js";
+import {
+  chatContentPolicy,
+  currentContentRedactor,
+  withChatContentPolicy,
+} from "./content-redactor.js";
 import { raceAbort } from "./abort-race.js";
 import { logChatCreationIntent } from "./store/chatCreationIntents.js";
 import { resolveRegisteredWorkspaceProjectPath } from "./workspace-root-identity.js";
@@ -9,7 +13,7 @@ import {
   markdownSkillSelectionRefusal,
 } from "./markdown-skill-selection-admission.js";
 import { markdownSkillCompactionReserve } from "./markdown-skill-prompt.js";
-import { CONVERSATION_SYSTEM_PROMPT } from "./conversation-prompt.js";
+import { conversationSystemPrompt } from "./conversation-prompt.js";
 import { withMarkdownSkillAdmission } from "./markdown-skill-admission.js";
 import { CancelledError } from "@oscharko-dev/keiko-security/errors/gateway";
 import { hasGroundingScope } from "./chat-grounding.js";
@@ -1861,6 +1865,7 @@ export function captureGatewayTurnSnapshot(
           new Set(snapshot.history.map((message) => message.id)),
           currentRedactionSecrets(deps),
           correlationId,
+          chatContentPolicy(deps),
         ),
       };
 }
@@ -1920,6 +1925,7 @@ export function buildGatewayAssembly(
     earlierCompaction: snapshot.earlierCompaction,
     documentContext: request.documentContext,
     redactionSecrets: currentRedactionSecrets(deps),
+    contentRedaction: chatContentPolicy(deps),
   });
   return finalizeGatewayAssembly(
     stampGatewayCompaction(selected, deps, modelId, snapshot),
@@ -2207,12 +2213,10 @@ function bufferedModelAtProviderBoundary(
     );
     return invalidProviderBoundary;
   }
-  return (
-    deps.modelPortFactory(modelId) ?? {
-      status: 400,
-      body: errorBody("NO_MODEL", "No model provider is configured."),
-    }
-  );
+  const model = deps.modelPortFactory(modelId);
+  return model === undefined
+    ? { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") }
+    : withChatContentPolicy(deps, model);
 }
 
 function desktopSkillCompactionReserve(
@@ -2224,7 +2228,7 @@ function desktopSkillCompactionReserve(
   return markdownSkillCompactionReserve(
     skill,
     currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE,
-    CONVERSATION_SYSTEM_PROMPT,
+    conversationSystemPrompt(chatContentPolicy(deps)),
   );
 }
 
