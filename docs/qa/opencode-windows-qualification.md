@@ -28,6 +28,9 @@ The continuation starts from PR #4088 head `475e91a3f9745a70a3371400c9fe265adf36
 integrates completed `dev` work through `44cfbbb3e` (Keiko 1.3.0, including #4092, #4080, #4095,
 #4096 and #4098). The original environment and artifact observations below retain their original
 source identity; this merge does not turn them into release or final-head evidence.
+The public [Keiko v1.3.0 release](https://github.com/oscharko-dev/Keiko/releases/tag/v1.3.0)
+was published at 2026-10-26 22:53 UTC (2026-10-26 23:53 Europe/Berlin). Publication does not add
+the absent Windows npm runtime target or reconcile this branch's changed helper source pin.
 
 The latest completed [CI run 40403258236](https://github.com/oscharko-dev/Keiko/actions/runs/40403258236),
 its duplicate run 40403248564, and customer-shape run 40403248664 failed before functional tests
@@ -47,6 +50,12 @@ five skipped**. The failure is the unchanged macOS native-profile PATH fixture c
 POSIX policy with Windows temporary paths (`runtime-gateway-policy-invalid`); the five skips
 remain explicit foreign-platform proofs. The real supervisor harness separately passes ordinary
 and detached descendants, cancellation and control EOF against the retained quality-build binary.
+Changed-file ESLint/Prettier, semantic duplication, architecture and negative architecture checks
+also pass; all five relative documentation link targets resolve.
+The required local Sonar rerun passes without unresolved findings (analysis task
+`965f8eb0-c6f1-406a-a3b7-9e288b35c83e`). Its first attempt aborted with an unresponsive JavaScript
+bridge and provides no successful verdict. The retry uses the repository-supported 8-GiB analyzer
+heap and, after the merge commit, the normal 19-file feature diff against `origin/dev`.
 
 The two substantive blockers remain unchanged:
 
@@ -58,9 +67,45 @@ The two substantive blockers remain unchanged:
   `38f7e01d432e283ca14c21e9f7e650c4085559d0`. Installed service/state machine, helper/server
   composition, restart reconciliation, installer/runtime packaging and actual Workbench execution
   remain outstanding. Production still refuses non-macOS gateway confinement before spawn.
+  Its [diagnostic run 40384624097](https://github.com/oscharko-dev/Keiko/actions/runs/40384624097/job/121789510335)
+  has completed with failure: the host-to-AppContainer HTTP control still times out
+  (`winsock=10060`) for IPv4 and IPv6, including the unfiltered inbound-provisioned controls.
 
 No inline review threads or PR discussion findings were present when rechecked. Full W1–W15
 acceptance and merge readiness remain unclaimed.
+
+### Published Windows helper execution
+
+The newly available `v1.3.0` Windows portable archive was downloaded separately, without running
+the installer or starting a product instance. Its 193,372,622 bytes match the published manifest
+and SHA256SUMS: `47ebc7321bb28c5d6cf18b90c0669c457d6d2b33bfce0e462c2f2a9d9d715410`.
+The existing `verifyPortableReleaseTrust` verifies the manifest using Keiko's built-in trusted
+public keys (`ok: true`, metadata version 424854975). Only the two uniquely named native helper
+entries were extracted; their lengths and hashes match that verified manifest:
+
+| Helper                | Bytes   | Published and measured SHA-256                                     |
+| --------------------- | ------- | ------------------------------------------------------------------ |
+| Runtime supervisor    | 115,712 | `8fb041805d804904bfe89684b8122e4f78bd217ab28693b50c6fbaf6fc255578` |
+| Secure workspace read | 129,024 | `1bebc2ccfc3fe1b0f9f5a8ce07219303c58939612c433c7bb2661cc6579b64f3` |
+
+The existing native harnesses execute these exact release bytes:
+
+- `node native/runtime-supervisor/test-protocol.mjs --helper <extracted-supervisor>`:
+  **PASS**, ordinary and detached descendants, cancellation and control EOF, with real live-PID
+  positive controls and disappearance checks.
+- `node native/secure-workspace-read/test-protocol.mjs --binary <extracted-secure-read>`:
+  **PASS**, including spaces/Unicode, case/root aliases, long paths, ADS/device namespace refusal,
+  file-generation and ancestor-alias consistency. All 32 file-generation reads observe known
+  bytes, with nine mutation attempts, eight after spawn and five sharing denials. Load observations:
+  1,000 sequential reads, p95 5.8 ms; 100 concurrent reads in 406.4 ms; resource delta zero.
+
+This advances W2/W4/W7 component evidence from locally built helpers to published portable bytes.
+The release's own signing report and runtime activation trust anchor remain
+`evaluation-unqualified`, with no verified Authenticode publisher chain or timestamp. The release
+manifest signature proves provenance; it does not replace those platform or product qualifications.
+No complete portable install/start, Windows npm package, Workbench model turn, upgrade or rollback
+is claimed. The optimized shipped supervisor passing does not invalidate the independently
+reproduced unoptimized handle-lifetime defect repaired by this PR.
 
 ## Environment and artifact identity
 
@@ -275,7 +320,7 @@ no unfinished implementation or its results were imported as this branch's quali
 | W1 — OS boundaries                   | BLOCKED. Mapped profile retained by explicit decision. Production gateway confinement still refuses Windows. Native filesystem and foreign-process boundaries remain unqualified                                                                                                               |
 | W2 — Owned process tree              | PARTIAL. Real Job Object helper cancels/reaps ordinary and detached descendants and handles control EOF. Workbench concurrency release, original service, watchers and active turns remain untested behind W1                                                                                  |
 | W3 — Customer installs               | BLOCKED. Fresh development dependencies and staging pass, but the npm runtime target map and approved npm runtime identities contain macOS only. No clean Windows npm/npx/Yarn/start/reload/upgrade qualification                                                                              |
-| W4 — Artifacts / approvals           | PARTIAL. Approved OpenCode and ripgrep bytes verified, local helper built. No approved Windows npm package/helper release; retained-state and stale-helper refusal still need installed-artifact execution                                                                                     |
+| W4 — Artifacts / approvals           | PARTIAL. Approved OpenCode/ripgrep and published v1.3.0 portable helper bytes verified; release helpers pass isolated execution. Portable remains evaluation-unqualified; Windows npm approval and installed retained-state/stale-helper proofs remain open                                    |
 | W5 — Platform lanes                  | PARTIAL. Existing required Windows native-quality lane now runs the actual supervisor protocol harness against its freshly compiled helper. Real service execution remains blocked; native macOS-only and environment-gated suites are not Windows certification                               |
 | W6 — Three-mode task comparison      | BLOCKED by W1 and the missing live model/Gateway qualification. No task or mode counted as passed                                                                                                                                                                                              |
 | W7 — Windows paths / filesystem      | PARTIAL. Git reparse, checkout binding, portable discovery, and source-built/staged secure-read paths and races pass, including Unicode, case aliases, long paths, ADS and namespace refusal. Full instruction/media/external-root and linked-worktree move/watcher qualification remains open |
@@ -284,7 +329,7 @@ no unfinished implementation or its results were imported as this branch's quali
 | W10 — Agents / IPC / active input    | NOT RUN. Native capabilities are unavailable under the retained mapped profile. Native local MCP still constructs `/usr/bin/env -i`; no native Windows MCP execution claim                                                                                                                     |
 | W11 — Network / environment          | PARTIAL. Disposable Windows runner passes IPv4/IPv6 WFP lifecycle and actual AppContainer socket/descendant controls. Installed service, inherited proxy/CA/OpenSSL/FIPS, endpoint failures, long streams and orphan requests remain unqualified                                               |
 | W12 — Visible identity / state       | PARTIAL, static only. Production selects `direct`, not `native`. Actual UI/model/agent/mode state and reload flows remain untested                                                                                                                                                             |
-| W13 — Upgrade / rollback             | BLOCKED. No approved/released Windows npm runtime pair or installed portable candidate supplied for this run. No executable-lock, rollback or retained-state qualification                                                                                                                     |
+| W13 — Upgrade / rollback             | PARTIAL. Published v1.3.0 portable archive and helper identities verified and helpers executed. No installed upgrade/rollback, executable-lock or retained-state qualification; Windows npm runtime pair remains absent                                                                        |
 | W14 — Large repositories / resources | NOT RUN. Secure-read load observations above cannot substitute for standalone/Workbench task measurements or another platform's reference budgets                                                                                                                                              |
 | W15 — Private skills / races         | NOT RUN. No actual model dispatch, compaction, revision replacement or multi-turn repair evidence                                                                                                                                                                                              |
 
