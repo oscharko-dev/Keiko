@@ -16,7 +16,10 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceInfo, WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
-import { DEPENDENCY_INSTALL_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/verification";
+import {
+  DEPENDENCY_INSTALL_LIMITS,
+  isVerificationDependencySummary,
+} from "@oscharko-dev/keiko-contracts/runtime/verification";
 import {
   DEPENDENCY_APPROVED_REGISTRY,
   DEPENDENCY_INSTALL_ARGS,
@@ -1466,6 +1469,34 @@ describe("runDependencyBootstrap — registry egress", () => {
       detail: expect.stringContaining("egress proxy failed during the install") as string,
     });
     expect(proxy.closed()).toBe(1);
+  });
+
+  // A refusal reason belongs to a refused summary only: an installed tree refused before the proxy
+  // reported its fault leaves a failed summary that still satisfies the dependency contract.
+  it("drops the installed-tree refusal reason when the egress proxy faulted", async () => {
+    const root = tempRoot();
+    const plan = installPlan(root);
+    writeInstalledTree(root, {
+      "node_modules/left-pad": registryEntry("left-pad"),
+      "node_modules/left-pad/node_modules/inner": {
+        version: "1.0.0",
+        resolved: "http://registry.internal.example/inner-1.0.0.tgz",
+        integrity: REGISTRY_INTEGRITY,
+      },
+    });
+    const proxy = fakeEgressProxy({ allowed: 2, refused: 0 }, "EMFILE");
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { exitCode: 0 });
+
+    const outcome = await runDependencyBootstrap(plan, {
+      ...bootstrapDepsFor(root, rec.fn),
+      startEgressProxy: () => Promise.resolve(proxy),
+    });
+
+    expect(outcome.summary.state).toBe("failed");
+    expect(outcome.summary).not.toHaveProperty("refusalReason");
+    expect(outcome.summary.detail).toContain("egress proxy failed during the install");
+    expect(isVerificationDependencySummary(outcome.summary)).toBe(true);
   });
 
   it("fails closed without spawning npm when the egress proxy cannot start", async () => {

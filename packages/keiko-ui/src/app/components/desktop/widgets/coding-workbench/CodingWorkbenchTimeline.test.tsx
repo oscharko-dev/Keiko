@@ -759,6 +759,43 @@ describe("CodingWorkbenchTimeline", () => {
     expect(detail).toHaveTextContent("keiko_workspace_discover");
   });
 
+  it("reports a tool disclosure only when the reader activates its summary", () => {
+    // #3897 review: a failed card opens itself, and the browser announces that as a `toggle` too.
+    const toggled = (expanded: boolean): readonly unknown[] => [
+      "[keiko] coding workbench interaction: details-toggled",
+      {
+        codingWorkbenchInteraction: { interaction: "details-toggled", section: "tool", expanded },
+        correlationId: undefined,
+      },
+    ];
+    const summaryOf = (details: Element | undefined): HTMLElement => {
+      const summary = details?.querySelector("summary");
+      if (summary === null || summary === undefined) throw new Error("disclosure without summary");
+      return summary;
+    };
+    const writer = vi.fn();
+    setClientDiagnosticWriter(writer);
+    try {
+      const { container } = render(
+        <Timeline
+          events={[]}
+          activity={activityLike(feedWithRepeatedTools())}
+          questions={IDLE_QUESTIONS}
+        />,
+      );
+      const [routine, failed] = container.querySelectorAll('[data-timeline-kind="tool"] details');
+      if (failed === undefined) throw new Error("failed tool card missing");
+      fireEvent(failed, new Event("toggle"));
+      expect(writer).not.toHaveBeenCalled();
+
+      fireEvent.click(summaryOf(failed));
+      fireEvent.click(summaryOf(routine));
+      expect(writer.mock.calls).toEqual([toggled(false), toggled(true)]);
+    } finally {
+      resetClientDiagnosticWriter();
+    }
+  });
+
   // The tool-call card (`.toolCard`) and plan card rows are otherwise exercised only indirectly
   // through CodingWorkbenchWindow.test.tsx's full-window axe pass; this pins the Timeline's own
   // rendering of both directly, matching the per-component axe suites of its siblings.
@@ -1075,7 +1112,7 @@ describe("CodingWorkbenchTimeline model reasoning", () => {
     expect(reasoningBlock(container)).toHaveTextContent("Output truncated");
   });
 
-  it("reports every toggle, which is always the reader's, and nothing else", () => {
+  it("reports each summary activation, which is always the reader's, and nothing else", () => {
     // #3897: a toggle is routine evidence on its own closed report, never a free-text note.
     const toggled = (expanded: boolean): readonly unknown[] => [
       "[keiko] coding workbench interaction: details-toggled",
@@ -1103,6 +1140,11 @@ describe("CodingWorkbenchTimeline model reasoning", () => {
       const block = reasoningBlock(container);
       block.open = true;
       fireEvent(block, new Event("toggle"));
+      expect(writer).not.toHaveBeenCalled();
+      block.open = false;
+      const summary = block.querySelector("summary");
+      if (summary === null) throw new Error("reasoning block without summary");
+      fireEvent.click(summary);
       expect(writer).toHaveBeenCalledExactlyOnceWith(...toggled(true));
       writer.mockClear();
       rerender(

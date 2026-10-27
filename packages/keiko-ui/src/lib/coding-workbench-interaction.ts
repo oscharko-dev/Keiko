@@ -1,7 +1,7 @@
 // Routine evidence of what the human did on the Coding Workbench page (#3897). Each report is a
 // closed shape the server records at info as `client.coding-workbench.interaction`, on the routine
 // budget: opening a detail is never a warn/unknown browser failure.
-import type { SyntheticEvent } from "react";
+import type { MouseEvent } from "react";
 import type {
   ClientCodingWorkbenchAgentKind,
   ClientCodingWorkbenchDetailSection,
@@ -19,15 +19,22 @@ export function reportCodingWorkbenchInteraction(
   });
 }
 
-/** A disclosure opened or closed, read from the element itself. */
-export function reportCodingWorkbenchDetailsToggled(
+/**
+ * The reader opened or closed a disclosure by activating its summary (a click, or Enter/Space,
+ * which the browser turns into one). The `toggle` event also fires when the page opens a
+ * disclosure itself, such as a failed tool card, so it is never read as the reader's. The element
+ * toggles after this handler, so the new state is the opposite of the current one.
+ */
+export function reportCodingWorkbenchSummaryActivated(
   section: ClientCodingWorkbenchDetailSection,
-  event: SyntheticEvent<HTMLDetailsElement>,
+  event: MouseEvent<HTMLElement>,
 ): void {
+  const details = event.currentTarget.parentElement;
+  if (!(details instanceof HTMLDetailsElement) || event.isDefaultPrevented()) return;
   reportCodingWorkbenchInteraction({
     interaction: "details-toggled",
     section,
-    expanded: event.currentTarget.open,
+    expanded: !details.open,
   });
 }
 

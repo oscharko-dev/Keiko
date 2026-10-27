@@ -21,7 +21,7 @@ import type {
 import type { UseCodingWorkbenchQuestionsResult } from "@/lib/useCodingWorkbenchQuestions";
 import type { UseCodingWorkbenchSafeActivityResult } from "@/lib/useCodingWorkbenchSafeActivity";
 import {
-  reportCodingWorkbenchDetailsToggled,
+  reportCodingWorkbenchSummaryActivated,
   reportCodingWorkbenchInteraction,
 } from "@/lib/coding-workbench-interaction";
 import { useLocale } from "@/lib/i18n";
@@ -855,12 +855,11 @@ function ModelReasoning({
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   return (
-    <details
-      className={styles.cmpReasoning}
-      aria-live="off"
-      onToggle={(event) => reportCodingWorkbenchDetailsToggled("model-reasoning", event)}
-    >
-      <summary className={styles.cmpActivitySummary}>
+    <details className={styles.cmpReasoning} aria-live="off">
+      <summary
+        className={styles.cmpActivitySummary}
+        onClick={(event) => reportCodingWorkbenchSummaryActivated("model-reasoning", event)}
+      >
         <span>{t("codingWorkbench.activity.reasoning.title")}</span>
         <span className={styles.cmpReasoningBadge}>
           {t("codingWorkbench.activity.reasoning.badge")}
@@ -947,9 +946,11 @@ function ToolRow({
         className={styles.toolCard}
         data-tool-state={item.tool.state}
         open={item.tool.state === "failed" || item.tool.state === "denied"}
-        onToggle={(event) => reportCodingWorkbenchDetailsToggled("tool", event)}
       >
-        <summary className={styles.cmpActivitySummary}>
+        <summary
+          className={styles.cmpActivitySummary}
+          onClick={(event) => reportCodingWorkbenchSummaryActivated("tool", event)}
+        >
           <span className={styles.toolIcon} aria-hidden="true" />
           <div className={styles.toolMeta}>
             <p className={styles.timelineTitle}>{humanizeToolName(item.tool.tool, t)}</p>
@@ -1028,11 +1029,11 @@ function ToolGroupRow({
       aria-setsize={total}
       data-timeline-kind="group"
     >
-      <details
-        className={styles.cmpToolGroup}
-        onToggle={(event) => reportCodingWorkbenchDetailsToggled("activity-group", event)}
-      >
-        <summary className={styles.cmpActivitySummary}>
+      <details className={styles.cmpToolGroup}>
+        <summary
+          className={styles.cmpActivitySummary}
+          onClick={(event) => reportCodingWorkbenchSummaryActivated("activity-group", event)}
+        >
           {t("codingWorkbench.activity.groupCount", { count })}
         </summary>
         <ol className={styles.cmpGroupedTools}>
@@ -1085,12 +1086,11 @@ function PlanRow({
       aria-setsize={total}
       data-timeline-kind="plan"
     >
-      <details
-        className={styles.planCard}
-        open={item.open}
-        onToggle={(event) => reportCodingWorkbenchDetailsToggled("plan", event)}
-      >
-        <summary className={styles.cmpActivitySummary}>
+      <details className={styles.planCard} open={item.open}>
+        <summary
+          className={styles.cmpActivitySummary}
+          onClick={(event) => reportCodingWorkbenchSummaryActivated("plan", event)}
+        >
           <p className={styles.timelineTitle}>{t("codingWorkbench.activity.plan.title")}</p>
           <PlanProgress steps={item.plan.steps} t={t} />
         </summary>
@@ -1151,12 +1151,13 @@ function EventRow({
       data-timeline-kind="event"
       data-event-tone={tone}
     >
-      <details
-        className={styles.eventCard}
-        open={tone === "attention"}
-        onToggle={(event) => reportCodingWorkbenchDetailsToggled("event", event)}
-      >
-        <summary className={styles.cmpActivitySummary}>{eventTitle(item.event, t)}</summary>
+      <details className={styles.eventCard} open={tone === "attention"}>
+        <summary
+          className={styles.cmpActivitySummary}
+          onClick={(event) => reportCodingWorkbenchSummaryActivated("event", event)}
+        >
+          {eventTitle(item.event, t)}
+        </summary>
         {detail.length > 0 ? <p className={styles.timelineDetail}>{detail}</p> : null}
         <VerificationDetail event={item.event} t={t} />
       </details>

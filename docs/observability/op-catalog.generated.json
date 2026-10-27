@@ -101263,6 +101263,13 @@
       "package": "keiko-server"
     },
     {
+      "op": "coding-app-session.operation.state",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-app-session/codingRunSessionLease.ts:80",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
       "op": "coding-app-session.paired",
       "category": "http",
       "site": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:91",

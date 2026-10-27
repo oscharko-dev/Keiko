@@ -18,7 +18,7 @@ import { TaskWorkspaceManager } from "../../TaskWorkspaceManager";
 import { useOptionalActiveWorkspace } from "../../context/ActiveWorkspaceContext";
 import { Icons } from "../../Icons";
 import {
-  reportCodingWorkbenchDetailsToggled,
+  reportCodingWorkbenchSummaryActivated,
   reportCodingWorkbenchInteraction,
 } from "@/lib/coding-workbench-interaction";
 import { useCodingWorkbenchTranslate } from "./coding-workbench-i18n";
@@ -347,11 +347,13 @@ function InformationDetails(props: InfoPanelProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const versions = useCodingWorkbenchVersionFacts(props.runtimeVersion);
   return (
-    <details
-      className={styles.cmpInfoDetails}
-      onToggle={(event) => reportCodingWorkbenchDetailsToggled("information", event)}
-    >
-      <summary className={styles.cmpActivitySummary}>{t("codingWorkbench.info.details")}</summary>
+    <details className={styles.cmpInfoDetails}>
+      <summary
+        className={styles.cmpActivitySummary}
+        onClick={(event) => reportCodingWorkbenchSummaryActivated("information", event)}
+      >
+        {t("codingWorkbench.info.details")}
+      </summary>
       <InformationFacts facts={[...props.facts.filter((fact) => !fact.primary), ...versions]} />
       <p className={styles.helpText}>{t("codingWorkbench.controls.help")}</p>
       <TaskWorkspaceLocation />

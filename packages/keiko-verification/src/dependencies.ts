@@ -971,9 +971,11 @@ function withEgress(
 ): DependencyBootstrapOutcome {
   const summary = { ...outcome.summary, egress };
   if (fault !== undefined) {
+    // A refusal reason belongs to a refused summary only; the fault supersedes an earlier refusal.
+    const { refusalReason: _superseded, ...faulted } = summary;
     return {
       ...outcome,
-      summary: { ...summary, state: "failed", detail: EGRESS_FAULT_DETAIL },
+      summary: { ...faulted, state: "failed", detail: EGRESS_FAULT_DETAIL },
     };
   }
   const state = outcome.summary.state;

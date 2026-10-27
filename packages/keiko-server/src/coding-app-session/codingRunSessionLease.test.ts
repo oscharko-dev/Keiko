@@ -15,6 +15,7 @@ import {
   CODING_RUN_SESSION_LEASE_OBSERVATION_MS,
   holdAppSessionForCodingRun,
 } from "./codingRunSessionLease.js";
+import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "../diagnostics-log.js";
 import { APP_SESSION_COOKIE_NAME } from "./sessionCookie.js";
 import { createCodingAppSessionChannel } from "./sessionChannel.js";
 import { createSessionRegistry } from "./sessionRegistry.js";
@@ -26,7 +27,9 @@ interface LeaseFixture {
   readonly deps: {
     readonly codingAppSessionChannel: ReturnType<typeof createCodingAppSessionChannel>;
     readonly activityLog: BufferedServerLogSink;
+    readonly diagnostics: ServerDiagnosticSink;
   };
+  readonly diagnostics: ServerDiagnosticRecord[];
   readonly registry: ReturnType<typeof createSessionRegistry>;
   readonly request: IncomingMessage;
   readonly token: string;
@@ -39,13 +42,18 @@ function leaseFixture(): LeaseFixture {
   const minted = registry.mint("coding-run-lease");
   const request = new IncomingMessage(new Socket());
   request.headers.cookie = `${APP_SESSION_COOKIE_NAME}=${minted.cookieToken}`;
+  const diagnostics: ServerDiagnosticRecord[] = [];
   const deps = {
     codingAppSessionChannel: createCodingAppSessionChannel({ registry }),
     activityLog: createBufferedServerLogSink(),
+    diagnostics: {
+      record: (record: ServerDiagnosticRecord): void => void diagnostics.push(record),
+    },
   };
   const state: LeaseFixture["state"] = { value: "running" };
   return {
     deps,
+    diagnostics,
     registry,
     request,
     token: minted.cookieToken,
@@ -215,6 +223,103 @@ describe("a Coding Workbench run keeps its window's session active (ADR-0141 D5)
     );
     expect(fixture.registry.inspectOperationCount(fixture.token)).toBe(0);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // Rotation re-issues the session as a new registry record whose operation count starts at zero,
+  // so the lease its predecessor held no longer protects it (PR #4096 review).
+  it("holds a rotated session again on the run's next admitted mutation", () => {
+    const fixture = leaseFixture();
+    fixture.hold();
+    const sessionId = fixture.registry.verify(fixture.token)?.sessionId;
+    if (sessionId === undefined) throw new Error("session missing");
+    const rotated = fixture.registry.rotate(sessionId);
+    if (rotated === undefined) throw new Error("rotation refused");
+    expect(fixture.registry.inspectOperationCount(rotated.cookieToken)).toBe(0);
+
+    fixture.request.headers.cookie = `${APP_SESSION_COOKIE_NAME}=${rotated.cookieToken}`;
+    fixture.hold();
+    expect(fixture.registry.inspectOperationCount(rotated.cookieToken)).toBe(1);
+    vi.advanceTimersByTime(IDLE_TTL_MS + 60_000);
+    expect(fixture.registry.inspect(rotated.cookieToken)).toBeDefined();
+
+    fixture.state.value = "succeeded";
+    vi.advanceTimersByTime(CODING_RUN_SESSION_LEASE_OBSERVATION_MS);
+    expect(fixture.registry.inspectOperationCount(rotated.cookieToken)).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("releases a run whose state cannot be read and records a body-free diagnostic", () => {
+    const fixture = leaseFixture();
+    holdAppSessionForCodingRun(
+      fixture.deps,
+      fixture.request,
+      { runId: RUN_ID, state: "running" },
+      () => {
+        throw new Error("PRIVATE_SNAPSHOT_STORE");
+      },
+    );
+
+    expect(() => vi.advanceTimersByTime(CODING_RUN_SESSION_LEASE_OBSERVATION_MS)).not.toThrow();
+    expect(fixture.registry.inspectOperationCount(fixture.token)).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(fixture.diagnostics).toEqual([
+      expect.objectContaining({
+        correlationId: RUN_ID,
+        operation: "coding-app-session.operation.state",
+        source: "coding-app-session.coding-run-lease.state",
+        errorClass: "Error",
+      }),
+    ]);
+    expect(JSON.stringify(fixture.diagnostics)).not.toContain("PRIVATE_SNAPSHOT_STORE");
+  });
+
+  it("releases every session of a settled run even when one release fails", () => {
+    const fixture = leaseFixture();
+    const channel = fixture.deps.codingAppSessionChannel;
+    const failing = fixture.token;
+    const deps = {
+      ...fixture.deps,
+      codingAppSessionChannel: {
+        ...channel,
+        beginOperation: (token: string | undefined): (() => void) | undefined => {
+          const release = channel.beginOperation(token);
+          if (release === undefined || token !== failing) return release;
+          return (): void => {
+            release();
+            throw new Error("PRIVATE_RELEASE_FAILURE");
+          };
+        },
+      },
+    };
+    const second = fixture.registry.mint("coding-run-lease");
+    const secondRequest = new IncomingMessage(new Socket());
+    secondRequest.headers.cookie = `${APP_SESSION_COOKIE_NAME}=${second.cookieToken}`;
+    holdAppSessionForCodingRun(
+      deps,
+      fixture.request,
+      { runId: RUN_ID, state: "running" },
+      () => fixture.state.value,
+    );
+    holdAppSessionForCodingRun(
+      deps,
+      secondRequest,
+      { runId: RUN_ID, state: "running" },
+      () => fixture.state.value,
+    );
+    expect(fixture.registry.inspectOperationCount(second.cookieToken)).toBe(1);
+
+    fixture.state.value = "succeeded";
+    expect(() => vi.advanceTimersByTime(CODING_RUN_SESSION_LEASE_OBSERVATION_MS)).not.toThrow();
+    expect(fixture.registry.inspectOperationCount(fixture.token)).toBe(0);
+    expect(fixture.registry.inspectOperationCount(second.cookieToken)).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(fixture.diagnostics).toEqual([
+      expect.objectContaining({
+        correlationId: RUN_ID,
+        source: "coding-app-session.coding-run-lease.release",
+      }),
+    ]);
+    expect(JSON.stringify(fixture.diagnostics)).not.toContain("PRIVATE_RELEASE_FAILURE");
   });
 
   it("ends every held lease as aborted when its graph is disposed", () => {

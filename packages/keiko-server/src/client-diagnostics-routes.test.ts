@@ -1574,6 +1574,7 @@ describe("POST /api/diagnostics/client", () => {
       workspaceId: `local:${"a".repeat(64)}`,
     },
     { interaction: "changeset-review-prepared", fileCount: 3 },
+    { interaction: "changeset-review-prepared", fileCount: 100_000 },
   ])("persists the Coding Workbench interaction $interaction at info", async (interaction) => {
     const sink = captureServerLog();
     const body = JSON.stringify({
@@ -1611,7 +1612,15 @@ describe("POST /api/diagnostics/client", () => {
     { interaction: "agent-selected", agent: "my-private-agent" },
     { interaction: "pending-decision-focused", fileCount: 1 },
     { interaction: "repository-trust-bound", repositoryId: "repo/../x", workspaceId: "w" },
+    {
+      interaction: "repository-trust-bound",
+      repositoryId: "",
+      workspaceId: `local:${"a".repeat(64)}`,
+    },
+    { interaction: "repository-trust-bound", repositoryId: "repo_trust-1", workspaceId: "" },
     { interaction: "changeset-review-prepared", fileCount: -1 },
+    { interaction: "changeset-review-prepared", fileCount: 100_001 },
+    { interaction: "changeset-review-prepared", fileCount: 1.5 },
     { interaction: "tool-name", tool: "bash" },
   ])("refuses a Coding Workbench interaction outside its closed shape: %o", async (interaction) => {
     const sink = captureServerLog();
