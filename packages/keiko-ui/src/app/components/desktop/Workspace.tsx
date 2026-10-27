@@ -37,6 +37,7 @@ import type {
 } from "./hooks/useWorkspace.types";
 import {
   LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT,
+  LOCAL_KNOWLEDGE_CONNECTOR_DRAG_TYPE,
   parseLocalKnowledgeConnectorDrag,
   isLocalKnowledgeConnectorDragPayload,
   type LocalKnowledgeConnectorDragPayload,
@@ -44,18 +45,21 @@ import {
 } from "../../local-knowledge/connector-drag";
 import {
   FIGMA_VIEW_DROP_EVENT,
+  FIGMA_VIEW_DRAG_TYPE,
   parseFigmaViewDrag,
   type FigmaViewDragPayload,
   type FigmaViewDropDetail,
 } from "./figma-view-drag";
 import {
   FIGMA_JSON_DROP_EVENT,
+  FIGMA_JSON_DRAG_TYPE,
   parseFigmaJsonDrag,
   type FigmaJsonDragPayload,
   type FigmaJsonDropDetail,
 } from "./figma-json-drag";
 import {
   FIGMA_IMAGE_DROP_EVENT,
+  FIGMA_IMAGE_DRAG_TYPE,
   parseFigmaImageDrag,
   type FigmaImageDragPayload,
   type FigmaImageDropDetail,
@@ -67,6 +71,13 @@ import controlStyles from "./WorkspaceControls.module.css";
 import clipboardStatusStyles from "./WorkspaceClipboardStatus.module.css";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const WORKSPACE_DRAG_TYPES: ReadonlySet<string> = new Set([
+  LOCAL_KNOWLEDGE_CONNECTOR_DRAG_TYPE,
+  FIGMA_VIEW_DRAG_TYPE,
+  FIGMA_JSON_DRAG_TYPE,
+  FIGMA_IMAGE_DRAG_TYPE,
+]);
+
 const ZoomOutIcon = Icons.zoomOut;
 const ExpandIcon = Icons.expand;
 const ZoomInIcon = Icons.zoomIn;
@@ -1441,14 +1452,9 @@ export function Workspace({
   }, [winMembershipSignature]);
 
   const onDragOver = (event: ReactDragEvent<HTMLDivElement>): void => {
-    if (
-      parseLocalKnowledgeConnectorDrag(event.dataTransfer) === null &&
-      parseFigmaViewDrag(event.dataTransfer) === null &&
-      parseFigmaJsonDrag(event.dataTransfer) === null &&
-      parseFigmaImageDrag(event.dataTransfer) === null
-    ) {
+    // Browsers protect payload data during dragover; only drop can validate its contents.
+    if (!Array.from(event.dataTransfer.types).some((type) => WORKSPACE_DRAG_TYPES.has(type)))
       return;
-    }
     event.preventDefault();
     event.dataTransfer.dropEffect = "copy";
   };

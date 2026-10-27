@@ -3,10 +3,12 @@ import { randomUUID } from "node:crypto";
 import { closeSync, fsyncSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { TextDecoder } from "node:util";
+import { pathToFileURL } from "node:url";
 import { basicAuth, labRequest, loadSession, requireLicense } from "./lab-client.mjs";
 import { jsonRequest, prepareChat, request, withLiveChat } from "./chat-read.mjs";
 
 const MODES = new Set(["governed-assist", "supervised-coding", "autonomous-delivery"]);
+const CONNECTIONS = new Set(["dropdown", "keyboard", "drag"]);
 const TRANSPORTS = new Set(["buffered", "stream", "browser"]);
 const WRITE_TOOLS = new Set([
   "jira_create",
@@ -16,7 +18,7 @@ const WRITE_TOOLS = new Set([
   "jira_transition",
 ]);
 
-function privateJson(path, value, exclusive = false) {
+export function privateJson(path, value, exclusive = false) {
   const fd = openSync(path, exclusive ? "wx" : "w", 0o600);
   try {
     writeFileSync(fd, JSON.stringify(value));
@@ -30,7 +32,7 @@ function stage(name, extra = {}) {
 }
 
 /** Independent read-only Jira observation, outside Chat/provider result handling. */
-async function commentState(session, key, marker) {
+export async function commentState(session, key, marker) {
   let total;
   let start = 0;
   let matches = 0;
@@ -80,9 +82,9 @@ async function consent(context, grant, signal) {
 
 async function approve(context, exchange, intent, signal) {
   assert.notEqual(intent.mode, "autonomous-delivery");
-  assert.equal(exchange.call.name, "jira_comment");
-  assert.deepEqual(exchange.call.arguments, { issueKey: intent.key, body: intent.marker });
-  assert.equal(exchange.approval.operation, "jira.comment");
+  assert.equal(exchange.call.name, toolName(intent));
+  assert.deepEqual(exchange.call.arguments, toolArguments(intent));
+  assert.equal(exchange.approval.operation, intent.operation ?? "jira.comment");
   const path = `/api/atlassian-connectors/action-approvals/${encodeURIComponent(exchange.approval.approvalId)}/chat-write-approval`;
   const current = await jsonRequest(
     context.origin,
@@ -107,10 +109,21 @@ async function approve(context, exchange, intent, signal) {
   assert.equal(result.approval.state, "approved");
 }
 
+function toolName(intent) {
+  return (intent.operation ?? "jira.comment").replaceAll(/[.-]/g, "_");
+}
+function toolArguments(intent) {
+  return intent.arguments ?? { issueKey: intent.key, body: intent.marker };
+}
+async function assertUnchanged(session, intent) {
+  if (intent.assertUnchanged) await intent.assertUnchanged();
+  else assert.deepEqual(await commentState(session, intent.key, intent.marker), intent.before);
+}
+
 async function readDecision(context, transcript, intent, grants, signal) {
   const grant = transcript?.readGrant;
   if (grant?.state !== "pending" || grants.has(grant.grantId)) return;
-  assert.deepEqual(await commentState(context.session, intent.key, intent.marker), intent.before);
+  await assertUnchanged(context.session, intent);
   grants.add(grant.grantId);
   assert.equal(grants.size, 1);
   await consent(context, grant, signal);
@@ -122,7 +135,7 @@ async function writeDecisions(context, transcript, intent, counts, signal) {
     const approval = exchange.approval;
     if (approval?.state !== "pending" || counts.approvals.has(approval.approvalId)) continue;
     assert.equal(counts.grants.size, 1);
-    assert.deepEqual(await commentState(context.session, intent.key, intent.marker), intent.before);
+    await assertUnchanged(context.session, intent);
     counts.approvals.add(approval.approvalId);
     assert.equal(counts.approvals.size, 1);
     await approve(context, exchange, intent, signal);
@@ -149,7 +162,7 @@ function payload(context, chat, intent) {
     modelId: context.modelId,
     clientTurnId: intent.clientTurnId,
     expectedGroundingScopeIdentity: chat.groundingScopeIdentity,
-    content: `Call jira_comment exactly once with this exact JSON argument object: ${JSON.stringify({ issueKey: intent.key, body: intent.marker })}. Do not call any other mutation tool. Wait for any requested approval. After the tool result, report its outcome briefly and do not repeat the call, even if the outcome is unknown or unconfirmed.`,
+    content: `Call ${toolName(intent)} exactly once with this exact JSON argument object: ${JSON.stringify(toolArguments(intent))}. Do not call any other mutation tool. Wait for any requested approval. After the tool result, report its outcome briefly and do not repeat the call, even if the outcome is unknown or unconfirmed.`,
     memory: { enabled: false, budgetTokens: 0, mode: "governed-assist", context: {} },
   };
 }
@@ -205,20 +218,32 @@ function verifyTurn(completed, decisions, intent, events) {
   const user = completed.messages.find((message) => message.role === "user");
   assert.equal(user?.turnState, "completed");
   assert.equal(decisions.grants, 1);
-  assert.equal(decisions.approvals, intent.mode === "autonomous-delivery" ? 0 : 1);
-  const exchanges = user.toolTranscript.exchanges;
-  const writes = exchanges.filter((exchange) => WRITE_TOOLS.has(exchange.call.name));
-  assert.equal(writes.length, 1);
-  assert.deepEqual(writes[0].call.arguments, { issueKey: intent.key, body: intent.marker });
-  assert.equal(writes[0].result?.data?.outcome, "succeeded");
-  assert.equal(writes[0].mutationOutcome, "succeeded");
+  const mutation = WRITE_TOOLS.has(toolName(intent));
+  const needsApproval = mutation && intent.mode !== "autonomous-delivery";
+  assert.equal(decisions.approvals, needsApproval ? 1 : 0);
+  const expected = verifyExchange(user.toolTranscript.exchanges, intent, mutation);
   if (intent.transport === "stream") {
     assert.ok(events.has("tool-read-consent"));
-    assert.equal(events.has("tool-write-approval"), intent.mode !== "autonomous-delivery");
+    assert.equal(events.has("tool-write-approval"), needsApproval);
   }
+  return expected;
 }
 
-async function writeTurn(context, chat, intent) {
+function verifyExchange(exchanges, intent, mutation) {
+  const writes = exchanges.filter((exchange) => WRITE_TOOLS.has(exchange.call.name));
+  assert.equal(writes.length, mutation ? 1 : 0);
+  const expected = exchanges.filter((exchange) => exchange.call.name === toolName(intent));
+  assert.equal(expected.length, 1);
+  assert.deepEqual(expected[0].call.arguments, toolArguments(intent));
+  assert.equal(expected[0].result?.status, "completed");
+  if (mutation) {
+    assert.equal(expected[0].result?.data?.outcome, intent.outcome ?? "succeeded");
+    assert.equal(expected[0].mutationOutcome, intent.outcome ?? "succeeded");
+  }
+  return expected[0];
+}
+
+export async function runChatToolTurn(context, chat, intent) {
   const controller = new globalThis.AbortController();
   const timeout = globalThis.setTimeout(() => controller.abort(), 240_000);
   const events = new Set();
@@ -240,8 +265,8 @@ async function writeTurn(context, chat, intent) {
       controller.signal,
       () => settled,
     );
-    verifyTurn(await pending, decisions, intent, events);
-    return decisions;
+    const exchange = verifyTurn(await pending, decisions, intent, events);
+    return { decisions, exchange };
   } finally {
     globalThis.clearTimeout(timeout);
     controller.abort();
@@ -279,7 +304,8 @@ async function prepareWriteChat(context, intent) {
 }
 
 async function dispatchWrite(context, chat, intent, pending) {
-  if (intent.transport !== "browser") return writeTurn(context, chat, intent);
+  if (intent.transport !== "browser")
+    return (await runChatToolTurn(context, chat, intent)).decisions;
   const { runBrowserWrite } = await import("./browser-write.mjs");
   const { completed, decisions } = await runBrowserWrite({
     context,
@@ -326,15 +352,26 @@ async function qualifyChatWrite(context, intent, pending) {
   privateJson(pending, intent);
 }
 
-async function main() {
-  const session = loadSession(process.argv[2]);
+function scenarioArguments() {
   const modelId = process.argv[3];
   const mode = process.argv[4];
   const transport = process.argv[5];
+  const connection = process.argv[6] ?? "dropdown";
+  const lifecycle = process.argv[7];
+  assert.ok(lifecycle === undefined || lifecycle === "lifecycle");
+  assert.ok(lifecycle === undefined || transport === "browser");
+  assert.ok(CONNECTIONS.has(connection));
+  assert.ok(transport === "browser" || connection === "dropdown");
   if (!modelId || !MODES.has(mode) || !TRANSPORTS.has(transport))
     throw new TypeError(
-      "Usage: chat-write.mjs <private-session> <model> <mode> <buffered|stream|browser>",
+      "Usage: chat-write.mjs <private-session> <model> <mode> <buffered|stream|browser> [dropdown|keyboard|drag] [lifecycle]",
     );
+  return { modelId, mode, transport, connection, lifecycle };
+}
+
+async function main() {
+  const session = loadSession(process.argv[2]);
+  const { modelId, mode, transport, connection, lifecycle } = scenarioArguments();
   await requireLicense(session);
   const fixture = JSON.parse(readFileSync(join(session.directory, "fixture.json"), "utf8"));
   const key = fixture.issueKeys[1];
@@ -344,6 +381,8 @@ async function main() {
     schemaVersion: 1,
     mode,
     transport,
+    connection,
+    lifecycleRequested: lifecycle === "lifecycle",
     key,
     marker: `Synthetic Chat write ${randomUUID()}`,
     clientTurnId: randomUUID(),
@@ -368,16 +407,18 @@ async function main() {
     passed: true,
     mode,
     transport,
+    connection,
     matchingRemoteComments: intent.after.matches,
     commentCountIncrease: intent.after.total - intent.before.total,
   });
 }
 
-await main().catch((error) => {
-  stage("failed", {
-    passed: false,
-    errorType: error instanceof Error ? error.name : "unknown",
-    reconcileRequired: true,
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)
+  await main().catch((error) => {
+    stage("failed", {
+      passed: false,
+      errorType: error instanceof Error ? error.name : "unknown",
+      reconcileRequired: true,
+    });
+    process.exitCode = 1;
   });
-  process.exitCode = 1;
-});

@@ -1160,6 +1160,8 @@ const SEARCH_CONNECTED_CONTEXT_FAILED_OPERATION = defineActivityLogOperation({
 // ─── Public types ─────────────────────────────────────────────────────────────
 
 export interface GroundedAnswerOptions {
+  /** Actual fitted source count, supplied by the existing hybrid prompt owner. */
+  readonly sourceEvidenceCount?: number | undefined;
   readonly modelInputTokensMax?: number | undefined;
   readonly modelOutputTokensMax?: number | undefined;
   readonly answerOnlyContextAvailable?: boolean | undefined;

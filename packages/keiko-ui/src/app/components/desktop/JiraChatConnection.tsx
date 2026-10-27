@@ -70,16 +70,19 @@ function choices(metadata: readonly AtlassianConnectorMetadata[]): readonly PodC
         ],
   );
 }
-function usePodChoices(list: typeof listAtlassianConnectors): {
+function usePodChoices(
+  list: typeof listAtlassianConnectors,
+  initiallyBound: boolean,
+): {
   pods: readonly PodChoice[];
   loading: boolean;
   failed: boolean;
   reload: () => void;
 } {
   const [pods, setPods] = useState<readonly PodChoice[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(initiallyBound);
   const [failed, setFailed] = useState(false);
-  const [version, setVersion] = useState(0);
+  const [version, setVersion] = useState(initiallyBound ? 1 : 0);
   useEffect(() => {
     if (version === 0) return;
     let active = true;
@@ -445,7 +448,7 @@ function useConnectionState({
   const detailsRef = useRef<HTMLDetailsElement>(null);
   useDisclosureEscape(detailsRef, open);
   const draft = storedDraft.revision === revision(chat) ? storedDraft : initialDraft(chat);
-  const catalog = usePodChoices(list);
+  const catalog = usePodChoices(list, chat.jiraPodBinding !== undefined);
   const request = useJiraWorkspaceRequest(chat, detailsRef, (pending) => {
     setDraft({ ...initialDraft(chat), podId: pending.podId });
     if (detailsRef.current !== null) detailsRef.current.open = true;
@@ -482,6 +485,27 @@ function useConnectionState({
   };
 }
 
+function ConnectionSummary({
+  chat,
+  catalog,
+}: Pick<ConnectionFormProps, "chat" | "catalog">): ReactNode {
+  const t = useTranslate();
+  const pod = catalog.pods.find((item) => item.id === chat.jiraPodBinding?.podId);
+  const fallback = catalog.loading ? "chat.jira.podLabel" : "chat.jira.podUnavailable";
+  return (
+    <summary className="lk-btn">
+      <span>{t("chat.jira.connection")}</span>
+      {chat.jiraPodBinding !== undefined ? (
+        <span>
+          {" "}
+          · <span>{pod?.name ?? t(fallback)}</span>
+          {pod !== undefined && !pod.ready ? ` — ${t("chat.jira.verifyRequired")}` : ""}
+        </span>
+      ) : null}
+    </summary>
+  );
+}
+
 export function JiraChatConnection(props: ConnectionProps): ReactNode {
   const t = useTranslate();
   const state = useConnectionState(props);
@@ -492,7 +516,7 @@ export function JiraChatConnection(props: ConnectionProps): ReactNode {
       ref={state.detailsRef}
       onToggle={(event) => state.toggle(event.currentTarget.open)}
     >
-      <summary className="lk-btn">{t("chat.jira.connection")}</summary>
+      <ConnectionSummary chat={props.chat} catalog={state.catalog} />
       {state.open ? (
         <div className={styles.cmpPanel}>
           <output>

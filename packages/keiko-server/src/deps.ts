@@ -954,6 +954,8 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   readonly jiraChatCatalog?: JiraChatCatalogRuntime;
   /** Accepted Chat turn scope reused by grounded preparation, tools and answer repair. */
   readonly jiraChatToolTurn?: JiraChatToolTurn;
+  /** Projection of the existing Memory admission for the productive grounded phase only. */
+  readonly groundedMemoryContextAvailable?: boolean;
   // Shared resolved Coding/connector ceiling. Production always sets it; incomplete injected deps
   // fail closed instead of accepting any request-supplied ceiling.
   readonly autonomousDeliveryDeploymentCeiling?: CodingWorkbenchMode | undefined;

@@ -218,6 +218,17 @@ visible button. The rendered terminal state and independent Jira count must both
 the write. Full access must display no write-approval card. Screenshots remain private in
 the session directory; an interrupted browser run retains the same reconciliation marker.
 
+Append `keyboard` or `drag` after `browser` to qualify adding the live Pod to the existing
+workspace and binding it through keyboard ports. `keyboard` activates the accessible Hub
+action; `drag` performs native browser drag/drop. Both assert that the edge appears only
+after the authenticated Chat settings request succeeds. The default is `dropdown`.
+Append `lifecycle` after the connection choice to additionally rename the same Pod, replace
+its PAT with the distinct synthetic editor identity, verify it again, and remove it through
+visible Hub controls. Independent public API reads confirm stable Pod identity, increased
+credential generation, invalidation of previously granted consent, credential removal and
+Chat disconnection; the workspace edge must disappear too. This optional group requires
+`seed.mjs`'s editor fixture and retains the completed write outcome after lifecycle changes.
+
 ## Read through the actual browser
 
 Build the UI with `npm run build --workspace @oscharko-dev/keiko-ui`, complete a

@@ -151,6 +151,27 @@ it("shows the server-clamped effective mode and prevents selecting modes above i
   expect(screen.getByRole("option", { name: "Supervised workspace" })).not.toBeDisabled();
 });
 
+it("shows the bound Pod identity while the connection disclosure stays closed", async () => {
+  render(
+    <JiraChatConnection
+      chat={{
+        ...CHAT,
+        jiraPodBinding: {
+          podId: "pod-one",
+          bindingGeneration: 1,
+          authenticationGeneration: 1,
+          connectedAtMs: 1,
+        },
+      }}
+      list={async () => [POD]}
+      onChatChanged={vi.fn()}
+    />,
+  );
+  expect(await screen.findByText("Lab Jira")).toBeVisible();
+  expect(screen.getByTestId("jira-chat-connection")).not.toHaveAttribute("open");
+  expect(screen.queryByRole("button", { name: "Apply Jira settings" })).not.toBeInTheDocument();
+});
+
 it("persists the selected mode through the same owner and never treats failure as confirmation", async () => {
   const user = userEvent.setup();
   const persist = vi.fn<typeof updateGroundingScopes>().mockRejectedValue(new Error("conflict"));
@@ -196,7 +217,7 @@ it("disables unverified Pods and closes with Escape while restoring focus", asyn
   await waitFor(() =>
     expect(screen.getByTestId("jira-chat-connection")).not.toHaveAttribute("open"),
   );
-  expect(screen.getByText("Jira connection")).toHaveFocus();
+  expect(screen.getByText("Jira connection").closest("summary")).toHaveFocus();
 });
 
 describe("Jira workspace connection requests", () => {

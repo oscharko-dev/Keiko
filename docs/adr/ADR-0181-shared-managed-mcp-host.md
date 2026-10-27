@@ -157,6 +157,13 @@ in the tool transcript and are attributed separately from connected-evidence cit
 `chat.grounded-tool-round.completed` records that phase and remaining synthesis count
 without source content. Data-only preparation and synthesis keep their existing path.
 
+An empty connected-evidence pack still permits the already admitted Jira turn to run.
+When neither governed Memory context nor the existing own-assessment policy permits an
+answer, that exception requires a settled tool exchange; a model that never calls a tool
+retains the deterministic Data-only abstention. Jira facts and denied tool results carry
+no Data citations. Missing or denied source paths retain their existing failure behavior.
+This exception never changes Memory admission, capture mode, or its deployment ceiling.
+
 Grounded mixed responses use the existing buffered transport and canonical turn owner.
 The ordinary streaming endpoint returns `STREAMING_UNSUPPORTED` before admitting a mixed
 turn, and the client follows its existing buffered fallback. That fallback and any replay

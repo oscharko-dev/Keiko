@@ -1,3 +1,4 @@
+import type { MemoryId, ProjectId, UserId } from "@oscharko-dev/keiko-contracts/memory";
 import {
   openKnowledgeStore,
   resolveKnowledgeStorePath,
@@ -39,6 +40,8 @@ const CITED =
   "Feature returns true [src/Feature.ts:1].\n\nJira tool result: project SYN is visible.";
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => {
+  // Let the existing post-commit Memory owner run its scheduled work before closing the vault.
+  await new Promise<void>((resolve) => setImmediate(resolve));
   for (const dispose of cleanup.splice(0)) await dispose();
   resetServerLogger();
   vi.restoreAllMocks();
@@ -94,6 +97,7 @@ function runtime(mutation = false): {
     evidenceDir: join(state, "evidence"),
     uiDbPath: join(state, "ui.db"),
     env: {
+      KEIKO_STATE_DIR: state,
       [QUALIFICATION_SPEND_BUDGET_USD_ENV]: "100",
       [QUALIFICATION_SPEND_LEDGER_PATH_ENV]: join(state, "spend.db"),
     },
@@ -173,6 +177,7 @@ function configure(deps: UiHandlerDeps): void {
   config.set(
     parseGatewayConfig({
       providers: [provider],
+      groundedAnswers: { ownAssessment: "disabled" },
       capabilities: [
         {
           ...createDefaultChatCapability(MODEL),
@@ -205,13 +210,27 @@ function outputCap(body: string): number {
   };
   return request.max_tokens ?? request.max_completion_tokens ?? 0;
 }
+function isProductiveRequest(body: string): boolean {
+  return (
+    body.includes("File: src/Feature.ts") ||
+    body.includes("Citations:") ||
+    body.includes('"tools":') ||
+    body.includes('"role":"tool"')
+  );
+}
 function providerBody(init: RequestInit | undefined): string {
   return typeof init?.body === "string" ? init.body : "";
 }
 function isToolStep(body: string, step: ProviderStep): boolean {
   return body.includes('"tools":') && (step === "tool" || step === "write");
 }
-function responseContent(body: string, step: ProviderStep, steps: readonly ProviderStep[]): string {
+function responseContent(
+  body: string,
+  step: ProviderStep,
+  steps: readonly ProviderStep[],
+  answerContent?: string,
+): string {
+  if (answerContent !== undefined) return answerContent;
   return body.includes("Citations:")
     ? "Feature returns true [1]. Jira tool result: project SYN is visible."
     : finalContent(step, steps);
@@ -221,13 +240,16 @@ function finalContent(step: ProviderStep, steps: readonly ProviderStep[]): strin
   return steps.includes("uncited") ? "Feature returns true [src/Feature.ts:1]." : CITED;
 }
 type ProviderStep = "tool" | "write" | "answer" | "uncited" | "overflow";
-function provider(steps: readonly ProviderStep[] = ["tool", "answer"]): string[] {
+function provider(
+  steps: readonly ProviderStep[] = ["tool", "answer"],
+  answerContent?: string,
+): string[] {
   const requests: string[] = [];
   vi.stubGlobal(
     "fetch",
     vi.fn<typeof fetch>((_url, init) => {
       const body = providerBody(init);
-      const productive = body.includes("File: src/Feature.ts") || body.includes("Citations:");
+      const productive = isProductiveRequest(body);
       const step = productive ? (steps[requests.length] ?? "answer") : "answer";
       if (productive) requests.push(body);
       if (step === "overflow")
@@ -273,7 +295,7 @@ function provider(steps: readonly ProviderStep[] = ["tool", "answer"]): string[]
                   }
                 : {
                     role: "assistant",
-                    content: responseContent(body, step, steps),
+                    content: responseContent(body, step, steps, answerContent),
                   },
               finish_reason: tools ? "tool_calls" : "stop",
             },
@@ -378,24 +400,29 @@ it("falls back before admission and replays the same mixed canonical turn withou
   expect(f.deps.store.listMessages(f.chatId)).toHaveLength(2);
 });
 
-it("uses the existing local Data-Pod evidence pack with Jira and keeps its numeric citations", async () => {
-  const f = runtime();
+async function connectDataPod(
+  f: ReturnType<typeof runtime>,
+  text: string,
+  keepFolder = false,
+): Promise<void> {
   const store = openKnowledgeStore({
     dbPath: resolveKnowledgeStorePath({ runtimeStateDir: dirname(f.deps.uiDbPath ?? "") }),
   });
   try {
-    const pod = await seedCapsuleWithVectors(store, {
-      displayName: "Synthetic Data Pod",
-      text: "Feature returns true. Feature is a function.",
-    });
+    const pod = await seedCapsuleWithVectors(store, { displayName: "Synthetic Data Pod", text });
     updateCapsuleState(store, pod.capsuleId, "ready");
     f.deps.store.updateChat(f.chatId, {
-      connectedScope: null,
+      ...(keepFolder ? {} : { connectedScope: null }),
       localKnowledgeScopes: [{ kind: "capsule", capsuleId: pod.capsuleId, connectedAtMs: 1 }],
     });
   } finally {
     store.close();
   }
+}
+
+it("uses the existing local Data-Pod evidence pack with Jira and keeps its numeric citations", async () => {
+  const f = runtime();
+  await connectDataPod(f, "Feature returns true. Feature is a function.");
   const requests = provider();
   const result = await handleGroundedAsk(
     context({
@@ -432,3 +459,272 @@ it("preserves Data-only desktop refusal and tool-free grounded synthesis", async
   expect(requests[0]).not.toContain('"tools":');
   expect(f.jiraRequests).toHaveLength(0);
 });
+
+it.each(["empty", "unmatched"] as const)(
+  "executes permitted Jira reads after %s folder evidence without creating Data citations",
+  async (source) => {
+    const f = runtime();
+    if (source === "empty") rmSync(join(f.root, "src"), { recursive: true });
+    else {
+      writeFileSync(join(f.root, "empty.txt"), "");
+      f.deps.store.updateChat(f.chatId, {
+        connectedScope: { kind: "files", relativePaths: ["empty.txt"], connectedAtMs: 0 },
+      });
+    }
+    const requests = provider(["tool", "answer"], "Jira tool result: project SYN is visible.");
+    const response = await handleGroundedAsk(
+      context({ chatId: f.chatId, content: "List the Jira projects.", modelId: MODEL }),
+      f.deps,
+    );
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(f.jiraRequests).toEqual(["GET"]);
+    expect(requests).toHaveLength(2);
+    const answer = response.body as GroundedAnswer;
+    expect(answer.content).toContain("Jira tool result");
+    expect(answer.citations).toEqual([]);
+    expect(answer.evidenceRunId).toBeUndefined();
+  },
+);
+
+it("keeps exact write approval and one remote effect when the connected folder has no evidence", async () => {
+  const f = runtime(true);
+  rmSync(join(f.root, "src"), { recursive: true });
+  const requests = provider(["write", "answer"], "Jira tool result: the comment was added.");
+  const body = {
+    chatId: f.chatId,
+    content: "Add the synthetic Jira comment.",
+    modelId: MODEL,
+    clientTurnId: "empty-data-write",
+  };
+  const response = await handleGroundedAsk(context(body), f.deps);
+  expect(response.status, JSON.stringify(response.body)).toBe(200);
+  expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
+  expect(requests).toHaveLength(2);
+  expect((response.body as GroundedAnswer).citations).toEqual([]);
+  const approval = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges[0]?.approval;
+  expect(approval).toBeDefined();
+  expect(
+    f.deps.atlassianActionApprovalRegistry?.getChatWriteApproval(approval?.approvalId ?? "")
+      ?.approval.state,
+  ).toBe("claimed");
+  expect((await handleGroundedAsk(context(body), f.deps)).status).toBe(200);
+  expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
+});
+
+it.each([false, true])(
+  "answers Jira from an empty Data-Pod pack with hybrid=%s and no false Memory attribution",
+  async (hybrid) => {
+    const f = runtime();
+    rmSync(join(f.root, "src"), { recursive: true });
+    await connectDataPod(f, "Orchids grow in violet garden beds.", hybrid);
+    const requests = provider(["tool", "answer"], "Jira tool result: project SYN is visible.");
+    const response = await handleGroundedAsk(
+      context({ chatId: f.chatId, content: "List Jira projects.", modelId: MODEL }),
+      f.deps,
+    );
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(f.jiraRequests).toEqual(["GET"]);
+    expect(requests).toHaveLength(2);
+    const answer = response.body as GroundedAnswer;
+    expect(answer.content).toContain("Jira tool result");
+    expect(answer.citations).toEqual([]);
+    expect(JSON.stringify(answer)).not.toContain("answer-only-memory");
+    expect(answer.memory).toBeUndefined();
+  },
+);
+
+it("abstains when a tool-only empty-pack model invents an answer without invoking Jira", async () => {
+  const f = runtime();
+  rmSync(join(f.root, "src"), { recursive: true });
+  const requests = provider(["answer"], "Invented Jira source fact.");
+  const result = await handleGroundedAsk(
+    context({ chatId: f.chatId, content: "List Jira projects.", modelId: MODEL }),
+    f.deps,
+  );
+  expect(result.status).toBe(200);
+  expect(requests).toHaveLength(1);
+  expect(f.jiraRequests).toEqual([]);
+  expect((result.body as GroundedAnswer).content).not.toContain("Invented");
+  expect((result.body as GroundedAnswer).citations).toEqual([]);
+});
+
+it("retains Data-only empty-pack abstention and the missing selected path denial", async () => {
+  const f = runtime();
+  rmSync(join(f.root, "src"), { recursive: true });
+  const requests = provider();
+  f.deps.store.updateChat(f.chatId, {
+    connectedScope: { kind: "files", relativePaths: ["src/Missing.ts"], connectedAtMs: 0 },
+  });
+  const body = { chatId: f.chatId, content: "List Jira projects.", modelId: MODEL };
+  expect((await handleGroundedAsk(context(body), f.deps)).status).toBe(400);
+  f.deps.store.updateChat(f.chatId, {
+    jiraPodId: null,
+    connectedScope: { kind: "workspace-root", relativePaths: [], connectedAtMs: 0 },
+  });
+  expect((await handleGroundedAsk(context(body), f.deps)).status).toBe(200);
+  expect(requests).toEqual([]);
+  expect(f.jiraRequests).toEqual([]);
+});
+
+it("rejects a bound mixed model without verified tool capability before any provider or Jira effect", async () => {
+  const f = runtime();
+  rmSync(join(f.root, "src"), { recursive: true });
+  const config = f.deps.gatewayConfig;
+  const current = config?.current();
+  if (config === undefined || current === undefined) throw new Error("Missing gateway");
+  config.set(
+    parseGatewayConfig({
+      ...current,
+      capabilities: current.capabilities?.map((capability) =>
+        capability.kind === "chat"
+          ? { ...capability, toolCallingVerification: undefined }
+          : capability,
+      ),
+    }),
+    true,
+  );
+  config.recordVerifiedCapability(
+    MODEL,
+    { conversationReady: true },
+    new Date().toISOString(),
+    config.generation(),
+  );
+  const requests = provider();
+  const result = await handleGroundedAsk(
+    context({ chatId: f.chatId, content: "List Jira projects.", modelId: MODEL }),
+    f.deps,
+  );
+  expect(result).toMatchObject({
+    status: 400,
+    body: { error: { code: "CONVERSATION_UNAVAILABLE_MODEL" } },
+  });
+  expect(JSON.stringify(result.body)).toContain("verified tool calling");
+  expect(requests).toEqual([]);
+  expect(f.jiraRequests).toEqual([]);
+  expect(fetch).not.toHaveBeenCalled();
+});
+
+it("keeps Memory capture governed when an empty-pack Jira turn has Full access", async () => {
+  const f = runtime(true);
+  rmSync(join(f.root, "src"), { recursive: true });
+  f.deps.store.updateChat(f.chatId, { toolMode: "autonomous-delivery" });
+  provider(["write", "answer"], "Jira tool result: the comment was added.");
+  const result = await handleGroundedAsk(
+    context({
+      chatId: f.chatId,
+      content: "remember that release checks use vitest. Add the Jira comment.",
+      modelId: MODEL,
+      memory: {
+        enabled: true,
+        budgetTokens: 1200,
+        mode: "autonomous-delivery",
+        context: {
+          userId: "local-operator",
+          workspaceId: f.root,
+          projectId: f.root,
+          conversationId: f.chatId,
+        },
+      },
+    }),
+    { ...f.deps, memoryDeploymentCeiling: "governed-assist" },
+  );
+  expect(result.status, JSON.stringify(result.body)).toBe(200);
+  expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
+  expect(
+    f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges[0]?.approval,
+  ).toBeUndefined();
+  const vault = f.deps.memoryVault;
+  if (vault === undefined) throw new Error("Missing Memory vault");
+  const memories = vault.listMemoriesAcrossScopes(vault.listMemoryScopes());
+  expect(memories.length).toBeGreaterThan(0);
+  expect(memories.every((memory) => memory.status === "proposed")).toBe(true);
+  expect((result.body as GroundedAnswer).memory?.context.memories).toEqual([]);
+});
+
+it("explains refused Jira consent with empty Data evidence without any remote request", async () => {
+  const f = runtime();
+  rmSync(join(f.root, "src"), { recursive: true });
+  const registry = f.deps.atlassianActionApprovalRegistry;
+  if (registry === undefined) throw new Error("Missing approval owner");
+  vi.spyOn(registry, "waitForChatReadGrant").mockImplementation(async (id) => {
+    expect(
+      (
+        await handleDecideChatReadConsent(
+          context({ decision: "reject", disclosureVersion: "jira-chat-read-v1" }, id),
+          f.deps,
+        )
+      ).status,
+    ).toBe(200);
+  });
+  const requests = provider(["tool", "answer"], "Jira access was denied by the user.");
+  const result = await handleGroundedAsk(
+    context({ chatId: f.chatId, content: "List Jira projects.", modelId: MODEL }),
+    f.deps,
+  );
+  expect(result.status).toBe(200);
+  expect(requests).toHaveLength(2);
+  expect(f.jiraRequests).toEqual([]);
+  expect((result.body as GroundedAnswer).content).toContain("denied");
+  expect((result.body as GroundedAnswer).citations).toEqual([]);
+  expect(f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges[0]?.result?.status).toBe(
+    "denied",
+  );
+});
+
+it.each(["disabled", "outside-scope"] as const)(
+  "does not attach %s Memory when Jira enables an empty-evidence answer",
+  async (kind) => {
+    const f = runtime();
+    rmSync(join(f.root, "src"), { recursive: true });
+    const vault = f.deps.memoryVault;
+    if (vault === undefined) throw new Error("Missing Memory vault");
+    const canary = "PRIVATE_MEMORY_CANARY_RESERVED_TO_ANOTHER_SOURCE";
+    vault.insertMemory({
+      id: "isolated-memory" as MemoryId,
+      schemaVersion: "1",
+      scope:
+        kind === "disabled"
+          ? { kind: "user", userId: "local-operator" as UserId }
+          : { kind: "project", projectId: "another-project" as ProjectId },
+      type: "preference",
+      body: canary,
+      provenance: {
+        sourceKind: "explicit-user-instruction",
+        capturedAt: 1,
+        confidence: 1,
+        sensitivity: "public",
+      },
+      validity: { validFrom: 1 },
+      status: "accepted",
+      pinned: true,
+      tags: [],
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    const requests = provider(["tool", "answer"], "Jira tool result: project SYN is visible.");
+    const result = await handleGroundedAsk(
+      context({
+        chatId: f.chatId,
+        content: "List Jira projects.",
+        modelId: MODEL,
+        memory: {
+          enabled: kind !== "disabled",
+          budgetTokens: 1200,
+          mode: "autonomous-delivery",
+          context: {
+            userId: "local-operator",
+            workspaceId: f.root,
+            projectId: f.root,
+            conversationId: f.chatId,
+          },
+        },
+      }),
+      { ...f.deps, memoryDeploymentCeiling: "governed-assist" },
+    );
+    expect(result.status).toBe(200);
+    expect(f.jiraRequests).toEqual(["GET"]);
+    expect(requests.join(" ")).not.toContain(canary);
+    expect((result.body as GroundedAnswer).memory?.context.memories).toEqual([]);
+    expect(JSON.stringify(result.body)).not.toContain(canary);
+  },
+);

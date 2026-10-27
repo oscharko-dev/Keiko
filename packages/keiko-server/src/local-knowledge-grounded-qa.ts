@@ -869,6 +869,7 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
     return callPluralGroundedSynthesis({
       model: this.model,
       deps: this.context.deps,
+      evidenceCount: this.sentReferences.length,
       signal,
       budget: this.synthesis,
       accounting: limits.tokenAccounting,
@@ -1379,7 +1380,17 @@ function citationsAndActivityForAnswer(
   return { citations, retrievalActivity };
 }
 
-function buildLocalKnowledgeAnswer(input: {
+function answerOnlyReason(
+  result: ScopedGroundedResult,
+  liveTools: boolean | undefined,
+  fallback: string | undefined,
+): string | undefined {
+  if (result.answerOnlyContextUsed !== true) return fallback;
+  return liveTools === true ? "no-evidence" : "answer-only-memory";
+}
+
+interface LocalKnowledgeAnswerInput {
+  readonly liveToolSourceAvailable?: boolean;
   readonly chat: Chat;
   readonly store: KnowledgeStore;
   readonly selected: SelectedLocalKnowledgeScope;
@@ -1391,13 +1402,18 @@ function buildLocalKnowledgeAnswer(input: {
   readonly sourceLookup?: LocalKnowledgeCitationSourceLookup | undefined;
   readonly redactLabel?: LabelRedactor | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
-}): LocalKnowledgeGroundedAnswer {
+}
+
+function buildLocalKnowledgeAnswer(input: LocalKnowledgeAnswerInput): LocalKnowledgeGroundedAnswer {
   const { result, redactLabel, assistantContent } = input;
   const [user, assistant] = input.persisted;
   const noEvidenceReason = enforcedNoEvidenceReason(result);
-  const answerOnlyMemory = result.answerOnlyContextUsed === true;
   const sourceNoEvidence = result.noEvidence || noEvidenceReason !== undefined;
-  const wireNoEvidenceReason = answerOnlyMemory ? "answer-only-memory" : noEvidenceReason;
+  const wireNoEvidenceReason = answerOnlyReason(
+    result,
+    input.liveToolSourceAvailable,
+    noEvidenceReason,
+  );
   const { citations, retrievalActivity } = citationsAndActivityForAnswer(
     input.store,
     input.selected,
@@ -2539,6 +2555,7 @@ function buildPersistedScopedAnswer(input: {
   readonly deps: UiHandlerDeps;
 }): GroundedAnswer {
   return buildLocalKnowledgeAnswer({
+    liveToolSourceAvailable: input.deps.jiraChatToolTurn !== undefined,
     chat: input.chat,
     store: input.store,
     selected: input.selected,

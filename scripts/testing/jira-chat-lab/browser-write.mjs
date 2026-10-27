@@ -4,16 +4,23 @@ import { join } from "node:path";
 import { URL } from "node:url";
 import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session-pairing";
 import { mintLauncherPairingAttestation } from "../../../packages/keiko-server/dist/coding-app-session/launcherSessionPairingPort.js";
+import { qualifyBrowserLifecycle } from "./browser-lifecycle.mjs";
+import { requestWorkspaceJiraConnection } from "./browser-connections.mjs";
 import { openBrowser, createPod } from "./browser-read.mjs";
 
 function stage(value) {
   console.log(JSON.stringify({ operation: "jira-chat-browser-write", stage: value }));
 }
 
-async function connectChat(page, mode) {
+async function connectChat(page, mode, connection = "dropdown") {
   const chat = page.getByRole("region", { name: /Synthetic Jira browser Chat/ });
-  await chat.getByText("Jira connection", { exact: true }).click();
-  await chat.getByRole("combobox", { name: /^Jira Pod/ }).selectOption({ label: "Browser Jira" });
+  let confirmEdge;
+  if (connection === "dropdown") {
+    await chat.getByText("Jira connection", { exact: true }).click();
+    await chat.getByRole("combobox", { name: /^Jira Pod/ }).selectOption({ label: "Browser Jira" });
+  } else {
+    confirmEdge = await requestWorkspaceJiraConnection(page, chat, connection);
+  }
   const labels = {
     "governed-assist": "Ask for approval",
     "supervised-coding": "Supervised workspace",
@@ -24,6 +31,7 @@ async function connectChat(page, mode) {
   await chat.getByRole("button", { name: "Apply Jira settings", exact: true }).click();
   await chat.getByText("Jira Pod connected by the server", { exact: true }).waitFor();
   await chat.getByText("Jira connection", { exact: true }).click();
+  await confirmEdge?.();
   stage("bound");
   return chat;
 }
@@ -79,6 +87,36 @@ async function completedTurn(observe) {
   throw new TypeError("Browser mutation completion timed out");
 }
 
+async function recordBrowserProof(page, region, context, chat, intent, completed) {
+  await region.screenshot({
+    path: join(context.session.directory, `browser-write-${intent.clientTurnId}.png`),
+  });
+  if (intent.lifecycleRequested) {
+    intent.lifecycle = await qualifyBrowserLifecycle(
+      page,
+      context,
+      chat,
+      completed,
+      intent.connection,
+    );
+    stage("lifecycle-complete");
+  }
+}
+
+function reportFailureLocation(error) {
+  const line =
+    error instanceof Error
+      ? Number(error.stack?.match(/browser-(?:write|connections|lifecycle)\.mjs:(\d+)/u)?.[1] ?? 0)
+      : 0;
+  console.log(
+    JSON.stringify({
+      operation: "jira-chat-browser-write",
+      stage: "failed-location",
+      sourceLine: line,
+    }),
+  );
+}
+
 /** Uses real visible controls; onIntent persists the actual browser turn before any grant. */
 export async function runBrowserWrite({
   context,
@@ -100,7 +138,7 @@ export async function runBrowserWrite({
     );
     await page.goto(context.origin + fragment);
     await createPod(page, context.session);
-    const region = await connectChat(page, intent.mode);
+    const region = await connectChat(page, intent.mode, intent.connection);
     await sendPrompt(page, region, prompt, onIntent);
     await decideRead(region, beforeDecision);
     const approvals = await decideWrite(region, intent, beforeDecision);
@@ -110,12 +148,11 @@ export async function runBrowserWrite({
       await region.getByRole("region", { name: "Review Jira action", exact: true }).count(),
       approvals,
     );
-    await region.screenshot({
-      path: join(context.session.directory, `browser-write-${intent.clientTurnId}.png`),
-    });
+    await recordBrowserProof(page, region, context, chat, intent, completed);
     stage("complete");
     return { completed, decisions: { grants: 1, approvals } };
   } catch (error) {
+    reportFailureLocation(error);
     await page.screenshot({ path: join(context.session.directory, "browser-write-failure.png") });
     throw error;
   } finally {

@@ -4,6 +4,7 @@ import {
   type JiraChatToolTurn,
 } from "./atlassian/jiraChatToolTurn.js";
 import { raceAbort } from "./abort-race.js";
+import { mappedConversationReadinessError } from "./conversation-readiness-admission.js";
 import { logChatCreationIntent } from "./store/chatCreationIntents.js";
 import { resolveRegisteredWorkspaceProjectPath } from "./workspace-root-identity.js";
 import { withMarkdownSkillRequestAuthority } from "./markdown-skill-authority.js";
@@ -523,6 +524,8 @@ export function desktopChatErrorResult(
   correlationId?: string,
   emitDiagnostic = true,
 ): RouteResult {
+  const readiness = mappedConversationReadinessError(error);
+  if (readiness !== undefined) return readiness;
   if (error instanceof ChatPromptPreparationRejection) return error.result;
   if (error instanceof ConversationAttachmentStoreError) {
     return {

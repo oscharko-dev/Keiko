@@ -13,7 +13,7 @@ import {
   parseJiraFieldMetadata,
   type JiraMetadataResult,
 } from "./jira-field-metadata.js";
-import { metadataPageMatches, parseJiraFieldMap } from "./jira-managed-metadata.js";
+import { jiraMetadataPageLast, parseJiraFieldMap } from "./jira-managed-metadata.js";
 
 export type JiraMutationRequest = (
   path: string,
@@ -45,12 +45,13 @@ function createPage(
   const body = response.body;
   if (response.status !== 200 || body === undefined) return undefined;
   const values = asArray(body.values);
-  if (values === undefined || !metadataPageMatches(body, values.length, start, 100))
-    return undefined;
+  const last =
+    values === undefined ? undefined : jiraMetadataPageLast(body, values.length, start, 100);
+  if (values === undefined || last === undefined) return undefined;
   return {
     values,
     total: typeof body.total === "number" ? body.total : undefined,
-    last: body.last === true,
+    last,
   };
 }
 export async function jiraCreateMutationMetadata(

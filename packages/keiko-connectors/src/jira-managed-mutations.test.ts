@@ -60,33 +60,46 @@ function fixture(): {
       ),
   };
 }
-it("creates through current paged metadata and the selected numeric routing identities", async () => {
-  const f = fixture();
-  expect(
-    await f.run("jira.create", {
-      projectId: "10000",
-      issueTypeId: "10001",
-      fields: { summary: "Synthetic", customfield_10000: "Required" },
-    }),
-  ).toEqual({ ok: true, receipt: { issueKey: "SYN-1", issueId: "10001" } });
-  expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET", "POST", "GET"]);
-  expect(f.http.mock.calls[0]?.[0].url).toContain(
-    "/context/rest/api/2/issue/createmeta/10000/issuetypes/10001?startAt=0&maxResults=100",
-  );
-  expect(
-    JSON.parse(
-      f.http.mock.calls.find(([request]) => request.method !== "GET")?.[0].bodyJson ?? "null",
-    ),
-  ).toEqual({
-    fields: {
-      project: { id: "10000" },
-      issuetype: { id: "10001" },
-      summary: "Synthetic",
-      customfield_10000: "Required",
-    },
-    update: {},
-  });
-});
+it.each(["legacy", "current"])(
+  "creates through %s paged metadata and numeric routing identities",
+  async (format) => {
+    const f = fixture();
+    if (format === "current")
+      f.http.mockResolvedValueOnce(
+        response({
+          values: FIELDS,
+          startAt: 0,
+          maxResults: 100,
+          isLast: true,
+          total: FIELDS.length,
+        }),
+      );
+    expect(
+      await f.run("jira.create", {
+        projectId: "10000",
+        issueTypeId: "10001",
+        fields: { summary: "Synthetic", customfield_10000: "Required" },
+      }),
+    ).toEqual({ ok: true, receipt: { issueKey: "SYN-1", issueId: "10001" } });
+    expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET", "POST", "GET"]);
+    expect(f.http.mock.calls[0]?.[0].url).toContain(
+      "/context/rest/api/2/issue/createmeta/10000/issuetypes/10001?startAt=0&maxResults=100",
+    );
+    expect(
+      JSON.parse(
+        f.http.mock.calls.find(([request]) => request.method !== "GET")?.[0].bodyJson ?? "null",
+      ),
+    ).toEqual({
+      fields: {
+        project: { id: "10000" },
+        issuetype: { id: "10001" },
+        summary: "Synthetic",
+        customfield_10000: "Required",
+      },
+      update: {},
+    });
+  },
+);
 it("edits only fields available in freshly retrieved edit metadata", async () => {
   const f = fixture();
   expect(await f.run("jira.edit", { issueKey: "SYN-1", fields: { summary: "Changed" } })).toEqual({

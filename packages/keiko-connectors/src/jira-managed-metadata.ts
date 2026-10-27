@@ -98,33 +98,39 @@ function totalMatches(total: unknown, start: number, count: number, last: boolea
   const end = start + count;
   return last === end >= total && (count === 0 || end <= total);
 }
-export function metadataPageMatches(
+/** Normalize known DC page envelopes; never combine fields from different formats. */
+export function jiraMetadataPageLast(
   body: Record<string, unknown>,
   count: number,
   start: number,
   max: number,
-): boolean {
-  if (body.start !== start || !integer(body.size, count, max) || typeof body.last !== "boolean")
-    return false;
-  if (!body.last && count === 0) return false;
-  return totalMatches(body.total, start, count, body.last);
+): boolean | undefined {
+  const currentKeys = ["startAt", "maxResults", "isLast"] as const;
+  const legacyKeys = ["start", "size", "last"] as const;
+  const current = currentKeys.some((key) => Object.hasOwn(body, key));
+  if (current && legacyKeys.some((key) => Object.hasOwn(body, key))) return undefined;
+  const keys = current ? currentKeys : legacyKeys;
+  const [offset, size, last] = keys.map((key) => body[key]);
+  if (offset !== start || !integer(size, count, max) || typeof last !== "boolean") return undefined;
+  if (!last && count === 0) return undefined;
+  return totalMatches(body.total, start, count, last) ? last : undefined;
 }
-/** DC createmeta uses start/size/last, unlike Cloud's startAt/maxResults/isLast. */
 export function remoteJiraPage(
   body: Record<string, unknown>,
   items: readonly CatalogJsonObject[] | undefined,
   startAt: number,
   maxResults: number,
 ): ManagedMcpToolResult {
-  if (items === undefined || !metadataPageMatches(body, items.length, startAt, maxResults))
-    return jiraReadFailure("malformed-payload");
+  const last =
+    items === undefined ? undefined : jiraMetadataPageLast(body, items.length, startAt, maxResults);
+  if (items === undefined || last === undefined) return jiraReadFailure("malformed-payload");
   return {
     data: {
       outcome: "succeeded",
       items,
       startAt,
       ...(typeof body.total === "number" ? { total: body.total } : {}),
-      ...(body.last ? {} : { nextStartAt: startAt + items.length }),
+      ...(last ? {} : { nextStartAt: startAt + items.length }),
     },
   };
 }

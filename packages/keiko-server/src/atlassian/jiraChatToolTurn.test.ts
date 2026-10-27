@@ -16,7 +16,10 @@ import {
   type GatewayStreamChunk,
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
-import type { DesktopChatSendResponse } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type {
+  ChatToolExchange,
+  DesktopChatSendResponse,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "../deps.js";
 import { handleSendDesktopChat } from "../chat-handlers.js";
@@ -29,6 +32,7 @@ import type {
 import { jiraChatActorDigest } from "./jiraPodAccess.js";
 import { handleDecideChatReadConsent } from "./chatReadConsentRoutes.js";
 
+type ToolProof = boolean | "missing" | "stale" | "unsupported" | "mismatched";
 const MODEL = "synthetic-jira-chat";
 const POD = "d5f5681e-ce98-4c3c-b27e-51d707c9d018";
 const cleanups: (() => Promise<void>)[] = [];
@@ -45,7 +49,7 @@ function context(body: Record<string, unknown>, params: Record<string, string> =
     correlationId: "jira-chat-loop-proof",
   };
 }
-function configure(deps: UiHandlerDeps, verified = true): void {
+function configure(deps: UiHandlerDeps, proof: ToolProof = true): void {
   const provider = {
     modelId: MODEL,
     baseUrl: "https://model.example.invalid/v1",
@@ -62,14 +66,23 @@ function configure(deps: UiHandlerDeps, verified = true): void {
       capabilities: [
         {
           ...createDefaultChatCapability(MODEL),
-          toolCalling: true,
+          toolCalling: proof !== "unsupported",
           streaming: true,
-          toolCallingVerification: {
-            status: verified ? "verified" : "unverified",
-            checkedAt: new Date().toISOString(),
-            probe: "gateway-tool-calling-v1",
-            configurationFingerprint: toolCallingConfigurationFingerprint(provider),
-          },
+          ...(proof === "missing"
+            ? {}
+            : {
+                toolCallingVerification: {
+                  status: proof === false ? "unverified" : "verified",
+                  checkedAt: new Date(
+                    proof === "stale" ? Date.now() - 2 * 24 * 60 * 60 * 1000 : Date.now(),
+                  ).toISOString(),
+                  probe: "gateway-tool-calling-v1",
+                  configurationFingerprint:
+                    proof === "mismatched"
+                      ? "f".repeat(64)
+                      : toolCallingConfigurationFingerprint(provider),
+                },
+              }),
         },
       ],
     }),
@@ -283,16 +296,60 @@ describe("normal buffered Chat through the owned Jira catalog", () => {
     expect((await send(f, "human-turn-two")).status).toBe(200);
     expect(f.requests()).toBe(2);
   });
-  it("does not advertise tools to a model without current tool-call proof", async () => {
+  it.each([false, "missing", "stale", "unsupported", "mismatched"] as const)(
+    "rejects a bound Chat with %s tool proof before any model or Jira call",
+    async (proof) => {
+      const f = fixture();
+      configure(f.deps, proof);
+      const result = await send(f, "unverified-model-turn");
+      expect(result).toMatchObject({
+        status: 400,
+        body: {
+          error: {
+            code: "CONVERSATION_UNAVAILABLE_MODEL",
+          },
+        },
+      });
+      expect(JSON.stringify(result.body)).toContain("verified tool calling");
+      expect(JSON.stringify(result.body)).toContain("disconnect the Jira Pod");
+      expect(f.calls).toHaveLength(0);
+      expect(f.requests()).toBe(0);
+      expect(f.deps.store.listMessages(f.chatId)[0]?.turnState).toBe("failed");
+    },
+  );
+  it("preserves ordinary unbound Chat without tool-calling proof", async () => {
     const f = fixture();
+    f.deps.store.updateChat(f.chatId, { jiraPodId: null });
     configure(f.deps, false);
-    expect((await send(f, "unverified-model-turn")).status).toBe(200);
-    expect(f.calls.every((request) => request.toolCatalog === undefined)).toBe(true);
+    expect((await send(f, "unbound-model-turn")).status).toBe(200);
+    expect(f.calls).toHaveLength(1);
+    expect(f.calls[0]?.toolCatalog).toBeUndefined();
     expect(f.requests()).toBe(0);
   });
 });
 
 describe("normal streamed Chat through the owned Jira catalog", () => {
+  it.each([false, "missing", "stale", "unsupported", "mismatched"] as const)(
+    "refuses streamed Chat with %s tool proof before SSE or model dispatch",
+    async (proof) => {
+      const f = fixture();
+      configure(f.deps, proof);
+      const response = mockResponse({ captureBody: true });
+      const result = await handleSendDesktopChatStream(
+        { ...sendContext(f, "unverified-stream"), res: response.res },
+        f.deps,
+      );
+      expect(result).toMatchObject({
+        status: 400,
+        body: { error: { code: "CONVERSATION_UNAVAILABLE_MODEL" } },
+      });
+      expect(response.body()).toBe("");
+      expect(f.calls).toHaveLength(0);
+      expect(f.requests()).toBe(0);
+      expect(f.deps.store.listMessages(f.chatId)[0]?.turnState).toBe("failed");
+    },
+  );
+
   it("publishes consent while waiting, then completes through the same MCP loop", async () => {
     const f = fixture();
     const response = mockResponse({ captureBody: true });
@@ -434,6 +491,9 @@ describe("normal Chat write approval and durable outcome", () => {
       } else expect(completed).toMatchObject({ status: 200 });
       expect(f.writes()).toBe(1);
       assertObservedWrite(f);
+      expect(firstToolExchange(f).approval?.state).toBe(
+        mode === "autonomous-delivery" ? undefined : "claimed",
+      );
       const modelCalls = f.calls.length;
       const replay = await handleSendDesktopChat(
         sendContext(f, `write-${mode}-${String(streamed)}`),
@@ -460,6 +520,12 @@ it("keeps a rejected normal Chat write free of remote effects", async () => {
   expect(exchange?.result?.status).toBe("denied");
 });
 
+function firstToolExchange(f: ReturnType<typeof fixture>): ChatToolExchange {
+  const exchange = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges[0];
+  if (exchange === undefined) throw new Error("Missing tool exchange");
+  return exchange;
+}
+
 it("retains late acknowledged Jira effects after the Chat has already been cancelled", async () => {
   let release = (): void => {
     throw new Error("Missing response gate");
@@ -485,17 +551,15 @@ it("retains late acknowledged Jira effects after the Chat has already been cance
     expect(f.deps.store.listMessages(f.chatId)[0]?.turnState).toBe("cancelled");
   });
   const message = f.deps.store.listMessages(f.chatId)[0];
-  const exchange = message?.toolTranscript?.exchanges[0];
-  if (message === undefined || exchange === undefined) throw new Error("Missing cancelled turn");
+  const exchange = firstToolExchange(f);
+  if (message === undefined) throw new Error("Missing cancelled turn");
   expect(exchange.result?.data).toBeNull();
-  const identity = sha256Hex(canonicalise({ messageId: message?.id, callId: exchange?.call.id }));
+  const identity = sha256Hex(canonicalise({ messageId: message.id, callId: exchange.call.id }));
   release();
   await vi.waitFor(() => {
     expect(f.deps.store.chatToolMutations?.find(identity)?.outcome).toBe("succeeded-unconfirmed");
   });
-  expect(
-    f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges[0]?.mutationOutcome,
-  ).toBe("succeeded-unconfirmed");
+  expect(firstToolExchange(f).mutationOutcome).toBe("succeeded-unconfirmed");
   const reader = new DatabaseSync(join(f.root, "ui.db"), { readOnly: true });
   try {
     expect(

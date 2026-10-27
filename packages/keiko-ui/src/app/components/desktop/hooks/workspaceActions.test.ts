@@ -3191,6 +3191,47 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
     expect(store.conns).toHaveLength(0);
   });
 
+  it("rejects a late Jira acknowledgement after the source node selects a different Pod", async () => {
+    const store = { conns: [] as Connection[] };
+    const cfg = { selectedKind: "jira-live", selectedId: "jira-one" };
+    let finish!: (accepted: boolean) => void;
+    const acceptance = new Promise<boolean>((resolve) => {
+      finish = resolve;
+    });
+    const harness = makeConnectHarness(
+      [win("connector", cfg, "conn-1"), win("chat", { chatId: "chat-a" }, "chat-1")],
+      [],
+      {
+        connecting: { from: "conn-1", x: 0, y: 0 },
+        setConns: collectingSetConns(store),
+        onConnectorBind: () => acceptance,
+      },
+    );
+    harness.confirmConnect("chat-1", evt);
+    cfg.selectedId = "jira-two";
+    finish(true);
+    await acceptance;
+    await flushAsyncBind();
+    expect(store.conns).toHaveLength(0);
+  });
+
+  it("runs programmatic Jira connection through the same acknowledgement boundary", async () => {
+    const store = { conns: [] as Connection[] };
+    const bind = vi.fn(() => false);
+    const harness = makeConnectHarness(
+      [
+        win("connector", { selectedKind: "jira-live", selectedId: "jira-one" }, "conn-1"),
+        win("chat", {}, "chat-1"),
+      ],
+      [],
+      { setConns: collectingSetConns(store), onConnectorBind: bind },
+    );
+    harness.connect("conn-1", "chat-1");
+    await flushAsyncBind();
+    expect(bind).toHaveBeenCalledOnce();
+    expect(store.conns).toHaveLength(0);
+  });
+
   it("does not draw the edge when onConnectorBind vetoes the bind", async () => {
     const store = { conns: [] as Connection[] };
     const harness = makeConnectHarness(

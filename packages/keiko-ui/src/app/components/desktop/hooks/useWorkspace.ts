@@ -1,5 +1,6 @@
+"use client";
+
 import type { ConnectArgs } from "./workspaceActions";
-("use client");
 
 import {
   useCallback,

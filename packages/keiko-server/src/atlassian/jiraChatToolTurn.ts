@@ -30,6 +30,8 @@ import type { UiHandlerDeps } from "../deps.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { defaultServerDiagnosticSink } from "../diagnostics-log.js";
 import { correlationIdOrUnknown } from "../correlation.js";
+import { ConversationModelNotReadyError } from "../conversation-readiness-admission.js";
+import { logConversationAdmission } from "../conversation-readiness-log.js";
 import { createCatalogToolBinder } from "../tool-catalog/catalogToolDispatch.js";
 import { createCodingToolInvocationRegistry } from "../coding-runtime/codingToolInvocationRegistry.js";
 import { requireDispatch } from "../tool-catalog/catalogToolErrors.js";
@@ -154,6 +156,9 @@ export class JiraChatToolTurn {
   }
   public onTranscript(listener: (message: ChatMessage) => void | Promise<void>): void {
     this.notify = listener;
+  }
+  public hasSettledExchange(): boolean {
+    return this.continuation.some((message) => message.role === "tool");
   }
   private async publish(): Promise<void> {
     const message = this.options.deps.store.findMessageById(this.options.message.id);
@@ -373,6 +378,7 @@ export class JiraChatToolTurn {
       idempotencyKey: identity,
     });
     requireDispatch(outcome.kind === "settled", "invalid", "recovery-required");
+    this.refreshWriteApproval(call.id);
     const descriptor = managed.catalog.descriptors.find(
       (entry) => entry.toolRef.canonicalId === call.invocation?.toolRef.canonicalId,
     );
@@ -392,6 +398,27 @@ export class JiraChatToolTurn {
     );
     this.appendObservedExchange(call.id);
     await this.publish();
+  }
+  private refreshWriteApproval(callId: string): void {
+    const { deps, message, correlationId } = this.options;
+    const previous = deps.store
+      .findMessageById(message.id)
+      ?.toolTranscript?.exchanges.find((exchange) => exchange.call.id === callId)?.approval;
+    if (previous === undefined) return;
+    const observed = deps.atlassianActionApprovalRegistry?.getChatWriteApproval(
+      previous.approvalId,
+      correlationId,
+    )?.approval;
+    if (
+      observed?.actionDigest !== previous.actionDigest ||
+      observed.invocationId !== previous.invocationId
+    )
+      return;
+    deps.store.updateChatToolTranscript(
+      message.id,
+      { kind: "write-approval", callId, approval: observed },
+      correlationId,
+    );
   }
   private appendObservedExchange(id: string): void {
     const stored = this.options.deps.store
@@ -522,11 +549,12 @@ export async function createJiraChatToolTurn(
   signal: AbortSignal,
   correlationId: string | undefined,
 ): Promise<JiraChatToolTurn | undefined> {
-  if (
-    deps.store.findChatById(message.chatId)?.jiraPodBinding === undefined ||
-    !jiraChatModelSupportsTools(deps, modelId)
-  )
-    return undefined;
+  if (deps.store.findChatById(message.chatId)?.jiraPodBinding === undefined) return undefined;
+  if (!jiraChatModelSupportsTools(deps, modelId)) {
+    const generation = deps.gatewayConfig?.generation();
+    logConversationAdmission("observation-unavailable", correlationId, generation, generation);
+    throw new ConversationModelNotReadyError("tool-calling");
+  }
   const authority = mintAcceptedJiraChatAuthority(deps, {
     chatId: message.chatId,
     userMessageId: message.id,

@@ -1,6 +1,9 @@
 import type { ParsedDesktopChatSend } from "./chat-handlers.js";
 import { createJiraChatToolTurn, scopeJiraChatToolTurn } from "./atlassian/jiraChatToolTurn.js";
-import { callGroundedSynthesisModel } from "./grounded-plural-synthesis.js";
+import {
+  callGroundedSynthesisModel,
+  requiresObservedToolResult,
+} from "./grounded-plural-synthesis.js";
 import { withMarkdownSkillRequestAuthority } from "./markdown-skill-authority.js";
 import { promptFitRedactor } from "./grounded-prompt-redactor.js";
 import {
@@ -1876,6 +1879,7 @@ async function dispatchGroundedSynthesis(
       ctx.signal,
       tracker,
       ctx.deps.jiraChatToolTurn,
+      requiresObservedToolResult(ctx.deps, sent.sentReferenceCount),
     );
     ctx.synthesis.recordCompleted();
     tracker.settleFallback(promptTokens, response.usage);
@@ -2211,6 +2215,10 @@ interface GroundedMemoryPreparation {
 
 function hasAnswerOnlyContext(prepared: PreparedGroundedAsk): boolean {
   return prepared.memory?.answerOnlyContextAvailable === true;
+}
+
+function canAnswerWithoutDataEvidence(prepared: PreparedGroundedAsk, deps: UiHandlerDeps): boolean {
+  return hasAnswerOnlyContext(prepared) || deps.jiraChatToolTurn !== undefined;
 }
 
 function admittedGroundedUser(prepared: PreparedGroundedAsk): ChatMessage {
@@ -2711,7 +2719,7 @@ async function dispatchMultiSourceAsk(
     args.correlationId,
     {
       currentQuestion: input.content,
-      answerOnlyContextAvailable: hasAnswerOnlyContext(args),
+      answerOnlyContextAvailable: canAnswerWithoutDataEvidence(args, deps),
       userMessageId: admittedGroundedUser(args).id,
     },
   );
@@ -2726,7 +2734,7 @@ async function dispatchMultiSourceAsk(
     content: input.content,
     retrievalContent: input.retrievalContent,
     answerContent: input.answerContent ?? input.content,
-    answerOnlyContextAvailable: hasAnswerOnlyContext(args),
+    answerOnlyContextAvailable: canAnswerWithoutDataEvidence(args, deps),
     ...(input.clientTurnId === undefined ? {} : { clientTurnId: input.clientTurnId }),
     commitTurnId: groundedCommitTurnId(args),
     userMessage: admittedGroundedUser(args),
@@ -2816,7 +2824,7 @@ async function dispatchFolderAsk(
     content: input.content,
     retrievalContent: input.retrievalContent,
     answerContent: input.answerContent ?? input.content,
-    answerOnlyContextAvailable: hasAnswerOnlyContext(prepared),
+    answerOnlyContextAvailable: canAnswerWithoutDataEvidence(prepared, deps),
     ...(input.clientTurnId === undefined ? {} : { clientTurnId: input.clientTurnId }),
     commitTurnId: groundedCommitTurnId(prepared),
     userMessage: admittedGroundedUser(prepared),
@@ -2878,7 +2886,7 @@ async function dispatchHybridAsk(
     content: input.content,
     retrievalContent: input.retrievalContent,
     answerContent: input.answerContent ?? input.content,
-    answerOnlyContextAvailable: hasAnswerOnlyContext(prepared),
+    answerOnlyContextAvailable: canAnswerWithoutDataEvidence(prepared, deps),
     ...(input.clientTurnId === undefined ? {} : { clientTurnId: input.clientTurnId }),
     userMessage: admittedGroundedUser(prepared),
     modelId,
@@ -2963,7 +2971,7 @@ async function dispatchPreparedGroundedAsk(
       chat,
       {
         ...prepared.input,
-        answerOnlyContextAvailable: hasAnswerOnlyContext(prepared),
+        answerOnlyContextAvailable: canAnswerWithoutDataEvidence(prepared, deps),
         userMessage: admittedGroundedUser(prepared),
       },
       deps,
@@ -3342,7 +3350,7 @@ async function runAdmittedGroundedAsk(
     }
     const result = await dispatchPreparedGroundedAsk(
       memoryPrepared,
-      deps,
+      { ...deps, groundedMemoryContextAvailable: hasAnswerOnlyContext(memoryPrepared) },
       runner,
       multiSource,
       hybrid,
@@ -3363,6 +3371,26 @@ async function runAdmittedGroundedAsk(
     if (stagedAssistantId !== undefined) discardGroundedTurn(stagedAssistantId);
     failGroundedChatTurn(admitted, deps, error instanceof CancelledError);
     if (admitted.signal.aborted) return groundedCancelledResult();
+    throw error;
+  }
+}
+
+async function admitGroundedJiraTurn(
+  admitted: PreparedGroundedAsk,
+  deps: UiHandlerDeps,
+): Promise<Awaited<ReturnType<typeof createJiraChatToolTurn>> | RouteResult> {
+  try {
+    return await createJiraChatToolTurn(
+      deps,
+      groundedModelId(admitted),
+      admittedGroundedUser(admitted),
+      admitted.signal,
+      admitted.correlationId,
+    );
+  } catch (error) {
+    failGroundedChatTurn(admitted, deps, error instanceof CancelledError);
+    const mapped = mappedGatewayError(error, deps, admitted.correlationId);
+    if (mapped !== undefined) return mapped;
     throw error;
   }
 }
@@ -3389,13 +3417,8 @@ async function executeGroundedAskInTurn(
     surface: "grounded-chat",
   });
   try {
-    const toolTurn = await createJiraChatToolTurn(
-      deps,
-      groundedModelId(admitted),
-      admittedGroundedUser(admitted),
-      admitted.signal,
-      admitted.correlationId,
-    );
+    const toolTurn = await admitGroundedJiraTurn(admitted, deps);
+    if (isRouteResult(toolTurn)) return toolTurn;
     const scoped = scopeJiraChatToolTurn(deps, toolTurn);
     return await runAdmittedGroundedAsk(
       toolTurn === undefined
