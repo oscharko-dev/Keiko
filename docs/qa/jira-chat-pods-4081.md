@@ -107,7 +107,7 @@ Status: **Pending**. Implementation: pending. Verification: pending. Evidence: p
 
 - [ ] **AC1:** Real modern MCP discovery, per-request protocol metadata, `tools/list` and `tools/call` through the shared host exercise the production Jira provider and list exactly the implemented typed capabilities; every listed tool has a catalog descriptor and an ADR-0128 D4 row. Unknown tools, malformed arguments and caller-supplied credentials, arbitrary destinations or connector switching are refused before HTTP execution.
 
-Status: **Pending**. Implementation: pending. Verification: pending. Evidence: pending.
+Status: **Partial — not accepted**. Implementation: `jira-managed-tools.ts`, `jiraManagedProvider.ts`, shared catalog/SDK composition. Verification: `catalogNonCodingConsumer.test.ts` (real SDK, synthetic HTTP). Evidence: first-Jira-capability checkpoint below. Only `jira.projects` is currently advertised; remaining operations and actual Chat admission are pending.
 
 - [ ] **AC2:** Against local Jira 10.3.26, a non-admin PAT searches/reads and performs create/edit/assign/comment/transition where Jira permits them, and the restricted identity is refused truthfully without escalation. The recorded supported-operation matrix names each tested operation, endpoint family and unsupported capability; it never claims full Jira REST coverage.
 
@@ -115,19 +115,19 @@ Status: **Pending**. Implementation: pending. Verification: pending. Evidence: p
 
 - [ ] **AC3:** Required supported custom fields, constrained fields and workflow-specific transitions are discovered/validated from real metadata through the post-9.0 endpoints. A real transition-screen fixture requires a supported field; omitting it fails, and the approved field value and transition succeed in one request. Undeclared mutation verbs, worklogs and unsupported compound effects are refused before HTTP. Unknown plugin-specific field types are reported as unsupported with no fabricated values. Missing/invalid values and unauthorized issues/actions produce honest safe errors without escalating to an admin identity.
 
-Status: **Pending**. Implementation: pending. Verification: pending. Evidence: pending.
+Status: **Partial — not accepted**. Implementation: `jira-field-metadata.ts` bounded field/verb validation. Verification: 26 field tests plus synthetic-lab required-field/transition baseline. Evidence: metadata-field checkpoint below. Production fresh-metadata write composition and live matrix remain pending.
 
 - [ ] **AC4:** Pagination, empty results, partial results, bounds, timeout and cancellation behave deterministically. Jira content and tool metadata cannot modify the tool allowlist, credential, chat binding, read grant or approval state.
 
-Status: **Pending**. Implementation: pending. Verification: pending. Evidence: pending.
+Status: **Partial — not accepted**. Implementation: bounded project pages and existing shared host cancellation/bounds. Verification: actual project SDK path and host regressions. Evidence: first-Jira-capability and host checkpoints below. Full operation pagination/cancellation matrix remains pending.
 
 - [ ] **AC5:** Tests distinguish malformed/truncated acknowledged 2xx from unknown remote effects, and prove no blind mutation replay after timeout, committed-then-5xx or cancellation. They cover intervening field/assignee changes and operation-aware retry safety, not only duplicate POST. Route, canonical tool outcome, activity and UI folds agree; an empty reconciliation search never authorizes a retry. Approved action changes invalidate stale approval. Document the concurrency limit of operations without an atomic Jira precondition; do not claim universal exactly-once execution or lost-update prevention.
 
-Status: **Pending**. Implementation: pending. Verification: pending. Evidence: pending.
+Status: **Partial — not accepted**. Implementation: GET-only physical retries in the existing HTTP helper. Verification: POST/PUT committed-error and foreign-change regressions plus real route logging. Evidence: mutation-transport checkpoint below. Durable intent, rich outcome and UI/Chat folds remain pending.
 
 - [ ] **AC7:** With no explicit ceiling configured, the connector policy evaluates Chat-consumer and Coding-run calls against the same resolved `autonomous-delivery` ceiling; `KEIKO_CODING_DEPLOYMENT_CEILING=governed-assist` clamps both, and an unrecognized value fails closed to `governed-assist`. Proven through the production policy and composition, not a hand-built deps object.
 
-Status: **Pending**. Implementation: pending. Verification: pending. Evidence: pending.
+Status: **Partial — not accepted**. Implementation: shared deployment-ceiling resolver in production composition. Verification: production `buildUiHandlerDeps` and connector policy tests. Evidence: deployment-ceiling checkpoint below. Actual Chat authority composition remains pending.
 
 - [ ] **AC6:** Tool descriptions, inputs and output envelopes contain no PAT; activity/evidence contain no Jira content or private endpoints. Existing Cloud v3 services and Workbench MCP tests remain green.
 
@@ -768,3 +768,36 @@ and the semantic gate passes. No executable clone or matching-rule change was in
 
 Production Jira tool composition, live operation acceptance and the remaining Chat/Pod/UI work
 remain open. This checkpoint does not complete #4083 or any other acceptance criterion.
+
+## First Jira capability and complete parser ownership — #4083 / #4089 / #4081
+
+`jira.projects` now executes through the production gateway projection, generalized binder,
+shared SDK host and real connector provider. Its canonical server descriptor is the only model
+offer; connection/context data remains private. The Data Center v2 collection is fully validated,
+bounded, sorted and paged. Only project id/key/name are returned. Provider failures use the
+existing managed-host failure event. Four integration cases cover pagination, field minimization,
+no second HTTP dispatch for the same invocation, permission refusal and malformed object/JSON
+responses. This is a hermetic HTTP fixture and a non-Coding consumer, not a real-model or Chat test.
+
+The auditor correctly identified that the shared JSON-parser ownership justification omitted sync
+consumers. Production SyncRun previously wrote only the existing connector activity ring. It now
+also calls the existing registered `atlassian.action.outcome` projection. Partial runs remain
+explicitly partial, warn, and retain their execution failure rather than replacing it with a
+governance rationale. Four metadata-route regressions failed before this fix with no global event;
+Jira and Confluence item failures and the live-search route are also reconstructed through the
+reader. All five production decoder call sites are accounted for; the new array consumer is
+covered through the actual MCP path. The one exact parser rule now names all these owners.
+
+80 affected route/sync tests and 12 binder/SDK tests pass, alongside 97 registry and 20 gate tests.
+Package build, root typecheck, changed lint, error observability and ADR index pass. The generated
+607-proof/30-scenario inventory has no violations. The two data-only Fallow windows regrouped
+because the ownership explanation changed; the existing refresh retains 938 groups and passes.
+Production Chat grants/approvals, all other Jira operations, durable write outcomes, Live Pods,
+UI and real-model/live-lab qualification remain open. No full acceptance criterion is closed.
+
+The full `check:activity-log` aggregate was also executed: its registry, replay, inventory and
+negative checks pass, but the aggregate remains red solely because its nested `arch:check` requires
+the already-open clean-revision catalog performance measurement. This is not an Activity Log pass
+claim; final architecture/performance qualification remains outstanding. Review prose about
+Supervised workspace was corrected to match the D4 table and ADR-0138. The newly reported oversized
+Jira allowed-values field issue remains queued for the next metadata increment.

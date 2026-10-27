@@ -53,7 +53,7 @@ const ACTION_OUTCOME = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["succeeded", "failed", "denied", "cancelled", "pending-review"],
+      values: ["succeeded", "partial", "failed", "denied", "cancelled", "pending-review"],
     },
     failureReason: {
       type: "string",
@@ -93,6 +93,15 @@ const ACTION_OUTCOME = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+const OUTCOME_LEVEL = {
+  succeeded: "info",
+  partial: "warn",
+  failed: "error",
+  denied: "warn",
+  cancelled: "info",
+  "pending-review": "info",
+} as const;
+
 /** Project the existing action owner's result, excluding targets, credential refs and content. */
 export function recordAtlassianActionOutcome(
   deps: Pick<AtlassianConnectorCredentialDeps, "activityLog" | "diagnostics">,
@@ -105,13 +114,13 @@ export function recordAtlassianActionOutcome(
         ACTION_OUTCOME,
         {
           correlationId: record.correlationId,
-          level: record.outcome === "failed" ? "error" : "info",
+          level: OUTCOME_LEVEL[record.syncSummary?.outcome ?? record.outcome],
         },
         {
           provider: record.provider,
           actionType: record.actionType,
           disposition: record.disposition,
-          outcome: record.outcome,
+          outcome: record.syncSummary?.outcome ?? record.outcome,
           durationMs: record.durationMs,
           deploymentCeiling,
           failureReason:
@@ -119,7 +128,7 @@ export function recordAtlassianActionOutcome(
               ? "none"
               : (ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS.find(
                   (reason) => reason === record.reasonCode,
-                ) ?? "other"),
+                ) ?? (record.outcome === "failed" ? "other" : "none")),
           completeness: "complete",
           loss: "none",
         },

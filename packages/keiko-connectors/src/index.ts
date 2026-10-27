@@ -181,3 +181,9 @@ export {
   type UpdateConfluencePageInput,
   type UpdateConfluencePageResult,
 } from "./confluence-write-actions.js";
+
+export {
+  createJiraManagedProvider,
+  type JiraManagedConnection,
+  type JiraManagedProviderDeps,
+} from "./jira-managed-tools.js";

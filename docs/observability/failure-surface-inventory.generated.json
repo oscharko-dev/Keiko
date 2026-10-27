@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "9c48d7f287a1ec21793b95013789caed81d66b795f93542eba17cbc7bf4f1ef2"
+    "catalogDigest": "20e8560ffcd021071d0f0a0682d46447d700d1019e7d52eb1380842b63f3be64"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -1195,6 +1195,9 @@
       "packages/keiko-activity-log/src/server-log.writer-ownership.test.ts"
     ],
     "atlassian.action.outcome.line": [
+      "packages/keiko-server/src/atlassian/syncRoutes.jira.test.ts",
+      "packages/keiko-server/src/atlassian/syncRoutes.test.ts",
+      "packages/keiko-server/src/atlassian/writeActionRoutes.liveSearch.test.ts",
       "packages/keiko-server/src/atlassian/writeActionRoutes.test.ts"
     ],
     "atlassian.connection.checked.line": [

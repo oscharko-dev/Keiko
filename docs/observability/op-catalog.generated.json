@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "9c48d7f287a1ec21793b95013789caed81d66b795f93542eba17cbc7bf4f1ef2",
+    "catalogDigest": "20e8560ffcd021071d0f0a0682d46447d700d1019e7d52eb1380842b63f3be64",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -909,7 +909,7 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["succeeded", "failed", "denied", "cancelled", "pending-review"]
+            "values": ["succeeded", "partial", "failed", "denied", "cancelled", "pending-review"]
           },
           "failureReason": {
             "type": "string",
@@ -950,7 +950,7 @@
         "proofIds": ["atlassian.action.outcome.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/atlassian/actionOutcomeActivity.ts:15",
-        "emitterSites": ["packages/keiko-server/src/atlassian/actionOutcomeActivity.ts:104"]
+        "emitterSites": ["packages/keiko-server/src/atlassian/actionOutcomeActivity.ts:113"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -101074,7 +101074,7 @@
     {
       "op": "atlassian.action.log-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/actionOutcomeActivity.ts:134",
+      "site": "packages/keiko-server/src/atlassian/actionOutcomeActivity.ts:143",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -101126,7 +101126,7 @@
     {
       "op": "atlassian.sync-job",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/syncService.ts:775",
+      "site": "packages/keiko-server/src/atlassian/syncService.ts:783",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

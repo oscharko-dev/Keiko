@@ -862,7 +862,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["succeeded", "failed", "denied", "cancelled", "pending-review"],
+        values: ["succeeded", "partial", "failed", "denied", "cancelled", "pending-review"],
       },
       failureReason: {
         type: "string",

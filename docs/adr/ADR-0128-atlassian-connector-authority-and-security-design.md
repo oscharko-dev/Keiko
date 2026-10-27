@@ -367,6 +367,7 @@ uniformly: reads name the `CodingWorkbenchActionClass`, writes name the
 | 8 | `create-page` | Confluence | `connector-write` | `knowledge-base.write` | high | review-required | review-required | allowed |
 | 9 | `update-page` | Confluence | `connector-write` | `knowledge-base.write` | medium | review-required | review-required | allowed |
 | 10 | `add-page-comment` | Confluence | `connector-write` | `knowledge-base.write` | low | review-required | review-required | allowed |
+| 11 | `jira.projects` | Jira | `connector-access` | `issue-tracker.read` | low | review-required | review-required | allowed |
 
 **Risk-tier rationale (fixed here so #2244 does not have to invent it):** reads are uniformly `low`
 — every read is non-mutating, trivially reversible (re-run the query), and bounded by D5/D3.
@@ -381,19 +382,15 @@ Jira automations/webhooks and is not guaranteed reversible) are `high`. No v1 ac
 `critical`; that tier is reserved by the shared vocabulary for classes of action this lane does not
 have (e.g. destructive/delete actions, explicitly out of scope — D7).
 
-**Disposition derivation, spelled out once:** `governed-assist` (Ask for approval) makes every
-`internet` risk tier `approval-required`, so every row is `review-required` regardless of risk —
-this matches #2248's explicit acceptance criterion for `search-issues-live` and generalizes to
-every other row without a special case. `supervised-coding` (Approve for me) allows `low`/`medium`
-and requires approval for `high`/`critical`, which is exactly why the risk tiers above were chosen
-to split the write set: comments and field edits proceed without interruption, while
-issue/page creation and status transitions are reviewed. `autonomous-delivery` (Full access) allows
-every `internet` risk tier, so every row is `allowed`, **conditioned on the connector scope being
-present** — an envelope missing `issue-tracker.write` (or `knowledge-base.write`) is `denied` with
-`connector-write-denied` in Full access exactly as in every other mode, per the #2240 acceptance
-criterion that write actions without the write scope are denied "in every mode, including Full
-access." No connector action ever reaches `delivery` resource scope; git commit/push/PR/merge stay
-governed exclusively by the existing delivery-substrate path and are untouched by this lane.
+**Disposition derivation, spelled out once:** both `governed-assist` (Ask for approval) and
+`supervised-coding` (Supervised workspace) require review for every connector action's `internet`
+resource scope, regardless of risk tier (ADR-0138). Risk tiers describe the action and inform its
+review; they do not exempt comments or field edits from approval. `autonomous-delivery` (Full
+access) allows these actions only within a valid authority envelope, the required connector scopes
+and the resolved deployment ceiling. A missing read/write scope is denied in every mode, including
+Full access. Invalid explicit ceilings fail closed; narrower configured ceilings still apply.
+Connector authority never grants repository delivery authority; commit/push/PR/merge remain on
+the existing delivery path.
 
 **Contract extension decided here, implemented in #2240:** `CodingWorkbenchConnectorScope` gains
 two new closed values, `"knowledge-base.read"` and `"knowledge-base.write"`, added to
@@ -407,6 +404,16 @@ identifiers themselves are unchanged: `connector-access` already exists as a
 `connector-write` already exists as a `CodingWorkbenchSupervisedActionKind` whose `actionKindToPerm`
 mapping resolves back to `connector-access`, carrying the additional approval-risk signal on the
 supervised-action path. Only the scope enum grows.
+
+Managed Jira catalog operations use the same `connector-access` effect class. The current
+`jira.projects` capability maps to `issue-tracker.read` (low risk). In ordinary Chat, every mode
+requires the current binding's first-read grant before HTTP; a valid grant permits subsequent
+read-class calls only within the current authority, binding and credential generation. That bounded
+read grant supplies the standing approval for read-class calls; it never approves writes. Missing or
+expired authority is denied. This consumer admission is being implemented under #4084: the
+provider factory and catalog/SDK integration do not themselves expose a Chat route or confer a
+grant. The descriptor keeps the catalog's conservative server-generated invocation key requirement
+for external connector effects.
 
 ### D5 — Sync bounds and lifecycle
 
@@ -459,6 +466,15 @@ run, so a cancelled run commits nothing and the pod's prior successful state rem
 and queryable throughout.
 
 ### D6 — Evidence and audit shape
+
+The existing server action owner also projects SyncRun completion through the registered
+`atlassian.action.outcome` Activity Log operation. The connector activity ring remains the UI
+projection; it is not the sole audit store. A partial sync is explicitly `partial` in the global
+log, with a warning level and the actual closed failure reason rather than a governance rationale.
+Malformed list/metadata JSON, individual Jira/Confluence item bodies and live-search responses
+are covered through the real routes and the existing log reader. Managed Jira tools use the shared
+`mcp.managed.lifecycle` producer; HTTP/provider failures are refused through that owner. No response
+body, URL, credential reference or token is copied into these registered projections.
 
 Every connector action attempt — allowed, review-required, denied, and failed — produces exactly
 one content-free audit record: action type, connector id, provider, target key/id (an issue key or

@@ -1,3 +1,6 @@
+import type { AtlassianHttpBodyResult } from "@oscharko-dev/keiko-connectors";
+import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
+import { createJiraProviderForCatalog } from "../atlassian/jiraManagedProvider.js";
 import type {
   ManagedMcpTool,
   ManagedMcpToolResult,
@@ -502,6 +505,148 @@ it("isolates two consumers with reverse completion and cancellation before the d
     second.release.resolve();
     a.dispose();
     b.dispose();
+    await m.managed.close();
+  }
+});
+
+async function jiraFixture(
+  body: unknown,
+  status = 200,
+  rawBody?: string,
+): Promise<{
+  managed: ManagedProviderCatalog<ConversationConsumer>;
+  logs: ReturnType<typeof createBufferedServerLogSink>;
+  requests: string[];
+}> {
+  const logs = createBufferedServerLogSink();
+  const requests: string[] = [];
+  const provider = createJiraProviderForCatalog<CatalogHandlerContext<ConversationConsumer>>(
+    (context) => ({
+      baseUrl: "https://jira.example.invalid/context",
+      deployment: "data-center",
+      http: (request): Promise<AtlassianHttpBodyResult> => {
+        requests.push(`${context.chatId}:${request.method}:${request.url}`);
+        const bodyText = rawBody ?? JSON.stringify(body);
+        return Promise.resolve({
+          kind: "response",
+          status,
+          bodyText,
+          bodyBytes: bodyText.length,
+          truncated: false,
+        });
+      },
+    }),
+  );
+  const managed = await createManagedProviderCatalog<ConversationConsumer>({
+    providers: [provider],
+    profile: { id: "jira-fixture", version: 1 },
+    log: { primary: logs, diagnostics: { record: () => undefined } },
+    correlationId: "jira-admission",
+    now: () => 1000,
+    routes: [
+      {
+        name: "jira.projects",
+        alias: "jira_projects",
+        catalogAction: "jira.projects",
+        previewAction: (identity): ConversationAction => ({
+          ...identity,
+          action: "lookup",
+          query: "projects",
+        }),
+        actionFor: (_args, identity): ConversationAction => ({
+          ...identity,
+          action: "lookup",
+          query: "projects",
+        }),
+        resultFor: (data): CatalogHandlerResult => ({
+          data,
+          page: { truncated: false, reason: "none", cursor: null },
+          resultCount: Array.isArray(data.items) ? data.items.length : 0,
+        }),
+      },
+    ],
+  });
+  return { managed, logs, requests };
+}
+
+it("executes the real Jira project provider through gateway, binder and SDK with a private connection", async () => {
+  const m = await jiraFixture([
+    { id: "2", key: "Z", name: "Last", self: "private-url" },
+    { id: "1", key: "A", name: "First", emailAddress: "private-email" },
+  ]);
+  const f = fixture(undefined, m.managed);
+  try {
+    const gateway = createGatewayToolCatalogBridge(
+      {
+        modelId: "fixture-model",
+        messages: [],
+        toolCatalog: {
+          kind: "bound",
+          catalog: m.managed.catalog,
+          projection: m.managed.projection,
+          offered: f.binder.offer(),
+        },
+      },
+      () => 1000,
+    );
+    expect(gateway.tools.map((tool) => tool.name)).toEqual(["jira_projects"]);
+    const call = gateway.bind({
+      id: "jira-model-call",
+      name: "jira_projects",
+      arguments: { maxResults: 1 },
+    });
+    const result = await f.binder.dispatch(call.invocation, identity);
+    expect(result).toMatchObject({
+      kind: "settled",
+      result: {
+        status: "completed",
+        data: {
+          outcome: "succeeded",
+          items: [{ id: "1", key: "A", name: "First" }],
+          startAt: 0,
+          total: 2,
+          nextStartAt: 1,
+        },
+      },
+    });
+    expect(m.requests).toEqual([
+      "chat-one:GET:https://jira.example.invalid/context/rest/api/2/project",
+    ]);
+    expect(JSON.stringify(result)).not.toContain("private-email");
+    expect(JSON.stringify(gateway.tools)).not.toContain("jira.example.invalid");
+    await f.binder.dispatch(call.invocation, identity);
+    expect(m.requests).toHaveLength(1);
+  } finally {
+    f.dispose();
+    await m.managed.close();
+  }
+});
+
+it.each([
+  { status: 403, body: [], raw: undefined },
+  { status: 200, body: {}, raw: undefined },
+  { status: 200, body: [], raw: "{" },
+])("records Jira provider failure through the managed host", async ({ status, body, raw }) => {
+  const m = await jiraFixture(body, status, raw);
+  const f = fixture(undefined, m.managed);
+  try {
+    const result = await f.binder.dispatch({ ...f.invocation, arguments: {} }, identity);
+    expect(result).toMatchObject({
+      kind: "settled",
+      result: { status: "failed", reason: "handler-failed" },
+    });
+    expect(m.requests).toHaveLength(1);
+    const lines = m.logs.lines();
+    const records = lines.map((line) => JSON.parse(line) as { phase?: string });
+    expect(records.filter((record) => record.phase === "failed")).toHaveLength(1);
+    const timelines = analyzeLogText(lines.join("\n")).timelines;
+    expect(
+      timelines.some((timeline) =>
+        timeline.lines.some((line) => line.op === "mcp.managed.lifecycle"),
+      ),
+    ).toBe(true);
+  } finally {
+    f.dispose();
     await m.managed.close();
   }
 });
