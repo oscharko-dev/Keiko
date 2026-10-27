@@ -136,8 +136,9 @@ function isDraftDeliveryPhase(phase: string): phase is DraftDeliveryPhase {
 export function isDeliveredDraftDeliveryPhase(phase: string): boolean {
   // Exported on the runtime subpath, so a JavaScript caller can hand in any string: a value that is
   // not one of the table's own phases is never delivered - not a thrown `size` read on `undefined`.
-  if (!Object.hasOwn(PHASE_REASONS, phase)) return false;
-  const phaseReasons: Readonly<Partial<Record<string, ReadonlySet<string>>>> = PHASE_REASONS;
+  if (!isDraftDeliveryPhase(phase)) return false;
+  const phaseReasons: Readonly<Partial<Record<DraftDeliveryPhase, ReadonlySet<string>>>> =
+    PHASE_REASONS;
   const reasons = phaseReasons[phase];
   if (reasons === undefined) return false;
   return reasons.size === 1 && reasons.has("completed");

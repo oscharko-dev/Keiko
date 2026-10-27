@@ -458,3 +458,28 @@ it("refuses prototype names in the freshly captured draft phase on both surfaces
     }
   }
 });
+
+describe("delivered phase key conversion preservation", () => {
+  for (const [surface, classify] of [
+    ["source", isDeliveredDraftDeliveryPhase],
+    ["public", g2PublicDraft.isDeliveredDraftDeliveryPhase],
+  ] as const) {
+    it.each([
+      ["pushed", true],
+      ["push-proposed", false],
+      ["not-a-phase", false],
+      ["__proto__", false],
+    ] as const)(`${surface} preserves a second key conversion to %s`, (next, delivered) => {
+      let conversions = 0;
+      const key = {
+        [Symbol.toPrimitive](): string {
+          conversions += 1;
+          return conversions === 1 ? "pushed" : next;
+        },
+      };
+      const result: unknown = Reflect.apply(classify, undefined, [key]);
+      expect(result).toBe(delivered);
+      expect(conversions).toBe(2);
+    });
+  }
+});
