@@ -10,7 +10,7 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 49;
+export const SCHEMA_VERSION = 50;
 
 interface Migration {
   readonly version: number;
@@ -1752,6 +1752,13 @@ export const MIGRATIONS: readonly Migration[] = [
   {
     version: 49,
     sql: "ALTER TABLE chats ADD COLUMN jira_state_json TEXT;",
+  },
+  {
+    version: 50,
+    sql: `ALTER TABLE chat_messages ADD COLUMN tool_transcript_json TEXT;
+      CREATE TRIGGER chat_tool_transcript_revision AFTER UPDATE OF tool_transcript_json ON chat_messages
+      WHEN OLD.tool_transcript_json IS NOT NEW.tool_transcript_json
+      BEGIN UPDATE chats SET history_revision = history_revision + 1 WHERE id = OLD.chat_id; END;`,
   },
 ];
 

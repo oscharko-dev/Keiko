@@ -1,3 +1,6 @@
+import type { NormalizedToolCall } from "./gateway.js";
+import type { ToolResultEnvelope } from "./governed-tool-catalog.js";
+import type { ChatToolReadGrantView } from "./chat-tool-authority.js";
 // Wire-safe entity types for the BFF (Back-For-Frontend) layer (ADR-0013 D4). These types
 // travel over the HTTP wire between the BFF and the React UI. The DI port interfaces
 // (UiStore, UiStoreFactoryOptions) remain in src/ui/store/types.ts to avoid a contracts→ui
@@ -493,7 +496,19 @@ export interface ChatAssistantResponseVersion {
   readonly supersedesVersion?: number | undefined;
 }
 
+/** A call/result pair stays attached to its canonical human turn during history selection. */
+export interface ChatToolExchange {
+  readonly call: Pick<NormalizedToolCall, "id" | "name" | "arguments">;
+  readonly result?: ToolResultEnvelope | undefined;
+}
+export interface ChatToolTranscript {
+  readonly schemaVersion: 1;
+  readonly exchanges: readonly ChatToolExchange[];
+  readonly readGrant?: ChatToolReadGrantView | undefined;
+}
+
 export interface ChatMessage {
+  readonly toolTranscript?: ChatToolTranscript | undefined;
   readonly id: string;
   readonly chatId: string;
   readonly role: ChatRole;

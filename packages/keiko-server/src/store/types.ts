@@ -1,3 +1,4 @@
+import type { ChatToolTranscriptUpdate } from "./chatToolTranscript.js";
 import type { ChatToolMutationStore } from "./chatToolMutationTypes.js";
 // ADR-0013 D4 — UiStore port and entity types. The port is the seam for testing; the concrete
 // `createNodeUiStore` adapter and the `createInMemoryUiStore` test adapter both implement it.
@@ -177,6 +178,11 @@ export interface UiStore {
   readonly chatHistoryRevision: (chatId: string) => number;
   readonly countMessages: (chatId: string) => number;
   readonly findMessageById: (id: string) => ChatMessage | undefined;
+  readonly updateChatToolTranscript: (
+    messageId: string,
+    update: ChatToolTranscriptUpdate,
+    correlationId: string,
+  ) => void;
   readonly createMessage: (msg: NewChatMessage) => ChatMessage;
   readonly createMessages: (messages: readonly NewChatMessage[]) => readonly ChatMessage[];
   readonly createTurnAssistant: (

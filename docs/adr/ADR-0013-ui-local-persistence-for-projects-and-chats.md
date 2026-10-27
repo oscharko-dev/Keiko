@@ -826,3 +826,14 @@ process so that DB operations do not block the main event loop.
 ## Date
 
 2026-05-30
+
+### Ordinary Chat tool transcripts (#4091 / #4081)
+
+Migration 50 adds a nullable `tool_transcript_json` column to existing user-message rows. The
+canonical human message owns a bounded ordered list of structured call/result pairs and an optional
+public read-consent card. The server-only store method atomically starts or settles a call, rejects
+conflicting duplicate identities/results, applies the existing redactor and increments the existing
+history revision. Terminal canonical turns cannot be updated. Legacy null rows retain their shape;
+corrupt non-null transcripts fail closed. Coding History isolation also applies to this method.
+This storage does not authorize or replay execution; authority, approvals and the mutation journal
+retain those decisions. The registered Activity Log records only identity digests, phase and counts.

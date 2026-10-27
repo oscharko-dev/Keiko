@@ -40,6 +40,8 @@ import {
   conversationForGateway,
   usableGatewayTurns,
   type GatewayConversationMessage,
+  type GatewayConversationTurn,
+  gatewayMessagesForTurn,
 } from "./conversation-gateway.js";
 
 export interface ConversationCompactionOptions {
@@ -58,10 +60,7 @@ export interface ConversationCompactionOutcome {
   readonly omittedSummaryCategories?: readonly string[] | undefined;
 }
 
-interface DroppedTurn {
-  readonly role: "user" | "assistant";
-  readonly content: string;
-  readonly stableId: string;
+interface DroppedTurn extends GatewayConversationTurn {
   readonly gatewayTokens: number;
 }
 
@@ -159,7 +158,7 @@ function selectCompactionOutcome(
 
 function buildInitialMessages(
   systemMessage: GatewayConversationMessage | undefined,
-  filtered: readonly { role: "user" | "assistant"; content: string }[],
+  filtered: readonly Pick<GatewayConversationTurn, "role" | "content" | "verbatim">[],
   earlier: ContextCompactionRecord | undefined,
 ): GatewayConversationMessage[] {
   if (earlier === undefined) return buildVerbatimMessages(systemMessage, filtered);
@@ -173,9 +172,9 @@ function buildInitialMessages(
 
 function buildVerbatimMessages(
   systemMessage: GatewayConversationMessage | undefined,
-  filtered: readonly { role: "user" | "assistant"; content: string }[],
+  filtered: readonly Pick<GatewayConversationTurn, "role" | "content" | "verbatim">[],
 ): GatewayConversationMessage[] {
-  const retained = filtered.map((turn) => ({ role: turn.role, content: turn.content }));
+  const retained = filtered.flatMap(gatewayMessagesForTurn);
   return systemMessage === undefined ? retained : [systemMessage, ...retained];
 }
 
@@ -199,9 +198,9 @@ function buildCompactedOutcome(
 function buildCompactedMessages(
   systemMessage: GatewayConversationMessage | undefined,
   summaryContent: string,
-  retained: readonly Pick<DroppedTurn, "role" | "content">[],
+  retained: readonly Pick<DroppedTurn, "role" | "content" | "verbatim">[],
 ): GatewayConversationMessage[] {
-  const retainedMessages = retained.map((turn) => ({ role: turn.role, content: turn.content }));
+  const retainedMessages = retained.flatMap(gatewayMessagesForTurn);
   const systemScopedSummary: GatewayConversationMessage = {
     role: "system",
     content: buildSystemScopedCompactionContent(systemMessage?.content, summaryContent),
@@ -298,14 +297,15 @@ function selectCompactionCandidate(
 }
 
 function prepareDroppedTurns(
-  prefix: readonly { role: "user" | "assistant"; content: string; stableId: string }[],
+  prefix: readonly GatewayConversationTurn[],
   tokenAccounting: ContextTokenAccounting | undefined,
 ): DroppedTurn[] {
   return prefix.map((turn) => ({
-    role: turn.role,
-    content: turn.content,
-    stableId: turn.stableId,
-    gatewayTokens: countGatewayPromptTokens({ messages: [turn] }, tokenAccounting),
+    ...turn,
+    gatewayTokens: countGatewayPromptTokens(
+      { messages: gatewayMessagesForTurn(turn) },
+      tokenAccounting,
+    ),
   }));
 }
 

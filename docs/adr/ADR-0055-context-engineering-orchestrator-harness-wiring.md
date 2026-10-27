@@ -668,3 +668,12 @@ caller to opt in by threading a profile.
 ## Date
 
 2026-06-23
+
+### Jira tool pairs in ordinary Chat context (#4091 / #4081)
+
+The persisted human turn is the atomic history-selection unit for its tool exchanges. Verbatim
+context expands it into the original user message and matching assistant/tool pairs; token accounting
+includes those exchanges. Existing compaction summarizes an entire older unit or retains its complete
+pairs. Interrupted observations receive a closed unavailable/unknown result in context, never an
+invented success or a request to repeat the action. The existing history allocator and continuity
+checkpoint owner remain authoritative; transcript changes invalidate the same history revision.

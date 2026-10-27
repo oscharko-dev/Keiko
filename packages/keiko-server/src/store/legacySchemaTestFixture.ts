@@ -13,7 +13,7 @@ interface VersionRollback {
   readonly sql: string;
 }
 
-// One rollback fragment per structural forward migration (V14..V49), undoing what that
+// One rollback fragment per structural forward migration (V14..V50), undoing what that
 // migration's own `V<n>_SQL` in schema.ts added to reach it — never more, never less — so a rewind
 // can stop at any intermediate version and leave every earlier version's data and shape untouched.
 // Declared newest-first (descending): dropping the newest objects before older ones is always safe
@@ -27,6 +27,10 @@ interface VersionRollback {
 // `coding_runtime_snapshots` (no column added), so there is nothing to structurally undo at fixture
 // granularity.
 const ROLLBACKS: readonly VersionRollback[] = [
+  {
+    version: 50,
+    sql: "DROP TRIGGER chat_tool_transcript_revision; ALTER TABLE chat_messages DROP COLUMN tool_transcript_json;",
+  },
   { version: 49, sql: "ALTER TABLE chats DROP COLUMN jira_state_json;" },
   { version: 47, sql: "DROP TABLE chat_tool_mutations;" },
   { version: 46, sql: "DROP TABLE chat_creation_intents;" },

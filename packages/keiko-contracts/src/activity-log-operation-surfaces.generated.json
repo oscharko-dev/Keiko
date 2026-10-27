@@ -35,6 +35,7 @@
   "chat.send.rejected": "bff",
   "chat.tool-authority.operation": "editor-delivery",
   "chat.tool-mutation": "bff",
+  "chat.tool-transcript.updated": "bff",
   "chat.turn.started": "bff",
   "cli.audit.completed": "runtime-packages",
   "cli.audit.failed": "runtime-packages",

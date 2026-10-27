@@ -1770,3 +1770,19 @@ makes duplicate admission consumers share the existing registry budget; a change
 the same identity fails closed. Revoked authority cannot be replaced. The canonical store admission
 regression runs two concurrent mint callers after exhausting the first budget and proves neither
 gets another budget. Normal HTTP Chat orchestration is still the next integration step.
+
+### Structured ordinary Chat history — #4091 / #4081
+
+Migration 50 retains call/result pairs and the public read-consent view on the canonical human
+message through the existing store. Private authority/binding handles are excluded from calls;
+configured secrets are redacted. Updates are bounded, atomic, idempotent for identical deliveries,
+and immutable after terminal settlement. Public create/PATCH routes do not expose this write seam.
+Legacy messages remain unchanged and corrupt transcript JSON fails closed. The existing history
+revision and Coding History isolation apply.
+
+Verbatim gateway context now preserves assistant/tool roles and matching call IDs. Compaction
+retains or summarizes the complete human-turn unit, including tool observations in accounting.
+An interrupted observation is projected as unavailable with unknown effect. Three context regressions
+failed before the change; 140 scoped store/migration/history/prompt/compaction tests passed afterward
+before two additional bounds/consent tests. The new registered Activity Log proof checks redaction,
+production formatting and analyzer projection. Normal Chat execution/UI wiring remains pending.

@@ -486,3 +486,66 @@ describe("conversationForGatewayWithCompaction — slow path (compaction)", () =
     expect(a).toEqual(b);
   });
 });
+
+describe("structured Chat tool transcript selection", () => {
+  function toolTurn(index: number): ChatMessage {
+    return {
+      ...msg("user", "Read the current Jira project", index),
+      toolTranscript: {
+        schemaVersion: 1,
+        exchanges: [
+          {
+            call: { id: `call-${String(index)}`, name: "jira_projects", arguments: {} },
+            result: {
+              schemaVersion: 1,
+              invocationId: `invocation-${String(index)}`,
+              toolRef: null,
+              projectionDigest: null,
+              status: "denied",
+              reason: "approval-required",
+              effectStarted: false,
+              page: null,
+              data: null,
+              metrics: { inputBytes: 0, outputBytes: 0, resultCount: 0, durationMs: 0 },
+            },
+          },
+        ],
+      },
+    };
+  }
+  it("retains actual assistant/tool roles with matching IDs when no compaction is needed", () => {
+    const outcome = conversationForGatewayWithCompaction([
+      toolTurn(1),
+      msg("assistant", "Read consent required", 2),
+    ]);
+    expect(outcome.messages.map((message) => message.role)).toEqual([
+      "system",
+      "user",
+      "assistant",
+      "tool",
+      "assistant",
+    ]);
+    expect(outcome.messages[2]?.toolCalls?.[0]?.id).toBe("call-1");
+    expect(outcome.messages[3]?.toolCallId).toBe("call-1");
+  });
+  it("keeps a retained pair atomic when compacting the older history", () => {
+    const outcome = conversationForGatewayWithCompaction(
+      [msg("user", "older context ".repeat(20_000), 0), toolTurn(1), msg("user", "continue", 2)],
+      { effectiveInputBudget: 2000 },
+    );
+    expect(outcome.compaction).toBeDefined();
+    expect(outcome.messages.filter((message) => message.toolCalls !== undefined)).toHaveLength(1);
+    expect(outcome.messages.filter((message) => message.toolCallId === "call-1")).toHaveLength(1);
+  });
+  it("does not leave an orphan call after an interrupted observation", () => {
+    const turn = toolTurn(1);
+    const exchange = turn.toolTranscript?.exchanges[0];
+    if (exchange === undefined) throw new Error("Missing fixture exchange");
+    const outcome = conversationForGatewayWithCompaction([
+      { ...turn, toolTranscript: { schemaVersion: 1, exchanges: [{ call: exchange.call }] } },
+    ]);
+    const result = outcome.messages.find((message) => message.toolCallId === "call-1");
+    expect(result?.content).toContain("observation-unavailable");
+    expect(result?.content).not.toContain("succeeded");
+  });
+});

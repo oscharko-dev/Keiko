@@ -3,10 +3,43 @@ import { isLegacyEmptyAssistantPlaceholder } from "./assistant-response.js";
 import type { ChatMessage } from "./store/index.js";
 import type { ChatMessageContentPart } from "@oscharko-dev/keiko-contracts";
 
-export interface GatewayConversationMessage {
-  readonly role: "system" | "user" | "assistant";
+export type GatewayConversationMessage = import("@oscharko-dev/keiko-contracts").ChatMessage;
+export interface GatewayConversationTurn {
+  readonly role: "user" | "assistant";
   readonly content: string;
-  readonly contentParts?: readonly ChatMessageContentPart[] | undefined;
+  readonly stableId: string;
+  readonly verbatim?: readonly GatewayConversationMessage[] | undefined;
+}
+
+/** A stored human turn is the indivisible selection unit, including every call/result pair. */
+export function gatewayMessagesForTurn(
+  turn: Pick<GatewayConversationTurn, "role" | "content" | "verbatim">,
+): GatewayConversationMessage[] {
+  return turn.verbatim === undefined
+    ? [{ role: turn.role, content: turn.content }]
+    : [...turn.verbatim];
+}
+
+function transcriptMessages(message: ChatMessage): GatewayConversationMessage[] | undefined {
+  const exchanges = message.toolTranscript?.exchanges;
+  if (exchanges === undefined || exchanges.length === 0) return undefined;
+  return [
+    { role: message.role, content: message.content },
+    ...exchanges.flatMap((exchange): GatewayConversationMessage[] => [
+      { role: "assistant", content: "", toolCalls: [exchange.call] },
+      {
+        role: "tool",
+        toolCallId: exchange.call.id,
+        content: JSON.stringify(
+          exchange.result ?? {
+            status: "unavailable",
+            reason: "observation-unavailable",
+            effect: "unknown",
+          },
+        ),
+      },
+    ]),
+  ];
 }
 
 export const MAX_CONTEXT_MESSAGES = 24;
@@ -37,21 +70,26 @@ export function gatewayConversationImageAccounting(
   );
 }
 
-function messageForGateway(
-  message: ChatMessage,
-): { role: "user" | "assistant"; content: string; stableId: string } | null {
+function messageForGateway(message: ChatMessage): GatewayConversationTurn | null {
   if (isLegacyEmptyAssistantPlaceholder(message)) {
     return null;
   }
   if (message.role !== "user" && message.role !== "assistant") {
     return null;
   }
-  return { role: message.role, content: message.content, stableId: message.id };
+  const verbatim = transcriptMessages(message);
+  return {
+    role: message.role,
+    stableId: message.id,
+    content:
+      verbatim === undefined
+        ? message.content
+        : `${message.content}\n\n[Untrusted tool observations]\n${JSON.stringify(verbatim.slice(1))}`,
+    ...(verbatim === undefined ? {} : { verbatim }),
+  };
 }
 
-export function usableGatewayTurns(
-  messages: readonly ChatMessage[],
-): { role: "user" | "assistant"; content: string; stableId: string }[] {
+export function usableGatewayTurns(messages: readonly ChatMessage[]): GatewayConversationTurn[] {
   return messages
     .map(messageForGateway)
     .filter(
@@ -68,7 +106,9 @@ export function usableGatewayMessages(
 export function conversationForGateway(
   messages: readonly ChatMessage[],
 ): GatewayConversationMessage[] {
-  const usable = usableGatewayMessages(messages).slice(-MAX_CONTEXT_MESSAGES);
+  const usable = usableGatewayTurns(messages)
+    .slice(-MAX_CONTEXT_MESSAGES)
+    .flatMap(gatewayMessagesForTurn);
   return [
     {
       role: "system",

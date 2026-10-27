@@ -1,3 +1,4 @@
+import { decodeChatToolTranscript } from "./chatToolTranscript.js";
 // ADR-0013 — chat_messages CRUD. shortResult is redacted+truncated to ≤ MAX_SHORT_RESULT before persist.
 // Issue #66 adds:
 //   - `cancelled` to the accepted workflow status set (parity with src/ui/runs.ts RunStatus).
@@ -54,6 +55,7 @@ interface MessageRow {
   readonly client_turn_state: string | null;
   readonly client_turn_content_digest: string | null;
   readonly assistant_response_versions_json: string | null;
+  readonly tool_transcript_json: string | null;
 }
 
 const MAX_ASSISTANT_RESPONSE_VERSIONS = 50;
@@ -171,11 +173,12 @@ function rowToMessage(row: MessageRow): ChatMessage {
     shortResult: row.short_result ?? undefined,
     taskType: row.task_type ?? undefined,
     groundedAnswer,
+    toolTranscript: decodeChatToolTranscript(row.tool_transcript_json),
   };
 }
 
 const COLUMNS =
-  "id, chat_id, role, content, timestamp, run_id, workflow_id, workflow_status, short_result, task_type, grounded_answer_json, grounded_preview_citations_json, client_turn_id, client_turn_state, client_turn_content_digest, assistant_response_versions_json";
+  "id, chat_id, role, content, timestamp, run_id, workflow_id, workflow_status, short_result, task_type, grounded_answer_json, grounded_preview_citations_json, client_turn_id, client_turn_state, client_turn_content_digest, assistant_response_versions_json, tool_transcript_json";
 
 const SQL_LIST = `SELECT ${COLUMNS} FROM chat_messages WHERE chat_id = ? ORDER BY timestamp ASC, rowid ASC`;
 const SQL_LIST_LIMITED = `

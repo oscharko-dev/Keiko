@@ -1,3 +1,4 @@
+import { updateChatToolTranscript } from "./chatToolTranscript.js";
 import { createChatToolMutationStore } from "./chatToolMutations.js";
 import { withImmediateTransaction } from "./transaction.js";
 import { replayChatCreationIntent, withChatCreationIntent } from "./chatCreationIntents.js";
@@ -776,6 +777,9 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
     chatHistoryRevision: (chatId): number => sqlChatHistoryRevision(db, chatId),
     countMessages: (chatId: string): number => sqlCountMessages(db, chatId),
     findMessageById: (id: string): ChatMessage | undefined => sqlFindMessageById(db, id),
+    updateChatToolTranscript: (id, update, correlationId): void => {
+      updateChatToolTranscript(db, id, update, options.redactString, correlationId);
+    },
     createMessage: (msg: NewChatMessage): ChatMessage => {
       const message = createMessageRecord(db, options, msg);
       sqlTouchChat(db, msg.chatId, options.now());
