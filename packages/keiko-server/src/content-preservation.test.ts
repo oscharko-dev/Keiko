@@ -11,6 +11,7 @@ import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
 import type { ContentRedactionPolicy } from "@oscharko-dev/keiko-contracts";
 import { DEFAULT_EXPLORATION_BUDGET } from "@oscharko-dev/keiko-contracts/connected-context";
+import { CONNECTED_CONTEXT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type {
   GatewayCallRequest,
@@ -39,6 +40,7 @@ import {
   evalFileEntry,
   runConnectedRetrievalEval,
 } from "./grounded-eval-support.js";
+import { defaultRetriever } from "./grounded-qa-multi-source.js";
 import type { RouteContext } from "./routes.js";
 
 const CONTENT = 'Contact: +49 30 12345678\npassword: "customer-owned-example"';
@@ -338,6 +340,52 @@ describe("rehydrated conversation history", () => {
       expect(recall("preserve")).toContain("+49 30 12345678");
       expect(recall("redact")).toContain("Customer record");
       expect(recall("redact")).not.toContain("+49 30 12345678");
+    } finally {
+      disposeFixture(fixture);
+    }
+  });
+});
+
+describe("multi-source and hybrid retrieval (#4098)", () => {
+  // Configured literals have no built-in credential shape, so only the live secret list can remove
+  // them from a preserving read; the plural-source retriever must hand it to its workspace. (The
+  // default read keeps them until the prompt's own redactor removes them, as before #4098.)
+  it("removes configured secrets from a preserving retrieved source", async () => {
+    const fixture = createFixture("preserve");
+    try {
+      writeFileSync(
+        join(fixture.root, "relay.txt"),
+        `Relay contact: +49 30 12345678\nRelay passphrase: ${PROVIDER_SECRET}\n`,
+      );
+      const { pack } = await defaultRetriever(
+        new AbortController().signal,
+        fixture.deps,
+      )({
+        scope: {
+          schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
+          scopeId: "multi-source-secret",
+          workspaceRoot: fixture.root,
+          kind: "files",
+          relativePaths: ["relay.txt"],
+          conversationId: undefined,
+          connectedAtMs: 0,
+          explicitConnection: true,
+        },
+        query: {
+          kind: "natural-language",
+          text: "What is the relay contact and passphrase in relay.txt?",
+          caseSensitive: false,
+          maxResults: 100,
+          emittedAtMs: 0,
+        },
+        workspaceRoot: fixture.root,
+      });
+      const excerpts = pack.files
+        .flatMap((file) => file.excerpts.map((excerpt) => excerpt.content))
+        .join("\n");
+      expect(excerpts).toContain("Relay contact");
+      expect(excerpts).toContain("+49 30 12345678");
+      expect(excerpts).not.toContain(PROVIDER_SECRET);
     } finally {
       disposeFixture(fixture);
     }

@@ -841,6 +841,9 @@ export function defaultRetriever(
       declarationVerificationSignal: signal,
       ownAssessmentPolicy: deps === undefined ? undefined : currentOwnAssessmentPolicy(deps),
       contentRedaction: deps === undefined ? undefined : deploymentContentPolicy(deps),
+      // A preserving read still removes the configured literals, as single-source retrieval does.
+      contentSecrets:
+        deps === undefined ? undefined : (): readonly string[] => currentRedactionSecrets(deps),
       microIndex: microIndexForGroundedScope(input.scope, nowMs),
       // ADR-0173 D5. A multi-folder or hybrid ask retrieves through THIS path, not through the
       // single-folder one, so without the id every git-history read failure on the plural-source
