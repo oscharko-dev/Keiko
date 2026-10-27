@@ -1,3 +1,4 @@
+import { jiraSelectedFieldValues } from "./jira-managed-field-reads.js";
 import { isSafeAtlassianIdentifier } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
@@ -128,12 +129,27 @@ export function jiraIssueReadResult(
   body: Record<string, unknown>,
   startAt: number,
   maxResults: number,
+  selectedFields: readonly string[] = [],
 ): ManagedMcpToolResult {
   if (name === "jira.issue") {
     const value = issue(body, true);
     return value === undefined
       ? jiraReadFailure("malformed-payload")
-      : { data: { outcome: "succeeded", items: [value], startAt: 0, total: 1 } };
+      : {
+          data: {
+            outcome: "succeeded",
+            items: [
+              {
+                ...value,
+                ...(selectedFields.length === 0
+                  ? {}
+                  : { fieldValues: jiraSelectedFieldValues(body, selectedFields) }),
+              },
+            ],
+            startAt: 0,
+            total: 1,
+          },
+        };
   }
   return name === "jira.search"
     ? page(

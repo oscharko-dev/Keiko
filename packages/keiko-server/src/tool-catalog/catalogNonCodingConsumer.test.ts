@@ -1131,3 +1131,107 @@ it.each([
     await m.managed.close();
   }
 });
+
+it("reads selected current field values without exposing unknown plugin data", async () => {
+  const m = await jiraFixture(
+    {
+      ...readIssue,
+      fields: {
+        ...readIssue.fields,
+        customfield_1: "Synthetic field",
+        customfield_2: { private: "plugin-private" },
+        customfield_3: null,
+        customfield_99: "unrequested-private",
+      },
+      names: { customfield_1: "Context", customfield_2: "Plugin", customfield_3: "Number" },
+      schema: {
+        customfield_1: {
+          type: "string",
+          custom: "com.atlassian.jira.plugin.system.customfieldtypes:textarea",
+        },
+        customfield_2: { type: "string", custom: "unreviewed:plugin" },
+        customfield_3: {
+          type: "number",
+          custom: "com.atlassian.jira.plugin.system.customfieldtypes:float",
+        },
+      },
+    },
+    200,
+    undefined,
+    "jira.issue",
+  );
+  const f = fixture(undefined, m.managed);
+  try {
+    const result = await f.binder.dispatch(
+      {
+        ...f.invocation,
+        arguments: {
+          issueKey: "KEIKO-1",
+          fields: ["customfield_1", "customfield_2", "customfield_3", "customfield_4"],
+        },
+      },
+      identity,
+    );
+    expect(result).toMatchObject({
+      kind: "settled",
+      result: {
+        status: "completed",
+        data: {
+          items: [
+            {
+              fieldValues: [
+                {
+                  id: "customfield_1",
+                  name: "Context",
+                  kind: "text",
+                  state: "value",
+                  text: "Synthetic field",
+                },
+                { id: "customfield_2", name: "Plugin", kind: "unsupported", state: "unsupported" },
+                { id: "customfield_3", name: "Number", kind: "number", state: "empty" },
+                {
+                  id: "customfield_4",
+                  name: "customfield_4",
+                  kind: "unsupported",
+                  state: "unavailable",
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+    expect(m.requests).toHaveLength(1);
+    expect(m.requests[0]).toContain("expand=names%2Cschema");
+    expect(JSON.stringify(result)).not.toContain("plugin-private");
+    expect(JSON.stringify(result)).not.toContain("unrequested-private");
+  } finally {
+    f.dispose();
+    await m.managed.close();
+  }
+});
+
+it.each(
+  [
+    ["*all"],
+    ["constructor"],
+    ["customfield_1", "customfield_1"],
+    Array.from({ length: 21 }, (_, i) => `customfield_${String(i)}`),
+  ].map((fields) => ({ fields })),
+)("refuses invalid field selections before resolving a Jira connection", async ({ fields }) => {
+  const m = await jiraFixture(readIssue, 200, undefined, "jira.issue");
+  const f = fixture(undefined, m.managed);
+  try {
+    const outcome = await f.binder.dispatch(
+      { ...f.invocation, arguments: { issueKey: "KEIKO-1", fields } },
+      identity,
+    );
+    expect(outcome).toMatchObject({ kind: "settled", result: { effectStarted: false } });
+    expect(outcome.kind === "settled" && outcome.result.status).not.toBe("completed");
+    expect(m.connections).toEqual([]);
+    expect(m.requests).toEqual([]);
+  } finally {
+    f.dispose();
+    await m.managed.close();
+  }
+});

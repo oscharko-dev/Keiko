@@ -910,3 +910,21 @@ and 97 registry tests pass. Build, root typecheck, changed lint/format, ADR inde
 checks pass; registry generation resolves 607 proofs and 30 scenarios without violations.
 Actual emitted settlement lines are registered proofs and both log owners remain body-free.
 Durable mutation intent, Jira write outcomes and ordinary Chat admission remain pending.
+
+## Selected issue field values — #4083 AC1/AC3/AC4 / #4081
+
+`jira.issue` contract version 2 accepts up to 20 explicit field IDs and requests the corresponding
+values with `names,schema` expansion. The existing field matrix and pure value validator project
+bounded text/numbers/dates/datetimes, users/options and supported lists. Empty, unavailable and
+unsupported fields are distinct; unrequested and unknown-plugin values are never projected.
+Reference projection excludes email/self fields, rejects duplicate identities and bounds lists.
+Jira compact datetime offsets round-trip through the shared normalizer. Duplicate field IDs,
+wildcards, reserved names and excessive selection fail before connection resolution/HTTP.
+
+The original integration test failed before implementation. Afterward, 41 actual binder/SDK
+integration tests and 217 selected field/Cloud-write/contract tests pass. Build, root typecheck,
+changed lint/format, ADR index and unchanged semantic checks pass. The field read uses the
+existing managed-MCP/catalog lifecycle and its body-free result-byte accounting. The REST-v2
+expansion is documented in [Atlassian's Server REST reference](https://docs.atlassian.com/software/jira/docs/api/REST/9.12.0/).
+Full operation and licensed 10.3.26 live qualification remain pending, as do durable writes and
+ordinary Chat authority. This is not an accepted AC or an epic-completion claim.

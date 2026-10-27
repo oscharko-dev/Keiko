@@ -332,6 +332,16 @@ Cloud rich text uses the existing ADF composer; Data Center uses plain text, and
 respect each deployment's identity scheme. Fresh metadata, authority and dispatch remain separate
 provider obligations; the pure validator grants no execution authority.
 
+Issue reads may select at most 20 additional field IDs. Their `names`/`schema` expansion is
+interpreted by the same field matrix and value validator; no edit permission is inferred from
+readable values. Missing values or schemas remain unavailable, null/empty values remain empty,
+and unknown plugin values remain unsupported without exposing their content. User/option
+references retain only the deployment identity and bounded display label; email addresses and
+self links are omitted. Datetimes accept both ISO offsets and Jira's compact offset representation.
+The expanded `jira.issue` input/result contract is version 2; its ordinary unexpanded read remains
+compatible. The transport's overall byte bound still applies to the selected result.
+
+
 ### D4 — Action-class mapping table
 
 **Shared deployment ceiling (#4083).** Production composition resolves one ceiling for Coding and

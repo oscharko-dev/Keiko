@@ -1,3 +1,4 @@
+import { JIRA_FIELD_ID_PATTERN } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 // Capability validation only: HTTP, authority, custody and audit remain with their existing owners.
 import type {
   AtlassianConnectorDeployment,
@@ -12,7 +13,7 @@ import { composePlainTextToAdf } from "./plain-text-to-adf.js";
 
 const MAX_FIELDS = 500;
 const MAX_VALUES = 100;
-const FIELD_ID = /^(?:[a-zA-Z][a-zA-Z0-9]*|customfield_\d{1,16})$/u;
+const FIELD_ID = new RegExp(JIRA_FIELD_ID_PATTERN, "u");
 const FORBIDDEN = new Set(["constructor", "prototype", "__proto__"]);
 const CUSTOM_PREFIX = "com.atlassian.jira.plugin.system.customfieldtypes:";
 const STANDARD: Readonly<Record<string, JiraFieldKind>> = {
@@ -58,7 +59,7 @@ function boundedText(value: unknown, max = 255): value is string {
     typeof value === "string" && value.length > 0 && value.length <= max && !CONTROL.test(value)
   );
 }
-function isFieldId(value: unknown): value is string {
+export function isJiraFieldId(value: unknown): value is string {
   return boundedText(value, 64) && FIELD_ID.test(value) && !FORBIDDEN.has(value);
 }
 function declaredKind(id: string, schema: Record<string, unknown>): JiraFieldKind | undefined {
@@ -92,7 +93,7 @@ function fieldKind(id: string, schema: Record<string, unknown>): JiraFieldKind {
 function standardScalarType(id: string, kind: JiraFieldKind, custom: boolean): string {
   return kind === "option" && !custom ? id : kind;
 }
-function referenceCandidate(value: unknown): JiraFieldReference | undefined {
+export function projectJiraFieldReference(value: unknown): JiraFieldReference | undefined {
   const raw = asRecord(value);
   if (raw === undefined) return undefined;
   const result: { id?: string; name?: string; accountId?: string; label?: string } = {};
@@ -110,7 +111,7 @@ function allowedReferences(value: unknown): readonly JiraFieldReference[] | unde
   if (values === undefined || values.length > 500) return undefined;
   const result: JiraFieldReference[] = [];
   for (const value of values) {
-    const candidate = referenceCandidate(value);
+    const candidate = projectJiraFieldReference(value);
     if (candidate === undefined) return undefined;
     result.push(candidate);
   }
@@ -153,7 +154,7 @@ function metadataField(value: unknown): JiraFieldMetadata | undefined {
   const raw = asRecord(value);
   if (
     raw === undefined ||
-    !isFieldId(raw.fieldId) ||
+    !isJiraFieldId(raw.fieldId) ||
     !boundedText(raw.name) ||
     typeof raw.required !== "boolean"
   )
@@ -268,7 +269,7 @@ function numberValue(value: unknown): ValueResult {
 function dateTimeValue(value: unknown): ValueResult {
   if (
     typeof value !== "string" ||
-    !/^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{3})?(?:Z|[+-]\d{2}:\d{2})$/u.test(
+    !/^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{3})?(?:Z|[+-]\d{2}:?\d{2})$/u.test(
       value,
     ) ||
     !calendarDate(value.slice(0, 10))
@@ -332,7 +333,7 @@ function arrayValue(
   }
   return { ok: true, value: result };
 }
-function fieldValue(
+export function validateJiraFieldValue(
   field: JiraFieldMetadata,
   value: unknown,
   deployment: AtlassianConnectorDeployment,
@@ -365,7 +366,7 @@ function setValue(
   if (field.kind === "unsupported") return { ok: false, reason: "unsupported-field" };
   if (!field.operations.includes("set")) return { ok: false, reason: "invalid-operation" };
   if (requiredEmpty(field, value)) return { ok: false, reason: "required-field" };
-  return fieldValue(field, value, deployment);
+  return validateJiraFieldValue(field, value, deployment);
 }
 function validateSets(
   byId: ReadonlyMap<string, JiraFieldMetadata>,
@@ -374,7 +375,7 @@ function validateSets(
 ): SetResult {
   const fields: Record<string, unknown> = {};
   for (const [id, value] of Object.entries(input)) {
-    if (!isFieldId(id)) return { ok: false, reason: "invalid-field" };
+    if (!isJiraFieldId(id)) return { ok: false, reason: "invalid-field" };
     const result = setValue(byId.get(id), value, deployment);
     if (!result.ok)
       return {
@@ -409,7 +410,7 @@ function missingRequired(
 }
 function updateInput(value: unknown): JiraFieldUpdate | undefined {
   const raw = asRecord(value);
-  if (raw === undefined || Object.keys(raw).length !== 3 || !isFieldId(raw.fieldId))
+  if (raw === undefined || Object.keys(raw).length !== 3 || !isJiraFieldId(raw.fieldId))
     return undefined;
   if (raw.operation !== "add" && raw.operation !== "remove") return undefined;
   if (!boundedText(raw.value) || /\s/u.test(raw.value)) return undefined;

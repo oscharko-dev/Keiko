@@ -1447,6 +1447,8 @@ export type {
 
 export {
   JIRA_FIELD_KINDS,
+  JIRA_FIELD_READ_MAX,
+  JIRA_FIELD_ID_PATTERN,
   JIRA_MANAGED_READ_TOOLS,
   type JiraManagedReadToolName,
 } from "./jira-tool-fields.js";

@@ -1,3 +1,4 @@
+import { jiraIssueFieldsQuery, selectedJiraReadFields } from "./jira-managed-field-reads.js";
 import {
   jiraAssignableUsersPath,
   jiraAssignableUsersResult,
@@ -94,6 +95,7 @@ function projectPage(
 }
 interface ReadSelection {
   readonly path: string;
+  readonly fields: readonly string[];
   readonly startAt: number;
   readonly maxResults: number;
 }
@@ -101,6 +103,8 @@ function selection(
   name: JiraManagedReadToolName,
   args: CatalogJsonObject,
 ): ReadSelection | undefined {
+  const fields = name === "jira.issue" ? selectedJiraReadFields(args.fields) : [];
+  if (fields === undefined) return undefined;
   const startAt = pageNumber(args.startAt, 0, 0, 1000000);
   const maxResults = pageNumber(args.maxResults, 25, 1, 100);
   if (startAt === undefined || maxResults === undefined) return undefined;
@@ -108,7 +112,7 @@ function selection(
   const paging = `startAt=${String(startAt)}&maxResults=${String(maxResults)}`;
   const path = readPath(name, args, allowed, paging);
   return path !== undefined && Object.keys(args).every((key) => allowed.has(key))
-    ? { path, startAt, maxResults }
+    ? { path, startAt, maxResults, fields }
     : undefined;
 }
 function readPath(
@@ -138,8 +142,11 @@ function issueReadPath(
   switch (name) {
     case "jira.edit-fields":
       return `${path}/editmeta`;
-    case "jira.issue":
-      return `${path}?fields=${JIRA_MANAGED_ISSUE_FIELDS}`;
+    case "jira.issue": {
+      allowed.add("fields");
+      const query = jiraIssueFieldsQuery(JIRA_MANAGED_ISSUE_FIELDS, args.fields);
+      return query === undefined ? undefined : `${path}?${query}`;
+    }
     case "jira.comments":
       return `${path}/comment?${paging}`;
     case "jira.transitions":
@@ -229,7 +236,7 @@ async function read<Context extends ManagedMcpInvocationContext>(
   if (ARRAY_READ_NAMES.has(name)) return arrayResult(name, outcome.items, startAt, maxResults);
   if (outcome.body === undefined) return failure("malformed-payload");
   return ISSUE_READ_NAMES.has(name)
-    ? jiraIssueReadResult(name, outcome.body, startAt, maxResults)
+    ? jiraIssueReadResult(name, outcome.body, startAt, maxResults, selected.fields)
     : metadataResult(name, outcome.body, selected);
 }
 
