@@ -45,6 +45,13 @@ const MCP_FAILURES: Readonly<
 };
 function catalogFailure(error: unknown): unknown {
   if (!(error instanceof ManagedMcpError)) return error;
+  if (error.reason === "tool-error" && error.structuredResult !== undefined)
+    return new CatalogDispatchFault(
+      "failed",
+      "provider-reported-error",
+      error,
+      error.structuredResult,
+    );
   const [status, reason] = MCP_FAILURES[error.reason];
   return new CatalogDispatchFault(status, reason, error);
 }

@@ -894,3 +894,19 @@ and 97 registry tests pass, along with package build, root typecheck, changed li
 ADR index and unchanged semantic checks. Catalog failure-envelope propagation, durable mutation
 intent and explicit Jira remote-result states are the next integration step; preserving data in
 the host alone does not complete the user-visible outcome requirements.
+
+## Catalog settlement retains provider errors — #4089 / #4083 AC4 / #4081
+
+Explicit MCP error results now reach the consumer as `failed` / `provider-reported-error`,
+with the admitted schema-validated JSON object, no page, zero result count and exact output-byte
+accounting. Other failures and all cancellations retain null data. The binder validates the
+payload again, settles invalid/missing error payloads without leaving reservations pending, and
+keeps the existing single settlement/replay behavior. The legacy string-returning adapter cannot
+claim this structured variant. ADR-0175 and its generated lifecycle contracts describe the addition.
+
+The regression failed in three provider integration cases and one pure result-contract case before
+implementation. Afterward, all 252 server catalog tests, 954 selected pure/contract/Harness/gate tests
+and 97 registry tests pass. Build, root typecheck, changed lint/format, ADR index and semantic
+checks pass; registry generation resolves 607 proofs and 30 scenarios without violations.
+Actual emitted settlement lines are registered proofs and both log owners remain body-free.
+Durable mutation intent, Jira write outcomes and ordinary Chat admission remain pending.

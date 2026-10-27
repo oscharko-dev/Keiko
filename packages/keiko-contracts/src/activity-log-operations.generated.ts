@@ -38242,6 +38242,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: [
           "none",
+          "provider-reported-error",
           "authority-invalid",
           "authority-expired",
           "authority-revoked",

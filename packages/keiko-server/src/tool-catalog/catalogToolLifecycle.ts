@@ -123,6 +123,7 @@ const BIND_UNAVAILABLE_REASON_VALUES = [
 ] as const;
 const INVOCATION_SETTLED_REASON_VALUES = [
   "none",
+  "provider-reported-error",
   ...AUTHORITY_VALIDITY_REASONS,
   ...APPROVAL_AND_SCOPE_REASONS,
   ...TOOL_SELECTION_REASONS,
@@ -545,6 +546,7 @@ const CATALOG_REASON_ERROR_KIND: Readonly<Record<string, ActivityLogErrorKind>> 
   "handler-unavailable": "unavailable",
   "handler-mismatch": "unavailable",
   "handler-failed": "internal",
+  "provider-reported-error": "unknown",
   "result-contract-failed": "validation-failed",
   "effect-outcome-unknown": "unknown",
   "budget-port-failed": "internal",

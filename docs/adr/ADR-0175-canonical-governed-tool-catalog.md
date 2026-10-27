@@ -300,7 +300,16 @@ truncated, recovery-required or running status may enter this envelope.
 | `effectStarted` | Boolean; false for pre-effect rejection, conservative true if an effect may have started |
 | `metrics` | `{inputBytes, outputBytes, resultCount, durationMs}` bounded integers, no content |
 | `page` | Completed only: `{truncated, reason, cursor}`; otherwise `null` |
-| `data` | Completed only: descriptor-schema-validated bounded JSON; otherwise `null` |
+| `data` | Completed: descriptor-schema-validated bounded JSON. `failed` / `provider-reported-error`: descriptor-schema-validated bounded JSON object. Otherwise `null` |
+
+Managed providers may return an explicit structured error under `failed` /
+`provider-reported-error`. It retains `page=null` and `resultCount=0`, requires the current bound
+descriptor, and accounts for the exact serialized data bytes. All other failed, cancelled,
+timed-out and rejected results keep `data=null`. Error data is consumer output, never Activity Log
+evidence. This protocol status does not classify the remote mutation effect: a provider's closed
+domain outcome may report an unknown effect or an acknowledged but unconfirmed result, and its
+consumer must preserve that distinction and the durable dispatch record. The legacy string-returning
+ToolPort adapter cannot emit this structured-error variant.
 
 A completed empty result is valid and distinct from a failed search. `page.reason` is one of
 `none`, `result-cap`, `byte-cap`, `file-cap`, `inventory-cap`, `time-cap`, `cancelled`, `oversized-file`,

@@ -158,6 +158,7 @@
       "handler-unavailable",
       "handler-mismatch",
       "handler-failed",
+      "provider-reported-error",
       "result-contract-failed",
       "effect-outcome-unknown",
       "budget-port-failed"

@@ -226,9 +226,25 @@ export class CatalogInvocation<Consumer extends CatalogConsumer = CodingCatalogC
       this.discardCompletion();
       return;
     }
-    if (error instanceof CatalogDispatchFault)
-      this.finish(error.status, error.reason, undefined, error);
-    else this.finish("failed", "handler-failed", undefined, error);
+    if (!(error instanceof CatalogDispatchFault)) {
+      this.finish("failed", "handler-failed", undefined, error);
+      return;
+    }
+    let candidate: ToolResultEnvelope;
+    try {
+      const data =
+        error.providerResult === undefined
+          ? null
+          : captureCatalogJson(
+              error.providerResult,
+              this.handler?.descriptor.bounds.maxResultBytes,
+            );
+      candidate = this.envelope(error.status, error.reason, data);
+    } catch (invalidResult) {
+      this.finish("failed", "result-contract-failed", undefined, invalidResult);
+      return;
+    }
+    this.finish(error.status, error.reason, candidate, error);
   }
   private envelope(
     status: ToolResultStatus,
@@ -261,7 +277,7 @@ export class CatalogInvocation<Consumer extends CatalogConsumer = CodingCatalogC
   ): ToolResultMetrics {
     return {
       inputBytes: this.inputBytes,
-      outputBytes: source === undefined ? 0 : catalogJsonBytes(data),
+      outputBytes: source === undefined && data === null ? 0 : catalogJsonBytes(data),
       resultCount: source?.resultCount ?? 0,
       durationMs: Math.max(0, this.state.options.now() - this.startedAt),
     };
@@ -343,7 +359,7 @@ export class CatalogInvocation<Consumer extends CatalogConsumer = CodingCatalogC
       truncated: result.page?.truncated ?? false,
       ...(result.status === "failed"
         ? {
-            errorKind: "internal",
+            errorKind: result.reason === "provider-reported-error" ? "unknown" : "internal",
             frames: keikoStackFrames(error),
             causeChain: causeChain(error),
           }

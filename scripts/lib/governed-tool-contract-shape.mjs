@@ -145,7 +145,7 @@ export const REQUIRED_STATUS_REASONS = {
   cancelled: "explicit-cancellation,parent-cancelled",
   timeout: "deadline-exceeded",
   failed:
-    "handler-unavailable,handler-mismatch,handler-failed,result-contract-failed,effect-outcome-unknown,budget-port-failed",
+    "handler-unavailable,handler-mismatch,handler-failed,provider-reported-error,result-contract-failed,effect-outcome-unknown,budget-port-failed",
 };
 
 // These discovery dimensions are unbounded; eligible file size and result budgets remain finite.

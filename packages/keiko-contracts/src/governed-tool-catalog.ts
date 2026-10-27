@@ -187,6 +187,7 @@ export const TOOL_RESULT_REASONS = deepFreeze({
     "handler-unavailable",
     "handler-mismatch",
     "handler-failed",
+    "provider-reported-error",
     "result-contract-failed",
     "effect-outcome-unknown",
     "budget-port-failed",
@@ -229,7 +230,7 @@ interface ToolResultIdentity {
 type ToolFailureEnvelope = {
   readonly [S in Exclude<ToolResultStatus, "completed">]: ToolResultIdentity & {
     readonly status: S;
-    readonly reason: ToolResultReason<S>;
+    readonly reason: Exclude<ToolResultReason<S>, "provider-reported-error">;
     readonly page: null;
     readonly data: null;
   };
@@ -240,5 +241,11 @@ export type ToolResultEnvelope =
       readonly reason: "none";
       readonly page: ToolResultPage;
       readonly data: CatalogJsonValue;
+    })
+  | (ToolResultIdentity & {
+      readonly status: "failed";
+      readonly reason: "provider-reported-error";
+      readonly page: null;
+      readonly data: CatalogJsonObject;
     })
   | ToolFailureEnvelope;

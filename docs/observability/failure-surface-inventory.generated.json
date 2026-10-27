@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "c1cab0fc43d2fac58759f10ebfce32353cb1336d9d136db59c0bfcd93665c14d"
+    "catalogDigest": "f648a5c38769aa92c485e1674bd5f42a00d76d34b67ca6fe042f8985621c762e"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -2843,6 +2843,7 @@
       "packages/keiko-server/src/tool-catalog/catalogToolFacadeBridge.test.ts"
     ],
     "tool-catalog.invocation-settled.emitted-line": [
+      "packages/keiko-server/src/tool-catalog/catalogNonCodingConsumer.test.ts",
       "packages/keiko-server/src/tool-catalog/catalogToolLifecycle.test.ts"
     ],
     "tool-catalog.invocation-started.emitted-line": [

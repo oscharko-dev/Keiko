@@ -1,3 +1,4 @@
+import { CatalogDispatchFault } from "./catalogToolErrors.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCatalogToolBinder } from "./catalogToolDispatch.js";
 import { catalogToolFixture } from "./__fixtures__/catalogToolFixture.js";
@@ -82,6 +83,38 @@ afterEach(() => {
   vi.useRealTimers();
 });
 describe("catalog invocation settlement races", () => {
+  it.each([
+    undefined,
+    { text: "safe", credentials: "private-provider-data" },
+    { text: "x".repeat(65) },
+  ])(
+    "settles invalid provider-error data without publishing it or retaining a reservation",
+    async (data) => {
+      const release = vi.fn();
+      const error = new CatalogDispatchFault("failed", "provider-reported-error", undefined, data);
+      const fixture = fixtureWith((f) => ({
+        ...f.input,
+        budgetPort: { ...f.input.budgetPort, release },
+        handlerBindings: [
+          { ...f.handler, execute: (): Promise<CatalogHandlerResult> => Promise.reject(error) },
+        ],
+      }));
+      const outcome = await fixture.binder.dispatch(fixture.request, ID);
+      expect(outcome).toMatchObject({
+        kind: "settled",
+        result: {
+          status: "failed",
+          reason: "result-contract-failed",
+          data: null,
+          effectStarted: false,
+        },
+      });
+      expect(release).toHaveBeenCalledOnce();
+      expect(JSON.stringify(error)).not.toContain("private-provider-data");
+      expect(JSON.stringify(fixture.primary.events)).not.toContain("private-provider-data");
+    },
+  );
+
   it("gives an authoritative elapsed deadline precedence over cancellation at the same instant", async () => {
     const started = deferred<CatalogHandlerContext>();
     const controller = new AbortController();

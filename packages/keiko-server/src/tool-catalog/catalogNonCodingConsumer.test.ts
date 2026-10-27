@@ -1,3 +1,7 @@
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 import type { JiraManagedReadToolName } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { AtlassianHttpBodyResult } from "@oscharko-dev/keiko-connectors";
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
@@ -631,7 +635,7 @@ it("executes the real Jira project provider through gateway, binder and SDK with
 });
 
 it.each([
-  { status: 403, body: [], raw: undefined },
+  { status: 403, body: { errorMessages: ["private-jira-error"] }, raw: undefined },
   { status: 200, body: {}, raw: undefined },
   { status: 200, body: [], raw: "{" },
 ])("records Jira provider failure through the managed host", async ({ status, body, raw }) => {
@@ -641,10 +645,42 @@ it.each([
     const result = await f.binder.dispatch({ ...f.invocation, arguments: {} }, identity);
     expect(result).toMatchObject({
       kind: "settled",
-      result: { status: "failed", reason: "handler-failed" },
+      result: {
+        status: "failed",
+        reason: "provider-reported-error",
+        data: {
+          outcome: "failed",
+          reason: status === 403 ? "permission-denied" : "malformed-payload",
+        },
+        page: null,
+        metrics: {
+          outputBytes: JSON.stringify({
+            outcome: "failed",
+            reason: status === 403 ? "permission-denied" : "malformed-payload",
+          }).length,
+          resultCount: 0,
+        },
+      },
     });
     expect(m.requests).toHaveLength(1);
+    expect(JSON.stringify(result)).not.toContain("private-jira-error");
+    const settlement = f.logs.events.find(
+      (event) =>
+        event.op === "tool-catalog.invocation-settled" &&
+        event.extra?.reason === "provider-reported-error",
+    );
+    expectActivityLogProof(
+      "tool-catalog.invocation-settled.emitted-line",
+      formatActivityLogProofLine(settlement ?? {}),
+    );
+    expect(f.logs.lines().join("\n")).not.toContain("permission-denied");
+    expect(f.logs.lines().join("\n")).not.toContain("private-jira-error");
+
+    await f.binder.dispatch({ ...f.invocation, arguments: {} }, identity);
+    expect(m.requests).toHaveLength(1);
     const lines = m.logs.lines();
+    expect(lines.join("\n")).not.toContain("permission-denied");
+    expect(lines.join("\n")).not.toContain("private-jira-error");
     const records = lines.map((line) => JSON.parse(line) as { phase?: string });
     expect(records.filter((record) => record.phase === "failed")).toHaveLength(1);
     const timelines = analyzeLogText(lines.join("\n")).timelines;
@@ -747,7 +783,11 @@ it.each([
     );
     expect(result).toMatchObject({
       kind: "settled",
-      result: { status: "failed", reason: "handler-failed" },
+      result: {
+        status: "failed",
+        reason: "provider-reported-error",
+        data: { outcome: "failed", reason: "malformed-payload" },
+      },
     });
     expect(m.requests).toHaveLength(1);
     expect(
@@ -913,7 +953,11 @@ it.each([
     );
     expect(result).toMatchObject({
       kind: "settled",
-      result: { status: "failed", reason: "handler-failed" },
+      result: {
+        status: "failed",
+        reason: "provider-reported-error",
+        data: { outcome: "failed", reason: "malformed-payload" },
+      },
     });
     expect(m.requests).toHaveLength(1);
   } finally {
@@ -1073,7 +1117,14 @@ it.each([
   try {
     expect(
       await f.binder.dispatch({ ...f.invocation, arguments: { issueKey: "KEIKO-1" } }, identity),
-    ).toMatchObject({ kind: "settled", result: { status: "failed", reason: "handler-failed" } });
+    ).toMatchObject({
+      kind: "settled",
+      result: {
+        status: "failed",
+        reason: "provider-reported-error",
+        data: { outcome: "failed", reason: "malformed-payload" },
+      },
+    });
     expect(m.requests).toHaveLength(1);
   } finally {
     f.dispose();
