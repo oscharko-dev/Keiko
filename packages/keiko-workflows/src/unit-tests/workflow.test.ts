@@ -1,4 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { DEFAULT_PATCH_SCOPE_LIMITS } from "@oscharko-dev/keiko-contracts/workflow-handoff";
 import { generateUnitTests } from "./workflow.js";
 import type { UnitTestWorkflowDeps, UnitTestWorkflowInput } from "./types.js";
@@ -19,7 +22,12 @@ vi.mock("@oscharko-dev/keiko-verification", async (importOriginal) => {
   return withConfinedVerificationFixture(actual);
 });
 
-const ROOT = "/repo";
+// A strict bubblewrap execution-root run creates its per-run home inside the execution root before
+// spawn (PR #4095), so this suite's root must exist on disk; its contents stay in memFs.
+const ROOT = realpathSync(mkdtempSync(join(tmpdir(), "keiko-workflow-verify-")));
+afterAll(() => {
+  rmSync(ROOT, { recursive: true, force: true });
+});
 
 // A valid create diff that adds a sibling-discoverable test under tests/ (mirrored convention).
 const VALID_TEST_DIFF =

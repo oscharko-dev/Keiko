@@ -72,6 +72,7 @@ import type {
   ActiveGitDeliveryRunAuthority,
   GitDeliveryDescriptionAuthorityScope,
 } from "./runBoundAuthority.js";
+import { depsRoot } from "../request-deps-root.js";
 import { createPrDescriptionApplicationService } from "./prDescriptionService.js";
 import type {
   PrDescriptionApplicationService,
@@ -394,11 +395,15 @@ function cacheKey(request: BaseFields, authorityIdentity: string): string {
   );
 }
 
+// Keyed on the composed graph (`depsRoot`), not on whichever request-scoped copy of it reached this
+// call: a Chat turn holds its proposal on a per-request copy, and the review, approval and apply
+// routes that follow resolve against the composed graph itself (or a copy of their own).
 function serviceCacheFor(deps: UiHandlerDeps): Map<string, PrDescriptionApplicationService> {
-  const cached = serviceCaches.get(deps);
+  const graph = depsRoot(deps);
+  const cached = serviceCaches.get(graph);
   if (cached !== undefined) return cached;
   const created = new Map<string, PrDescriptionApplicationService>();
-  serviceCaches.set(deps, created);
+  serviceCaches.set(graph, created);
   return created;
 }
 

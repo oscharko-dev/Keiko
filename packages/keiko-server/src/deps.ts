@@ -4922,7 +4922,15 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   return installConversationReadinessInitialization(deps);
 }
 
-function installConversationReadinessInitialization(deps: UiHandlerDeps): UiHandlerDeps {
+/**
+ * Starts the configured conversation readiness checks and wires their shutdown into the graph's own
+ * `dispose`. The graph keeps its identity: the Workbench description dispatcher, the semantic search
+ * lease and every cache keyed by the graph (the PR-description application services among them) were
+ * attached to this exact object, and the server hands the SAME object to its routes. Returning a
+ * spread copy (#3676) left the mounted review route reading an empty cache for a proposal the
+ * dispatcher had just retained, so a generated description could never be reviewed.
+ */
+export function installConversationReadinessInitialization(deps: UiHandlerDeps): UiHandlerDeps {
   const startup = createGatewayStartupChecks(deps);
   startup.start(deps.gatewayConfig?.initializationCorrelationId);
   // A provider-stated window replaces an assumed one wherever it is observed: in every overflow
@@ -4937,8 +4945,8 @@ function installConversationReadinessInitialization(deps: UiHandlerDeps): UiHand
       startup.start(correlationId ?? newCorrelationId());
     });
   });
-  return {
-    ...deps,
+  const disposeServices = deps.dispose;
+  return Object.assign(deps, {
     refreshGatewayCatalog: startup.refresh,
     dispose: async (): Promise<void> => {
       unsubscribe?.();
@@ -4946,9 +4954,9 @@ function installConversationReadinessInitialization(deps: UiHandlerDeps): UiHand
       await startup.stop();
       await conversationShutdown;
       await stopAssumedContextWindowDiscovery(deps);
-      await deps.dispose?.();
+      await disposeServices?.();
     },
-  };
+  });
 }
 
 function createDapRuntimeReference(options: BuildHandlerDepsOptions): DapRuntimeReference {

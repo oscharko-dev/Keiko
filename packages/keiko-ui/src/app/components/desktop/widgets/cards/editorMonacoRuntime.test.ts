@@ -43,11 +43,24 @@ vi.mock("monaco-editor/editor/editor.api.js", () => ({
     register: registerLanguage,
   },
 }));
+vi.mock("monaco-editor/features/codeAction/register.js", () =>
+  trackEditorFeatureImport("codeAction"),
+);
 vi.mock("monaco-editor/features/find/register.js", () => trackEditorFeatureImport("find"));
 vi.mock("monaco-editor/features/format/register.js", () => trackEditorFeatureImport("format"));
+vi.mock("monaco-editor/features/gotoLine/register.js", () => trackEditorFeatureImport("gotoLine"));
+vi.mock("monaco-editor/features/gotoSymbol/register.js", () =>
+  trackEditorFeatureImport("gotoSymbol"),
+);
 vi.mock("monaco-editor/features/hover/register.js", () => trackEditorFeatureImport("hover"));
+vi.mock("monaco-editor/features/inlayHints/register.js", () =>
+  trackEditorFeatureImport("inlayHints"),
+);
 vi.mock("monaco-editor/features/inlineCompletions/register.js", () =>
   trackEditorFeatureImport("inlineCompletions"),
+);
+vi.mock("monaco-editor/features/parameterHints/register.js", () =>
+  trackEditorFeatureImport("parameterHints"),
 );
 vi.mock("monaco-editor/features/quickCommand/register.js", () =>
   trackEditorFeatureImport("quickCommand"),
@@ -55,6 +68,10 @@ vi.mock("monaco-editor/features/quickCommand/register.js", () =>
 vi.mock("monaco-editor/features/quickHelp/register.js", () =>
   trackEditorFeatureImport("quickHelp"),
 );
+vi.mock("monaco-editor/features/referenceSearch/register.js", () =>
+  trackEditorFeatureImport("referenceSearch"),
+);
+vi.mock("monaco-editor/features/rename/register.js", () => trackEditorFeatureImport("rename"));
 vi.mock("monaco-editor/features/suggest/register.js", () => trackEditorFeatureImport("suggest"));
 vi.mock("monaco-editor/languages/definitions/go/register.js", () =>
   trackOptionalLanguageImport("go"),
@@ -177,15 +194,39 @@ describe("ensureMonacoRuntime", () => {
     await import("./editorMonacoRuntime");
     expect(editorFeatureImports).toEqual(
       new Set([
+        "codeAction",
         "find",
         "format",
+        "gotoLine",
+        "gotoSymbol",
         "hover",
+        "inlayHints",
         "inlineCompletions",
+        "parameterHints",
         "quickCommand",
         "quickHelp",
+        "referenceSearch",
+        "rename",
         "suggest",
       ]),
     );
+  });
+
+  // The governed provider bridges only register data providers; Monaco shows nothing for them (no
+  // F12, Shift+F12, F2, Ctrl+., Ctrl+G, signature widget or inlay hints) unless the matching UI
+  // contribution is imported. The 0.3.8 editor-bundle trim dropped these seven together and the
+  // editor-baseline e2e gate (#1377) was the only thing that noticed.
+  it.each([
+    ["codeAction", "Ctrl+. quick fixes and the lightbulb"],
+    ["gotoLine", "Ctrl+G go to line"],
+    ["gotoSymbol", "F12 go to definition"],
+    ["inlayHints", "inlay hints"],
+    ["parameterHints", "signature help"],
+    ["referenceSearch", "Shift+F12 peek references"],
+    ["rename", "F2 rename"],
+  ])("keeps the %s contribution that surfaces a governed bridge (%s)", async (feature) => {
+    await import("./editorMonacoRuntime");
+    expect(editorFeatureImports.has(feature)).toBe(true);
   });
 
   it("keeps rare Monaco language contributions out of the eager editor runtime chunk", async () => {

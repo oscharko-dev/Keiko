@@ -286,18 +286,33 @@ interface VerificationProof extends VerificationTicket {
   readonly passed: boolean;
 }
 
-function verificationPassed(
+// Why a completed verification cannot prove the candidate, or undefined when it does. The cause is
+// on the verification line: a Linux run whose sandbox left untracked files behind read only as
+// `passed: false` beside zero failed checks (PR #4095).
+function verificationRejection(
   before: VerificationTicket,
   after: VerifiedCommitFacts,
   report: VerificationReport,
   now: number,
-): boolean {
-  return (
-    report.workspaceRoot === before.context.workspace.root &&
-    commitVerificationReportPassed(report, before.startedAtMs, now) &&
-    sameVerifiedCommitFacts(before.facts, after) &&
-    now - before.startedAtMs < TTL_MS
-  );
+): "verification-failed" | "candidate-drift" | "verification-stale" | undefined {
+  if (
+    report.workspaceRoot !== before.context.workspace.root ||
+    !commitVerificationReportPassed(report, before.startedAtMs, now)
+  )
+    return "verification-failed";
+  if (!sameVerifiedCommitFacts(before.facts, after)) return "candidate-drift";
+  if (now - before.startedAtMs >= TTL_MS) return "verification-stale";
+  return undefined;
+}
+
+function blockingCounts(
+  facts: VerifiedCommitFacts,
+): Pick<VerifiedCommitActivityFields, "unstagedCount" | "untrackedCount"> {
+  if (facts.blocking === undefined) return {};
+  return {
+    unstagedCount: facts.blocking.unstagedCount,
+    untrackedCount: facts.blocking.untrackedCount,
+  };
 }
 
 function approvalBinding(proposal: VerifiedCommitProposal): GitDeliveryApprovalBinding {
@@ -524,12 +539,15 @@ class VerifiedCommitController implements VerifiedCommitService {
       throw error;
     }
     if (!this.verificationGuardLive(context, guard)) return false;
-    const passed = verificationPassed(before, after, report, this.now());
+    const rejection = verificationRejection(before, after, report, this.now());
+    const passed = rejection === undefined;
     const history = this.recordCheck(context.runId, report, before.facts.stagedTreeDigest);
     const evidenceId = this.recordVerificationEvidence(context, before.facts, report, history);
     this.proof = { ...before, passed, evidenceId };
     this.log(context, "verification", {
       passed,
+      ...(rejection === undefined ? {} : { reason: rejection }),
+      ...blockingCounts(after),
       verificationEvidenceId: evidenceId,
       checkCount: history.records.length,
       failedCheckCount: failedVerificationCheckCount(report),

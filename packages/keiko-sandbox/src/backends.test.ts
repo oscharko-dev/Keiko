@@ -178,6 +178,45 @@ describe("buildWrappedCommand", () => {
     ]);
   });
 
+  // PR #4095: the execution root is the caller's real worktree, so the shared tmp directory left
+  // npm logs and Node's compile cache behind as untracked files after every governed verification.
+  it("bubblewrap execution-root mode gives the child the caller's per-run tmp directory", () => {
+    const wrapped = expectWrapped(
+      buildWrappedCommand("bubblewrap", {
+        ...plan,
+        filesystem: "execution-root",
+        executionTmp: "/work/root/.keiko-home-AbC123",
+      }),
+    );
+    const perRunTmp = `${EXECUTION_ROOT_MOUNT}/.keiko-home-AbC123`;
+    const chdir = wrapped.args.indexOf("--chdir");
+    expect(wrapped.args.slice(chdir - 5, chdir)).toEqual([
+      "--dir",
+      perRunTmp,
+      "--symlink",
+      perRunTmp,
+      "/tmp",
+    ]);
+    expect(wrapped.args).not.toContain(EXECUTION_ROOT_TMP);
+    expect(wrapped.args).toEqual(
+      expect.arrayContaining(["--setenv", "HOME", "/tmp", "--setenv", "TMPDIR", "/tmp"]),
+    );
+  });
+
+  it("refuses a per-run tmp directory that is not a direct child of the execution root", () => {
+    for (const executionTmp of [
+      "/work/other/.keiko-home-AbC123",
+      "/work/root/nested/.keiko-home-AbC123",
+      "/work/root",
+      "/work/root/..",
+      "/work/root/.keiko-home-\0",
+    ]) {
+      expect(() =>
+        buildWrappedCommand("bubblewrap", { ...plan, filesystem: "execution-root", executionTmp }),
+      ).toThrow("sandbox-execution-tmp-invalid");
+    }
+  });
+
   it("keeps execution-root process confinement when networking is explicitly inherited", () => {
     const wrapped = expectWrapped(
       buildWrappedCommand("bubblewrap", {
