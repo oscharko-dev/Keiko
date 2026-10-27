@@ -1717,3 +1717,19 @@ The regression fails before and passes after the correction. All 89 credential-r
 package build, root typecheck and changed-file lint pass. Existing Activity Log writer/reader
 proof verifies exactly one `verify` record without secret bytes. Final full gates/Sonar remain
 pending; this checkpoint does not close an acceptance criterion.
+
+### Application-owned managed catalog — 2026-10-27 (#4089, #4084, #4081)
+
+`buildUiHandlerDeps` now installs one lazy managed Jira catalog per application graph.
+Concurrent consumers share initialization and the nine canonical read bindings. Independent
+graphs retain independent SDK hosts. Disposal before/during discovery rejects late consumers;
+normal disposal closes the host before the remaining services. Discovery emits exactly one
+listing/admission pair through the injected existing Activity Log and resolves no credentials.
+The invocation connection resolver checks current Chat authority and uses custody's existing
+HTTP factory with the final dispatch guard; no token is exposed to the catalog.
+
+The missing-composition regression failed before implementation. The 159-test affected run
+(dependency assembly, Chat authority and managed catalog), plus four final lifecycle cases,
+package build, root typecheck and changed lint pass. The final lifecycle assertions cover
+registered listing/admission evidence. Normal Chat orchestration, accepted-human authority
+minting and write approvals remain open; no complete AC or final gate is claimed.

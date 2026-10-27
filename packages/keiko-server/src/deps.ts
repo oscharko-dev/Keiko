@@ -1,4 +1,8 @@
 import { EditorAgentAuthorityRegistry } from "./editor/agentAuthorityRegistry.js";
+import {
+  installJiraChatCatalogRuntime,
+  type JiraChatCatalogRuntime,
+} from "./atlassian/jiraChatCatalogRuntime.js";
 import { createNativeHistoryCapture } from "./coding-runtime/codingRuntimeHistory.js";
 import {
   createStateCodingSessionContinuity,
@@ -945,6 +949,8 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   // built without buildUiHandlerDeps), which is the one case current behaviour is preserved for.
   readonly atlassianActionApprovalRegistry?: AtlassianActionApprovalRegistry | undefined;
   readonly atlassianSyncJobRegistry?: AtlassianSyncJobRegistry | undefined;
+  /** Lazy application-owned managed host; shared by ordinary Chat turns and bound Pods. */
+  readonly jiraChatCatalog?: JiraChatCatalogRuntime;
   // Shared resolved Coding/connector ceiling. Production always sets it; incomplete injected deps
   // fail closed instead of accepting any request-supplied ceiling.
   readonly autonomousDeliveryDeploymentCeiling?: CodingWorkbenchMode | undefined;
@@ -4943,7 +4949,12 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     deps,
   );
   attachRepositorySemanticSearch(services.codingRuntimeControlPlane, deps);
-  return installConversationReadinessInitialization(deps);
+  return installConversationReadinessInitialization(
+    installJiraChatCatalogRuntime(deps, {
+      primary: args.options.activityLog ?? processServerLogSink(),
+      diagnostics: args.options.diagnostics ?? defaultServerDiagnosticSink,
+    }),
+  );
 }
 
 function installConversationReadinessInitialization(deps: UiHandlerDeps): UiHandlerDeps {

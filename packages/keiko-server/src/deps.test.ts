@@ -3776,6 +3776,80 @@ describe("production OpenCode tool profile (#3897)", () => {
   });
 });
 
+function chatCatalogTestDeps(
+  activityLog = createBufferedServerLogSink(),
+): ReturnType<typeof buildUiHandlerDeps> {
+  return buildUiHandlerDeps({
+    configPath: undefined,
+    evidenceDir: tmp("chat-catalog-"),
+    env: {},
+    store: createInMemoryUiStore(),
+    activityLog,
+  });
+}
+
+it("shares one lazy Jira catalog per graph and closes it on disposal (#4089)", async () => {
+  const activityLog = createBufferedServerLogSink();
+  const deps = chatCatalogTestDeps(activityLog);
+  try {
+    expect(deps.jiraChatCatalog).toBeDefined();
+    const runtime = deps.jiraChatCatalog;
+    if (runtime === undefined) throw new Error("Expected graph-owned managed catalog");
+    const [first, second] = await Promise.all([runtime.get(), runtime.get()]);
+    expect(second).toBe(first);
+    expect(
+      activityLog.events.filter((event) => event.op === "mcp.managed.lifecycle"),
+    ).toMatchObject([
+      { extra: { phase: "listed", toolCount: 9, reason: "none" } },
+      { extra: { phase: "admitted", toolCount: 9, reason: "none" } },
+    ]);
+    expect(first.handlerBindings).toHaveLength(9);
+    expect(first.handlerBindings.every((handler) => handler.readiness() === "ready")).toBe(true);
+    await deps.dispose?.();
+    await expect(runtime.get()).rejects.toMatchObject({ reason: "handler-unavailable" });
+    expect(first.handlerBindings.every((handler) => handler.readiness() === "unavailable")).toBe(
+      true,
+    );
+  } finally {
+    await deps.dispose?.();
+  }
+});
+
+it("isolates Jira catalog hosts between application graphs (#4089)", async () => {
+  const first = chatCatalogTestDeps();
+  const second = chatCatalogTestDeps();
+  try {
+    const [a, b] = await Promise.all([first.jiraChatCatalog?.get(), second.jiraChatCatalog?.get()]);
+    expect(a).toBeDefined();
+    expect(b).toBeDefined();
+    expect(a).not.toBe(b);
+    await first.dispose?.();
+    expect(b?.handlerBindings.every((handler) => handler.readiness() === "ready")).toBe(true);
+    expect(await second.jiraChatCatalog?.get()).toBe(b);
+  } finally {
+    await first.dispose?.();
+    await second.dispose?.();
+  }
+});
+
+it.each([false, true])(
+  "closes a Jira catalog before/during discovery: started=%s (#4089)",
+  async (start) => {
+    const deps = chatCatalogTestDeps();
+    try {
+      const runtime = deps.jiraChatCatalog;
+      if (runtime === undefined) throw new Error("Expected graph-owned managed catalog");
+      const pending = start ? runtime.get() : undefined;
+      const results = await Promise.allSettled([pending, runtime.close(), runtime.close()]);
+      expect(results[0].status).toBe(start ? "rejected" : "fulfilled");
+      expect(results.slice(1).every((result) => result.status === "fulfilled")).toBe(true);
+      await expect(runtime.get()).rejects.toMatchObject({ reason: "handler-unavailable" });
+    } finally {
+      await deps.dispose?.();
+    }
+  },
+);
+
 it("owns Chat authority per deps graph and clears only that graph on disposal (#4084)", async () => {
   const first = buildUiHandlerDeps({
     configPath: undefined,

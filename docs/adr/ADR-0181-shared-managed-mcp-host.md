@@ -29,6 +29,15 @@ for each protocol exchange. That is request isolation, not a server/process/list
 configuration per Pod. The injected fetch invokes the handler directly and refuses any
 other address or method. The internal `.invalid` URL is never dialed.
 
+The server dependency graph now owns one lazy managed Jira catalog. Concurrent callers
+share its initialization and admitted descriptors. Disposal closes that same host before
+closing the graph's remaining services; closure before/during initialization refuses
+late consumers. Independently assembled application graphs remain isolated. Connection
+selection uses the private invocation context and current Chat authority, then obtains
+the existing generation-bound custody HTTP port with its final dispatch guard. Catalog
+discovery itself performs no credential resolution or Jira HTTP. Ordinary Chat turn
+orchestration remains separate acceptance work.
+
 ### D2 — Explicit modern protocol and bounded capabilities
 
 Both serving and client negotiation select `2026-07-28`; the client pins the revision
