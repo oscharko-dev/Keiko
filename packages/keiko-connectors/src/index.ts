@@ -188,3 +188,4 @@ export {
   type JiraManagedProviderDeps,
   type JiraManagedMutationExecutor,
 } from "./jira-managed-tools.js";
+export { JIRA_METADATA_MAX_UPDATES } from "./jira-field-metadata.js";

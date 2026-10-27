@@ -34,6 +34,23 @@ const metadata = [
   }),
 ];
 
+it("accepts 50 implemented updates and rejects the next update before field execution", () => {
+  const parsed = parseJiraFieldMetadata(metadata);
+  if (!parsed.ok) throw new Error("Expected supported field metadata");
+  const updates = Array.from({ length: 51 }, (_, index) => ({
+    fieldId: "labels",
+    operation: "add",
+    value: `label-${String(index)}`,
+  }));
+  expect(
+    validateJiraFieldChanges(parsed.fields, {}, "edit", "data-center", updates.slice(0, 50)).ok,
+  ).toBe(true);
+  expect(validateJiraFieldChanges(parsed.fields, {}, "edit", "data-center", updates)).toEqual({
+    ok: false,
+    reason: "bounds-exceeded",
+  });
+});
+
 function parsed(): ReturnType<typeof parseJiraFieldMetadata> {
   return parseJiraFieldMetadata(metadata);
 }

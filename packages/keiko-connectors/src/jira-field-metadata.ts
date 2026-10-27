@@ -12,6 +12,7 @@ import { asArray, asRecord } from "./atlassian-sync-classify.js";
 import { composePlainTextToAdf } from "./plain-text-to-adf.js";
 
 export const JIRA_METADATA_MAX_FIELDS = 500;
+export const JIRA_METADATA_MAX_UPDATES = 50;
 const MAX_VALUES = 100;
 const FIELD_ID = new RegExp(JIRA_FIELD_ID_PATTERN, "u");
 const FORBIDDEN = new Set(["constructor", "prototype", "__proto__"]);
@@ -450,7 +451,10 @@ export function validateJiraFieldChanges(
   const requestedUpdates = asArray(updates);
   if (input === undefined || requestedUpdates === undefined)
     return { ok: false, reason: "invalid-field" };
-  if (Object.keys(input).length > JIRA_METADATA_MAX_FIELDS || requestedUpdates.length > 50)
+  if (
+    Object.keys(input).length > JIRA_METADATA_MAX_FIELDS ||
+    requestedUpdates.length > JIRA_METADATA_MAX_UPDATES
+  )
     return { ok: false, reason: "bounds-exceeded" };
   const byId = new Map(metadata.map((field) => [field.id, field]));
   const sets = validateSets(byId, input, deployment);

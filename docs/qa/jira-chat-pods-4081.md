@@ -51,79 +51,79 @@ Evidence records the tested source identity, command, outcome and relevant limit
 
 - [ ] **AC1:** A generated PAT for a non-admin lab user verifies against real Jira 10.3.26 at REST v2. Invalid/revoked PAT, insufficient permission, redirect, HTML/login response, unsupported version, stopped Jira and timeout have distinguishable safe outcomes; an HTML 2xx is never `ok`. Cloud Basic/v3 behaviour passes its existing regression tests, and a non-mocked UI-client → route test proves real Cloud and Data Center creation (the omitted `authScheme` defect fails this test before the fix).
 
-Status: **Pending**. Implementation: pending. Verification: pending. Evidence: pending.
+Status: **Partial — not accepted**. Data Center REST-v2/PAT verification and the real UI-client credential request fix are implemented. Retained HTTP/client, verification and Cloud regressions are recorded below. Renewed licensed non-admin/restricted-user qualification remains pending.
 
 - [ ] **AC2:** Name/base URL/deployment/credential reference persist through the current owner; cleartext PAT is absent from saved metadata, responses, browser recovery, MCP configuration, logs and evidence. Resolve the PAT only at outbound execution; Keiko-managed rotation/revocation updates the connector generation for dependent consumers. Jira-side revocation is enforced by Jira on each call; an observed auth failure invalidates local readiness and pending work.
 
-Status: **Pending**. Implementation: pending. Verification: pending. Evidence: pending.
+Status: **Partial — not accepted**. The existing vault stores tokens; public credential projections exclude private Pod facts. HTTP factories pin the selected credential generation before materialization. Custody and actual HTTP regression proofs are recorded below. Rotation and observed-call invalidation of Chat grants/approvals remain pending.
 
 - [ ] **AC3:** Root and non-root Jira context paths work. Exactly admitted enterprise/private and trusted local-lab HTTPS targets work; other hosts/ports, path escape, Keiko's own listener, metadata/link-local addresses, DNS rebinding and mixed-class answers, cross-origin redirects, untrusted certificates and expired certificates remain refused, including the proxy path. Admission cannot be enabled through environment variables or the global private-egress flag.
 
-Status: **Pending**. Implementation: pending. Verification: pending. Evidence: pending.
+Status: **Partial — not accepted**. Exact operator-owned HTTPS targets, context paths, direct/proxy pinning and network refusals are implemented with retained transport regressions below. Final licensed/network qualification on the completed head remains pending.
 
 - [ ] **AC4:** Existing saved Cloud connectors and Data Pods load without migration loss. Live Jira Pod creation and readiness do not require USearch, an embedding model, indexing or a sync job. A Data Center connector refuses sync with a closed reason and performs no sync request; Cloud sync is unchanged.
 
-Status: **Pending**. Implementation: pending. Verification: pending. Evidence: pending.
+Status: **Partial — not accepted**. Legacy Cloud custody remains readable and Data Center sync is explicitly refused. Retained Cloud/sync regression evidence is recorded below. Live-Pod Hub integration and the complete Data-Pod regression run remain pending.
 
 - [ ] **AC5:** A repeatable local-only bootstrap/preflight produces every listed fixture class, verifies license validity and both reads and writes, preserves volumes and never prints credentials. The published timebomb license is re-entered per qualification session by owner decision; there is no clock change, license modification or customer licensing.
 
-Status: **Pending**. Implementation: pending. Verification: pending. Evidence: pending.
+Status: **Partial — not accepted**. The local synthetic Jira/PostgreSQL/HTTPS lab and fixture work are retained below. Fully repeatable bootstrap and renewed complete licensed session groups remain pending; no current valid license or final live pass is claimed.
 
 - [ ] **AC6:** Real adapter and registered Activity Log tests prove successful and failed paths without retaining tokens, endpoint strings, identity data, request bodies or raw provider errors. All applicable gates pass on the actual implementation head.
 
-Status: **Pending**. Implementation: pending. Verification: pending. Evidence: pending.
+Status: **Partial — not accepted**. Registered creation, listing, verification and rejection evidence and real transport/custody tests are implemented. The checkpoints below record executed writer/reader and scoped gate results. Final aggregate and live gates remain pending.
 
 ### #4089 — Establish a shared MCP host for Keiko-managed providers and governed non-OpenCode consumers
 
 - [ ] **AC1:** A real SDK client and server execute MCP 2026-07-28 through the modern in-process request path without sockets or spawned processes. Tests exercise `server/discover`, `tools/list`, `tools/call`, required per-request metadata and unsupported-version rejection, and record the actual protocol revision. Malformed messages, unknown tools and schema-invalid arguments are refused before a handler runs. A legacy `initialize` handshake or linked in-memory transport alone does not satisfy this criterion; legacy compatibility is tested separately only if deliberately implemented.
 
-Status: **Pending**. Implementation: pending. Verification: pending. Evidence: pending.
+Status: **Partial — not accepted**. The shared official-SDK host explicitly enables MCP 2026-07-28 over injected in-process fetch. Actual SDK discovery/list/call and malformed/protocol regression evidence are recorded in the host checkpoints below. Final complete-head qualification remains pending.
 
 - [ ] **AC2:** Every tool the model can see originates from a compiled `keiko-tool-catalog` projection through the bound gateway advertisement; a hand-written, unknown or post-admission-drifted tool cannot be advertised or dispatched. Existing `projection-mismatch` protection stays green.
 
-Status: **Pending**. Implementation: pending. Verification: pending. Evidence: pending.
+Status: **Partial — not accepted**. Managed discovery compiles into the canonical catalog and gateway offer; drift/schema/override rejection is exercised by the retained binder/SDK tests. Ordinary-Chat tool-loop composition remains pending.
 
 - [ ] **AC3:** Call context is injected server-side only; routing and authority overrides are refused. Ordinary links in supported issue content remain data. Interleaved calls from two differently bound consumers, with cancellation and reversed completion order, cannot observe or use each other's context. Unsupported SDK input fulfillment or retries cannot bypass canonical admission and invocation accounting.
 
-Status: **Pending**. Implementation: pending. Verification: pending. Evidence: pending.
+Status: **Partial — not accepted**. The host injects isolated invocation context and refuses routing/authority overrides; retained interleaving/cancellation and binder tests are recorded below. Actual product Chat lifecycle integration remains pending.
 
 - [ ] **AC4:** The admission pipeline composes stricter-wins in all three modes; a denied call performs no handler call; approval and grant redemption re-validate binding, generation, envelope, mode and budget; cancellation and timeout settle exactly once.
 
-Status: **Pending**. Implementation: pending. Verification: pending. Evidence: pending.
+Status: **Partial — not accepted**. The generalized binder, shared mode policy and once-only settlement are implemented and scoped regression evidence is retained below. Chat-specific grants, approvals and their full redemption checks remain pending.
 
 - [ ] **AC5:** An import of `@modelcontextprotocol/*` outside the host fails `arch:check`, proven by a negative fixture in `arch:check:negative`; dependency matrix, currency, hygiene, SBOM and package-surface gates pass.
 
-Status: **Pending**. Implementation: pending. Verification: pending. Evidence: pending.
+Status: **Partial — not accepted**. The SDK import boundary, package registration and negative fixture are implemented. Final complete dependency/SBOM/package-surface and architecture gates remain pending; the paired architecture/performance review stays open.
 
 - [ ] **AC6:** Registered body-free Activity Log events reconstruct provider admission and the call lifecycle with correlation and failure classes; existing Workbench MCP registry, relay and OAuth suites are unchanged and green. All applicable gates pass on the actual implementation head.
 
-Status: **Pending**. Implementation: pending. Verification: pending. Evidence: pending.
+Status: **Partial — not accepted**. Registered host/catalog lifecycle evidence and scoped Workbench regressions are recorded below. Final full Workbench suites and aggregate Activity Log/quality gates remain pending.
 
 - [ ] **AC7:** A hermetic non-Coding consumer executes through the production catalog binder and admission pipeline without a synthetic Coding session or workspace authority. Existing Coding identity, mutation and approval guards retain their regression coverage.
 
-Status: **Pending**. Implementation: pending. Verification: pending. Evidence: pending.
+Status: **Partial — not accepted**. The independent non-Coding consumer exercises the production binder, gateway and actual MCP host without a synthetic Coding session. Managed mutation tests additionally compose the durable journal. Product Chat authority and final regressions remain pending.
 
 ### #4083 — Expose Jira Data Center ticket operations as the first managed provider on the shared MCP host
 
 - [ ] **AC1:** Real modern MCP discovery, per-request protocol metadata, `tools/list` and `tools/call` through the shared host exercise the production Jira provider and list exactly the implemented typed capabilities; every listed tool has a catalog descriptor and an ADR-0128 D4 row. Unknown tools, malformed arguments and caller-supplied credentials, arbitrary destinations or connector switching are refused before HTTP execution.
 
-Status: **Partial — not accepted**. Implementation: `jira-managed-tools.ts`, `jiraManagedProvider.ts`, shared catalog/SDK composition. Verification: `catalogNonCodingConsumer.test.ts` (real SDK, synthetic HTTP). Evidence: first-Jira-capability checkpoint below. The provider advertises `jira.projects`, `jira.issue-types`, `jira.create-fields`, `jira.edit-fields`, `jira.search`, `jira.issue`, `jira.comments`, `jira.transitions` and `jira.assignable-users`; the metadata checkpoint below extends this evidence. Remaining operations and actual Chat admission are pending.
+Status: **Partial — not accepted**. The catalog advertises nine reads and five mutations through the actual SDK host; canonical schema, drift and override refusals are exercised below. Ordinary-Chat tool authority/admission and final qualification remain pending.
 
 - [ ] **AC2:** Against local Jira 10.3.26, a non-admin PAT searches/reads and performs create/edit/assign/comment/transition where Jira permits them, and the restricted identity is refused truthfully without escalation. The recorded supported-operation matrix names each tested operation, endpoint family and unsupported capability; it never claims full Jira REST coverage.
 
-Status: **Partial — not accepted**. Implementation: private Data Center mutation executor in `jira-managed-mutations.ts`. Verification: 45 synthetic executor tests and retained Cloud/catalog regressions. Evidence: Data Center mutation checkpoint below. Actual managed SDK/journal/Chat composition and the licensed non-admin/restricted-identity matrix remain pending.
+Status: **Partial — not accepted**. The Data Center mutation executor is composed with the durable journal and SDK binder. Executor and real SDK/journal integration evidence is recorded in the mutation/composition checkpoints below. Product Chat authority and the licensed non-admin/restricted-identity matrix remain pending.
 
 - [ ] **AC3:** Required supported custom fields, constrained fields and workflow-specific transitions are discovered/validated from real metadata through the post-9.0 endpoints. A real transition-screen fixture requires a supported field; omitting it fails, and the approved field value and transition succeed in one request. Undeclared mutation verbs, worklogs and unsupported compound effects are refused before HTTP. Unknown plugin-specific field types are reported as unsupported with no fabricated values. Missing/invalid values and unauthorized issues/actions produce honest safe errors without escalating to an admin identity.
 
-Status: **Partial — not accepted**. Implementation: `jira-field-metadata.ts` bounded field/verb validation and the fresh-metadata mutation executor. Verification: 26 field tests plus synthetic-lab required-field/transition baseline. Evidence: metadata-field checkpoint below. Production catalog/journal/Chat composition and the live matrix remain pending.
+Status: **Partial — not accepted**. Bounded field/verb validation and fresh metadata checks are composed with managed writes and the journal; retained field, executor and SDK tests are recorded below. Product Chat authority, complete unsupported-field presentation and the licensed metadata/transition matrix remain pending.
 
 - [ ] **AC4:** Pagination, empty results, partial results, bounds, timeout and cancellation behave deterministically. Jira content and tool metadata cannot modify the tool allowlist, credential, chat binding, read grant or approval state.
 
-Status: **Partial — not accepted**. Implementation: bounded project pages and existing shared host cancellation/bounds. Verification: actual project SDK path and host regressions. Evidence: first-Jira-capability and host checkpoints below. Full operation pagination/cancellation matrix remains pending.
+Status: **Partial — not accepted**. Read pages and complete issue results have aggregate byte bounds; retained SDK/host tests exercise these and cancellation/override guards. Full per-operation pagination/cancellation and product Chat lifecycle qualification remain pending.
 
 - [ ] **AC5:** Tests distinguish malformed/truncated acknowledged 2xx from unknown remote effects, and prove no blind mutation replay after timeout, committed-then-5xx or cancellation. They cover intervening field/assignee changes and operation-aware retry safety, not only duplicate POST. Route, canonical tool outcome, activity and UI folds agree; an empty reconciliation search never authorizes a retry. Approved action changes invalidate stale approval. Document the concurrency limit of operations without an atomic Jira precondition; do not claim universal exactly-once execution or lost-update prevention.
 
-Status: **Partial — not accepted**. Implementation: GET-only physical retries and a durable canonical-turn journal in the existing UiStore. Verification: transport regressions, real route logging and restart/settlement/storage tests. Evidence: mutation-transport and durable-journal checkpoints below. Connecting the journal to managed writes, rich HTTP outcomes and UI/Chat folds remains pending.
+Status: **Partial — not accepted**. Managed writes use the durable canonical-turn journal, acknowledgement/read-back outcomes and GET-only physical retries. Restart, unknown-effect, replay and actual SDK/journal evidence is recorded below. Approval invalidation, product Chat/UI folds and licensed remote-effect counts remain pending.
 
 - [ ] **AC7:** With no explicit ceiling configured, the connector policy evaluates Chat-consumer and Coding-run calls against the same resolved `autonomous-delivery` ceiling; `KEIKO_CODING_DEPLOYMENT_CEILING=governed-assist` clamps both, and an unrecognized value fails closed to `governed-assist`. Proven through the production policy and composition, not a hand-built deps object.
 
@@ -131,33 +131,33 @@ Status: **Partial — not accepted**. Implementation: shared deployment-ceiling 
 
 - [ ] **AC6:** Tool descriptions, inputs and output envelopes contain no PAT; activity/evidence contain no Jira content or private endpoints. Existing Cloud v3 services and Workbench MCP tests remain green.
 
-Status: **Pending**. Implementation: pending. Verification: pending. Evidence: pending.
+Status: **Partial — not accepted**. Private invocation connections, public projections and body-free registered evidence have retained secret-absence and Cloud regression tests below. Final complete Cloud/Workbench regressions and aggregate gates remain pending.
 
 ### #4084 — Bind one Jira Pod to ordinary Chat with per-chat mode, Chat authority and a one-time read grant
 
 - [ ] **AC1:** Server-side concurrent connect/replace requests cannot leave two Jira Pods attached to one Chat. The binding, grounding identity and generation update atomically through the authenticated PATCH pattern; restart/reload restores valid bindings without cross-chat or cross-token reuse. A registry entry, guessed ID, client-side edge or another Chat's binding grants no access, and a Chat without a binding offers no Jira tool to the consumer context.
 
-Status: **Pending**. Implementation: pending. Verification: pending. Evidence: pending.
+Status: **Partial — not accepted**. Schema 49 and the authenticated PATCH/serializer now atomically persist one owned verified Pod, mode and scope generations. Reopen/store and actual HTTP conflict/selection evidence is retained below. Tool offers and full Chat authority/lifecycle integration remain pending.
 
 - [ ] **AC2:** All three modes have explicit regression coverage through the shared action-class policy, including per-chat mode persistence, the unconfigured `autonomous-delivery` tool-source ceiling delivered by the one server resolver from #4083 and an explicitly narrower ceiling: required approval precedes network/effect, denied actions make no call, bounded allowed actions execute without invented extra approval. The read grant is requested once, covers only read-class tools of the current binding and credential generation, and never covers writes. Missing/expired authority remains denied in every mode.
 
-Status: **Pending**. Implementation: pending. Verification: pending. Evidence: pending.
+Status: **Partial — not accepted**. All three mode selections persist through the actual Chat PATCH; the shared action policy and deployment ceiling have scoped regression evidence below. Once-per-binding read grants, approval redemption and ordinary-Chat execution remain pending.
 
 - [ ] **AC3:** Disconnect, replacement, Pod deletion and Keiko-managed token rotation/revocation revoke read grants and invalidate pending approvals and queued calls. Jira-side token revocation is enforced on the next Jira call; observed auth failure invalidates local readiness and pending work without introducing polling or webhooks. Tests cover these changes during approval and before effect; no stale request uses the old or newly substituted credential.
 
-Status: **Pending**. Implementation: pending. Verification: pending. Evidence: pending.
+Status: **Partial — not accepted**. HTTP generation capture, verification ticket settlement and atomic binding generations prevent the implemented stale credential/probe/update paths. Retained real-route proofs are recorded below. Rotation, observed-call failures and coordinated grant/approval/queued-call invalidation remain pending.
 
 - [ ] **AC4:** Two chats using different Pods are isolated; two chats deliberately using the same Pod share neither grants nor approval state; a new or copied Chat identity cannot inherit grants or approvals. Data-Pod-only grounding is byte-for-byte unchanged in behaviour and existing Workbench MCP works unchanged.
 
-Status: **Pending**. Implementation: pending. Verification: pending. Evidence: pending.
+Status: **Partial — not accepted**. Actual competing binding PATCH tests preserve one binding and leave another Chat unchanged. Shared-Pod grants/approvals, parallel tool execution isolation and final Data-Pod/Workbench regressions remain pending.
 
 - [ ] **AC5:** Production-path lifecycle logging for binding, mode, grant and approval is registered and body-free. Restart and authority/mode changes cannot revive expired grants, approvals or queued effects. All applicable gates pass.
 
-Status: **Pending**. Implementation: pending. Verification: pending. Evidence: pending.
+Status: **Partial — not accepted**. Existing registered Chat scope evidence reconstructs one application, denials and conflicts without private facts; credential lifecycle evidence is recorded below. Remaining authority/lifecycle/restart events and final gates remain pending.
 
 - [ ] **AC6:** Through the trusted non-Coding test consumer against local Jira 10.3.26, an admitted read-class call reaches the real provider only with a valid grant, and a write-class call only under the mode matrix or a redeemed approval that re-ran the complete pipeline; a denied, expired or revoked call performs no HTTP request.
 
-Status: **Pending**. Implementation: pending. Verification: pending. Evidence: pending.
+Status: **Partial — not accepted**. A real non-Coding catalog/SDK consumer and normal authenticated Chat binding API exist without a Coding session. Full product Chat authority/policy/tool execution against licensed Jira remains pending.
 
 ### #4091 — Run a governed tool loop in ordinary Chat through the shared MCP host
 
@@ -189,19 +189,19 @@ Status: **Pending**. Implementation: pending. Verification: pending. Evidence: p
 
 - [ ] **AC1:** The existing Knowledge Pods hub offers Data and Jira creation. A Jira Pod is created using name, address and PAT against the real local lab through the production API; Data creation and existing saved Pods, including synced Jira knowledge Pods, still work and remain distinguishable.
 
-Status: **Pending**. Implementation: pending. Verification: pending. Evidence: pending.
+Status: **Partial — not accepted**. The existing credential API can create owner-bound Data Center Live-Pod metadata through the real vault. Public responses omit private metadata. Hub creation/forms, Live-Pod projection and browser/Data-Pod qualification remain pending.
 
 - [ ] **AC2:** The PAT is write-only, cleared on save/cancel/unmount and never returned in later reads, stored in browser persistence, placed in URLs, screenshots, analytics or error strings. Duplicate submits/retries do not create duplicate Pods or orphan credentials.
 
-Status: **Pending**. Implementation: pending. Verification: pending. Evidence: pending.
+Status: **Partial — not accepted**. Write-only custody, owner-bound creation-intent conflict handling and explicit public GET/Create projection are covered by retained actual HTTP tests. UI secret clearing/persistence checks and the complete duplicate-submit/retry journey remain pending.
 
 - [ ] **AC3:** The card reports actual verification status. Bad/revoked token, inaccessible Jira, trust failure, redirect/HTML response, permission refusal and, where observable, license or read-only restrictions have actionable bounded presentation; saving or probing identity does not promise every action is permitted.
 
-Status: **Pending**. Implementation: pending. Verification: pending. Evidence: pending.
+Status: **Partial — not accepted**. Bounded Data Center probes and generation/revision-aware verification settlement are composed through the actual HTTP route, including failures, deletion races and internal aborts. Cards/actionable UI and licensed restriction qualification remain pending.
 
 - [ ] **AC4:** Rename, reverify, token replacement and removal survive reload and use the existing server owner. Tests delete/replace a Pod-owned credential through the existing credential route while two Chats share the Pod and deliver stale verification replies after rotation; neither alternate entry points nor late replies restore stale access. Removal deletes the owned credential and dependent Chat bindings; token rotation preserves their visible association but invalidates authorization, read grants and pending work until re-verification; deleting one Pod never damages unrelated credentials or Data Pods.
 
-Status: **Pending**. Implementation: pending. Verification: pending. Evidence: pending.
+Status: **Partial — not accepted**. Owned credential deletion and stale-verification refusal are exercised through actual routes; binding/readiness generations persist in existing owners. Rename, rotation, dependent-Chat cleanup, restart coordination and grant/approval invalidations remain pending.
 
 - [ ] **AC5:** The ordinary Jira form requires no email, MCP configuration or vector-index setup. The initial implemented ticket capabilities are explained plainly without claiming all Jira APIs or guaranteed write permissions.
 
@@ -1291,3 +1291,27 @@ normal-Chat tool loop, Pod lifecycle coordination and UI remain incomplete.
 All 239 affected credential-route/Chat-handler/binding-store tests and 97 registry tests pass.
 Package build, root typecheck and changed lint pass. The regenerated registry resolves 609 proofs
 and 30 scenarios without violations. Final integrated and live acceptance remain pending.
+
+## Review corrections: update bounds and current AC status — #4083/#4081
+
+The review correctly identified that the schema admitted 100 additive updates while the existing
+field validator rejected more than 50. Both now use `JIRA_METADATA_MAX_UPDATES` from the connector
+owner; mutation descriptors advance to version 3. Actual gateway/binder regressions with 51 and
+100 updates first failed against the previous descriptor. The corrected gateway rejects them
+before journal preparation and remote writes, with registered body-free rejection evidence.
+The existing runtime control accepts 50 supported label updates and refuses the next one.
+
+The AC matrix was reconciled with the retained checkpoints: 29 rows now describe implemented
+portions and their specific remaining work, including SDK/journal composition and normal Chat
+binding admission. No acceptance checkbox was marked complete. Product Chat authority, live
+qualification and final aggregate gates are still explicitly outstanding.
+
+All 103 field/provider/non-Coding-consumer/SDK-mutation tests and 97 registry tests pass after the
+correction. Package build, root typecheck, changed lint/format and staged semantic checks pass.
+The existing registered gateway rejection is checked through its production formatter; its owning
+package retains the canonical proof. Final assembled-package and aggregate qualification remain pending.
+
+A read-only lab recheck on 2026-10-27 confirms healthy Jira/PostgreSQL containers and all three
+production HTTPS/PAT connection cases (trusted connection, untrusted certificate and revoked
+exact admission). The license check reports expired. This is connection evidence only, not a
+licensed write/model/browser qualification; the next complete live group needs a valid session.

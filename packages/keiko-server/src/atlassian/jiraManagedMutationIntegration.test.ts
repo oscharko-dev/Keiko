@@ -15,6 +15,10 @@ import {
   type SyntheticJira,
 } from "../../../../tests/support/jira-managed-remote.js";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+import {
+  expectRegisteredActivityLogLine,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 import { buildUiStoreOverDatabase } from "../store/index.js";
 import { runMigrations } from "../store/schema.js";
 import { createChatToolMutationStore } from "../store/chatToolMutations.js";
@@ -246,6 +250,7 @@ async function fixture(mode: RemoteMode = "confirmed"): Promise<{
       },
     },
     () => 1000,
+    db.logs,
   );
   return {
     journal: db.journal,
@@ -348,3 +353,35 @@ it("requires explicit clearing and rejects ambiguous assignment through the SDK 
   expect(f.state.fields.assignee).toBeNull();
   expect(f.writes()).toBe(1);
 });
+
+it.each([51, 100])(
+  "rejects %s updates at the catalog boundary before journal preparation",
+  async (count) => {
+    const f = await fixture();
+    const prepare = vi.spyOn(f.journal, "prepare");
+    await expect(
+      f.invoke("jira.edit", {
+        issueKey: "SYN-1",
+        fields: {},
+        updates: Array.from({ length: count }, (_, index) => ({
+          fieldId: "labels",
+          operation: "add",
+          value: `label-${String(index)}`,
+        })),
+      }),
+    ).rejects.toMatchObject({ reason: "invalid-arguments" });
+    expect(prepare).not.toHaveBeenCalled();
+    expect(f.writes()).toBe(0);
+    const rejections = f.logs.events.filter(
+      (event) => event.op === "gateway.tool-catalog.rejected",
+    );
+    expect(rejections).toHaveLength(1);
+    for (const event of rejections)
+      expect(
+        expectRegisteredActivityLogLine(
+          "gateway.tool-catalog.rejected",
+          formatActivityLogProofLine(event),
+        ),
+      ).toMatchObject({ reason: "invalid-arguments" });
+  },
+);
