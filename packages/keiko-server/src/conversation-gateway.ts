@@ -56,13 +56,21 @@ function transcriptMessages(message: ChatMessage): GatewayConversationMessage[] 
 
 export const MAX_CONTEXT_MESSAGES = 24;
 
+export function latestGatewayUserIndex(messages: readonly GatewayConversationMessage[]): number {
+  return messages.reduce(
+    (latest, message, index) => (message.role === "user" ? index : latest),
+    -1,
+  );
+}
+
 export function withGatewayConversationImages(
   messages: GatewayConversationMessage[],
   imageParts: readonly ChatMessageContentPart[],
 ): GatewayConversationMessage[] {
   if (imageParts.length === 0) return messages;
+  const userIndex = latestGatewayUserIndex(messages);
   return messages.map((message, index) =>
-    index === messages.length - 1
+    index === userIndex
       ? { ...message, contentParts: [{ type: "text", text: message.content }, ...imageParts] }
       : message,
   );

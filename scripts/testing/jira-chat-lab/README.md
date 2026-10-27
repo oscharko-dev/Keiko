@@ -402,3 +402,27 @@ and `restricted-chat.pending.json` after an incomplete group. Reconcile those re
 read-only before starting another group; never repeat a possibly executed mutation. A completed
 private receipt requires the entire selected group and the closing license check. Preparing or
 unit-testing this harness does not count as live acceptance.
+
+## Consent reuse after process restart and token replacement
+
+```bash
+node scripts/testing/jira-chat-lab/consent-lifecycle.mjs /absolute/private/session actual-model-id
+```
+
+This separate four-turn group uses one persisted Chat and one stable Jira Pod. It grants the first
+buffered read, closes the server, and starts a fresh Node process against the retained product store.
+The new process sends a **new** buffered read with a new canonical turn identity and proves an
+actual Jira request without another disclosure. It then replaces the credential through the normal
+authenticated API with the distinct seeded editor token, verifies that the old grant is unavailable,
+reverifies the Pod, and performs a streamed read with fresh consent. A final streamed comment reuses
+that new grant and requires its own concrete action approval. Independent Jira reads prove exactly
+one comment and its editor author, demonstrating that the rotated credential was actually used.
+
+The common Chat observer follows the single newly admitted user row, excluding historical pending
+approvals. Consent reuse is explicit and checks the exact existing grant, Chat, Pod, both generations,
+state and expiry before sending; a write rechecks the grant before approval. Unexpected new
+disclosure fails the reuse proof. Before and after artifact inventories must match, as for the other
+live groups. The private pending intent and product database survive failure; never invoke the
+internal `--resume` phase manually or replay a potentially dispatched mutation. A completed receipt
+requires all four turns, distinct process IDs, independent remote verification, and a closing valid
+license check.

@@ -194,6 +194,7 @@ async function main() {
     },
   });
   assert.equal(new Set(group.results.map((result) => result.operation)).size, 14);
+  await requireLicense(session);
   privateJson(join(session.directory, `catalog-chat-${group.id}.json`), group, true);
   rmSync(group.pendingPath);
   stage("all", true, { operations: 14, transport });

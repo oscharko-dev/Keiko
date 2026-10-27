@@ -102829,7 +102829,7 @@
     {
       "op": "chat.compaction.summary.scheduled",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:2123",
+      "site": "packages/keiko-server/src/chat-handlers.ts:2124",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

@@ -104,6 +104,115 @@ function assertContinuedObservation(deps: UiHandlerDeps, chatId: string): void {
   expect(last?.toolTranscript?.exchanges[0]?.result?.status).toBe("completed");
 }
 
+function secondBoundChat(f: ReturnType<typeof runtime>, separatePod: boolean): string {
+  const credentials = f.deps.atlassianConnectorCredentials;
+  if (credentials === undefined) throw new Error("Missing credential owner");
+  const original = metadata(f.deps);
+  if (original.deployment !== "data-center") throw new Error("Missing Data Center fixture");
+  const originalPod = original.livePod;
+  if (originalPod === undefined) throw new Error("Missing original verified Pod");
+  const next: AtlassianCredentialMetadata = separatePod
+    ? {
+        ...original,
+        authRef: "second-synthetic-credential",
+        baseUrl: "https://second-jira.example.invalid",
+        livePod: {
+          ...originalPod,
+          podId: "d5f5681e-ce98-4c3c-b27e-51d707c9d028",
+          creationRequestId: "d5f5681e-ce98-4c3c-b27e-51d707c9d029",
+        },
+      }
+    : original;
+  vi.mocked(credentials.custody.list).mockReturnValue(separatePod ? [original, next] : [original]);
+  const chat = f.deps.store.createChat(f.root, "Second isolated Chat", MODEL);
+  const podId = next.livePod?.podId;
+  if (podId === undefined) throw new Error("Missing verified Pod");
+  f.deps.store.updateChat(
+    chat.id,
+    {
+      connectedScope: { kind: "workspace-root", relativePaths: [], connectedAtMs: 0 },
+      jiraPodId: podId,
+    },
+    { verifiedJiraPod: { podId, authenticationGeneration: 1 } },
+  );
+  return chat.id;
+}
+
+function interleavedReadBarrier(f: ReturnType<typeof runtime>): {
+  readonly release: () => void;
+  readonly waiting: () => boolean;
+  readonly observed: string[];
+} {
+  const owner = f.deps.atlassianConnectorCredentials;
+  if (owner === undefined) throw new Error("Missing credential owner");
+  const original = vi.mocked(owner.httpBodyPortFactory).getMockImplementation();
+  if (original === undefined) throw new Error("Missing independent Jira fixture");
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  if (release === undefined) throw new Error("Missing independent response barrier");
+  const observed: string[] = [];
+  let waiting = false;
+  vi.mocked(owner.httpBodyPortFactory).mockImplementation((credential, correlation, lifecycle) => {
+    const port = original(credential, correlation, lifecycle);
+    return async (request): ReturnType<AtlassianHttpBodyPort> => {
+      if (!waiting) {
+        waiting = true;
+        await gate;
+      }
+      observed.push(credential.authRef);
+      return port(request);
+    };
+  });
+  return { release, waiting: () => waiting, observed };
+}
+
+it.each([false, true])(
+  "isolates parallel mixed Chat grants and MCP contexts with separate Pod=%s and reversed completion",
+  async (separatePod) => {
+    const f = runtime();
+    const second = secondBoundChat(f, separatePod);
+    const barrier = interleavedReadBarrier(f);
+    const calls = provider(["tool", "tool", "answer", "answer"]);
+    const request = { content: "Read the feature and Jira projects.", modelId: MODEL };
+    const first = handleGroundedAsk(context({ ...request, chatId: f.chatId }), f.deps);
+    try {
+      await vi.waitFor(
+        () => {
+          expect(barrier.waiting()).toBe(true);
+        },
+        { timeout: 5000 },
+      );
+      const completed = await handleGroundedAsk(context({ ...request, chatId: second }), f.deps);
+      expect(completed.status, JSON.stringify(completed.body)).toBe(200);
+      expect(
+        f.deps.store.listMessages(f.chatId).some((message) => message.role === "assistant"),
+      ).toBe(false);
+    } finally {
+      barrier.release();
+    }
+    const completed = await first;
+    expect(completed.status, JSON.stringify(completed.body)).toBe(200);
+    expect(calls).toHaveLength(4);
+    expect(barrier.observed).toEqual([
+      separatePod ? "second-synthetic-credential" : "synthetic-credential",
+      "synthetic-credential",
+    ]);
+    const transcripts = [f.chatId, second].map((id) => {
+      const transcript = f.deps.store
+        .listMessages(id)
+        .find((message) => message.role === "user")?.toolTranscript;
+      expect(transcript?.readGrant).toMatchObject({ chatId: id, state: "granted" });
+      expect(transcript?.exchanges[0]?.result?.status).toBe("completed");
+      return transcript;
+    });
+    expect(transcripts[0]?.readGrant?.grantId).not.toBe(transcripts[1]?.readGrant?.grantId);
+    expect(transcripts[0]?.exchanges[0]?.call.id).not.toBe(transcripts[1]?.exchanges[0]?.call.id);
+    expect(f.jiraRequests).toEqual(["GET", "GET"]);
+  },
+);
+
 function assertOriginAuthorityNotRestored(
   deps: UiHandlerDeps,
   entry: import("./atlassian/chatReadGrantState.js").ChatReadGrantEntry,

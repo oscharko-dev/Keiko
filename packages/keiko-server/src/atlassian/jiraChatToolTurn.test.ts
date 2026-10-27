@@ -24,7 +24,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "../deps.js";
-import { handleSendDesktopChat } from "../chat-handlers.js";
+import { handleRegenerateDesktopChat, handleSendDesktopChat } from "../chat-handlers.js";
 import { CatalogDispatchFault } from "../tool-catalog/catalogToolErrors.js";
 import { mockRequest, mockResponse } from "../_support.js";
 import type { RouteContext, RouteResult } from "../routes.js";
@@ -175,6 +175,7 @@ async function* syntheticStream(
 function fixture(
   mutation = false,
   writeResponse?: Promise<void>,
+  acknowledgeWrite = true,
 ): {
   deps: UiHandlerDeps;
   chatId: string;
@@ -222,6 +223,7 @@ function fixture(
           await writeResponse;
         }
         const status = write ? 201 : 200;
+        if (write && !acknowledgeWrite) return { kind: "network-error" };
         lifecycle.onResponse?.(request, status);
         const bodyText = mutation
           ? JSON.stringify({ id: "10001", body: "Synthetic approved comment" })
@@ -531,6 +533,51 @@ function firstToolExchange(f: ReturnType<typeof fixture>): ChatToolExchange {
   if (exchange === undefined) throw new Error("Missing tool exchange");
   return exchange;
 }
+
+it.each([
+  ["succeeded", true],
+  ["unknown", false],
+] as const)(
+  "regenerates from the exact durable %s tool observation without offering or repeating tools",
+  async (outcome, acknowledgeWrite) => {
+    const f = fixture(true, undefined, acknowledgeWrite);
+    const pending = send(f, "regenerated-write");
+    await approveReadForWrite(f);
+    await decidePendingWrite(f, "approve");
+    expect((await pending).status).toBe(200);
+    expect(f.calls).toHaveLength(2);
+    expect(f.calls[1]?.messages.filter((message) => message.role === "tool")).toHaveLength(1);
+    const original = firstToolExchange(f);
+    const requests = f.requests();
+    expect(original.mutationOutcome).toBe(outcome);
+    const assistant = f.deps.store
+      .listMessages(f.chatId)
+      .find((message) => message.role === "assistant");
+    if (assistant === undefined) throw new Error("Missing mutation answer");
+    const result = await handleRegenerateDesktopChat(
+      context({ ...sendBody(f, "regenerated-write"), assistantMessageId: assistant.id }),
+      f.deps,
+    );
+    expect(result.status).toBe(200);
+    expect(f.calls).toHaveLength(3);
+    const regeneration = f.calls.at(-1);
+    expect(regeneration?.toolCatalog).toBeUndefined();
+    expect(regeneration?.messages).toContainEqual({
+      role: "assistant",
+      content: "",
+      toolCalls: [original.call],
+    });
+    const observation = regeneration?.messages.find((message) => message.role === "tool");
+    expect(observation?.toolCallId).toBe(original.call.id);
+    expect(JSON.parse(observation?.content ?? "null")).toEqual({
+      result: original.result,
+      mutationOutcome: outcome,
+    });
+    expect(f.writes()).toBe(1);
+    expect(f.requests()).toBe(requests);
+    expect(firstToolExchange(f)).toEqual(original);
+  },
+);
 
 it("retains late acknowledged Jira effects after the Chat has already been cancelled", async () => {
   let release = (): void => {

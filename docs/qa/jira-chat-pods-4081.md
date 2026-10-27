@@ -22,7 +22,7 @@ acceptance remains open. Existing #2952 performance ceilings remain authoritativ
 
 The independent Jira 10.3.26/PostgreSQL 16 lab now has trusted local HTTPS and a
 normally bootstrapped, synthetic licensed session. Checkout dependencies, USearch and
-ripgrep are provisioned. The current renewed session expires at 2026-10-28 00:25:46 UTC.
+ripgrep are provisioned. The current renewed session expires at 2026-10-28 02:01:30 UTC.
 Read/write preflights, browser read/write/lifecycle groups and both complete 14-operation
 normal-Chat catalog groups passed within their recorded artifact/session scopes.
 These scoped proofs do not establish full acceptance; the checkpoints below record
@@ -2354,3 +2354,47 @@ reference were regenerated; all numerical ceilings remain unchanged. Architectur
 passes. Current updater evidence was regenerated through its canonical nine-case browser suite;
 the three-case wired Jira browser lane also passes. These checks do not replace final aggregate,
 Sonar, current-head CI, Linux editor qualification or the remaining licensed live groups.
+
+### Regenerate retains the current durable tool observations
+
+The clean fault repeat stopped in its fourth case after one independently verified Jira comment.
+The duplicate request and fresh-process duplicate had preserved that one effect, but Regenerate
+returned a registered `ProviderEmptyAnswerError` after consuming its output allocation. Before and
+after inventories match across 6,824 compiled/helper files, with digest
+`b4ad065a4065d0d793a6403eeba8270da8a1929e2f98705b31a8b16e23983ffa`.
+The incomplete group, pending marker, private reconciliation and database remain retained. It is
+not a ten-case acceptance receipt and its mutation is never replayed.
+
+Two failing regressions then demonstrated the real context defect: Regenerate discarded the
+current user row's stored tool exchanges while rebuilding its prompt. The existing prompt owner
+now includes complete durable call/result pairs and their canonical outcomes in the protected
+current-turn scaffold, counts them before history compaction, and refuses an oversized scaffold.
+Images attach to the latest user message even when tool observations follow it. No tools are
+offered or dispatched by Regenerate; no output budget, retry allowance or authority is widened.
+The eight affected Chat/context suites pass 447 cases, with root typechecking, scoped lint/format,
+semantic duplication and error-observability checks green. The compiled context-quality gate also
+passes, including short-session compatibility and calibrated tool accounting.
+
+Two additional actual-Gateway mixed tests hold the first Jira read until a second Chat completes,
+using the same Pod and distinct Pods. They prove separate grants and call IDs, correct credential
+routing in reversed completion order, and exactly two reads. The final mixed suite passes 32 cases.
+This is hermetic production-path evidence, not a licensed live two-Chat receipt.
+
+The live consent observer now follows the newly admitted durable user row rather than the first
+historical user row. Explicit consent reuse validates the exact current subject/generations before
+the turn and again before write approval. Nine tests failed before this correction; the combined
+helper suite passes 72 tests. A four-turn driver now covers a real process restart, fresh read with
+retained consent, token replacement/reverification, fresh consent and one approved comment with
+independent replacement-identity authorship. Its live execution remains pending. Catalog and
+restricted group receipts also require an explicit final license check.
+
+A new independent project completed normal cold setup, all fixture classes and the production
+HTTPS/read/write preflight. Its license expires at 2026-10-28 02:01:30 UTC. The preceding project is
+stopped with volumes and incomplete records retained; unrelated Jira installations are untouched.
+The corrected artifact requires a new complete fault group with fresh intents on this session.
+
+Separately, exact checkpoint `4269b438c538` passed the isolated canonical Linux package/root/UI
+build, editor release-evidence gate, bundle-size gate and 50 related tests. The existing editor
+evidence matched without regeneration or changed limits. All nine reviewed bot conversations were
+answered with fixes or the documented raw-digest rebuttal and resolved. Final aggregate/Sonar,
+current-head checks, remaining live groups and complete Jira visual acceptance remain open.

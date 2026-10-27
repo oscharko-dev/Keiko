@@ -177,6 +177,7 @@ async function main() {
   assert.equal(group.results.length, suite === "catalog" ? 14 : 8);
   if (suite === "catalog")
     assert.equal(new Set(group.results.map((item) => item.operation)).size, 14);
+  await requireLicense(session);
   privateJson(join(session.directory, `restricted-chat-${group.id}.json`), group, true);
   rmSync(group.pendingPath);
   stage("complete", { passed: true, cases: group.results.length, transport, suite });

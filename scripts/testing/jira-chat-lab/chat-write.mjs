@@ -113,9 +113,39 @@ async function assertUnchanged(session, intent) {
   else assert.deepEqual(await commentState(session, intent.key, intent.marker), intent.before);
 }
 
+function expectedReadGrants(intent) {
+  const expected = intent.expectedReadGrants ?? 1;
+  if (expected !== 0 && expected !== 1) throw new TypeError("Invalid expected disclosure count");
+  if (expected === 0 && typeof intent.reusedReadGrantId !== "string")
+    throw new TypeError("A consent-reuse proof requires its exact existing grant");
+  return expected;
+}
+
+async function requireReusableGrant(context, chat, intent, signal) {
+  if (expectedReadGrants(intent) !== 0) return;
+  const { approval } = await jsonRequest(
+    context.origin,
+    context.cookie,
+    "read-reuse-observe",
+    `/api/atlassian-connectors/action-approvals/${encodeURIComponent(intent.reusedReadGrantId)}/chat-read-consent`,
+    undefined,
+    "GET",
+    signal,
+  );
+  assert.equal(approval.kind, "jira-chat-read");
+  assert.equal(approval.grantId, intent.reusedReadGrantId);
+  assert.equal(approval.state, "granted");
+  assert.equal(approval.chatId, chat.id);
+  assert.ok(chat.jiraPodBinding);
+  for (const field of ["podId", "bindingGeneration", "authenticationGeneration"])
+    assert.equal(approval[field], chat.jiraPodBinding[field]);
+  assert.ok(approval.expiresAt > Date.now());
+}
+
 async function readDecision(context, transcript, intent, grants, signal) {
   const grant = transcript?.readGrant;
   if (grant?.state !== "pending" || grants.has(grant.grantId)) return;
+  assert.equal(expectedReadGrants(intent), 1, "Consent reuse must not approve a fresh disclosure");
   await assertUnchanged(context.session, intent);
   grants.add(grant.grantId);
   assert.equal(grants.size, 1);
@@ -123,11 +153,12 @@ async function readDecision(context, transcript, intent, grants, signal) {
   stage("read-consent", { approved: true });
 }
 
-async function writeDecisions(context, transcript, intent, counts, signal) {
+async function writeDecisions(context, chat, transcript, intent, counts, signal) {
   for (const exchange of transcript?.exchanges ?? []) {
     const approval = exchange.approval;
     if (approval?.state !== "pending" || counts.approvals.has(approval.approvalId)) continue;
-    assert.equal(counts.grants.size, 1);
+    assert.equal(counts.grants.size, expectedReadGrants(intent));
+    await requireReusableGrant(context, chat, intent, signal);
     await assertUnchanged(context.session, intent);
     counts.approvals.add(approval.approvalId);
     assert.equal(counts.approvals.size, 1);
@@ -136,13 +167,17 @@ async function writeDecisions(context, transcript, intent, counts, signal) {
   }
 }
 
-async function observeDecisions(context, chat, intent, signal, settled) {
+async function observeDecisions(context, chat, intent, priorUserIds, signal, settled) {
   const counts = { grants: new Set(), approvals: new Set() };
   while (!settled() && !signal.aborted) {
     const observed = await observeMessages(context, chat, signal);
-    const transcript = observed.messages.find((message) => message.role === "user")?.toolTranscript;
+    const admitted = observed.messages.filter(
+      (message) => message.role === "user" && !priorUserIds.has(message.id),
+    );
+    assert.ok(admitted.length <= 1, "Consent observation requires one newly admitted user turn");
+    const transcript = admitted[0]?.toolTranscript;
     await readDecision(context, transcript, intent, counts.grants, signal);
-    await writeDecisions(context, transcript, intent, counts, signal);
+    await writeDecisions(context, chat, transcript, intent, counts, signal);
     await new Promise((resolve) => globalThis.setTimeout(resolve, 300));
   }
   return { grants: counts.grants.size, approvals: counts.approvals.size };
@@ -215,13 +250,13 @@ async function sendTurn(context, chat, intent, signal, events) {
 function verifyTurn(completed, decisions, intent, events) {
   const user = completed.messages.find((message) => message.role === "user");
   assert.equal(user?.turnState, "completed");
-  assert.equal(decisions.grants, 1);
+  assert.equal(decisions.grants, expectedReadGrants(intent));
   const mutation = WRITE_TOOLS.has(toolName(intent));
   const needsApproval = mutation && intent.mode !== "autonomous-delivery";
   assert.equal(decisions.approvals, needsApproval ? 1 : 0);
   const expected = verifyExchange(user.toolTranscript.exchanges, intent, mutation);
   if (intent.transport === "stream") {
-    assert.ok(events.has("tool-read-consent"));
+    assert.equal(events.has("tool-read-consent"), expectedReadGrants(intent) === 1);
     assert.equal(events.has("tool-write-approval"), needsApproval);
   }
   return expected;
@@ -242,25 +277,33 @@ function verifyExchange(exchanges, intent, mutation) {
 }
 
 export async function runObservedChatTurn(context, chat, intent) {
+  expectedReadGrants(intent);
   const controller = new globalThis.AbortController();
   const timeout = globalThis.setTimeout(() => controller.abort(), 240_000);
   const events = new Set();
   const turnRequest = payload(context, chat, intent);
   let settled = false;
-  const pending = sendTurn(context, chat, intent, controller.signal, events);
-  void pending.then(
-    () => {
-      settled = true;
-    },
-    () => {
-      settled = true;
-    },
-  );
+  let pending;
   try {
+    await requireReusableGrant(context, chat, intent, controller.signal);
+    const before = await observeMessages(context, chat, controller.signal);
+    const priorUserIds = new Set(
+      before.messages.filter((message) => message.role === "user").map((message) => message.id),
+    );
+    pending = sendTurn(context, chat, intent, controller.signal, events);
+    void pending.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
     const decisions = await observeDecisions(
       context,
       chat,
       intent,
+      priorUserIds,
       controller.signal,
       () => settled,
     );
@@ -268,7 +311,7 @@ export async function runObservedChatTurn(context, chat, intent) {
   } finally {
     globalThis.clearTimeout(timeout);
     controller.abort();
-    await pending.catch(() => undefined);
+    await pending?.catch(() => undefined);
   }
 }
 

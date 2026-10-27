@@ -1932,10 +1932,10 @@ export function buildGatewayAssembly(
   snapshot: GatewayTurnSnapshot,
   correlationId?: string,
 ): GatewayPromptAssembly {
-  const hasCurrentUser = snapshot.history.some(
+  const currentUser = snapshot.history.find(
     (message) => message.id === snapshot.currentUserMessageId,
   );
-  if (!hasCurrentUser) {
+  if (currentUser === undefined) {
     throw new UiStoreError("INTERNAL", "Admitted chat turn is missing from its history.", 500);
   }
   const historyPrefix = gatewayHistoryPrefix(snapshot);
@@ -1948,6 +1948,7 @@ export function buildGatewayAssembly(
       content: request.content,
       discussionMode: request.discussionMode,
       imageCount: request.attachments.filter((attachment) => attachment.kind === "image").length,
+      toolExchanges: currentUser.toolTranscript?.exchanges,
     },
     profile: currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE,
     memoryEntries: memory.context.memories,
