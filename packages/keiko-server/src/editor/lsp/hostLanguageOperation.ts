@@ -41,6 +41,17 @@ import {
 import { MANAGED_LSP_LANGUAGES } from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-activation";
 import { isManagedLspOperationNegotiated } from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-capabilities";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
+import {
+  causeChain,
+  contentFreeErrorClass,
+  keikoStackFrames,
+} from "@oscharko-dev/keiko-activity-log";
+import { correlationIdOrUnknown } from "../../correlation.js";
+import {
+  DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+  emitServerDiagnostic,
+  type ServerDiagnosticSink,
+} from "../../diagnostics-log.js";
 import type { CommandRule } from "@oscharko-dev/keiko-tools";
 import { isWithinWorkspace } from "@oscharko-dev/keiko-workspace";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
@@ -85,6 +96,9 @@ export interface HostLanguageOperationOptions {
   readonly commandRules: readonly CommandRule[];
   readonly overlayAbsolutePath: string;
   readonly signal: AbortSignal;
+  /** Existing server diagnostic port; direct callers retain its canonical default fallback. */
+  readonly diagnosticSink?: ServerDiagnosticSink | undefined;
+  readonly correlationId?: string | undefined;
   readonly limits?: LanguageServiceLimits | undefined;
   /** Test-only timeout/resource seam; production keeps DEFAULT_LSP_PROCESS_CONFIG. */
   readonly lspProcessConfig?:
@@ -125,6 +139,14 @@ export interface HostSemanticTokenResult {
   readonly legend: ManagedLspSemanticTokenLegend;
   readonly data: ManagedLspSemanticTokenData;
 }
+
+/** Host observations only: sanitizer refusal carries no inferred tuple or budget subreason. */
+export type HostSemanticTokenOutcome =
+  | { readonly disposition: "served"; readonly result: HostSemanticTokenResult }
+  | {
+      readonly disposition:
+        "unavailable" | "not-negotiated" | "sanitizer-refused" | "cancelled" | "request-failed";
+    };
 
 // GEN-PERF-EDITOR-007: the host LSP path used to (a) gate ALL host-LSP work behind a single
 // process-wide slot so a second concurrent op returned TIMED_OUT "busy", and (b) spawn a
@@ -1713,22 +1735,25 @@ async function requestSemanticTokens(
   spec: HostLanguageProviderSpec,
   document: HostSemanticTokenDocument,
   options: HostLanguageOperationOptions,
-): Promise<HostSemanticTokenResult | undefined> {
-  if (entry.quarantined) return undefined;
+  signal: AbortSignal,
+): Promise<HostSemanticTokenOutcome> {
+  if (entry.quarantined) return { disposition: "unavailable" };
   const config = makeConfig(
     spec,
     options.protocolConfiguration?.resourceBudget,
     options.lspProcessConfig,
   );
-  if (!(await waitForReady(entry.manager, config.initializeTimeoutMs, options.signal))) return;
+  if (!(await waitForReady(entry.manager, config.initializeTimeoutMs, signal))) {
+    return { disposition: "unavailable" };
+  }
   const negotiation = entry.manager.getSemanticTokenNegotiation();
-  if (negotiation === undefined) return;
+  if (negotiation === undefined) return { disposition: "not-negotiated" };
   const uri = pathToFileURL(options.overlayAbsolutePath).href;
   syncSemanticDocument(entry, uri, document);
   const response = await entry.manager.sendRequest<unknown>(
     "textDocument/semanticTokens/full",
     { textDocument: { uri } },
-    options.signal,
+    signal,
   );
   const data = sanitizeSemanticTokenResponse(
     response,
@@ -1736,25 +1761,60 @@ async function requestSemanticTokens(
     document.version,
     negotiation,
   );
-  return data === undefined ? undefined : { legend: negotiation.legend, data };
+  return data === undefined
+    ? { disposition: "sanitizer-refused" }
+    : { disposition: "served", result: { legend: negotiation.legend, data } };
 }
 
 export async function runHostLanguageSemanticTokens(
   document: HostSemanticTokenDocument,
   options: HostLanguageOperationOptions,
 ): Promise<HostSemanticTokenResult | undefined> {
+  const outcome = await runHostLanguageSemanticTokensDetailed(document, options);
+  return outcome.disposition === "served" ? outcome.result : undefined;
+}
+
+function recordSemanticTokenRequestFailure(
+  options: HostLanguageOperationOptions,
+  error: unknown,
+): void {
+  const frames = keikoStackFrames(error);
+  const causes = causeChain(error);
+  emitServerDiagnostic(options.diagnosticSink, {
+    correlationId: correlationIdOrUnknown(options.correlationId),
+    timestamp: new Date().toISOString(),
+    operation: "editor.semantic-tokens",
+    source: "editor.hostLanguageOperation",
+    errorClass: contentFreeErrorClass(error),
+    message: DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+    diagnosticOutcome: "request-failed",
+    ...(frames.length === 0 ? {} : { frames }),
+    ...(causes.length === 0 ? {} : { causeChain: causes }),
+  });
+}
+
+/** Preserve phase distinctions for the owning route without changing the legacy token surface. */
+export async function runHostLanguageSemanticTokensDetailed(
+  document: HostSemanticTokenDocument,
+  options: HostLanguageOperationOptions,
+): Promise<HostSemanticTokenOutcome> {
   // Rust is the only language with measured conformance/budget evidence for semantic tokens
   // (ADR-0132 D18). Enabling another language here requires new evidence, not just this check.
-  if (document.languageId !== "rust") return undefined;
+  if (document.languageId !== "rust") return { disposition: "unavailable" };
   const spec = findSpec(document.languageId);
-  if (spec === undefined || !matchingAvailableProvider(spec, options)) return undefined;
+  if (spec === undefined || !matchingAvailableProvider(spec, options)) {
+    return { disposition: "unavailable" };
+  }
   const key = poolKey(options.workspace.root, poolLanguageAxis(spec));
   const entry = await acquirePooledEntry(spec, options);
-  const run = entry.queue.then(async () => {
+  const run = entry.queue.then(async (): Promise<HostSemanticTokenOutcome> => {
+    const signal = options.signal;
     try {
-      return await requestSemanticTokens(entry, spec, document, options);
-    } catch {
-      return undefined;
+      return await requestSemanticTokens(entry, spec, document, options, signal);
+    } catch (error) {
+      const cancelled = signal.aborted;
+      if (!cancelled) recordSemanticTokenRequestFailure(options, error);
+      return { disposition: cancelled ? "cancelled" : "request-failed" };
     }
   });
   entry.queue = run.catch(() => undefined);
