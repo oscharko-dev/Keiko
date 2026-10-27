@@ -3812,9 +3812,22 @@
       "releaseNoteCategory": "fixes",
       "releaseNotePriority": "high",
       "userVisibleChange": "behavioral",
-      "userVisibleSummary": "Long coding runs keep their live activity and browser pairing, the task timeline says why a call failed, and the editor, Git-change Chat and Linux verification work again.",
-      "affectedStateStores": [],
-      "stateImpact": [],
+      "userVisibleSummary": "Long coding runs keep their live activity and browser pairing, the task timeline says why a call failed, the editor, Git-change Chat and Linux verification work again, and a trusted deployment can let Chat keep authorized document details.",
+      "affectedStateStores": ["ui-store-schema", "workspace-search-index"],
+      "stateImpact": [
+        {
+          "store": "ui-store-schema",
+          "description": "No schema migration. Without the opt-out nothing changes. With KEIKO_CONTENT_REDACTION=off, new Chat answers are stored with the authorized document details they contain; credentials stay removed. Text stored earlier is not rewritten in either direction, and history recall and compaction redact it again after the opt-out is removed.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        },
+        {
+          "store": "workspace-search-index",
+          "description": "A Chat that preserves content builds its own workspace-index snapshot on first use, so preserved and default snapshots never serve each other. Default snapshots are untouched.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        }
+      ],
       "userActionRequired": false,
       "remediation": "no-action-required",
       "oneClickEligible": true,
@@ -3830,6 +3843,7 @@
         "A restored Coding Workbench window picks up the project's repository, a signed-out window shows the pairing guidance, and an open Changes section stays open while it refreshes.",
         "`keiko start` in a project installation no longer warns about a stale binary when it runs the installed package through npm's bin link.",
         "A Coding Workbench run that passed the repository's own combined check in its shell, such as `npm run check` running the type check, lint and tests, now counts every check that line ran. Before, such a run could be reported as not verified because only its tests counted.",
+        "Operators of trusted model deployments can start Keiko with `KEIKO_CONTENT_REDACTION=off` so Chat keeps authorized document details such as phone numbers, account numbers, configuration values and code. Credentials, private keys, URL credentials and `Authorization` values are still removed, memory proposals and the Coding Workbench keep their redaction, and the default is unchanged. The setting applies to every configured model provider, and the Activity Log records it at startup.",
         "Updating from 1.2.7 or 1.3.0 needs no action. An installation on 1.2.6 or earlier still runs the verified updater bootstrap once before automatic updates."
       ],
       "review": {
@@ -3838,7 +3852,7 @@
         "reviewedAt": "2026-10-27",
         "humanApproved": true,
         "approvalReference": "github-issue-comment:oscharko-dev/Keiko#3897#6443332275",
-        "rationale": "The owner explicitly authorized preparing release 1.3.1 with the fixes from #4096; the authorization is recorded on epic #3897. The entry accounts for every change integrated since v1.3.0: the Coding Workbench defects from the 1.3.0 test (#4096), the product defects found by the nightly journeys (#4095) and contributor guidance only (#4080). This records release-impact preparation under the signed-version-bump policy, not permission to integrate or publish. Integration remains subject to the owner's authorization, exact-head required checks and settled review findings, and publication requires the protected release workflow. The installed upgrade demonstration from 1.2.x (#3908) and the fresh npm and Yarn installation qualification (#3898) remain post-release acceptance."
+        "rationale": "The owner explicitly authorized preparing release 1.3.1 with the fixes from #4096; the authorization is recorded on epic #3897. The entry accounts for every change integrated since v1.3.0: the Coding Workbench defects from the 1.3.0 test (#4096), the product defects found by the nightly journeys (#4095), contributor guidance only (#4080) and the deployment-owned Chat content opt-out (#4098), which the owner asked in chat on 2026-10-27 to include in this release; its default behaviour is unchanged. This records release-impact preparation under the signed-version-bump policy, not permission to integrate or publish. Integration remains subject to the owner's authorization, exact-head required checks and settled review findings, and publication requires the protected release workflow. The installed upgrade demonstration from 1.2.x (#3908) and the fresh npm and Yarn installation qualification (#3898) remain post-release acceptance."
       },
       "breakingException": {
         "rationale": "Immutable published 1.2.6 and earlier source updaters still look for the handoff plan outside the canonical update-state root. A newer target cannot repair that source before handoff; the verified managed-install bootstrap introduced with 1.2.7 remains the carry-forward path.",

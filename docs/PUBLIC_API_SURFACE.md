@@ -111,8 +111,10 @@ for compatibility. The root `package.json` `"version"` field is kept in lockstep
 
 - Removing a root-barrel export or renaming a CLI flag is a breaking change.
 - 1.3.1: root exports, CLI entrypoints and local server routes remain unchanged. The release fixes
-  Coding Workbench, editor, Git-change Chat and Linux sandbox behaviour. No customer database schema
-  migration is introduced.
+  Coding Workbench, editor, Git-change Chat and Linux sandbox behaviour. The server reads the new
+  deployment environment variable `KEIKO_CONTENT_REDACTION` once at startup: only the exact value
+  `off` lets Chat preserve authorized document content. The workspace packages add the matching
+  content-policy contract and security exports. No customer database schema migration is introduced.
 - 1.3.0: root exports and CLI entrypoints remain unchanged. The macOS optional coding-runtime
   dependencies move to 1.1.4 (OpenCode 2.1.4). The local server adds authenticated Coding History
   import and export routes for the Workbench UI. No customer database schema migration is introduced.
