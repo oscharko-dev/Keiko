@@ -63,6 +63,12 @@ const CODING_APP_SESSION_CHANNEL_OPENED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+// The live stream's flow counts (ADR-0141 D6), recorded on its closed line.
+const SESSION_STREAM_FLOW_FIELDS = {
+  drainWaitCount: { type: "integer", dataClass: "count", required: true },
+  coalescedSnapshotCount: { type: "integer", dataClass: "count", required: true },
+} as const;
+
 const CODING_APP_SESSION_CHANNEL_CLOSED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -70,10 +76,7 @@ const CODING_APP_SESSION_CHANNEL_CLOSED_OPERATION = defineActivityLogOperation({
   category: "http",
   owner: "keiko-server",
   emitter: "coding-app-session.codingAppSessionRoutes.channelOpened.close",
-  fields: {
-    drainWaitCount: { type: "integer", dataClass: "count", required: true },
-    coalescedSnapshotCount: { type: "integer", dataClass: "count", required: true },
-  },
+  fields: SESSION_STREAM_FLOW_FIELDS,
   causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",

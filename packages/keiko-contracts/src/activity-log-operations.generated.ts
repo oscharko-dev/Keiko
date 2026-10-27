@@ -3246,7 +3246,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     op: "client.coding-run.restored",
     category: "diagnostic",
     owner: "keiko-server",
-    emitter: "client-diagnostics-routes.logClientCodingRunRestore",
+    emitter: "client-diagnostics-routes.logCodingClientReport",
     fields: {
       completeness: {
         type: "string",
@@ -3307,7 +3307,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     op: "client.coding-workbench.interaction",
     category: "diagnostic",
     owner: "keiko-server",
-    emitter: "client-diagnostics-routes.logClientCodingWorkbenchInteraction",
+    emitter: "client-diagnostics-routes.logCodingClientReport",
     fields: {
       completeness: {
         type: "string",

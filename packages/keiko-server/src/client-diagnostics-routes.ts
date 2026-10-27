@@ -1336,7 +1336,7 @@ const CLIENT_CODING_RUN_RESTORED_OPERATION = defineActivityLogOperation({
   op: "client.coding-run.restored",
   category: "diagnostic",
   owner: "keiko-server",
-  emitter: "client-diagnostics-routes.logClientCodingRunRestore",
+  emitter: "client-diagnostics-routes.logCodingClientReport",
   fields: {
     timelineCount: { type: "integer", dataClass: "count", required: true },
     transcriptCount: { type: "integer", dataClass: "count", required: true },
@@ -1365,7 +1365,7 @@ const CLIENT_CODING_WORKBENCH_INTERACTION_OPERATION = defineActivityLogOperation
   op: "client.coding-workbench.interaction",
   category: "diagnostic",
   owner: "keiko-server",
-  emitter: "client-diagnostics-routes.logClientCodingWorkbenchInteraction",
+  emitter: "client-diagnostics-routes.logCodingClientReport",
   fields: {
     interaction: {
       type: "string",
@@ -2350,46 +2350,27 @@ function logClientEvidenceInspection(
   return true;
 }
 
-function logClientCodingRunRestore(
-  request: ClientDiagnosticIngestRequest,
-  correlationId: string,
-): boolean {
-  const restore = request.codingRunRestore;
-  if (restore === undefined) return false;
-  getServerLogger().info(
-    activityLogEvent(
-      CLIENT_CODING_RUN_RESTORED_OPERATION,
-      clientDiagnosticCorrelation(request, correlationId),
-      { ...restore, completeness: "complete", loss: "none" },
-    ),
-  );
-  return true;
-}
-
-function logClientCodingWorkbenchInteraction(
-  request: ClientDiagnosticIngestRequest,
-  correlationId: string,
-): boolean {
-  const interaction = request.codingWorkbenchInteraction;
-  if (interaction === undefined) return false;
-  getServerLogger().info(
-    activityLogEvent(
-      CLIENT_CODING_WORKBENCH_INTERACTION_OPERATION,
-      clientDiagnosticCorrelation(request, correlationId),
-      { ...interaction, completeness: "complete", loss: "none" },
-    ),
-  );
-  return true;
-}
-
+// The two closed Coding Workbench reports: a restored run, else a routine page interaction.
 function logCodingClientReport(
   request: ClientDiagnosticIngestRequest,
   correlationId: string,
 ): boolean {
-  return (
-    logClientCodingRunRestore(request, correlationId) ||
-    logClientCodingWorkbenchInteraction(request, correlationId)
-  );
+  const { codingRunRestore: restore, codingWorkbenchInteraction: interaction } = request;
+  const envelope = clientDiagnosticCorrelation(request, correlationId);
+  const closed = { completeness: "complete", loss: "none" } as const;
+  if (restore !== undefined) {
+    getServerLogger().info(
+      activityLogEvent(CLIENT_CODING_RUN_RESTORED_OPERATION, envelope, { ...restore, ...closed }),
+    );
+  } else if (interaction !== undefined) {
+    getServerLogger().info(
+      activityLogEvent(CLIENT_CODING_WORKBENCH_INTERACTION_OPERATION, envelope, {
+        ...interaction,
+        ...closed,
+      }),
+    );
+  }
+  return restore !== undefined || interaction !== undefined;
 }
 
 // The closed report shapes, each of which owns its own registered line.
