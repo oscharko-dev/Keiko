@@ -1,6 +1,9 @@
 import type { AtlassianConnectorActionType } from "@oscharko-dev/keiko-contracts";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
-import type { ChatToolAuthoritySubject } from "@oscharko-dev/keiko-contracts";
+import type {
+  ChatToolAuthoritySubject,
+  ChatToolReadGrantState,
+} from "@oscharko-dev/keiko-contracts";
 import { validateChatToolAuthoritySubject } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
 import {
   activityLogEvent,
@@ -12,7 +15,8 @@ import { processServerLogSink } from "../process-log-sink.js";
 type Failure =
   "invalid" | "expired" | "budget-exceeded" | "revoked" | "review-required" | "policy-denied";
 type Outcome = { readonly ok: true } | { readonly ok: false; readonly reason: Failure };
-type Phase = "register" | "resolve" | "reserve" | "revoke" | "current-state" | "action-policy";
+type Phase =
+  "register" | "resolve" | "reserve" | "revoke" | "current-state" | "action-policy" | "read-grant";
 export type ChatAuthorityReadiness =
   | "ready"
   | "chat-unavailable"
@@ -43,7 +47,15 @@ const CHAT_AUTHORITY_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["register", "resolve", "reserve", "revoke", "current-state", "action-policy"],
+      values: [
+        "register",
+        "resolve",
+        "reserve",
+        "revoke",
+        "current-state",
+        "action-policy",
+        "read-grant",
+      ],
     },
     outcome: {
       type: "string",
@@ -86,6 +98,14 @@ const CHAT_AUTHORITY_OPERATION = defineActivityLogOperation({
         "assign-issue",
       ],
     },
+    grantDigest: OPTIONAL_DIGEST,
+    consentProofDigest: OPTIONAL_DIGEST,
+    grantState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["pending", "granted", "rejected", "expired", "revoked"],
+    },
     authorityDigest: OPTIONAL_DIGEST,
     readiness: {
       type: "string",
@@ -122,11 +142,15 @@ const CHAT_AUTHORITY_OPERATION = defineActivityLogOperation({
     "chat.tool-authority.operation.action-policy",
     "chat.tool-authority.operation.current-state",
     "chat.tool-authority.operation.lifecycle",
+    "chat.tool-authority.operation.read-grant",
   ],
   releaseImpact: "minor",
 });
 
 interface AuthorityEvidence {
+  readonly grantId?: string | undefined;
+  readonly grantState?: ChatToolReadGrantState | undefined;
+  readonly consentProofDigest?: string | undefined;
   readonly actionType?: AtlassianConnectorActionType | undefined;
   readonly readiness?: ChatAuthorityReadiness | undefined;
   readonly authorityDigest?: string | undefined;
@@ -154,13 +178,24 @@ function countField(name: string, value: number | undefined): Record<string, num
   return value !== undefined && Number.isSafeInteger(value) && value >= 0 ? { [name]: value } : {};
 }
 
+function digestField(name: string, value: string | undefined): Record<string, string> {
+  return value !== undefined && /^[a-f0-9]{64}$/.test(value) ? { [name]: value } : {};
+}
+
+function grantFields(evidence: AuthorityEvidence): Record<string, string> {
+  return {
+    ...(evidence.grantId === undefined ? {} : { grantDigest: sha256Hex(evidence.grantId) }),
+    ...(evidence.grantState === undefined ? {} : { grantState: evidence.grantState }),
+    ...digestField("consentProofDigest", evidence.consentProofDigest),
+  };
+}
+
 export function recordChatAuthorityResult<T extends Outcome>(
   phase: Phase,
   result: T,
   evidence: AuthorityEvidence,
   correlationId: string | undefined,
 ): T {
-  const digest = evidence.authorityDigest;
   processServerLogSink().write(
     activityLogEvent(
       CHAT_AUTHORITY_OPERATION,
@@ -170,12 +205,11 @@ export function recordChatAuthorityResult<T extends Outcome>(
       },
       {
         phase,
+        ...grantFields(evidence),
         ...(evidence.actionType === undefined ? {} : { actionType: evidence.actionType }),
         outcome: result.ok ? "allowed" : result.reason,
         ...(evidence.readiness === undefined ? {} : { readiness: evidence.readiness }),
-        ...(digest !== undefined && /^[a-f0-9]{64}$/.test(digest)
-          ? { authorityDigest: digest }
-          : {}),
+        ...digestField("authorityDigest", evidence.authorityDigest),
         ...(evidence.chatId === undefined ? {} : { chatDigest: sha256Hex(evidence.chatId) }),
         ...subjectFields(evidence.subject),
         ...countField("toolCalls", evidence.toolCalls),

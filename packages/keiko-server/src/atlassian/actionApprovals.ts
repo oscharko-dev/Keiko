@@ -1,3 +1,20 @@
+import type {
+  ChatToolAuthoritySubject,
+  ChatToolReadGrant,
+  EditorAgentGovernedAuthorityReference,
+} from "@oscharko-dev/keiko-contracts";
+import {
+  invalidReadGrant,
+  recordReadGrant,
+  sameReadGrantAuthority,
+  sameReadGrantSubject,
+  snapshotReadGrant,
+  validReadGrantRequest,
+  type ChatReadGrantEntry,
+  type ChatReadGrantResult,
+  type RetainedChatReadGrant,
+} from "./chatReadGrantState.js";
+export type { ChatReadGrantEntry } from "./chatReadGrantState.js";
 // Server-side pending-approval state for review-required connector actions (Issue #2244, Epic
 // #2238, ADR-0128 D4; rendered by the #2245 UI).
 //
@@ -187,8 +204,12 @@ export interface PendingAtlassianActionEntry {
 export type PendingApprovalCreation =
   { readonly ok: true } | { readonly ok: false; readonly reason: "capacity-exhausted" };
 
+type RetainedApproval =
+  | { readonly kind: "connector"; readonly entry: PendingAtlassianActionEntry }
+  | RetainedChatReadGrant;
+
 export class AtlassianActionApprovalRegistry {
-  private readonly entries = new Map<string, PendingAtlassianActionEntry>();
+  private readonly entries = new Map<string, RetainedApproval>();
   private readonly now: () => number;
 
   public constructor(now: () => number = Date.now) {
@@ -197,25 +218,28 @@ export class AtlassianActionApprovalRegistry {
 
   public create(entry: PendingAtlassianActionEntry): PendingApprovalCreation {
     this.evictExpired();
-    if (this.entries.size >= ATLASSIAN_ACTION_APPROVAL_MAX_PENDING) {
+    if (
+      this.entries.size >= ATLASSIAN_ACTION_APPROVAL_MAX_PENDING ||
+      this.entries.get(entry.approval.approvalId)?.kind === "chat-read"
+    )
       return { ok: false, reason: "capacity-exhausted" };
-    }
-    this.entries.set(entry.approval.approvalId, entry);
+    this.entries.set(entry.approval.approvalId, { kind: "connector", entry });
     return { ok: true };
   }
 
   public get(approvalId: string): PendingAtlassianActionEntry | undefined {
     this.evictExpired();
-    return this.entries.get(approvalId);
+    const record = this.entries.get(approvalId);
+    return record?.kind === "connector" ? record.entry : undefined;
   }
 
   public listPending(): readonly AtlassianConnectorPendingApproval[] {
     this.evictExpired();
-    return Array.from(this.entries.values(), (entry) => entry.approval);
+    return Array.from(this.entries.values()).flatMap((record) =>
+      record.kind === "connector" ? [record.entry.approval] : [],
+    );
   }
 
-  // Single-use resolution: approve consumes the entry so a second approve (or a replayed
-  // request) finds nothing and fails closed.
   public consume(approvalId: string): PendingAtlassianActionEntry | undefined {
     const entry = this.get(approvalId);
     if (entry !== undefined) this.entries.delete(approvalId);
@@ -226,16 +250,144 @@ export class AtlassianActionApprovalRegistry {
     return this.consume(approvalId);
   }
 
-  public reset(): void {
+  public createChatReadGrant(
+    entry: ChatReadGrantEntry,
+    correlationId?: string,
+  ): PendingApprovalCreation | { readonly ok: false; readonly reason: "invalid" } {
+    this.evictExpired(correlationId);
+    if (
+      !validReadGrantRequest(entry, this.now(), ATLASSIAN_ACTION_APPROVAL_TTL_MS) ||
+      this.entries.has(entry.grant.grantId)
+    )
+      return invalidReadGrant(correlationId);
+    if (this.entries.size >= ATLASSIAN_ACTION_APPROVAL_MAX_PENDING) {
+      invalidReadGrant(correlationId);
+      return { ok: false, reason: "capacity-exhausted" };
+    }
+    const record = snapshotReadGrant(entry, correlationId);
+    this.entries.set(entry.grant.grantId, record);
+    recordReadGrant(record);
+    return { ok: true };
+  }
+
+  public getChatReadGrant(grantId: string, correlationId?: string): ChatReadGrantEntry | undefined {
+    this.evictExpired(correlationId);
+    const record = this.entries.get(grantId);
+    return record?.kind === "chat-read" ? record.entry : undefined;
+  }
+
+  public findGrantedChatReadGrant(
+    subject: ChatToolAuthoritySubject,
+    correlationId?: string,
+  ): ChatToolReadGrant | undefined {
+    this.evictExpired(correlationId);
+    for (const record of this.entries.values())
+      if (
+        record.kind === "chat-read" &&
+        record.entry.grant.state === "granted" &&
+        sameReadGrantSubject(record.entry.grant, subject)
+      ) {
+        recordReadGrant(snapshotReadGrant(record.entry, correlationId), 0);
+        return record.entry.grant;
+      }
+    return undefined;
+  }
+
+  public acceptChatReadGrant(
+    grantId: string,
+    subject: ChatToolAuthoritySubject,
+    authority: EditorAgentGovernedAuthorityReference,
+    consentProofDigest: string,
+    correlationId?: string,
+  ): ChatReadGrantResult {
+    const entry = this.currentReadGrant(grantId, subject, authority, correlationId);
+    if (entry === undefined || !/^[a-f0-9]{64}$/.test(consentProofDigest))
+      return invalidReadGrant(correlationId);
+    if (entry.grant.state === "granted") {
+      recordReadGrant(snapshotReadGrant(entry, correlationId), 0);
+      return { ok: true, grant: entry.grant };
+    }
+    if (entry.grant.state !== "pending") return invalidReadGrant(correlationId);
+    const grant = { ...entry.grant, state: "granted", consentProofDigest } as const;
+    return { ok: true, grant: this.retainReadGrant({ ...entry, grant }, correlationId) };
+  }
+
+  public rejectChatReadGrant(
+    grantId: string,
+    subject: ChatToolAuthoritySubject,
+    authority: EditorAgentGovernedAuthorityReference,
+    correlationId?: string,
+  ): ChatReadGrantResult {
+    const entry = this.currentReadGrant(grantId, subject, authority, correlationId);
+    if (entry?.grant.state !== "pending") return invalidReadGrant(correlationId);
+    const grant = { ...entry.grant, state: "rejected", consentProofDigest: null } as const;
+    return { ok: true, grant: this.retainReadGrant({ ...entry, grant }, correlationId) };
+  }
+
+  public revokeChatReadGrants(chatId: string, correlationId?: string): number {
+    this.evictExpired(correlationId);
+    let count = 0;
+    for (const record of this.entries.values()) {
+      if (record.kind !== "chat-read" || record.entry.grant.subject.chatId !== chatId) continue;
+      if (this.revokeReadGrant(record, correlationId)) count++;
+    }
+    return count;
+  }
+
+  private currentReadGrant(
+    grantId: string,
+    subject: ChatToolAuthoritySubject,
+    authority: EditorAgentGovernedAuthorityReference,
+    correlationId?: string,
+  ): ChatReadGrantEntry | undefined {
+    const entry = this.getChatReadGrant(grantId, correlationId);
+    return entry !== undefined &&
+      sameReadGrantSubject(entry.grant, subject) &&
+      sameReadGrantAuthority(entry, authority)
+      ? entry
+      : undefined;
+  }
+
+  private retainReadGrant(entry: ChatReadGrantEntry, correlationId?: string): ChatToolReadGrant {
+    const record = snapshotReadGrant(entry, correlationId);
+    this.entries.set(entry.grant.grantId, record);
+    recordReadGrant(record);
+    return record.entry.grant;
+  }
+
+  private revokeReadGrant(record: RetainedChatReadGrant, correlationId?: string): boolean {
+    const grant = record.entry.grant;
+    if (grant.state !== "pending" && grant.state !== "granted") return false;
+    this.retainReadGrant(
+      { ...record.entry, grant: { ...grant, state: "revoked" } },
+      correlationId ?? record.correlationId,
+    );
+    return true;
+  }
+
+  public reset(correlationId?: string): void {
+    this.evictExpired(correlationId);
+    for (const record of this.entries.values())
+      if (record.kind === "chat-read") this.revokeReadGrant(record, correlationId);
     this.entries.clear();
   }
 
-  private evictExpired(): void {
+  private evictExpired(correlationId?: string): void {
     const cutoff = this.now();
-    for (const [approvalId, entry] of this.entries) {
-      if (entry.approval.expiresAt <= cutoff) {
-        this.entries.delete(approvalId);
+    for (const [id, record] of this.entries) {
+      const expiresAt =
+        record.kind === "connector"
+          ? record.entry.approval.expiresAt
+          : record.entry.grant.expiresAt;
+      if (expiresAt > cutoff) continue;
+      if (record.kind === "chat-read") {
+        const grant = { ...record.entry.grant, state: "expired" } as const;
+        recordReadGrant(
+          snapshotReadGrant({ ...record.entry, grant }, correlationId ?? record.correlationId),
+          record.entry.grant.state === "pending" || record.entry.grant.state === "granted" ? 1 : 0,
+        );
       }
+      this.entries.delete(id);
     }
   }
 }

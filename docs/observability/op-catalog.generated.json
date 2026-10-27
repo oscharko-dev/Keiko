@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "ee75a9251ce7e6f4bd2deb780cdc5b4bf806456225a5515a6e7ea16af88c2fed",
+    "catalogDigest": "fa621e1bf1f2edd7c43ed5b3e3890bd27c5cc921f812df246c5a4bde9bc583c3",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -2399,7 +2399,15 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["register", "resolve", "reserve", "revoke", "current-state", "action-policy"]
+            "values": [
+              "register",
+              "resolve",
+              "reserve",
+              "revoke",
+              "current-state",
+              "action-policy",
+              "read-grant"
+            ]
           },
           "outcome": {
             "type": "string",
@@ -2441,6 +2449,24 @@
               "jira.assignable-users",
               "assign-issue"
             ]
+          },
+          "grantDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": false,
+            "maxLength": 64
+          },
+          "consentProofDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": false,
+            "maxLength": 64
+          },
+          "grantState": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["pending", "granted", "rejected", "expired", "revoked"]
           },
           "authorityDigest": {
             "type": "string",
@@ -2515,11 +2541,12 @@
         "proofIds": [
           "chat.tool-authority.operation.action-policy",
           "chat.tool-authority.operation.current-state",
-          "chat.tool-authority.operation.lifecycle"
+          "chat.tool-authority.operation.lifecycle",
+          "chat.tool-authority.operation.read-grant"
         ],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/editor/chatAuthorityActivity.ts:34",
-        "emitterSites": ["packages/keiko-server/src/editor/chatAuthorityActivity.ts:165"]
+        "registrationSite": "packages/keiko-server/src/editor/chatAuthorityActivity.ts:38",
+        "emitterSites": ["packages/keiko-server/src/editor/chatAuthorityActivity.ts:200"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -55501,6 +55528,24 @@
                   "required": false
                 },
                 {
+                  "name": "consentProofDigest",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": false
+                },
+                {
+                  "name": "grantDigest",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": false
+                },
+                {
+                  "name": "grantState",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "outcome",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -55551,7 +55596,8 @@
               "proofIds": [
                 "chat.tool-authority.operation.action-policy",
                 "chat.tool-authority.operation.current-state",
-                "chat.tool-authority.operation.lifecycle"
+                "chat.tool-authority.operation.lifecycle",
+                "chat.tool-authority.operation.read-grant"
               ],
               "replayReferences": [],
               "missingObligations": []
@@ -102003,7 +102049,7 @@
     {
       "op": "chat.tool-authority.operation",
       "category": "security",
-      "site": "packages/keiko-server/src/editor/chatAuthorityActivity.ts:37",
+      "site": "packages/keiko-server/src/editor/chatAuthorityActivity.ts:41",
       "package": "keiko-server"
     },
     {

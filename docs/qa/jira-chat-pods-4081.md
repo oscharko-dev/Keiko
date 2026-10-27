@@ -141,7 +141,7 @@ Status: **Partial — not accepted**. Schema 49 and the authenticated PATCH/seri
 
 - [ ] **AC2:** All three modes have explicit regression coverage through the shared action-class policy, including per-chat mode persistence, the unconfigured `autonomous-delivery` tool-source ceiling delivered by the one server resolver from #4083 and an explicitly narrower ceiling: required approval precedes network/effect, denied actions make no call, bounded allowed actions execute without invented extra approval. The read grant is requested once, covers only read-class tools of the current binding and credential generation, and never covers writes. Missing/expired authority remains denied in every mode.
 
-Status: **Partial — not accepted**. All three mode selections persist through the actual Chat PATCH; the shared action policy and deployment ceiling have scoped regression evidence below. The ordinary Chat contract and shared registry now enforce subject, ceiling, expiry, revocation and cumulative budget boundaries. Once-per-binding read grants, approval redemption and ordinary-Chat execution remain pending.
+Status: **Partial — not accepted**. All three mode selections persist through the actual Chat PATCH; the shared action policy and deployment ceiling have scoped regression evidence below. The ordinary Chat contract and shared registry now enforce subject, ceiling, expiry, revocation and cumulative budget boundaries. The existing approval owner now retains bounded, immutable Chat read grants with idempotent acceptance and no TTL renewal. Real human acceptance, once-per-binding request composition, write-approval redemption and ordinary-Chat execution remain pending.
 
 - [ ] **AC3:** Disconnect, replacement, Pod deletion and Keiko-managed token rotation/revocation revoke read grants and invalidate pending approvals and queued calls. Jira-side token revocation is enforced on the next Jira call; observed auth failure invalidates local readiness and pending work without introducing polling or webhooks. Tests cover these changes during approval and before effect; no stale request uses the old or newly substituted credential.
 
@@ -149,11 +149,11 @@ Status: **Partial — not accepted**. HTTP generation capture, verification tick
 
 - [ ] **AC4:** Two chats using different Pods are isolated; two chats deliberately using the same Pod share neither grants nor approval state; a new or copied Chat identity cannot inherit grants or approvals. Data-Pod-only grounding is byte-for-byte unchanged in behaviour and existing Workbench MCP works unchanged.
 
-Status: **Partial — not accepted**. Actual competing binding PATCH tests preserve one binding and leave another Chat unchanged. Shared registry tests additionally isolate every Chat subject and reject cross-consumer Coding/Chat references. Shared-Pod grants/approvals, parallel tool execution isolation and final Data-Pod/Workbench regressions remain pending.
+Status: **Partial — not accepted**. Actual competing binding PATCH tests preserve one binding and leave another Chat unchanged. Shared registry tests additionally isolate every Chat subject and reject cross-consumer Coding/Chat references. Private read-grant tests additionally isolate actor, Chat, Pod and both generations, preserve another Chat on revocation and prevent legacy approval consumers from reading or consuming Chat grants. Actual parallel tool/approval execution and final Data-Pod/Workbench regressions remain pending.
 
 - [ ] **AC5:** Production-path lifecycle logging for binding, mode, grant and approval is registered and body-free. Restart and authority/mode changes cannot revive expired grants, approvals or queued effects. All applicable gates pass.
 
-Status: **Partial — not accepted**. Existing registered Chat scope evidence reconstructs one application, denials and conflicts without private facts; credential lifecycle evidence is recorded below. Remaining authority/lifecycle/restart events and final gates remain pending.
+Status: **Partial — not accepted**. Existing registered Chat scope evidence reconstructs one application, denials and conflicts without private facts; credential lifecycle evidence is recorded below. Private read-grant evidence now reconstructs creation, acceptance, reuse, revocation and expiry through the real Activity Log writer/reader. Complete production route/lifecycle/restart composition and final gates remain pending.
 
 - [ ] **AC6:** Through the trusted non-Coding test consumer against local Jira 10.3.26, an admitted read-class call reaches the real provider only with a valid grant, and a write-class call only under the mode matrix or a redeemed approval that re-ran the complete pipeline; a denied, expired or revoked call performs no HTTP request.
 
@@ -1522,3 +1522,26 @@ with explicit construction of its own fields. Package build, root typecheck, cha
 format and semantic checks pass; no baseline exemption is added. Logs:
 `/tmp/keiko-4081-read-grant-contract-*.log`. Public package assembly and full gates remain
 scheduled for final acceptance; no complete AC is accepted by this contract increment.
+
+### Shared read-grant owner checkpoint — #4084 AC2–AC5
+
+The existing Atlassian approval registry retains discriminated legacy approvals and private
+Chat read grants in the same capacity-bounded map. Legacy get/list/consume/reject cannot see,
+consume or replace Chat grants. Requests must be pending, within the existing approval TTL and
+bound to an immutable subject/authority snapshot. Acceptance checks the exact actor, Chat,
+Pod, generations and original authority reference. Repeated acceptance preserves the first
+proof and expiry. Reuse checks the current subject; rejection/revocation cannot be revived.
+Per-Chat revocation preserves other Chats, and graph disposal clears only its owner's grants.
+
+Twelve new owner tests fail before implementation while 38 legacy tests pass. Afterward, 191
+approval, real existing write/search/sync route, Chat-adapter and authority-registry tests pass.
+The real writer/reader proof reconstructs pending, granted, reused, revoked and expired records,
+including zero affected entries on reuse/already-inactive expiry, without raw subject or grant
+identifiers. All 97 operation-catalog tests pass; generation resolves 614 proofs and 30 scenarios
+without violations. Build, root typecheck, changed lint/format, staged semantic and ADR checks
+pass; the duplicate baseline remains unchanged.
+
+This is a private retention API: current authority/readiness must still be checked at human
+acceptance and use. Authenticated consent routes, once-per-binding request orchestration,
+credential/Chat lifecycle wiring and actual tool admission remain pending. No complete AC is
+accepted here. Logs: `/tmp/keiko-4081-read-grant-registry-*.log`.

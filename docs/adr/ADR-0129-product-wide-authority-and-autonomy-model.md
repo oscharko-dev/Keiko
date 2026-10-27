@@ -211,6 +211,15 @@ cannot claim one. Runtime owners must establish acceptance and invalidate these 
 structural validation alone never grants access, and browser projections exclude private
 actor/proof facts.
 
+The existing Atlassian approval owner retains these Chat read grants in its same bounded map,
+with a discriminator that excludes them from legacy approval retrieval and consumption.
+Pending grants retain the original authority reference; active consent can be reused only for
+the same current subject while the execution path independently establishes fresh valid
+authority. Acceptance is idempotent without extending TTL or replacing its proof. The owner
+snapshots private facts, handles expiry and supports per-Chat revocation and isolated disposal.
+These retention APIs do not themselves establish a human decision or replace lifecycle and
+execution admission at their callers.
+
 ### D6 — Forward rule for decision records
 
 New ADRs and epics for autonomy-capable surfaces must cite this record and document their

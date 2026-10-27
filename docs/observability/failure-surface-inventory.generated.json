@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "ee75a9251ce7e6f4bd2deb780cdc5b4bf806456225a5515a6e7ea16af88c2fed"
+    "catalogDigest": "fa621e1bf1f2edd7c43ed5b3e3890bd27c5cc921f812df246c5a4bde9bc583c3"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -68,8 +68,8 @@
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
     "operationCount": 598,
-    "proofCount": 613,
-    "resolvedProofCount": 613,
+    "proofCount": 614,
+    "resolvedProofCount": 614,
     "failureClassCount": 374,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -1277,6 +1277,9 @@
     ],
     "chat.tool-authority.operation.lifecycle": [
       "packages/keiko-server/src/editor/agentAuthorityRegistry.test.ts"
+    ],
+    "chat.tool-authority.operation.read-grant": [
+      "packages/keiko-server/src/atlassian/actionApprovals.test.ts"
     ],
     "chat.tool-mutation.emitted-line": [
       "packages/keiko-server/src/store/chatToolMutations.test.ts"

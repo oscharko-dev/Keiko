@@ -2741,6 +2741,24 @@
               "required": false
             },
             {
+              "name": "consentProofDigest",
+              "type": "string",
+              "dataClass": "digest",
+              "required": false
+            },
+            {
+              "name": "grantDigest",
+              "type": "string",
+              "dataClass": "digest",
+              "required": false
+            },
+            {
+              "name": "grantState",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "outcome",
               "type": "string",
               "dataClass": "closed-enum",
@@ -2785,7 +2803,8 @@
           "proofIds": [
             "chat.tool-authority.operation.action-policy",
             "chat.tool-authority.operation.current-state",
-            "chat.tool-authority.operation.lifecycle"
+            "chat.tool-authority.operation.lifecycle",
+            "chat.tool-authority.operation.read-grant"
           ],
           "replayReferences": [],
           "missingObligations": []
