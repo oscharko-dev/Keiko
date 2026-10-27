@@ -605,10 +605,12 @@ export function __resetContextTokenCacheForTests(): void {
   tokenEstimateCacheBytes = 0;
 }
 
-export function __contextTokenCacheDiagnosticsForTests(): {
+export interface ContextTokenCacheDiagnostics {
   readonly entries: number;
   readonly bytesRetained: number;
-} {
+}
+
+export function __contextTokenCacheDiagnosticsForTests(): ContextTokenCacheDiagnostics {
   return { entries: tokenEstimateCache.size, bytesRetained: tokenEstimateCacheBytes };
 }
 

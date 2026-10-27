@@ -1077,8 +1077,11 @@ Scorecard and selection retain the documented nonthrowing boundary repaired inde
 this registration: unreadable payloads return a fixed refusal without inspecting the thrown value.
 Their original operation order, admitted identity and ordered ordinary errors remain authoritative.
 This declaration grants no universal hostile-accessor promise to the other four validators and
-changes no runtime behavior. The separate collective graph-budget refusal must be resolved through
-its owning implementation before these six records can be assessed and qualified.
+changes no runtime behavior. The complete 129-record qualification on signed
+`a97807bfb020a5300bbbd28714b266d37e236702` assessed and qualified these six Prompt roots; that
+historical verdict does not qualify current source. Retained helper-closure refusals (limit 64,
+attempt 65) can coexist with qualified roots, and their withheld helper slots remain unadmitted.
+Fresh complete-cohort qualification remains mandatory on the final composed source.
 
 ## Context compaction diagnostic ownership
 
