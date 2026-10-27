@@ -1,6 +1,7 @@
 import { chmod, mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -27,6 +28,29 @@ import {
   managedActivationRecheck,
   type EditorLanguageRouteOptions,
 } from "./languageRoutes.js";
+import { createFakeLspProcess } from "./lsp/testing/fakeLspProcess.js";
+import { writeExecutableFixture } from "./lsp/testing/executableFixture.js";
+import { shutdownHostLspPool } from "./lsp/hostLanguageOperation.js";
+import { processServerLogSink } from "../process-log-sink.js";
+import {
+  createServerLogger,
+  getServerLogger,
+  setServerLogger,
+  type ServerLogEvent,
+  type ServerLogSink,
+} from "../observability/index.js";
+import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "../diagnostics-log.js";
+import {
+  resetServerLogger,
+  resetServerLogFailureNotices,
+} from "../../../../tests/support/activity-log-test-support.js";
+import { activityLogLossCounters } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { MANAGED_LSP_SEMANTIC_TOKEN_MAX_TOKENS } from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-capabilities";
+import {
+  expectActivityLogProof,
+  persistedActivityLogLines,
+  readPersistedActivityLog,
+} from "../../../../tests/support/activity-log-proof.js";
 import type { ManagedLspControlSnapshot } from "./lsp/managedLspControl.js";
 import { createManagedLspActivationStore } from "./lsp/managedLspActivationStore.js";
 import { createManagedLspControlService } from "./lsp/managedLspControl.js";
@@ -1298,3 +1322,626 @@ describe("managedActivationAuthorization", () => {
     }
   });
 });
+
+interface SemanticEvidenceSettings {
+  readonly active?: boolean;
+  readonly negotiated?: boolean;
+  readonly failure?: "cancelled" | "technical";
+  readonly text?: string;
+  readonly activityLog?: ServerLogSink;
+  readonly diagnostics?: ServerDiagnosticSink;
+}
+
+interface SemanticEvidenceFixture {
+  readonly request: (overrides?: EditorLanguageRouteOptions) => Promise<RouteResult>;
+  readonly process: ReturnType<typeof createFakeLspProcess>;
+  readonly diagnostics: readonly ServerDiagnosticRecord[];
+  readonly close: () => Promise<void>;
+}
+
+interface SemanticEvidenceHooks {
+  readonly beforeOpen?: () => void;
+  readonly closeFixture?: (fixture: SemanticEvidenceFixture) => Promise<void>;
+}
+
+function semanticEvidenceFiles(base: string): { readonly bin: string; readonly workspace: string } {
+  const bin = join(base, "bin");
+  const workspace = join(base, "workspace");
+  mkdirSync(bin);
+  mkdirSync(workspace);
+  for (const executable of [
+    "cargo",
+    "rust-analyzer",
+    "rustc",
+    "rustfmt",
+    "bwrap",
+    "sandbox-exec",
+  ]) {
+    writeExecutableFixture(bin, executable);
+  }
+  writeFileSync(join(workspace, "Cargo.toml"), "[package]\nname='safe'\nversion='0.1.0'\n");
+  writeFileSync(join(workspace, "lib.rs"), "struct Value;\n");
+  return { bin, workspace };
+}
+
+async function semanticEvidenceControl(
+  base: string,
+  workspace: string,
+): Promise<ReturnType<typeof createManagedLspControlService>> {
+  const control = createManagedLspControlService({
+    store: createManagedLspActivationStore({ stateDir: join(base, "control") }),
+    processEnv: {},
+    provisioning: (): boolean => true,
+    disposePoolEntry: (): Promise<void> => Promise.resolve(),
+    workspaceTrust: (): "trusted" => "trusted",
+    runtimeApproved: (): boolean => true,
+    configurationSafe: (): boolean => true,
+    projectEvidence: (): "projected" => "projected",
+    mutex: createWorkspaceMutexRegistry(),
+  });
+  const activated = await control.mutate({
+    action: "activate",
+    actorClass: "localHuman",
+    expectedRevision: 0,
+    idempotencyKey: "semantic-evidence-activate",
+    language: "rust",
+    root: workspace,
+  });
+  if (activated.kind !== "ok") throw new TypeError("Semantic fixture requires real activation");
+  return control;
+}
+
+function semanticEvidenceProcess(
+  data: readonly number[],
+  request: RouteContext,
+  settings: SemanticEvidenceSettings,
+): ReturnType<typeof createFakeLspProcess> {
+  const behavior = settings.failure === undefined ? "normal" : "unresponsive-request";
+  const process = createFakeLspProcess({
+    behavior,
+    initializeResult: {
+      capabilities: {
+        textDocumentSync: 2,
+        ...(settings.negotiated === false
+          ? {}
+          : {
+              semanticTokensProvider: {
+                full: true,
+                legend: { tokenTypes: ["struct"], tokenModifiers: ["declaration"] },
+              },
+            }),
+      },
+    },
+    results: { "textDocument/semanticTokens/full": { data } },
+    onMessage(method): void {
+      if (method !== "textDocument/semanticTokens/full") return;
+      if (settings.failure === "cancelled") request.req.emit("aborted");
+      if (settings.failure === "technical")
+        process.emitError(new TypeError("private-semantic-request-canary"));
+    },
+  });
+  return process;
+}
+
+function semanticEvidenceDeps(
+  files: { readonly bin: string; readonly workspace: string },
+  ownStore: UiStore,
+  control: ReturnType<typeof createManagedLspControlService>,
+  settings: SemanticEvidenceSettings,
+  diagnostics: ServerDiagnosticRecord[],
+): UiHandlerDeps {
+  return {
+    ...deps(),
+    store: ownStore,
+    env: { PATH: files.bin },
+    ...(settings.active === false ? {} : { managedLspControl: control }),
+    activityLog: settings.activityLog ?? processServerLogSink(),
+    diagnostics: settings.diagnostics ?? {
+      record(record: ServerDiagnosticRecord): void {
+        diagnostics.push(record);
+      },
+    },
+  };
+}
+
+async function closeSemanticEvidenceStore(ownStore: UiStore): Promise<void> {
+  try {
+    await shutdownHostLspPool();
+  } finally {
+    ownStore.close();
+  }
+}
+
+function semanticEvidenceContext(workspace: string, text: string): RouteContext {
+  return {
+    ...postContext({
+      schemaVersion: "1",
+      root: workspace,
+      document: { path: "lib.rs", languageId: "rust", text, version: 2 },
+    }),
+    correlationId: "semantic-route-request",
+  };
+}
+
+function requestSemanticEvidence(
+  context: RouteContext,
+  dependencies: UiHandlerDeps,
+  process: ReturnType<typeof createFakeLspProcess>,
+  overrides: EditorLanguageRouteOptions = {},
+): Promise<RouteResult> {
+  return handleEditorLanguageSemanticTokens(context, dependencies, {
+    hostLanguageSpawn: () => process.handle,
+    hostLanguageCommandRules: ["cargo", "rust-analyzer", "rustc", "rustfmt"].map((executable) => ({
+      executable,
+    })),
+    hostLanguageProcessConfig: { maxRestartsInWindow: 0 },
+    ...overrides,
+  });
+}
+
+async function openSemanticEvidenceFixture(
+  base: string,
+  data: readonly number[],
+  settings: SemanticEvidenceSettings,
+): Promise<SemanticEvidenceFixture> {
+  const files = semanticEvidenceFiles(base);
+  const ownStore = createInMemoryUiStore();
+  try {
+    ownStore.createProject(files.workspace, "semantic fixture");
+    const control = await semanticEvidenceControl(base, files.workspace);
+    const context = semanticEvidenceContext(files.workspace, settings.text ?? "struct Value;\n");
+    const process = semanticEvidenceProcess(data, context, settings);
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const dependencies = semanticEvidenceDeps(files, ownStore, control, settings, diagnostics);
+    return {
+      process,
+      diagnostics,
+      request: (overrides): Promise<RouteResult> =>
+        requestSemanticEvidence(context, dependencies, process, overrides),
+      close: (): Promise<void> => closeSemanticEvidenceStore(ownStore),
+    };
+  } catch (error) {
+    try {
+      await closeSemanticEvidenceStore(ownStore);
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], "Semantic fixture setup and cleanup failed", {
+        cause: cleanupError,
+      });
+    }
+    throw error;
+  }
+}
+
+async function closeSemanticEvidenceScope(
+  base: string,
+  fixture: SemanticEvidenceFixture | undefined,
+  hooks: SemanticEvidenceHooks,
+): Promise<void> {
+  try {
+    if (fixture !== undefined) {
+      if (hooks.closeFixture === undefined) await fixture.close();
+      else await hooks.closeFixture(fixture);
+    }
+  } finally {
+    try {
+      resetServerLogger();
+    } finally {
+      try {
+        vi.restoreAllMocks();
+      } finally {
+        try {
+          vi.unstubAllEnvs();
+        } finally {
+          rmSync(base, { recursive: true, force: true });
+        }
+      }
+    }
+  }
+}
+
+async function withSemanticEvidence(
+  data: readonly number[],
+  settings: SemanticEvidenceSettings,
+  run: (fixture: SemanticEvidenceFixture, base: string) => Promise<void>,
+  hooks: SemanticEvidenceHooks = {},
+): Promise<void> {
+  const ownedBase = mkdtempSync(join(homedir(), ".keiko-semantic-evidence-"));
+  let fixture: SemanticEvidenceFixture | undefined;
+  let failed = false;
+  let operationError: unknown;
+  try {
+    const base = realpathSync(ownedBase);
+    vi.stubEnv("KEIKO_STATE_DIR", join(base, "state"));
+    vi.stubEnv("KEIKO_LOG_LEVEL", "debug");
+    resetServerLogger();
+    hooks.beforeOpen?.();
+    fixture = await openSemanticEvidenceFixture(base, data, settings);
+    await run(fixture, base);
+  } catch (error) {
+    failed = true;
+    operationError = error;
+  }
+  try {
+    await closeSemanticEvidenceScope(ownedBase, fixture, hooks);
+  } catch (cleanupError) {
+    if (failed)
+      throw new AggregateError(
+        [operationError, cleanupError],
+        "Semantic evidence and cleanup failed",
+        { cause: cleanupError },
+      );
+    throw cleanupError;
+  }
+  if (failed) throw operationError;
+}
+
+function semanticEvidenceLine(base: string, operation: string): string {
+  const lines = persistedActivityLogLines(readPersistedActivityLog(join(base, "state")), operation);
+  expect(lines).toHaveLength(1);
+  return lines[0] ?? "";
+}
+
+function expectSemanticFallback(result: RouteResult): void {
+  expect(result).toEqual({ status: 200, body: { schemaVersion: "1", supported: false } });
+}
+
+function semanticOverCapData(): readonly number[] {
+  return Array.from(
+    { length: MANAGED_LSP_SEMANTIC_TOKEN_MAX_TOKENS + 1 },
+    (_entry, index): number[] => [0, index === 0 ? 0 : 1, 1, 0, 0],
+  ).flat();
+}
+
+interface SemanticRefusalSample {
+  readonly name: string;
+  readonly data: readonly number[];
+  readonly settings: SemanticEvidenceSettings;
+}
+
+interface SemanticHealthyControl {
+  readonly name: string;
+  readonly settings: SemanticEvidenceSettings;
+  readonly outcome: "served" | "unavailable";
+  readonly reason: "available" | "activation-unavailable" | "not-negotiated";
+  readonly supported: boolean;
+}
+
+const semanticRefusalSamples: readonly SemanticRefusalSample[] = [
+  { name: "malformed tuple", data: [0, 0, 6, 8, 0], settings: {} },
+  {
+    name: "over-cap JSON",
+    data: semanticOverCapData(),
+    settings: { text: "x".repeat(MANAGED_LSP_SEMANTIC_TOKEN_MAX_TOKENS + 2) },
+  },
+];
+
+const semanticHealthyControls: readonly SemanticHealthyControl[] = [
+  { name: "served", settings: {}, outcome: "served", reason: "available", supported: true },
+  {
+    name: "inactive",
+    settings: { active: false },
+    outcome: "unavailable",
+    reason: "activation-unavailable",
+    supported: false,
+  },
+  {
+    name: "not negotiated",
+    settings: { negotiated: false },
+    outcome: "unavailable",
+    reason: "not-negotiated",
+    supported: false,
+  },
+];
+
+const semanticEvidencePlatform = process.platform === "darwin" || process.platform === "linux";
+
+describe.runIf(semanticEvidencePlatform)("semantic-token route evidence (#3918)", (): void => {
+  for (const sample of semanticRefusalSamples) {
+    it(`records actual ${sample.name} refusal without changing fallback`, async (): Promise<void> => {
+      await withSemanticEvidence(
+        sample.data,
+        sample.settings,
+        async (fixture, base): Promise<void> => {
+          expectSemanticFallback(await fixture.request());
+          expect(fixture.process.receivedMethods()).toContain("textDocument/semanticTokens/full");
+          const line = semanticEvidenceLine(base, "editor.semantic-tokens.refused");
+          const record = expectActivityLogProof("editor.semantic-tokens.refused.line", line);
+          expect(record).toMatchObject({
+            correlationId: "semantic-route-request",
+            reason: "sanitizer-refused",
+            errorKind: "validation-failed",
+          });
+          const log = readPersistedActivityLog(join(base, "state"));
+          expect(persistedActivityLogLines(log, "editor.semantic-tokens.settled")).toHaveLength(0);
+          expect(record).not.toHaveProperty("frames");
+          expect(record).not.toHaveProperty("causeChain");
+          expect(line).not.toContain(base);
+        },
+      );
+    });
+  }
+
+  for (const control of semanticHealthyControls) {
+    it(`keeps ${control.name} separate from sanitizer refusal`, async (): Promise<void> => {
+      await withSemanticEvidence(
+        [0, 0, 6, 0, 1],
+        control.settings,
+        async (fixture, base): Promise<void> => {
+          expect(await fixture.request()).toMatchObject({
+            status: 200,
+            body: { supported: control.supported },
+          });
+          const record = expectActivityLogProof(
+            "editor.semantic-tokens.settled.line",
+            semanticEvidenceLine(base, "editor.semantic-tokens.settled"),
+          );
+          expect(record).toMatchObject({
+            correlationId: "semantic-route-request",
+            outcome: control.outcome,
+            reason: control.reason,
+          });
+          if (control.supported) expect(record.returnedTokenCount).toBe(1);
+          else expect(record).not.toHaveProperty("returnedTokenCount");
+          expect(
+            persistedActivityLogLines(
+              readPersistedActivityLog(join(base, "state")),
+              "editor.semantic-tokens.refused",
+            ),
+          ).toHaveLength(0);
+        },
+      );
+    });
+  }
+
+  for (const failure of ["cancelled", "technical"]) {
+    it(`settles actual ${failure} without inventing sanitizer refusal`, async (): Promise<void> => {
+      const settings: SemanticEvidenceSettings =
+        failure === "cancelled" ? { failure: "cancelled" } : { failure: "technical" };
+      await withSemanticEvidence([], settings, async (fixture, base): Promise<void> => {
+        expectSemanticFallback(await fixture.request());
+        expect(fixture.process.receivedMethods()).toContain("textDocument/semanticTokens/full");
+        const record = expectActivityLogProof(
+          "editor.semantic-tokens.settled.line",
+          semanticEvidenceLine(base, "editor.semantic-tokens.settled"),
+        );
+        expect(record).toMatchObject({
+          correlationId: "semantic-route-request",
+          outcome: failure === "cancelled" ? "cancelled" : "failed",
+          reason: failure === "cancelled" ? "request-cancelled" : "request-failed",
+        });
+        expect(fixture.diagnostics).toHaveLength(failure === "cancelled" ? 0 : 1);
+        expect(
+          persistedActivityLogLines(
+            readPersistedActivityLog(join(base, "state")),
+            "editor.semantic-tokens.refused",
+          ),
+        ).toHaveLength(0);
+        expect(JSON.stringify(fixture.diagnostics)).not.toContain(
+          "private-semantic-request-canary",
+        );
+      });
+    });
+  }
+
+  it("preserves fallback when the real physical logger sink rejects", async (): Promise<void> => {
+    await withSemanticEvidence([0, 0, 6, 8, 0], {}, async (fixture): Promise<void> => {
+      resetServerLogFailureNotices();
+      const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+      const before = activityLogLossCounters()["logger-write-failed"];
+      const beforePort = activityLogLossCounters()["port-sink-failed"];
+      setServerLogger(
+        createServerLogger({
+          level: "debug",
+          sink: {
+            write(event: ServerLogEvent): void {
+              if (event.op === "editor.semantic-tokens.refused")
+                throw new TypeError("private-physical-sink-canary");
+            },
+          },
+        }),
+      );
+      expectSemanticFallback(await fixture.request());
+      expect(fixture.process.receivedMethods()).toContain("textDocument/semanticTokens/full");
+      expect(activityLogLossCounters()["logger-write-failed"]).toBe(before + 1);
+      expect(activityLogLossCounters()["port-sink-failed"]).toBe(beforePort);
+      const notices = stderr.mock.calls.map((call) => String(call[0])).join("\n");
+      expect(notices).toContain("semantic-route-request");
+      expect(notices).not.toContain("private-physical-sink-canary");
+    });
+  });
+
+  it("records real physical writer unavailability without changing fallback", async (): Promise<void> => {
+    await withSemanticEvidence(
+      [0, 0, 6, 8, 0],
+      {},
+      async (fixture): Promise<void> => {
+        resetServerLogger();
+        resetServerLogFailureNotices();
+        const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+        const before = activityLogLossCounters()["logger-unavailable"];
+        expectSemanticFallback(await fixture.request());
+        expect(fixture.process.receivedMethods()).toContain("textDocument/semanticTokens/full");
+        expect(activityLogLossCounters()["logger-unavailable"]).toBeGreaterThan(before);
+        expect(stderr.mock.calls.map((call) => String(call[0])).join("\n")).toContain(
+          "server-log.initialize",
+        );
+      },
+      {
+        beforeOpen(): void {
+          const state = process.env.KEIKO_STATE_DIR;
+          if (state === undefined) throw new TypeError("Expected owned semantic state");
+          mkdirSync(state, { recursive: true });
+          writeFileSync(join(state, "logs"), "occupied");
+        },
+      },
+    );
+  });
+});
+
+function throwingSemanticPort(events: ServerLogEvent[]): ServerLogSink {
+  const failure: Error = Object.freeze(new TypeError("private-outer-port-canary"));
+  return {
+    write(event: ServerLogEvent): never {
+      events.push(event);
+      throw failure;
+    },
+  };
+}
+
+function expectSemanticPortLoss(before: number, notices: string): void {
+  expect(activityLogLossCounters()["port-sink-failed"]).toBe(before + 1);
+  expect(notices).toContain("semantic-route-request");
+  expect(notices).toContain("event-location-unknown");
+  expect(notices).not.toContain("private-outer-port-canary");
+}
+
+describe.runIf(semanticEvidencePlatform)(
+  "semantic-token evidence failure boundaries (#3918)",
+  (): void => {
+    for (const mode of ["capture then throw", "always throw"]) {
+      it(`preserves normally refused host result when activity port ${mode}`, async (): Promise<void> => {
+        const events: ServerLogEvent[] = [];
+        let attempts = 0;
+        const failure: Error = Object.freeze(new TypeError("private-outer-port-canary"));
+        const activityLog: ServerLogSink = {
+          write(event): void {
+            attempts += 1;
+            events.push(event);
+            if (mode === "always throw" || attempts === 1) throw failure;
+          },
+        };
+        await withSemanticEvidence(
+          [0, 0, 6, 8, 0],
+          { activityLog },
+          async (fixture): Promise<void> => {
+            resetServerLogFailureNotices();
+            const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+            const before = activityLogLossCounters()["port-sink-failed"];
+            expectSemanticFallback(await fixture.request());
+            expect(attempts).toBe(1);
+            expect(events.map((event) => event.op)).toEqual(["editor.semantic-tokens.refused"]);
+            expect(fixture.diagnostics).toHaveLength(0);
+            expectSemanticPortLoss(
+              before,
+              stderr.mock.calls.map((call) => String(call[0])).join("\n"),
+            );
+          },
+        );
+      });
+    }
+
+    it("retains the acquire Error identity when both evidence ports fail", async (): Promise<void> => {
+      const failure: Error = Object.freeze(new TypeError("private-acquire-canary"));
+      const events: ServerLogEvent[] = [];
+      let configReads = 0;
+      let diagnosticAttempts = 0;
+      const diagnostics: ServerDiagnosticSink = {
+        record(): never {
+          diagnosticAttempts += 1;
+          throw new TypeError("private-diagnostic-port-canary");
+        },
+      };
+      await withSemanticEvidence(
+        [],
+        { activityLog: throwingSemanticPort(events), diagnostics },
+        async (fixture): Promise<void> => {
+          resetServerLogFailureNotices();
+          const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+          const beforeDiagnostic = activityLogLossCounters()["diagnostic-sink-failed"];
+          const beforePort = activityLogLossCounters()["port-sink-failed"];
+          await expect(
+            fixture.request({
+              hostLanguageProcessConfig: {
+                get initializeTimeoutMs(): number {
+                  configReads += 1;
+                  throw failure;
+                },
+              },
+            }),
+          ).rejects.toBe(failure);
+          expect(configReads).toBe(1);
+          expect(diagnosticAttempts).toBe(1);
+          expect(activityLogLossCounters()["diagnostic-sink-failed"]).toBe(beforeDiagnostic + 1);
+          expect(activityLogLossCounters()["port-sink-failed"]).toBe(beforePort + 1);
+          expect(events.map((event) => event.op)).toEqual(["editor.semantic-tokens.settled"]);
+          expect(fixture.process.receivedMethods()).not.toContain(
+            "textDocument/semanticTokens/full",
+          );
+          const notices = stderr.mock.calls.map((call) => String(call[0])).join("\n");
+          expect(notices).toContain("semantic-route-request");
+          expect(notices).not.toContain("private-acquire-canary");
+        },
+      );
+    });
+
+    it("restores owned globals and root after partial fixture setup fails", async (): Promise<void> => {
+      const failure: Error = Object.freeze(new TypeError("synthetic semantic setup refusal"));
+      const beforeState = process.env.KEIKO_STATE_DIR;
+      const ownedLogger = createServerLogger({
+        level: "debug",
+        sink: { write: vi.fn<ServerLogSink["write"]>() },
+      });
+      let ownedRoot = "";
+      let installed = false;
+      await expect(
+        withSemanticEvidence(
+          [],
+          {},
+          (): Promise<void> => Promise.reject(new TypeError("Setup failure must precede the body")),
+          {
+            beforeOpen(): never {
+              const state = process.env.KEIKO_STATE_DIR;
+              if (state === undefined) throw new TypeError("Expected owned semantic state");
+              ownedRoot = dirname(state);
+              setServerLogger(ownedLogger);
+              vi.spyOn(process.stderr, "write").mockReturnValue(true);
+              installed = true;
+              throw failure;
+            },
+          },
+        ),
+      ).rejects.toBe(failure);
+      expect(process.env.KEIKO_STATE_DIR).toBe(beforeState);
+      expect(existsSync(ownedRoot)).toBe(false);
+      expect(installed).toBe(true);
+      expect(getServerLogger()).not.toBe(ownedLogger);
+      expect(
+        vi.isMockFunction(Object.getOwnPropertyDescriptor(process.stderr, "write")?.value),
+      ).toBe(false);
+    });
+
+    it("runs remaining cleanup after the acquired fixture close path fails", async (): Promise<void> => {
+      const failure: Error = Object.freeze(new TypeError("synthetic semantic close refusal"));
+      const beforeState = process.env.KEIKO_STATE_DIR;
+      let ownedRoot = "";
+      let closed = false;
+      await expect(
+        withSemanticEvidence(
+          [0, 0, 6, 0, 1],
+          {},
+          async (fixture, base): Promise<void> => {
+            ownedRoot = base;
+            vi.spyOn(process.stderr, "write").mockReturnValue(true);
+            expect(await fixture.request()).toMatchObject({
+              status: 200,
+              body: { supported: true },
+            });
+          },
+          {
+            async closeFixture(fixture): Promise<void> {
+              await fixture.close();
+              closed = true;
+              throw failure;
+            },
+          },
+        ),
+      ).rejects.toBe(failure);
+      expect(closed).toBe(true);
+      expect(process.env.KEIKO_STATE_DIR).toBe(beforeState);
+      expect(existsSync(ownedRoot)).toBe(false);
+      expect(
+        vi.isMockFunction(Object.getOwnPropertyDescriptor(process.stderr, "write")?.value),
+      ).toBe(false);
+    });
+  },
+);

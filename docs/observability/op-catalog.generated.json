@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "0c7c2f0dfe5a87a96688c06ea9c2a475eba01376c656ed5cabd2fb8b874b91e5",
+    "catalogDigest": "35a8f5bbc2ace4d2fd8db7df7bbd0df48c97852d4d585d1b4fa36378b26bda70",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -12363,6 +12363,104 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/editor/agentProducerRoute.ts:89",
         "emitterSites": ["packages/keiko-server/src/editor/agentProducerRoute.ts:531"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "editor.semantic-tokens.refused",
+        "category": "diagnostic",
+        "owner": "keiko-server",
+        "emitter": "editor.languageRoutes.recordSemanticTokenOutcome",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "reason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["sanitizer-refused"]
+          }
+        },
+        "diagnosticWhen": [
+          {
+            "field": "reason",
+            "values": ["sanitizer-refused"]
+          }
+        ],
+        "causal": "correlation",
+        "lifecycle": "failure",
+        "analyzerProjection": "failure-cluster",
+        "failureClasses": ["editor-semantic-token-refusal"],
+        "proofIds": ["editor.semantic-tokens.refused.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/editor/languageRoutes.ts:350",
+        "emitterSites": ["packages/keiko-server/src/editor/languageRoutes.ts:438"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "editor.semantic-tokens.settled",
+        "category": "diagnostic",
+        "owner": "keiko-server",
+        "emitter": "editor.languageRoutes.recordSemanticTokenOutcome",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "outcome": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["served", "unavailable", "cancelled", "failed"]
+          },
+          "reason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "available",
+              "activation-unavailable",
+              "host-unavailable",
+              "not-negotiated",
+              "request-cancelled",
+              "request-failed"
+            ]
+          },
+          "returnedTokenCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          }
+        },
+        "diagnosticWhen": [
+          {
+            "field": "outcome",
+            "values": ["failed"]
+          }
+        ],
+        "causal": "correlation",
+        "lifecycle": "end",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["editor-semantic-token-settlement"],
+        "proofIds": ["editor.semantic-tokens.settled.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/editor/languageRoutes.ts:312",
+        "emitterSites": ["packages/keiko-server/src/editor/languageRoutes.ts:461"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -37540,6 +37638,48 @@
       {
         "contractKind": "activity-log-failure-class",
         "schemaVersion": 1,
+        "failureClass": "editor-semantic-token-refusal",
+        "requiredProductSurfaces": ["keiko-server"],
+        "requiredLifecycleOperations": {
+          "start": [],
+          "state": [],
+          "end": [],
+          "failure": ["editor.semantic-tokens.refused"],
+          "loss": []
+        },
+        "requiredCausalOperations": ["editor.semantic-tokens.refused"],
+        "requiredLossOperations": [],
+        "requiredProofOperations": ["editor.semantic-tokens.refused"],
+        "requiredReplayProofIds": [],
+        "requiredResourceOperations": [],
+        "requiredEvidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+        "requiredFrameOperations": [],
+        "requiredCauseOperations": []
+      },
+      {
+        "contractKind": "activity-log-failure-class",
+        "schemaVersion": 1,
+        "failureClass": "editor-semantic-token-settlement",
+        "requiredProductSurfaces": ["keiko-server"],
+        "requiredLifecycleOperations": {
+          "start": [],
+          "state": [],
+          "end": ["editor.semantic-tokens.settled"],
+          "failure": [],
+          "loss": []
+        },
+        "requiredCausalOperations": ["editor.semantic-tokens.settled"],
+        "requiredLossOperations": [],
+        "requiredProofOperations": ["editor.semantic-tokens.settled"],
+        "requiredReplayProofIds": [],
+        "requiredResourceOperations": ["editor.semantic-tokens.settled"],
+        "requiredEvidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+        "requiredFrameOperations": [],
+        "requiredCauseOperations": []
+      },
+      {
+        "contractKind": "activity-log-failure-class",
+        "schemaVersion": 1,
         "failureClass": "memory-write-capture",
         "requiredProductSurfaces": ["keiko-memory-vault"],
         "requiredLifecycleOperations": {
@@ -47376,8 +47516,8 @@
     "failureClassCoverage": {
       "schemaVersion": 1,
       "releaseExpectation": "100%-complete",
-      "supportedClassCount": 350,
-      "completeClassCount": 350,
+      "supportedClassCount": 352,
+      "completeClassCount": 352,
       "completeness": "complete",
       "classes": [
         {
@@ -62793,6 +62933,118 @@
                 "causeChain": false
               },
               "proofIds": ["editor.producer-turn.completed.emitted-line"],
+              "replayReferences": [],
+              "missingObligations": []
+            }
+          ],
+          "missingObligations": [],
+          "completeness": "complete"
+        },
+        {
+          "failureClass": "editor-semantic-token-refusal",
+          "requirementContract": "editor-semantic-token-refusal",
+          "productSurfaces": ["keiko-server"],
+          "lifecycleTransitions": ["failure"],
+          "lifecycleOperations": {
+            "start": [],
+            "state": [],
+            "end": [],
+            "failure": ["editor.semantic-tokens.refused"],
+            "loss": []
+          },
+          "causalEdges": [
+            {
+              "op": "editor.semantic-tokens.refused",
+              "mode": "correlation"
+            }
+          ],
+          "lossSignals": [],
+          "resourceSignals": [],
+          "replayReferences": [],
+          "operations": [
+            {
+              "op": "editor.semantic-tokens.refused",
+              "owner": "keiko-server",
+              "category": "diagnostic",
+              "lifecycle": "failure",
+              "causal": "correlation",
+              "analyzerProjection": "failure-cluster",
+              "safeContextFields": [
+                {
+                  "name": "reason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["editor.semantic-tokens.refused.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            }
+          ],
+          "missingObligations": [],
+          "completeness": "complete"
+        },
+        {
+          "failureClass": "editor-semantic-token-settlement",
+          "requirementContract": "editor-semantic-token-settlement",
+          "productSurfaces": ["keiko-server"],
+          "lifecycleTransitions": ["end"],
+          "lifecycleOperations": {
+            "start": [],
+            "state": [],
+            "end": ["editor.semantic-tokens.settled"],
+            "failure": [],
+            "loss": []
+          },
+          "causalEdges": [
+            {
+              "op": "editor.semantic-tokens.settled",
+              "mode": "correlation"
+            }
+          ],
+          "lossSignals": [],
+          "resourceSignals": ["editor.semantic-tokens.settled"],
+          "replayReferences": [],
+          "operations": [
+            {
+              "op": "editor.semantic-tokens.settled",
+              "owner": "keiko-server",
+              "category": "diagnostic",
+              "lifecycle": "end",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "outcome",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "reason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "returnedTokenCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["editor.semantic-tokens.settled.line"],
               "replayReferences": [],
               "missingObligations": []
             }
@@ -89631,7 +89883,7 @@
     "violations": []
   },
   "legacyDiscovery": {
-    "dynamicCount": 82,
+    "dynamicCount": 83,
     "unknownCategoryCount": 77,
     "authoritative": false
   },
@@ -91578,6 +91830,12 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/languageRoutes.ts:416",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "diagnostic",
       "site": "packages/keiko-server/src/editor/localHistory/localHistoryCapture.ts:152",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
@@ -91585,7 +91843,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/files.ts:3177",
+      "site": "packages/keiko-server/src/files.ts:3181",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -93148,6 +93406,25 @@
       "op": "editor.producer-turn.completed",
       "category": "process",
       "site": "packages/keiko-server/src/editor/agentProducerRoute.ts:92",
+      "package": "keiko-server"
+    },
+    {
+      "op": "editor.semantic-tokens",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/lsp/hostLanguageOperation.ts:1786",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "editor.semantic-tokens.refused",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/languageRoutes.ts:353",
+      "package": "keiko-server"
+    },
+    {
+      "op": "editor.semantic-tokens.settled",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/languageRoutes.ts:315",
       "package": "keiko-server"
     },
     {
@@ -95346,6 +95623,9 @@
     "editor.local-history.rekey.completed",
     "editor.local-history.rekey.failed",
     "editor.producer-turn.completed",
+    "editor.semantic-tokens",
+    "editor.semantic-tokens.refused",
+    "editor.semantic-tokens.settled",
     "editor.testGeneration",
     "editor.verification.dependencies",
     "editor.verification.execute",

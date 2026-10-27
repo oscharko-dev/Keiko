@@ -3,13 +3,13 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "0c7c2f0dfe5a87a96688c06ea9c2a475eba01376c656ed5cabd2fb8b874b91e5" as const;
+  "35a8f5bbc2ace4d2fd8db7df7bbd0df48c97852d4d585d1b4fa36378b26bda70" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 350,
-  completeClassCount: 350,
+  supportedClassCount: 352,
+  completeClassCount: 352,
   completeness: "complete",
   classes: [
     {
@@ -15291,6 +15291,118 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["editor.producer-turn.completed.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
+      failureClass: "editor-semantic-token-refusal",
+      requirementContract: "editor-semantic-token-refusal",
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["editor.semantic-tokens.refused"],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "editor.semantic-tokens.refused",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
+      operations: [
+        {
+          op: "editor.semantic-tokens.refused",
+          owner: "keiko-server",
+          category: "diagnostic",
+          lifecycle: "failure",
+          causal: "correlation",
+          analyzerProjection: "failure-cluster",
+          safeContextFields: [
+            {
+              name: "reason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["editor.semantic-tokens.refused.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
+      failureClass: "editor-semantic-token-settlement",
+      requirementContract: "editor-semantic-token-settlement",
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["end"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: ["editor.semantic-tokens.settled"],
+        failure: [],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "editor.semantic-tokens.settled",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["editor.semantic-tokens.settled"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "editor.semantic-tokens.settled",
+          owner: "keiko-server",
+          category: "diagnostic",
+          lifecycle: "end",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "outcome",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "reason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "returnedTokenCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["editor.semantic-tokens.settled.line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -42055,6 +42167,8 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "editor.local-history.rekey.completed": "editor-delivery",
     "editor.local-history.rekey.failed": "editor-delivery",
     "editor.producer-turn.completed": "editor-delivery",
+    "editor.semantic-tokens.refused": "editor-delivery",
+    "editor.semantic-tokens.settled": "editor-delivery",
     "editor.verification.dependencies": "editor-delivery",
     "editor.verification.execute": "editor-delivery",
     "editor.verification.workspace": "editor-delivery",

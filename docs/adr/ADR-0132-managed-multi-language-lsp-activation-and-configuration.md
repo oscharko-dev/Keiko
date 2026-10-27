@@ -526,6 +526,18 @@ excessive responses, stale versions, large files, unsupported providers, timeout
 all discard the complete semantic response and preserve deterministic syntax highlighting. Partial
 or stale semantic overlays are never rendered.
 
+The host keeps distinct served, unavailable, not-negotiated, sanitizer-refused, cancelled and
+request-failed outcomes. The existing served-or-undefined compatibility API retains its projection.
+The admitted route records sanitizer refusal on `editor.semantic-tokens.refused` and every other
+settled outcome on `editor.semantic-tokens.settled`, under the request correlation; only a served
+result carries its actual returned-token count. Refusal records the observed sanitizer decision,
+never an inferred tuple, cap or version subreason. Cancellation classification reads the captured
+request signal; it is not evidence that cancellation caused a concurrent transport failure.
+Technical failures retain available body-free diagnostic frames and causes. Acquisition and
+finalization errors are diagnosed, settled as failed, and rethrown with their original identity;
+secondary diagnostic or activity-port failures cannot replace them. The existing loss ledger and
+logger fallback distinguish outer-port uncertainty from physical writer failure (ADR-0173).
+
 Rust is the first and only language enabled for semantic tokens in this decision, contingent on
 current provider-conformance quality plus measured sanitizer latency, payload, large-file,
 cancellation, stale-version, and fallback evidence meeting the committed budgets. Live use remains

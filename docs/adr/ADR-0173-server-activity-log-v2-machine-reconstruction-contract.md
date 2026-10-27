@@ -618,6 +618,18 @@ only measurements actually made. Omitted metrics must not be interpreted as meas
 `client.composer.activity` records `draft-notifications-ready` when the private draft notification
 subscription mounts in layout, before browser input or passive effects, without draft text.
 
+`editor.semantic-tokens.refused` records only an observed sanitizer refusal, with
+`reason: sanitizer-refused`; it does not guess which tuple, size or version check refused it.
+Other admitted attempts use `editor.semantic-tokens.settled`: served with the actual returned-token
+count, unavailable with activation/host/not-negotiated reasons, cancelled from the captured request
+signal, or failed. The two settlements are mutually exclusive and carry the actual request
+correlation. Technical failures additionally use the existing redacted server diagnostic, retaining
+available Keiko frames and cause classes without foreign messages. Acquisition/finalization errors
+retain their original rejection after evidence is attempted. A throwing activity port increments
+`port-sink-failed` and reports `event-location-unknown`: it may have captured the event before
+throwing, so the route does not retry or replace the host outcome. Physical writer loss remains
+separately owned by the existing logger. Token bodies, legends, document text and paths are absent.
+
 `client.citation.activated` records a citation click and its source selection under the
 activation correlation. `reason` describes the source fingerprint: `matched` (one root),
 `unmatched`, `absent`, `malformed`, or `ambiguous` (several matches). `outcome` records

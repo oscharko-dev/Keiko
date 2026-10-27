@@ -322,7 +322,11 @@ export async function runFilesHandler(
   try {
     return await work();
   } catch (error) {
-    if (error instanceof FilesError) return filesErrorResult(error);
+    try {
+      if (error instanceof FilesError) return filesErrorResult(error);
+    } catch {
+      throw error;
+    }
     throw error;
   }
 }

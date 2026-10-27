@@ -50,6 +50,7 @@ import {
   buildSupportReport,
   serializeSupportReport,
   type SupportQueryResult,
+  type SupportQueryLimits,
 } from "@oscharko-dev/keiko-activity-log/reader";
 import {
   executeSupportQuery,
@@ -73,6 +74,8 @@ export interface ActivityLogScenarioRun {
    * package passes that package's recorders.
    */
   readonly incidents?: ScenarioIncidentRecorders | undefined;
+  /** Optional selection bounds; omitted callers retain the canonical default query limits. */
+  readonly queryLimits?: SupportQueryLimits | undefined;
 }
 
 /** The incident recorders of one module graph: the source tree or the built package. */
@@ -173,11 +176,14 @@ function knownFailureCorrelationId(cluster: OpCluster): string | undefined {
 async function queryEvents(
   stateDir: string,
   selector: Parameters<typeof resolveSupportSelection>[0],
+  limits: SupportQueryLimits,
 ): Promise<SupportQueryResult> {
   const selection = await resolveSupportSelection(selector, stateDir);
-  return executeSupportQuery(stateDir, selection, DEFAULT_SUPPORT_QUERY_LIMITS, {
+  const result = executeSupportQuery(stateDir, selection, limits, {
     trigger: "query",
   }).result;
+  if (limits.maxContextEvents === 0) expect(result.metrics.contextEventCount).toBe(0);
+  return result;
 }
 
 // Production records a registered-failure incident from the failing event itself, so the harness
@@ -207,6 +213,7 @@ async function proveIncidentWindowCoversClosure(
   stateDir: string,
   result: AnalyzeAllResult,
   incidents: ScenarioIncidentRecorders,
+  queryLimits: SupportQueryLimits,
 ): Promise<void> {
   const failure = primaryFailureCluster(result);
   const correlationId = failure === undefined ? undefined : knownFailureCorrelationId(failure);
@@ -225,10 +232,14 @@ async function proveIncidentWindowCoversClosure(
     expect.fail(`scenario ${scenario}: incident candidate was rejected (${creation.reason})`);
   }
 
-  const incidentResult = await queryEvents(stateDir, {
-    incidentId: creation.incidentId,
-    filter: {},
-  });
+  const incidentResult = await queryEvents(
+    stateDir,
+    {
+      incidentId: creation.incidentId,
+      filter: {},
+    },
+    queryLimits,
+  );
   expect(
     incidentResult.diagnosticSufficiency.reasons,
     `scenario ${scenario}: the incident's own selection is retained`,
@@ -241,7 +252,7 @@ async function proveIncidentWindowCoversClosure(
     // compare against, only the pinned window itself, already proven non-empty above.
     return;
   }
-  const ownResult = await queryEvents(stateDir, { correlationId, filter: {} });
+  const ownResult = await queryEvents(stateDir, { correlationId, filter: {} }, queryLimits);
   const incidentLines = new Set(incidentResult.events.map((event) => event.text));
   const missing = ownResult.events
     .map((event) => event.text)
@@ -330,6 +341,7 @@ export async function expectActivityLogScenario(
     run.stateDir,
     result,
     run.incidents ?? SOURCE_INCIDENT_RECORDERS,
+    run.queryLimits ?? DEFAULT_SUPPORT_QUERY_LIMITS,
   );
   const lineCount = persistedOps(text).length;
   const trace = {

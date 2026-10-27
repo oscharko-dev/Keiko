@@ -23,7 +23,18 @@ import {
   parseLanguageServiceRequest,
 } from "@oscharko-dev/keiko-contracts/runtime/language-service";
 import { MANAGED_LSP_LANGUAGES } from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-activation";
-import { parseManagedLspSemanticTokenRequest } from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-capabilities";
+import {
+  parseManagedLspSemanticTokenRequest,
+  type ManagedLspSemanticTokenRequest,
+} from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-capabilities";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  recordActivityLogLoss,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { correlationIdOrUnknown } from "../correlation.js";
+import { reportServerLogFailure, type ServerLogEvent } from "../observability/server-log.js";
 import type { CommandRule } from "@oscharko-dev/keiko-tools";
 import { containedRealPathInfo, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
@@ -54,8 +65,11 @@ import {
   initializeHostLanguageProvider,
   listHostLspHealthSnapshotsForRoot,
   runHostLanguageOperation,
-  runHostLanguageSemanticTokens,
+  runHostLanguageSemanticTokensDetailed,
+  recordSemanticTokenRequestFailure,
   type HostLanguageOperationOptions,
+  type HostSemanticTokenDocument,
+  type HostSemanticTokenOutcome,
 } from "./lsp/hostLanguageOperation.js";
 import type { LspSpawnFn } from "./lsp/lspNodeAdapter.js";
 import type { ManagedLspControlSnapshot } from "./lsp/managedLspControl.js";
@@ -295,6 +309,191 @@ export function handleEditorLanguageCapabilities(): RouteResult {
   return { status: 200, body: describeLanguageCapabilities() };
 }
 
+const SEMANTIC_TOKEN_SETTLED = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "editor.semantic-tokens.settled",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "editor.languageRoutes.recordSemanticTokenOutcome",
+  fields: {
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["served", "unavailable", "cancelled", "failed"],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "available",
+        "activation-unavailable",
+        "host-unavailable",
+        "not-negotiated",
+        "request-cancelled",
+        "request-failed",
+      ],
+    },
+    returnedTokenCount: { type: "integer", dataClass: "count", required: false },
+  },
+  diagnosticWhen: [{ field: "outcome", values: ["failed"] }],
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["editor-semantic-token-settlement"],
+  proofIds: ["editor.semantic-tokens.settled.line"],
+  releaseImpact: "patch",
+});
+
+const SEMANTIC_TOKEN_REFUSED = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "editor.semantic-tokens.refused",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "editor.languageRoutes.recordSemanticTokenOutcome",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["sanitizer-refused"],
+    },
+  },
+  diagnosticWhen: [{ field: "reason", values: ["sanitizer-refused"] }],
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["editor-semantic-token-refusal"],
+  proofIds: ["editor.semantic-tokens.refused.line"],
+  releaseImpact: "patch",
+});
+
+type SemanticTokenRouteOutcome =
+  HostSemanticTokenOutcome | { readonly disposition: "activation-unavailable" };
+
+interface SemanticTokenSettlementFields {
+  readonly outcome: "served" | "unavailable" | "cancelled" | "failed";
+  readonly reason:
+    | "available"
+    | "activation-unavailable"
+    | "host-unavailable"
+    | "not-negotiated"
+    | "request-cancelled"
+    | "request-failed";
+  readonly returnedTokenCount?: number;
+}
+
+function semanticTokenSettlementFields(
+  disposition: Exclude<SemanticTokenRouteOutcome["disposition"], "served" | "sanitizer-refused">,
+): SemanticTokenSettlementFields {
+  switch (disposition) {
+    case "activation-unavailable":
+      return { outcome: "unavailable", reason: "activation-unavailable" };
+    case "unavailable":
+      return { outcome: "unavailable", reason: "host-unavailable" };
+    case "not-negotiated":
+      return { outcome: "unavailable", reason: "not-negotiated" };
+    case "cancelled":
+      return { outcome: "cancelled", reason: "request-cancelled" };
+    case "request-failed":
+      return { outcome: "failed", reason: "request-failed" };
+  }
+}
+
+function writeSemanticTokenEvent(
+  deps: UiHandlerDeps,
+  operation: "editor.semantic-tokens.settled" | "editor.semantic-tokens.refused",
+  correlationId: string,
+  event: ServerLogEvent,
+): void {
+  try {
+    deps.activityLog?.write(event);
+  } catch (error) {
+    recordActivityLogLoss("port-sink-failed");
+    reportServerLogFailure(error, { op: operation, correlationId, loss: "event-location-unknown" });
+  }
+}
+
+function semanticTokenErrorKind(
+  disposition: SemanticTokenRouteOutcome["disposition"],
+): ActivityLogErrorKind | undefined {
+  if (disposition === "request-failed") return "unknown";
+  if (disposition === "cancelled") return "cancelled";
+  return undefined;
+}
+
+function recordSemanticTokenOutcome(
+  deps: UiHandlerDeps,
+  correlationId: string,
+  outcome: SemanticTokenRouteOutcome,
+): void {
+  if (outcome.disposition === "sanitizer-refused") {
+    writeSemanticTokenEvent(
+      deps,
+      SEMANTIC_TOKEN_REFUSED.op,
+      correlationId,
+      activityLogEvent(
+        SEMANTIC_TOKEN_REFUSED,
+        { correlationId, errorKind: "validation-failed" },
+        {
+          reason: "sanitizer-refused",
+        },
+      ),
+    );
+    return;
+  }
+  const fields: SemanticTokenSettlementFields =
+    outcome.disposition === "served"
+      ? {
+          outcome: "served",
+          reason: "available",
+          returnedTokenCount: outcome.result.data.returnedTokenCount,
+        }
+      : semanticTokenSettlementFields(outcome.disposition);
+  const errorKind = semanticTokenErrorKind(outcome.disposition);
+  writeSemanticTokenEvent(
+    deps,
+    SEMANTIC_TOKEN_SETTLED.op,
+    correlationId,
+    activityLogEvent(
+      SEMANTIC_TOKEN_SETTLED,
+      {
+        correlationId,
+        ...(errorKind === undefined ? {} : { errorKind }),
+      },
+      { ...fields },
+    ),
+  );
+}
+
+async function semanticTokenResponseWithEvidence(
+  document: HostSemanticTokenDocument,
+  hostOptions: HostLanguageOperationOptions,
+  deps: UiHandlerDeps,
+  correlationId: string,
+): Promise<ManagedLspSemanticTokenResponse> {
+  let outcome: HostSemanticTokenOutcome;
+  try {
+    outcome = await runHostLanguageSemanticTokensDetailed(document, hostOptions);
+  } catch (error) {
+    recordSemanticTokenRequestFailure(hostOptions, error);
+    recordSemanticTokenOutcome(deps, correlationId, { disposition: "request-failed" });
+    throw error;
+  }
+  recordSemanticTokenOutcome(deps, correlationId, outcome);
+  return outcome.disposition === "served"
+    ? {
+        schemaVersion: "1",
+        supported: true,
+        legend: outcome.result.legend,
+        data: outcome.result.data,
+      }
+    : semanticFallback();
+}
+
 function semanticFallback(): ManagedLspSemanticTokenResponse {
   return { schemaVersion: "1", supported: false };
 }
@@ -310,45 +509,59 @@ export async function handleEditorLanguageSemanticTokens(
   if (!parsed.ok) {
     return { status: 400, body: errorBody("INVALID_REQUEST", parsed.errors.join("; ")) };
   }
-  return runFilesHandler(async () => {
-    const request = parsed.value;
-    const root = await resolveRequestRoot(ctx, deps, request.root);
-    const { canonicalRoot, fs } = root.access;
-    const overlayAbsolutePath = resolveOverlayPath(canonicalRoot, request.document.path, fs);
-    const effectOptions: EditorLanguageRouteOptions = {
-      ...options,
-      reproveRootAccess: options.reproveRootAccess ?? requestRootAccessResolver(ctx, deps, root),
-      correlationId: options.correlationId ?? ctx.correlationId,
-    };
-    const authorization = await managedActivationAuthorization(
-      deps,
-      canonicalRoot,
-      request.document.languageId,
-    );
-    // The control read above is an await: authority proved at admission may already be gone by the
-    // time this would spawn or reuse a long-lived server for `canonicalRoot`.
-    if (!rootAuthorityHolds(deps, canonicalRoot, effectOptions)) {
-      await evictManagedLspProcessesForRoot(canonicalRoot);
-      throw denied();
-    }
-    if (authorization?.authorized !== true) return { status: 200, body: semanticFallback() };
-    const result = await runHostLanguageSemanticTokens(request.document, {
-      workspace: workspaceForRoot(canonicalRoot),
-      processEnv: deps.env,
-      commandRules: options.hostLanguageCommandRules ?? defaultHostLanguageCommandRules(),
-      overlayAbsolutePath,
-      signal: clientAbortSignal(ctx),
-      now: options.now,
-      lspProcessConfig: options.hostLanguageProcessConfig,
-      ...(options.hostLanguageSpawn === undefined ? {} : { spawn: options.hostLanguageSpawn }),
-      ...managedHostOptions(authorization, canonicalRoot, deps, effectOptions),
-    });
-    const response: ManagedLspSemanticTokenResponse =
-      result === undefined
-        ? semanticFallback()
-        : { schemaVersion: "1", supported: true, legend: result.legend, data: result.data };
-    return { status: 200, body: response };
-  });
+  return runFilesHandler(() => runSemanticTokenRouteEffect(ctx, deps, parsed.value, options));
+}
+
+async function runSemanticTokenRouteEffect(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  request: ManagedLspSemanticTokenRequest,
+  options: EditorLanguageRouteOptions,
+): Promise<RouteResult> {
+  const root = await resolveRequestRoot(ctx, deps, request.root);
+  const { canonicalRoot, fs } = root.access;
+  const overlayAbsolutePath = resolveOverlayPath(canonicalRoot, request.document.path, fs);
+  const effectOptions: EditorLanguageRouteOptions = {
+    ...options,
+    reproveRootAccess: options.reproveRootAccess ?? requestRootAccessResolver(ctx, deps, root),
+    correlationId: options.correlationId ?? ctx.correlationId,
+  };
+  const authorization = await managedActivationAuthorization(
+    deps,
+    canonicalRoot,
+    request.document.languageId,
+  );
+  // The control read above is an await: authority proved at admission may already be gone by the
+  // time this would spawn or reuse a long-lived server for `canonicalRoot`.
+  if (!rootAuthorityHolds(deps, canonicalRoot, effectOptions)) {
+    await evictManagedLspProcessesForRoot(canonicalRoot);
+    throw denied();
+  }
+  const correlationId = correlationIdOrUnknown(effectOptions.correlationId);
+  if (authorization?.authorized !== true) {
+    recordSemanticTokenOutcome(deps, correlationId, { disposition: "activation-unavailable" });
+    return { status: 200, body: semanticFallback() };
+  }
+  const hostOptions: HostLanguageOperationOptions = {
+    workspace: workspaceForRoot(canonicalRoot),
+    processEnv: deps.env,
+    commandRules: options.hostLanguageCommandRules ?? defaultHostLanguageCommandRules(),
+    overlayAbsolutePath,
+    signal: clientAbortSignal(ctx),
+    diagnosticSink: deps.diagnostics,
+    correlationId,
+    now: options.now,
+    lspProcessConfig: options.hostLanguageProcessConfig,
+    ...(options.hostLanguageSpawn === undefined ? {} : { spawn: options.hostLanguageSpawn }),
+    ...managedHostOptions(authorization, canonicalRoot, deps, effectOptions),
+  };
+  const response = await semanticTokenResponseWithEvidence(
+    request.document,
+    hostOptions,
+    deps,
+    correlationId,
+  );
+  return { status: 200, body: response };
 }
 
 function workspaceForRoot(

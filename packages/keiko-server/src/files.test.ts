@@ -52,12 +52,14 @@ import {
 } from "./index.js";
 import {
   handleFilesPreviewImage,
+  FilesError,
+  runFilesHandler,
   normalizeRelativePath,
   resolveRoot,
   classifyInLockRefreshFailure,
   type ResolvedProjectRoot,
 } from "./files.js";
-import { STREAMING } from "./routes.js";
+import { errorBody, STREAMING, type RouteResult } from "./routes.js";
 import { mockRequest, mockResponse, type MockResponse } from "./_support.js";
 import type { RouteContext, UiHandlerDeps } from "./index.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
@@ -2793,5 +2795,105 @@ describe("desktop files mutations (create / rename / delete)", () => {
     // Without a baseVersion the delete is unconditional (the metadata-only tree path).
     const deleted = await deleteFilesEntry({ store, rootInput: root, pathInput: "src/renamed.ts" });
     expect(deleted.path).toBe("src/renamed.ts");
+  });
+});
+
+// Preserve the operation's failure when the existing FilesError inspection itself is hostile.
+describe("Files handler original failure preservation (#3918)", (): void => {
+  it("rethrows the original revoked Error without replacing it during classification", async (): Promise<void> => {
+    const revocable = Proxy.revocable(new TypeError("synthetic original refusal"), {});
+    const original: Error = revocable.proxy;
+    revocable.revoke();
+    let caught: unknown;
+    try {
+      await runFilesHandler((): never => {
+        throw original;
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(Object.is(caught, original)).toBe(true);
+  });
+
+  it("rethrows the original when its prototype inspection throws", async (): Promise<void> => {
+    const inspection: Error = Object.freeze(
+      new TypeError("synthetic prototype inspection refusal"),
+    );
+    let reads = 0;
+    const original: Error = new Proxy(new TypeError("synthetic original refusal"), {
+      getPrototypeOf(): never {
+        reads += 1;
+        throw inspection;
+      },
+    });
+    let caught: unknown;
+    try {
+      await runFilesHandler((): never => {
+        throw original;
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(reads).toBe(1);
+    expect(Object.is(caught, original)).toBe(true);
+  });
+
+  for (const field of ["status", "code", "message"]) {
+    it(`preserves the FilesError when its ${field} getter refuses translation`, async (): Promise<void> => {
+      const original = new FilesError(403, "DENIED", "synthetic request refusal");
+      const inspection: Error = Object.freeze(new TypeError("synthetic FilesError getter refusal"));
+      let reads = 0;
+      Object.defineProperty(original, field, {
+        configurable: true,
+        get(): never {
+          reads += 1;
+          throw inspection;
+        },
+      });
+      let caught: unknown;
+      try {
+        await runFilesHandler((): never => {
+          throw original;
+        });
+      } catch (error) {
+        caught = error;
+      }
+      expect(reads).toBe(1);
+      expect(Object.is(caught, original)).toBe(true);
+    });
+  }
+
+  it("preserves an ordinary Error rejected by the work", async (): Promise<void> => {
+    const original: Error = Object.freeze(new TypeError("synthetic ordinary refusal"));
+    await expect(
+      runFilesHandler((): Promise<RouteResult> => Promise.reject(original)),
+    ).rejects.toBe(original);
+  });
+
+  for (const original of [undefined, "synthetic primitive refusal"]) {
+    it(`preserves a ${typeof original} primitive rejection unchanged`, async (): Promise<void> => {
+      // The work seam can reject arbitrary values; Vitest permits that malformed producer input.
+      const work = vi.fn<() => Promise<RouteResult>>().mockRejectedValue(original);
+      await expect(runFilesHandler(work)).rejects.toBe(original);
+      expect(work).toHaveBeenCalledTimes(1);
+    });
+  }
+
+  it("retains the canonical status and body for a valid FilesError", async (): Promise<void> => {
+    const original = new FilesError(403, "DENIED", "synthetic request refusal");
+    expect(
+      await runFilesHandler((): never => {
+        throw original;
+      }),
+    ).toEqual({
+      status: 403,
+      body: errorBody("DENIED", original.message),
+    });
+  });
+
+  it("retains successful synchronous and asynchronous result references", async (): Promise<void> => {
+    const result: RouteResult = { status: 200, body: { available: true } };
+    expect(await runFilesHandler((): RouteResult => result)).toBe(result);
+    expect(await runFilesHandler((): Promise<RouteResult> => Promise.resolve(result))).toBe(result);
   });
 });

@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "0c7c2f0dfe5a87a96688c06ea9c2a475eba01376c656ed5cabd2fb8b874b91e5"
+    "catalogDigest": "35a8f5bbc2ace4d2fd8db7df7bbd0df48c97852d4d585d1b4fa36378b26bda70"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,10 +55,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 543,
-    "proofCount": 555,
-    "resolvedProofCount": 555,
-    "failureClassCount": 350,
+    "operationCount": 545,
+    "proofCount": 557,
+    "resolvedProofCount": 557,
+    "failureClassCount": 352,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -516,6 +516,8 @@
         "editor.local-history.rekey.completed",
         "editor.local-history.rekey.failed",
         "editor.producer-turn.completed",
+        "editor.semantic-tokens.refused",
+        "editor.semantic-tokens.settled",
         "editor.verification.dependencies",
         "editor.verification.execute",
         "editor.verification.workspace",
@@ -717,6 +719,8 @@
     }
   ],
   "failureClassScenarios": {
+    "editor-semantic-token-refusal": ["editor-delivery.rejection"],
+    "editor-semantic-token-settlement": ["editor-delivery.dependency-failure"],
     "memory-write-capture": ["memory-knowledge.dependency-failure"],
     "memory-write-validation": ["memory-knowledge.rejection"],
     "knowledge-manual-summary-validation": ["memory-knowledge.rejection"],
@@ -1568,6 +1572,12 @@
     ],
     "editor.producer-turn.completed.emitted-line": [
       "packages/keiko-server/src/editor/agentProducerRoute.test.ts"
+    ],
+    "editor.semantic-tokens.refused.line": [
+      "packages/keiko-server/src/editor/languageRoutes.test.ts"
+    ],
+    "editor.semantic-tokens.settled.line": [
+      "packages/keiko-server/src/editor/languageRoutes.test.ts"
     ],
     "editor.verification.dependencies.emitted-line": [
       "packages/keiko-server/src/editor/verificationExecution.bootstrap.test.ts",

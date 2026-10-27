@@ -1774,7 +1774,7 @@ export async function runHostLanguageSemanticTokens(
   return outcome.disposition === "served" ? outcome.result : undefined;
 }
 
-function recordSemanticTokenRequestFailure(
+export function recordSemanticTokenRequestFailure(
   options: HostLanguageOperationOptions,
   error: unknown,
 ): void {
