@@ -4,7 +4,11 @@ import {
   type JiraFieldMetadata,
   type JiraFieldKind,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import {
+  TOOL_CATALOG_LIMITS,
+  type CatalogJsonObject,
+  type CatalogJsonValue,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
 import {
   isJiraFieldId,
@@ -12,6 +16,14 @@ import {
   projectJiraFieldReference,
   validateJiraFieldValue,
 } from "./jira-field-metadata.js";
+
+const UTF8 = new TextEncoder();
+export function jiraProjectionBytes(value: CatalogJsonValue): number {
+  return UTF8.encode(JSON.stringify(value)).length;
+}
+export function jiraProjectionTextFits(value: string): boolean {
+  return UTF8.encode(value).length <= TOOL_CATALOG_LIMITS.maxStringBytes;
+}
 
 export function selectedJiraReadFields(value: unknown): readonly string[] | undefined {
   if (value === undefined) return [];
@@ -90,18 +102,43 @@ function valueProjection(field: JiraFieldMetadata, value: unknown): CatalogJsonO
     return result.length === 0 ? { state: "empty" } : { state: "value", strings: result };
   return { state: "unavailable" };
 }
+function validReadBudget(bytes: number): boolean {
+  return Number.isSafeInteger(bytes) && bytes >= 0 && bytes <= TOOL_CATALOG_LIMITS.maxResultBytes;
+}
 export function jiraSelectedFieldValues(
   body: Record<string, unknown>,
   selected: readonly string[],
-): readonly CatalogJsonObject[] {
+  maxBytes: number = TOOL_CATALOG_LIMITS.maxResultBytes,
+): readonly CatalogJsonObject[] | undefined {
+  if (!validReadBudget(maxBytes)) return undefined;
   const values = asRecord(body.fields);
-  return selected.map((id) => {
-    const field = metadata(body, id);
-    const identity = { id, name: field?.name ?? id, kind: field?.kind ?? "unsupported" };
-    if (field === undefined) return { ...identity, state: "unavailable" };
-    if (field.kind === "unsupported") return { ...identity, state: "unsupported" };
-    if (values === undefined || !Object.hasOwn(values, id))
-      return { ...identity, state: "unavailable" };
-    return { ...identity, ...valueProjection(field, values[id]) };
-  });
+  const fields = selected.map((id) => metadata(body, id));
+  const result: CatalogJsonObject[] = selected.map((id, index) => ({
+    id,
+    name: fields[index]?.name ?? id,
+    kind: fields[index]?.kind ?? "unsupported",
+    state: "unavailable",
+  }));
+  // Reserve every placeholder, including escaped/multibyte names, before admitting any value.
+  let remaining = maxBytes - jiraProjectionBytes(result);
+  if (remaining < 0) return undefined;
+  for (const [index, placeholder] of result.entries()) {
+    const field = fields[index];
+    if (field === undefined) continue;
+    const candidate = { ...placeholder, ...selectedValue(field, values) };
+    if (typeof candidate.text === "string" && !jiraProjectionTextFits(candidate.text)) break;
+    const delta = jiraProjectionBytes(candidate) - jiraProjectionBytes(placeholder);
+    if (delta > remaining) break;
+    result[index] = candidate;
+    remaining -= delta;
+  }
+  return result;
+}
+function selectedValue(
+  field: JiraFieldMetadata,
+  values: Record<string, unknown> | undefined,
+): CatalogJsonObject {
+  if (field.kind === "unsupported") return { state: "unsupported" };
+  if (values === undefined || !Object.hasOwn(values, field.id)) return { state: "unavailable" };
+  return valueProjection(field, values[field.id]);
 }

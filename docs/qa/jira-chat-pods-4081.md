@@ -1017,3 +1017,23 @@ errors, asynchronous callback rejection and response-stream cleanup. All **168 c
 and HTTP helper tests** pass. Build, root typecheck, changed lint and error observability pass.
 This increment supplies the concrete transport hooks; durable journal/current-authority composition,
 managed Jira mutations, ordinary Chat and complete epic qualification remain pending. No AC is accepted.
+
+## Review repair: aggregate issue projection — #4083 AC3 / Epic #4081
+
+CodeRabbit's aggregate `jira.issue` result-size finding is confirmed. Three production SDK/binder
+regressions failed before the repair even though the synthetic upstream bodies fit the existing HTTP
+ceiling. The projection now charges the complete issue data, including description and metadata,
+reserves 4 KiB for the bounded catalog envelope, and accounts for serialized UTF-8 bytes and JSON
+escapes. Every selected field's unavailable placeholder is reserved before any value is admitted.
+The first value that cannot fit, and all subsequent fields, retain that explicit unavailable state;
+supported values and the issue itself remain intact. The unchanged catalog gate still validates the
+complete terminal envelope. Individual selected strings also respect its existing string-byte cap.
+An unrepresentable base description returns a structured bounds failure. No new truncation state,
+larger ceiling or schema exception was introduced.
+
+The SDK/binder regressions now pass, including duplicate standard-field data, escaped control text,
+multibyte values, all 20 selected fields and single settlement. Focused projection tests cover exact
+byte boundaries, placeholder reservation and invalid budgets. The existing lifecycle still records
+bounded result metrics without Jira content. All **261 catalog/consumer tests** and **76 field/Cloud
+write regressions** pass, as do package build, root typecheck, changed lint/format and the unchanged
+semantic gate. Full epic and live qualification remain pending.

@@ -1,6 +1,13 @@
-import { jiraSelectedFieldValues } from "./jira-managed-field-reads.js";
+import {
+  jiraSelectedFieldValues,
+  jiraProjectionBytes,
+  jiraProjectionTextFits,
+} from "./jira-managed-field-reads.js";
 import { isSafeAtlassianIdentifier } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import {
+  TOOL_CATALOG_LIMITS,
+  type CatalogJsonObject,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
 import { jiraReadFailure, remoteJiraPage, projectJiraCollection } from "./jira-managed-metadata.js";
@@ -9,6 +16,9 @@ export const JIRA_MANAGED_ISSUE_FIELDS =
   "summary,description,status,issuetype,project,assignee,reporter,priority,labels,duedate,created,updated";
 export const JIRA_MANAGED_SEARCH_FIELDS =
   "summary,status,issuetype,project,assignee,priority,labels,created,updated";
+// Reserve the complete catalog envelope (fixed Jira reference, bounded invocation/digest,
+// metrics and a cursor-free page). The unchanged catalog cap still validates the final envelope.
+const ISSUE_DATA_MAX_BYTES = TOOL_CATALOG_LIMITS.maxResultBytes - 4096;
 function text(value: unknown, max: number): value is string {
   return typeof value === "string" && value.length <= max;
 }
@@ -124,6 +134,28 @@ function page(
     maxResults,
   );
 }
+function singleIssueData(value: CatalogJsonObject): CatalogJsonObject {
+  return { outcome: "succeeded", items: [value], startAt: 0, total: 1 };
+}
+function singleIssueResult(
+  body: Record<string, unknown>,
+  selected: readonly string[],
+): ManagedMcpToolResult {
+  let value = issue(body, true);
+  if (value === undefined) return jiraReadFailure("malformed-payload");
+  if (typeof value.description === "string" && !jiraProjectionTextFits(value.description))
+    return jiraReadFailure("bounds-exceeded");
+  if (selected.length > 0) {
+    const baseBytes = jiraProjectionBytes(singleIssueData({ ...value, fieldValues: [] })) - 2;
+    const fields = jiraSelectedFieldValues(body, selected, ISSUE_DATA_MAX_BYTES - baseBytes);
+    if (fields === undefined) return jiraReadFailure("bounds-exceeded");
+    value = { ...value, fieldValues: fields };
+  }
+  const data = singleIssueData(value);
+  return jiraProjectionBytes(data) <= ISSUE_DATA_MAX_BYTES
+    ? { data }
+    : jiraReadFailure("bounds-exceeded");
+}
 export function jiraIssueReadResult(
   name: string,
   body: Record<string, unknown>,
@@ -131,26 +163,7 @@ export function jiraIssueReadResult(
   maxResults: number,
   selectedFields: readonly string[] = [],
 ): ManagedMcpToolResult {
-  if (name === "jira.issue") {
-    const value = issue(body, true);
-    return value === undefined
-      ? jiraReadFailure("malformed-payload")
-      : {
-          data: {
-            outcome: "succeeded",
-            items: [
-              {
-                ...value,
-                ...(selectedFields.length === 0
-                  ? {}
-                  : { fieldValues: jiraSelectedFieldValues(body, selectedFields) }),
-              },
-            ],
-            startAt: 0,
-            total: 1,
-          },
-        };
-  }
+  if (name === "jira.issue") return singleIssueResult(body, selectedFields);
   return name === "jira.search"
     ? page(
         body,

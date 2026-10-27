@@ -14,7 +14,7 @@ function projection(type: string, custom: string, value: unknown, items?: string
       },
     },
     ["customfield_1"],
-  )[0];
+  )?.[0];
 }
 describe("selected Jira field values", () => {
   it.each([
@@ -95,4 +95,42 @@ describe("selected Jira field values", () => {
       state: "unavailable",
     });
   });
+});
+
+describe("aggregate field projection byte budget", () => {
+  const selected = ["customfield_1", "customfield_2"];
+  const body = {
+    fields: { customfield_1: '漢"\\'.repeat(200), customfield_2: "second" },
+    names: { customfield_1: '名"\\'.repeat(80), customfield_2: "Second" },
+    schema: Object.fromEntries(
+      selected.map((id) => [
+        id,
+        { type: "string", custom: "com.atlassian.jira.plugin.system.customfieldtypes:textarea" },
+      ]),
+    ),
+  };
+  it("counts escaped UTF-8 bytes and keeps the exact fitting result", () => {
+    const full = jiraSelectedFieldValues(body, selected);
+    const bytes = Buffer.byteLength(JSON.stringify(full));
+    expect(jiraSelectedFieldValues(body, selected, bytes)).toEqual(full);
+    const bounded = jiraSelectedFieldValues(body, selected, bytes - 1);
+    expect(bounded).toMatchObject([{ state: "value" }, { state: "unavailable" }]);
+    expect(Buffer.byteLength(JSON.stringify(bounded))).toBeLessThan(bytes);
+  });
+  it("reserves every placeholder before admitting any field value", () => {
+    const full = jiraSelectedFieldValues(body, selected);
+    expect(full).toBeDefined();
+    const first = full?.[0];
+    expect(first).toBeDefined();
+    const budget = Buffer.byteLength(JSON.stringify([first]));
+    const bounded = jiraSelectedFieldValues(body, selected, budget);
+    expect(bounded).toMatchObject([{ state: "unavailable" }, { state: "unavailable" }]);
+    expect(Buffer.byteLength(JSON.stringify(bounded))).toBeLessThanOrEqual(budget);
+  });
+  it.each([0, 1, -1, Number.NaN, Number.POSITIVE_INFINITY, 262145])(
+    "refuses a budget that cannot hold the projection: %s",
+    (bytes) => {
+      expect(jiraSelectedFieldValues(body, selected, bytes)).toBeUndefined();
+    },
+  );
 });

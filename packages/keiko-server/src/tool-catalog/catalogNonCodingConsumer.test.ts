@@ -541,7 +541,7 @@ async function jiraFixture(
             kind: "response",
             status,
             bodyText,
-            bodyBytes: bodyText.length,
+            bodyBytes: Buffer.byteLength(bodyText),
             truncated: false,
           });
         },
@@ -1230,6 +1230,119 @@ it.each(
     expect(outcome.kind === "settled" && outcome.result.status).not.toBe("completed");
     expect(m.connections).toEqual([]);
     expect(m.requests).toEqual([]);
+  } finally {
+    f.dispose();
+    await m.managed.close();
+  }
+});
+
+function largeSelectedIssue(
+  description: string,
+  values: readonly string[],
+): {
+  body: Record<string, unknown>;
+  selected: string[];
+} {
+  const selected = [
+    "description",
+    ...values.map((_value, index) => `customfield_${String(index + 1)}`),
+  ];
+  const schema = Object.fromEntries(
+    selected.map((id) => [
+      id,
+      id === "description"
+        ? { type: "string", system: "description" }
+        : { type: "string", custom: "com.atlassian.jira.plugin.system.customfieldtypes:textarea" },
+    ]),
+  );
+  const names = Object.fromEntries(selected.map((id) => [id, `Synthetic ${id}`]));
+  return {
+    selected,
+    body: {
+      ...readIssue,
+      fields: {
+        ...readIssue.fields,
+        description,
+        ...Object.fromEntries(values.map((value, index) => [selected[index + 1], value])),
+      },
+      schema,
+      names,
+    },
+  };
+}
+
+it.each([
+  {
+    description: "x".repeat(32768),
+    values: [...Array<string>(6).fill("y".repeat(32768)), ...Array<string>(13).fill("small")],
+    kept: 6,
+  },
+  { description: "\u0000".repeat(32768), values: ["y".repeat(32768)], kept: 0 },
+  { description: "ordinary description", values: ["漢".repeat(32768), "small"], kept: 1 },
+])(
+  "keeps the complete Jira result bounded with explicit unavailable fields ($kept retained)",
+  async ({ description, values, kept }) => {
+    const { body, selected } = largeSelectedIssue(description, values);
+    expect(Buffer.byteLength(JSON.stringify(body))).toBeLessThan(262144);
+    const m = await jiraFixture(body, 200, undefined, "jira.issue");
+    const f = fixture(undefined, m.managed);
+    try {
+      const outcome = await f.binder.dispatch(
+        { ...f.invocation, arguments: { issueKey: "KEIKO-1", fields: selected } },
+        identity,
+      );
+      expect(outcome).toMatchObject({
+        kind: "settled",
+        result: {
+          status: "completed",
+          data: {
+            outcome: "succeeded",
+            items: [
+              {
+                description,
+                fieldValues: selected.map((id, index) => ({
+                  id,
+                  state: index < kept ? "value" : "unavailable",
+                })),
+              },
+            ],
+          },
+        },
+      });
+      if (outcome.kind !== "settled") throw new Error("Expected settlement");
+      expect(Buffer.byteLength(JSON.stringify(outcome.result))).toBeLessThanOrEqual(262144);
+      expect(m.requests).toHaveLength(1);
+      expect(
+        f.logs.events.filter((event) => event.op === "tool-catalog.invocation-settled"),
+      ).toHaveLength(1);
+      expect(m.logs.lines().join()).not.toContain("Synthetic customfield");
+    } finally {
+      f.dispose();
+      await m.managed.close();
+    }
+  },
+);
+
+it("reports a base description exceeding the catalog string ceiling as a structured bounds failure", async () => {
+  const m = await jiraFixture(
+    { ...readIssue, fields: { ...readIssue.fields, description: "漢".repeat(32768) } },
+    200,
+    undefined,
+    "jira.issue",
+  );
+  const f = fixture(undefined, m.managed);
+  try {
+    expect(
+      await f.binder.dispatch({ ...f.invocation, arguments: { issueKey: "KEIKO-1" } }, identity),
+    ).toMatchObject({
+      kind: "settled",
+      result: {
+        status: "failed",
+        reason: "provider-reported-error",
+        data: { outcome: "failed", reason: "bounds-exceeded" },
+      },
+    });
+    expect(m.requests).toHaveLength(1);
   } finally {
     f.dispose();
     await m.managed.close();
