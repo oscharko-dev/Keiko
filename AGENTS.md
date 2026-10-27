@@ -108,8 +108,12 @@ This shapes the product _and_ how you work on it:
   context, answers and private chat history. The server resolves it once at startup into the deps
   graph (`chat.content-policy.resolved`; an unrecognized value warns and keeps redaction); no
   package reads it per request. Only Chat model ports and the Chat connected-context workspace
-  carry the preserving policy; the Coding Workbench, its search and semantic refresh, evidence,
-  audit, logs, support exports and tool arguments keep their default or unconditional redaction.
+  carry the preserving policy from this switch. Independently of it, the OpenCode runtime is its own
+  producer and uses the gateway as infrastructure only: the Coding Workbench sidecar route always
+  hands it the model's answer, reasoning and structured output under the preserving policy (owner
+  decision, 2026-10-27). Coding repository search and semantic refresh, Coding History exports and
+  imports, evidence, audit, logs, support exports and tool arguments keep their default or
+  unconditional redaction.
   Preserved content still loses the credential floor: configured secret literals, private keys,
   URL credentials, `Authorization` header values, encoded-looking Bearer/Basic values and known
   token shapes; memory proposals keep the default projection. Workspace

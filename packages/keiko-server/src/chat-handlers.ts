@@ -1,5 +1,5 @@
 import {
-  chatContentPolicy,
+  deploymentContentPolicy,
   currentContentRedactor,
   withChatContentPolicy,
 } from "./content-redactor.js";
@@ -1865,7 +1865,7 @@ export function captureGatewayTurnSnapshot(
           new Set(snapshot.history.map((message) => message.id)),
           currentRedactionSecrets(deps),
           correlationId,
-          chatContentPolicy(deps),
+          deploymentContentPolicy(deps),
         ),
       };
 }
@@ -1925,7 +1925,7 @@ export function buildGatewayAssembly(
     earlierCompaction: snapshot.earlierCompaction,
     documentContext: request.documentContext,
     redactionSecrets: currentRedactionSecrets(deps),
-    contentRedaction: chatContentPolicy(deps),
+    contentRedaction: deploymentContentPolicy(deps),
   });
   return finalizeGatewayAssembly(
     stampGatewayCompaction(selected, deps, modelId, snapshot),
@@ -2228,7 +2228,7 @@ function desktopSkillCompactionReserve(
   return markdownSkillCompactionReserve(
     skill,
     currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE,
-    conversationSystemPrompt(chatContentPolicy(deps)),
+    conversationSystemPrompt(deploymentContentPolicy(deps)),
   );
 }
 

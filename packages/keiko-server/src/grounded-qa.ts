@@ -1,5 +1,5 @@
 import {
-  chatContentPolicy,
+  deploymentContentPolicy,
   currentContentRedactor,
   withChatContentPolicy,
 } from "./content-redactor.js";
@@ -1923,7 +1923,7 @@ export function groundedPromptOptions(
   const modelInputTokensMax = groundedPromptInputTokensForCapability(chatCapability(deps, modelId));
   return {
     ownAssessmentPolicy: currentOwnAssessmentPolicy(deps),
-    contentRedaction: chatContentPolicy(deps),
+    contentRedaction: deploymentContentPolicy(deps),
     ...(modelInputTokensMax === undefined ? {} : { modelInputTokensMax }),
     ...(tokenAccounting === undefined ? {} : { tokenAccounting }),
   };
@@ -1974,13 +1974,15 @@ interface DefaultRunnerContext {
 function groundedExplorationPolicies(deps: UiHandlerDeps): {
   readonly ownAssessmentPolicy: ReturnType<typeof currentOwnAssessmentPolicy>;
   readonly contentRedaction: ContentRedactionPolicy;
+  readonly contentSecrets: () => readonly string[];
   readonly followUpConfigurationDisposition: ReturnType<
     typeof connectedFollowUpConfiguration
   >["disposition"];
 } {
   return {
     ownAssessmentPolicy: currentOwnAssessmentPolicy(deps),
-    contentRedaction: chatContentPolicy(deps),
+    contentRedaction: deploymentContentPolicy(deps),
+    contentSecrets: () => currentRedactionSecrets(deps),
     followUpConfigurationDisposition: connectedFollowUpConfiguration(
       deps.env.KEIKO_CONNECTED_FOLLOW_UP_PASSES_MAX,
     ).disposition,
@@ -3106,7 +3108,7 @@ function compactGroundedCurrentPrompt(
     protectedInstructionTokens: markdownSkillCompactionReserve(
       skill,
       profile,
-      groundedSystemPrompt(currentOwnAssessmentPolicy(deps), "file", chatContentPolicy(deps)),
+      groundedSystemPrompt(currentOwnAssessmentPolicy(deps), "file", deploymentContentPolicy(deps)),
     ),
     signal: prepared.signal,
     correlationId: prepared.correlationId,

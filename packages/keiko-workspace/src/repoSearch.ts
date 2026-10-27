@@ -25,8 +25,8 @@ import {
   readWorkspaceFileBytesPrefixForInternalUse,
   type WorkspaceContentLane,
   workspaceContentPolicy,
+  workspaceContentSecrets,
 } from "./discovery.js";
-import type { ContentRedactionPolicy } from "@oscharko-dev/keiko-contracts";
 import {
   FileTooLargeError,
   RepoSearchInvalidQueryError,
@@ -3982,14 +3982,14 @@ function excerptFileLines(
     { maxBytes: MAX_EXCERPT_FILE_BYTES },
     fs,
   ).rawText;
-  return excerptTextLines(raw, request.scopePath, lane, workspaceContentPolicy(scope.workspace));
+  return excerptTextLines(raw, request.scopePath, lane, scope.workspace);
 }
 
 function excerptTextLines(
   raw: string,
   scopePath: string,
   lane: WorkspaceContentLane,
-  policy: ContentRedactionPolicy,
+  workspace: WorkspaceInfo,
 ): readonly string[] {
   if (raw.includes("\0")) {
     throw new RepoSearchUnsupportedFileError(
@@ -3997,9 +3997,14 @@ function excerptTextLines(
       "binary",
     );
   }
-  return (lane === "editor" ? raw : redactWorkspaceSource(raw, scopePath, true, policy)).split(
-    "\n",
-  );
+  if (lane === "editor") return raw.split("\n");
+  return redactWorkspaceSource(
+    raw,
+    scopePath,
+    true,
+    workspaceContentPolicy(workspace),
+    workspaceContentSecrets(workspace),
+  ).split("\n");
 }
 
 async function readExcerptLines(
@@ -4035,12 +4040,7 @@ async function readExcerptLines(
         "binary",
       );
     }
-    return excerptTextLines(
-      decoded.text,
-      request.scopePath,
-      lane,
-      workspaceContentPolicy(scope.workspace),
-    );
+    return excerptTextLines(decoded.text, request.scopePath, lane, scope.workspace);
   } catch (error) {
     if (error instanceof WorkspaceReadError) throw excerptUnreadable(request.scopePath);
     throw error;

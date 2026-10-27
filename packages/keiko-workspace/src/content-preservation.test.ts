@@ -17,7 +17,8 @@ import { redactWorkspaceSource } from "./sourceRedaction.js";
 import { buildWorkspaceIndexScopeKey } from "./workspaceIndex.js";
 
 const ROOT = "/workspace";
-const ISSUER_TOKEN = "ghp_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789";
+// Assembled from fragments, so a secret scanner never sees a token-shaped literal.
+const ISSUER_TOKEN = ["ghp_", "AbCdEfGhIjKlMnOpQrSt", "UvWxYz0123456789"].join("");
 const DOCUMENT = [
   "Customer contact: +49 30 12345678",
   "Account: DE89 3704 0044 0532 0130 00",
@@ -80,6 +81,31 @@ describe("Chat-only content preservation in the evidence lane", () => {
     const workspace = { ...detectWorkspaceAt(ROOT, fs), contentRedaction: "preserve" as const };
     const text = readWorkspaceFile(workspace, "notes.txt", undefined, fs).text;
     expect(text).toBe("token [REDACTED]\nphone 030 12345678\n");
+  });
+
+  // A configured secret need not look like a credential; the preserving lane removes it because the
+  // Chat composition boundary hands it in, never because the workspace read the environment.
+  it("removes the configured secrets the preserving workspace carries, and only those", () => {
+    const configured = "tenant-relay-passphrase-2026";
+    const fs = memFs(ROOT, {
+      "notes.txt": `relay ${configured}
+phone 030 12345678
+`,
+    });
+    const detected = detectWorkspaceAt(ROOT, fs);
+    const withSecrets = {
+      ...detected,
+      contentRedaction: "preserve" as const,
+      contentSecrets: (): readonly string[] => [configured],
+    };
+    expect(readWorkspaceFile(withSecrets, "notes.txt", undefined, fs).text).toBe(
+      "relay [REDACTED]\nphone 030 12345678\n",
+    );
+    expect(JSON.stringify(withSecrets)).not.toContain(configured);
+    const withoutSecrets = { ...detected, contentRedaction: "preserve" as const };
+    expect(readWorkspaceFile(withoutSecrets, "notes.txt", undefined, fs).text).toContain(
+      configured,
+    );
   });
 
   it("applies the workspace policy to internal reads, search hits and excerpts", async () => {

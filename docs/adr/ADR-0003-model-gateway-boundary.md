@@ -173,8 +173,12 @@ reads the deployment environment: a call preserves authorized response content, 
 structured output only when its caller sets `GatewayCallRequest.contentRedaction: "preserve"`.
 The BFF resolves `KEIKO_CONTENT_REDACTION` once at startup and sets that field only on Chat answer
 model ports (conversation, connected-folder, Knowledge Pod, multi-source and hybrid answers) when
-the exact value `off` was configured. Every other caller, including the Coding Workbench sidecar
-route, compaction summaries and evaluation, keeps the default heuristic redaction. A preserved
+the exact value `off` was configured. The Coding Workbench sidecar route sets it on every model call
+regardless of that setting (owner decision, 2026-10-27): the OpenCode runtime is its own producer
+that uses the gateway as infrastructure, so it receives the model's answer as written, credential
+floor only; a closing diff is no longer replaced by `[REDACTED]`. Every other caller, including the
+commit-message draft, conversation-history compaction summaries and evaluation, keeps the default
+heuristic redaction. A preserved
 answer still loses its credential floor: configured provider and Keiko credential literals of at
 least four characters and their encoded spellings, PEM private-key blocks, URL credentials,
 `Authorization` header values, encoded-looking Bearer/Basic values and the known issuer token

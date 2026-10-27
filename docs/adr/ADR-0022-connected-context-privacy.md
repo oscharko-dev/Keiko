@@ -1504,9 +1504,10 @@ applied; it is not a claim that all personal data was anonymized. `raw-internal`
 rejected. The conversation and grounded system prompts in this mode request source fidelity, tell
 the model never to reconstruct `[REDACTED]` text, and keep the instruction not to expose API keys,
 tokens, private keys or URL credentials; the default prompts are byte-identical to the previous
-ones. This does not widen source authorization or any read/output budget. The Coding Workbench,
-counts-only summaries and audit manifests retain their existing redaction and body-free
-contracts, and compaction summaries keep the default projection. Already masked historic chat text
+ones. This does not widen source authorization or any read/output budget. Coding repository
+search, counts-only summaries and audit manifests retain their existing redaction and body-free
+contracts, and conversation-history compaction summaries keep the default projection. The Coding
+Workbench agent's answers follow ADR-0003 D7 independently of this switch. Already masked historic chat text
 cannot be recovered: re-read sources and generate a new answer.
 
 The wire boundary is asserted by `grounded-qa.redaction.test.ts`: an attacker-controlled

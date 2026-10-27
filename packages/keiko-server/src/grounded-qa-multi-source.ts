@@ -1,4 +1,4 @@
-import { chatContentPolicy, currentContentRedactor } from "./content-redactor.js";
+import { deploymentContentPolicy, currentContentRedactor } from "./content-redactor.js";
 import { withMarkdownSkillAdmission } from "./markdown-skill-admission.js";
 import {
   markdownSkillPromptUsage,
@@ -840,7 +840,7 @@ export function defaultRetriever(
       signal: childSignal,
       declarationVerificationSignal: signal,
       ownAssessmentPolicy: deps === undefined ? undefined : currentOwnAssessmentPolicy(deps),
-      contentRedaction: deps === undefined ? undefined : chatContentPolicy(deps),
+      contentRedaction: deps === undefined ? undefined : deploymentContentPolicy(deps),
       microIndex: microIndexForGroundedScope(input.scope, nowMs),
       // ADR-0173 D5. A multi-folder or hybrid ask retrieves through THIS path, not through the
       // single-folder one, so without the id every git-history read failure on the plural-source

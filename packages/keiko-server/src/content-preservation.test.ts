@@ -22,7 +22,7 @@ import { buildRedactor, type UiHandlerDeps } from "./deps.js";
 import { createRunRegistry } from "./runs.js";
 import { createNodeUiStore, type UiStore, type GroundedAnswer } from "./store/index.js";
 import {
-  chatContentPolicy,
+  deploymentContentPolicy,
   currentContentRedactor,
   withChatContentPolicy,
 } from "./content-redactor.js";
@@ -123,7 +123,7 @@ function runner(fixture: Fixture, captured: string[]): GroundedRunner {
       input.query.text,
       pack,
       currentContentRedactor(fixture.deps),
-      { contentRedaction: chatContentPolicy(fixture.deps) },
+      { contentRedaction: deploymentContentPolicy(fixture.deps) },
     );
     captured.push(...messages.map((message) => message.content));
     return Promise.resolve({ pack, assistantContent: CONTENT + PROVIDER_SECRET, elapsedMs: 1 });
@@ -152,7 +152,7 @@ describe("Chat content policy resolution (#4098)", () => {
     vi.stubEnv("KEIKO_CONTENT_REDACTION", "off");
     const fixture = createFixture(undefined);
     try {
-      expect(chatContentPolicy(fixture.deps)).toBe("redact");
+      expect(deploymentContentPolicy(fixture.deps)).toBe("redact");
       expect(currentContentRedactor(fixture.deps)).toBe(fixture.deps.redactor);
       expect(String(currentContentRedactor(fixture.deps)(CONTENT))).not.toContain(
         "customer-owned-example",

@@ -24,7 +24,8 @@ Read the existing Activity Log first; do not log document text to investigate.
    with `setting=invalid` means the variable was set to an unrecognized value, such as `OFF`,
    `false` or ` off`, and Keiko kept the default redaction.
 2. For the affected request, `chat.request.dispatch` records `contentRedactionEnabled`; `false`
-   identifies a Chat call that used the preserving policy. A missing field on an older
+   identifies a call that used the preserving policy. Coding Workbench calls always report
+   `false`: the OpenCode runtime receives the model's answer with the credential floor only. A missing field on an older
    installation is not proof that the policy was disabled.
 3. Provider completion events retain source-projection refusal counts.
 
@@ -50,7 +51,9 @@ change in this repair. Confirm the startup `chat.content-policy.resolved` line s
 `policy=preserve`.
 
 The setting applies to Chat only: plain conversations, connected folders, Knowledge Pods and
-multi-source or hybrid answers, including their private saved answers. It applies to all
+multi-source or hybrid answers, including their private saved answers. The Coding Workbench does not
+need it: since release 1.3.1 its agent receives the model's answers without content heuristics in
+every installation, with the same credential floor. It applies to all
 configured model providers, including any cloud provider added later; the operator must select a
 deployment policy appropriate for those destinations. It is not a complete personal-data
 anonymizer in either mode. Model-provider policies may independently affect the answer.
@@ -58,9 +61,9 @@ anonymizer in either mode. Model-provider policies may independently affect the 
 Even with the setting, Keiko still removes configured Keiko/provider credential literals, private
 keys, credentials embedded in URLs, `Authorization` header values, encoded-looking
 `Bearer`/`Basic` values and known API token shapes; the model is told never to reconstruct such
-text. The Coding Workbench and its repository search, compaction summaries, memory proposals, filesystem containment and denied paths, authority and budgets,
-tool-argument protections, audit artifacts, diagnostics and support exports retain their existing
-protections. They do not inherit the content-policy opt-out.
+text. Coding repository search, Coding History exports and imports, compaction summaries, memory
+proposals, filesystem containment and denied paths, authority and budgets, tool-argument
+protections, audit artifacts, diagnostics and support exports retain their existing protections. They do not inherit the content-policy opt-out.
 
 Re-read or re-attach the original document and generate a new answer. A preserving Chat uses its
 own workspace-index snapshot, so the first connected-folder question after the change may rebuild

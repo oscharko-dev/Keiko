@@ -53,8 +53,11 @@ The deployment operator can set `KEIKO_CONTENT_REDACTION=off` before startup so 
 authorized document context, answers and private chat history (#4098). The server resolves the
 setting once at startup and records `chat.content-policy.resolved` (`policy`, `setting`; `warn` for
 an unrecognized value, which keeps redaction). Only Chat model ports and the Chat connected-context
-workspace receive the preserving policy explicitly; the gateway, workspace and store never read the
-environment, and the Coding Workbench keeps the default projection. Preserved content still loses
+workspace receive the preserving policy from it; the gateway, workspace and store never read the
+environment. Independently of the setting, the Coding Workbench sidecar route always gives the
+OpenCode runtime the model's answer under the preserving policy (credential floor only), because
+OpenCode is its own producer and uses the gateway as infrastructure; Coding repository search and
+Coding History exports and imports keep the default projection. Preserved content still loses
 configured infrastructure-secret literals, private keys, URL credentials, `Authorization` header
 values, encoded-looking Bearer/Basic values and known token shapes, and memory proposals keep the
 default projection. Diagnostics, audit evidence, support exports and

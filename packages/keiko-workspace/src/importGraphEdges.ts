@@ -3,6 +3,7 @@ import {
   readWorkspaceFile,
   readWorkspaceFileBytesForTextInspection,
   workspaceContentPolicy,
+  workspaceContentSecrets,
 } from "./discovery.js";
 import { decodeTextFileBytes } from "./binaryDetect.js";
 import { redactWorkspaceSource } from "./sourceRedaction.js";
@@ -779,6 +780,7 @@ async function readImportSource(
           scopePath,
           true,
           workspaceContentPolicy(scope.workspace),
+          workspaceContentSecrets(scope.workspace),
         );
   } catch {
     return undefined;

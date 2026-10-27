@@ -1026,6 +1026,11 @@ export function workspaceContentPolicy(workspace: WorkspaceInfo): ContentRedacti
   return workspace.contentRedaction === "preserve" ? "preserve" : "redact";
 }
 
+/** The configured secret literals a preserving evidence-lane read still removes (#4098). */
+export function workspaceContentSecrets(workspace: WorkspaceInfo): readonly string[] {
+  return workspace.contentRedaction === "preserve" ? (workspace.contentSecrets?.() ?? []) : [];
+}
+
 /**
  * RAW, UNREDACTED workspace bytes for the editor lane.
  *
@@ -1324,7 +1329,13 @@ export function readWorkspaceFilePrefixForEvidence(
   }
   assertStablePrefixRead(workspace, fs, target);
   assertBeforeRead?.();
-  return redactWorkspaceSource(rawText, relPath, true, workspaceContentPolicy(workspace));
+  return redactWorkspaceSource(
+    rawText,
+    relPath,
+    true,
+    workspaceContentPolicy(workspace),
+    workspaceContentSecrets(workspace),
+  );
 }
 
 /** Internal text seam that keeps stable read metadata attached until index persistence. */
@@ -1364,6 +1375,7 @@ export function readWorkspaceFileTextForInternalUse(
             relPath,
             preserveSourceLineBreaks,
             workspaceContentPolicy(workspace),
+            workspaceContentSecrets(workspace),
           ),
     sizeBytes: raw.sizeBytes,
     stat: raw.stat,
@@ -1471,7 +1483,13 @@ export function readWorkspaceFile(
   return {
     relativePath: raw.relativePath,
     sizeBytes: raw.sizeBytes,
-    text: redactWorkspaceSource(raw.rawText, relPath, true, workspaceContentPolicy(workspace)),
+    text: redactWorkspaceSource(
+      raw.rawText,
+      relPath,
+      true,
+      workspaceContentPolicy(workspace),
+      workspaceContentSecrets(workspace),
+    ),
     truncated: raw.truncated,
   };
 }

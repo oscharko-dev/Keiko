@@ -58,6 +58,11 @@ export interface WorkspaceInfo {
    * default projection.
    */
   readonly contentRedaction?: ContentRedactionPolicy | undefined;
+  /**
+   * The configured secret literals a `preserve` read still removes (#4098). A function, so the
+   * literals never travel with a serialized or logged workspace description.
+   */
+  readonly contentSecrets?: (() => readonly string[]) | undefined;
 }
 
 /**

@@ -1237,6 +1237,9 @@ export interface OrchestratorDeps {
   // lets the evidence lane read the connected folder's authorized content unmasked; absent keeps
   // the default projection.
   readonly contentRedaction?: ContentRedactionPolicy | undefined;
+  // #4098: the configured secret literals a preserving read still removes; read per call, so a
+  // rotated secret applies to the next read.
+  readonly contentSecrets?: (() => readonly string[]) | undefined;
   // Called after a ready plan exists and before any workspace detection or repository IO starts.
   readonly recordPlan?: (plan: ExplorationPlan) => void;
   // Ephemeral #183 context-pack cache for one connected scope/session.
@@ -11953,7 +11956,12 @@ function connectedContextDetector(
 ): (root: string, fs: WorkspaceFs) => WorkspaceInfo {
   const detect = deps.detectWorkspace ?? detectConnectedContextWorkspace;
   if (deps.contentRedaction !== "preserve") return detect;
-  return (root, fs): WorkspaceInfo => ({ ...detect(root, fs), contentRedaction: "preserve" });
+  const contentSecrets = deps.contentSecrets;
+  return (root, fs): WorkspaceInfo => ({
+    ...detect(root, fs),
+    contentRedaction: "preserve",
+    ...(contentSecrets === undefined ? {} : { contentSecrets }),
+  });
 }
 
 // #3347 P2: detection previously received the observed raw filesystem with no request signal or

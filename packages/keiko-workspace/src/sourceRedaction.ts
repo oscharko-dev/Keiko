@@ -10,17 +10,19 @@ import { WorkspaceReadError } from "./errors.js";
  * a consumer that receives workspace text from another read boundary (the Coding runtime's secure
  * read helper, say) imports it through the `./source-redaction` subpath instead of a second copy.
  * Throws `WorkspaceReadError` when no safe projection is available, so callers fail closed.
- * `preserve` (#4098) is the Chat-only content opt-out: it keeps the source as it is and removes only
- * credential shapes, so no code projection can be unavailable.
+ * `preserve` (#4098) is the Chat content opt-out: it keeps the source as it is and removes only the
+ * credential floor (credential shapes and the configured `secrets`), so no code projection can be
+ * unavailable.
  */
 export function redactWorkspaceSource(
   text: string,
   scopePath: string,
   preserveSourceLineBreaks = true,
   policy: ContentRedactionPolicy = "redact",
+  secrets: readonly string[] = [],
 ): string {
   if (policy === "preserve")
-    return redactContent(text, "preserve", [], { preserveSourceLineBreaks });
+    return redactContent(text, "preserve", secrets, { preserveSourceLineBreaks });
   const sourceFile = isEcosystemSourceFile(scopePath);
   const language = sourceFile ? workspaceLanguageForPath(scopePath) : undefined;
   const sourceLanguage = projectionLanguage(language, scopePath);

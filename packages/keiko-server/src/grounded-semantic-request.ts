@@ -4,7 +4,7 @@ import type {
   UncertaintyMarker,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import type { SemanticSearchProvider, WorkspaceFs } from "@oscharko-dev/keiko-workspace";
-import { chatContentPolicy } from "./content-redactor.js";
+import { deploymentContentPolicy } from "./content-redactor.js";
 import { currentGatewayConfig, type UiHandlerDeps } from "./deps.js";
 import { configuredEmbeddingProviders } from "./local-knowledge-handlers.js";
 import {
@@ -110,7 +110,11 @@ export function configuredGroundedSemanticRequest(
         deps,
         request.signal,
         repositoryRoot,
-        { ...request, semanticRefreshDocumentBudget, contentRedaction: chatContentPolicy(deps) },
+        {
+          ...request,
+          semanticRefreshDocumentBudget,
+          contentRedaction: deploymentContentPolicy(deps),
+        },
       );
       leases.push(lease);
       return lease.provider;

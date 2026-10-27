@@ -25,6 +25,7 @@ import {
   readWorkspaceFileTextForInternalUse,
   type WorkspaceContentLane,
   workspaceContentPolicy,
+  workspaceContentSecrets,
 } from "./discovery.js";
 import {
   FileTooLargeError,
@@ -1042,6 +1043,7 @@ function laneText(runner: SearchTextRunner, text: string, relativePath: string):
         relativePath,
         true,
         workspaceContentPolicy(runner.scope.workspace),
+        workspaceContentSecrets(runner.scope.workspace),
       );
 }
 

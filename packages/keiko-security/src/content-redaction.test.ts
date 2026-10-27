@@ -123,6 +123,15 @@ describe("credential floor of preserved content", () => {
     expect(redactContent(text, "preserve")).toBe(text);
   });
 
+  // A coding agent's closing summary often quotes its change as a diff. The default projection
+  // cannot parse a diff fence as source and replaces the whole block, which the Workbench then
+  // shows as `[REDACTED]` (release 1.3.1 lab, T4).
+  it("keeps a fenced diff that the default projection replaces", () => {
+    const text = "Changed:\n\n```diff\n- const A = 1;\n+ const A = 2;\n```\n";
+    expect(redactContent(text, "redact")).toContain("[REDACTED]");
+    expect(redactContent(text, "preserve")).toBe(text);
+  });
+
   it("keeps physical line coordinates when the caller asks for them", () => {
     const text = `line1\n${PRIVATE_KEY}\nline6\nline7`;
     const preserved = redactContent(text, "preserve", [], { preserveSourceLineBreaks: true });

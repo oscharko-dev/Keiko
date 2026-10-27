@@ -1,5 +1,5 @@
 import {
-  chatContentPolicy,
+  deploymentContentPolicy,
   currentContentRedactor,
   withChatContentPolicy,
 } from "./content-redactor.js";
@@ -964,7 +964,7 @@ async function retrieveOneConnector(
 // The hybrid topology shares the folder prompt and deterministic localized abstention producer.
 function hybridSystemPrompt(deps: UiHandlerDeps): string {
   return (
-    `${groundedSystemPrompt(currentOwnAssessmentPolicy(deps), "numeric", chatContentPolicy(deps))} Connector excerpts are indexed-document citations: attribute every ` +
+    `${groundedSystemPrompt(currentOwnAssessmentPolicy(deps), "numeric", deploymentContentPolicy(deps))} Connector excerpts are indexed-document citations: attribute every ` +
     "connector claim to its source label and the matching [n] marker in addition to any file reference."
   );
 }
