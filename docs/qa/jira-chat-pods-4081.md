@@ -1685,3 +1685,22 @@ Logs: `/tmp/keiko-4081-observed-auth-*.log`.
 
 This closes the observed-status custody/transport gap; complete ordinary-Chat and write-approval
 composition and final licensed qualification remain pending. No complete AC is accepted here.
+
+### Late read-result admission checkpoint — #4084 AC3–AC5, #4089 AC4
+
+A read admitted before an access change previously could publish its successful result afterwards.
+The managed route now receives its private invocation context when projecting the result. The
+Jira read consumer uses that existing effect guard again before publication; a disconnected,
+reverifying, differently owned or revoked scope cannot forward the returned Jira data. The shared
+binder keeps the performed-effect charge and settles once. This changes no mutation outcome
+contract and creates no replacement authority, budget or settlement owner.
+
+All four late-result cases fail before the correction and pass afterwards. The 218-test scoped
+run covers Chat admission, managed/non-Coding catalogs, settlement and the 97 operation-catalog
+checks. A real shared writer/reader proof observes the refusal and exactly one committed
+settlement. Build, root types and semantic checks pass; the semantic baseline remains 938 groups.
+Generation resolves 620 proofs and 30 scenarios without violations. Logs:
+`/tmp/keiko-4081-late-read-*.log`.
+
+The production graph, ordinary Chat/model loop, concrete write approvals and UI still require
+composition and complete qualification; this component checkpoint accepts no complete AC.

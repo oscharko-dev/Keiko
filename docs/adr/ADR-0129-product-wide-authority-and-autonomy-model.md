@@ -239,7 +239,9 @@ and does not automatically repeat a rejected request within the same authority. 
 bounded by the issuing authority and existing approval TTL. The private ordinary-Chat read
 consumer uses the shared catalog binder and MCP routes without a Coding session. Its admission
 ports require that consent in every mode, re-resolve current authority before reservation and
-recheck consent/authority at each HTTP effect. A completed UI notification is not approval; the
+recheck consent/authority at each HTTP effect and again before publishing the read result.
+A successful response arriving after access loss is discarded without exposing its data; its
+already-performed effect retains the shared budget charge and one terminal settlement. A completed UI notification is not approval; the
 existing approval owner must contain the accepted record. Catalog offers create no consent
 requests. The existing Harness counter owner is available to non-Coding compositions; the binder
 retains reservation, cancellation and settlement ownership. Concrete write approval, application

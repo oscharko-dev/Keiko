@@ -548,6 +548,8 @@ describe("ordinary Chat catalog read admission", () => {
   let requests: number;
   let notifications: number;
   let beforeConnection: () => void;
+  let afterRequest: () => void;
+  let responseBody: string;
   let consent: (grant: ChatToolReadGrantView) => void;
   const hosts: { close: () => Promise<void> }[] = [];
 
@@ -556,6 +558,8 @@ describe("ordinary Chat catalog read admission", () => {
     requests = 0;
     notifications = 0;
     beforeConnection = (): void => undefined;
+    afterRequest = (): void => undefined;
+    responseBody = "[]";
     consent = (view): void => {
       const entry = grants.getChatReadGrant(view.grantId);
       if (entry === undefined) throw new Error("Expected retained grant");
@@ -587,7 +591,10 @@ describe("ordinary Chat catalog read admission", () => {
     };
   }
 
-  async function catalogFixture(maxToolCalls = 3): Promise<{
+  async function catalogFixture(
+    maxToolCalls = 3,
+    primary: import("@oscharko-dev/keiko-activity-log").ServerLogSink = createBufferedServerLogSink(),
+  ): Promise<{
     binder: ReturnType<typeof createCatalogToolBinder>;
     budget: ReturnType<typeof createHarnessCatalogBudget>;
     counters: RunCounters;
@@ -610,7 +617,7 @@ describe("ordinary Chat catalog read admission", () => {
       limits: { ...DEFAULT_LIMITS, maxToolCalls },
     });
     const log = {
-      primary: createBufferedServerLogSink(),
+      primary,
       diagnostics: { record: (): void => undefined },
     };
     const provider = createJiraProviderForCatalog<CatalogHandlerContext<JiraChatCatalogConsumer>>(
@@ -619,15 +626,19 @@ describe("ordinary Chat catalog read admission", () => {
         return {
           baseUrl: "https://jira.example.invalid/context",
           deployment: "data-center",
-          http: (): Promise<import("@oscharko-dev/keiko-connectors").AtlassianHttpBodyResult> => {
+          http: async (): Promise<
+            import("@oscharko-dev/keiko-connectors").AtlassianHttpBodyResult
+          > => {
             requests++;
-            return Promise.resolve({
+            await Promise.resolve();
+            afterRequest();
+            return {
               kind: "response",
               status: 200,
-              bodyText: "[]",
-              bodyBytes: 2,
+              bodyText: responseBody,
+              bodyBytes: Buffer.byteLength(responseBody),
               truncated: false,
-            });
+            };
           },
         };
       },
@@ -790,6 +801,57 @@ describe("ordinary Chat catalog read admission", () => {
         "jira.example.invalid",
       ])
         expect(lines.join("\n")).not.toContain(value);
+    } finally {
+      sink.close?.();
+      resetServerLogger();
+    }
+  });
+
+  it.each(["disconnect", "reverify", "actor", "revoke"] as const)(
+    "discards a late read result after %s while retaining the performed-effect charge",
+    async (change) => {
+      const f = await catalogFixture();
+      responseBody = JSON.stringify([{ id: "10", key: "KEIKO", name: "Late private project" }]);
+      afterRequest = (): void => {
+        if (change === "disconnect") store.updateChat(chat.id, { jiraPodId: null });
+        if (change === "reverify") updatePod({ verificationInProgress: true });
+        if (change === "actor") actor = "other-operator";
+        if (change === "revoke") grants.revokeChatReadGrants(chat.id);
+      };
+      const result = await dispatch(f, `late-${change}`);
+      expect(result).toMatchObject({
+        kind: "settled",
+        result: { status: "denied", reason: "effect-denied" },
+        receipt: { effectStarted: true, budgetDisposition: "committed" },
+      });
+      expect(JSON.stringify(result)).not.toContain("Late private project");
+      expect(requests).toBe(1);
+      expect(f.counters.toolCalls).toBe(1);
+    },
+  );
+
+  it("records a discarded late read with one committed settlement", async () => {
+    const sink = createFileServerLogSink(project, { level: "debug" });
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    try {
+      const f = await catalogFixture(3, sink);
+      afterRequest = (): void => {
+        grants.revokeChatReadGrants(chat.id, "catalog-consent-proof");
+      };
+      expect(await dispatch(f, "late-proof")).toMatchObject({ result: { status: "denied" } });
+      const persisted = readPersistedActivityLog(project);
+      const checks = persistedActivityLogLines(persisted, "chat.tool-authority.operation").map(
+        (line) => expectActivityLogProof("chat.tool-authority.operation.late-read-result", line),
+      );
+      expect(
+        checks.some((entry) => entry.phase === "catalog-read" && entry.outcome === "invalid"),
+      ).toBe(true);
+      const settlements = persistedActivityLogLines(persisted, "tool-catalog.invocation-settled");
+      expect(settlements).toHaveLength(1);
+      expect(settlements[0]).toContain('"effectStarted":true');
+      expect(settlements[0]).toContain('"budgetDisposition":"committed"');
+      expect(requests).toBe(1);
+      expect(f.counters.toolCalls).toBe(1);
     } finally {
       sink.close?.();
       resetServerLogger();

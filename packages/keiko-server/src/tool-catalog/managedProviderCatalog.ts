@@ -62,7 +62,10 @@ export interface ManagedCatalogRoute<Consumer extends CatalogConsumer> {
   readonly catalogAction: string;
   readonly previewAction: CatalogToolHandlerBinding<Consumer>["previewAction"];
   readonly actionFor: CatalogToolHandlerBinding<Consumer>["actionFor"];
-  readonly resultFor: (data: CatalogJsonObject) => CatalogHandlerResult;
+  readonly resultFor: (
+    data: CatalogJsonObject,
+    context: CatalogHandlerContext<Consumer>,
+  ) => CatalogHandlerResult;
 }
 export interface ManagedProviderCatalog<Consumer extends CatalogConsumer> {
   readonly catalog: ToolCatalog;
@@ -112,7 +115,7 @@ function bindManagedTool<Consumer extends CatalogConsumer>(
       context: CatalogHandlerContext<Consumer>,
     ): Promise<CatalogHandlerResult> => {
       try {
-        return route.resultFor(await host.call(name, objectArguments(args), context));
+        return route.resultFor(await host.call(name, objectArguments(args), context), context);
       } catch (error) {
         throw catalogFailure(error);
       }

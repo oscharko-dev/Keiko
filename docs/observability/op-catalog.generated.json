@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "a6e81f35d45ccbdba6b7d10507159e56c6042f512a42cd4f5a4ddc9a40684450",
+    "catalogDigest": "1b84610f07cdc5e9e61eb11ab085155543dfcb974dffa2facc22390348c4b4d5",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -2550,11 +2550,12 @@
           "chat.tool-authority.operation.read-grant-admission",
           "chat.tool-authority.operation.read-grant-lifecycle",
           "chat.tool-authority.operation.read-consent-route",
-          "chat.tool-authority.operation.catalog-read"
+          "chat.tool-authority.operation.catalog-read",
+          "chat.tool-authority.operation.late-read-result"
         ],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/editor/chatAuthorityActivity.ts:45",
-        "emitterSites": ["packages/keiko-server/src/editor/chatAuthorityActivity.ts:212"]
+        "emitterSites": ["packages/keiko-server/src/editor/chatAuthorityActivity.ts:213"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -55612,7 +55613,8 @@
                 "chat.tool-authority.operation.read-grant-admission",
                 "chat.tool-authority.operation.read-grant-lifecycle",
                 "chat.tool-authority.operation.read-consent-route",
-                "chat.tool-authority.operation.catalog-read"
+                "chat.tool-authority.operation.catalog-read",
+                "chat.tool-authority.operation.late-read-result"
               ],
               "replayReferences": [],
               "missingObligations": []
@@ -105073,7 +105075,7 @@
     {
       "op": "tool-catalog.binding-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/tool-catalog/managedProviderCatalog.ts:192",
+      "site": "packages/keiko-server/src/tool-catalog/managedProviderCatalog.ts:195",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

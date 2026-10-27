@@ -2449,6 +2449,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       "chat.tool-authority.operation.read-grant-lifecycle",
       "chat.tool-authority.operation.read-consent-route",
       "chat.tool-authority.operation.catalog-read",
+      "chat.tool-authority.operation.late-read-result",
     ],
     releaseImpact: "minor",
   },

@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "a6e81f35d45ccbdba6b7d10507159e56c6042f512a42cd4f5a4ddc9a40684450"
+    "catalogDigest": "1b84610f07cdc5e9e61eb11ab085155543dfcb974dffa2facc22390348c4b4d5"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -68,8 +68,8 @@
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
     "operationCount": 598,
-    "proofCount": 619,
-    "resolvedProofCount": 619,
+    "proofCount": 620,
+    "resolvedProofCount": 620,
     "failureClassCount": 374,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -1294,6 +1294,9 @@
       "packages/keiko-server/src/atlassian/credentialRoutes.test.ts"
     ],
     "chat.tool-authority.operation.catalog-read": [
+      "packages/keiko-server/src/atlassian/jiraChatAuthority.test.ts"
+    ],
+    "chat.tool-authority.operation.late-read-result": [
       "packages/keiko-server/src/atlassian/jiraChatAuthority.test.ts"
     ],
     "chat.tool-mutation.emitted-line": [

@@ -1,3 +1,4 @@
+import { requireDispatch } from "../tool-catalog/catalogToolErrors.js";
 import type {
   ChatToolReadGrantView,
   EditorAgentGovernedAuthorityReference,
@@ -23,6 +24,7 @@ import { decideAtlassianEnvelopeAction } from "./actionPolicy.js";
 import type { ChatReadGrantEntry } from "./chatReadGrantState.js";
 import type {
   CatalogConsumer,
+  CatalogHandlerResult,
   CatalogConsumerPort,
   CatalogToolBinderInput,
 } from "../tool-catalog/catalogToolPorts.js";
@@ -104,15 +106,18 @@ export function jiraChatReadCatalogRoutes(): readonly ManagedCatalogRoute<JiraCh
       tool,
       argumentsDigest: sha256Hex(canonicalise(args)),
     }),
-    resultFor: (data) => ({
-      data,
-      page: {
-        truncated: typeof data.nextStartAt === "number",
-        reason: typeof data.nextStartAt === "number" ? "result-cap" : "none",
-        cursor: null,
-      },
-      resultCount: Array.isArray(data.items) ? data.items.length : 0,
-    }),
+    resultFor: (data, context): CatalogHandlerResult => {
+      requireDispatch(context.beforeEffect(), "denied", "effect-denied");
+      return {
+        data,
+        page: {
+          truncated: typeof data.nextStartAt === "number",
+          reason: typeof data.nextStartAt === "number" ? "result-cap" : "none",
+          cursor: null,
+        },
+        resultCount: Array.isArray(data.items) ? data.items.length : 0,
+      };
+    },
   }));
 }
 
