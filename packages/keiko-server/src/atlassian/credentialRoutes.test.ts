@@ -405,6 +405,9 @@ describe("POST /api/atlassian-connectors/credentials", () => {
   // ceiling as a server fault. Uses a stub custody instead of filling 64 real vault entries.
   it("answers 429 CREDENTIAL_LIMIT_EXCEEDED when custody has hit the storage cap", async () => {
     const stubCustody: AtlassianCredentialCustody = {
+      updateLivePod: (): never => {
+        throw new Error("Unexpected Live Pod update");
+      },
       beginVerification: (): undefined => undefined,
       finishVerification: (): boolean => false,
       create: (): never => {
@@ -476,6 +479,9 @@ describe("POST /api/atlassian-connectors/credentials", () => {
     { code: "credential-changed", status: 409, errorKind: "validation-failed" },
   ] as const)("persists the registered credential rejection: $code", async (failure) => {
     const stubCustody: AtlassianCredentialCustody = {
+      updateLivePod: (): never => {
+        throw new Error("Unexpected Live Pod update");
+      },
       beginVerification: (): undefined => undefined,
       finishVerification: (): boolean => false,
       create: (): never => {
@@ -541,6 +547,9 @@ describe("POST /api/atlassian-connectors/credentials", () => {
 describe("Atlassian credential route in-memory failure handling", () => {
   it("preserves the typed 429 when activity logging fails", async (): Promise<void> => {
     const custody: AtlassianCredentialCustody = {
+      updateLivePod: (): never => {
+        throw new Error("Unexpected Live Pod update");
+      },
       beginVerification: (): undefined => undefined,
       finishVerification: (): boolean => false,
       create: (): never => {

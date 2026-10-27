@@ -123,6 +123,9 @@ function guardWith(
   override?: (request: AtlassianHttpBodyRequest) => AtlassianHttpBodyResult | undefined,
 ): AtlassianConnectorCredentialDeps {
   const custody = {
+    updateLivePod: (): never => {
+      throw new Error("Unexpected Live Pod update");
+    },
     beginVerification: (): undefined => undefined,
     finishVerification: (): boolean => false,
     create: (): never => {

@@ -235,6 +235,9 @@ function guard(): AtlassianConnectorCredentialDeps {
   const jira = credentialMeta("jira");
   const confluence = credentialMeta("confluence");
   const custody = {
+    updateLivePod: (): never => {
+      throw new Error("Unexpected Live Pod update");
+    },
     beginVerification: (): undefined => undefined,
     finishVerification: (): boolean => false,
     create: (): never => {

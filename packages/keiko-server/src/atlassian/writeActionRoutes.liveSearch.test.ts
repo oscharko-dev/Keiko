@@ -139,6 +139,9 @@ function guardWith(
     return fixture(request);
   };
   const custody = {
+    updateLivePod: (): never => {
+      throw new Error("Unexpected Live Pod update");
+    },
     beginVerification: (): undefined => undefined,
     finishVerification: (): boolean => false,
     create: (): never => {

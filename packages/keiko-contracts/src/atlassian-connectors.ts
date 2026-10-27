@@ -75,6 +75,8 @@ interface AtlassianCredentialMetadataBase {
 
 /** Private-custody identity and verification facts, never a Chat authorization grant. */
 export interface JiraLivePodMetadata {
+  /** Durable incomplete custody work; execution and verification remain blocked. */
+  readonly credentialOperation?: "replace-token" | "delete";
   readonly podId: string;
   readonly ownerDigest: string;
   readonly creationRequestId: string;

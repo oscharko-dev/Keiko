@@ -135,7 +135,7 @@ describe("Jira Live Pod custody", () => {
     expect(invalidated).toHaveBeenCalledTimes(1);
   });
 
-  it("invalidates a deleted Pod after ciphertext removal even if metadata cleanup fails", () => {
+  it("invalidates a deleted Pod even if metadata cleanup fails", () => {
     const invalidated = vi.fn();
     const f = custodyOverFakes(invalidated);
     const created = f.custody.create(livePodInput(), "a".repeat(64));
@@ -148,7 +148,7 @@ describe("Jira Live Pod custody", () => {
     expect(invalidated).toHaveBeenCalledExactlyOnceWith(created.livePod.podId, null);
   });
 
-  it("does not revoke a Pod when ciphertext removal fails", () => {
+  it("retains a durable revoked deletion intent when ciphertext removal fails", () => {
     const invalidated = vi.fn();
     const f = custodyOverFakes(invalidated);
     const created = f.custody.create(livePodInput(), "a".repeat(64));
@@ -156,8 +156,21 @@ describe("Jira Live Pod custody", () => {
       throw new Error("Synthetic vault write failure");
     });
     expect(() => f.custody.delete(created.authRef)).toThrow();
-    expect(invalidated).not.toHaveBeenCalled();
-    expect(f.custody.getMetadata(created.authRef)).toEqual(created);
+    expect(invalidated).toHaveBeenCalledTimes(1);
+    expect(f.custody.getMetadata(created.authRef)).toMatchObject({
+      generation: 2,
+      livePod: { credentialOperation: "delete", verificationStatus: "unverified" },
+    });
+    const reopened = createAtlassianCredentialCustody({
+      vault: f.vault,
+      metadataStore: f.metadataStore,
+    });
+    const read = vi.spyOn(f.vault, "get");
+    expect(
+      custodyErrorCode(() => reopened.executionResolver.resolveForExecution(created.authRef, 2)),
+    ).toBe("credential-changed");
+    expect(() => reopened.custody.beginVerification(created.authRef, 2)).toThrow();
+    expect(read).not.toHaveBeenCalled();
   });
 
   it("retires an aborted recheck with a new generation and unverified readiness", () => {
@@ -261,6 +274,172 @@ function describeThrown(work: () => unknown): string {
   }
   throw new Error("expected the operation to throw");
 }
+
+describe("Live Pod credential updates", () => {
+  it("rejects impossible pending-custody states in retained metadata", () => {
+    const f = custodyOverFakes();
+    const created = f.custody.create(livePodInput(), "a".repeat(64));
+    assert(created.deployment === "data-center" && created.livePod);
+    for (const changed of [
+      { credentialOperation: "unknown" },
+      { credentialOperation: "replace-token", verificationStatus: "ok" },
+      { credentialOperation: "delete", verificationInProgress: true },
+    ])
+      expect(
+        isAtlassianCredentialMetadata({ ...created, livePod: { ...created.livePod, ...changed } }),
+      ).toBe(false);
+  });
+
+  it.each([
+    {},
+    { expectedGeneration: 0, displayName: "Name" },
+    { expectedGeneration: 1, displayName: "" },
+    { expectedGeneration: 1, apiToken: "short" },
+    { expectedGeneration: 1, apiToken: SYNTHETIC_TOKEN, baseUrl: "https://other.invalid" },
+    { expectedGeneration: 1, displayName: "Name", ownerDigest: "b".repeat(64) },
+  ])("rejects invalid update fields before either store changes", (input) => {
+    const f = custodyOverFakes();
+    const created = f.custody.create(livePodInput(), "a".repeat(64));
+    const write = vi.spyOn(f.vault, "set");
+    expect(custodyErrorCode(() => f.custody.updateLivePod(created.authRef, input))).toBe(
+      "invalid-input",
+    );
+    expect(write).not.toHaveBeenCalled();
+    expect(f.custody.getMetadata(created.authRef)).toEqual(created);
+  });
+
+  it("does not touch ciphertext when the pending generation cannot be persisted", () => {
+    const f = custodyOverFakes();
+    const created = f.custody.create(livePodInput(), "a".repeat(64));
+    const write = vi.spyOn(f.vault, "set");
+    vi.spyOn(f.metadataStore, "insert").mockImplementation(() => {
+      throw new Error("Synthetic metadata failure");
+    });
+    expect(() =>
+      f.custody.updateLivePod(created.authRef, {
+        expectedGeneration: 1,
+        apiToken: SYNTHETIC_TOKEN + "next",
+      }),
+    ).toThrow();
+    expect(write).not.toHaveBeenCalled();
+    expect(f.custody.getMetadata(created.authRef)).toEqual(created);
+  });
+
+  it("retries durable deletion without allowing rename, replacement or another verification", () => {
+    const invalidated = vi.fn();
+    const f = custodyOverFakes(invalidated);
+    const created = f.custody.create(livePodInput(), "a".repeat(64));
+    vi.spyOn(f.metadataStore, "delete").mockImplementationOnce(() => {
+      throw new Error("Synthetic cleanup failure");
+    });
+    expect(() => f.custody.delete(created.authRef)).toThrow();
+    const pending = f.custody.getMetadata(created.authRef);
+    expect(() =>
+      f.custody.updateLivePod(created.authRef, { expectedGeneration: 2, displayName: "Restore" }),
+    ).toThrow();
+    expect(() =>
+      f.custody.updateLivePod(created.authRef, {
+        expectedGeneration: 2,
+        apiToken: SYNTHETIC_TOKEN,
+      }),
+    ).toThrow();
+    expect(() => f.custody.beginVerification(created.authRef)).toThrow();
+    expect(f.custody.getMetadata(created.authRef)).toEqual(pending);
+    expect(f.custody.delete(created.authRef)).toBe(true);
+    expect(f.vault.entries.size).toBe(0);
+    expect(f.custody.getMetadata(created.authRef)).toBeUndefined();
+    expect(invalidated).toHaveBeenCalledTimes(2);
+  });
+
+  it("retains Pod identity on replacement, revokes old probes/transports and keeps rename authority stable", () => {
+    const invalidated = vi.fn();
+    const f = custodyOverFakes(invalidated);
+    const created = f.custody.create(livePodInput(), "a".repeat(64));
+    const probe = f.custody.beginVerification(created.authRef);
+    assert(probe);
+    const replaced = f.custody.updateLivePod(created.authRef, {
+      expectedGeneration: 1,
+      apiToken: SYNTHETIC_TOKEN + "replacement",
+    });
+    expect(replaced).toMatchObject({
+      authRef: created.authRef,
+      generation: 2,
+      livePod: { verificationStatus: "unverified", verificationInProgress: false },
+    });
+    assert(created.deployment === "data-center" && created.livePod);
+    assert(replaced.deployment === "data-center" && replaced.livePod);
+    expect(replaced.livePod.podId).toBe(created.livePod.podId);
+    expect(replaced.livePod.credentialOperation).toBeUndefined();
+    expect(invalidated).toHaveBeenCalledExactlyOnceWith(created.livePod.podId, 2);
+    expect(f.custody.finishVerification(created.authRef, 1, probe.revision, "ok")).toBe(false);
+    expect(() => f.executionResolver.resolveForExecution(created.authRef, 1)).toThrow();
+    expect(f.executionResolver.resolveForExecution(created.authRef, 2).apiToken).toBe(
+      SYNTHETIC_TOKEN + "replacement",
+    );
+    const renamed = f.custody.updateLivePod(created.authRef, {
+      expectedGeneration: 2,
+      displayName: "Renamed Jira",
+    });
+    expect(renamed).toEqual({ ...replaced, displayName: "Renamed Jira" });
+    expect(invalidated).toHaveBeenCalledTimes(1);
+    expect(() =>
+      f.custody.updateLivePod(created.authRef, {
+        expectedGeneration: 1,
+        apiToken: SYNTHETIC_TOKEN,
+      }),
+    ).toThrow();
+  });
+
+  it.each(["vault-write", "metadata-settlement"])(
+    "fails closed across restart after %s failure",
+    (failure) => {
+      const f = custodyOverFakes();
+      const created = f.custody.create(livePodInput(), "a".repeat(64));
+      const realInsert = f.metadataStore.insert;
+      const realSet = f.vault.set;
+      if (failure === "vault-write")
+        vi.spyOn(f.vault, "set").mockImplementation(() => {
+          throw new Error("Synthetic storage failure");
+        });
+      else
+        vi.spyOn(f.metadataStore, "insert").mockImplementation((row) => {
+          if (row.deployment === "data-center" && row.livePod?.credentialOperation === undefined)
+            throw new Error("Synthetic settlement failure");
+          realInsert(row);
+        });
+      expect(() =>
+        f.custody.updateLivePod(created.authRef, {
+          expectedGeneration: 1,
+          apiToken: SYNTHETIC_TOKEN + "new",
+        }),
+      ).toThrow();
+      const reopened = createAtlassianCredentialCustody({
+        vault: f.vault,
+        metadataStore: f.metadataStore,
+      });
+      const read = vi.spyOn(f.vault, "get");
+      expect(
+        custodyErrorCode(() => reopened.executionResolver.resolveForExecution(created.authRef, 2)),
+      ).toBe("credential-changed");
+      expect(() => reopened.custody.beginVerification(created.authRef, 2)).toThrow();
+      expect(read).not.toHaveBeenCalled();
+      expect(reopened.custody.getMetadata(created.authRef)).toMatchObject({
+        generation: 2,
+        livePod: { credentialOperation: "replace-token", verificationStatus: "unverified" },
+      });
+      vi.spyOn(f.vault, "set").mockImplementation(realSet);
+      vi.spyOn(f.metadataStore, "insert").mockImplementation(realInsert);
+      const repaired = reopened.custody.updateLivePod(created.authRef, {
+        expectedGeneration: 2,
+        apiToken: SYNTHETIC_TOKEN + "repaired",
+      });
+      expect(repaired.generation).toBe(3);
+      expect(reopened.executionResolver.resolveForExecution(created.authRef, 3).apiToken).toBe(
+        SYNTHETIC_TOKEN + "repaired",
+      );
+    },
+  );
+});
 
 describe("createAtlassianCredentialCustody — create", () => {
   it("mints a contract-shaped authRef, seals the secret, and returns metadata only", () => {

@@ -420,14 +420,19 @@ distinguishes applied and stale observations without response content. This veri
 does not itself grant Chat read or mutation authority.
 
 The custody owner notifies server composition when a current failed/aborted probe advances the
-credential generation, or after ciphertext removal during deletion. This also covers the direct
-credential-management routes. The existing UI store atomically advances every matching Chat's
+credential generation, or after retaining a durable deletion intent and before removing ciphertext.
+This also covers the direct credential-management routes. The existing UI store atomically advances every matching Chat's
 binding generation, retaining its Pod association on credential invalidation and disconnecting on
 removal. Older/repeated generation notifications are harmless. The existing Chat turn serializer
 then interrupts affected generations; other Pods' Chats remain untouched. Applied scope changes
-and requested cancellation use the registered `chat.scope.update` event. Cleanup failure after
-ciphertext removal still invalidates bindings; cross-store restart reconciliation, token rotation
-and Chat grant/approval revocation remain separate completion work.
+and requested cancellation use the registered `chat.scope.update` event. Cleanup failure cannot restore access: incomplete token replacement
+and deletion are retained in private metadata, with a new generation and unverified readiness, before ciphertext changes.
+Execution and verification refuse these pending records before reading the vault. Token replacement
+settles only after the new sealed value and metadata are both written; a failed replacement requires
+an explicit replacement at the current generation. Deletion may retry its retained intent. Rename
+keeps authorization stable. These custody primitives preserve Pod identity and reject stale updates.
+Restart reconciliation of dependent UI state, authenticated update routes and Chat grant/approval
+revocation remain separate completion work.
 
 Both outbound HTTP factories capture the selected credential generation by value. The custody
 resolver checks it against current private metadata before reading ciphertext, so an old transport
