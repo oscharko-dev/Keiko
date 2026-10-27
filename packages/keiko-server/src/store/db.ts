@@ -645,14 +645,20 @@ function completeChatTurnRecord(
       assistantMessageId,
     );
     if (plan.kind !== "commit") return plan;
-    const assistant = persistStagedAssistant(
-      db,
-      options,
-      assistantMessageId,
-      plan.pendingAssistant,
-    );
+    persistStagedAssistant(db, options, assistantMessageId, plan.pendingAssistant);
     sqlLinkAssistantToClientTurn(db, chatId, assistantMessageId, storedTurnId);
-    return { kind: "completed", userMessage: plan.userMessage, assistantMessage: assistant };
+    const committed = sqlFindClientTurn(db, chatId, storedTurnId);
+    if (
+      committed.state !== "completed" ||
+      committed.userMessage === undefined ||
+      committed.assistantMessage === undefined
+    )
+      throw new UiStoreError("INTERNAL", "Canonical turn completion was not observable.", 500);
+    return {
+      kind: "completed",
+      userMessage: committed.userMessage,
+      assistantMessage: committed.assistantMessage,
+    };
   });
   if (result.kind === "completed") staged.delete(assistantMessageId);
   return result;

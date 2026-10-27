@@ -1841,3 +1841,36 @@ lint suppressions were preserved unchanged. The loaded local model
 `keiko-qwen36-35b-8bit:latest` passed the real production tool-calling probe; this alone
 is not a live Jira Chat or browser acceptance. Hub creation/binding, write approvals,
 live journeys and final full gates remain open.
+
+### Real normal Chat read and public Pod identity — #4085, #4091, #4084 / #4081
+
+The public credential API now returns a separate typed Live Pod view: connectable Pod
+identity, current credential generation, verification status/revision and supported
+`live-read` capability. Private owner digests, creation intents and incomplete custody
+operation details remain omitted. Incomplete custody work projects unverified. Cloud
+responses retain their shape. The HTTP projection regression failed before repair;
+all 90 credential/lifecycle cases now pass. Older assertions were narrowed to the
+actual private facts, and a lifecycle fixture now uses a new invocation identity for
+a new post-revocation authority rather than replaying the revoked identity.
+
+The real normal Chat HTTP group found a separate canonical-store defect: completion
+returned the pre-commit user projection with a pending state. The store now reloads
+both canonical messages inside the same completion transaction. The targeted normal
+Chat regression failed before correction; 231 route, Chat, store/transcript and
+operation-registry tests pass afterward. Build, root/UI typechecks and affected lint
+pass. Existing completion and credential Activity Log owners are retained.
+
+A licensed Jira 10.3.26 group on 2026-10-27 passed with the actual local
+`keiko-qwen36-35b-8bit` model after the production tool-calling probe. Launcher pairing,
+HTTP Pod creation/HTTPS verification, authenticated binding, normal buffered Chat,
+explicit read consent, Gateway → catalog/binder → shared SDK MCP → Jira, structured
+result persistence and final completion all ran live. One `jira_projects` call
+returned the synthetic project. License checks before and after were valid. The
+reproducible command is `scripts/testing/jira-chat-lab/chat-read.mjs`; its retained
+logs contain counts/status only. A first teardown emitted a log-sink warning; a
+trace-warnings rerun did not reproduce it. The harness now rejects that warning as
+a failed run instead of accepting a successful read with lost diagnostics.
+
+This is one live buffered read journey, not complete AC acceptance. Normal Chat
+writes/approvals, Hub management and binding UI, full browser/mixed-grounding journeys,
+all-operation failure/isolation/restart qualification and final gates remain open.

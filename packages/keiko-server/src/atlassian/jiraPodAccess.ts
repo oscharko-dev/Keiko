@@ -3,7 +3,11 @@ import type {
   AtlassianCredentialMetadata,
   AtlassianCredentialCustody,
 } from "@oscharko-dev/keiko-connectors";
-import type { JiraLivePodMetadata } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import type {
+  AtlassianCredentialPublicMetadata,
+  JiraLivePodMetadata,
+  JiraLivePodView,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { UiHandlerDeps } from "../deps.js";
 
 export type JiraLivePodCredential = Extract<
@@ -68,7 +72,7 @@ export function ownsAtlassianCredential(
 /** Explicit legacy wire projection: private ownership, creation and verification facts stay in custody. */
 export function publicAtlassianCredential(
   metadata: AtlassianCredentialMetadata,
-): AtlassianCredentialMetadata {
+): AtlassianCredentialPublicMetadata {
   const common = {
     schemaVersion: metadata.schemaVersion,
     authRef: metadata.authRef,
@@ -84,6 +88,9 @@ export function publicAtlassianCredential(
         deployment: "data-center",
         authScheme: "bearer-pat",
         generation: metadata.generation,
+        ...(metadata.livePod === undefined
+          ? {}
+          : { livePod: publicJiraPod(metadata.generation, metadata.livePod) }),
       }
     : {
         ...common,
@@ -91,4 +98,17 @@ export function publicAtlassianCredential(
         authScheme: "basic-api-token",
         ...(metadata.deployment === undefined ? {} : { deployment: metadata.deployment }),
       };
+}
+
+function publicJiraPod(generation: number, pod: JiraLivePodMetadata): JiraLivePodView {
+  return {
+    kind: "jira-live",
+    podId: pod.podId,
+    authenticationGeneration: generation,
+    verificationRevision: pod.verificationRevision,
+    verificationInProgress: pod.verificationInProgress,
+    verificationStatus:
+      pod.credentialOperation === undefined ? pod.verificationStatus : "unverified",
+    capabilities: ["live-read"],
+  };
 }

@@ -149,3 +149,29 @@ Checkpoint (2026-10-26): the fresh licensed instance passed basic PAT/non-admin,
 three-create/three-read and repeat-seed checks. All three production HTTPS probes
 then passed through the Compose frontend. The remaining acceptance work is recorded
 in `docs/qa/jira-chat-pods-4081.md`; no full criterion is closed by this checkpoint.
+
+## Real ordinary Chat read group
+
+After the licensed HTTPS/read/write preflight, run the actual normal Chat API with a
+locally installed, tool-capable Ollama model. The model argument is a Chat registry
+identifier; for an Ollama default tag, omit `:latest` (the actual provider probe must
+still succeed). This example uses the installed Qwen model:
+
+```sh
+node scripts/testing/jira-chat-lab/preflight.mjs "$HOME/.local/share/keiko-jira-4081-new"
+node scripts/testing/jira-chat-lab/chat-read.mjs "$HOME/.local/share/keiko-jira-4081-new" keiko-qwen36-35b-8bit
+```
+
+The script creates an isolated temporary product state, pairs through the real launcher
+attestation route, verifies the model using the production tool-calling probe, creates
+and verifies a Live Pod through HTTP, and binds it to a normal Chat. It sends one
+canonical turn, observes the server-owned pending read consent through GET, explicitly
+approves through the authenticated consent route, and checks the completed canonical
+turn, actual `jira_projects` result and final model answer. It uses the shared gateway,
+catalog and MCP host with real TLS/PAT access to the lab; no model/Jira transport is
+mocked. License checks bracket the group. Output and persisted Activity Logs are
+content-free. A log-sink warning makes the process fail. Private temporary product
+state is removed; the lab and its credentials remain untouched.
+
+This group qualifies one buffered read journey. It does not qualify Chat writes,
+streaming/browser journeys, mixed grounding or the full acceptance matrix.

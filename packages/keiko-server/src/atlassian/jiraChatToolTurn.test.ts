@@ -12,6 +12,7 @@ import {
   type GatewayStreamChunk,
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
+import type { DesktopChatSendResponse } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "../deps.js";
 import { handleSendDesktopChat } from "../chat-handlers.js";
@@ -236,7 +237,9 @@ describe("normal buffered Chat through the owned Jira catalog", () => {
         )
       ).status,
     ).toBe(200);
-    expect((await pending).status).toBe(200);
+    const completed = await pending;
+    expect(completed.status).toBe(200);
+    expect((completed.body as DesktopChatSendResponse).messages[0]?.turnState).toBe("completed");
     expect(f.requests()).toBe(1);
     expect(
       f.calls[1]?.messages.some(

@@ -16,7 +16,7 @@ import { bffFetchJson } from "./http";
 import type {
   AtlassianConnectionVerificationStatus,
   ChatToolReadGrantView,
-  AtlassianCredentialMetadata,
+  AtlassianCredentialPublicMetadata,
   AtlassianCredentialCreateRequest,
   AtlassianConnectorActionExecutionResult,
   AtlassianConnectorActivityRecord,
@@ -44,7 +44,7 @@ export { isAtlassianConnectionVerificationStatus as isAtlassianConnectorVerifySt
 // The non-secret credential metadata projection every credentials route answers (ADR-0128 D2). It
 // carries no field that could hold the token; `authRef` is the opaque vault handle and `createdAt`
 // is the epoch-ms registration time surfaced in the connector list.
-export type AtlassianConnectorMetadata = AtlassianCredentialMetadata;
+export type AtlassianConnectorMetadata = AtlassianCredentialPublicMetadata;
 
 // ---------------------------------------------------------------------------
 // Request/response envelopes

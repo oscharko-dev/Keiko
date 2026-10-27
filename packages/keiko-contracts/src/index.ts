@@ -1242,6 +1242,8 @@ export type {
   AtlassianPrivateTarget,
   AtlassianNetworkConfig,
   AtlassianCredentialMetadata,
+  AtlassianCredentialPublicMetadata,
+  JiraLivePodView,
   AtlassianCredentialCreateRequest,
   AtlassianConnectorAuthorityFailureReason,
   AtlassianConnectorDescriptor,

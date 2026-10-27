@@ -954,8 +954,8 @@ describe("end-to-end verify through the gateway transport adapter", () => {
     const body = (await response.json()) as { credentials: readonly Record<string, unknown>[] };
     expect(response.status).toBe(200);
     expect(body.credentials).toHaveLength(1);
-    expect(body.credentials[0]).not.toHaveProperty("livePod");
-    expect(JSON.stringify(body)).not.toMatch(/ownerDigest|creationRequestId|verificationRevision/);
+    expect(body.credentials[0]).toHaveProperty("livePod.kind", "jira-live");
+    expect(JSON.stringify(body)).not.toMatch(/ownerDigest|creationRequestId|credentialOperation/);
     sink.close?.();
     const lines = persistedActivityLogLines(
       readPersistedActivityLog(configDir),
@@ -976,7 +976,8 @@ describe("end-to-end verify through the gateway transport adapter", () => {
     });
     expect(response.status).toBe(200);
     const body = (await response.json()) as { authRef: string };
-    expect(body).not.toHaveProperty("livePod");
+    expect(body).toHaveProperty("livePod.kind", "jira-live");
+    expect(JSON.stringify(body)).not.toMatch(/ownerDigest|creationRequestId|credentialOperation/);
     expect(wiring.custody.getMetadata(body.authRef)).toMatchObject({
       livePod: {
         ownerDigest: jiraChatActorDigest(baseDeps(wiring)),
@@ -1314,7 +1315,7 @@ function retainedChatAuthority(chat: Chat): () => ChatToolAuthorityResolution {
   const value = chatAuthorityFixture({
     deploymentCeiling: ceiling,
     expiresAt: new Date(Date.now() + ATLASSIAN_ACTION_APPROVAL_TTL_MS).toISOString(),
-    runId: `authority-${chat.id}`,
+    runId: `authority-${chat.id}-${randomUUID()}`,
     requestedMode: chat.toolMode ?? "governed-assist",
     subject: jiraChatSubject(chat),
   });
@@ -1770,7 +1771,7 @@ describe("authenticated Live Pod credential updates", () => {
       correlations.push(replaced.headers.get("x-keiko-correlation-id"));
       const response = await replaced.text();
       expect(JSON.parse(response)).toMatchObject({ authRef: credential.authRef, generation: 2 });
-      expect(response).not.toContain("livePod");
+      expect(response).not.toMatch(/ownerDigest|creationRequestId|credentialOperation/);
       expect(response).not.toContain(SYNTHETIC_TOKEN);
       const both = await updateJiraCredential(credential.authRef, {
         expectedGeneration: 2,
@@ -2170,4 +2171,29 @@ it("bounds the Chat consent request body before accepting anything", async () =>
   });
   expect(response.status).toBe(413);
   expect(pending.state()).toBe("pending");
+});
+
+describe("public Live Pod projection", () => {
+  it("exposes the connectable identity without private custody or authorization facts", async () => {
+    const response = await fetch(`${baseUrl()}/api/atlassian-connectors/credentials`, {
+      method: "POST",
+      headers: csrfHeaders(),
+      body: JSON.stringify(livePodCreateInput()),
+    });
+    expect(response.status).toBe(200);
+    const created = (await response.json()) as Record<string, unknown>;
+    expect(created.livePod).toEqual({
+      kind: "jira-live",
+      podId: expect.any(String) as unknown,
+      authenticationGeneration: 1,
+      verificationRevision: 0,
+      verificationInProgress: false,
+      verificationStatus: "unverified",
+      capabilities: ["live-read"],
+    });
+    expect(JSON.stringify(created)).not.toMatch(
+      /ownerDigest|creationRequestId|credentialOperation/,
+    );
+    expectNoSecretBytes(JSON.stringify(created));
+  });
 });

@@ -102,6 +102,24 @@ export type AtlassianCredentialMetadata = AtlassianCredentialMetadataBase &
       }
   );
 
+/** UI projection only; possession never grants Chat or connector authority. */
+export interface JiraLivePodView {
+  readonly kind: "jira-live";
+  readonly podId: string;
+  readonly authenticationGeneration: number;
+  readonly verificationRevision: number;
+  readonly verificationInProgress: boolean;
+  readonly verificationStatus: JiraLivePodMetadata["verificationStatus"];
+  readonly capabilities: readonly ("live-read" | "live-write")[];
+}
+
+/** The credential API omits all private custody identity and pending-operation facts. */
+export type AtlassianCredentialPublicMetadata =
+  | Extract<AtlassianCredentialMetadata, { authScheme: "basic-api-token" }>
+  | (Omit<Extract<AtlassianCredentialMetadata, { authScheme: "bearer-pat" }>, "livePod"> & {
+      readonly livePod?: JiraLivePodView;
+    });
+
 interface AtlassianCredentialCreateBase {
   readonly displayName: string;
   readonly baseUrl: string;
