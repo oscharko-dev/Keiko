@@ -25,7 +25,9 @@ vi.mock("@oscharko-dev/keiko-verification", async (importOriginal) => {
 // A strict bubblewrap execution-root run creates its per-run home inside the execution root before
 // spawn (PR #4095), so this suite's root must exist on disk; its contents stay in memFs.
 const ROOT = realpathSync(mkdtempSync(join(tmpdir(), "keiko-workflow-verify-")));
-afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
+afterAll(() => {
+  rmSync(ROOT, { recursive: true, force: true });
+});
 
 // A valid create diff that adds a sibling-discoverable test under tests/ (mirrored convention).
 const VALID_TEST_DIFF =
