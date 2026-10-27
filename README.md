@@ -34,7 +34,7 @@
   ·
   <a href="#install-with-npm">npm</a>
   ·
-  <a href="#whats-new-in-130">What's new in 1.3</a>
+  <a href="#whats-new-in-131">What's new in 1.3</a>
   ·
   <a href="https://github.com/oscharko-dev/Keiko/blob/dev/CONTRIBUTING.md">Contributing</a>
   ·
@@ -89,6 +89,14 @@ Connected folders do not need Git metadata or a `package.json`. Run `keiko init`
 - The CLI, the UI and the SDK share one product. Surface coverage is intentionally not identical. `keiko gen-tests` and `keiko investigate` print a reviewable report but do not persist an evidence manifest.
 - The UI can create a local runtime config during first-run setup. To list models, Keiko calls the gateway model list endpoint you configured — credentials stay in your local config.
 - Keiko serves loopback only: `keiko start` and the UI validate a loopback host value, and the server always binds `127.0.0.1`. `keiko start --port <n>` sets the Port to bind (default: 1983).
+
+## What's new in 1.3.1
+
+- **Long coding runs stay connected.** The task timeline keeps updating during a long run, reconnects on its own after a brief drop, and a quiet stretch while the model thinks no longer signs your browser window out.
+- **Clear reasons instead of bare failures.** A failed step in the timeline says why, for example which exit code a command returned. In Full access on macOS, when Keiko cannot prepare a project's dependencies for its isolated check, the model is pointed to the project's own checks and the Activity Log names the reason.
+- **Editor and Git-change Chat work again.** Go to definition, find references, rename and the other code navigation commands answer again, and a Chat about a Git change can connect, send and apply proposals.
+
+Updating from 1.2.7 or 1.3.0 needs no action, and your tasks and Coding History carry over unchanged.
 
 ## What's new in 1.3.0
 

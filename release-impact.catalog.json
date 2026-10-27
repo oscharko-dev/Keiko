@@ -3780,6 +3780,70 @@
         "verifiedCarryForward": true,
         "carryForwardPath": "Verified managed-install bootstrap with existing state and keys outside the application bundle, then authenticated native handoff using the canonical update-state root introduced in 1.2.7."
       }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "supportedFrom": ["0.2.0", "1.2.5", "1.2.6", "1.2.7", "1.3.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "id": "2026-10-27-keiko-1.3.1-coding-workbench-reliability",
+      "packageVersion": "1.3.1",
+      "releaseTag": "v1.3.1",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Long coding runs keep their live activity and browser pairing, the task timeline says why a call failed, and the editor, Git-change Chat and Linux verification work again.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "oneClickEligible": true,
+      "releaseNoteBullets": [
+        "A long coding run keeps its live activity feed and its browser pairing. A busy feed waits for the browser instead of closing, a dropped feed reconnects on its own, and a quiet model turn no longer signs the window out.",
+        "In Full access on macOS, when the isolated verifier cannot install a project's dependencies, the model is told to run the project's own checks in its shell, and the Activity Log names the reason.",
+        "The task timeline says why a call failed, such as the command's exit code, and model reasoning no longer carries a warning-coloured badge.",
+        "Routine Coding Workbench actions are recorded as interaction events instead of browser diagnostics, so real browser failures stand out in the Activity Log.",
+        "The editor answers go to definition, find references, rename, code actions, signature help and go to line again.",
+        "Chats that use a Git change can connect, send, and review, approve and apply proposals again, and pull request description review finds its proposal.",
+        "Applying a pull request description no longer reports a failure when Keiko runs in GitHub Codespaces or on a hosted runner.",
+        "On Linux, strict sandbox runs keep temporary files outside the worktree, so verified commits are no longer reported as failed. Below Full access, governed research can ask for its network approval again.",
+        "A restored Coding Workbench window picks up the project's repository, a signed-out window shows the pairing guidance, and an open Changes section stays open while it refreshes.",
+        "Updating from 1.2.7 or 1.3.0 needs no action. An installation on 1.2.6 or earlier still runs the verified updater bootstrap once before automatic updates."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-10-27",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#3897#6443332275",
+        "rationale": "The owner explicitly authorized preparing release 1.3.1 with the fixes from #4096; the authorization is recorded on epic #3897. The entry accounts for every change integrated since v1.3.0: the Coding Workbench defects from the 1.3.0 test (#4096), the product defects found by the nightly journeys (#4095) and contributor guidance only (#4080). This records release-impact preparation under the signed-version-bump policy, not permission to integrate or publish. Integration remains subject to the owner's authorization, exact-head required checks and settled review findings, and publication requires the protected release workflow. The installed upgrade demonstration from 1.2.x (#3908) and the fresh npm and Yarn installation qualification (#3898) remain post-release acceptance."
+      },
+      "breakingException": {
+        "rationale": "Immutable published 1.2.6 and earlier source updaters still look for the handoff plan outside the canonical update-state root. A newer target cannot repair that source before handoff; the verified managed-install bootstrap introduced with 1.2.7 remains the carry-forward path.",
+        "warningText": "Published 1.2.6 and earlier installations require the verified managed-install updater bootstrap before using automatic updates. Keep a backup of local state and preserve private keys when replacing the application bundle.",
+        "verifiedCarryForward": true,
+        "carryForwardPath": "Verified managed-install bootstrap with existing state and keys outside the application bundle, then authenticated native handoff using the canonical update-state root introduced in 1.2.7."
+      }
     }
   ]
 }
