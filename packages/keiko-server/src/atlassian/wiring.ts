@@ -10,6 +10,7 @@
 import {
   createAtlassianCredentialCustody,
   type AtlassianCredentialVaultPort,
+  type AtlassianCredentialCustodyDeps,
   type AtlassianCredentialExecutionResolver,
 } from "@oscharko-dev/keiko-connectors";
 import type {
@@ -27,6 +28,7 @@ import { createGatewayAtlassianHttpBodyPort, createGatewayAtlassianHttpPort } fr
 import type { AtlassianConnectorCredentialDeps } from "./credentialRoutes.js";
 
 export interface BuildAtlassianConnectorCredentialDepsOptions {
+  readonly onLivePodInvalidated?: AtlassianCredentialCustodyDeps["onLivePodInvalidated"];
   readonly networkConfig?: () => AtlassianNetworkConfig | undefined;
   // The effective gateway config path; the credential custody domain lives in the sibling
   // `credentials/` directory (shared with the provider vault, separately keyed — ADR-0128 D2).
@@ -80,6 +82,7 @@ export function buildAtlassianConnectorCredentialDeps(
   const { custody, executionResolver } = createAtlassianCredentialCustody({
     vault: lazyVaultPort(options),
     metadataStore: createAtlassianCredentialMetadataStore({ configPath: options.configPath }),
+    onLivePodInvalidated: options.onLivePodInvalidated,
   });
   return {
     custody,

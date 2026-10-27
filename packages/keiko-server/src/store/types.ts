@@ -145,6 +145,11 @@ export interface UiStore {
     opts?: StoreCreateChatOptions,
   ) => Chat;
   readonly updateChat: (id: string, patch: UpdateChatPatch, options?: UpdateChatOptions) => Chat;
+  readonly invalidateJiraPod: (
+    podId: string,
+    authenticationGeneration: number | null,
+    correlationId?: string,
+  ) => readonly { readonly previous: Chat; readonly current: Chat }[];
   /**
    * Atomic git-change scope mutation: the callback receives the CURRENT list, read inside the same
    * transaction as the write. The only safe way to append or replace an entry across an await

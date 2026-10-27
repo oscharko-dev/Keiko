@@ -42,6 +42,74 @@ function target(
 }
 
 describe("Chat Jira binding persistence", () => {
+  it("revokes all matching bindings atomically, retaining association across credential changes", () => {
+    const first = store.createChat(project, "First", "model");
+    const second = store.createChat(project, "Second", "model");
+    const other = store.createChat(project, "Other", "model");
+    const bound = store.updateChat(first.id, { jiraPodId: FIRST }, target());
+    store.updateChat(second.id, { jiraPodId: FIRST }, target());
+    const unrelated = store.updateChat(other.id, { jiraPodId: SECOND }, target(SECOND));
+    expect(store.invalidateJiraPod(FIRST, 2)).toHaveLength(2);
+    const changed = store.findChatById(first.id);
+    expect(changed?.jiraPodBinding).toEqual({
+      ...bound.jiraPodBinding,
+      authenticationGeneration: 2,
+      bindingGeneration: 2,
+    });
+    expect(changed?.groundingScopeIdentity).not.toBe(bound.groundingScopeIdentity);
+    expect(store.invalidateJiraPod(FIRST, 2)).toEqual([]);
+    expect(store.invalidateJiraPod(FIRST, 1)).toEqual([]);
+    expect(store.findChatById(other.id)).toEqual(unrelated);
+    expect(store.invalidateJiraPod(FIRST, null)).toHaveLength(2);
+    expect(store.findChatById(first.id)).toMatchObject({ jiraBindingGeneration: 3 });
+    expect(store.findChatById(first.id)?.jiraPodBinding).toBeUndefined();
+    expect(store.invalidateJiraPod(FIRST, null)).toEqual([]);
+    expect(store.findChatById(other.id)).toEqual(unrelated);
+  });
+
+  it("rolls back every matching Chat when one generation cannot advance", () => {
+    store.close();
+    const dbPath = join(project, "lifecycle.db");
+    store = createNodeUiStore(dbPath);
+    store.createProject(project);
+    const first = store.updateChat(
+      store.createChat(project, "First", "model").id,
+      { jiraPodId: FIRST },
+      target(),
+    );
+    const last = store.updateChat(
+      store.createChat(project, "Last", "model").id,
+      { jiraPodId: FIRST },
+      target(),
+    );
+    const raw = new DatabaseSync(dbPath);
+    try {
+      raw.prepare("UPDATE chats SET jira_state_json = ? WHERE id = ?").run(
+        JSON.stringify({
+          schemaVersion: 1,
+          generation: Number.MAX_SAFE_INTEGER,
+          mode: "governed-assist",
+          binding: { ...last.jiraPodBinding, bindingGeneration: Number.MAX_SAFE_INTEGER },
+        }),
+        last.id,
+      );
+    } finally {
+      raw.close();
+    }
+    expect(() => store.invalidateJiraPod(FIRST, 2)).toThrow("generation is exhausted");
+    expect(store.findChatById(first.id)).toEqual(first);
+    expect(store.findChatById(last.id)?.jiraBindingGeneration).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
+  it("rejects invalid lifecycle generations before altering any binding", () => {
+    const chat = store.createChat(project, "First", "model");
+    const bound = store.updateChat(chat.id, { jiraPodId: FIRST }, target());
+    for (const generation of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => store.invalidateJiraPod(FIRST, generation)).toThrow();
+      expect(store.findChatById(chat.id)).toEqual(bound);
+    }
+  });
+
   it("restores the saved selection and binding on reopen, and rejects corrupt persisted generations", () => {
     const dbPath = join(project, "ui.db");
     const disk = createNodeUiStore(dbPath);

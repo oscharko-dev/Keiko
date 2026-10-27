@@ -269,6 +269,9 @@ export interface AtlassianCredentialCustody {
 export interface AtlassianCredentialCustodyDeps {
   readonly vault: AtlassianCredentialVaultPort;
   readonly metadataStore: AtlassianCredentialMetadataStore;
+  // Server-owned invalidation follows durable revocation. null means credential removal.
+  readonly onLivePodInvalidated?:
+    ((podId: string, authenticationGeneration: number | null) => void) | undefined;
   readonly now?: () => number;
 }
 
@@ -613,11 +616,14 @@ function finishVerification(
     return false;
   if (status !== "unverified" && !isAtlassianConnectionVerificationStatus(status))
     throw new AtlassianCredentialCustodyError("invalid-input");
+  const nextGeneration = status === "ok" ? generation : advanceGeneration(generation);
   deps.metadataStore.insert({
     ...metadata,
-    generation: status === "ok" ? generation : advanceGeneration(generation),
+    generation: nextGeneration,
     livePod: { ...metadata.livePod, verificationInProgress: false, verificationStatus: status },
   });
+  if (nextGeneration !== generation)
+    deps.onLivePodInvalidated?.(metadata.livePod.podId, nextGeneration);
   return true;
 }
 
@@ -685,12 +691,19 @@ export function createAtlassianCredentialCustody(
         .sort(compareAtlassianCredentialMetadata),
     delete: (authRef: string): boolean => {
       if (!isAtlassianConnectorAuthRef(authRef)) return false;
-      if (deps.metadataStore.get(authRef) === undefined) return false;
+      const metadata = deps.metadataStore.get(authRef);
+      if (metadata === undefined) return false;
       // Ciphertext removal first: if it fails the metadata row remains and the delete is
       // retryable; the reverse order could silently orphan a sealed secret on disk.
       vaultOp(() => {
         deps.vault.delete(authRef);
       });
+      if (
+        isAtlassianCredentialMetadata(metadata) &&
+        metadata.deployment === "data-center" &&
+        metadata.livePod !== undefined
+      )
+        deps.onLivePodInvalidated?.(metadata.livePod.podId, null);
       return deps.metadataStore.delete(authRef);
     },
   };

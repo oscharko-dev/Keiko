@@ -10,6 +10,8 @@ import { realpathSync } from "node:fs";
 import { randomBytes, randomUUID } from "node:crypto";
 import type { Chat } from "../store/index.js";
 import { jiraChatActorDigest } from "./jiraPodAccess.js";
+import { invalidateJiraPodChats } from "./jiraPodLifecycle.js";
+import { runSerializedChatTurn } from "../chat-turn-serializer.js";
 import {
   createFileServerLogSink,
   createServerLogger,
@@ -276,6 +278,9 @@ beforeEach(async () => {
   fakePortRequests = [];
   fakePortResult = { kind: "response", status: 200 };
   const built = buildAtlassianConnectorCredentialDeps({
+    onLivePodInvalidated: (podId, generation) => {
+      invalidateJiraPodChats(fixtureStore, podId, generation);
+    },
     configPath,
     env: vaultEnv(),
     egress: () => undefined,
@@ -1039,6 +1044,105 @@ async function updatedJiraChat(chat: Chat, patch: Record<string, unknown>): Prom
 }
 
 describe("normal Chat Jira binding through authenticated PATCH", () => {
+  it("direct credential deletion disconnects matching Chats and cancels only their active turns", async () => {
+    const podId = await readyJiraPod();
+    const otherPodId = await readyJiraPod();
+    const first = await updatedJiraChat(jiraChat(), { jiraPodId: podId });
+    const second = await updatedJiraChat(jiraChat(), { jiraPodId: podId });
+    const other = await updatedJiraChat(jiraChat(), { jiraPodId: otherPodId });
+    const credential = wiring.custody
+      .list()
+      .find((row) => row.deployment === "data-center" && row.livePod?.podId === podId);
+    if (credential === undefined) throw new Error("Expected synthetic credential");
+    const controllers = [
+      new AbortController(),
+      new AbortController(),
+      new AbortController(),
+      new AbortController(),
+    ];
+    const started: number[] = [];
+    let release!: () => void;
+    const work = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const turns = [first, second, other, first].map((chat, index) => {
+      const controller = controllers[index];
+      if (controller === undefined) throw new Error("Expected turn controller");
+      return runSerializedChatTurn(
+        { store: fixtureStore },
+        chat.id,
+        controller.signal,
+        () => {
+          started.push(index);
+          return work;
+        },
+        controller,
+      );
+    });
+    const sink = createFileServerLogSink(configDir, { level: "debug" });
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    try {
+      const response = await fetch(
+        `${baseUrl()}/api/atlassian-connectors/credentials/${credential.authRef}`,
+        {
+          method: "DELETE",
+          headers: csrfHeaders(),
+        },
+      );
+      expect(response.status).toBe(200);
+      expect(controllers.map((controller) => controller.signal.aborted)).toEqual([
+        true,
+        true,
+        false,
+        true,
+      ]);
+      for (const chat of [first, second]) {
+        expect(fixtureStore.findChatById(chat.id)?.jiraPodBinding).toBeUndefined();
+        expect(fixtureStore.findChatById(chat.id)?.jiraBindingGeneration).toBe(2);
+      }
+      expect(fixtureStore.findChatById(other.id)).toEqual(other);
+    } finally {
+      release();
+      await Promise.all(turns);
+      sink.close?.();
+      resetServerLogger();
+    }
+    expect(started).toEqual([0, 1, 2]);
+    const lines = persistedActivityLogLines(
+      readPersistedActivityLog(configDir),
+      "chat.scope.update",
+    );
+    const events = lines.map((line) => expectActivityLogProof("chat.scope.update.outcome", line));
+    expect(events.map((event) => event.outcome)).toEqual([
+      "applied",
+      "applied",
+      "cancellation-requested",
+      "cancellation-requested",
+    ]);
+    expect(lines.join("\n")).not.toContain(podId);
+    expect(lines.join("\n")).not.toContain(credential.authRef);
+  });
+
+  it("a failed direct reverify revokes the old binding generation while retaining the Pod", async () => {
+    const podId = await readyJiraPod();
+    const bound = await updatedJiraChat(jiraChat(), { jiraPodId: podId });
+    const credential = wiring.custody
+      .list()
+      .find((row) => row.deployment === "data-center" && row.livePod?.podId === podId);
+    if (credential === undefined) throw new Error("Expected synthetic credential");
+    fakePortResult = { kind: "response", status: 401 };
+    await rebuild({ ...wiring, httpBodyPortFactory: fakeHttpBodyPortFactory() });
+    const failed = await verifyCredentialRequest(credential.authRef);
+    expect(failed.status).toBe(200);
+    expect(await failed.json()).toMatchObject({ status: "auth-failed" });
+    expect(fixtureStore.findChatById(bound.id)?.jiraPodBinding).toEqual({
+      ...bound.jiraPodBinding,
+      authenticationGeneration: 2,
+      bindingGeneration: 2,
+    });
+    expect((await patchJiraChat(bound, { toolMode: "autonomous-delivery" })).status).toBe(409);
+  });
+
   it("records each binding effect once and reconstructs denials and conflicts without private facts", async () => {
     const podId = await readyJiraPod();
     const initial = jiraChat();

@@ -509,6 +509,7 @@ import type { JiraCodeContextHttpPort } from "./coding-context/jiraCodeContextCo
 import { createGovernedJiraCodeContextHttpPort } from "./coding-context/jiraCodeContextPort.js";
 import type { AtlassianConnectorCredentialDeps } from "./atlassian/credentialRoutes.js";
 import { buildAtlassianConnectorCredentialDeps } from "./atlassian/wiring.js";
+import { invalidateJiraPodChats } from "./atlassian/jiraPodLifecycle.js";
 // KEIKO-0565: DI-scoped Atlassian connector registries. The classes are imported (not just their
 // types) so buildUiHandlerDeps can construct one instance per BFF process without depending on
 // the module-level singleton.
@@ -4547,6 +4548,9 @@ function atlassianConnectorCredentialFields(
 ): Pick<UiHandlerDeps, "atlassianConnectorCredentials"> {
   return {
     atlassianConnectorCredentials: buildAtlassianConnectorCredentialDeps({
+      onLivePodInvalidated: (podId, generation) => {
+        invalidateJiraPodChats(args.bundle.uiStore, podId, generation);
+      },
       networkConfig: () => args.runtimeConfig.current()?.atlassian,
       configPath: args.runtimeConfig.storagePath,
       env: args.options.env,

@@ -142,3 +142,37 @@ export function updatedJiraChatState(
     ...(binding === undefined ? {} : { binding: { ...binding, bindingGeneration: generation } }),
   };
 }
+
+/** A revoked credential keeps its visible association; removal disconnects it. */
+export function invalidatedJiraChatState(
+  existing: Chat,
+  podId: string,
+  authenticationGeneration: number | null,
+): JiraChatState | undefined {
+  assertJiraPodInvalidation(podId, authenticationGeneration);
+  const binding = existing.jiraPodBinding;
+  if (binding?.podId !== podId) return undefined;
+  if (
+    authenticationGeneration !== null &&
+    authenticationGeneration <= binding.authenticationGeneration
+  )
+    return undefined;
+  const generation = (existing.jiraBindingGeneration ?? 0) + 1;
+  if (!Number.isSafeInteger(generation))
+    throw invalidRequest("Chat binding generation is exhausted.");
+  return {
+    schemaVersion: 1,
+    generation,
+    mode: existing.toolMode ?? "governed-assist",
+    ...(authenticationGeneration === null
+      ? {}
+      : {
+          binding: { ...binding, authenticationGeneration, bindingGeneration: generation },
+        }),
+  };
+}
+
+export function assertJiraPodInvalidation(podId: string, generation: number | null): void {
+  if (!isChatJiraPodId(podId) || (generation !== null && !positiveGeneration(generation)))
+    throw invalidRequest("Invalid Jira Pod lifecycle state.");
+}

@@ -390,7 +390,8 @@ connection and validated issue keys, preserving the context path. Jira-supplied 
 used for them. Links are added after journal composition and stay out of receipts, journal rows and
 Activity Log evidence. A replay of a create without a retained issue identity does not fabricate a
 link. Read and mutation descriptors carry the additive result field in their new contract versions
-(reads and writes v2, issue read v3). Complete read-page byte accounting includes the links and
+(reads v2, issue read and mutations v3). Mutation schemas share the connector validator's
+50-update bound. Complete read-page byte accounting includes the links and
 reserves the existing catalog envelope budget. When a page exceeds that budget, a fitting prefix
 is returned with `nextStartAt` pointing to its first unreturned item; an item that cannot fit alone
 produces the existing bounded failure instead of a misleading empty page.
@@ -417,6 +418,16 @@ advance it. Aborted probes return to unverified readiness. Late answers after a 
 deletion return conflict and cannot overwrite current state. The existing connection-check event
 distinguishes applied and stale observations without response content. This verification state
 does not itself grant Chat read or mutation authority.
+
+The custody owner notifies server composition when a current failed/aborted probe advances the
+credential generation, or after ciphertext removal during deletion. This also covers the direct
+credential-management routes. The existing UI store atomically advances every matching Chat's
+binding generation, retaining its Pod association on credential invalidation and disconnecting on
+removal. Older/repeated generation notifications are harmless. The existing Chat turn serializer
+then interrupts affected generations; other Pods' Chats remain untouched. Applied scope changes
+and requested cancellation use the registered `chat.scope.update` event. Cleanup failure after
+ciphertext removal still invalidates bindings; cross-store restart reconciliation, token rotation
+and Chat grant/approval revocation remain separate completion work.
 
 Both outbound HTTP factories capture the selected credential generation by value. The custody
 resolver checks it against current private metadata before reading ciphertext, so an old transport

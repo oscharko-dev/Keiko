@@ -69,7 +69,9 @@ function inMemoryVault(): AtlassianCredentialVaultPort & { readonly entries: Map
   };
 }
 
-function custodyOverFakes(): {
+function custodyOverFakes(
+  onLivePodInvalidated?: (podId: string, authenticationGeneration: number | null) => void,
+): {
   readonly custody: ReturnType<typeof createAtlassianCredentialCustody>["custody"];
   readonly executionResolver: ReturnType<
     typeof createAtlassianCredentialCustody
@@ -83,6 +85,7 @@ function custodyOverFakes(): {
     vault,
     metadataStore,
     now: () => 1_700_000_000_000,
+    ...(onLivePodInvalidated === undefined ? {} : { onLivePodInvalidated }),
   });
   return { custody, executionResolver, vault, metadataStore };
 }
@@ -116,6 +119,44 @@ describe("Jira Live Pod custody", () => {
     expect(custodyErrorCode(() => f.custody.beginVerification(created.authRef, 2))).toBe(
       "credential-changed",
     );
+    expect(f.custody.getMetadata(created.authRef)).toEqual(created);
+  });
+
+  it("notifies the lifecycle owner only after a current verification revokes its generation", () => {
+    const invalidated = vi.fn();
+    const f = custodyOverFakes(invalidated);
+    const created = f.custody.create(livePodInput(), "a".repeat(64));
+    assert(created.deployment === "data-center" && created.livePod);
+    const check = f.custody.beginVerification(created.authRef);
+    assert(check);
+    f.custody.finishVerification(created.authRef, 1, check.revision, "auth-failed");
+    expect(invalidated).toHaveBeenCalledExactlyOnceWith(created.livePod.podId, 2);
+    f.custody.finishVerification(created.authRef, 1, check.revision, "ok");
+    expect(invalidated).toHaveBeenCalledTimes(1);
+  });
+
+  it("invalidates a deleted Pod after ciphertext removal even if metadata cleanup fails", () => {
+    const invalidated = vi.fn();
+    const f = custodyOverFakes(invalidated);
+    const created = f.custody.create(livePodInput(), "a".repeat(64));
+    assert(created.deployment === "data-center" && created.livePod);
+    vi.spyOn(f.metadataStore, "delete").mockImplementation(() => {
+      throw new Error("Synthetic metadata write failure");
+    });
+    expect(() => f.custody.delete(created.authRef)).toThrow("Synthetic metadata write failure");
+    expect(f.vault.entries.size).toBe(0);
+    expect(invalidated).toHaveBeenCalledExactlyOnceWith(created.livePod.podId, null);
+  });
+
+  it("does not revoke a Pod when ciphertext removal fails", () => {
+    const invalidated = vi.fn();
+    const f = custodyOverFakes(invalidated);
+    const created = f.custody.create(livePodInput(), "a".repeat(64));
+    vi.spyOn(f.vault, "delete").mockImplementation(() => {
+      throw new Error("Synthetic vault write failure");
+    });
+    expect(() => f.custody.delete(created.authRef)).toThrow();
+    expect(invalidated).not.toHaveBeenCalled();
     expect(f.custody.getMetadata(created.authRef)).toEqual(created);
   });
 

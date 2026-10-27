@@ -84,6 +84,7 @@ import {
   touchChat as sqlTouchChat,
   mutateGitChangeScopes as sqlMutateGitChangeScopes,
   updateChat as sqlUpdateChat,
+  invalidateJiraPod as sqlInvalidateJiraPod,
 } from "./chats.js";
 import {
   type ClientTurnRecord,
@@ -750,6 +751,8 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
     ): Chat => createChatRecord(db, options, projectPath, title, selectedModel, opts),
     updateChat: (id: string, patch: UpdateChatPatch, updateOptions?: UpdateChatOptions): Chat =>
       sqlUpdateChat(db, id, patch, options.now(), updateOptions),
+    invalidateJiraPod: (podId, generation, correlationId) =>
+      sqlInvalidateJiraPod(db, podId, generation, options.now(), correlationId),
     mutateGitChangeScopes: (
       id: string,
       mutate: (current: readonly ChatGitChangeScope[]) => readonly ChatGitChangeScope[],

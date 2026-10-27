@@ -33,7 +33,13 @@ import type {
 import { invalidRequest, notFound, UiStoreError } from "./errors.js";
 import { logChatScopeUpdate } from "../chat-scope-update-log.js";
 import { deriveChatGroundingScopeIdentity } from "./chat-grounding-scope-identity.js";
-import { decodeJiraChatState, jiraChatFields, updatedJiraChatState } from "./chatJiraBinding.js";
+import {
+  decodeJiraChatState,
+  jiraChatFields,
+  updatedJiraChatState,
+  invalidatedJiraChatState,
+  assertJiraPodInvalidation,
+} from "./chatJiraBinding.js";
 import { withImmediateTransaction } from "./transaction.js";
 
 // Issue #3400 (epic #3384) — a chat rarely connects more than one Git comparison at a time; this
@@ -1213,4 +1219,40 @@ export function deleteChat(db: DatabaseSync, id: string): void {
 export function touchChat(db: DatabaseSync, id: string, now: number): void {
   const info = db.prepare(SQL_TOUCH).run(now, id);
   if (info.changes === 0) throw notFound("Chat");
+}
+
+export function invalidateJiraPod(
+  db: DatabaseSync,
+  podId: string,
+  authenticationGeneration: number | null,
+  now: number,
+  correlationId?: string,
+): readonly { readonly previous: Chat; readonly current: Chat }[] {
+  assertJiraPodInvalidation(podId, authenticationGeneration);
+  const changes = withImmediateTransaction(db, () => {
+    const rows = db
+      .prepare(
+        `SELECT ${SELECT_COLUMNS} FROM chats WHERE json_extract(jira_state_json, '$.binding.podId') = ?`,
+      )
+      .all(podId) as unknown as ChatRow[];
+    const changed: { previous: Chat; current: Chat }[] = [];
+    for (const row of rows) {
+      const previous = rowToChat(row);
+      const state = invalidatedJiraChatState(previous, podId, authenticationGeneration);
+      if (state === undefined) continue;
+      db.prepare("UPDATE chats SET jira_state_json = ?, updated_at = ? WHERE id = ?").run(
+        JSON.stringify(state),
+        now,
+        previous.id,
+      );
+      changed.push({
+        previous,
+        current: rowToChat({ ...row, jira_state_json: JSON.stringify(state), updated_at: now }),
+      });
+    }
+    return changed;
+  });
+  for (const change of changes)
+    logChatScopeUpdate("applied", change.previous, change.current, {}, correlationId);
+  return changes;
 }

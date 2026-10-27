@@ -145,7 +145,7 @@ Status: **Partial — not accepted**. All three mode selections persist through 
 
 - [ ] **AC3:** Disconnect, replacement, Pod deletion and Keiko-managed token rotation/revocation revoke read grants and invalidate pending approvals and queued calls. Jira-side token revocation is enforced on the next Jira call; observed auth failure invalidates local readiness and pending work without introducing polling or webhooks. Tests cover these changes during approval and before effect; no stale request uses the old or newly substituted credential.
 
-Status: **Partial — not accepted**. HTTP generation capture, verification ticket settlement and atomic binding generations prevent the implemented stale credential/probe/update paths. Retained real-route proofs are recorded below. Rotation, observed-call failures and coordinated grant/approval/queued-call invalidation remain pending.
+Status: **Partial — not accepted**. HTTP generation capture, verification ticket settlement and atomic binding generations prevent the implemented stale credential/probe/update paths. Retained real-route proofs are recorded below. Credential deletion and failed/aborted re-verification now atomically invalidate dependent Chat bindings and cancel their active/queued turns through the existing serializer, including direct credential routes. Rotation, observed tool-call failures and grant/approval invalidation remain pending.
 
 - [ ] **AC4:** Two chats using different Pods are isolated; two chats deliberately using the same Pod share neither grants nor approval state; a new or copied Chat identity cannot inherit grants or approvals. Data-Pod-only grounding is byte-for-byte unchanged in behaviour and existing Workbench MCP works unchanged.
 
@@ -201,7 +201,7 @@ Status: **Partial — not accepted**. Bounded Data Center probes and generation/
 
 - [ ] **AC4:** Rename, reverify, token replacement and removal survive reload and use the existing server owner. Tests delete/replace a Pod-owned credential through the existing credential route while two Chats share the Pod and deliver stale verification replies after rotation; neither alternate entry points nor late replies restore stale access. Removal deletes the owned credential and dependent Chat bindings; token rotation preserves their visible association but invalidates authorization, read grants and pending work until re-verification; deleting one Pod never damages unrelated credentials or Data Pods.
 
-Status: **Partial — not accepted**. Owned credential deletion and stale-verification refusal are exercised through actual routes; binding/readiness generations persist in existing owners. Rename, rotation, dependent-Chat cleanup, restart coordination and grant/approval invalidations remain pending.
+Status: **Partial — not accepted**. Owned credential deletion and stale-verification refusal are exercised through actual routes; binding/readiness generations persist in existing owners. Dependent-Chat cleanup and cancellation now run from the custody owner, including direct credential deletion and failed/aborted verification; unrelated Pods remain unchanged. Rename, rotation, restart coordination and grant/approval invalidations remain pending.
 
 - [ ] **AC5:** The ordinary Jira form requires no email, MCP configuration or vector-index setup. The initial implemented ticket capabilities are explained plainly without claiming all Jira APIs or guaranteed write permissions.
 
@@ -1315,3 +1315,24 @@ A read-only lab recheck on 2026-10-27 confirms healthy Jira/PostgreSQL container
 production HTTPS/PAT connection cases (trusted connection, untrusted certificate and revoked
 exact admission). The license check reports expired. This is connection evidence only, not a
 licensed write/model/browser qualification; the next complete live group needs a valid session.
+
+### Credential-owned Chat invalidation — #4084 AC3, #4085 AC4
+
+- Current failed/aborted verification and credential deletion notify the server through the existing
+  custody owner, including direct credential-management routes. Notification follows durable
+  generation revocation or ciphertext removal; metadata cleanup failure cannot skip it.
+- The existing UI store changes all matching Chat bindings in one immediate transaction, advances
+  scope generations and preserves Pod association on credential-generation changes. Deletion
+  disconnects the Pod. Repeated/older generation notifications do nothing; unrelated Pods remain
+  unchanged. Exhausted generations roll back the complete affected set.
+- The existing turn serializer cancels matching active generations. An actual authenticated DELETE
+  test covers two Chats on one Pod and a third on another; a direct Verify route test covers failed
+  re-verification and rejection of the old scope identity. Real Activity Log writer/reader evidence
+  reconstructs both applications and both cancellation requests without Pod/authRef values.
+- Three focused custody/store regressions fail before implementation. Targeted final results are
+  recorded in the PR checkpoint. This increment does not complete restart reconciliation, token
+  rotation, Chat authority/grants/approvals or UI lifecycle integration; the affected ACs remain partial.
+
+Final focused results for this checkpoint: 217 custody/HTTP-route/store/serializer tests and 97
+registry tests pass, with package build, root typecheck, changed lint/format, staged semantic and
+ADR-index checks. Full aggregate, assembled-package, licensed live and UI qualification remain pending.
