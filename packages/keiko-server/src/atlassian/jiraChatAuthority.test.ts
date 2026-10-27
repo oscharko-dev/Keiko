@@ -51,6 +51,7 @@ import {
 import { jiraChatActorDigest } from "./jiraPodAccess.js";
 import {
   requestJiraChatReadGrant,
+  mintAcceptedJiraChatAuthority,
   resolveCurrentJiraChatAuthority,
   decideGovernedJiraChatAction,
   reserveCurrentJiraChatAuthority,
@@ -147,6 +148,122 @@ function updatePod(patch: Partial<JiraLivePodMetadata>): void {
     throw new Error("Expected Jira metadata");
   metadata = [{ ...credential, livePod: { ...credential.livePod, ...patch } }];
 }
+
+describe("accepted ordinary Chat turn authority", () => {
+  function acceptedMessage(role: "user" | "assistant" = "user"): string {
+    return store.createMessage({
+      chatId: chat.id,
+      role,
+      content: "Synthetic accepted task",
+      timestamp: Date.parse(CHAT_AUTHORITY_TEST_NOW),
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    }).id;
+  }
+
+  function mint(userMessageId: string): ReturnType<typeof mintAcceptedJiraChatAuthority> {
+    return mintAcceptedJiraChatAuthority(deps, {
+      chatId: chat.id,
+      userMessageId,
+      startedAtMs: Date.parse(CHAT_AUTHORITY_TEST_NOW),
+      nowMs: Date.parse(CHAT_AUTHORITY_TEST_NOW),
+      correlationId: "accepted-chat-authority",
+    });
+  }
+
+  it("mints from the stored human turn and current binding with one exact deadline", () => {
+    const result = mint(acceptedMessage());
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("Expected accepted authority");
+    expect(
+      resolveCurrentJiraChatAuthority(
+        deps,
+        chat.id,
+        result.reference,
+        CHAT_AUTHORITY_TEST_NOW,
+        "accepted-chat-authority",
+      ),
+    ).toMatchObject({ ok: true, envelope: result.envelope });
+    expect(result.envelope.requestedMode).toBe("governed-assist");
+    expect(Date.parse(result.envelope.expiresAt)).toBe(
+      Date.parse(CHAT_AUTHORITY_TEST_NOW) + result.envelope.budget.maxRuntimeMs,
+    );
+    expect(JSON.stringify(result)).not.toMatch(
+      /Synthetic accepted task|private-credential-reference/,
+    );
+  });
+
+  it("refuses missing/nonhuman turns, missing binding and unverified credentials", () => {
+    expect(mint("missing").ok).toBe(false);
+    expect(mint(acceptedMessage("assistant")).ok).toBe(false);
+    const message = acceptedMessage();
+    updatePod({ verificationStatus: "unverified" });
+    expect(mint(message).ok).toBe(false);
+    updatePod({ verificationStatus: "ok" });
+    store.updateChat(chat.id, { jiraPodId: null });
+    expect(mint(message).ok).toBe(false);
+  });
+
+  it("reuses accepted consent across separately admitted human turns without replacing the issuer", () => {
+    const first = mint(acceptedMessage());
+    if (!first.ok) throw new Error("Expected accepted authority");
+    const grants = new AtlassianActionApprovalRegistry(() => Date.parse(CHAT_AUTHORITY_TEST_NOW));
+    const owners = { ...deps, atlassianActionApprovalRegistry: grants };
+    const pending = requestJiraChatReadGrant(
+      owners,
+      chat.id,
+      first.reference,
+      CHAT_AUTHORITY_TEST_NOW,
+      "first-human-turn",
+    );
+    if (pending.kind !== "review-required") throw new Error("Expected read consent");
+    expect(
+      grants.acceptChatReadGrant(
+        pending.grant.grantId,
+        first.envelope.subject,
+        first.reference,
+        "b".repeat(64),
+      ).ok,
+    ).toBe(true);
+    const second = mint(acceptedMessage());
+    if (!second.ok) throw new Error("Expected second accepted authority");
+    expect(second.reference).not.toEqual(first.reference);
+    expect(
+      requestJiraChatReadGrant(
+        owners,
+        chat.id,
+        second.reference,
+        CHAT_AUTHORITY_TEST_NOW,
+        "second-human-turn",
+      ),
+    ).toEqual({
+      kind: "granted",
+      grant: {
+        ...pending.grant,
+        state: "granted",
+      },
+    });
+    expect(grants.getChatReadGrant(pending.grant.grantId)?.authority).toEqual(first.reference);
+  });
+
+  it.each([Number.NaN, -1, Number.MAX_SAFE_INTEGER])(
+    "rejects invalid accepted time %s",
+    (startedAtMs) => {
+      expect(
+        mintAcceptedJiraChatAuthority(deps, {
+          chatId: chat.id,
+          userMessageId: acceptedMessage(),
+          startedAtMs,
+          nowMs: Date.parse(CHAT_AUTHORITY_TEST_NOW),
+          correlationId: "invalid-acceptance-time",
+        }).ok,
+      ).toBe(false);
+    },
+  );
+});
 
 describe("current ordinary Chat Jira authority facts", () => {
   it("resolves private metadata only from the current owned and verified binding", () => {

@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { DEFAULT_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/harness";
+import { resolveEffectiveCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { CHAT_TOOL_READ_DISCLOSURE_VERSION } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
 import {
   ATLASSIAN_ACTION_APPROVAL_TTL_MS,
@@ -17,6 +20,7 @@ import {
 } from "./actionPolicy.js";
 import type {
   ChatToolAuthorityEnvelope,
+  CodingWorkbenchMode,
   ChatToolReadGrant,
   ChatToolReadGrantView,
   AtlassianConnectorActionType,
@@ -54,6 +58,99 @@ interface CurrentFacts {
   readonly chat: Chat;
   readonly credential: JiraLivePodCredential;
   readonly subject: ChatToolAuthoritySubject;
+}
+
+export interface AcceptedJiraChatTurn {
+  readonly chatId: string;
+  readonly userMessageId: string;
+  readonly startedAtMs: number;
+  readonly nowMs: number;
+  readonly correlationId: string;
+}
+type AcceptedJiraChatAuthority =
+  | {
+      readonly ok: true;
+      readonly envelope: ChatToolAuthorityEnvelope;
+      readonly reference: EditorAgentGovernedAuthorityReference;
+    }
+  | { readonly ok: false; readonly reason: EditorAgentAuthorityFailureReason };
+
+function acceptedTurnEnvelope(
+  facts: CurrentFacts,
+  turn: AcceptedJiraChatTurn,
+  deploymentCeiling: CodingWorkbenchMode,
+): ChatToolAuthorityEnvelope {
+  const requestedMode = facts.chat.toolMode ?? "governed-assist";
+  const runId = randomUUID();
+  return {
+    schemaVersion: "1",
+    kind: "chat-tool-authority",
+    runId,
+    subject: facts.subject,
+    requestedMode,
+    deploymentCeiling,
+    effectiveMode: resolveEffectiveCodingWorkbenchMode(requestedMode, deploymentCeiling),
+    actionClasses: ["connector-access", "network-egress"],
+    connectorScopes: ["issue-tracker.read", "issue-tracker.write"],
+    budget: {
+      maxRuntimeMs: DEFAULT_LIMITS.maxWallTimeMs,
+      maxToolCalls: DEFAULT_LIMITS.maxToolCalls,
+      maxPromptTokens: 100_000,
+      maxPatchBytes: 0,
+    },
+    expiresAt: new Date(turn.startedAtMs + DEFAULT_LIMITS.maxWallTimeMs).toISOString(),
+    approvalProofDigest: sha256Hex(
+      canonicalise({
+        runId,
+        subject: facts.subject,
+        requestedMode,
+        deploymentCeiling,
+        userMessageId: turn.userMessageId,
+        acceptedAtMs: turn.startedAtMs,
+      }),
+    ),
+  };
+}
+
+/** Called once after authenticated human-turn admission; retain the result across every phase. */
+function validAcceptedTurn(deps: JiraChatAuthorityDeps, turn: AcceptedJiraChatTurn): boolean {
+  const message = deps.store.findMessageById(turn.userMessageId);
+  const deadline = turn.startedAtMs + DEFAULT_LIMITS.maxWallTimeMs;
+  return (
+    message?.role === "user" &&
+    message.chatId === turn.chatId &&
+    Number.isSafeInteger(turn.startedAtMs) &&
+    Number.isSafeInteger(turn.nowMs) &&
+    Number.isFinite(new Date(deadline).getTime()) &&
+    turn.startedAtMs >= 0 &&
+    turn.nowMs >= turn.startedAtMs &&
+    turn.nowMs < deadline
+  );
+}
+
+/** Normal turn settlement does not revoke this issuer; expiry/lifecycle retain that ownership. */
+export function mintAcceptedJiraChatAuthority(
+  deps: JiraChatAuthorityDeps,
+  turn: AcceptedJiraChatTurn,
+): AcceptedJiraChatAuthority {
+  const facts = currentFacts(deps, turn.chatId);
+  const registry = deps.agentAuthorityRegistry;
+  if (!facts.ok || registry === undefined || !validAcceptedTurn(deps, turn))
+    return recordChatAuthorityResult(
+      "register",
+      { ok: false, reason: "invalid" },
+      { chatId: turn.chatId },
+      turn.correlationId,
+    );
+  const ceiling = deps.autonomousDeliveryDeploymentCeiling ?? "governed-assist";
+  const envelope = acceptedTurnEnvelope(facts, turn, ceiling);
+  const result = registry.registerChat(
+    envelope,
+    ceiling,
+    new Date(turn.nowMs).toISOString(),
+    turn.correlationId,
+  );
+  return result.ok ? { ok: true, envelope, reference: result.authorityRef } : result;
 }
 
 function currentFacts(

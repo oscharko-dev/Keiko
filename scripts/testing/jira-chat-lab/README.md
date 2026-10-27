@@ -27,10 +27,21 @@ trust is unchanged. HTTP administration uses port 18081 (an optional final `init
 argument changes it); product-path qualification uses HTTPS port 18443. Stop the
 previous session before starting another frontend on that port.
 
-Complete Jira’s normal first-run setup on the local HTTP administration port:
-private access mode, the published test license, administrator `keiko-admin` with
-the generated `secrets/admin-password`, and email delivery disabled. Setup automation
-is still pending; never paste secrets into tracked files, commands or evidence.
+Save the published Jira Software Data Center test license in a private regular file
+(mode 0600) outside the repository, then run the normal first-run setup:
+
+```sh
+node scripts/testing/jira-chat-lab/setup.mjs "$HOME/.local/share/keiko-jira-4081-new" /absolute/private/test-license
+```
+
+This drives Jira's existing forms: private access, the supplied test license,
+administrator `keiko-admin` with `secrets/admin-password`, and disabled email. An exclusive
+`setup-pending` marker prevents repeating a potentially completed setup after interruption.
+Reconcile the normal UI and license endpoint before removing that marker. A completed setup
+records a private receipt. Setup does not modify Jira licensing code, clocks or database values.
+Never paste secrets into tracked files, commands or evidence. The 2026-10-27 session verified
+these same form operations; an end-to-end fresh execution of the consolidated script remains
+pending for the next qualification group.
 
 The [published test license](https://developer.atlassian.com/platform/marketplace/timebomb-licenses-for-testing-server-apps/)
 has a three-hour lifetime. A healthy container or successful read does not establish

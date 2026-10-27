@@ -244,10 +244,19 @@ A successful response arriving after access loss is discarded without exposing i
 already-performed effect retains the shared budget charge and one terminal settlement. A completed UI notification is not approval; the
 existing approval owner must contain the accepted record. Catalog offers create no consent
 requests. The existing Harness counter owner is available to non-Coding compositions; the binder
-retains reservation, cancellation and settlement ownership. Concrete write approval, application
-graph/ordinary Chat orchestration and UI composition remain integration requirements. Turn
+retains reservation, cancellation and settlement ownership. Concrete write approval, ordinary Chat orchestration and UI composition remain integration
+requirements. The application graph owns the lazy shared host (ADR-0181). Turn
 settlement must preserve valid Chat consent within its retained scope and expiry; the normal-Chat
 lifecycle must still prove that it does not revoke the issuing authority at each turn boundary.
+
+Accepted-turn authority minting reads the persisted human user message and current owned,
+verified Chat binding. It derives mode/ceiling and acceptance evidence server-side, retains
+the existing authority registry and grants no read consent or concrete write approval. The
+same turn deadline bounds `expiresAt` and runtime; the initial limits are five minutes,
+30 tool calls and 100,000 cumulative prompt tokens. The caller must retain this single
+registration across tool, model and retry phases. Registration does not revoke a previous
+turn's valid consent issuer. Component tests prove grant reuse across independently accepted
+turns; the ordinary Chat entrypoint still needs the integrated lifecycle proof.
 
 ### D6 — Forward rule for decision records
 

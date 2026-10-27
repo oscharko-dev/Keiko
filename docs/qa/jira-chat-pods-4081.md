@@ -1733,3 +1733,29 @@ The missing-composition regression failed before implementation. The 159-test af
 package build, root typecheck and changed lint pass. The final lifecycle assertions cover
 registered listing/admission evidence. Normal Chat orchestration, accepted-human authority
 minting and write approvals remain open; no complete AC or final gate is claimed.
+
+### Accepted-turn authority and renewed live group — 2026-10-27 (#4084, #4082, #4081)
+
+The accepted-turn helper now mints private authority from an existing human message and fresh
+owned/verified binding facts, with server-derived mode, ceiling and acceptance digest. Its five-minute
+deadline starts with the turn, with 30 tool calls and 100,000 prompt tokens. It does not grant
+read consent or write approval. The retained issuer survives separate later turn admission;
+component tests prove one accepted read grant is reused without replacing its issuer/expiry.
+Normal Chat must still call this once and preserve it throughout all phases.
+
+Two new cases failed before implementation. All 55 authority tests, package build, root typecheck
+and changed lint pass after the correction. These are test counts, not 55 accepted epic criteria.
+The complete Chat entrypoint/lifetime proof and final gates remain pending.
+
+A new independent synthetic Jira 10.3.26 session passed licensed fixture creation, restricted
+identities, required create/custom fields, required transition screen, pagination/hostile content,
+project isolation, trusted HTTPS, untrusted-certificate denial and admission revocation. Its
+production-custody/HTTP write preflight verified assignment, description edit and exactly one added
+comment by independent readback. The final license check reported 10,045 seconds remaining.
+The prior session is stopped with volumes retained. No license or clock manipulation occurred.
+
+Fresh Jira onboarding overlays blocked the fixture's mouse Publish action. The supported keyboard
+action fixed that reproducibly; the complete fields group was rerun successfully. A consolidated
+normal-first-run setup script now retains a private pending marker on uncertain completion. Its
+individual form operations established this session; fresh end-to-end script qualification is still
+pending. These live groups do not yet establish normal Chat, model or browser acceptance.

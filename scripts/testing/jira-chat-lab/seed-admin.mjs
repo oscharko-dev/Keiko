@@ -72,7 +72,10 @@ export async function configureFixtureTransition(page, session) {
   await page.locator("select[name=view]").selectOption({ label: "Resolve Issue Screen" });
   await page.getByRole("button", { name: "Update", exact: true }).click();
   await page.getByRole("heading", { name: "Transition: Done", exact: true }).waitFor();
-  await page.getByRole("link", { name: "Publish", exact: true }).click();
+  const publish = page.getByRole("link", { name: "Publish", exact: true });
+  // Fresh Jira installations show onboarding overlays above this link; use its keyboard action.
+  await publish.focus();
+  await publish.press("Enter");
   const dialog = page.getByRole("dialog");
   await dialog.waitFor();
   await dialog.locator("label[for=publish-workflow-false]").click();
