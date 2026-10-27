@@ -197,6 +197,13 @@ previous successful verification cannot authorize attachment while a new probe i
 This resolver alone does not grant read consent, approve an action, reserve a budget or dispatch
 an external effect; consumers must compose those existing gates before execution.
 
+Coding and Chat pass the same mode, action-class and connector-scope facets to the existing
+Atlassian action policy. Its strictest disposition remains authoritative; a review-required
+read needs the accepted Chat read grant, and a review-required write needs its concrete action
+approval. Policy inspection does not reserve budget. Chat reservation refreshes owned live
+facts before charging the same cumulative authority owner. Neither helper dispatches tools or
+substitutes for explicit consent to model transmission.
+
 ### D6 — Forward rule for decision records
 
 New ADRs and epics for autonomy-capable surfaces must cite this record and document their

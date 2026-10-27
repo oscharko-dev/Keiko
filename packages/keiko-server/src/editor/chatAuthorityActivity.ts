@@ -1,3 +1,4 @@
+import type { AtlassianConnectorActionType } from "@oscharko-dev/keiko-contracts";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import type { ChatToolAuthoritySubject } from "@oscharko-dev/keiko-contracts";
 import { validateChatToolAuthoritySubject } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
@@ -8,9 +9,10 @@ import {
 import { correlationIdOrUnknown } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
 
-type Failure = "invalid" | "expired" | "budget-exceeded" | "revoked";
+type Failure =
+  "invalid" | "expired" | "budget-exceeded" | "revoked" | "review-required" | "policy-denied";
 type Outcome = { readonly ok: true } | { readonly ok: false; readonly reason: Failure };
-type Phase = "register" | "resolve" | "reserve" | "revoke" | "current-state";
+type Phase = "register" | "resolve" | "reserve" | "revoke" | "current-state" | "action-policy";
 export type ChatAuthorityReadiness =
   | "ready"
   | "chat-unavailable"
@@ -41,13 +43,48 @@ const CHAT_AUTHORITY_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["register", "resolve", "reserve", "revoke", "current-state"],
+      values: ["register", "resolve", "reserve", "revoke", "current-state", "action-policy"],
     },
     outcome: {
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["allowed", "invalid", "expired", "budget-exceeded", "revoked"],
+      values: [
+        "allowed",
+        "invalid",
+        "expired",
+        "budget-exceeded",
+        "revoked",
+        "review-required",
+        "policy-denied",
+      ],
+    },
+    actionType: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "sync-space",
+        "sync-project",
+        "search-issues-live",
+        "create-issue",
+        "update-issue-fields",
+        "transition-issue",
+        "add-issue-comment",
+        "create-page",
+        "update-page",
+        "add-page-comment",
+        "jira.projects",
+        "jira.issue-types",
+        "jira.create-fields",
+        "jira.edit-fields",
+        "jira.search",
+        "jira.issue",
+        "jira.comments",
+        "jira.transitions",
+        "jira.assignable-users",
+        "assign-issue",
+      ],
     },
     authorityDigest: OPTIONAL_DIGEST,
     readiness: {
@@ -82,6 +119,7 @@ const CHAT_AUTHORITY_OPERATION = defineActivityLogOperation({
   analyzerProjection: "capability",
   failureClasses: ["chat-tool-authority"],
   proofIds: [
+    "chat.tool-authority.operation.action-policy",
     "chat.tool-authority.operation.current-state",
     "chat.tool-authority.operation.lifecycle",
   ],
@@ -89,6 +127,7 @@ const CHAT_AUTHORITY_OPERATION = defineActivityLogOperation({
 });
 
 interface AuthorityEvidence {
+  readonly actionType?: AtlassianConnectorActionType | undefined;
   readonly readiness?: ChatAuthorityReadiness | undefined;
   readonly authorityDigest?: string | undefined;
   readonly subject?: ChatToolAuthoritySubject | undefined;
@@ -127,10 +166,11 @@ export function recordChatAuthorityResult<T extends Outcome>(
       CHAT_AUTHORITY_OPERATION,
       {
         correlationId: correlationIdOrUnknown(correlationId),
-        level: result.ok ? "info" : "warn",
+        level: result.ok || result.reason === "review-required" ? "info" : "warn",
       },
       {
         phase,
+        ...(evidence.actionType === undefined ? {} : { actionType: evidence.actionType }),
         outcome: result.ok ? "allowed" : result.reason,
         ...(evidence.readiness === undefined ? {} : { readiness: evidence.readiness }),
         ...(digest !== undefined && /^[a-f0-9]{64}$/.test(digest)

@@ -2699,6 +2699,12 @@
           "analyzerProjection": "capability",
           "safeContextFields": [
             {
+              "name": "actionType",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "actorDigest",
               "type": "string",
               "dataClass": "digest",
@@ -2777,6 +2783,7 @@
             "causeChain": false
           },
           "proofIds": [
+            "chat.tool-authority.operation.action-policy",
             "chat.tool-authority.operation.current-state",
             "chat.tool-authority.operation.lifecycle"
           ],

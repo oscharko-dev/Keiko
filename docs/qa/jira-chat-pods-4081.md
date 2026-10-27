@@ -1484,3 +1484,22 @@ baseline is unchanged. All 97 operation-catalog tests pass; generation resolves 
 30 scenarios with zero violations. Logs: `/tmp/keiko-4081-jira-current-authority-*.log` and
 `/tmp/keiko-4081-jira-pending-verification-before.log`. No complete AC is accepted here; full
 normal Chat execution, licensed live acceptance and final aggregate gates remain pending.
+
+### Shared policy and reservation checkpoint — #4084 AC2–AC5
+
+Ordinary Chat now has private adapters to the existing Atlassian action policy and shared
+cumulative authority budget. The policy accepts the same mode/scope/action-class facets from
+Coding and Chat envelopes, with the strictest mode winning. Ask for approval and Supervised
+workspace return review-required for network access; a future active read grant must satisfy
+that read disposition. Full access still needs separate read consent before model transmission.
+Read-only authority cannot gain Jira writes or Confluence access. Policy inspection does not
+consume budget. Reservation reloads current Chat/credential readiness immediately beforehand;
+this adapter does not itself satisfy consent/approval or execute tools.
+
+Six valid ordinary-Chat policy regressions fail on the previous resolver exports. After the
+implementation, 82 current-state, existing Atlassian policy and authority-registry tests pass.
+The real Activity Log writer/reader reconstructs review-required, allowed, denied and reserved
+states with their closed action types and one correlation; ordinary pending review logs at info
+level. Build, root typecheck and changed lint pass. Catalog generation resolves 613 proofs and
+30 scenarios without violations. Final aggregate gates and actual permission/dispatch composition
+remain pending; no complete AC is accepted here. Logs: `/tmp/keiko-4081-chat-policy-*.log`.

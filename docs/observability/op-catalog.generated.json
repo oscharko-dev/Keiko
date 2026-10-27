@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "8c4cc5c0b7a70f8a8dc009df426fd0fd8f0fb1969c016d044550547f62b7f38e",
+    "catalogDigest": "ee75a9251ce7e6f4bd2deb780cdc5b4bf806456225a5515a6e7ea16af88c2fed",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -2399,13 +2399,48 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["register", "resolve", "reserve", "revoke", "current-state"]
+            "values": ["register", "resolve", "reserve", "revoke", "current-state", "action-policy"]
           },
           "outcome": {
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["allowed", "invalid", "expired", "budget-exceeded", "revoked"]
+            "values": [
+              "allowed",
+              "invalid",
+              "expired",
+              "budget-exceeded",
+              "revoked",
+              "review-required",
+              "policy-denied"
+            ]
+          },
+          "actionType": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "sync-space",
+              "sync-project",
+              "search-issues-live",
+              "create-issue",
+              "update-issue-fields",
+              "transition-issue",
+              "add-issue-comment",
+              "create-page",
+              "update-page",
+              "add-page-comment",
+              "jira.projects",
+              "jira.issue-types",
+              "jira.create-fields",
+              "jira.edit-fields",
+              "jira.search",
+              "jira.issue",
+              "jira.comments",
+              "jira.transitions",
+              "jira.assignable-users",
+              "assign-issue"
+            ]
           },
           "authorityDigest": {
             "type": "string",
@@ -2478,12 +2513,13 @@
         "analyzerProjection": "capability",
         "failureClasses": ["chat-tool-authority"],
         "proofIds": [
+          "chat.tool-authority.operation.action-policy",
           "chat.tool-authority.operation.current-state",
           "chat.tool-authority.operation.lifecycle"
         ],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/editor/chatAuthorityActivity.ts:32",
-        "emitterSites": ["packages/keiko-server/src/editor/chatAuthorityActivity.ts:126"]
+        "registrationSite": "packages/keiko-server/src/editor/chatAuthorityActivity.ts:34",
+        "emitterSites": ["packages/keiko-server/src/editor/chatAuthorityActivity.ts:165"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -55423,6 +55459,12 @@
               "analyzerProjection": "capability",
               "safeContextFields": [
                 {
+                  "name": "actionType",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "actorDigest",
                   "type": "string",
                   "dataClass": "digest",
@@ -55507,6 +55549,7 @@
                 "causeChain": false
               },
               "proofIds": [
+                "chat.tool-authority.operation.action-policy",
                 "chat.tool-authority.operation.current-state",
                 "chat.tool-authority.operation.lifecycle"
               ],
@@ -101960,7 +102003,7 @@
     {
       "op": "chat.tool-authority.operation",
       "category": "security",
-      "site": "packages/keiko-server/src/editor/chatAuthorityActivity.ts:35",
+      "site": "packages/keiko-server/src/editor/chatAuthorityActivity.ts:37",
       "package": "keiko-server"
     },
     {

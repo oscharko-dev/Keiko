@@ -16,6 +16,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
   AtlassianCredentialMetadata,
+  ChatToolAuthorityEnvelope,
+  AtlassianConnectorActionType,
+  CodingWorkbenchMode,
   EditorAgentGovernedAuthorityReference,
 } from "@oscharko-dev/keiko-contracts";
 import { createInMemoryUiStore, type Chat, type UiStore } from "../store/index.js";
@@ -27,6 +30,8 @@ import {
 import { jiraChatActorDigest } from "./jiraPodAccess.js";
 import {
   resolveCurrentJiraChatAuthority,
+  decideGovernedJiraChatAction,
+  reserveCurrentJiraChatAuthority,
   type JiraChatAuthorityDeps,
 } from "./jiraChatAuthority.js";
 
@@ -219,6 +224,149 @@ it("records closed current-state reasons through the real Activity Log without p
       actor,
     ])
       expect(lines.join("\n")).not.toContain(privateValue);
+  } finally {
+    sink.close?.();
+    resetServerLogger();
+  }
+});
+
+function registerCurrentAuthority(overrides: Partial<ChatToolAuthorityEnvelope> = {}): void {
+  const current = store.findChatById(chat.id);
+  const binding = current?.jiraPodBinding;
+  const actorDigest = jiraChatActorDigest(deps);
+  if (current === undefined || binding === undefined || actorDigest === undefined)
+    throw new Error("Expected current Chat authority facts");
+  const value = chatAuthorityFixture({
+    runId: "policy-run",
+    requestedMode: current.toolMode ?? "governed-assist",
+    subject: {
+      actorDigest,
+      chatId: chat.id,
+      podId: binding.podId,
+      bindingGeneration: binding.bindingGeneration,
+      authenticationGeneration: binding.authenticationGeneration,
+    },
+    ...overrides,
+  });
+  const result = deps.agentAuthorityRegistry?.registerChat(
+    value,
+    "autonomous-delivery",
+    CHAT_AUTHORITY_TEST_NOW,
+    "chat-policy-proof",
+  );
+  if (result?.ok !== true) throw new Error("Expected current authority registration");
+  reference = result.authorityRef;
+}
+
+function decide(
+  action: AtlassianConnectorActionType,
+): ReturnType<typeof decideGovernedJiraChatAction> {
+  return decideGovernedJiraChatAction(
+    action,
+    deps,
+    chat.id,
+    reference,
+    CHAT_AUTHORITY_TEST_NOW,
+    "chat-policy-proof",
+  );
+}
+
+function reserve(
+  toolCalls = 1,
+  promptTokens = 0,
+): ReturnType<typeof reserveCurrentJiraChatAuthority> {
+  return reserveCurrentJiraChatAuthority(
+    deps,
+    chat.id,
+    reference,
+    { toolCalls, promptTokens, patchBytes: 0 },
+    CHAT_AUTHORITY_TEST_NOW,
+    "chat-policy-proof",
+  );
+}
+
+describe("ordinary Chat composes the existing Atlassian policy", () => {
+  it.each<CodingWorkbenchMode>(["governed-assist", "supervised-coding", "autonomous-delivery"])(
+    "applies %s without a Coding session",
+    (mode) => {
+      store.updateChat(chat.id, { toolMode: mode });
+      registerCurrentAuthority();
+      expect(decide("jira.issue").kind).toBe(
+        mode === "autonomous-delivery" ? "allowed" : "review-required",
+      );
+      expect(decide("create-issue").kind).toBe(
+        mode === "autonomous-delivery" ? "allowed" : "review-required",
+      );
+      expect(decide("create-page").kind).toBe("policy-denied");
+    },
+  );
+
+  it("never widens read-only authority in Full access", () => {
+    store.updateChat(chat.id, { toolMode: "autonomous-delivery" });
+    registerCurrentAuthority({ connectorScopes: ["issue-tracker.read"] });
+    expect(decide("jira.issue").kind).toBe("allowed");
+    expect(decide("create-issue").kind).toBe("policy-denied");
+  });
+
+  it("does not charge pending policy decisions and accumulates reservations", () => {
+    registerCurrentAuthority({
+      budget: { maxRuntimeMs: 60_000, maxToolCalls: 2, maxPromptTokens: 10, maxPatchBytes: 0 },
+    });
+    for (let i = 0; i < 4; i++) expect(decide("create-issue").kind).toBe("review-required");
+    expect(reserve(1, 4).ok).toBe(true);
+    expect(reserve(1, 6).ok).toBe(true);
+    expect(reserve()).toEqual({ ok: false, reason: "budget-exceeded" });
+  });
+
+  it("rechecks current facts immediately before reservation", () => {
+    expect(decide("jira.issue").kind).toBe("review-required");
+    updatePod({ verificationInProgress: true });
+    expect(reserve()).toEqual({ ok: false, reason: "invalid" });
+    expect(decide("jira.issue")).toEqual({ kind: "authority-denied", reason: "authority-invalid" });
+    updatePod({ verificationInProgress: false });
+    expect(reserve().ok).toBe(true);
+  });
+});
+
+it("reconstructs Chat policy and reservation through the real Activity Log", () => {
+  const sink = createFileServerLogSink(project, { level: "debug" });
+  setServerLogger(createServerLogger({ sink, level: "debug" }));
+  try {
+    expect(decide("jira.issue").kind).toBe("review-required");
+    store.updateChat(chat.id, { toolMode: "autonomous-delivery" });
+    registerCurrentAuthority();
+    expect(decide("jira.issue").kind).toBe("allowed");
+    expect(decide("create-issue").kind).toBe("allowed");
+    expect(decide("create-page").kind).toBe("policy-denied");
+    expect(reserve(1, 2).ok).toBe(true);
+    const lines = persistedActivityLogLines(
+      readPersistedActivityLog(project),
+      "chat.tool-authority.operation",
+    );
+    const records = lines.map((line) =>
+      expectActivityLogProof("chat.tool-authority.operation.action-policy", line),
+    );
+    expect(
+      records
+        .filter((line) => line.phase === "action-policy")
+        .map((line) => [line.actionType, line.outcome]),
+    ).toEqual([
+      ["jira.issue", "review-required"],
+      ["jira.issue", "allowed"],
+      ["create-issue", "allowed"],
+      ["create-page", "policy-denied"],
+    ]);
+    expect(records.find((line) => line.outcome === "review-required")).toMatchObject({
+      level: "info",
+    });
+    expect(records.find((line) => line.phase === "reserve")).toMatchObject({
+      toolCalls: 1,
+      promptTokens: 2,
+      outcome: "allowed",
+    });
+    expect(records.every((line) => line.correlationId === "chat-policy-proof")).toBe(true);
+    expect(lines.join("\n")).not.toContain("private-credential-reference");
+    expect(lines.join("\n")).not.toContain(chat.id);
   } finally {
     sink.close?.();
     resetServerLogger();
