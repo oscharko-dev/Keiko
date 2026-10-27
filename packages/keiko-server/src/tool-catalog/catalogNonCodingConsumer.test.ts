@@ -1,3 +1,4 @@
+import type { JiraManagedReadToolName } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { AtlassianHttpBodyResult } from "@oscharko-dev/keiko-connectors";
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 import { createJiraProviderForCatalog } from "../atlassian/jiraManagedProvider.js";
@@ -513,29 +514,36 @@ async function jiraFixture(
   body: unknown,
   status = 200,
   rawBody?: string,
+  tool: JiraManagedReadToolName = "jira.projects",
 ): Promise<{
   managed: ManagedProviderCatalog<ConversationConsumer>;
   logs: ReturnType<typeof createBufferedServerLogSink>;
   requests: string[];
+  connections: string[];
 }> {
   const logs = createBufferedServerLogSink();
   const requests: string[] = [];
+  const connections: string[] = [];
   const provider = createJiraProviderForCatalog<CatalogHandlerContext<ConversationConsumer>>(
-    (context) => ({
-      baseUrl: "https://jira.example.invalid/context",
-      deployment: "data-center",
-      http: (request): Promise<AtlassianHttpBodyResult> => {
-        requests.push(`${context.chatId}:${request.method}:${request.url}`);
-        const bodyText = rawBody ?? JSON.stringify(body);
-        return Promise.resolve({
-          kind: "response",
-          status,
-          bodyText,
-          bodyBytes: bodyText.length,
-          truncated: false,
-        });
-      },
-    }),
+    (context) => {
+      connections.push(context.chatId);
+      return {
+        baseUrl: "https://jira.example.invalid/context",
+        deployment: "data-center",
+        http: (request): Promise<AtlassianHttpBodyResult> => {
+          requests.push(`${context.chatId}:${request.method}:${request.url}`);
+          const bodyText = rawBody ?? JSON.stringify(body);
+          return Promise.resolve({
+            kind: "response",
+            status,
+            bodyText,
+            bodyBytes: bodyText.length,
+            truncated: false,
+          });
+        },
+      };
+    },
+    [tool],
   );
   const managed = await createManagedProviderCatalog<ConversationConsumer>({
     providers: [provider],
@@ -545,9 +553,9 @@ async function jiraFixture(
     now: () => 1000,
     routes: [
       {
-        name: "jira.projects",
-        alias: "jira_projects",
-        catalogAction: "jira.projects",
+        name: tool,
+        alias: tool.replace(/[.-]/gu, "_"),
+        catalogAction: tool,
         previewAction: (identity): ConversationAction => ({
           ...identity,
           action: "lookup",
@@ -566,7 +574,7 @@ async function jiraFixture(
       },
     ],
   });
-  return { managed, logs, requests };
+  return { managed, logs, requests, connections };
 }
 
 it("executes the real Jira project provider through gateway, binder and SDK with a private connection", async () => {
@@ -645,6 +653,125 @@ it.each([
         timeline.lines.some((line) => line.op === "mcp.managed.lifecycle"),
       ),
     ).toBe(true);
+  } finally {
+    f.dispose();
+    await m.managed.close();
+  }
+});
+
+const metadataField = {
+  fieldId: "summary",
+  name: "Summary",
+  required: true,
+  schema: { type: "string", system: "summary" },
+  operations: ["set"],
+};
+it.each([
+  {
+    tool: "jira.issue-types",
+    args: { projectKey: "KEIKO", maxResults: 1 },
+    body: {
+      start: 0,
+      size: 1,
+      total: 2,
+      last: false,
+      values: [{ id: "10002", name: "Task", subtask: false, self: "private-url" }],
+    },
+    endpoint: "issue/createmeta/KEIKO/issuetypes?startAt=0&maxResults=1",
+    expected: { items: [{ id: "10002", name: "Task", subtask: false }], nextStartAt: 1 },
+  },
+  {
+    tool: "jira.create-fields",
+    args: { projectKey: "KEIKO", issueTypeId: "10002" },
+    body: { start: 0, size: 1, total: 1, last: true, values: [metadataField] },
+    endpoint: "issue/createmeta/KEIKO/issuetypes/10002?startAt=0&maxResults=25",
+    expected: {
+      items: [{ id: "summary", required: true, kind: "text", operations: ["set"] }],
+      total: 1,
+    },
+  },
+  {
+    tool: "jira.edit-fields",
+    args: { issueKey: "KEIKO-1" },
+    body: { fields: { summary: { ...metadataField, fieldId: "untrusted-override" } } },
+    endpoint: "issue/KEIKO-1/editmeta",
+    expected: { items: [{ id: "summary", required: true, kind: "text" }], total: 1 },
+  },
+] as const)(
+  "runs $tool through the real binder and SDK",
+  async ({ tool, args, body, endpoint, expected }) => {
+    const m = await jiraFixture(body, 200, undefined, tool);
+    const f = fixture(undefined, m.managed);
+    try {
+      const result = await f.binder.dispatch({ ...f.invocation, arguments: args }, identity);
+      expect(result).toMatchObject({
+        kind: "settled",
+        result: { status: "completed", data: { outcome: "succeeded", startAt: 0, ...expected } },
+      });
+      expect(m.requests).toEqual([
+        `chat-one:GET:https://jira.example.invalid/context/rest/api/2/${endpoint}`,
+      ]);
+      expect(JSON.stringify(result)).not.toContain("private-url");
+      const lines = m.logs.lines();
+      expect(
+        lines
+          .map((line) => JSON.parse(line) as { phase?: string })
+          .filter((event) => event.phase === "completed"),
+      ).toHaveLength(1);
+      expect(lines.join()).not.toContain("Summary");
+      expect(
+        analyzeLogText(lines.join("\n")).timelines.some((timeline) =>
+          timeline.lines.some((line) => line.op === "mcp.managed.lifecycle"),
+        ),
+      ).toBe(true);
+    } finally {
+      f.dispose();
+      await m.managed.close();
+    }
+  },
+);
+
+it.each([
+  { start: 0, size: 1, total: 1, last: false, values: [metadataField] },
+  { start: 0, size: 0, total: 2, last: false, values: [] },
+  { start: 1, size: 1, total: 2, last: true, values: [metadataField] },
+  { startAt: 0, maxResults: 1, total: 1, isLast: true, values: [metadataField] },
+  { start: 0, size: 1, total: 1, last: true, values: [{ ...metadataField, operations: "set" }] },
+])("refuses inconsistent or malformed DC metadata pages", async (body) => {
+  const m = await jiraFixture(body, 200, undefined, "jira.create-fields");
+  const f = fixture(undefined, m.managed);
+  try {
+    const result = await f.binder.dispatch(
+      { ...f.invocation, arguments: { projectKey: "KEIKO", issueTypeId: "10002" } },
+      identity,
+    );
+    expect(result).toMatchObject({
+      kind: "settled",
+      result: { status: "failed", reason: "handler-failed" },
+    });
+    expect(m.requests).toHaveLength(1);
+    expect(
+      m.logs
+        .lines()
+        .map((line) => JSON.parse(line) as { phase?: string })
+        .filter((event) => event.phase === "failed"),
+    ).toHaveLength(1);
+  } finally {
+    f.dispose();
+    await m.managed.close();
+  }
+});
+it("rejects a path override before resolving the private Jira connection", async () => {
+  const m = await jiraFixture({}, 200, undefined, "jira.edit-fields");
+  const f = fixture(undefined, m.managed);
+  try {
+    const result = await f.binder.dispatch(
+      { ...f.invocation, arguments: { issueKey: "../../private" } },
+      identity,
+    );
+    expect(result).toMatchObject({ kind: "settled", result: { status: "failed" } });
+    expect(m.requests).toHaveLength(0);
+    expect(m.connections).toHaveLength(0);
   } finally {
     f.dispose();
     await m.managed.close();

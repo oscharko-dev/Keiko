@@ -95,12 +95,15 @@ function standardScalarType(id: string, kind: JiraFieldKind, custom: boolean): s
 function referenceCandidate(value: unknown): JiraFieldReference | undefined {
   const raw = asRecord(value);
   if (raw === undefined) return undefined;
-  const result: { id?: string; name?: string; accountId?: string } = {};
+  const result: { id?: string; name?: string; accountId?: string; label?: string } = {};
   for (const key of ["id", "name", "accountId"] as const) {
     const candidate = raw[key];
     if (boundedText(candidate, 256)) result[key] = candidate;
   }
-  return Object.keys(result).length === 0 ? undefined : result;
+  if (Object.keys(result).length === 0) return undefined;
+  const label = raw.displayName ?? raw.value ?? raw.name;
+  if (boundedText(label, 256)) result.label = label;
+  return result;
 }
 function allowedReferences(value: unknown): readonly JiraFieldReference[] | undefined {
   const values = asArray(value);

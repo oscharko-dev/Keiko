@@ -1444,3 +1444,9 @@ export type {
   JiraFieldMetadata,
   JiraFieldUpdate,
 } from "./jira-tool-fields.js";
+
+export {
+  JIRA_FIELD_KINDS,
+  JIRA_MANAGED_READ_TOOLS,
+  type JiraManagedReadToolName,
+} from "./jira-tool-fields.js";

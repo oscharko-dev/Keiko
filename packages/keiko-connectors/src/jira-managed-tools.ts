@@ -1,13 +1,24 @@
-import type { AtlassianConnectorDeployment } from "@oscharko-dev/keiko-contracts";
-import type {
-  CatalogJsonObject,
-  ToolDescriptor,
-} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import {
+  isSafeAtlassianIdentifier,
+  JIRA_MANAGED_READ_TOOLS,
+  type AtlassianConnectorDeployment,
+  type JiraManagedReadToolName,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
+  editMetadataItems,
+  issueTypeItems,
+  jiraReadFailure as failure,
+  localJiraPage,
+  metadataItems,
+  remoteJiraPage,
+} from "./jira-managed-metadata.js";
+import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type {
   ManagedMcpInvocationContext,
   ManagedMcpProvider,
   ManagedMcpTool,
   ManagedMcpToolResult,
+  ManagedMcpToolDeclaration,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
 import { asRecord, atlassianApiEndpointsFor, atlassianApiUrl } from "./atlassian-sync-classify.js";
@@ -20,7 +31,7 @@ export interface JiraManagedConnection {
 }
 export interface JiraManagedProviderDeps<Context extends ManagedMcpInvocationContext> {
   readonly connection: (context: Context) => JiraManagedConnection | Promise<JiraManagedConnection>;
-  readonly descriptor: ToolDescriptor;
+  readonly declarations: readonly ManagedMcpToolDeclaration[];
 }
 
 interface Project extends CatalogJsonObject {
@@ -48,9 +59,6 @@ function pageNumber(
     ? value
     : undefined;
 }
-function failure(reason: string): ManagedMcpToolResult {
-  return { data: { outcome: "failed", reason }, isError: true };
-}
 function projectPage(
   values: readonly unknown[],
   startAt: number,
@@ -64,64 +72,115 @@ function projectPage(
     return failure("malformed-payload");
   // The DC endpoint is an unpaginated collection. Sort and slice only after complete validation.
   valid.sort((left, right) => left.key.localeCompare(right.key, "en"));
-  const items = valid.slice(startAt, startAt + maxResults);
-  const nextStartAt = startAt + items.length < valid.length ? startAt + items.length : null;
-  return {
-    data: {
-      outcome: "succeeded",
-      items,
-      startAt,
-      total: valid.length,
-      ...(nextStartAt === null ? {} : { nextStartAt }),
-    },
-  };
+  return localJiraPage(valid, startAt, maxResults);
 }
-async function projects<Context extends ManagedMcpInvocationContext>(
+interface ReadSelection {
+  readonly path: string;
+  readonly startAt: number;
+  readonly maxResults: number;
+}
+function selection(
+  name: JiraManagedReadToolName,
+  args: CatalogJsonObject,
+): ReadSelection | undefined {
+  const startAt = pageNumber(args.startAt, 0, 0, 1000000);
+  const maxResults = pageNumber(args.maxResults, 25, 1, 100);
+  if (startAt === undefined || maxResults === undefined) return undefined;
+  const allowed = new Set(["startAt", "maxResults"]);
+  let path: string;
+  if (name === "jira.projects") path = "project";
+  else if (name === "jira.edit-fields") {
+    if (!isSafeAtlassianIdentifier(args.issueKey)) return undefined;
+    allowed.add("issueKey");
+    path = `issue/${encodeURIComponent(args.issueKey)}/editmeta`;
+  } else {
+    const metadata = metadataPath(name, args, allowed);
+    if (metadata === undefined) return undefined;
+    path = `${metadata}?startAt=${String(startAt)}&maxResults=${String(maxResults)}`;
+  }
+  return Object.keys(args).every((key) => allowed.has(key))
+    ? { path, startAt, maxResults }
+    : undefined;
+}
+function metadataPath(
+  name: JiraManagedReadToolName,
+  args: CatalogJsonObject,
+  allowed: Set<string>,
+): string | undefined {
+  if (!isSafeAtlassianIdentifier(args.projectKey)) return undefined;
+  allowed.add("projectKey");
+  const path = `issue/createmeta/${encodeURIComponent(args.projectKey)}/issuetypes`;
+  if (name !== "jira.create-fields") return path;
+  if (typeof args.issueTypeId !== "string" || !/^\d{1,32}$/u.test(args.issueTypeId))
+    return undefined;
+  allowed.add("issueTypeId");
+  return `${path}/${args.issueTypeId}`;
+}
+function metadataResult(
+  name: JiraManagedReadToolName,
+  body: Record<string, unknown>,
+  selected: ReadSelection,
+): ManagedMcpToolResult {
+  const { startAt, maxResults } = selected;
+  if (name === "jira.edit-fields") {
+    const items = editMetadataItems(body.fields);
+    return items === undefined
+      ? failure("malformed-payload")
+      : localJiraPage(items, startAt, maxResults);
+  }
+  const items =
+    name === "jira.issue-types" ? issueTypeItems(body.values) : metadataItems(body.values);
+  return remoteJiraPage(body, items, startAt, maxResults);
+}
+async function read<Context extends ManagedMcpInvocationContext>(
+  name: JiraManagedReadToolName,
   args: CatalogJsonObject,
   context: Context,
-  deps: JiraManagedProviderDeps<Context>,
+  connection: JiraManagedProviderDeps<Context>["connection"],
 ): Promise<ManagedMcpToolResult> {
-  const startAt = pageNumber(args.startAt, 0, 0, 1000);
-  const maxResults = pageNumber(args.maxResults, 25, 1, 100);
-  if (
-    startAt === undefined ||
-    maxResults === undefined ||
-    Object.keys(args).some((key) => key !== "startAt" && key !== "maxResults")
-  )
-    return failure("invalid-input");
-  const { deployment, baseUrl, http } = await deps.connection(context);
+  const selected = selection(name, args);
+  if (selected === undefined) return failure("invalid-input");
+  const { deployment, baseUrl, http } = await connection(context);
   if (deployment !== "data-center") return failure("unsupported-deployment");
-  const url = atlassianApiUrl(atlassianApiEndpointsFor(baseUrl, "/rest/api/2/"), "project");
+  const url = atlassianApiUrl(atlassianApiEndpointsFor(baseUrl, "/rest/api/2/"), selected.path);
   const outcome = await executeAtlassianWriteRequest(
     {
       signal: context.signal,
-      http: (request) => {
-        if (context.signal.aborted || !context.beforeEffect())
-          return Promise.resolve({ kind: "network-error" });
-        return http(request);
-      },
+      http: (request) =>
+        context.signal.aborted || !context.beforeEffect()
+          ? Promise.resolve({ kind: "network-error" })
+          : http(request),
     },
-    { method: "GET", url, expect: "json-array" },
+    { method: "GET", url, expect: name === "jira.projects" ? "json-array" : "json" },
   );
   if (!outcome.ok) return failure(outcome.reason);
-  return outcome.items === undefined
-    ? failure("malformed-payload")
-    : projectPage(outcome.items, startAt, maxResults);
+  const { startAt, maxResults } = selected;
+  if (name === "jira.projects")
+    return outcome.items === undefined
+      ? failure("malformed-payload")
+      : projectPage(outcome.items, startAt, maxResults);
+  if (outcome.body === undefined) return failure("malformed-payload");
+  return metadataResult(name, outcome.body, selected);
 }
 
 /** Private connection/context stays outside the MCP declaration and arguments. */
 export function createJiraManagedProvider<Context extends ManagedMcpInvocationContext>(
   deps: JiraManagedProviderDeps<Context>,
 ): ManagedMcpProvider<Context> {
-  const captured = Object.freeze({ connection: deps.connection, descriptor: deps.descriptor });
-  const tools: readonly ManagedMcpTool<Context>[] = Object.freeze([
-    Object.freeze({
-      name: "jira.projects",
-      risk: "read" as const,
-      descriptor: captured.descriptor,
-      execute: (args: CatalogJsonObject, context: Context): Promise<ManagedMcpToolResult> =>
-        projects(args, context, captured),
+  const connection = deps.connection;
+  const tools: readonly ManagedMcpTool<Context>[] = Object.freeze(
+    deps.declarations.map((declaration) => {
+      const name = JIRA_MANAGED_READ_TOOLS.find((name) => name === declaration.name);
+      if (name === undefined || declaration.risk !== "read")
+        throw new TypeError("Unsupported Jira declaration");
+      return Object.freeze({
+        name,
+        risk: "read" as const,
+        descriptor: declaration.descriptor,
+        execute: (args: CatalogJsonObject, context: Context): Promise<ManagedMcpToolResult> =>
+          read(name, args, context, connection),
+      });
     }),
-  ]);
+  );
   return Object.freeze({ id: "jira", tools: (): readonly ManagedMcpTool<Context>[] => tools });
 }

@@ -306,3 +306,34 @@ it.each([{ allowedValues: { invalid: "not-a-list" } }, { allowedValues: [{}] }])
     });
   },
 );
+
+it("retains human choice labels without admitting labels as write identities", () => {
+  const parsed = parseJiraFieldMetadata([
+    field("customfield_10001", "option", {
+      schema: {
+        type: "option",
+        custom: "com.atlassian.jira.plugin.system.customfieldtypes:select",
+      },
+      allowedValues: [{ id: "21", value: "Blue", self: "private-url" }],
+    }),
+  ]);
+  expect(parsed.ok).toBe(true);
+  if (!parsed.ok) throw new Error("Invalid metadata fixture");
+  expect(parsed.fields[0]?.allowedValues).toEqual([{ id: "21", label: "Blue" }]);
+  expect(
+    validateJiraFieldChanges(
+      parsed.fields,
+      { customfield_10001: { label: "Blue" } },
+      "edit",
+      "data-center",
+    ).ok,
+  ).toBe(false);
+  expect(
+    validateJiraFieldChanges(
+      parsed.fields,
+      { customfield_10001: { id: "21" } },
+      "edit",
+      "data-center",
+    ).ok,
+  ).toBe(true);
+});

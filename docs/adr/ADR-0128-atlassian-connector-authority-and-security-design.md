@@ -324,7 +324,7 @@ schema looks familiar. A choice list above 500 entries makes only that field uns
 fields remain usable, and a required unsupported field without a server default still blocks
 creation. Unsupported plugin choice structures are not interpreted. Known-field structural errors
 remain malformed metadata. Offered verbs are intersected with the implemented field/verb matrix;
-unsupported fields advertise no operations. Current metadata operations and allowed references constrain values.
+unsupported fields advertise no operations. Choice labels are display-only and never replace the deployment-specific identity in mutation arguments. Current metadata operations and allowed references constrain values.
 Omission preserves an edit; null/empty clearing requires an optional field and an allowed set.
 Create may leave a Jira-declared default omitted without copying or fabricating it. Add/remove is
 limited to labels; replacement and additive changes cannot target the same field in one action.
@@ -372,6 +372,7 @@ uniformly: reads name the `CodingWorkbenchActionClass`, writes name the
 | 9 | `update-page` | Confluence | `connector-write` | `knowledge-base.write` | medium | review-required | review-required | allowed |
 | 10 | `add-page-comment` | Confluence | `connector-write` | `knowledge-base.write` | low | review-required | review-required | allowed |
 | 11 | `jira.projects` | Jira | `connector-access` | `issue-tracker.read` | low | review-required | review-required | allowed |
+| 12–14 | `jira.issue-types`, `jira.create-fields`, `jira.edit-fields` | Jira | `connector-access` | `issue-tracker.read` | low | review-required | review-required | allowed |
 
 **Risk-tier rationale (fixed here so #2244 does not have to invent it):** reads are uniformly `low`
 — every read is non-mutating, trivially reversible (re-run the query), and bounded by D5/D3.
@@ -410,7 +411,7 @@ mapping resolves back to `connector-access`, carrying the additional approval-ri
 supervised-action path. Only the scope enum grows.
 
 Managed Jira catalog operations use the same `connector-access` effect class. The current
-`jira.projects` capability maps to `issue-tracker.read` (low risk). In ordinary Chat, every mode
+`jira.projects`, `jira.issue-types`, `jira.create-fields` and `jira.edit-fields` capabilities map to `issue-tracker.read` (low risk). In ordinary Chat, every mode
 requires the current binding's first-read grant before HTTP; a valid grant permits subsequent
 read-class calls only within the current authority, binding and credential generation. That bounded
 read grant supplies the standing approval for read-class calls; it never approves writes. Missing or

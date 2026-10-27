@@ -107,7 +107,7 @@ Status: **Pending**. Implementation: pending. Verification: pending. Evidence: p
 
 - [ ] **AC1:** Real modern MCP discovery, per-request protocol metadata, `tools/list` and `tools/call` through the shared host exercise the production Jira provider and list exactly the implemented typed capabilities; every listed tool has a catalog descriptor and an ADR-0128 D4 row. Unknown tools, malformed arguments and caller-supplied credentials, arbitrary destinations or connector switching are refused before HTTP execution.
 
-Status: **Partial — not accepted**. Implementation: `jira-managed-tools.ts`, `jiraManagedProvider.ts`, shared catalog/SDK composition. Verification: `catalogNonCodingConsumer.test.ts` (real SDK, synthetic HTTP). Evidence: first-Jira-capability checkpoint below. Only `jira.projects` is currently advertised; remaining operations and actual Chat admission are pending.
+Status: **Partial — not accepted**. Implementation: `jira-managed-tools.ts`, `jiraManagedProvider.ts`, shared catalog/SDK composition. Verification: `catalogNonCodingConsumer.test.ts` (real SDK, synthetic HTTP). Evidence: first-Jira-capability checkpoint below. The provider advertises `jira.projects`, `jira.issue-types`, `jira.create-fields` and `jira.edit-fields`; the metadata checkpoint below extends this evidence. Remaining operations and actual Chat admission are pending.
 
 - [ ] **AC2:** Against local Jira 10.3.26, a non-admin PAT searches/reads and performs create/edit/assign/comment/transition where Jira permits them, and the restricted identity is refused truthfully without escalation. The recorded supported-operation matrix names each tested operation, endpoint family and unsupported capability; it never claims full Jira REST coverage.
 
@@ -816,3 +816,22 @@ Five regressions failed before this repair. The metadata and existing Jira/Confl
 plus the unchanged ADF composer baseline, pass (69 tests total). Package build, root typecheck,
 changed lint and semantic duplication pass; no baseline or gate rule changed. This repairs review
 comment 4383946211. It does not complete the still-pending provider metadata/live-operation matrix.
+
+## Managed metadata reads — #4083 AC1/AC3/AC7, #4089 / #4081
+
+The existing connector provider now exposes issue types, create fields and edit fields beside
+projects. Server-owned canonical descriptors feed the same compiled catalog, non-Coding binder
+and in-process SDK host. DC create metadata uses the supported project/type endpoints and validates
+`start`, `size`, `last`, optional totals and continuation consistency. Edit metadata preserves the
+server's field-map keys; response-supplied field IDs cannot override them. All operations retain
+context paths, bounded transport, per-effect checks and private invocation connections. Cloud is
+still explicitly refused by this DC provider; the existing Cloud write path remains separate.
+Human choice labels are exposed separately from validated mutation identities.
+
+Three integration regressions failed before provider admission. Their successors exercise actual
+binder/SDK/HTTP-port calls and registered, content-free Activity Log reconstruction. Controls reject
+malformed or inconsistent pages, Cloud pagination shapes and path overrides. This is hermetic
+provider evidence, not ordinary Chat or a current live Jira qualification. The expired lab license
+must be replaced by a fresh legitimate session before the next full live group. No AC is closed.
+
+Targeted checks for this increment: package build, root typecheck, changed lint/format, ADR index and unchanged semantic-duplication gate pass; 21 binder/SDK tests and 70 connector field/write/ADF tests pass. Final package-surface, architecture/performance, complete coverage and live acceptance remain open.
