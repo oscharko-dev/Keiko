@@ -979,3 +979,24 @@ licensed Jira or ordinary Chat acceptance. All **712 store tests**, **31 existin
 **97 registry tests** pass, along with build, root typecheck, changed lint/format, ADR index and the
 unchanged semantic gate. Registry generation remains at 608 proofs/30 scenarios without violations.
 The provider/HTTP/authority integration and complete epic qualification remain pending.
+
+## Final transport preparation — #4083 AC5 / #4084 AC3 / #4081 (foundation)
+
+The existing gateway now accepts a trusted synchronous header-preparation callback. Native requests
+invoke it after pinned DNS and body preparation; HTTPS proxy requests additionally wait for the
+CONNECT/TLS handshake. A refused or cancelled preparation sends no target HTTP request and disposes
+an acquired tunnel. Callback/control fields never reach injected fetch implementations. Existing
+callers retain their original header and cancellation semantics.
+
+An explicit `singleAttempt` uses the configured native CA trust set on the first HTTPS attempt and
+disables fallback, including for TLS-shaped errors from injected transports. It preserves certificate
+verification and DNS pinning. This lets the future mutation adapter record durable admission at the
+actual request boundary without a hidden second attempt. The gateway itself grants no authority.
+
+Three initial regressions failed before implementation. All **2,290 gateway tests** and **46 existing
+Atlassian port tests** pass, including actual native/CONNECT refusal, post-DNS revocation, cancellation,
+invalid asynchronous callbacks and first-attempt custom-CA success. Build, root typecheck, changed
+lint/format, ADR index, error observability and unchanged semantic checks pass. Existing registered
+HTTP lifecycle operations retain their body-free evidence; ADR-0038 describes the boundary.
+Connecting the Atlassian credential owner, durable journal and ordinary Chat authority to this seam
+remains pending. No AC is accepted by this transport checkpoint.

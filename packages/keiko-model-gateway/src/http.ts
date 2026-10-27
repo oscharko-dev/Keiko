@@ -232,6 +232,10 @@ function logEndpointClass(url: string | URL | undefined): LogEndpointClass | und
 }
 
 export interface GatewayFetchOptions extends RequestInit {
+  /** Trusted synchronous admission/header factory, run immediately before each physical request. */
+  readonly prepareHeaders?: (() => Headers) | undefined;
+  /** Use configured native TLS trust initially and never perform an automatic fallback attempt. */
+  readonly singleAttempt?: boolean | undefined;
   readonly fetchImpl?: typeof fetch | undefined;
   readonly useCaFallback?: boolean | undefined;
   readonly egress?: OutboundHttpEgressConfig | undefined;
@@ -248,6 +252,24 @@ export interface GatewayFetchOptions extends RequestInit {
   // what makes one of N concurrent in-flight requests identifiable as the stuck one. Stripped
   // from the options before they reach the transport — it never becomes a RequestInit field.
   readonly logContext?: ModelGatewayLogContext | undefined;
+}
+
+type PreparedRequestInit = RequestInit & Pick<GatewayFetchOptions, "prepareHeaders">;
+
+function dispatchHeaderRecord(init: PreparedRequestInit): Record<string, string> {
+  init.signal?.throwIfAborted();
+  if (init.prepareHeaders === undefined) return headersToRecord(init.headers);
+  const headers = init.prepareHeaders();
+  if (!(headers instanceof Headers))
+    throw new TypeError("Request preparation must return Headers synchronously.");
+  init.signal?.throwIfAborted();
+  return headersToRecord(headers);
+}
+
+function preparedFetchInit(init: PreparedRequestInit): RequestInit {
+  const { prepareHeaders: _prepareHeaders, ...rest } = init;
+  if (_prepareHeaders === undefined) return rest;
+  return { ...rest, headers: dispatchHeaderRecord(init) };
 }
 
 export type OutboundHttpEgressErrorCode =
@@ -608,13 +630,13 @@ function pinnedLookup(addresses: readonly LookupAddress[]): LookupFunction {
 
 async function fetchWithCaBundle(
   url: string,
-  init: RequestInit,
+  init: PreparedRequestInit,
   egress?: OutboundHttpEgressConfig,
   maxResponseBytes?: number,
   lookup?: LookupFunction,
 ): Promise<Response> {
   const body = await bodyToWire(init.body);
-  const headers = headersToRecord(init.headers);
+  const headers = dispatchHeaderRecord(init);
   const cap = maxResponseBytes ?? MAX_RESPONSE_BYTES;
   return new Promise<Response>((resolve, reject) => {
     const req = httpsRequest(
@@ -643,12 +665,12 @@ async function fetchWithCaBundle(
 // would otherwise have used.
 async function fetchDirectPinned(
   url: string,
-  init: RequestInit,
+  init: PreparedRequestInit,
   addresses: readonly LookupAddress[],
   maxResponseBytes?: number,
 ): Promise<Response> {
   const body = await bodyToWire(init.body);
-  const headers = headersToRecord(init.headers);
+  const headers = dispatchHeaderRecord(init);
   const request = usesHttps(url) ? httpsRequest : httpRequest;
   const cap = maxResponseBytes ?? MAX_RESPONSE_BYTES;
   return new Promise<Response>((resolve, reject) => {
@@ -1320,14 +1342,14 @@ function proxyRequestTarget(target: URL, pinnedAddress: LookupAddress | undefine
 
 async function fetchHttpViaProxy(
   target: URL,
-  init: RequestInit,
+  init: PreparedRequestInit,
   proxy: URL,
   ca: readonly string[],
   maxResponseBytes: number | undefined,
   pinnedAddress: LookupAddress | undefined,
 ): Promise<Response> {
   const body = await bodyToWire(init.body);
-  const headers = headersToRecord(init.headers);
+  const headers = dispatchHeaderRecord(init);
   assertNoForwardedCredentialHeader(headers);
   // Ensure Host header omits the default port (fixes SigV4 pre-signed S3 URLs). Read from the
   // ORIGINAL target even when pinned, so the origin server's virtual-hosting still sees the real
@@ -1364,22 +1386,15 @@ async function fetchHttpViaProxy(
 // eslint-disable-next-line max-lines-per-function
 async function fetchHttpsViaProxy(
   target: URL,
-  init: RequestInit,
+  init: PreparedRequestInit,
   proxy: URL,
   ca: readonly string[],
   maxResponseBytes: number | undefined,
   pinnedAddress: LookupAddress | undefined,
 ): Promise<Response> {
   const body = await bodyToWire(init.body);
-  const headers = headersToRecord(init.headers);
-  if (!Object.hasOwn(headers, "connection")) {
-    headers.connection = "keep-alive";
-  }
-  // Ensure Host header omits :443 so it matches what undici sends directly and
-  // satisfies SigV4 pre-signed S3 URLs behind a proxy.
-  if (!Object.hasOwn(headers, "host")) {
-    headers.host = hostHeader(target);
-  }
+  const originalHeaders =
+    init.prepareHeaders === undefined ? dispatchHeaderRecord(init) : undefined;
   const tunnelKey = httpsProxyTunnelKey(target, proxy, ca, pinnedAddress);
   // The key now carries this call's pinning posture (see httpsProxyTunnelKey above), so an idle
   // pooled entry is only ever a cache hit here when it was established under the IDENTICAL
@@ -1388,48 +1403,63 @@ async function fetchHttpsViaProxy(
   const socket =
     takeIdleHttpsProxyTunnel(tunnelKey) ??
     (await createTlsTunnel(target, proxy, ca, init.signal ?? undefined, pinnedAddress));
-  socket.setKeepAlive(true);
-  const cap = maxResponseBytes ?? MAX_RESPONSE_BYTES;
-  return responseFromClientRequest((resolve, reject) => {
-    const req = httpRequest(
-      {
-        method: init.method ?? "GET",
-        hostname: target.hostname,
-        port: Number(targetPort(target)),
-        path: `${target.pathname}${target.search}`,
-        headers,
-        signal: init.signal ?? undefined,
-        createConnection: () => socket,
-      },
-      (res) => {
-        const responseAllowsReuse = (res.headers.connection ?? "").toLowerCase() !== "close";
-        resolveNodeResponse(
-          res,
-          resolve,
-          reject,
-          () => {
-            socket.destroy();
-            req.destroy();
-          },
-          cap,
-          () => {
-            if (responseAllowsReuse) releaseIdleHttpsProxyTunnel(tunnelKey, socket);
-            else socket.destroy();
-          },
-        );
-      },
-    );
-    req.on("error", (error) => {
-      socket.destroy();
-      reject(mapProxyError(error));
+  try {
+    init.signal?.throwIfAborted();
+    const headers = originalHeaders ?? dispatchHeaderRecord(init);
+    if (!Object.hasOwn(headers, "connection")) {
+      headers.connection = "keep-alive";
+    }
+    // Ensure Host header omits :443 so it matches what undici sends directly and
+    // satisfies SigV4 pre-signed S3 URLs behind a proxy.
+    if (!Object.hasOwn(headers, "host")) {
+      headers.host = hostHeader(target);
+    }
+    socket.setKeepAlive(true);
+    const cap = maxResponseBytes ?? MAX_RESPONSE_BYTES;
+    return await responseFromClientRequest((resolve, reject) => {
+      const req = httpRequest(
+        {
+          method: init.method ?? "GET",
+          hostname: target.hostname,
+          port: Number(targetPort(target)),
+          path: `${target.pathname}${target.search}`,
+          headers,
+          signal: init.signal ?? undefined,
+          createConnection: () => socket,
+        },
+        (res) => {
+          const responseAllowsReuse = (res.headers.connection ?? "").toLowerCase() !== "close";
+          resolveNodeResponse(
+            res,
+            resolve,
+            reject,
+            () => {
+              socket.destroy();
+              req.destroy();
+            },
+            cap,
+            () => {
+              if (responseAllowsReuse) releaseIdleHttpsProxyTunnel(tunnelKey, socket);
+              else socket.destroy();
+            },
+          );
+        },
+      );
+      req.on("error", (error) => {
+        socket.destroy();
+        reject(mapProxyError(error));
+      });
+      req.end(body);
     });
-    req.end(body);
-  });
+  } catch (error) {
+    socket.destroy();
+    throw error;
+  }
 }
 
 function fetchViaProxy(
   target: URL,
-  init: RequestInit,
+  init: PreparedRequestInit,
   proxy: URL,
   egress: OutboundHttpEgressConfig | undefined,
   maxResponseBytes: number | undefined,
@@ -1446,14 +1476,14 @@ function fetchViaProxy(
 // instead of letting the transport re-resolve DNS independently (AUDIT-SEC-001).
 function attemptPrimaryFetch(
   url: string,
-  init: RequestInit,
+  init: PreparedRequestInit,
   doFetch: typeof fetch,
   maxResponseBytes: number | undefined,
   pinnedAddresses: readonly LookupAddress[] | undefined,
 ): Promise<Response> {
   return pinnedAddresses !== undefined
     ? fetchDirectPinned(url, init, pinnedAddresses, maxResponseBytes)
-    : doFetch(url, init);
+    : doFetch(url, preparedFetchInit(init));
 }
 
 // Everything the direct (non-proxied) transport needs for one call, grouped so the two helpers
@@ -1462,6 +1492,7 @@ function attemptPrimaryFetch(
 interface DirectFetchPlan {
   readonly doFetch: typeof fetch;
   readonly useCaFallback: boolean;
+  readonly singleAttempt: boolean;
   readonly egress: OutboundHttpEgressConfig | undefined;
   readonly maxResponseBytes: number | undefined;
   readonly pinnedAddresses: readonly LookupAddress[] | undefined;
@@ -1511,7 +1542,7 @@ function logTlsCaFallback(url: string, plan: DirectFetchPlan, error: unknown): v
 // Extracted from fetchDirectWithCaFallback to keep its cyclomatic complexity within the limit.
 async function attemptCaBundleFallback(
   url: string,
-  init: RequestInit,
+  init: PreparedRequestInit,
   plan: DirectFetchPlan,
 ): Promise<Response> {
   try {
@@ -1534,10 +1565,19 @@ async function attemptCaBundleFallback(
 // Extracted from gatewayFetch to keep its cyclomatic complexity within the limit.
 async function fetchDirectWithCaFallback(
   url: string,
-  init: RequestInit,
+  init: PreparedRequestInit,
   plan: DirectFetchPlan,
 ): Promise<Response> {
   try {
+    if (plan.singleAttempt && plan.pinnedAddresses !== undefined && usesHttps(url)) {
+      return await fetchWithCaBundle(
+        url,
+        init,
+        plan.egress,
+        plan.maxResponseBytes,
+        pinnedLookup(plan.pinnedAddresses),
+      );
+    }
     return await attemptPrimaryFetch(
       url,
       init,
@@ -1547,7 +1587,7 @@ async function fetchDirectWithCaFallback(
     );
   } catch (error) {
     const recoverable = usesHttps(url) && isRecoverableTlsTrustError(error);
-    if (plan.useCaFallback && recoverable) {
+    if (plan.useCaFallback && !plan.singleAttempt && recoverable) {
       // Degradation: the default trust store rejected the peer, so the call is retried against
       // Keiko's assembled CA set. Silently, this shows up only as a doubled connect latency.
       logTlsCaFallback(url, plan, error);
@@ -1710,11 +1750,18 @@ function planGatewayProxy(
 // for each hop, so the target is re-vetted by the full DNS/address-pinning egress policy on the hop
 // that actually connects to it. Following a Location with a raw fetch would bypass that boundary
 // entirely (#3348 audit).
-function gatewayRequestInit(rest: RequestInit, timeoutMs: number | undefined): RequestInit {
+function gatewayRequestInit(
+  rest: RequestInit,
+  timeoutMs: number | undefined,
+  prepareHeaders: GatewayFetchOptions["prepareHeaders"],
+): PreparedRequestInit {
   const composedSignal = composeSignal(rest.signal, timeoutMs);
-  return composedSignal !== undefined
-    ? { ...rest, redirect: "manual", signal: composedSignal }
-    : { ...rest, redirect: "manual" };
+  return {
+    ...rest,
+    redirect: "manual",
+    ...(composedSignal === undefined ? {} : { signal: composedSignal }),
+    ...(prepareHeaders === undefined ? {} : { prepareHeaders }),
+  };
 }
 
 // The fetch itself. Split out of `gatewayFetch` so the outcome line can wrap it without pushing
@@ -1723,6 +1770,8 @@ async function performGatewayFetch(url: string, options: GatewayFetchOptions): P
   const {
     fetchImpl,
     useCaFallback = fetchImpl === undefined,
+    singleAttempt = false,
+    prepareHeaders,
     egress,
     timeoutMs,
     maxResponseBytes,
@@ -1730,7 +1779,7 @@ async function performGatewayFetch(url: string, options: GatewayFetchOptions): P
     ...rest
   } = options;
   const log = resolveLogSink(logOption);
-  const init = gatewayRequestInit(rest, timeoutMs);
+  const init = gatewayRequestInit(rest, timeoutMs, prepareHeaders);
   const plan = planGatewayProxy(url, fetchImpl, egress, log);
   refuseUndelegatedProxiedHostnameEgress(plan.target, plan.proxy, egress);
   refuseUnpinnableResearchEgress(plan.proxy, egress);
@@ -1749,6 +1798,7 @@ async function performGatewayFetch(url: string, options: GatewayFetchOptions): P
   const response = await fetchDirectWithCaFallback(url, init, {
     doFetch: plan.doFetch,
     useCaFallback,
+    singleAttempt,
     egress,
     maxResponseBytes,
     pinnedAddresses: dns.pinnedAddresses,

@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "9f993ab5bc2fe69a9546c84745c91842206c100f696aa61ff048f05432ebf899",
+    "catalogDigest": "25fb9ec4b0cff52afcf62c5d755195c872bafb4d73b39d1c670faed80c26e6d0",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -27568,7 +27568,7 @@
         "proofIds": ["http.gateway.egress.planned.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-model-gateway/src/http.ts:104",
-        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1686"]
+        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1726"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -27610,7 +27610,7 @@
         "proofIds": ["http.gateway.fetch.completed.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-model-gateway/src/http.ts:170",
-        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1839"]
+        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1889"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -27658,7 +27658,7 @@
         "proofIds": ["http.gateway.fetch.failed.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-model-gateway/src/http.ts:193",
-        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1876"]
+        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1926"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -27716,7 +27716,7 @@
         "proofIds": ["http.gateway.fetch.started.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-model-gateway/src/http.ts:144",
-        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1798"]
+        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1848"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -27758,7 +27758,7 @@
         "proofIds": ["http.gateway.tls.ca-bundle-fallback.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-model-gateway/src/http.ts:81",
-        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1499"]
+        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1530"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -27805,7 +27805,7 @@
         "proofIds": ["http.gateway.tls.trust-failed.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-model-gateway/src/http.ts:53",
-        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1480"]
+        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1511"]
       },
       {
         "contractKind": "activity-log-operation",
