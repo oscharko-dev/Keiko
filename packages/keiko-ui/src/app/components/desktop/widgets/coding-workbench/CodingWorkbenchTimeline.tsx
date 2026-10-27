@@ -986,13 +986,13 @@ function ToolOutcome({
   const exitCode = tool.presentation?.exitCode;
   if (exitCode !== undefined) {
     return (
-      <p className={styles.toolOutcome}>
+      <p className={styles.cmpToolOutcome}>
         {t("codingWorkbench.activity.exitCode", { code: exitCode })}
       </p>
     );
   }
   return tool.state === "failed" ? (
-    <p className={styles.toolOutcome}>{t("codingWorkbench.activity.toolError")}</p>
+    <p className={styles.cmpToolOutcome}>{t("codingWorkbench.activity.toolError")}</p>
   ) : null;
 }
 
