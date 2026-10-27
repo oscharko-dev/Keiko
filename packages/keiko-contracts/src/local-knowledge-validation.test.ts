@@ -228,7 +228,14 @@ for (const [entry, validate] of [
       };
       const input = {
         schemaVersion: "1",
-        nodes: [{ kind: "conversation-center", nodeId: "n1", conversationId: "c1", route: "chat" }],
+        nodes: [
+          {
+            kind: "conversation-center",
+            nodeId: "n1",
+            conversationId: "c1",
+            route: "chat",
+          },
+        ],
         edges: [edge],
         updatedAt: 1,
       };
@@ -251,7 +258,14 @@ for (const [entry, validate] of [
       };
       const input = {
         schemaVersion: "1",
-        nodes: [{ kind: "conversation-center", nodeId: "n1", conversationId: "c1", route: "chat" }],
+        nodes: [
+          {
+            kind: "conversation-center",
+            nodeId: "n1",
+            conversationId: "c1",
+            route: "chat",
+          },
+        ],
         edges: [edge],
         updatedAt: 1,
       };
@@ -437,7 +451,11 @@ describe("Knowledge capsule public responsibility (#3918)", () => {
   });
 });
 
-import type { KnowledgeCapsule as SourceKnowledgeCapsule } from "./local-knowledge.js";
+import type {
+  KnowledgeCapsule as SourceKnowledgeCapsule,
+  CapsuleContextualRetrievalSettings,
+} from "./local-knowledge.js";
+import type { KnowledgePodModelUsePolicy } from "./local-knowledge-model-use-policy.js";
 
 it.each(["source", "public"])("preserves captured extent observations through %s", (surface) => {
   const validate = surface === "source" ? validateKnowledgeCapsule : publicValidateKnowledgeCapsule;
@@ -594,3 +612,100 @@ it.each(["source", "public"] as const)(
     expect(trace).toEqual(["get:length", "get:0", "get:length"]);
   },
 );
+
+function assertCapsulePresentUndefinedTypes(): void {
+  expectTypeOf<Required<SourceKnowledgeCapsule>["description"]>().toEqualTypeOf<
+    string | undefined
+  >();
+  expectTypeOf<Required<PublicKnowledgeCapsule>["description"]>().toEqualTypeOf<
+    string | undefined
+  >();
+  expectTypeOf<Required<SourceKnowledgeCapsule>["sourceRoutingInstructions"]>().toEqualTypeOf<
+    string | undefined
+  >();
+  expectTypeOf<Required<PublicKnowledgeCapsule>["sourceRoutingInstructions"]>().toEqualTypeOf<
+    string | undefined
+  >();
+  expectTypeOf<Required<SourceKnowledgeCapsule>["alwaysQuery"]>().toEqualTypeOf<
+    boolean | undefined
+  >();
+  expectTypeOf<Required<PublicKnowledgeCapsule>["alwaysQuery"]>().toEqualTypeOf<
+    boolean | undefined
+  >();
+  expectTypeOf<Required<SourceKnowledgeCapsule>["contextualRetrieval"]>().toEqualTypeOf<
+    CapsuleContextualRetrievalSettings | undefined
+  >();
+  expectTypeOf<Required<PublicKnowledgeCapsule>["contextualRetrieval"]>().toEqualTypeOf<
+    CapsuleContextualRetrievalSettings | undefined
+  >();
+  expectTypeOf<Required<SourceKnowledgeCapsule>["modelUsePolicy"]>().toEqualTypeOf<
+    KnowledgePodModelUsePolicy | undefined
+  >();
+  expectTypeOf<Required<PublicKnowledgeCapsule>["modelUsePolicy"]>().toEqualTypeOf<
+    KnowledgePodModelUsePolicy | undefined
+  >();
+  expectTypeOf<Required<SourceKnowledgeCapsule>["metadata"]>().toEqualTypeOf<
+    Readonly<Record<string, string>> | undefined
+  >();
+  expectTypeOf<Required<PublicKnowledgeCapsule>["metadata"]>().toEqualTypeOf<
+    Readonly<Record<string, string>> | undefined
+  >();
+}
+
+function capsuleWithOwnUndefinedOptions(): Record<string, unknown> {
+  return {
+    ...capsuleInput(),
+    description: undefined,
+    sourceRoutingInstructions: undefined,
+    alwaysQuery: undefined,
+    contextualRetrieval: undefined,
+    modelUsePolicy: undefined,
+    metadata: undefined,
+  };
+}
+
+it("preserves source and public capsule option presence with truthful types", (): void => {
+  assertCapsulePresentUndefinedTypes();
+  for (const validate of [validateKnowledgeCapsule, publicValidateKnowledgeCapsule]) {
+    const input = capsuleWithOwnUndefinedOptions();
+    const result = validate(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new TypeError("Expected admitted own-undefined options");
+    expect(result.value).toBe(input);
+    for (const field of [
+      "description",
+      "sourceRoutingInstructions",
+      "alwaysQuery",
+      "contextualRetrieval",
+      "modelUsePolicy",
+      "metadata",
+    ] as const) {
+      expect(Object.hasOwn(result.value, field)).toBe(true);
+      expect(result.value[field]).toBeUndefined();
+    }
+    if ("description" in result.value) {
+      expectTypeOf(result.value.description).toEqualTypeOf<string | undefined>();
+    }
+    if ("sourceRoutingInstructions" in result.value) {
+      expectTypeOf(result.value.sourceRoutingInstructions).toEqualTypeOf<string | undefined>();
+    }
+    if ("alwaysQuery" in result.value) {
+      expectTypeOf(result.value.alwaysQuery).toEqualTypeOf<boolean | undefined>();
+    }
+    if ("contextualRetrieval" in result.value) {
+      expectTypeOf(result.value.contextualRetrieval).toEqualTypeOf<
+        CapsuleContextualRetrievalSettings | undefined
+      >();
+    }
+    if ("modelUsePolicy" in result.value) {
+      expectTypeOf(result.value.modelUsePolicy).toEqualTypeOf<
+        KnowledgePodModelUsePolicy | undefined
+      >();
+    }
+    if ("metadata" in result.value) {
+      expectTypeOf(result.value.metadata).toEqualTypeOf<
+        Readonly<Record<string, string>> | undefined
+      >();
+    }
+  }
+});

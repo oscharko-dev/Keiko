@@ -60,11 +60,11 @@ export interface EmbeddingModelIdentity {
   readonly modelId: string;
   readonly vectorDimensions: number;
   readonly vectorMetric: EmbeddingVectorMetric;
-  readonly modelRevision?: string;
-  readonly normalization?: EmbeddingVectorNormalization;
-  readonly instructionVersion?: string;
-  readonly embeddingSpaceFingerprint?: string;
-  readonly dimensionsParam?: number;
+  readonly modelRevision?: string | undefined;
+  readonly normalization?: EmbeddingVectorNormalization | undefined;
+  readonly instructionVersion?: string | undefined;
+  readonly embeddingSpaceFingerprint?: string | undefined;
+  readonly dimensionsParam?: number | undefined;
 }
 
 export interface ParserDependencyVersion {
@@ -170,27 +170,27 @@ export type SharedPodRefreshTerminal = (typeof SHARED_POD_REFRESH_TERMINALS)[num
 
 export interface CapsuleContextualRetrievalSettings {
   readonly enabled: boolean;
-  readonly modelId?: string;
-  readonly promptVersion?: string;
-  readonly strict?: boolean;
-  readonly maxContextChars?: number;
-  readonly documentContextMaxChars?: number;
+  readonly modelId?: string | undefined;
+  readonly promptVersion?: string | undefined;
+  readonly strict?: boolean | undefined;
+  readonly maxContextChars?: number | undefined;
+  readonly documentContextMaxChars?: number | undefined;
 }
 
 // ─── Knowledge capsule + set ──────────────────────────────────────────────────
 export interface KnowledgeCapsule {
   readonly id: KnowledgeCapsuleId;
   readonly displayName: string;
-  readonly description?: string;
+  readonly description?: string | undefined;
   readonly tags: readonly string[];
   readonly sourceIds: readonly KnowledgeSourceId[];
-  readonly sourceRoutingInstructions?: string;
-  readonly alwaysQuery?: boolean;
+  readonly sourceRoutingInstructions?: string | undefined;
+  readonly alwaysQuery?: boolean | undefined;
   readonly retrievalEffort: CapsuleRetrievalEffort;
   readonly outputMode: CapsuleOutputMode;
   readonly answerGroundingPolicy: CapsuleAnswerGroundingPolicy;
-  readonly contextualRetrieval?: CapsuleContextualRetrievalSettings;
-  readonly modelUsePolicy?: KnowledgePodModelUsePolicy;
+  readonly contextualRetrieval?: CapsuleContextualRetrievalSettings | undefined;
+  readonly modelUsePolicy?: KnowledgePodModelUsePolicy | undefined;
   readonly embeddingModelIdentity: EmbeddingModelIdentity;
   readonly lifecycleState: CapsuleLifecycleState;
   // Path relative to the runtime-state directory; never absolute and never containing `..`.
@@ -198,7 +198,7 @@ export interface KnowledgeCapsule {
   readonly storageReference: string;
   // Arbitrary key-value metadata for UI labelling and connector tagging. Bounded at the
   // BFF layer to protect the store from unbounded growth (see UpdateCapsulePatch).
-  readonly metadata?: Readonly<Record<string, string>>;
+  readonly metadata?: Readonly<Record<string, string>> | undefined;
   readonly createdAt: number;
   readonly updatedAt: number;
 }
@@ -209,7 +209,7 @@ export interface KnowledgeCapsule {
 export interface CapsuleSet {
   readonly id: CapsuleSetId;
   readonly displayName: string;
-  readonly description?: string;
+  readonly description?: string | undefined;
   readonly tags: readonly string[];
   readonly capsuleIds: readonly KnowledgeCapsuleId[];
   readonly composedAt: number;

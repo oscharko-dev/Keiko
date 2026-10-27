@@ -25,6 +25,9 @@ import {
 } from "./local-knowledge-records.js";
 import type {
   CapsuleSet,
+  EmbeddingModelIdentity,
+  EmbeddingVectorNormalization,
+  CapsuleContextualRetrievalSettings,
   ConnectorGraphState,
   ChunkId,
   DocumentId,
@@ -1196,12 +1199,16 @@ describe("mutation-robustness anchors", () => {
 
 import {
   validateCapsuleSet as publicValidateSet,
+  validateEmbeddingModelIdentity as publicValidateEmbeddingIdentity,
+  validateCapsuleContextualRetrievalSettings as publicValidateContextualRetrieval,
   validateCapsuleReindexRequest as publicValidateReindex,
   validateConnectorGraphState as publicValidateGraph,
   type LocalKnowledgeValidation as PublicKnowledgeValidation,
 } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation";
 import type {
   CapsuleSet as PublicCapsuleSet,
+  EmbeddingModelIdentity as PublicEmbeddingModelIdentity,
+  CapsuleContextualRetrievalSettings as PublicContextualRetrieval,
   CapsuleReindexRequest as PublicReindexRequest,
   ConnectorGraphState as PublicGraphState,
   KnowledgeCapsuleId as PublicKnowledgeCapsuleId,
@@ -1478,4 +1485,227 @@ describe("Knowledge graph public responsibility (#3918)", () => {
       expect(reads).toBe(2);
     }
   });
+});
+
+function assertSetPresentUndefinedTypes(): void {
+  expectTypeOf<Required<CapsuleSet>["description"]>().toEqualTypeOf<string | undefined>();
+  expectTypeOf<Required<PublicCapsuleSet>["description"]>().toEqualTypeOf<string | undefined>();
+}
+
+it("preserves source and public Set option presence with truthful types", (): void => {
+  assertSetPresentUndefinedTypes();
+  for (const validate of [validateCapsuleSet, publicValidateSet]) {
+    const input = { ...happyCapsuleSet(), description: undefined };
+    const result = validate(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new TypeError("Expected admitted own-undefined options");
+    expect(result.value).toBe(input);
+    for (const field of ["description"] as const) {
+      expect(Object.hasOwn(result.value, field)).toBe(true);
+      expect(result.value[field]).toBeUndefined();
+    }
+    if ("description" in result.value) {
+      expectTypeOf(result.value.description).toEqualTypeOf<string | undefined>();
+    }
+  }
+});
+
+function assertReindexPresentUndefinedTypes(): void {
+  expectTypeOf<Required<CapsuleReindexRequest>["mode"]>().toEqualTypeOf<
+    (typeof CAPSULE_REINDEX_MODES)[number] | undefined
+  >();
+  expectTypeOf<Required<PublicReindexRequest>["mode"]>().toEqualTypeOf<
+    (typeof CAPSULE_REINDEX_MODES)[number] | undefined
+  >();
+  expectTypeOf<Required<CapsuleReindexRequest>["force"]>().toEqualTypeOf<boolean | undefined>();
+  expectTypeOf<Required<PublicReindexRequest>["force"]>().toEqualTypeOf<boolean | undefined>();
+  expectTypeOf<Required<CapsuleReindexRequest>["resumeJobId"]>().toEqualTypeOf<
+    string | undefined
+  >();
+  expectTypeOf<Required<PublicReindexRequest>["resumeJobId"]>().toEqualTypeOf<string | undefined>();
+}
+
+it("preserves source and public Reindex option presence with truthful types", (): void => {
+  assertReindexPresentUndefinedTypes();
+  for (const validate of [validateCapsuleReindexRequest, publicValidateReindex]) {
+    const input = { capsuleId: "cap-1", mode: undefined, force: undefined, resumeJobId: undefined };
+    const result = validate(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new TypeError("Expected admitted own-undefined options");
+    expect(result.value).toBe(input);
+    for (const field of ["mode", "force", "resumeJobId"] as const) {
+      expect(Object.hasOwn(result.value, field)).toBe(true);
+      expect(result.value[field]).toBeUndefined();
+    }
+    if ("mode" in result.value) {
+      expectTypeOf(result.value.mode).toEqualTypeOf<
+        (typeof CAPSULE_REINDEX_MODES)[number] | undefined
+      >();
+    }
+    if ("force" in result.value) {
+      expectTypeOf(result.value.force).toEqualTypeOf<boolean | undefined>();
+    }
+    if ("resumeJobId" in result.value) {
+      expectTypeOf(result.value.resumeJobId).toEqualTypeOf<string | undefined>();
+    }
+  }
+});
+
+function assertEmbeddingIdentityPresentUndefinedTypes(): void {
+  expectTypeOf<Required<EmbeddingModelIdentity>["modelRevision"]>().toEqualTypeOf<
+    string | undefined
+  >();
+  expectTypeOf<Required<PublicEmbeddingModelIdentity>["modelRevision"]>().toEqualTypeOf<
+    string | undefined
+  >();
+  expectTypeOf<Required<EmbeddingModelIdentity>["normalization"]>().toEqualTypeOf<
+    EmbeddingVectorNormalization | undefined
+  >();
+  expectTypeOf<Required<PublicEmbeddingModelIdentity>["normalization"]>().toEqualTypeOf<
+    EmbeddingVectorNormalization | undefined
+  >();
+  expectTypeOf<Required<EmbeddingModelIdentity>["instructionVersion"]>().toEqualTypeOf<
+    string | undefined
+  >();
+  expectTypeOf<Required<PublicEmbeddingModelIdentity>["instructionVersion"]>().toEqualTypeOf<
+    string | undefined
+  >();
+  expectTypeOf<Required<EmbeddingModelIdentity>["embeddingSpaceFingerprint"]>().toEqualTypeOf<
+    string | undefined
+  >();
+  expectTypeOf<Required<PublicEmbeddingModelIdentity>["embeddingSpaceFingerprint"]>().toEqualTypeOf<
+    string | undefined
+  >();
+  expectTypeOf<Required<EmbeddingModelIdentity>["dimensionsParam"]>().toEqualTypeOf<
+    number | undefined
+  >();
+  expectTypeOf<Required<PublicEmbeddingModelIdentity>["dimensionsParam"]>().toEqualTypeOf<
+    number | undefined
+  >();
+}
+
+it("preserves source and public EmbeddingIdentity option presence with truthful types", (): void => {
+  assertEmbeddingIdentityPresentUndefinedTypes();
+  const fixture = validateEmbeddingModelIdentity(happyEmbeddingIdentity());
+  if (!fixture.ok) throw new TypeError("Expected healthy embedding fixture");
+  for (const validate of [validateEmbeddingModelIdentity, publicValidateEmbeddingIdentity]) {
+    const input = {
+      ...fixture.value,
+      modelRevision: undefined,
+      normalization: undefined,
+      instructionVersion: undefined,
+      embeddingSpaceFingerprint: undefined,
+      dimensionsParam: undefined,
+    };
+    const result = validate(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new TypeError("Expected admitted own-undefined options");
+    expect(result.value).toBe(input);
+    for (const field of [
+      "modelRevision",
+      "normalization",
+      "instructionVersion",
+      "embeddingSpaceFingerprint",
+      "dimensionsParam",
+    ] as const) {
+      expect(Object.hasOwn(result.value, field)).toBe(true);
+      expect(result.value[field]).toBeUndefined();
+    }
+    if ("modelRevision" in result.value) {
+      expectTypeOf(result.value.modelRevision).toEqualTypeOf<string | undefined>();
+    }
+    if ("normalization" in result.value) {
+      expectTypeOf(result.value.normalization).toEqualTypeOf<
+        EmbeddingVectorNormalization | undefined
+      >();
+    }
+    if ("instructionVersion" in result.value) {
+      expectTypeOf(result.value.instructionVersion).toEqualTypeOf<string | undefined>();
+    }
+    if ("embeddingSpaceFingerprint" in result.value) {
+      expectTypeOf(result.value.embeddingSpaceFingerprint).toEqualTypeOf<string | undefined>();
+    }
+    if ("dimensionsParam" in result.value) {
+      expectTypeOf(result.value.dimensionsParam).toEqualTypeOf<number | undefined>();
+    }
+  }
+});
+
+function assertContextualRetrievalPresentUndefinedTypes(): void {
+  expectTypeOf<Required<CapsuleContextualRetrievalSettings>["modelId"]>().toEqualTypeOf<
+    string | undefined
+  >();
+  expectTypeOf<Required<PublicContextualRetrieval>["modelId"]>().toEqualTypeOf<
+    string | undefined
+  >();
+  expectTypeOf<Required<CapsuleContextualRetrievalSettings>["promptVersion"]>().toEqualTypeOf<
+    string | undefined
+  >();
+  expectTypeOf<Required<PublicContextualRetrieval>["promptVersion"]>().toEqualTypeOf<
+    string | undefined
+  >();
+  expectTypeOf<Required<CapsuleContextualRetrievalSettings>["strict"]>().toEqualTypeOf<
+    boolean | undefined
+  >();
+  expectTypeOf<Required<PublicContextualRetrieval>["strict"]>().toEqualTypeOf<
+    boolean | undefined
+  >();
+  expectTypeOf<Required<CapsuleContextualRetrievalSettings>["maxContextChars"]>().toEqualTypeOf<
+    number | undefined
+  >();
+  expectTypeOf<Required<PublicContextualRetrieval>["maxContextChars"]>().toEqualTypeOf<
+    number | undefined
+  >();
+  expectTypeOf<
+    Required<CapsuleContextualRetrievalSettings>["documentContextMaxChars"]
+  >().toEqualTypeOf<number | undefined>();
+  expectTypeOf<Required<PublicContextualRetrieval>["documentContextMaxChars"]>().toEqualTypeOf<
+    number | undefined
+  >();
+}
+
+it("preserves source and public ContextualRetrieval option presence with truthful types", (): void => {
+  assertContextualRetrievalPresentUndefinedTypes();
+  for (const validate of [
+    validateCapsuleContextualRetrievalSettings,
+    publicValidateContextualRetrieval,
+  ]) {
+    const input = {
+      enabled: true,
+      modelId: undefined,
+      promptVersion: undefined,
+      strict: undefined,
+      maxContextChars: undefined,
+      documentContextMaxChars: undefined,
+    };
+    const result = validate(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new TypeError("Expected admitted own-undefined options");
+    expect(result.value).toBe(input);
+    for (const field of [
+      "modelId",
+      "promptVersion",
+      "strict",
+      "maxContextChars",
+      "documentContextMaxChars",
+    ] as const) {
+      expect(Object.hasOwn(result.value, field)).toBe(true);
+      expect(result.value[field]).toBeUndefined();
+    }
+    if ("modelId" in result.value) {
+      expectTypeOf(result.value.modelId).toEqualTypeOf<string | undefined>();
+    }
+    if ("promptVersion" in result.value) {
+      expectTypeOf(result.value.promptVersion).toEqualTypeOf<string | undefined>();
+    }
+    if ("strict" in result.value) {
+      expectTypeOf(result.value.strict).toEqualTypeOf<boolean | undefined>();
+    }
+    if ("maxContextChars" in result.value) {
+      expectTypeOf(result.value.maxContextChars).toEqualTypeOf<number | undefined>();
+    }
+    if ("documentContextMaxChars" in result.value) {
+      expectTypeOf(result.value.documentContextMaxChars).toEqualTypeOf<number | undefined>();
+    }
+  }
 });
