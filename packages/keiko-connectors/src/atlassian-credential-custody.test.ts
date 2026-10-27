@@ -234,6 +234,52 @@ describe("Jira Live Pod custody", () => {
     expect(f.metadataStore.rows.size).toBe(0);
   });
 
+  it("revokes a currently verified credential once after an observed authentication failure", () => {
+    const invalidated = vi.fn();
+    const f = custodyOverFakes(invalidated);
+    const created = f.custody.create(livePodInput(), "a".repeat(64));
+    const probe = f.custody.beginVerification(created.authRef);
+    assert(probe);
+    f.custody.finishVerification(created.authRef, 1, probe.revision, "ok");
+    const secretRead = vi.spyOn(f.vault, "get");
+    expect(
+      f.custody.observeAuthenticationFailure(created.authRef, 1, probe.revision, "observed"),
+    ).toBe(true);
+    expect(f.custody.observeAuthenticationFailure(created.authRef, 1, probe.revision, "late")).toBe(
+      false,
+    );
+    expect(f.custody.getMetadata(created.authRef)).toMatchObject({
+      generation: 2,
+      livePod: { verificationStatus: "auth-failed", verificationInProgress: false },
+    });
+    expect(invalidated).toHaveBeenCalledTimes(1);
+    expect(secretRead).not.toHaveBeenCalled();
+    expect(
+      custodyErrorCode(() => f.executionResolver.resolveForExecution(created.authRef, 1)),
+    ).toBe("credential-changed");
+  });
+
+  it("does not revoke a newer, pending or deleted verification from a stale response", () => {
+    const invalidated = vi.fn();
+    const f = custodyOverFakes(invalidated);
+    const created = f.custody.create(livePodInput(), "a".repeat(64));
+    expect(f.custody.observeAuthenticationFailure(created.authRef, 1, 0)).toBe(false);
+    const first = f.custody.beginVerification(created.authRef);
+    assert(first);
+    expect(f.custody.observeAuthenticationFailure(created.authRef, 1, first.revision)).toBe(false);
+    f.custody.finishVerification(created.authRef, 1, first.revision, "ok");
+    const newer = f.custody.beginVerification(created.authRef);
+    assert(newer);
+    f.custody.finishVerification(created.authRef, 1, newer.revision, "ok");
+    expect(f.custody.observeAuthenticationFailure(created.authRef, 1, first.revision)).toBe(false);
+    expect(f.custody.observeAuthenticationFailure(created.authRef, 2, newer.revision)).toBe(false);
+    expect(invalidated).not.toHaveBeenCalled();
+    f.custody.delete(created.authRef);
+    invalidated.mockClear();
+    expect(f.custody.observeAuthenticationFailure(created.authRef, 1, newer.revision)).toBe(false);
+    expect(invalidated).not.toHaveBeenCalled();
+  });
+
   it("advances the authorization generation on failed verification and refuses stale success", () => {
     const f = custodyOverFakes();
     const created = f.custody.create(livePodInput(), "a".repeat(64));

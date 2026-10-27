@@ -1,3 +1,11 @@
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { recordConnectionCheck } from "./credentialActivity.js";
+import type { AtlassianHttpLifecycleOptions } from "./httpRequestLifecycle.js";
+import type { CreateAtlassianHttpPortOptions } from "./httpPort.js";
+import type {
+  AtlassianCredentialMetadata,
+  AtlassianCredentialCustody,
+} from "@oscharko-dev/keiko-connectors";
 // Composition-root wiring for Atlassian connector credential custody (Issue #2241, ADR-0128 D1).
 //
 // keiko-server assembles the concrete pieces the keiko-connectors domain logic declares as ports:
@@ -92,34 +100,24 @@ export function buildAtlassianConnectorCredentialDeps(
         listenerPorts.delete(port);
       };
     },
-    httpPortFactory: (metadata, correlationId) =>
-      createGatewayAtlassianHttpPort({
-        privateTargets: () =>
-          metadata.deployment === "data-center"
-            ? (options.networkConfig?.()?.privateTargets ?? [])
-            : [],
-        deniedLoopbackPorts: () => [...listenerPorts],
-        baseUrl: metadata.baseUrl,
-        authRef: metadata.authRef,
-        credentials: generationBoundResolver(executionResolver, metadata.generation ?? 1),
-        egress: options.egress,
-        correlationId,
-        ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
-      }),
-    httpBodyPortFactory: (metadata, correlationId) =>
-      createGatewayAtlassianHttpBodyPort({
-        privateTargets: () =>
-          metadata.deployment === "data-center"
-            ? (options.networkConfig?.()?.privateTargets ?? [])
-            : [],
-        deniedLoopbackPorts: () => [...listenerPorts],
-        baseUrl: metadata.baseUrl,
-        authRef: metadata.authRef,
-        credentials: generationBoundResolver(executionResolver, metadata.generation ?? 1),
-        egress: options.egress,
-        correlationId,
-        ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
-      }),
+    httpPortFactory: (metadata, correlationId, lifecycle) =>
+      createGatewayAtlassianHttpPort(
+        credentialTransportOptions(
+          { options, listenerPorts, executionResolver, custody },
+          metadata,
+          correlationId,
+          lifecycle,
+        ),
+      ),
+    httpBodyPortFactory: (metadata, correlationId, lifecycle) =>
+      createGatewayAtlassianHttpBodyPort(
+        credentialTransportOptions(
+          { options, listenerPorts, executionResolver, custody },
+          metadata,
+          correlationId,
+          lifecycle,
+        ),
+      ),
     ...(options.activityLog === undefined ? {} : { activityLog: options.activityLog }),
   };
 }
@@ -129,4 +127,69 @@ function generationBoundResolver(
   generation: number,
 ): AtlassianCredentialExecutionResolver {
   return { resolveForExecution: (authRef) => resolver.resolveForExecution(authRef, generation) };
+}
+
+interface CredentialTransportOwner {
+  readonly options: BuildAtlassianConnectorCredentialDepsOptions;
+  readonly listenerPorts: ReadonlySet<number>;
+  readonly executionResolver: AtlassianCredentialExecutionResolver;
+  readonly custody: AtlassianCredentialCustody;
+}
+
+function observedAuthentication(
+  owner: CredentialTransportOwner,
+  metadata: AtlassianCredentialMetadata,
+  correlationId: string,
+): (status: number) => void {
+  if (metadata.deployment !== "data-center" || metadata.livePod === undefined)
+    return (): void => undefined;
+  const { authRef, generation } = metadata;
+  const revision = metadata.livePod.verificationRevision;
+  return (status): void => {
+    if (status !== 401) return;
+    const applied = owner.custody.observeAuthenticationFailure(
+      authRef,
+      generation,
+      revision,
+      correlationId,
+    );
+    recordConnectionCheck(
+      owner.options,
+      correlationId,
+      "auth-failed",
+      applied ? "applied" : "stale",
+      "request",
+    );
+  };
+}
+
+function credentialTransportOptions(
+  owner: CredentialTransportOwner,
+  metadata: AtlassianCredentialMetadata,
+  correlationId: string | undefined,
+  lifecycle: AtlassianHttpLifecycleOptions = {},
+): CreateAtlassianHttpPortOptions {
+  const { options, listenerPorts, executionResolver } = owner;
+  const dataCenter = metadata.deployment === "data-center";
+  const observe = observedAuthentication(owner, metadata, correlationId ?? UNKNOWN_CORRELATION_ID);
+  const beforeDispatch = lifecycle.beforeDispatch;
+  const onResponse = lifecycle.onResponse;
+  return {
+    privateTargets: () => (dataCenter ? (options.networkConfig?.()?.privateTargets ?? []) : []),
+    deniedLoopbackPorts: () => [...listenerPorts],
+    baseUrl: metadata.baseUrl,
+    authRef: metadata.authRef,
+    credentials: generationBoundResolver(executionResolver, metadata.generation ?? 1),
+    egress: options.egress,
+    correlationId,
+    ...(beforeDispatch === undefined ? {} : { beforeDispatch }),
+    onResponse: (request, status): boolean => {
+      try {
+        return onResponse === undefined || onResponse(request, status);
+      } finally {
+        observe(status);
+      }
+    },
+    ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
+  };
 }

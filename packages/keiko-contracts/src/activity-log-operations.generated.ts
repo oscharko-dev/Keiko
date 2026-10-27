@@ -935,7 +935,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["verify", "sync"],
+        values: ["verify", "sync", "request"],
       },
       outcome: {
         type: "string",
@@ -966,7 +966,10 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     lifecycle: "end",
     analyzerProjection: "timeline",
     failureClasses: ["atlassian-credential-custody"],
-    proofIds: ["atlassian.connection.checked.line"],
+    proofIds: [
+      "atlassian.connection.checked.line",
+      "atlassian.connection.checked.observed-authentication",
+    ],
     releaseImpact: "patch",
   },
   {

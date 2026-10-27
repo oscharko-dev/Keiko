@@ -240,6 +240,7 @@ function guard(): AtlassianConnectorCredentialDeps {
     },
     beginVerification: (): undefined => undefined,
     finishVerification: (): boolean => false,
+    observeAuthenticationFailure: (): boolean => false,
     create: (): never => {
       throw new Error("create is not exercised");
     },

@@ -95,7 +95,7 @@ const ATLASSIAN_CONNECTION_CHECKED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["verify", "sync"],
+      values: ["verify", "sync", "request"],
     },
     outcome: {
       type: "string",
@@ -128,7 +128,10 @@ const ATLASSIAN_CONNECTION_CHECKED_OPERATION = defineActivityLogOperation({
   lifecycle: "end",
   analyzerProjection: "timeline",
   failureClasses: ["atlassian-credential-custody"],
-  proofIds: ["atlassian.connection.checked.line"],
+  proofIds: [
+    "atlassian.connection.checked.line",
+    "atlassian.connection.checked.observed-authentication",
+  ],
   releaseImpact: "patch",
 });
 
@@ -137,6 +140,7 @@ export function recordConnectionCheck(
   correlationId: string,
   result: AtlassianConnectionVerificationStatus | "sync-unsupported" | "verification-aborted",
   verificationState?: "applied" | "stale",
+  source: "verify" | "request" = "verify",
 ): void {
   try {
     deps.activityLog?.write(
@@ -144,7 +148,7 @@ export function recordConnectionCheck(
         ATLASSIAN_CONNECTION_CHECKED_OPERATION,
         { correlationId },
         {
-          action: result === "sync-unsupported" ? "sync" : "verify",
+          action: result === "sync-unsupported" ? "sync" : source,
           outcome: result,
           ...(verificationState === undefined ? {} : { verificationState }),
           completeness: "complete",

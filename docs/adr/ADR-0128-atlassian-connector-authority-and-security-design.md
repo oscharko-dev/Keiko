@@ -441,6 +441,15 @@ A logging fault after commit produces a diagnostic without converting success in
 mutation failure. Restart reconciliation of dependent UI state, management UI and Chat grant/approval
 revocation remain separate completion work.
 
+Both outbound HTTP factories forward the private dispatch/response hooks so the same current
+policy guard can run after transport preparation and before credential materialization. A
+response observer captures the selected Live Pod generation and verification revision by value.
+An observed 401 invalidates only that still-current verified credential, advances its generation
+and notifies the existing dependent-Chat lifecycle owner. A newer/pending verification, rotation,
+deletion or 403 permission denial cannot revoke another/current credential. Response acknowledgement
+runs before invalidation and body consumption; the existing Activity Log distinguishes observed
+request status from an explicit verification probe. This does not introduce credential polling.
+
 Both outbound HTTP factories capture the selected credential generation by value. The custody
 resolver checks it against current private metadata before reading ciphertext, so an old transport
 cannot silently materialize a replacement credential. The existing typed rejection event and 409

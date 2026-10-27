@@ -1694,7 +1694,10 @@
             "frames": false,
             "causeChain": false
           },
-          "proofIds": ["atlassian.connection.checked.line"],
+          "proofIds": [
+            "atlassian.connection.checked.line",
+            "atlassian.connection.checked.observed-authentication"
+          ],
           "replayReferences": [],
           "missingObligations": []
         },

@@ -55,7 +55,7 @@ Status: **Partial — not accepted**. Data Center REST-v2/PAT verification and t
 
 - [ ] **AC2:** Name/base URL/deployment/credential reference persist through the current owner; cleartext PAT is absent from saved metadata, responses, browser recovery, MCP configuration, logs and evidence. Resolve the PAT only at outbound execution; Keiko-managed rotation/revocation updates the connector generation for dependent consumers. Jira-side revocation is enforced by Jira on each call; an observed auth failure invalidates local readiness and pending work.
 
-Status: **Partial — not accepted**. The existing vault stores tokens; public credential projections exclude private Pod facts. HTTP factories pin the selected credential generation before materialization. Custody and actual HTTP regression proofs are recorded below. Rotation and observed-call invalidation of Chat grants/approvals remain pending.
+Status: **Partial — not accepted**. The existing vault stores tokens; public credential projections exclude private Pod facts. HTTP factories pin the selected credential generation before materialization. Custody and actual HTTP regression proofs are recorded below. Rotation invalidates dependent Chat bindings, authority and read grants. A current observed 401 now invalidates readiness through that same custody callback; stale responses and 403 do not. Complete pending write-approval and normal-Chat qualification remain pending.
 
 - [ ] **AC3:** Root and non-root Jira context paths work. Exactly admitted enterprise/private and trusted local-lab HTTPS targets work; other hosts/ports, path escape, Keiko's own listener, metadata/link-local addresses, DNS rebinding and mixed-class answers, cross-origin redirects, untrusted certificates and expired certificates remain refused, including the proxy path. Admission cannot be enabled through environment variables or the global private-egress flag.
 
@@ -145,7 +145,7 @@ Status: **Partial — not accepted**. All three mode selections persist through 
 
 - [ ] **AC3:** Disconnect, replacement, Pod deletion and Keiko-managed token rotation/revocation revoke read grants and invalidate pending approvals and queued calls. Jira-side token revocation is enforced on the next Jira call; observed auth failure invalidates local readiness and pending work without introducing polling or webhooks. Tests cover these changes during approval and before effect; no stale request uses the old or newly substituted credential.
 
-Status: **Partial — not accepted**. HTTP generation capture, verification ticket settlement and atomic binding generations prevent the implemented stale credential/probe/update paths. Retained real-route proofs are recorded below. Credential deletion and failed/aborted re-verification now atomically invalidate dependent Chat bindings and cancel their active/queued turns through the existing serializer, including direct credential routes. Generation-checked replacement now exists in custody with durable failure states; Read grants now follow committed Chat mode/binding changes, closure/deletion, project removal, direct credential deletion, failed re-verification and token replacement. Management UI, observed tool-call auth failures and pending write-approval invalidation remain pending.
+Status: **Partial — not accepted**. HTTP generation capture, verification ticket settlement and atomic binding generations prevent the implemented stale credential/probe/update paths. Retained real-route proofs are recorded below. Credential deletion and failed/aborted re-verification now atomically invalidate dependent Chat bindings and cancel their active/queued turns through the existing serializer, including direct credential routes. Generation-checked replacement now exists in custody with durable failure states; Read grants now follow committed Chat mode/binding changes, closure/deletion, project removal, direct credential deletion, failed re-verification and token replacement. Observed current 401 responses now invalidate readiness and use that same lifecycle callback, while 403 and stale observations preserve current state. Management UI, normal-Chat dispatch composition and pending write-approval invalidation remain pending.
 
 - [ ] **AC4:** Two chats using different Pods are isolated; two chats deliberately using the same Pod share neither grants nor approval state; a new or copied Chat identity cannot inherit grants or approvals. Data-Pod-only grounding is byte-for-byte unchanged in behaviour and existing Workbench MCP works unchanged.
 
@@ -1661,3 +1661,27 @@ part of final qualification. No complete criterion or current licensed live pass
 The laboratory was rechecked at 15:35 Berlin on 2026-10-27: the production HTTPS/PAT verifier
 passes, untrusted TLS is rejected and revoked target admission is unreachable. The license check
 still reports invalid; current licensed live-write/model/browser acceptance remains blocked.
+
+### Observed-authentication and transport-guard checkpoint — #4082 AC2, #4084 AC3, #4085 AC4
+
+Both existing credential HTTP factories now forward private final-dispatch and response hooks;
+the shared factory composition still captures credential generation before token resolution.
+The custody owner handles an observed 401 only for the selected, currently verified Live Pod
+generation and verification revision. It commits auth-failed and advances the generation before
+notifying the existing lifecycle owner. Repeated/stale responses, an in-progress or newer
+verification, deletion and ordinary 403 permission denial cannot invalidate a current credential.
+The response observer captures identity/revision by value, including if caller metadata later
+changes. A caller's acknowledgement hook runs before credential invalidation and before body
+consumption, preserving the mutation journal's existing response-observation seam.
+
+The new factory-guard and current-401 cases fail before implementation; the 403 baseline already
+passes. After implementation, 271 scoped custody/transport/Chat tests pass. The subsequent
+credential/write/policy/operation-catalog regression run passes 374 tests (including the 97
+operation-catalog cases; the runs overlap). A registered real writer/reader proof reconstructs
+request-status invalidation and acknowledgement → invalidation → body ordering without secret
+or endpoint bytes. Build, root typecheck, changed lint, semantic checks and their 938-group
+unchanged baseline pass. Generation resolves 619 proofs and 30 scenarios without violations.
+Logs: `/tmp/keiko-4081-observed-auth-*.log`.
+
+This closes the observed-status custody/transport gap; complete ordinary-Chat and write-approval
+composition and final licensed qualification remain pending. No complete AC is accepted here.

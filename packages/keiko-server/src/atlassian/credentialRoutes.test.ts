@@ -429,6 +429,7 @@ describe("POST /api/atlassian-connectors/credentials", () => {
       },
       beginVerification: (): undefined => undefined,
       finishVerification: (): boolean => false,
+      observeAuthenticationFailure: (): boolean => false,
       create: (): never => {
         throw new AtlassianCredentialCustodyError("credential-limit-exceeded");
       },
@@ -503,6 +504,7 @@ describe("POST /api/atlassian-connectors/credentials", () => {
       },
       beginVerification: (): undefined => undefined,
       finishVerification: (): boolean => false,
+      observeAuthenticationFailure: (): boolean => false,
       create: (): never => {
         throw new AtlassianCredentialCustodyError(failure.code);
       },
@@ -571,6 +573,7 @@ describe("Atlassian credential route in-memory failure handling", () => {
       },
       beginVerification: (): undefined => undefined,
       finishVerification: (): boolean => false,
+      observeAuthenticationFailure: (): boolean => false,
       create: (): never => {
         throw new AtlassianCredentialCustodyError("credential-limit-exceeded");
       },
@@ -961,6 +964,185 @@ describe("end-to-end verify through the gateway transport adapter", () => {
     expect(fakePortRequests).toHaveLength(0);
     expect(wiring.custody.getMetadata(created.authRef)).toBeDefined();
   });
+  it("forwards final transport lifecycle guards before materializing credentials", async () => {
+    let calls = 0;
+    const real = buildAtlassianConnectorCredentialDeps({
+      configPath,
+      env: vaultEnv(),
+      egress: () => undefined,
+      fetchImpl: (): Promise<Response> => {
+        calls++;
+        return Promise.resolve(new Response("{}"));
+      },
+    });
+    const metadata = real.custody.create({
+      provider: "jira",
+      displayName: "Synthetic",
+      baseUrl: "https://acme.example",
+      authScheme: "basic-api-token",
+      accountEmail: SYNTHETIC_EMAIL,
+      apiToken: SYNTHETIC_TOKEN,
+    });
+    const request = {
+      method: "GET",
+      url: "https://acme.example/rest/api/3/myself",
+      timeoutMs: 1000,
+      maxBodyBytes: 4096,
+    } as const;
+    const hooks = { beforeDispatch: (): boolean => false };
+    await expect(
+      real.httpPortFactory(metadata, "factory-guard", hooks)(request),
+    ).rejects.toMatchObject({ code: "invalid-input" });
+    await expect(
+      real.httpBodyPortFactory(metadata, "factory-guard", hooks)(request),
+    ).rejects.toMatchObject({ code: "invalid-input" });
+    expect(calls).toBe(0);
+  });
+
+  it.each([401, 403])(
+    "handles observed HTTP %s without confusing permission denial with invalid credentials",
+    async (status) => {
+      const invalidated: number[] = [];
+      const real = buildAtlassianConnectorCredentialDeps({
+        configPath,
+        env: vaultEnv(),
+        egress: () => undefined,
+        onLivePodInvalidated: (_podId, generation): void => {
+          if (generation !== null) invalidated.push(generation);
+        },
+        fetchImpl: (): Promise<Response> => Promise.resolve(new Response("{}", { status })),
+      });
+      const created = real.custody.create(livePodCreateInput(), "a".repeat(64));
+      const probe = real.custody.beginVerification(created.authRef);
+      if (probe === undefined) throw new Error("Expected verification ticket");
+      real.custody.finishVerification(created.authRef, 1, probe.revision, "ok");
+      const metadata = real.custody.getMetadata(created.authRef);
+      if (metadata === undefined) throw new Error("Expected metadata");
+      const port = real.httpBodyPortFactory(metadata, "observed-authentication");
+      expect(
+        await port({
+          method: "GET",
+          url: `${metadata.baseUrl}/rest/api/2/project`,
+          timeoutMs: 1000,
+          maxBodyBytes: 4096,
+        }),
+      ).toMatchObject({ kind: "response", status });
+      expect(real.custody.getMetadata(created.authRef)).toMatchObject({
+        generation: status === 401 ? 2 : 1,
+        livePod: { verificationStatus: status === 401 ? "auth-failed" : "ok" },
+      });
+      expect(invalidated).toEqual(status === 401 ? [2] : []);
+    },
+  );
+
+  it("records observed authentication invalidation after acknowledgement and before body consumption", async () => {
+    const events: string[] = [];
+    const sink = createFileServerLogSink(configDir, { level: "debug" });
+    try {
+      const real = buildAtlassianConnectorCredentialDeps({
+        configPath,
+        env: vaultEnv(),
+        egress: () => undefined,
+        activityLog: sink,
+        onLivePodInvalidated: (): void => {
+          events.push("invalidated");
+        },
+        fetchImpl: (): Promise<Response> =>
+          Promise.resolve(
+            new Response(
+              new ReadableStream<Uint8Array>(
+                {
+                  pull: (controller): void => {
+                    events.push("body");
+                    controller.enqueue(new TextEncoder().encode("{}"));
+                    controller.close();
+                  },
+                },
+                { highWaterMark: 0 },
+              ),
+              { status: 401 },
+            ),
+          ),
+      });
+      const created = real.custody.create(livePodCreateInput(), "a".repeat(64));
+      const probe = real.custody.beginVerification(created.authRef);
+      if (probe === undefined) throw new Error("Expected verification ticket");
+      real.custody.finishVerification(created.authRef, 1, probe.revision, "ok");
+      const metadata = real.custody.getMetadata(created.authRef);
+      if (metadata === undefined) throw new Error("Expected metadata");
+      const http = real.httpBodyPortFactory(metadata, "observed-authentication-proof", {
+        onResponse: (): boolean => {
+          events.push("acknowledged");
+          return true;
+        },
+      });
+      await http({
+        method: "GET",
+        url: `${metadata.baseUrl}/rest/api/2/project`,
+        timeoutMs: 1000,
+        maxBodyBytes: 4096,
+      });
+      expect(events).toEqual(["acknowledged", "invalidated", "body"]);
+      const lines = persistedActivityLogLines(
+        readPersistedActivityLog(configDir),
+        "atlassian.connection.checked",
+      );
+      const records = lines.map((line) =>
+        expectActivityLogProof("atlassian.connection.checked.observed-authentication", line),
+      );
+      expect(records).toMatchObject([
+        {
+          action: "request",
+          outcome: "auth-failed",
+          verificationState: "applied",
+          correlationId: "observed-authentication-proof",
+        },
+      ]);
+      expectNoSecretBytes(lines.join("\n"));
+      expect(lines.join("\n")).not.toContain(metadata.authRef);
+      expect(lines.join("\n")).not.toContain(metadata.baseUrl);
+    } finally {
+      sink.close?.();
+    }
+  });
+
+  it("pins response observation before caller metadata or verification can change", async () => {
+    const invalidated: number[] = [];
+    const real = buildAtlassianConnectorCredentialDeps({
+      configPath,
+      env: vaultEnv(),
+      egress: () => undefined,
+      onLivePodInvalidated: (_pod, generation): void => {
+        if (generation !== null) invalidated.push(generation);
+      },
+      fetchImpl: (): Promise<Response> => {
+        if (selected === undefined) throw new Error("Expected selected credential");
+        const newer = real.custody.beginVerification(selected.authRef);
+        if (newer === undefined) throw new Error("Expected newer verification");
+        real.custody.finishVerification(selected.authRef, 1, newer.revision, "ok");
+        Object.assign(selected, real.custody.getMetadata(selected.authRef));
+        return Promise.resolve(new Response("{}", { status: 401 }));
+      },
+    });
+    const created = real.custody.create(livePodCreateInput(), "a".repeat(64));
+    const probe = real.custody.beginVerification(created.authRef);
+    if (probe === undefined) throw new Error("Expected verification ticket");
+    real.custody.finishVerification(created.authRef, 1, probe.revision, "ok");
+    const selected = real.custody.getMetadata(created.authRef);
+    if (selected === undefined) throw new Error("Expected metadata");
+    await real.httpBodyPortFactory(selected)({
+      method: "GET",
+      url: `${selected.baseUrl}/rest/api/2/project`,
+      timeoutMs: 1000,
+      maxBodyBytes: 4096,
+    });
+    expect(real.custody.getMetadata(created.authRef)).toMatchObject({
+      generation: 1,
+      livePod: { verificationStatus: "ok", verificationRevision: 2 },
+    });
+    expect(invalidated).toEqual([]);
+  });
+
   it("pins the selected generation in both HTTP factories before credential materialization", async () => {
     let calls = 0;
     const realWiring = buildAtlassianConnectorCredentialDeps({

@@ -1,3 +1,4 @@
+import type { AtlassianHttpLifecycleOptions } from "./httpRequestLifecycle.js";
 // Issue #2241 — Atlassian connector credential custody BFF routes (ADR-0128 D2/D3, ADR-0129 D3).
 //
 //   POST   /api/atlassian-connectors/credentials                  create (write-only: responds
@@ -98,10 +99,12 @@ export interface AtlassianConnectorCredentialDeps {
   readonly httpPortFactory: (
     metadata: AtlassianCredentialMetadata,
     correlationId?: string,
+    lifecycle?: AtlassianHttpLifecycleOptions,
   ) => AtlassianHttpPort;
   readonly httpBodyPortFactory: (
     metadata: AtlassianCredentialMetadata,
     correlationId?: string,
+    lifecycle?: AtlassianHttpLifecycleOptions,
   ) => AtlassianHttpBodyPort;
   // KEIKO-0826 follow-up: optional sink for body-free activity events emitted on every typed
   // custody-error path (`credential-not-found` 404, `unsupported-auth-scheme` 400, `invalid-input`

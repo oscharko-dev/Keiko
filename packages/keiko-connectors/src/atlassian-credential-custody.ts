@@ -283,6 +283,13 @@ export interface AtlassianCredentialCustody {
     status: JiraLivePodMetadata["verificationStatus"],
     correlationId?: string,
   ) => boolean;
+  /** A current authenticated request observed 401; stale responses cannot invalidate newer verification. */
+  readonly observeAuthenticationFailure: (
+    authRef: string,
+    generation: number,
+    verificationRevision: number,
+    correlationId?: string,
+  ) => boolean;
   readonly getMetadata: (authRef: string) => AtlassianCredentialMetadata | undefined;
   readonly list: () => readonly AtlassianCredentialMetadata[];
   // Removes ciphertext AND metadata; returns false when the authRef is unknown.
@@ -640,6 +647,17 @@ function finishVerification(
     return false;
   if (status !== "unverified" && !isAtlassianConnectionVerificationStatus(status))
     throw new AtlassianCredentialCustodyError("invalid-input");
+  commitVerificationStatus(deps, metadata, status, correlationId);
+  return true;
+}
+
+function commitVerificationStatus(
+  deps: AtlassianCredentialCustodyDeps,
+  metadata: LivePodCredential,
+  status: JiraLivePodMetadata["verificationStatus"],
+  correlationId?: string,
+): void {
+  const generation = metadata.generation;
   const nextGeneration = status === "ok" ? generation : advanceGeneration(generation);
   deps.metadataStore.insert({
     ...metadata,
@@ -648,6 +666,25 @@ function finishVerification(
   });
   if (nextGeneration !== generation)
     deps.onLivePodInvalidated?.(metadata.livePod.podId, nextGeneration, correlationId);
+}
+
+function observeAuthenticationFailure(
+  deps: AtlassianCredentialCustodyDeps,
+  authRef: string,
+  generation: number,
+  revision: number,
+  correlationId?: string,
+): boolean {
+  const metadata = livePodCredential(deps, authRef);
+  if (
+    metadata?.generation !== generation ||
+    metadata.livePod.verificationRevision !== revision ||
+    metadata.livePod.verificationInProgress ||
+    metadata.livePod.credentialOperation !== undefined ||
+    metadata.livePod.verificationStatus !== "ok"
+  )
+    return false;
+  commitVerificationStatus(deps, metadata, "auth-failed", correlationId);
   return true;
 }
 
@@ -822,6 +859,8 @@ export function createAtlassianCredentialCustody(
       beginVerification(deps, authRef, expectedGeneration),
     finishVerification: (authRef, generation, revision, status, correlationId) =>
       finishVerification(deps, authRef, generation, revision, status, correlationId),
+    observeAuthenticationFailure: (authRef, generation, revision, correlationId) =>
+      observeAuthenticationFailure(deps, authRef, generation, revision, correlationId),
     // Re-validated on read (KEIKO-0894), matching resolveForExecution below: an authRef that
     // resolves to a record failing the key allowlist is indistinguishable from one that was never
     // stored.

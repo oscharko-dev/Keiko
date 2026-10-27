@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "6e5221701b692fb9735d7e4cb137f08bec9223d4147aa3377924fc7bd69bb3f2"
+    "catalogDigest": "a6e81f35d45ccbdba6b7d10507159e56c6042f512a42cd4f5a4ddc9a40684450"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -68,8 +68,8 @@
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
     "operationCount": 598,
-    "proofCount": 618,
-    "resolvedProofCount": 618,
+    "proofCount": 619,
+    "resolvedProofCount": 619,
     "failureClassCount": 374,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -1213,6 +1213,9 @@
     ],
     "atlassian.connection.checked.line": [
       "packages/keiko-server/src/atlassian/credentialActivity.test.ts",
+      "packages/keiko-server/src/atlassian/credentialRoutes.test.ts"
+    ],
+    "atlassian.connection.checked.observed-authentication": [
       "packages/keiko-server/src/atlassian/credentialRoutes.test.ts"
     ],
     "atlassian.credential.created.line": [
