@@ -4118,6 +4118,132 @@ describe("native verification publication through the production facade", () => 
     expect(settlement.settled(outcome)).toBe("duplicate");
     expect(events).toHaveLength(1);
   });
+
+  // Keiko 1.3.1 qualification, T4: the lab repository documents `npm run check`; a pass of that line
+  // proves the type check and lint its script chains, read from the task workspace's package.json.
+  describe("checks a passing line also proved (Keiko 1.3.1 qualification)", () => {
+    function admitCheck(
+      workspaceRoot: string,
+      exitCode: number,
+    ): {
+      readonly events: CodingWorkbenchRuntimeEvent[];
+      readonly executed: ReturnType<typeof vi.fn>;
+      readonly verificationLines: ServerLogEvent[];
+    } {
+      const events: CodingWorkbenchRuntimeEvent[] = [];
+      const log: ServerLogEvent[] = [];
+      const executed = vi.fn();
+      const facade = verificationFacade({
+        toolProfile: "native",
+        workspaceRoot,
+        verificationRevision: () => 3,
+        verificationAdmitted: () => executed,
+        records: [],
+        events,
+        log,
+        runToReport: () => Promise.resolve(verificationReport("passed")),
+      });
+      const settlement = facade.nativeSettlement;
+      if (settlement?.verificationAdmitted === undefined)
+        throw new TypeError("native verification admission unavailable");
+      const call = { messageId: "message-check-1", callId: "tool-check-1" };
+      settlement.verificationAdmitted(call, "test", ["npm run check"]);
+      settlement.settled({
+        ...call,
+        tool: "shell",
+        state: exitCode === 0 ? "succeeded" : "failed",
+        exitCode,
+        exitStatusCheck: "test",
+      });
+      const verificationLines = log.filter((event) => event.op === "coding-runtime.verification");
+      return { events, executed, verificationLines };
+    }
+    function labWorkspace(manifest: string | undefined): string {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-native-credit-")));
+      if (manifest !== undefined) writeFileSync(join(root, "package.json"), manifest);
+      return root;
+    }
+    const LAB_MANIFEST = JSON.stringify({
+      scripts: {
+        test: "node --test",
+        typecheck: "tsc --noEmit",
+        lint: "eslint .",
+        check: "npm run typecheck && npm run lint && npm test",
+      },
+    });
+
+    it("publishes the line's own check and every check its script chains, and logs each credit", () => {
+      const root = labWorkspace(LAB_MANIFEST);
+      try {
+        const { events, executed, verificationLines } = admitCheck(root, 0);
+        expect(events.map((event) => event.verificationSummary?.verifierId)).toEqual([
+          "test",
+          "typecheck",
+          "lint",
+        ]);
+        expect(events.every((event) => event.verificationStatus === "passed")).toBe(true);
+        expect(events.every((event) => event.verificationEditRevision === 3)).toBe(true);
+        expect(executed.mock.calls).toEqual([
+          [codingVerificationTargetDigest("test")],
+          [codingVerificationTargetDigest("typecheck")],
+          [codingVerificationTargetDigest("lint")],
+        ]);
+        expect(
+          verificationLines.map((event) =>
+            expectActivityLogProof(
+              "coding-runtime.verification.emitted-line",
+              formatActivityLogProofLine(event),
+            ),
+          ),
+        ).toEqual([
+          expect.objectContaining({
+            state: "credited",
+            verifierId: "typecheck",
+            creditedBy: "test",
+          }),
+          expect.objectContaining({ state: "credited", verifierId: "lint", creditedBy: "test" }),
+        ]);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it("publishes only the named check's failure and credits nothing when the line failed", () => {
+      const root = labWorkspace(LAB_MANIFEST);
+      try {
+        const { events, verificationLines } = admitCheck(root, 1);
+        expect(events.map((event) => event.verificationSummary?.verifierId)).toEqual(["test"]);
+        expect(events[0]?.verificationStatus).toBe("failed");
+        expect(verificationLines).toEqual([]);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it.each([
+      ["no package.json", undefined],
+      ["a malformed package.json", "{ not json"],
+    ] as const)("credits the line's own check alone and logs why with %s", (_label, manifest) => {
+      const root = labWorkspace(manifest);
+      try {
+        const { events, verificationLines } = admitCheck(root, 0);
+        expect(events.map((event) => event.verificationSummary?.verifierId)).toEqual(["test"]);
+        expect(verificationLines).toHaveLength(1);
+        const line = expectActivityLogProof(
+          "coding-runtime.verification.emitted-line",
+          formatActivityLogProofLine(verificationLines[0] ?? {}),
+        );
+        expect(line).toMatchObject({
+          level: "warn",
+          state: "credit-unavailable",
+          errorKind: "unavailable",
+        });
+        expect(JSON.stringify(verificationLines)).not.toContain(root);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+  });
 });
 
 describe("verification waiting on the operator's package-script trust decision", () => {
