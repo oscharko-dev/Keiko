@@ -1,5 +1,7 @@
 import type { OptionalWidgetMessageCatalog } from "./i18n-messages.optional.en";
 export const OPTIONAL_WIDGET_DE_MESSAGES = {
+  "atlassianConnectors.live.empty":
+    "Noch keine Jira-Pods. Erstelle einen Pod, um Jira mit einem Chat zu verbinden.",
   "chat.jira.connection": "Jira-Verbindung",
   "chat.jira.podLabel": "Jira-Pod",
   "chat.jira.noPod": "Kein Jira-Pod",

@@ -111,7 +111,9 @@ function ConnectorsSection({
       ) : null}
       {ctrl.loading ? <p className="acx-muted">{t("atlassianConnectors.loading")}</p> : null}
       {!ctrl.loading && connectors.length === 0 && !adding ? (
-        <p className="acx-empty">{t("atlassianConnectors.empty")}</p>
+        <p className="acx-empty">
+          {t(jiraLive ? "atlassianConnectors.live.empty" : "atlassianConnectors.empty")}
+        </p>
       ) : null}
       <ul className="acx-list">
         {connectors.map((connector) => (

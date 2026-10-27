@@ -1912,3 +1912,25 @@ and restores summary focus. The new cases and existing Chat/API/scope suites pas
 398 tests; UI typecheck, lint and production static build pass. Browser qualification,
 drag/drop, effective-ceiling presentation, rename/token controls and the complete
 write/mixed-source workflows remain pending. No full AC acceptance is claimed.
+
+# 2026-10-27 browser checkpoint (19:48 Europe/Berlin)
+
+The actual production UI build and Chromium now reach launcher pairing, Hub Pod
+creation, real Jira HTTPS verification and server-confirmed Chat binding. This
+exposed misleading empty-Hub copy: the Live Pod surface inherited the Cloud
+sync invitation. A new regression failed first; the corrected DE/EN text offers
+connecting Jira to Chat. All 11 focused Hub/connection tests, the production UI
+build (including TypeScript), full UI lint, harness lint, scoped format and the
+unchanged 938-group semantic baseline pass.
+
+The browser harness now uses the existing accessible composer control and records
+its stages without contents. The complete browser read is still pending: the
+next full attempt was correctly refused with 269 seconds of license time left,
+below the existing admission minimum. Earlier partial browser stages do not
+constitute a completed qualification group. An independent fresh synthetic
+session is being prepared; the previous session's volumes remain retained.
+
+No full acceptance criterion is newly claimed. Chat write/approval composition,
+mixed grounding, drag/drop, remaining Pod lifecycle UI, complete scenario lanes,
+and final quality/Sonar/current-head qualification remain open. PR #4093 remains
+the only PR, against `dev`, with auto-merge off.

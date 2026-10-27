@@ -1,10 +1,16 @@
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
-import { mkdtempSync, mkdirSync, rmSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, realpathSync, writeFileSync, readFileSync } from "node:fs";
+import { fileURLToPath, URL } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:net";
-import { buildUiHandlerDeps, createUiServer } from "../../../packages/keiko-server/dist/index.js";
+import {
+  buildUiHandlerDeps,
+  createUiServer,
+  buildCspHeader,
+  extractInlineScriptHashes,
+} from "../../../packages/keiko-server/dist/index.js";
 import {
   createFileServerLogSink,
   createServerLogger,
@@ -20,6 +26,7 @@ import {
   mintLauncherPairingAttestation,
   SESSION_PAIRING_LAUNCHER_SECRET_ENV,
 } from "../../../packages/keiko-server/dist/coding-app-session/launcherSessionPairingPort.js";
+import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session-pairing";
 import { loadSession, readPrivateFile, requireLicense } from "./lab-client.mjs";
 
 process.on("warning", (warning) => {
@@ -274,6 +281,41 @@ function createLiveDeps(root, session, secret) {
     activityLog,
   });
 }
+function uiSurface(root) {
+  if (process.argv[4] !== "--browser") return { staticRoot: root, csp: "default-src 'self'" };
+  const staticRoot = fileURLToPath(new URL("../../../packages/keiko-ui/out/", import.meta.url));
+  const hashes = extractInlineScriptHashes([readFileSync(join(staticRoot, "index.html"), "utf8")]);
+  return { staticRoot, csp: buildCspHeader(hashes) };
+}
+async function runSelectedJourney(origin, cookie, session, projectPath, modelId, secret) {
+  if (process.argv[4] !== "--browser") {
+    const chat = await prepareChat(origin, cookie, session, projectPath, modelId);
+    return readTurn(origin, cookie, chat, projectPath, modelId);
+  }
+  const { chat } = await jsonRequest(origin, cookie, "chat-create", "/api/chats", {
+    projectPath,
+    title: "Synthetic Jira browser Chat",
+    selectedModel: modelId,
+  });
+  const { runBrowserRead } = await import("./browser-read.mjs");
+  await runBrowserRead({
+    origin,
+    fragment: encodeCodingAppSessionPairingFragment(
+      mintLauncherPairingAttestation({ secret, requestId: randomUUID(), issuedAtMs: Date.now() }),
+    ),
+    chat,
+    session,
+    observe: () =>
+      jsonRequest(
+        origin,
+        cookie,
+        "chat-observe",
+        `/api/chats/messages?chatId=${encodeURIComponent(chat.id)}&projectPath=${encodeURIComponent(projectPath)}`,
+        undefined,
+        "GET",
+      ),
+  });
+}
 async function main() {
   const session = loadSession(process.argv[2]);
   const modelId = process.argv[3];
@@ -293,8 +335,7 @@ async function main() {
     server = createUiServer({
       port,
       handlerDeps: deps,
-      staticRoot: root,
-      csp: "default-src 'self'",
+      ...uiSurface(root),
     });
     await new Promise((resolve) => server.listen(port, "127.0.0.1", resolve));
     const attestation = mintLauncherPairingAttestation({
@@ -314,8 +355,7 @@ async function main() {
       .map((value) => value.split(";")[0])
       .join("; ");
     assert.ok(cookie.length > 0);
-    const chat = await prepareChat(origin, cookie, session, projectPath, modelId);
-    await readTurn(origin, cookie, chat, projectPath, modelId);
+    await runSelectedJourney(origin, cookie, session, projectPath, modelId, secret);
     await requireLicense(session);
   } finally {
     server?.closeAllConnections();

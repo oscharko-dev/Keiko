@@ -1,4 +1,5 @@
 export const OPTIONAL_WIDGET_EN_MESSAGES = {
+  "atlassianConnectors.live.empty": "No Jira Pods yet. Create one to connect Jira to a Chat.",
   "chat.jira.connection": "Jira connection",
   "chat.jira.podLabel": "Jira Pod",
   "chat.jira.noPod": "No Jira Pod",

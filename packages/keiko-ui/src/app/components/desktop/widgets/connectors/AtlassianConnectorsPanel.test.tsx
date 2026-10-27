@@ -144,3 +144,17 @@ it("shows only owned Live Pods in the Hub without sync or legacy approvals", asy
   await waitFor(() => expect(client.listConnectors).toHaveBeenCalledTimes(2));
   expect(await axe(container)).toHaveNoViolations();
 });
+
+it("describes an empty live Jira Hub without offering a connector sync", async () => {
+  render(
+    <AtlassianConnectorsPanel
+      jiraLive
+      client={makeClient({ listConnectors: vi.fn(async () => []) })}
+      pollIntervalMs={100000}
+    />,
+  );
+  expect(
+    await screen.findByText("No Jira Pods yet. Create one to connect Jira to a Chat."),
+  ).toBeVisible();
+  expect(screen.queryByText(/sync Confluence spaces/u)).toBeNull();
+});

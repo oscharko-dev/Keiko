@@ -175,3 +175,18 @@ state is removed; the lab and its credentials remain untouched.
 
 This group qualifies one buffered read journey. It does not qualify Chat writes,
 streaming/browser journeys, mixed grounding or the full acceptance matrix.
+
+## Read through the actual browser
+
+Build the UI with `npm run build --workspace @oscharko-dev/keiko-ui`, complete a
+fresh license/read/write/HTTPS preflight, then append `--browser` to the command
+above. The harness serves that static build with its actual CSP, redeems a fresh
+launcher pairing fragment in Chromium, creates and verifies a Jira Pod in the
+Knowledge Hub, and connects an existing empty Chat through the visible controls.
+It sends a prompt through the normal composer, approves the read disclosure,
+and requires a completed canonical turn, the real project result and a final
+model answer. There are no mocked browser, model or Jira transports.
+
+Stage diagnostics contain no request bodies or credentials. Screenshots stay in
+the private synthetic session directory. A failed or license-budget-rejected run
+is not a completed journey; repeat the entire group in a valid session.
