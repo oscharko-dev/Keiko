@@ -27,7 +27,7 @@ import {
   SESSION_PAIRING_LAUNCHER_SECRET_ENV,
 } from "../../../packages/keiko-server/dist/coding-app-session/launcherSessionPairingPort.js";
 import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session-pairing";
-import { loadSession, readPrivateFile, requireLicense } from "./lab-client.mjs";
+import { actorDetails, loadSession, readPrivateFile, requireLicense } from "./lab-client.mjs";
 import { drainLiveChatTurns } from "./chat-lifecycle.mjs";
 
 process.on("warning", (warning) => {
@@ -118,7 +118,9 @@ async function configureModel(deps, modelId, session, configPath) {
   );
   console.log(JSON.stringify({ operation: "jira-chat-live-model", verified: true }));
 }
-export async function prepareChat(origin, cookie, session, projectPath, modelId) {
+export async function prepareChat(origin, cookie, session, projectPath, modelId, actor = "api") {
+  actorDetails(actor);
+  if (actor === "admin") throw new TypeError("The laboratory administrator has no synthetic PAT");
   const credential = await jsonRequest(
     origin,
     cookie,
@@ -130,7 +132,7 @@ export async function prepareChat(origin, cookie, session, projectPath, modelId)
       authScheme: "bearer-pat",
       displayName: "Synthetic live Chat qualification",
       baseUrl: "https://127.0.0.1:18443",
-      apiToken: readPrivateFile(join(session.directory, "secrets", "api-token")),
+      apiToken: readPrivateFile(join(session.directory, "secrets", `${actor}-token`)),
       livePodCreationRequestId: randomUUID(),
     },
   );

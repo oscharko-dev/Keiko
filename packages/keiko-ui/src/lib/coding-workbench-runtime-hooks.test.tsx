@@ -13,6 +13,7 @@ import {
   prepareCodingWorkbenchCodexSubscriptionSetup,
 } from "./coding-workbench-provider-api";
 import { ApiError } from "./api";
+import { useCodingAppSessionRedemptions } from "./coding-app-session-client";
 import { reportClientDiagnostic } from "./client-diagnostics";
 import {
   getCodingWorkbenchRuntimeReadiness,
@@ -636,6 +637,41 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
     await act(() => mutations.stop());
     expect(refreshRun).toHaveBeenCalledTimes(1);
     expect(dispatch).toHaveBeenCalledWith({ kind: "mutation-complete" });
+  });
+
+  // ADR-0141 D6: a run control from a browser whose app session was revoked is answered with the
+  // existence-concealing not-found result. The refusal alone cannot say which it was, so every
+  // session-dependent read runs again and reports the honest pairing state (#2478).
+  it("re-inspects the app session when a run control is refused as not found", async () => {
+    vi.mocked(stopCodingWorkbenchRuntime).mockRejectedValueOnce(
+      new ApiError("CODING_RUNTIME_RUN_NOT_FOUND", "Runtime run was not found.", 404),
+    );
+    const session = renderHook(() => useCodingAppSessionRedemptions());
+    const before = session.result.current;
+    const { mutations, dispatch } = renderMutations(readyRunState(snapshot({ state: "running" })));
+
+    await act(() => mutations.stop());
+
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "mutation-failed",
+        error: expect.objectContaining({ code: "CODING_RUNTIME_RUN_NOT_FOUND" }),
+      }),
+    );
+    expect(session.result.current).toBe(before + 1);
+  });
+
+  it("leaves the app session reads alone for any other refused run control", async () => {
+    vi.mocked(stopCodingWorkbenchRuntime).mockRejectedValueOnce(
+      new ApiError("CODING_RUNTIME_REVISION_CONFLICT", "Runtime revision is stale.", 409),
+    );
+    const session = renderHook(() => useCodingAppSessionRedemptions());
+    const before = session.result.current;
+    const { mutations } = renderMutations(readyRunState(snapshot({ state: "running" })));
+
+    await act(() => mutations.stop());
+
+    expect(session.result.current).toBe(before);
   });
 
   it("routes a waiting-message action through the queue, bound to the observed revision", async () => {

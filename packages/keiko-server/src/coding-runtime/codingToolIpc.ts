@@ -148,7 +148,12 @@ export interface CodingToolVerificationFailure {
 
 /** Why a verification step did not run (F74): a closed reason the model can act on. */
 export type VerificationNotRunReason =
-  "script-missing" | "dependencies-unavailable" | "denied" | "cancelled" | "skipped";
+  | "script-missing"
+  | "dependencies-unavailable"
+  | "native-shell-required"
+  | "denied"
+  | "cancelled"
+  | "skipped";
 
 /** One step of a verification that never executed, and why (F74). Model-facing and body-free. */
 export interface VerificationNotRunStep {

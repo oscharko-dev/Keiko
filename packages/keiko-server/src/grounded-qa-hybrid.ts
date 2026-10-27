@@ -1,3 +1,8 @@
+import {
+  deploymentContentPolicy,
+  currentContentRedactor,
+  withChatContentPolicy,
+} from "./content-redactor.js";
 import { withMarkdownSkillAdmission } from "./markdown-skill-admission.js";
 import {
   markdownSkillPromptUsage,
@@ -521,7 +526,7 @@ function buildUnifiedSelection(
   includeConnectorExcerptText: boolean,
 ): readonly SelectedCandidate<HybridPayload>[] {
   const limits = currentGroundingLimits(ctx.deps);
-  const { redactor } = ctx.deps;
+  const redactor = currentContentRedactor(ctx.deps);
   const inputs: RerankInput<HybridPayload>[] = [
     ...folderRerankInputs(folders, redactor, ctx.assistantReferents),
     ...connectorRerankInputs(
@@ -959,7 +964,7 @@ async function retrieveOneConnector(
 // The hybrid topology shares the folder prompt and deterministic localized abstention producer.
 function hybridSystemPrompt(deps: UiHandlerDeps): string {
   return (
-    `${groundedSystemPrompt(currentOwnAssessmentPolicy(deps), "numeric")} Connector excerpts are indexed-document citations: attribute every ` +
+    `${groundedSystemPrompt(currentOwnAssessmentPolicy(deps), "numeric", deploymentContentPolicy(deps))} Connector excerpts are indexed-document citations: attribute every ` +
     "connector claim to its source label and the matching [n] marker in addition to any file reference."
   );
 }
@@ -1019,7 +1024,7 @@ function hybridUserMessage(
     buildRerankedHybridUserMessage(
       ctx.answerContent ?? ctx.content,
       selected,
-      ctx.deps.redactor,
+      currentContentRedactor(ctx.deps),
       ctx.folderOmissionMetadata,
     ),
     hybridProtectedSkill(ctx),
@@ -1718,7 +1723,7 @@ function answerWithHybridMarkers(
       ...answer.uncertainty,
       ...markers.map((marker) => ({
         kind: marker.kind,
-        claim: redactString(ctx.deps.redactor, marker.claim),
+        claim: redactString(currentContentRedactor(ctx.deps), marker.claim),
       })),
     ],
   };
@@ -1752,14 +1757,14 @@ async function applyHybridEntailment(
     stage,
     answerContent,
     sentPacks,
-    ctx.deps.redactor,
+    currentContentRedactor(ctx.deps),
   );
   return appendGroundedAnswerNumericEntailment(
     folderEntailment,
     stage,
     answerContent,
     numericEntailmentEvidence(selected),
-    ctx.deps.redactor,
+    currentContentRedactor(ctx.deps),
   );
 }
 
@@ -2069,7 +2074,7 @@ function hybridAnswerContextPack(
   },
 ): HybridGroundedAnswer["contextPack"] {
   const { ctx, sources, cited } = input;
-  const summary = folderSummary(sources.folders, cited, ctx.deps.redactor, {
+  const summary = folderSummary(sources.folders, cited, currentContentRedactor(ctx.deps), {
     contextProfile: ctx.contextProfile,
   });
   return buildHybridContextPack(input, summary);
@@ -2098,7 +2103,7 @@ function hybridUncertaintyForAnswer(
   sourceEvidenceAvailable: boolean,
   nowMs: number,
 ): readonly GroundedUncertainty[] {
-  const { redactor } = ctx.deps;
+  const redactor = currentContentRedactor(ctx.deps);
   const { correlationId } = ctx;
   const markers = sourceEvidenceAvailable
     ? hybridAnswerUncertainty(sources, selected, assistant, redactor, nowMs, correlationId)
@@ -2138,8 +2143,12 @@ function projectHybridAnswer(
   sourceEvidenceAvailable: boolean,
 ): HybridAnswerProjection {
   const cited = citedHybridSelections(selected, assistant.content);
-  const citations = selectedFolderCitations(cited, ctx.deps.redactor);
-  const knowledgeCitations = selectedConnectorCitations(store, cited, ctx.deps.redactor);
+  const citations = selectedFolderCitations(cited, currentContentRedactor(ctx.deps));
+  const knowledgeCitations = selectedConnectorCitations(
+    store,
+    cited,
+    currentContentRedactor(ctx.deps),
+  );
   const retrievalActivity = buildHybridRetrievalActivity(
     store,
     sources.connectors,
@@ -2240,7 +2249,7 @@ function assembleHybridAnswer(
     ids,
     sourceEvidenceAvailable = true,
   } = input;
-  const { redactor } = ctx.deps;
+  const redactor = currentContentRedactor(ctx.deps);
   const projection = projectHybridAnswer(
     ctx,
     sources,
@@ -2316,7 +2325,7 @@ function resolveHybridAnswerer(ctx: HybridGroundedAskCtx): ResolvedAnswerer | Ro
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
   }
   const model = withConversationReadinessAdmission(
-    resolvedModel,
+    withChatContentPolicy(ctx.deps, resolvedModel),
     ctx.modelId,
     readinessAdmission,
     ctx.deps,
@@ -2389,12 +2398,13 @@ async function assembleHybridNoEvidenceRoute(
   if ("status" in outcome) return outcome;
   const { assistant, promptCtx } = outcome;
   ensureNotCancelled(ctx.signal);
-  const content = redactString(ctx.deps.redactor, assistant.content);
+  const redactor = currentContentRedactor(ctx.deps);
+  const content = redactString(redactor, assistant.content);
   ensureNotCancelled(ctx.signal);
   const [userMessage, assistantMessage] = persistGroundedExchange(
     ctx.deps,
     ctx.chat.id,
-    redactString(ctx.deps.redactor, ctx.content),
+    redactString(redactor, ctx.content),
     content,
     ctx.userMessage,
   );
@@ -2421,7 +2431,7 @@ async function assembleHybridNoEvidenceRoute(
         )
       : answer;
   ensureNotCancelled(ctx.signal);
-  const previewCitations = selectedConnectorPreviewCitations(store, selected, ctx.deps.redactor);
+  const previewCitations = selectedConnectorPreviewCitations(store, selected, redactor);
   const completedAnswer = withHybridAnswerDuration(finalAnswer, ctx);
   ctx.deps.store.attachGroundedAnswer(assistantMessage.id, completedAnswer, previewCitations);
   return { status: 200, body: completedAnswer };
@@ -2691,7 +2701,10 @@ async function runHybridWithStore(
       : connectorResult;
   const answerCtx = {
     ...ctx,
-    folderOmissionMetadata: folderOmissionMetadata(folderResult.retrieved, ctx.deps.redactor),
+    folderOmissionMetadata: folderOmissionMetadata(
+      folderResult.retrieved,
+      currentContentRedactor(ctx.deps),
+    ),
     folderOmissionPacks: folderResult.retrieved,
   };
   return await answerAndAssemble(answerCtx, store, {
@@ -2740,7 +2753,12 @@ async function selectHybridPromptCandidates(
   // deferred until the final prompt-sized `selected` below (unchanged from before).
   const rerankable = externalRerankingDenied
     ? preliminary
-    : hydrateConnectorSelections(store, preliminary, ctx.deps.redactor, limits.maxExcerptChars);
+    : hydrateConnectorSelections(
+        store,
+        preliminary,
+        currentContentRedactor(ctx.deps),
+        limits.maxExcerptChars,
+      );
   const { selected, diagnostics } = await rerankHybridSelection(
     ctx,
     rerankable,
@@ -2750,7 +2768,12 @@ async function selectHybridPromptCandidates(
   ensureNotCancelled(ctx.signal);
   return {
     selected: externalRerankingDenied
-      ? hydrateConnectorSelections(store, selected, ctx.deps.redactor, limits.maxExcerptChars)
+      ? hydrateConnectorSelections(
+          store,
+          selected,
+          currentContentRedactor(ctx.deps),
+          limits.maxExcerptChars,
+        )
       : selected,
     diagnostics,
   };
@@ -2817,7 +2840,7 @@ function hybridContextWithinWindow(
     ...ctx,
     folderOmissionMetadata: folderOmissionMetadata(
       ctx.folderOmissionPacks ?? [],
-      ctx.deps.redactor,
+      currentContentRedactor(ctx.deps),
       bytes,
     ),
   });
@@ -3168,7 +3191,11 @@ async function finalizeHybridAnswer(
     selected,
   );
   ensureNotCancelled(ctx.signal);
-  const previewCitations = selectedConnectorPreviewCitations(store, selected, ctx.deps.redactor);
+  const previewCitations = selectedConnectorPreviewCitations(
+    store,
+    selected,
+    currentContentRedactor(ctx.deps),
+  );
   const completedAnswer = withHybridAnswerDuration(finalAnswer, ctx);
   ctx.deps.store.attachGroundedAnswer(ids.assistantMessageId, completedAnswer, previewCitations);
   return { status: 200, body: completedAnswer };
@@ -3181,8 +3208,8 @@ function persistHybridGroundedExchange(
   return persistGroundedExchange(
     ctx.deps,
     ctx.chat.id,
-    redactString(ctx.deps.redactor, ctx.content),
-    redactString(ctx.deps.redactor, assistantContent),
+    redactString(currentContentRedactor(ctx.deps), ctx.content),
+    redactString(currentContentRedactor(ctx.deps), assistantContent),
     ctx.userMessage,
   );
 }

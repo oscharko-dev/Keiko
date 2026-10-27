@@ -890,7 +890,10 @@ function additionalPolicyAllowed(
         connectorAllowed(envelope, request.scope)
       );
     case "egress":
-      return internetPolicyAllowed(envelope, approvalVerified) && networkAllowed(envelope);
+      return (
+        networkAllowed(envelope) &&
+        (internetPolicyAllowed(envelope, approvalVerified) || researchGrantGoverned(envelope))
+      );
     case "skill":
     case "skill-discover":
     case "child-agent":
@@ -1134,6 +1137,17 @@ function deliveryAllowed(
     : networkAllowed(envelope) &&
         hasClasses(authority.actionClasses, ["network-egress"]) &&
         hasScope(authority.networkPolicy.connectorScopes, "source-control.write");
+}
+
+// #2387: below Full access the mode asks before internet use, and research is the only egress a
+// deployment opens there, through the `governed-egress` policy. Its one delegate is the research
+// port, which fetches only under a human-approved grant bound to the exact request line and, when
+// none covers the request, raises that approval and fails the call closed. The grant is the
+// per-action approval, so the facade hands the request on instead of demanding a proof egress
+// cannot carry. Narrowing keeps this policy only for an envelope that was already minted with it;
+// a broad envelope narrowed below Full access drops to deny-all.
+function researchGrantGoverned(envelope: CodingWorkbenchRuntimeAuthorityEnvelope): boolean {
+  return envelope.authority.networkPolicy.mode === "governed-egress";
 }
 
 function networkAllowed(envelope: CodingWorkbenchRuntimeAuthorityEnvelope): boolean {

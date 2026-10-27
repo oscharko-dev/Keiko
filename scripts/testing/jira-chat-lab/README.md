@@ -66,11 +66,16 @@ administrator `keiko-admin` with `secrets/admin-password`, and disabled email. A
 `setup-pending` marker prevents repeating a potentially completed setup after interruption.
 Reconcile the normal UI and license endpoint before removing that marker. A completed setup
 records a private receipt. Setup does not modify Jira licensing code, clocks or database values.
-Never paste secrets into tracked files, commands or evidence. A fresh 2026-10-27 session
-completed the consolidated form sequence after an initial startup interruption was
-reconciled. Setup now waits for Jira's `FIRST_RUN` state before creating its pending
-marker; a verified `RUNNING` instance is refused before any setup mutation. The
-new cold-start waiting path still needs its own fresh-start qualification.
+Never paste secrets into tracked files, commands or evidence. Setup waits for Jira's
+`FIRST_RUN` state, then uses the normal root entry and waits for database initialization
+to reach application properties; `FIRST_RUN` alone does not prove database readiness.
+A verified `RUNNING` instance is refused before any setup mutation. The license submission
+includes the existing wizard's `next` control, checks its exact same-origin redirect,
+and never repeats an uncertain POST. Diagnostics expose only stage, status and readiness.
+On 2026-10-27 the complete corrected script passed against fresh isolated volumes, including
+normal license/admin/mail forms, the private receipt, a valid license and `RUNNING` state.
+Earlier interrupted proof volumes and their pending markers remain preserved; their writes
+were not replayed to obtain this clean cold-start result.
 
 The [published test license](https://developer.atlassian.com/platform/marketplace/timebomb-licenses-for-testing-server-apps/)
 has a three-hour lifetime. A healthy container or successful read does not establish

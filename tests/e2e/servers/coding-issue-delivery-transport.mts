@@ -5,7 +5,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { delimiter, join, relative, isAbsolute } from "node:path";
 import type { GitPullRequestIdentity } from "@oscharko-dev/keiko-contracts/runtime/git-pull-request";
-import { buildPrBodyReadArgv } from "@oscharko-dev/keiko-tools";
+import { buildPrBodyReadArgv } from "../../../packages/keiko-tools/src/git-pr-body.js";
 import { GIT_PR_IDENTITY_JQ } from "../../../packages/keiko-tools/src/git-pr-gateway.js";
 import { buildGitJourneyReadArgv } from "../../../packages/keiko-tools/src/git-journey-read-argv.js";
 import {

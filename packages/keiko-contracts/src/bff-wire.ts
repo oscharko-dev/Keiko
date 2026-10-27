@@ -1,6 +1,7 @@
 import type { NormalizedToolCall } from "./gateway.js";
 import type { ToolResultEnvelope } from "./governed-tool-catalog.js";
 import { exactKeys } from "./contract-validation-primitives.js";
+import { parseSafely } from "./managed-lsp-parse-safely.js";
 import {
   CHAT_TOOL_READ_DISCLOSURE_VERSION,
   CHAT_TOOL_READ_GRANT_STATES,
@@ -1150,21 +1151,25 @@ export function isChatToolWriteApprovalView(value: unknown): value is ChatToolWr
 }
 
 function isChatToolCallView(value: unknown): value is ChatToolExchange["call"] {
-  if (
-    !isWireRecord(value) ||
-    exactKeys(value, ["id", "name", "arguments"], "call").length > 0 ||
-    typeof value.id !== "string" ||
-    !/^[\w-]{1,128}$/u.test(value.id) ||
-    typeof value.name !== "string" ||
-    !/^[\w.-]{1,128}$/u.test(value.name) ||
-    !isWireRecord(value.arguments)
-  )
-    return false;
-  try {
-    return new TextEncoder().encode(JSON.stringify(value.arguments)).length <= 262144;
-  } catch {
-    return false;
-  }
+  const parsed = parseSafely(() => {
+    if (
+      !isWireRecord(value) ||
+      exactKeys(value, ["id", "name", "arguments"], "call").length > 0 ||
+      typeof value.id !== "string" ||
+      !/^[\w-]{1,128}$/u.test(value.id) ||
+      typeof value.name !== "string" ||
+      !/^[\w.-]{1,128}$/u.test(value.name) ||
+      !isWireRecord(value.arguments)
+    )
+      return { ok: true, value: false };
+    const serialized = JSON.stringify(value.arguments);
+    return {
+      ok: true,
+      value:
+        typeof serialized === "string" && new TextEncoder().encode(serialized).length <= 262144,
+    };
+  });
+  return parsed.ok && parsed.value;
 }
 
 function isDesktopChatWriteApprovalData(data: unknown): boolean {

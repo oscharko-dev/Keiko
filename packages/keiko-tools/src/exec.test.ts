@@ -2001,6 +2001,75 @@ describe("runCommand — enforced network egress (ADR-0043, network:'none')", ()
     },
   );
 
+  // PR #4095: strict bubblewrap mounts the real execution root, and its shared /tmp kept npm logs
+  // and Node's compile cache there after the run, so every governed verification on Linux left the
+  // worktree unclean and the verified commit refused it. Each run now owns its home in the root.
+  it("mounts a per-run home as the strict bubblewrap /tmp and removes it when the run settles", async () => {
+    const spawn = recordingSpawn();
+    const deps: RunCommandDeps = {
+      ...fakeDeps(spawn.fn),
+      policy: { ...DEFAULT_SANDBOX_POLICY, network: "none", filesystem: "execution-root" },
+      resolveExecutable: absResolver,
+      sandboxAvailability: { ...NO_BACKENDS, bubblewrap: true },
+      platform: "linux",
+    };
+    const promise = runCommand(
+      {
+        command: "node",
+        args: ["-e", "1"],
+        cwd: undefined,
+        timeoutMs: undefined,
+        signal: controller().signal,
+      },
+      deps,
+    );
+    const args = spawn.calls()[0]?.args ?? [];
+    const symlink = args.indexOf("--symlink");
+    const tmp = args[symlink + 1] ?? "";
+    const name = tmp.slice("/keiko-execution-root/".length);
+    expect(name).toMatch(/^\.keiko-home-/u);
+    expect(args.slice(symlink - 2, symlink + 3)).toEqual(["--dir", tmp, "--symlink", tmp, "/tmp"]);
+    expect(existsSync(join(realpathSync(root), name))).toBe(true);
+    spawn.child.emit("close", 0, null);
+    await promise;
+    expect(readdirSync(root)).not.toContain(name);
+  });
+
+  it("removes the per-run bubblewrap home and never spawns when the sandbox refuses it", async () => {
+    const outside = mkdtempSync(join(tmpdir(), "keiko-outside-home-"));
+    const cleaned: string[] = [];
+    const spawn = recordingSpawn();
+    const deps: RunCommandDeps = {
+      ...fakeDeps(spawn.fn),
+      policy: { ...DEFAULT_SANDBOX_POLICY, network: "none", filesystem: "execution-root" },
+      resolveExecutable: absResolver,
+      sandboxAvailability: { ...NO_BACKENDS, bubblewrap: true },
+      platform: "linux",
+      home: {
+        make: () => outside,
+        cleanup: (dir) => {
+          cleaned.push(dir);
+          rmSync(dir, { recursive: true, force: true });
+        },
+      },
+    };
+    await expect(
+      runCommand(
+        {
+          command: "node",
+          args: ["-e", "1"],
+          cwd: undefined,
+          timeoutMs: undefined,
+          signal: controller().signal,
+        },
+        deps,
+      ),
+    ).rejects.toThrow("sandbox-execution-tmp-invalid");
+    expect(spawn.calls()).toHaveLength(0);
+    expect(cleaned).toEqual([outside]);
+    expect(existsSync(outside)).toBe(false);
+  });
+
   it("fails closed (never spawns) when no enforcing backend is available", async () => {
     const spawn = recordingSpawn();
     const deps: RunCommandDeps = {

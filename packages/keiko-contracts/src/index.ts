@@ -397,6 +397,7 @@ export type {
   WorkspaceSummary,
   AuditEntry,
   AuditSummary,
+  ContentRedactionPolicy,
 } from "./workspace.js";
 export type {
   DEFAULT_DISCOVERY_OPTIONS,
@@ -2423,6 +2424,7 @@ export type {
   VerificationResult,
   VerificationFailureLocation,
   VerificationReport,
+  VerificationDependencyRefusalReason,
   VerificationDependencyState,
   VerificationDependencySummary,
   VerificationLockfileState,

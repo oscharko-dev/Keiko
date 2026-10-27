@@ -9,10 +9,7 @@ import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { processServerLogSink } from "../process-log-sink.js";
 import type { ChatMessage } from "./types.js";
 import type { ChatToolMutationRecord } from "./chatToolMutationTypes.js";
-import {
-  observedChatToolMutationOutcome,
-  validateMutationIntent,
-} from "./chatToolMutationState.js";
+import { observedChatToolMutationOutcome, mutationIntentError } from "./chatToolMutationState.js";
 import { readChatToolMutationTurn } from "./chatToolMutations.js";
 import { readChatReadGrant } from "./chatToolReadGrants.js";
 import {
@@ -83,12 +80,7 @@ function validObservation(
     return false;
   if (call.result !== undefined && call.result.toolRef?.canonicalId !== `keiko.${record.operation}`)
     return false;
-  try {
-    validateMutationIntent({ ...record, userMessageId: message.id });
-    return true;
-  } catch {
-    return false;
-  }
+  return mutationIntentError({ ...record, userMessageId: message.id }) === undefined;
 }
 
 /** Historical effects remain visible after authority expires or the connection closes.

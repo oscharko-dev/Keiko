@@ -71,6 +71,10 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
   CLIENT_BINDING_FAILURE_OUTCOMES,
+  CLIENT_CODING_WORKBENCH_AGENT_KINDS,
+  CLIENT_CODING_WORKBENCH_DETAIL_SECTIONS,
+  CLIENT_CODING_WORKBENCH_INTERACTIONS,
+  CLIENT_CODING_WORKBENCH_PROGRESS_STATES,
   CLIENT_BROWSER_APPROVAL_OPERATIONS,
   CLIENT_BROWSER_APPROVAL_OUTCOMES,
   CLIENT_MODULE_LOAD_FAILURES,
@@ -1332,7 +1336,7 @@ const CLIENT_CODING_RUN_RESTORED_OPERATION = defineActivityLogOperation({
   op: "client.coding-run.restored",
   category: "diagnostic",
   owner: "keiko-server",
-  emitter: "client-diagnostics-routes.logClientCodingRunRestore",
+  emitter: "client-diagnostics-routes.logCodingClientReport",
   fields: {
     timelineCount: { type: "integer", dataClass: "count", required: true },
     transcriptCount: { type: "integer", dataClass: "count", required: true },
@@ -1349,6 +1353,56 @@ const CLIENT_CODING_RUN_RESTORED_OPERATION = defineActivityLogOperation({
   analyzerProjection: "timeline",
   failureClasses: ["client-coding-run-restore"],
   proofIds: ["client.coding-run.restored.line"],
+  releaseImpact: "patch",
+});
+
+// #3897: what the human did on the Coding Workbench page — ordinary evidence, so it never spends the
+// failure budget or reads as a warn/unknown `client.diagnostic`. Closed values, the two body-free
+// ids of a trust binding and one count only.
+const CLIENT_CODING_WORKBENCH_INTERACTION_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.coding-workbench.interaction",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logCodingClientReport",
+  fields: {
+    interaction: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: CLIENT_CODING_WORKBENCH_INTERACTIONS,
+    },
+    section: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: CLIENT_CODING_WORKBENCH_DETAIL_SECTIONS,
+    },
+    expanded: { type: "boolean", dataClass: "closed-enum", required: false },
+    progressState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: CLIENT_CODING_WORKBENCH_PROGRESS_STATES,
+    },
+    agent: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: CLIENT_CODING_WORKBENCH_AGENT_KINDS,
+    },
+    repositoryId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
+    workspaceId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
+    fileCount: { type: "integer", dataClass: "count", required: false },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-coding-workbench-interaction"],
+  proofIds: ["client.coding-workbench.interaction.line"],
   releaseImpact: "patch",
 });
 
@@ -2296,20 +2350,27 @@ function logClientEvidenceInspection(
   return true;
 }
 
-function logClientCodingRunRestore(
+// The two closed Coding Workbench reports: a restored run, else a routine page interaction.
+function logCodingClientReport(
   request: ClientDiagnosticIngestRequest,
   correlationId: string,
 ): boolean {
-  const restore = request.codingRunRestore;
-  if (restore === undefined) return false;
-  getServerLogger().info(
-    activityLogEvent(
-      CLIENT_CODING_RUN_RESTORED_OPERATION,
-      clientDiagnosticCorrelation(request, correlationId),
-      { ...restore, completeness: "complete", loss: "none" },
-    ),
-  );
-  return true;
+  const { codingRunRestore: restore, codingWorkbenchInteraction: interaction } = request;
+  const envelope = clientDiagnosticCorrelation(request, correlationId);
+  const closed = { completeness: "complete", loss: "none" } as const;
+  if (restore !== undefined) {
+    getServerLogger().info(
+      activityLogEvent(CLIENT_CODING_RUN_RESTORED_OPERATION, envelope, { ...restore, ...closed }),
+    );
+  } else if (interaction !== undefined) {
+    getServerLogger().info(
+      activityLogEvent(CLIENT_CODING_WORKBENCH_INTERACTION_OPERATION, envelope, {
+        ...interaction,
+        ...closed,
+      }),
+    );
+  }
+  return restore !== undefined || interaction !== undefined;
 }
 
 // The closed report shapes, each of which owns its own registered line.
@@ -2338,7 +2399,7 @@ function logClosedClientReport(
     logClientFilesScopeDecision(request, correlationId) ||
     logClientUpdateNotice(request, correlationId) ||
     logRetrievalClientReport(request, correlationId) ||
-    logClientCodingRunRestore(request, correlationId)
+    logCodingClientReport(request, correlationId)
   );
 }
 
@@ -2925,9 +2986,11 @@ function isRoutineVoiceReport(report: ClientDiagnosticIngestRequest): boolean {
   );
 }
 
-// The closed support, scope, citation and restored-run reports: routine evidence, never a failure.
+// The closed support, scope, citation, restored-run and Coding Workbench interaction reports:
+// routine evidence, never a failure.
 function isRoutineScopedReport(report: ClientDiagnosticIngestRequest): boolean {
   return (
+    report.codingWorkbenchInteraction !== undefined ||
     report.supportReportDelivery !== undefined ||
     report.supportReportPreparation !== undefined ||
     report.filesScopeDecision !== undefined ||

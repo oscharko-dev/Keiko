@@ -1,6 +1,10 @@
 "use client";
 import { useLayoutEffect, useRef, useState } from "react";
 import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
+import { ApiError } from "@/lib/api";
+import { clientErrorEvidence } from "@/lib/client-error-evidence";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { bffRequestErrorKind } from "@/lib/http";
 
 export type ConnectorOperation = "verify" | "delete" | "rename" | "rotate" | "refresh" | "create";
 interface Owner {
@@ -42,6 +46,12 @@ async function execute<T>(input: {
       publish(() => ({ key, unconfirmed: false }));
     }
   } catch (error) {
+    reportClientDiagnostic("Connector operation failed.", {
+      kind: "other",
+      correlationId: error instanceof ApiError ? error.correlationId : undefined,
+      errorKind: bffRequestErrorKind(error),
+      errorEvidence: clientErrorEvidence(error),
+    });
     if (owner.active)
       publish((current) => ({
         key,

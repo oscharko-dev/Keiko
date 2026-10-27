@@ -144,6 +144,11 @@ interface FunctionalRuntimeResolverBaseInput {
   readonly researchEgressEnabled?: boolean | undefined;
   /** #2387 hermetic research transport; tests never touch the real network. */
   readonly researchFetchImpl?: ProductionCodingRuntimeResolverInput["researchFetchImpl"];
+  /**
+   * #2387: the gateway's configured outbound transport. Research is offered only while one
+   * resolves, as in production, so a journey that proves the research loop supplies it.
+   */
+  readonly gatewayEgress?: ProductionCodingRuntimeResolverInput["gatewayEgress"];
 }
 
 type FunctionalChildModelInput =
@@ -220,6 +225,7 @@ export function createFunctionalRuntimeResolver(
       researchEgressEnabled: input.researchEgressEnabled,
     },
     ...(input.researchFetchImpl ? { researchFetchImpl: input.researchFetchImpl } : {}),
+    ...(input.gatewayEgress ? { gatewayEgress: input.gatewayEgress } : {}),
     ...resolveFunctionalChildModelInput(input),
     ...(input.verifiedCommit === undefined ? {} : { verifiedCommit: input.verifiedCommit }),
     ...(input.draftDelivery === undefined ? {} : { draftDelivery: input.draftDelivery }),
@@ -938,17 +944,28 @@ function productiveResponse(step: number, script: ScriptState): NormalizedRespon
     script.verificationIssued = true;
     return tool("keiko_verification", { verifierId: "typecheck" });
   }
+  // A held run reports the closing progress a settling run would, then blocks on a question: the
+  // causal-terminal contract settles a run on its first `stop`, so only a blocked turn keeps it live.
   if (script.holdAfterVerification === true && script.verificationIssued === true) {
-    return tool("question", question());
+    return { ...tool("question", question()), content: normal().content };
   }
   return normal();
 }
 
+/**
+ * The project check the native journey runs through the runtime's own `shell` (#3901, parity T10):
+ * the fixture's `typecheck` script, which the native policy classifies as verification evidence.
+ */
+export const NATIVE_VERIFICATION_COMMAND = "npm run typecheck";
+
 // The native journey (#3897): the original runtime's own tools, as the pinned 2.1.4 child offers
 // them to the model on macOS. Search, read and the repository skill are its `grep`, `read` and
-// `skill`; the contained edit is its `edit`; only the verification is Keiko's own tool, which a
-// native run registers beside the delivery tools. The mapped `keiko_*` read, search, changeset and
-// skill tools do not exist in a native run, and calling one is answered "No tool named ...".
+// `skill`; the contained edit is its `edit`; the verification is the project's own check through
+// its `shell`, which the native policy reads as the run's verification evidence. Keiko's governed
+// verifier runs in a container, and on a host without a container backend it correctly fails
+// closed, so the native check is what carries a native run's verification. The mapped `keiko_*`
+// read, search, changeset and skill tools do not exist in a native run, and calling one is answered
+// "No tool named ...".
 function nativeSearchSteps(
   script: ScriptState,
   transcript: string,
@@ -982,7 +999,7 @@ function nativeSearchSteps(
   });
   const verify = (): NormalizedResponse => {
     script.verificationIssued = true;
-    return tool("keiko_verification", { verifierId: "typecheck", targetPath: "" });
+    return tool("shell", { command: NATIVE_VERIFICATION_COMMAND, timeout: 60_000 });
   };
   return [
     search,
@@ -1106,7 +1123,7 @@ const FUNCTIONAL_PROVIDER_ORIGIN = "https://provider.invalid";
  * scripted chat seam; the fixture provider answers it the way a working endpoint would. Any other
  * destination fails like an unreachable host, so the probe can never pass for a different provider.
  */
-function functionalReadinessFetch(input: string | URL | Request): Promise<Response> {
+export function functionalReadinessFetch(input: string | URL | Request): Promise<Response> {
   const url = new URL(input instanceof Request ? input.url : input);
   if (url.origin !== FUNCTIONAL_PROVIDER_ORIGIN)
     return Promise.reject(new TypeError("functional-readiness-destination-unknown"));

@@ -169,6 +169,14 @@ async function loadChanges(
   return Promise.all([client.getStatus(root), loadHistory(client, root)]);
 }
 
+// Within one run a re-read keeps what the panel already settled on until the new read lands: the
+// files and diff of a ready snapshot, or the explanation of an unavailable, failed or lost read.
+// Resetting a settled explanation to loading unmounted the Changes disclosure and remounted it
+// collapsed while the person was reading it (PR #4095).
+function keepsSettledState(current: CodingWorkbenchChangesState, runIdChanged: boolean): boolean {
+  return !runIdChanged && current.status !== "idle" && current.status !== "loading";
+}
+
 function useChangesSnapshot(input: {
   readonly client: CodingWorkbenchChangesClient;
   readonly root: string | null;
@@ -193,7 +201,7 @@ function useChangesSnapshot(input: {
     }
     if (bindingPending) {
       setState((current) =>
-        !runIdChanged && current.status === "ready" ? current : unavailable("loading"),
+        keepsSettledState(current, runIdChanged) ? current : unavailable("loading"),
       );
       return undefined;
     }
@@ -203,7 +211,7 @@ function useChangesSnapshot(input: {
     }
     let cancelled = false;
     setState((current) =>
-      !runIdChanged && current.status === "ready"
+      keepsSettledState(current, runIdChanged)
         ? current
         : { ...unavailable("loading"), selectedPath: runIdChanged ? null : current.selectedPath },
     );

@@ -2,6 +2,7 @@ import type { CodingWorkbenchStartOptions } from "./coding-workbench-runtime-act
 import { newClientCorrelationId } from "./bff-correlation";
 import { reportGatewayProfileRefresh, reportClientDiagnostic } from "./client-diagnostics";
 import { bffRequestErrorKind } from "./http";
+import { requestCodingAppSessionReinspection } from "./coding-app-session-client";
 import { useCallback, useEffect, useRef, type Dispatch, type RefObject } from "react";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import type {
@@ -435,6 +436,10 @@ export function useCodingWorkbenchRuntimeResources(
   };
 }
 
+// ADR-0141 D6: a per-run control from a browser without app-session authority is answered with the
+// same not-found result as an unknown run, so the refusal cannot say whether the session was revoked.
+const RUN_NOT_FOUND_CODE = "CODING_RUNTIME_RUN_NOT_FOUND";
+
 function useRuntimeMutationQueue({
   stateRef,
   refreshRun,
@@ -461,7 +466,9 @@ function useRuntimeMutationQueue({
           }
           dispatch({ kind: "mutation-complete" });
         } catch (error) {
-          dispatch({ kind: "mutation-failed", error: codingWorkbenchRuntimeApiError(error) });
+          const failure = codingWorkbenchRuntimeApiError(error);
+          dispatch({ kind: "mutation-failed", error: failure });
+          if (failure.code === RUN_NOT_FOUND_CODE) requestCodingAppSessionReinspection();
         }
       };
       const result = mutationTail.current.then(execute, execute);

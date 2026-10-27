@@ -556,6 +556,8 @@ describe("verified Code-task commit service", () => {
     const proposalId = await verifiedProposal();
     const verification = events.filter((event) => event.extra?.phase === "verification").at(-1);
     expect(verification).toMatchObject({ extra: { passed: true, checkCount: 2 } });
+    expect(verification?.extra).not.toHaveProperty("reason");
+    expect(verification?.extra).not.toHaveProperty("untrackedCount");
     const stored: unknown = JSON.parse(
       evidence.get(String(verification?.extra?.verificationEvidenceId)) ?? "null",
     );
@@ -572,6 +574,33 @@ describe("verified Code-task commit service", () => {
       },
     });
     expect(stored).not.toHaveProperty(["checks", "records", 0, "stagedTreeDigest"]);
+  });
+  // PR #4095: on Linux the verification sandbox left untracked files in the worktree, and the line
+  // read only `passed: false` beside zero failed checks. It now names the cause and its counts.
+  it("names a candidate that changed during its verification on the verification line", async () => {
+    const ticket = ticketOf(await service.beginVerification());
+    if (ticket === undefined) throw new Error("verification ticket unavailable");
+    writeFileSync(join(root, "left-behind.log"), "debug log\n");
+    expect(await service.completeVerification(ticket, report())).toBe(false);
+    expect(events.filter((event) => event.extra?.phase === "verification").at(-1)).toMatchObject({
+      extra: {
+        passed: false,
+        reason: "candidate-drift",
+        unstagedCount: 0,
+        untrackedCount: 1,
+        failedCheckCount: 0,
+      },
+    });
+  });
+  it("names a failed verification report on the verification line", async () => {
+    const ticket = ticketOf(await service.beginVerification());
+    if (ticket === undefined) throw new Error("verification ticket unavailable");
+    expect(await service.completeVerification(ticket, report(false))).toBe(false);
+    const line = events.filter((event) => event.extra?.phase === "verification").at(-1);
+    expect(line).toMatchObject({
+      extra: { passed: false, reason: "verification-failed", failedCheckCount: 1 },
+    });
+    expect(line?.extra).not.toHaveProperty("untrackedCount");
   });
   it("starts a new run's verification history empty", async () => {
     let runId = "run-1";

@@ -397,7 +397,7 @@ it.each([400, 403, 429])(
         "UPDATE chat_tool_mutations SET phase = 'settled', outcome = 'rejected' WHERE invocation_id = ?",
       )
       .run(f.intent.invocationId);
-    f.db.exec("PRAGMA user_version = 47");
+    rewindSchemaFixture(f.db, 47);
     runMigrations(f.db);
     expect(f.journal.find(f.intent.invocationId)?.outcome).toBe("unknown");
     expect(

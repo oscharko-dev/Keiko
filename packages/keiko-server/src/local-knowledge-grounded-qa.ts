@@ -1,6 +1,7 @@
 import type { GatewayCallRequest } from "@oscharko-dev/keiko-model-gateway";
 import { createGroundedSynthesisCallBudget } from "./grounded-answer.js";
 import { callPluralGroundedSynthesis } from "./grounded-plural-synthesis.js";
+import { currentContentRedactor, withChatContentPolicy } from "./content-redactor.js";
 import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { withMarkdownSkillAdmission } from "./markdown-skill-admission.js";
 import {
@@ -1504,11 +1505,16 @@ function resolveModel(
   if (resolvedModel === undefined) {
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
   }
-  return withConversationReadinessAdmission(resolvedModel, modelId, readinessAdmission, deps);
+  return withConversationReadinessAdmission(
+    withChatContentPolicy(deps, resolvedModel),
+    modelId,
+    readinessAdmission,
+    deps,
+  );
 }
 
 function redactText(deps: UiHandlerDeps, value: string): string {
-  const redacted = deps.redactor(value);
+  const redacted = currentContentRedactor(deps)(value);
   return typeof redacted === "string" ? redacted : stripUnsafeFormatChars(value);
 }
 
@@ -2843,7 +2849,7 @@ export function mapGroundedAskError(
   // failure during the scoped answer can echo a provider endpoint or token). Scrub it through the
   // same redactor the content path uses before it reaches the wire; the fixed fallback is static.
   const message =
-    error instanceof Error ? redactText(deps, error.message) : "Local knowledge ask failed.";
+    error instanceof Error ? String(deps.redactor(error.message)) : "Local knowledge ask failed.";
   return { status: 500, body: errorBody("INTERNAL", message, correlationId) };
 }
 

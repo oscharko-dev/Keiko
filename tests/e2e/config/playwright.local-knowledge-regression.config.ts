@@ -2,6 +2,7 @@ import { defineConfig, devices } from "@playwright/test";
 import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { FILE_HISTORY_APP_SESSION_LAUNCHER_SECRET } from "../support/file-history-2531.js";
 
 const root = process.cwd();
 const publicPort = Number(process.env.KEIKO_LK_E2E_UI_PORT ?? "42183");
@@ -87,6 +88,11 @@ export default defineConfig({
       KEIKO_MEMORY_DIR: join(stateDir, "memory"),
       KEIKO_INITIAL_PROJECT_PATH: corpusDataRoot,
       KEIKO_CONFIG_FILE: runtimeConfigPath,
+      // Chat drafts and skill selections are private, app-session-bound reads (ADR-0114 D1): an
+      // unpaired browser answers them 404, which the pass's console-error assertion rightly
+      // rejects. The same fixture launcher secret the generic config uses lets the spec pair its
+      // browser through the production launcher-fragment handshake.
+      KEIKO_CODING_APP_SESSION_LAUNCHER_SECRET: FILE_HISTORY_APP_SESSION_LAUNCHER_SECRET,
       KEIKO_LK_E2E_MOCK_GATEWAY_PORT: String(mockGatewayPort),
       // Issue #1286: drive the bounded large-document path for any PDF so the regression exercises
       // progressive extraction + bounded chunk/embed + the large-document health UI without needing

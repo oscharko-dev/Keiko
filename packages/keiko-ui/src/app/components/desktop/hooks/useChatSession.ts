@@ -853,12 +853,24 @@ export function resolveSelectedModelId(
   return resolveSelection(current, models).id;
 }
 
-function hasGroundingScope(chat: Chat): boolean {
+// The sources `POST /api/chats/messages/grounded` answers from: a connected folder or a Knowledge
+// Pod. A connected Git change is not one. Its turn is admitted (description authority) and answered
+// by the ordinary Chat route, and the grounded route refuses a chat that has only a Git change
+// (`grounding-mode-changed`), so selecting it for such a chat fails every send.
+function hasGroundedRouteScope(chat: Chat): boolean {
   return (
     chat.connectedScope !== undefined ||
     (chat.connectedScopes !== undefined && chat.connectedScopes.length > 0) ||
     chat.localKnowledgeScope !== undefined ||
-    (chat.localKnowledgeScopes !== undefined && chat.localKnowledgeScopes.length > 0) ||
+    (chat.localKnowledgeScopes !== undefined && chat.localKnowledgeScopes.length > 0)
+  );
+}
+
+// Any source that supplies the turn's context: it blocks staged attachments (the grounded and Git
+// change contexts carry no attachment channel), whichever route then answers the turn.
+function hasGroundingScope(chat: Chat): boolean {
+  return (
+    hasGroundedRouteScope(chat) ||
     (chat.gitChangeScopes !== undefined && chat.gitChangeScopes.length > 0)
   );
 }
@@ -4508,15 +4520,15 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         : buildAttachmentDescriptors(staged);
       const consumedAttachmentIds = grounded ? [] : staged.map((attachment) => attachment.id);
       const memory = canonicalTarget?.memory ?? buildMemoryRequest(chat, request.project);
-      if (grounded) {
-        // A typed send in this state is rejected before admission (resolveSendMessageAdmission), so
-        // only a spoken turn can reach here with files staged. A settled final transcript must never
-        // be discarded (ADR-0154 D1), so the turn proceeds on the grounded route and a DISTINCT
-        // notice (GROUNDED_ATTACHMENT_DROPPED_NOTICE, not the typed path's full-reject
-        // GROUNDED_ATTACHMENT_NOTICE — see KEIKO-0793) states that the staged attachments were not
-        // part of it. Unconditional on purpose: whichever caller arrives here with staged files,
-        // the user is told rather than silently ignored.
-        if (staged.length > 0) setError(GROUNDED_ATTACHMENT_DROPPED_NOTICE);
+      // A typed send in this state is rejected before admission (resolveSendMessageAdmission), so
+      // only a spoken turn can reach here with files staged. A settled final transcript must never
+      // be discarded (ADR-0154 D1), so the turn proceeds and a DISTINCT notice
+      // (GROUNDED_ATTACHMENT_DROPPED_NOTICE, not the typed path's full-reject
+      // GROUNDED_ATTACHMENT_NOTICE — see KEIKO-0793) states that the staged attachments were not
+      // part of it. Unconditional on purpose: whichever caller arrives here with staged files,
+      // the user is told rather than silently ignored.
+      if (grounded && staged.length > 0) setError(GROUNDED_ATTACHMENT_DROPPED_NOTICE);
+      if (hasGroundedRouteScope(chat)) {
         const terminal = await sendGrounded({
           chat,
           expectedSkillSelectionRevision: request.expectedSkillSelectionRevision,

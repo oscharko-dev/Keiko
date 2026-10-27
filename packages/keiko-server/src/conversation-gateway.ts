@@ -1,7 +1,7 @@
-import { CONVERSATION_SYSTEM_PROMPT } from "./conversation-prompt.js";
+import { conversationSystemPrompt } from "./conversation-prompt.js";
 import { isLegacyEmptyAssistantPlaceholder } from "./assistant-response.js";
 import type { ChatMessage } from "./store/index.js";
-import type { ChatMessageContentPart } from "@oscharko-dev/keiko-contracts";
+import type { ChatMessageContentPart, ContentRedactionPolicy } from "@oscharko-dev/keiko-contracts";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 
 export type GatewayConversationMessage = import("@oscharko-dev/keiko-contracts").ChatMessage;
@@ -117,6 +117,7 @@ export function usableGatewayMessages(
 
 export function conversationForGateway(
   messages: readonly ChatMessage[],
+  contentRedaction?: ContentRedactionPolicy,
 ): GatewayConversationMessage[] {
   const usable = usableGatewayTurns(messages)
     .slice(-MAX_CONTEXT_MESSAGES)
@@ -124,7 +125,7 @@ export function conversationForGateway(
   return [
     {
       role: "system",
-      content: CONVERSATION_SYSTEM_PROMPT,
+      content: conversationSystemPrompt(contentRedaction),
     },
     ...usable,
   ];

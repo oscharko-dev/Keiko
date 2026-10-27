@@ -183,3 +183,21 @@ regexes = [
   '''^\s*"design-system/keiko-tokens\.css": "ebb2520ea5c85953b5dca237026e917330884b0e4639f68e93f8d82608a1681d",?\s*$''',
   '''^\s*"design-system/keiko-semantic-tokens\.css": "aaa597a1d3d28309de222ead883f6a83f05d4ae66747e2d474663c718e3fd845",?\s*$''',
 ]
+
+[[allowlists]]
+description = "PR #4098: synthetic credential-floor fixtures in two immutable checkpoints, a made-up RSA private-key block in two tests and a made-up Stripe-shaped key, used only to prove that the preserving Chat content projection still removes them. No real credential was involved; the following commit assembles both from fragments, so the squash-merged tree carries no literal. Scoped to the two commits, the two test files, the two rules and the synthetic values, so every other finding remains enforced."
+condition = "AND"
+commits = [
+  "618acc0ef8e88ba485b15aa9635333df060e033b",
+  "3029864dd6bd337b1881dec2e6fa6a5655c428d6",
+]
+paths = [
+  '''^packages/keiko-security/src/content-redaction\.test\.ts$''',
+  '''^packages/keiko-workspace/src/content-preservation\.test\.ts$''',
+]
+targetRules = ["private-key", "stripe-access-token"]
+regexTarget = "match"
+regexes = [
+  '''MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun''',
+  '''^sk_live_AbCdEfGhIjKlMnOp1234"$''',
+]

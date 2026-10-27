@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { openCodeGatewayCatalogAdvertisement } from "./__fixtures__/toolCatalog.js";
 import { OpenAiAdapter } from "./openai-adapter.js";
+import type { GatewayCallRequest } from "./gateway.js";
 import { logModelId, type ModelGatewayLogEvent } from "./observability.js";
 import type {
   GatewayRequest,
@@ -415,3 +416,33 @@ describe("native executable arguments reach the original runtime byte for byte (
     expect(JSON.stringify(read.toolCalls)).toContain("[REDACTED]");
   });
 });
+
+it.each(["buffered", "streamed"] as const)(
+  "keeps heuristic and configured-secret tool protection on a preserving %s Chat call",
+  async (transport) => {
+    const args = {
+      questions: [
+        {
+          header: "Synthetic contact",
+          question: `Contact +49 30 12345678 with Authorization: Bearer fixture-token-value and ${PROVIDER.apiKey}`,
+          options: [{ label: "Continue", description: "Synthetic review" }],
+        },
+      ],
+    };
+    const request: GatewayCallRequest = { ...REQUEST, contentRedaction: "preserve" };
+    const response =
+      transport === "buffered"
+        ? await adapter(() => wholeBody(args, "question")).call(request, PROVIDER)
+        : await streamedAnswer(
+            adapter(() => streamed(args, "question")),
+            request,
+          );
+    expect(response.toolCalls[0]?.name).toBe("question");
+    const serialized = JSON.stringify(response.toolCalls[0]?.arguments);
+    expect(serialized).toContain("Synthetic review");
+    expect(serialized).toContain("[REDACTED]");
+    expect(serialized).not.toContain("+49 30 12345678");
+    expect(serialized).not.toContain("fixture-token-value");
+    expect(serialized).not.toContain(PROVIDER.apiKey);
+  },
+);

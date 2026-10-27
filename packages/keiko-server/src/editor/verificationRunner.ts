@@ -53,6 +53,7 @@ import {
   type ExecuteVerificationArgs,
   type ExecuteVerificationResult,
 } from "./verificationExecution.js";
+import { VERIFICATION_DEPENDENCY_REFUSAL_REASONS } from "@oscharko-dev/keiko-contracts/runtime/verification";
 import {
   VERIFICATION_COMPLETION_FIELD_CONTRACTS,
   VERIFICATION_DEPENDENCY_STATE_VALUES,
@@ -224,6 +225,13 @@ const EDITOR_VERIFICATION_DEPENDENCIES_OPERATION = defineActivityLogOperation({
     durationMs: { type: "integer", dataClass: "duration", required: true },
     egressAllowed: { type: "integer", dataClass: "count", required: false },
     egressRefused: { type: "integer", dataClass: "count", required: false },
+    // Which closed refusal applied, so a refused bootstrap names its cause (#3897).
+    refusalReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: VERIFICATION_DEPENDENCY_REFUSAL_REASONS,
+    },
   },
   causal: "correlation",
   lifecycle: "end",
@@ -849,6 +857,9 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
                 egressAllowed: dependencies.egress.allowed,
                 egressRefused: dependencies.egress.refused,
               }),
+          ...(dependencies.refusalReason === undefined
+            ? {}
+            : { refusalReason: dependencies.refusalReason }),
         },
       ),
     );

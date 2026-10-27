@@ -1,5 +1,8 @@
 import type { Chat, ChatMessage } from "@oscharko-dev/keiko-contracts/bff-wire";
-import { fetchChatMessages } from "./api";
+import { ApiError, fetchChatMessages } from "./api";
+import { clientErrorEvidence } from "./client-error-evidence";
+import { reportClientDiagnostic } from "./client-diagnostics";
+import { bffRequestErrorKind } from "./http";
 type BoundChat = Pick<Chat, "id" | "jiraPodBinding">;
 async function readConsent(
   chatId: string,
@@ -64,8 +67,14 @@ export function watchChatToolConsent(
         previous = observed.identity;
         publish(observed.message);
       }
-    } catch {
-      // The shared BFF client records failed reads. Only GET is retried, never the turn POST.
+    } catch (error) {
+      if (!combined.aborted)
+        reportClientDiagnostic("Jira Chat consent observation failed.", {
+          kind: "other",
+          correlationId: error instanceof ApiError ? error.correlationId : undefined,
+          errorKind: bffRequestErrorKind(error),
+          errorEvidence: clientErrorEvidence(error),
+        });
     } finally {
       if (!combined.aborted)
         timer = setTimeout(() => {

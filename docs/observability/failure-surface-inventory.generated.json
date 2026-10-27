@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "66cae99db060036c5b7181c8110d7cfa6a22a7109552cf2f24bce38937c4d2d9"
+    "catalogDigest": "712b88bfed3b83baa72fab1736fd1b08d1448cb9a1045f336c3bd4e2efe83c05"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,10 +67,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 601,
-    "proofCount": 624,
-    "resolvedProofCount": 624,
-    "failureClassCount": 375,
+    "operationCount": 604,
+    "proofCount": 627,
+    "resolvedProofCount": 627,
+    "failureClassCount": 378,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -167,6 +167,7 @@
         "client.binding.target-missing",
         "client.citation.activated",
         "client.coding-run.restored",
+        "client.coding-workbench.interaction",
         "client.composer.activity",
         "client.diagnostic",
         "client.diagnostic.rate-limited",
@@ -261,6 +262,7 @@
         "gateway.retry.scheduled",
         "gateway.route.rejected",
         "gateway.setup.metadata.resolved",
+        "gateway.setup.target.accepted",
         "gateway.spend.ceiling",
         "gateway.spend.rejected",
         "gateway.spend.reserved",
@@ -692,6 +694,7 @@
         "activity-log.segment.recovered",
         "activity-log.segment.sealed",
         "activity-log.writer-rejected",
+        "chat.content-policy.resolved",
         "memory.audit.state-cache.seeded",
         "portable.windows-alert.spawn-failed",
         "process.exiting",
@@ -800,6 +803,7 @@
     "browser-handoff": ["ui.dependency-failure"],
     "chat-context-management": ["bff.dependency-failure"],
     "gateway-alias-intersection": ["model-gateway.dependency-failure"],
+    "gateway-setup-target": ["model-gateway.dependency-failure"],
     "gateway-setup-metadata": ["model-gateway.dependency-failure"],
     "gateway-context-admission": ["model-gateway.dependency-failure"],
     "coding-history-persistence": ["tools-workflows.dependency-failure"],
@@ -832,6 +836,7 @@
     "client-knowledge-catalog": ["client-diagnostics.dependency-failure"],
     "client-citation-activation": ["client-diagnostics.dependency-failure"],
     "client-coding-run-restore": ["client-diagnostics.dependency-failure"],
+    "client-coding-workbench-interaction": ["client-diagnostics.dependency-failure"],
     "client-select": ["client-diagnostics.dependency-failure"],
     "client-session-repair": ["client-diagnostics.dependency-failure"],
     "client-stage": ["client-diagnostics.dependency-failure"],
@@ -1053,6 +1058,7 @@
     "lsp-process-runtime": ["editor-delivery.crash"],
     "lsp-process-spawn": ["editor-delivery.dependency-failure"],
     "lsp-process-termination": ["editor-delivery.crash"],
+    "chat-content-policy": ["lifecycle-crash.dependency-failure"],
     "memory-audit-state-cache": ["lifecycle-crash.dependency-failure"],
     "memory-capture-novelty": ["memory-knowledge.dependency-failure"],
     "memory-embedding-invalidation": ["memory-knowledge.dependency-failure"],
@@ -1237,6 +1243,7 @@
     "chat.compaction.facts.classified.line": [
       "packages/keiko-server/src/chat-compaction-model-summary.test.ts"
     ],
+    "chat.content-policy.resolved.setting": ["packages/keiko-server/src/deps-activity.test.ts"],
     "chat.context.failed.line": ["packages/keiko-server/src/chat-context-status.test.ts"],
     "chat.context.management.line": ["packages/keiko-server/src/chat-context-status.test.ts"],
     "chat.context.selected.budget": [
@@ -1292,7 +1299,8 @@
       "packages/keiko-server/src/atlassian/actionApprovals.test.ts"
     ],
     "chat.tool-authority.operation.read-grant-admission": [
-      "packages/keiko-server/src/atlassian/jiraChatAuthority.test.ts"
+      "packages/keiko-server/src/atlassian/jiraChatAuthority.test.ts",
+      "packages/keiko-server/src/store/chatToolReadGrantProjection.test.ts"
     ],
     "chat.tool-authority.operation.read-grant-lifecycle": [
       "packages/keiko-server/src/atlassian/credentialRoutes.test.ts"
@@ -1384,6 +1392,9 @@
     "client.coding-run.restored.line": [
       "packages/keiko-server/src/client-diagnostics-routes.test.ts"
     ],
+    "client.coding-workbench.interaction.line": [
+      "packages/keiko-server/src/client-diagnostics-routes.test.ts"
+    ],
     "client.composer.activity.line": [
       "packages/keiko-server/src/client-diagnostics-routes.test.ts"
     ],
@@ -1461,7 +1472,8 @@
       "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.test.ts"
     ],
     "coding-app-session.operation.state.line": [
-      "packages/keiko-server/src/coding-app-session/appSessionReadAuthority.test.ts"
+      "packages/keiko-server/src/coding-app-session/appSessionReadAuthority.test.ts",
+      "packages/keiko-server/src/coding-app-session/codingRunSessionLease.test.ts"
     ],
     "coding-app-session.paired.request": [
       "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.test.ts"
@@ -2116,6 +2128,7 @@
       "packages/keiko-model-gateway/src/gateway.logging.test.ts"
     ],
     "gateway.setup.metadata.resolved.line": ["packages/keiko-server/src/gateway-setup.test.ts"],
+    "gateway.setup.target.accepted.line": ["packages/keiko-server/src/gateway-setup.test.ts"],
     "gateway.spend.ceiling.line": ["packages/keiko-server/src/gateway-spend-budget.test.ts"],
     "gateway.spend.rejected.line": [
       "packages/keiko-server/src/gateway-spend-budget.test.ts",

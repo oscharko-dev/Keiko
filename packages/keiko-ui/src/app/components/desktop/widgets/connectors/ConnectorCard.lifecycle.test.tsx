@@ -12,6 +12,8 @@ import { ApiError } from "@/lib/api";
 import { I18nProvider, loadLocaleMessages } from "@/lib/i18n";
 import { loadOptionalWidgetMessages } from "@/lib/optional-widget-i18n";
 import { ConnectorCard } from "./ConnectorCard";
+import * as diagnostics from "@/lib/client-diagnostics";
+import { expectDiagnosticWireAccepted } from "@/test-utils/diagnostic-wire";
 
 const LIVE: AtlassianConnectorMetadata = {
   schemaVersion: "1",
@@ -164,10 +166,13 @@ describe("Jira Pod lifecycle in the existing Hub", () => {
     expect(onUpdated).not.toHaveBeenCalled();
   });
   it("requires state refresh after an uncertain replacement without displaying reflected secrets or replaying the write", async () => {
+    const diagnostic = vi.spyOn(diagnostics, "reportClientDiagnostic");
+    const failure = new ApiError("INTERNAL", "synthetic-replacement-pat", 500);
+    failure.correlationId = "jira-rotation-request-1";
     const api = client({
       listConnectors: vi.fn().mockResolvedValueOnce([LIVE]).mockResolvedValue([rotated()]),
       updateConnector: vi.fn(async () => {
-        throw new ApiError("INTERNAL", "synthetic-replacement-pat", 500);
+        throw failure;
       }),
     });
     const { container } = render(<AtlassianConnectorsPanel client={api} jiraLive />);
@@ -175,6 +180,17 @@ describe("Jira Pod lifecycle in the existing Hub", () => {
     await userEvent.type(screen.getByLabelText("New API token"), "synthetic-replacement-pat");
     await userEvent.click(screen.getByRole("button", { name: "Save token" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("could not be confirmed");
+    expect(diagnostic).toHaveBeenCalledWith(
+      "Connector operation failed.",
+      expect.objectContaining({
+        correlationId: failure.correlationId,
+        kind: "other",
+      }),
+    );
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain(failure.message);
+    await expectDiagnosticWireAccepted(
+      diagnostic.mock.calls.map(([message, meta]) => ({ message, meta })),
+    );
     expect(container.innerHTML).not.toContain("synthetic-replacement-pat");
     expect(screen.queryByText("Connection verified")).toBeNull();
     expect(screen.getByRole("button", { name: "Save token" })).toBeDisabled();

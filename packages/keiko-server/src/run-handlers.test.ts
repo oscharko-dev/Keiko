@@ -188,6 +188,7 @@ function testAppSessionChannel(paired: boolean): CodingAppSessionChannel {
       live: false,
       stop: () => undefined,
       detach: () => undefined,
+      reportBackpressure: () => undefined,
     }),
   };
 }

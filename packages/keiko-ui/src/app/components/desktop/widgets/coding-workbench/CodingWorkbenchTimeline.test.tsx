@@ -241,6 +241,28 @@ function feedWithPresentedTools(): AvailableCodingSafeActivityFeed {
   return { ...feed, turns: [{ turnId: "turn-tools", messages: [], tools, truncated: false }] };
 }
 
+// The two failed calls of a real run (#3897): a command that exited non-zero and a Code Mode
+// program that reported an error to the model. Neither carries any other presentation fact.
+function feedWithFailedNativeCalls(): AvailableCodingSafeActivityFeed {
+  const feed = feedWithRepeatedTools();
+  const tools = [
+    {
+      callId: "execute-1",
+      tool: "execute",
+      state: "failed" as const,
+      occurredAt: AT,
+    },
+    {
+      callId: "shell-1",
+      tool: "shell",
+      state: "failed" as const,
+      occurredAt: AT,
+      presentation: { exitCode: 1 },
+    },
+  ];
+  return { ...feed, turns: [{ turnId: "turn-failed", messages: [], tools, truncated: false }] };
+}
+
 const IDLE_QUESTIONS: UseCodingWorkbenchQuestionsResult = {
   status: "empty",
   questions: [],
@@ -284,6 +306,26 @@ function paintRowHeights(container: HTMLElement, heightFor: (li: HTMLLIElement) 
 }
 
 describe("CodingWorkbenchTimeline", () => {
+  it("says why a failed call failed instead of opening to its tool name alone", () => {
+    const { container } = render(
+      <Timeline
+        active={false}
+        events={[]}
+        activity={activityLike(feedWithFailedNativeCalls())}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    const cards = [...container.querySelectorAll<HTMLDetailsElement>('[data-tool-state="failed"]')];
+    expect(cards).toHaveLength(2);
+    const [execute, shell] = cards;
+    expect(execute?.open).toBe(true);
+    expect(execute).toHaveTextContent("The tool reported an error to the model.");
+    expect(execute).not.toHaveTextContent("exited with code");
+    expect(shell?.open).toBe(true);
+    expect(shell).toHaveTextContent("The command exited with code 1.");
+    expect(shell).not.toHaveTextContent("reported an error");
+  });
+
   it("keeps each presented call visible with precise canonical facts", () => {
     const { container } = render(
       <Timeline
@@ -759,6 +801,43 @@ describe("CodingWorkbenchTimeline", () => {
     expect(detail).toHaveTextContent("keiko_workspace_discover");
   });
 
+  it("reports a tool disclosure only when the reader activates its summary", () => {
+    // #3897 review: a failed card opens itself, and the browser announces that as a `toggle` too.
+    const toggled = (expanded: boolean): readonly unknown[] => [
+      "[keiko] coding workbench interaction: details-toggled",
+      {
+        codingWorkbenchInteraction: { interaction: "details-toggled", section: "tool", expanded },
+        correlationId: undefined,
+      },
+    ];
+    const summaryOf = (details: Element | undefined): HTMLElement => {
+      const summary = details?.querySelector("summary");
+      if (summary === null || summary === undefined) throw new Error("disclosure without summary");
+      return summary;
+    };
+    const writer = vi.fn();
+    setClientDiagnosticWriter(writer);
+    try {
+      const { container } = render(
+        <Timeline
+          events={[]}
+          activity={activityLike(feedWithRepeatedTools())}
+          questions={IDLE_QUESTIONS}
+        />,
+      );
+      const [routine, failed] = container.querySelectorAll('[data-timeline-kind="tool"] details');
+      if (failed === undefined) throw new Error("failed tool card missing");
+      fireEvent(failed, new Event("toggle"));
+      expect(writer).not.toHaveBeenCalled();
+
+      fireEvent.click(summaryOf(failed));
+      fireEvent.click(summaryOf(routine));
+      expect(writer.mock.calls).toEqual([toggled(false), toggled(true)]);
+    } finally {
+      resetClientDiagnosticWriter();
+    }
+  });
+
   // The tool-call card (`.toolCard`) and plan card rows are otherwise exercised only indirectly
   // through CodingWorkbenchWindow.test.tsx's full-window axe pass; this pins the Timeline's own
   // rendering of both directly, matching the per-component axe suites of its siblings.
@@ -926,8 +1005,9 @@ describe("CodingWorkbenchTimeline model reasoning", () => {
       />,
     );
     const block = reasoningBlock(container);
-    expect(block.querySelector("summary")).toHaveTextContent("Model reasoning");
-    expect(block.querySelector("summary")).toHaveTextContent("Unverified");
+    // The summary sits among tool rows whose badges are statuses; a warning-coloured "Unverified"
+    // there read as a failed check on every step (#3897, owner). The label lives in the block.
+    expect(block.querySelector("summary")?.textContent).toBe("Model reasoning");
     expect(block).toHaveTextContent("Unverified model reasoning");
     expect(block).toHaveTextContent(THOUGHT.text);
     const answer = container.querySelector(
@@ -1075,7 +1155,19 @@ describe("CodingWorkbenchTimeline model reasoning", () => {
     expect(reasoningBlock(container)).toHaveTextContent("Output truncated");
   });
 
-  it("reports every toggle, which is always the reader's, and nothing else", () => {
+  it("reports each summary activation, which is always the reader's, and nothing else", () => {
+    // #3897: a toggle is routine evidence on its own closed report, never a free-text note.
+    const toggled = (expanded: boolean): readonly unknown[] => [
+      "[keiko] coding workbench interaction: details-toggled",
+      {
+        codingWorkbenchInteraction: {
+          interaction: "details-toggled",
+          section: "model-reasoning",
+          expanded,
+        },
+        correlationId: undefined,
+      },
+    ];
     const writer = vi.fn();
     setClientDiagnosticWriter(writer);
     try {
@@ -1087,17 +1179,16 @@ describe("CodingWorkbenchTimeline model reasoning", () => {
           questions={IDLE_QUESTIONS}
         />,
       );
-      expect(writer).not.toHaveBeenCalledWith(
-        "[keiko] coding workbench model reasoning toggled",
-        undefined,
-      );
+      expect(writer).not.toHaveBeenCalled();
       const block = reasoningBlock(container);
       block.open = true;
       fireEvent(block, new Event("toggle"));
-      expect(writer).toHaveBeenCalledWith(
-        "[keiko] coding workbench model reasoning toggled",
-        undefined,
-      );
+      expect(writer).not.toHaveBeenCalled();
+      block.open = false;
+      const summary = block.querySelector("summary");
+      if (summary === null) throw new Error("reasoning block without summary");
+      fireEvent.click(summary);
+      expect(writer).toHaveBeenCalledExactlyOnceWith(...toggled(true));
       writer.mockClear();
       rerender(
         <Timeline
@@ -1107,10 +1198,7 @@ describe("CodingWorkbenchTimeline model reasoning", () => {
           questions={IDLE_QUESTIONS}
         />,
       );
-      expect(writer).not.toHaveBeenCalledWith(
-        "[keiko] coding workbench model reasoning toggled",
-        undefined,
-      );
+      expect(writer).not.toHaveBeenCalled();
     } finally {
       resetClientDiagnosticWriter();
     }

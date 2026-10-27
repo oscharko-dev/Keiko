@@ -2358,7 +2358,10 @@ function adapterSafeActivitySink(
   };
 }
 
-/** Native exit evidence is settled above, outside the closed display-signal schema. */
+/**
+ * Native exit evidence is settled above, outside the closed display-signal schema. The timeline
+ * keeps only the exit status, as a presentation fact, so a failed command says why it failed.
+ */
 function displayActivitySignal(
   signal: CompositionSafeActivitySignal,
 ): CompositionSafeActivitySignal {
@@ -2366,7 +2369,8 @@ function displayActivitySignal(
   const display = { ...signal };
   delete display.exitCode;
   delete display.exitStatusCheck;
-  return display;
+  if (signal.exitCode === undefined) return display;
+  return { ...display, presentation: { ...display.presentation, exitCode: signal.exitCode } };
 }
 
 /** The native tools whose completed call wrote the files its edit check named. */

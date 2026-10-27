@@ -129,6 +129,28 @@ describe("ordinary Chat structured tool transcript", () => {
     );
     expect(() => store.findMessageById(id)).toThrow("Stored Chat tool transcript is invalid");
   });
+  it.each([
+    '{"private-token":',
+    JSON.stringify({
+      schemaVersion: 1,
+      exchanges: [{ call: { ...call, arguments: { text: "private-token" }, private: true } }],
+    }),
+    JSON.stringify({
+      schemaVersion: 1,
+      exchanges: [{ call: { ...call, arguments: { text: "private-token".repeat(262144) } } }],
+    }),
+  ])("normalizes corrupt private transcript input to one static failure %#", (json) => {
+    const f = fixture();
+    f.db.prepare("UPDATE chat_messages SET tool_transcript_json = ? WHERE id = ?").run(json, f.id);
+    expect(() => f.store.findMessageById(f.id)).toThrow(
+      new TypeError("Stored Chat tool transcript is invalid."),
+    );
+    expect(
+      f.db.prepare("SELECT tool_transcript_json AS body FROM chat_messages WHERE id = ?").get(f.id)
+        ?.body,
+    ).toBe(json);
+    expect(JSON.stringify(f.logs.events)).not.toContain("private-token");
+  });
   it("bounds the transcript and refuses writes after canonical turn termination", () => {
     const { store, db, id } = fixture();
     for (let index = 0; index < 30; index++)
@@ -482,6 +504,7 @@ describe("authoritative late mutation history", () => {
     ["user_message_id", null],
     ["authority_digest", "g".repeat(64)],
     ["actor_id", "/"],
+    ["correlation_id", "private-correlation-canary/invalid"],
     ["operation", "jira.edit"],
   ])("does not attach a mismatched or corrupt journal %s to history", (column, value) => {
     const f = observedMutationFixture();

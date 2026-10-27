@@ -5,6 +5,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts";
 import { JiraWriteApproval } from "./JiraWriteApproval";
 import { I18N_STORAGE_KEY, I18nProvider } from "@/lib/i18n";
+import { ApiError } from "@/lib/api";
+import * as diagnostics from "@/lib/client-diagnostics";
+import { expectDiagnosticWireAccepted } from "@/test-utils/diagnostic-wire";
 
 const call = {
   id: "call-1",
@@ -67,12 +70,15 @@ describe("Jira Chat write approvals", () => {
     expect(await axe(container)).toHaveNoViolations();
   });
   it("keeps a failed decision unavailable until a state-only refresh and never retries the POST", async () => {
+    const diagnostic = vi.spyOn(diagnostics, "reportClientDiagnostic");
     const view = approval();
     const observe = vi
       .fn()
       .mockResolvedValueOnce(view)
       .mockResolvedValue({ ...view, state: "claimed" });
-    const decide = vi.fn().mockRejectedValue(new Error("synthetic lost decision response"));
+    const failure = new ApiError("INTERNAL", "synthetic-private-decision-token", 503);
+    failure.correlationId = "jira-decision-request-1";
+    const decide = vi.fn().mockRejectedValue(failure);
     render(
       <JiraWriteApproval
         approval={view}
@@ -85,6 +91,17 @@ describe("Jira Chat write approvals", () => {
     await ready();
     await userEvent.click(screen.getByRole("button", { name: "Approve this action" }));
     expect(await screen.findByRole("alert")).toBeVisible();
+    expect(diagnostic).toHaveBeenCalledWith(
+      "Jira Chat decision failed.",
+      expect.objectContaining({
+        correlationId: failure.correlationId,
+        kind: "other",
+      }),
+    );
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain(failure.message);
+    await expectDiagnosticWireAccepted(
+      diagnostic.mock.calls.map(([message, meta]) => ({ message, meta })),
+    );
     expect(screen.getByRole("button", { name: "Approve this action" })).toBeDisabled();
     await userEvent.click(screen.getByRole("button", { name: "Approve this action" }));
     await userEvent.click(screen.getByRole("button", { name: "Refresh action state" }));

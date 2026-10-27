@@ -193,7 +193,10 @@ export type CodingSafeActivitySignal =
       readonly tool?: string | undefined;
       readonly state: CodingSafeActivityToolState;
       readonly presentation?: CodingSafeActivityToolPresentation;
-      /** A finished native `shell` call's exit status: run evidence only, never projected. */
+      /**
+       * A finished native `shell` call's exit status for run evidence; the composition removes it
+       * here and the timeline receives the number alone as `presentation.exitCode`.
+       */
       readonly exitCode?: number | undefined;
       /**
        * The project check that exit status speaks for, read from the finished call's whole command

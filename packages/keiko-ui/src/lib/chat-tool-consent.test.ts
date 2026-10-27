@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatMessage } from "@oscharko-dev/keiko-contracts/bff-wire";
 import * as api from "./api";
 import { watchChatToolConsent } from "./chat-tool-consent";
+import * as diagnostics from "./client-diagnostics";
+import { expectDiagnosticWireAccepted } from "@/test-utils/diagnostic-wire";
 const chat = {
   id: "chat-1",
   jiraPodBinding: {
@@ -46,6 +48,40 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 describe("buffered Chat consent observation", () => {
+  it("records a correlated body-free observation failure and retries only the read", async () => {
+    vi.useFakeTimers();
+    const diagnostic = vi.spyOn(diagnostics, "reportClientDiagnostic");
+    const failure = new api.ApiError("INTERNAL", "synthetic-private-consent-token", 503);
+    failure.correlationId = "jira-consent-request-1";
+    const fetch = vi
+      .spyOn(api, "fetchChatMessages")
+      .mockRejectedValueOnce(failure)
+      .mockResolvedValue({ messages: [message] });
+    const publish = vi.fn();
+    const stop = watchChatToolConsent(
+      chat,
+      "/repo",
+      () => Promise.resolve("scoped-digest"),
+      new AbortController().signal,
+      publish,
+    );
+    await vi.advanceTimersByTimeAsync(1500);
+    stop();
+    vi.useRealTimers();
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(publish).toHaveBeenCalledExactlyOnceWith(message);
+    expect(diagnostic).toHaveBeenCalledWith(
+      "Jira Chat consent observation failed.",
+      expect.objectContaining({
+        correlationId: failure.correlationId,
+        kind: "other",
+      }),
+    );
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain(failure.message);
+    await expectDiagnosticWireAccepted(
+      diagnostic.mock.calls.map(([message, meta]) => ({ message, meta })),
+    );
+  });
   it("uses the scoped turn digest, deduplicates states and stops with the accepted request", async () => {
     vi.useFakeTimers();
     const fetch = vi.spyOn(api, "fetchChatMessages").mockResolvedValue({ messages: [message] });

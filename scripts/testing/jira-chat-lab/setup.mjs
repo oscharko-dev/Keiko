@@ -1,7 +1,7 @@
 // Drives Jira's normal first-run forms with private synthetic credentials. No licensing shortcuts.
 import { writeFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { URL } from "node:url";
+import { URL, pathToFileURL } from "node:url";
 import { chromium } from "playwright";
 import { loadSession, readPrivateFile, requireLicense } from "./lab-client.mjs";
 
@@ -41,15 +41,59 @@ async function submitSetup(page, session, action, fields, expectedRedirect) {
     timeout: 30_000,
   });
   const location = new URL(response.headers().location ?? "", page.url());
-  if (response.status() !== 302 || location.pathname !== `/secure/${expectedRedirect}.jspa`)
+  const expected =
+    response.status() === 302 &&
+    location.origin === session.origin &&
+    location.pathname === `/secure/${expectedRedirect}.jspa`;
+  console.log(
+    JSON.stringify({
+      operation: "jira-lab-setup-response",
+      stage: action,
+      status: response.status(),
+      expectedRedirect: expected,
+    }),
+  );
+  if (!expected)
     throw new TypeError("Unexpected laboratory setup result; reconcile before retrying");
-  await page.goto(location.href, { waitUntil: "domcontentloaded" });
+  await page.goto(location.href, { waitUntil: "domcontentloaded", timeout: 180_000 });
 }
 
-async function applicationProperties(page, session) {
-  await page.goto(`${session.origin}/secure/SetupApplicationProperties!default.jspa`, {
+export async function licenseSetup(page, session, license) {
+  await submitSetup(
+    page,
+    session,
+    "SetupLicense",
+    { setupLicenseKey: license, next: "" },
+    "SetupAdminAccount!default",
+  );
+}
+
+export async function applicationProperties(page, session) {
+  // FIRST_RUN can precede database initialization. Jira's normal entry point completes
+  // that setup before presenting this form; direct legacy form URLs bypass that wait.
+  await page.goto(`${session.origin}/`, {
     waitUntil: "domcontentloaded",
+    timeout: 180_000,
   });
+  const initial = new URL(page.url());
+  if (
+    initial.origin === session.origin &&
+    initial.pathname === "/secure/SetupDatabase!default.jspa"
+  ) {
+    setupStage("database-readiness");
+    await page.waitForURL(
+      (url) =>
+        url.origin === session.origin &&
+        url.pathname === "/secure/SetupApplicationProperties!default.jspa",
+      { timeout: 180_000 },
+    );
+  }
+  const current = new URL(page.url());
+  if (
+    current.origin !== session.origin ||
+    current.pathname !== "/secure/SetupApplicationProperties!default.jspa"
+  )
+    throw new TypeError("Unexpected laboratory setup phase; reconcile before retrying");
   await page.locator("input[name=title]").fill("Keiko synthetic laboratory");
   await page.locator("#jira-setupwizard-mode-private").check();
   // Administration stays on its loopback origin; product qualification separately uses trusted HTTPS.
@@ -96,13 +140,7 @@ async function main() {
     setupStage("license");
     // Jira's fallback visible license form does not populate the wizard's setupLicenseKey.
     // Submit the existing wizard form endpoint with its CSRF token, as the normal JS UI does.
-    await submitSetup(
-      page,
-      session,
-      "SetupLicense",
-      { setupLicenseKey: license },
-      "SetupAdminAccount!default",
-    );
+    await licenseSetup(page, session, license);
     setupStage("administrator");
     await administrator(page, session);
     setupStage("mail");
@@ -130,8 +168,19 @@ async function main() {
   }
 }
 
-await main().catch(() => {
-  // Browser failures can embed filled values or CSRF-bearing URLs. Keep diagnostics body-free.
-  console.error("jira-lab-setup: failed; reconcile the private pending marker before retrying");
-  process.exitCode = 1;
-});
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await main().catch((error) => {
+    // Browser failures can embed filled values or CSRF-bearing URLs. Keep diagnostics body-free.
+    console.error(
+      JSON.stringify({
+        operation: "jira-lab-setup",
+        passed: false,
+        errorType: error instanceof Error ? error.name : "unknown",
+        sourceLine:
+          error instanceof Error ? Number(error.stack?.match(/setup\.mjs:(\d+)/)?.[1] ?? 0) : 0,
+      }),
+    );
+    console.error("jira-lab-setup: failed; reconcile the private pending marker before retrying");
+    process.exitCode = 1;
+  });
+}

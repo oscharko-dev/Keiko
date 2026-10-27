@@ -1,5 +1,9 @@
 "use client";
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { ApiError } from "@/lib/api";
+import { clientErrorEvidence } from "@/lib/client-error-evidence";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { bffRequestErrorKind } from "@/lib/http";
 
 type DecisionView = { readonly state: string; readonly expiresAt: number };
 interface DecisionState<T> {
@@ -47,7 +51,13 @@ async function performDecision<T>(input: {
   try {
     const resolved = await input.execute();
     if (owner.active) report({ key, resolved, busy: false, failed: false, uncertain: false });
-  } catch {
+  } catch (error) {
+    reportClientDiagnostic("Jira Chat decision failed.", {
+      kind: "other",
+      correlationId: error instanceof ApiError ? error.correlationId : undefined,
+      errorKind: bffRequestErrorKind(error),
+      errorEvidence: clientErrorEvidence(error),
+    });
     if (owner.active)
       report({ key, busy: false, failed: true, uncertain: input.blockAfterFailure });
   } finally {

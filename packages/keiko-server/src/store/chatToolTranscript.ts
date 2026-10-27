@@ -240,9 +240,13 @@ function decodeStoredTranscript(
     const parsed: unknown = JSON.parse(json);
     if (validTranscript(parsed, identity)) return parsed;
   } catch {
-    /* Closed, body-free corruption result below. */
+    // Preserve the body-free failure for the existing store/route error boundary.
+    throw invalidTranscript();
   }
-  throw new TypeError("Stored Chat tool transcript is invalid.");
+  throw invalidTranscript();
+}
+function invalidTranscript(): TypeError {
+  return new TypeError("Stored Chat tool transcript is invalid.");
 }
 function sameSettlement(
   existing: StoredExchange,

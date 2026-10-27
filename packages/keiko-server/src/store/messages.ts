@@ -19,6 +19,7 @@ import type {
   GroundedAnswer,
   NewChatMessage,
   StoredPdfCitationPreviewCitation,
+  UiStoreFactoryOptions,
   UpdateChatMessagePatch,
   WorkflowStatus,
 } from "./types.js";
@@ -695,7 +696,7 @@ export function insertMessage(
   db: DatabaseSync,
   id: string,
   msg: NewChatMessage,
-  redactString: (s: string) => string,
+  redactors: Required<Pick<UiStoreFactoryOptions, "redactString" | "redactContentString">>,
   clientTurnId?: string,
   clientTurnState?: "pending",
   clientTurnContentDigest?: string,
@@ -703,8 +704,8 @@ export function insertMessage(
   validateMessage(msg);
   const chatExists = db.prepare(SQL_CHAT_EXISTS).get(msg.chatId) !== undefined;
   if (!chatExists) throw notFound("Chat");
-  const shortResult = processShortResult(msg.shortResult, redactString);
-  const groundedAnswer = processGroundedAnswer(msg.groundedAnswer, redactString);
+  const shortResult = processShortResult(msg.shortResult, redactors.redactString);
+  const groundedAnswer = processGroundedAnswer(msg.groundedAnswer, redactors.redactContentString);
   const groundedPreviewCitations = null;
   const row = db
     .prepare(SQL_INSERT)

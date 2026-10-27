@@ -30,6 +30,7 @@ import type { ChatMessage } from "./store/index.js";
 import type { JiraMutationOutcome } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { decodeChatToolTranscript } from "./store/chatToolTranscript.js";
 import { createToolRef } from "@oscharko-dev/keiko-tool-catalog";
+import { conversationSystemPrompt } from "./conversation-prompt.js";
 
 const NON_PATTERN_SECRET = "customer-secret-ABC-1234567890";
 const CURRENT_INSTRUCTION = "latest question";
@@ -555,21 +556,27 @@ describe("structured Chat tool transcript selection", () => {
       });
     },
   );
-  it("retains the remote outcome and unchanged pair when compacting an older history", () => {
-    const turn = mutationTurn("unknown");
-    const result = conversationForGatewayWithCompaction(
-      [msg("user", "older context ".repeat(20_000), 0), turn, msg("user", "continue", 2)],
-      { effectiveInputBudget: 2000 },
-    );
-    expect(result.compaction).toBeDefined();
-    expect(result.messages.filter((message) => message.toolCalls !== undefined)).toHaveLength(1);
-    const responses = result.messages.filter((message) => message.toolCallId === "call-1");
-    expect(responses).toHaveLength(1);
-    expect(JSON.parse(responses[0]?.content ?? "null")).toEqual({
-      result: turn.toolTranscript?.exchanges[0]?.result,
-      mutationOutcome: "unknown",
-    });
-  });
+  it.each(["redact", "preserve"] as const)(
+    "retains the remote outcome and pair while compacting under %s content policy",
+    (contentRedaction) => {
+      const turn = mutationTurn("unknown");
+      const result = conversationForGatewayWithCompaction(
+        [msg("user", "older context ".repeat(20_000), 0), turn, msg("user", "continue", 2)],
+        { effectiveInputBudget: 2000, contentRedaction },
+      );
+      expect(result.compaction).toBeDefined();
+      expect(
+        result.messages[0]?.content.startsWith(`${conversationSystemPrompt(contentRedaction)}\n\n`),
+      ).toBe(true);
+      expect(result.messages.filter((message) => message.toolCalls !== undefined)).toHaveLength(1);
+      const responses = result.messages.filter((message) => message.toolCallId === "call-1");
+      expect(responses).toHaveLength(1);
+      expect(JSON.parse(responses[0]?.content ?? "null")).toEqual({
+        result: turn.toolTranscript?.exchanges[0]?.result,
+        mutationOutcome: "unknown",
+      });
+    },
+  );
   it("retains actual assistant/tool roles with matching IDs when no compaction is needed", () => {
     const outcome = conversationForGatewayWithCompaction([
       toolTurn(1),

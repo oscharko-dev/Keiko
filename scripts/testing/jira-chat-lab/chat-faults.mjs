@@ -201,6 +201,7 @@ async function qualifyCase(session, modelId, fixture, group, operation, fault, k
     },
     run: (context) => firstDispatch(context, group, observer),
   });
+  verifyObserver(observer);
   await childRestart(session, modelId, group);
   group.results.push({
     operation,
@@ -237,6 +238,7 @@ async function restart(session, modelId, pendingPath) {
       privateJson(pendingPath, group);
     },
   });
+  verifyObserver(observer);
 }
 
 async function reconcile(session, pendingPath) {

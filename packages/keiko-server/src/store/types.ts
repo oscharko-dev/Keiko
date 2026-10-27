@@ -344,4 +344,5 @@ export interface UiStoreFactoryOptions {
   readonly now?: () => number;
   readonly newId?: () => string;
   readonly redactString?: (input: string) => string;
+  readonly redactContentString?: (input: string) => string;
 }

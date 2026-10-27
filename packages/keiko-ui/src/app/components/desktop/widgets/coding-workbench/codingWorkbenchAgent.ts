@@ -1,5 +1,8 @@
 import type { CodingWorkbenchAgent } from "@oscharko-dev/keiko-contracts";
-import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import {
+  codingWorkbenchAgentKind,
+  reportCodingWorkbenchInteraction,
+} from "@/lib/coding-workbench-interaction";
 import {
   offeredCodingWorkbenchAgents,
   type CodingWorkbenchRuntimeState,
@@ -32,7 +35,10 @@ export function activeAgentIsPlan(state: CodingWorkbenchRuntimeState): boolean {
   return state.agent === "plan" && offeredCodingWorkbenchAgents(state).includes("plan");
 }
 
-/** The operator's agent choice, as a body-free client diagnostic: the closed agent id and nothing else. */
+/** The operator's agent choice as routine evidence: a built-in id or `custom`, never a custom name. */
 export function reportAgentSelection(agent: CodingWorkbenchAgent): void {
-  reportClientDiagnostic(`[keiko] coding workbench agent selected: ${agent}`);
+  reportCodingWorkbenchInteraction({
+    interaction: "agent-selected",
+    agent: codingWorkbenchAgentKind(agent),
+  });
 }

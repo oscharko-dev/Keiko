@@ -11,17 +11,17 @@
   },
   "b2": {
     "budgetBytes": 2621440,
-    "shipsTotalBytes": 1026605,
-    "loadedTotalBytes": 1026605,
+    "shipsTotalBytes": 1034940,
+    "loadedTotalBytes": 1034940,
     "ok": true,
     "shipsOk": true,
     "loadedOk": true
   },
   "b3": {
     "budgetBytes": 768000,
-    "largestWorkerBytes": 110896,
+    "largestWorkerBytes": 110901,
     "largestWorkerLabel": "editor",
-    "largestLoadedWorkerBytes": 110896,
+    "largestLoadedWorkerBytes": 110901,
     "largestLoadedWorkerLabel": "editor",
     "ok": true,
     "shipsOk": true,
@@ -30,8 +30,8 @@
   "workers": [
     {
       "label": "editor",
-      "gzipBytes": 110896,
-      "path": "dist/ui/static/_next/static/chunks/2vmw7uw9qfxtm.js"
+      "gzipBytes": 110901,
+      "path": "dist/ui/static/_next/static/chunks/3-vp5mbiz_k0a.js"
     },
     {
       "label": "editor",
@@ -48,21 +48,21 @@
   "editorRuntimeChunkCount": 5,
   "editorRuntimeChunks": [
     {
-      "path": "dist/ui/static/_next/static/chunks/0kx828qnu1y09.js",
-      "gzipBytes": 635158,
-      "rawBytes": 2569489,
+      "path": "dist/ui/static/_next/static/chunks/02jl1lf3a8dud.js",
+      "gzipBytes": 635285,
+      "rawBytes": 2569892,
       "workerLabel": null
     },
     {
-      "path": "dist/ui/static/_next/static/chunks/07957vlppntmk.js",
-      "gzipBytes": 280277,
-      "rawBytes": 1182855,
+      "path": "dist/ui/static/_next/static/chunks/1ka7n7_t88nku.js",
+      "gzipBytes": 288480,
+      "rawBytes": 1212214,
       "workerLabel": null
     },
     {
-      "path": "dist/ui/static/_next/static/chunks/2vmw7uw9qfxtm.js",
-      "gzipBytes": 110896,
-      "rawBytes": 362719,
+      "path": "dist/ui/static/_next/static/chunks/3-vp5mbiz_k0a.js",
+      "gzipBytes": 110901,
+      "rawBytes": 362727,
       "workerLabel": "editor"
     },
     {
@@ -78,5 +78,5 @@
       "workerLabel": "editor"
     }
   ],
-  "measurementSha256": "16da23bbd31858efd34851b928bef93e9132c3ab1d22b9fa0b425442708a8ec8"
+  "measurementSha256": "f21c3052059734d880fcce3f7708c7bb61a997a08d72791726bf969579ae2416"
 }

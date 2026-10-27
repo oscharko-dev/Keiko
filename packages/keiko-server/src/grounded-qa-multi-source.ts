@@ -1,3 +1,4 @@
+import { deploymentContentPolicy, currentContentRedactor } from "./content-redactor.js";
 import { withMarkdownSkillAdmission } from "./markdown-skill-admission.js";
 import {
   markdownSkillPromptUsage,
@@ -41,7 +42,11 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { persistConnectedContextEvidence } from "@oscharko-dev/keiko-evidence";
-import type { ContextBudgetPressure, ContextLaneId } from "@oscharko-dev/keiko-contracts";
+import type {
+  ContentRedactionPolicy,
+  ContextBudgetPressure,
+  ContextLaneId,
+} from "@oscharko-dev/keiko-contracts";
 import { CONTEXT_LANE_IDS } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 
 import {
@@ -518,6 +523,7 @@ function buildRawMultiSourceGatewayMessages(
   omissionPathBytes?: number,
   ownAssessmentPolicy: OwnAssessmentPolicy = "disabled",
   protectedSkill?: MarkdownSkillDocument,
+  contentRedaction?: ContentRedactionPolicy,
 ): readonly GatewayChatMessage[] {
   const sections = labeledPacks.flatMap((entry, index) =>
     sourceSection(entry, index, redactor, omissionPathBytes),
@@ -532,7 +538,10 @@ function buildRawMultiSourceGatewayMessages(
     redactString(redactor, question),
   ].join("\n");
   return [
-    { role: "system", content: groundedSystemPrompt(ownAssessmentPolicy) },
+    {
+      role: "system",
+      content: groundedSystemPrompt(ownAssessmentPolicy, "file", contentRedaction),
+    },
     { role: "user", content: withMarkdownSkillInstructions(userContent, protectedSkill) },
   ];
 }
@@ -652,6 +661,7 @@ function multiSourcePromptRenderer(
       bytes,
       options.ownAssessmentPolicy,
       options.protectedSkill,
+      options.contentRedaction,
     );
 }
 
@@ -749,6 +759,7 @@ function loggedMultiSourceFit(
           0,
           options.ownAssessmentPolicy,
           options.protectedSkill,
+          options.contentRedaction,
         ),
       );
       const fit = { referenceCount, sentReferenceCount: 0, promptTokens, inputBudget };
@@ -794,6 +805,7 @@ export function fittedMultiSourcePrompt(
       -1,
       options.ownAssessmentPolicy,
       options.protectedSkill,
+      options.contentRedaction,
     ),
     sentReferenceCount: promptExcerptCount(fitted.packs.map((entry) => entry.pack)),
     availableReferenceCount: promptExcerptCount(labeledPacks.map((entry) => entry.pack)),
@@ -828,6 +840,10 @@ export function defaultRetriever(
       signal: childSignal,
       declarationVerificationSignal: signal,
       ownAssessmentPolicy: deps === undefined ? undefined : currentOwnAssessmentPolicy(deps),
+      contentRedaction: deps === undefined ? undefined : deploymentContentPolicy(deps),
+      // A preserving read still removes the configured literals, as single-source retrieval does.
+      contentSecrets:
+        deps === undefined ? undefined : (): readonly string[] => currentRedactionSecrets(deps),
       microIndex: microIndexForGroundedScope(input.scope, nowMs),
       // ADR-0173 D5. A multi-folder or hybrid ask retrieves through THIS path, not through the
       // single-folder one, so without the id every git-history read failure on the plural-source
@@ -958,7 +974,7 @@ async function multiSourceGatewayAttempt(
   const sent = fittedMultiSourcePrompt(
     question,
     packs,
-    ctx.deps.redactor,
+    currentContentRedactor(ctx.deps),
     options,
     ctx.correlationId,
   );
@@ -1071,7 +1087,7 @@ function multiSourceRepairPrompt(
     const fitted = fittedMultiSourcePrompt(
       `${question}\n\n${buildCitationRepairPrompt(original)}`,
       packs,
-      ctx.deps.redactor,
+      currentContentRedactor(ctx.deps),
       {
         ...promptOptions,
         protectedSkill:
@@ -1659,7 +1675,7 @@ function assembleMultiSourceAnswer(
     readonly abstained: boolean;
   },
 ): GroundedAnswer {
-  const { redactor } = ctx.deps;
+  const redactor = currentContentRedactor(ctx.deps);
   const modelInvoked =
     assistant.modelInvoked ?? (!ids.abstained || ctx.answerOnlyContextAvailable === true);
   const citationBundles = sourceCitationBundles(
@@ -1788,7 +1804,7 @@ async function applyMultiSourceEntailment(
     stage,
     assistant.content,
     finalMultiSourceEvidence(assistant, retrieved),
-    ctx.deps.redactor,
+    currentContentRedactor(ctx.deps),
   );
 }
 
@@ -1804,8 +1820,8 @@ function persistMultiSourceExchange(
   const [userMessage, assistantMessage] = persistGroundedExchange(
     ctx.deps,
     ctx.chat.id,
-    redactString(ctx.deps.redactor, ctx.content),
-    redactString(ctx.deps.redactor, assistant.content),
+    redactString(currentContentRedactor(ctx.deps), ctx.content),
+    redactString(currentContentRedactor(ctx.deps), assistant.content),
     ctx.userMessage,
   );
   return {

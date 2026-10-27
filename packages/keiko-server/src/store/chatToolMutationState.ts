@@ -16,7 +16,8 @@ export function journalConflict(): UiStoreError {
     409,
   );
 }
-export function validateMutationIntent(intent: ChatToolMutationIntent): void {
+/** Pure validation result shared by write admission and read-only history projection. */
+export function mutationIntentError(intent: ChatToolMutationIntent): UiStoreError | undefined {
   const identifiers = [
     intent.invocationId,
     intent.chatId,
@@ -26,23 +27,29 @@ export function validateMutationIntent(intent: ChatToolMutationIntent): void {
     intent.correlationId,
   ];
   if (!identifiers.every((value) => typeof value === "string" && ID.test(value)))
-    throw invalidRequest("Invalid mutation identity.");
+    return invalidRequest("Invalid mutation identity.");
   if (
     typeof intent.turnRef !== "string" ||
     intent.turnRef.length < 1 ||
     intent.turnRef.length > 256
   )
-    throw invalidRequest("Invalid mutation turn reference.");
+    return invalidRequest("Invalid mutation turn reference.");
   if (!DIGEST.test(intent.actionDigest) || !DIGEST.test(intent.authorityDigest))
-    throw invalidRequest("Invalid mutation digest.");
+    return invalidRequest("Invalid mutation digest.");
   if (
     ![intent.bindingGeneration, intent.credentialGeneration].every(
       (value) => Number.isSafeInteger(value) && value > 0,
     )
   )
-    throw invalidRequest("Invalid mutation generation.");
-  if (!OPERATIONS.has(intent.operation)) throw invalidRequest("Invalid mutation operation.");
+    return invalidRequest("Invalid mutation generation.");
+  if (!OPERATIONS.has(intent.operation)) return invalidRequest("Invalid mutation operation.");
+  return undefined;
 }
+export function validateMutationIntent(intent: ChatToolMutationIntent): void {
+  const error = mutationIntentError(intent);
+  if (error !== undefined) throw error;
+}
+
 export function sameMutationIdentity(
   record: ChatToolMutationRecord,
   intent: ChatToolMutationIntent,

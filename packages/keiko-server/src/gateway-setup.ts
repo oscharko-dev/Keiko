@@ -7288,23 +7288,43 @@ function reportChatSmokeAdmission(
 // silently accepted with no configuration signal, no log line, and no opt-in trail — a deliberate
 // product choice (local sidecar providers, Ollama-style, #2387 research egress), not a defect. The
 // gap is purely observability: an operator investigating an unexpected Gateway Setup acceptance had
-// no record that a loopback target was the one silently let through. Body-free by construction, the
-// same pattern as `reportDiscoveryTruncation` above — a fixed code, never the raw baseUrl/host/port.
+// no record that a loopback target was the one silently let through. The acceptance is ordinary
+// evidence, so it has its own line at info: as an error-level `server.diagnostic.failure` every
+// successful local setup read as a failure (Keiko 1.3.0 test, #3897). Body-free by construction —
+// the request's correlation and the closed target class, never the raw baseUrl/host/port.
+const GATEWAY_SETUP_TARGET_ACCEPTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.setup.target.accepted",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "gateway-setup.reportLoopbackTargetAccepted",
+  fields: {
+    targetClass: { type: "string", dataClass: "closed-enum", required: true, values: ["loopback"] },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-setup-target"],
+  proofIds: ["gateway.setup.target.accepted.line"],
+  releaseImpact: "patch",
+});
+
 function reportLoopbackTargetAccepted(
-  diagnostics: ServerDiagnosticSink | undefined,
   correlationId: string | undefined,
   baseUrl: string,
+  sink: ServerLogSink = processServerLogSink(),
 ): void {
   if (gatewaySetupTargetClass(baseUrl) !== "loopback") return;
-  emitServerDiagnostic(diagnostics, {
-    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
-    timestamp: new Date().toISOString(),
-    operation: "POST /api/gateway/setup",
-    source: "gateway-setup.candidate",
-    errorClass: "GatewaySetupLoopbackTargetAccepted",
-    message: "Gateway Setup accepted a loopback candidate target.",
-    code: "GATEWAY_SETUP_LOOPBACK_TARGET_ACCEPTED",
-  });
+  sink.write(
+    activityLogEvent(
+      GATEWAY_SETUP_TARGET_ACCEPTED_OPERATION,
+      { correlationId: correlationIdOrUnknown(correlationId), level: "info" },
+      { targetClass: "loopback", completeness: "complete", loss: "none" },
+    ),
+  );
 }
 
 // Isolates the chat-smoke-test call from verifySetupCandidate: on a temporary gateway failure,
@@ -7337,7 +7357,7 @@ async function verifySetupCandidate(input: SetupVerificationInput): Promise<Veri
   // Defence-in-depth: never send the credential to a candidate URL that has not passed the same
   // scheme/credential/loopback validation as the originally submitted base URL.
   validateBaseUrl(input.baseUrl, "candidate", input.egress);
-  reportLoopbackTargetAccepted(input.diagnostics, input.correlationId, input.baseUrl);
+  reportLoopbackTargetAccepted(input.correlationId, input.baseUrl);
   const validationConfig = validationConfigForSetup(input);
   const candidateModels = await candidateModelIdsForSetup(input, validationConfig);
   input.signal?.throwIfAborted();

@@ -22,8 +22,9 @@ acceptance remains open. Existing #2952 performance ceilings remain authoritativ
 
 The independent Jira 10.3.26/PostgreSQL 16 lab now has trusted local HTTPS and a
 normally bootstrapped, synthetic licensed session. Checkout dependencies, USearch and
-ripgrep are provisioned. The 2026-10-27 session expires at 21:48:51 UTC. Read and write
-preflights, two actual browser-read groups and nine real-model Chat-write groups passed (three modes across buffered API, SSE and browser).
+ripgrep are provisioned. The current renewed session expires at 2026-10-28 00:25:46 UTC.
+Read/write preflights, browser read/write/lifecycle groups and both complete 14-operation
+normal-Chat catalog groups passed within their recorded artifact/session scopes.
 These scoped proofs do not establish full acceptance; the checkpoints below record
 what ran and the remaining obligations.
 
@@ -48,6 +49,13 @@ Each numbered row is a separate obligation. `Pending` means unproven, including 
 implementation already present. Behavioral changes need a meaningful red/green proof;
 compatibility uses baseline/post-change checks; delivery uses the actual artifact/check.
 Evidence records the tested source identity, command, outcome and relevant limitation.
+`Partial` includes implemented behavior whose complete acceptance evidence is still outstanding.
+The [complete catalog groups](#complete-live-catalog-groups-and-cancellation-recovery),
+[retained consent](#incremental-qualification--retained-consent-and-controlled-empty-evidence-answers),
+[UI/Data-surface proofs](#incremental-qualification--capability-empty-evidence-and-current-jira-pages)
+and [fresh setup](#incremental-qualification--renewed-laboratory-and-reproducible-cold-setup)
+are scoped evidence; live receipts from prior artifacts do not establish acceptance at the final PR head.
+The 10/10 fault receipt interrupted by an artifact rebuild is diagnostic only.
 
 ### #4082 — Support Jira Data Center PAT connections through the existing Atlassian connector
 
@@ -65,15 +73,15 @@ Status: **Partial — not accepted**. Exact operator-owned targets, context path
 
 - [ ] **AC4:** Existing saved Cloud connectors and Data Pods load without migration loss. Live Jira Pod creation and readiness do not require USearch, an embedding model, indexing or a sync job. A Data Center connector refuses sync with a closed reason and performs no sync request; Cloud sync is unchanged.
 
-Status: **Partial — not accepted**. Cloud metadata remains readable, Data Center sync is refused before HTTP, and the real Live-Pod Hub/Chat path runs without an embedding/index setup. Existing Data/synced-Pod regression evidence is partial; the final complete compatibility run remains open.
+Status: **Partial — not accepted**. Cloud metadata remains readable, Data Center sync refuses before HTTP, and real Live-Pod Hub/Chat groups require no embedding or index setup. Direct BFF Live-to-Data refusals and a real Data control pass within 227 credential/Data-handler cases. Complete saved Data/synced-Jira and Cloud compatibility on the final artifact remains open.
 
 - [ ] **AC5:** A repeatable local-only bootstrap/preflight produces every listed fixture class, verifies license validity and both reads and writes, preserves volumes and never prints credentials. The published timebomb license is re-entered per qualification session by owner decision; there is no clock change, license modification or customer licensing.
 
-Status: **Partial — not accepted**. The synthetic Compose/HTTPS bootstrap, non-admin/restricted/assignable identities, permissions, required field/transition screen, pagination/hostile/isolation fixtures and licensed read/write preflights have recorded live groups. The new cold-start setup wait still needs a complete fresh-session proof. Every remaining live group requires a valid preflight and license check at completion.
+Status: **Partial — not accepted**. Synthetic fixture groups and licensed read/write preflights are recorded. The corrected first-run script also completed an independent empty-volume setup without manual continuation, after failure-first fixes for database-page readiness and the license submitter. Volumes and failed intents were retained. Final combined bootstrap/fixture qualification on the delivered artifact and fresh opening/closing license checks for each remaining live group remain required.
 
 - [ ] **AC6:** Real adapter and registered Activity Log tests prove successful and failed paths without retaining tokens, endpoint strings, identity data, request bodies or raw provider errors. All applicable gates pass on the actual implementation head.
 
-Status: **Partial — not accepted**. Registered body-free credential, verification, admission, grant/approval and mutation evidence is implemented with writer/reader and real adapter tests. The latest checkpoint records a synthetic marker/PAT absence sweep across live Activity Logs. Complete inventory/error-observability and current-head gates remain open.
+Status: **Partial — not accepted**. Registered body-free credential, verification, host/admission, grant/approval and mutation evidence has writer/reader and real-adapter proofs, plus live marker/PAT absence sweeps. The source failure-path inventory is clean after the parser/store/UI repairs; the complete regenerated Activity Log, error-observability and final-head gate run remains open.
 
 ### #4089 — Establish a shared MCP host for Keiko-managed providers and governed non-OpenCode consumers
 
@@ -83,7 +91,7 @@ Status: **Partial — not accepted**. The official SDK host explicitly enables M
 
 - [ ] **AC2:** Every tool the model can see originates from a compiled `keiko-tool-catalog` projection through the bound gateway advertisement; a hand-written, unknown or post-admission-drifted tool cannot be advertised or dispatched. Existing `projection-mismatch` protection stays green.
 
-Status: **Partial — not accepted**. Canonical discovery compilation, bound gateway offers and drift/schema/projection refusals now compose into ordinary buffered/SSE Chat. Real-model read/write groups exercise this path. Final full catalog/gateway and Coding compatibility checks remain open.
+Status: **Partial — not accepted**. Canonical discovery compilation, bound gateway offers and drift/schema/projection refusals compose into ordinary buffered/SSE Chat. Both complete 14-operation real-model groups exercised this path on the preceding assembled artifact. Final catalog/gateway and Coding compatibility checks remain open.
 
 - [ ] **AC3:** Call context is injected server-side only; routing and authority overrides are refused. Ordinary links in supported issue content remain data. Interleaved calls from two differently bound consumers, with cancellation and reversed completion order, cannot observe or use each other's context. Unsupported SDK input fulfillment or retries cannot bypass canonical admission and invocation accounting.
 
@@ -91,7 +99,7 @@ Status: **Partial — not accepted**. Server-only invocation context, override r
 
 - [ ] **AC4:** The admission pipeline composes stricter-wins in all three modes; a denied call performs no handler call; approval and grant redemption re-validate binding, generation, envelope, mode and budget; cancellation and timeout settle exactly once.
 
-Status: **Partial — not accepted**. The shared policy, cumulative reservation, read-consent and exact-action approval pipeline now runs in all three normal-Chat modes. Approval routes and final dispatch revalidate current authority and generations; cancellation settles through existing owners. Final expiry/race/budget/restart composition remains open.
+Status: **Partial — not accepted**. Shared stricter-wins policy, cumulative reservation, read consent and exact-action approvals run through ordinary Chat. Eight regression-first buffered/SSE read/write cancellation cases and actual buffered HTTP disconnects now drain composite-signal waits, revoke unfulfilled decisions and make zero Jira calls; granted read consent remains valid within its original scope. Full expiry/race/budget/restart qualification on the final artifact remains open.
 
 - [ ] **AC5:** An import of `@modelcontextprotocol/*` outside the host fails `arch:check`, proven by a negative fixture in `arch:check:negative`; dependency matrix, currency, hygiene, SBOM and package-surface gates pass.
 
@@ -99,111 +107,111 @@ Status: **Partial — not accepted**. The SDK import boundary, negative fixture 
 
 - [ ] **AC6:** Registered body-free Activity Log events reconstruct provider admission and the call lifecycle with correlation and failure classes; existing Workbench MCP registry, relay and OAuth suites are unchanged and green. All applicable gates pass on the actual implementation head.
 
-Status: **Partial — not accepted**. Registered host/catalog/Chat events and scoped Workbench regressions are retained. Complete Workbench registry/relay/OAuth, Activity Log and current-head gates remain open.
+Status: **Partial — not accepted**. Registered host/catalog/Chat events reconstruct the retained scoped proofs; unchanged failure-path scanning reports no unregistered production catches. Existing scoped Workbench regressions are retained. Complete registry/relay/OAuth, regenerated Activity Log and final-head gates remain open.
 
 - [ ] **AC7:** A hermetic non-Coding consumer executes through the production catalog binder and admission pipeline without a synthetic Coding session or workspace authority. Existing Coding identity, mutation and approval guards retain their regression coverage.
 
-Status: **Partial — not accepted**. The hermetic non-Coding consumer and normal product Chat both use the production binder/shared host without a synthetic Coding session. Real-model Chat groups now prove product composition. Final Coding identity/approval/mutation compatibility checks remain open.
+Status: **Partial — not accepted**. The hermetic non-Coding consumer and ordinary product Chat use the production binder/shared host without a synthetic Coding session. Complete buffered/SSE 14-operation live groups prove that composition on a preceding artifact. Final Coding identity/approval/mutation compatibility remains open.
 
 ### #4083 — Expose Jira Data Center ticket operations as the first managed provider on the shared MCP host
 
 - [ ] **AC1:** Real modern MCP discovery, per-request protocol metadata, `tools/list` and `tools/call` through the shared host exercise the production Jira provider and list exactly the implemented typed capabilities; every listed tool has a catalog descriptor and an ADR-0128 D4 row. Unknown tools, malformed arguments and caller-supplied credentials, arbitrary destinations or connector switching are refused before HTTP execution.
 
-Status: **Partial — not accepted**. All nine reads and five mutations have canonical descriptors and ADR-0128 D4 mappings and execute through the actual SDK/binder. Ordinary Chat discovers them; schema/routing/credential overrides are refused in retained tests. Complete live coverage of every advertised operation remains open.
+Status: **Partial — not accepted**. All nine reads and five writes have canonical descriptors and ADR-0128 D4 mappings. Complete buffered and SSE normal-Chat groups exercised every advertised operation through the actual gateway/binder/SDK. Schema/routing/credential override refusals have retained tests; current-head full host/provider qualification remains open.
 
 - [ ] **AC2:** Against local Jira 10.3.26, a non-admin PAT searches/reads and performs create/edit/assign/comment/transition where Jira permits them, and the restricted identity is refused truthfully without escalation. The recorded supported-operation matrix names each tested operation, endpoint family and unsupported capability; it never claims full Jira REST coverage.
 
-Status: **Partial — not accepted**. All five mutations have deterministic actual-SDK/binder/custody/journal tests. Real normal Chat currently qualifies comment writes and project reads; raw fixture setup is not an all-operation Chat proof. Create/edit/assign/transition and the full restricted-identity matrix must still run through normal Chat against the licensed lab.
+Status: **Partial — not accepted**. Both complete 14-operation normal-Chat groups passed against licensed Jira 10.3.26 with the verified Qwen model and non-admin API identity: nine reads plus create/edit/assign/comment/transition, independently checked remotely. These are prior-artifact receipts, not final-head acceptance. The complete restricted-identity operation matrix and final-artifact repetition remain open.
 
 - [ ] **AC3:** Required supported custom fields, constrained fields and workflow-specific transitions are discovered/validated from real metadata through the post-9.0 endpoints. A real transition-screen fixture requires a supported field; omitting it fails, and the approved field value and transition succeed in one request. Undeclared mutation verbs, worklogs and unsupported compound effects are refused before HTTP. Unknown plugin-specific field types are reported as unsupported with no fabricated values. Missing/invalid values and unauthorized issues/actions produce honest safe errors without escalating to an admin identity.
 
-Status: **Partial — not accepted**. Fresh metadata, supported field/verb constraints, unknown plugin refusal and combined transition-field dispatch have retained executor/SDK tests. Real required-field and transition-screen fixtures passed direct lab preparation. Those fixtures still need complete normal-Chat/MCP success/refusal receipts and honest unsupported-field presentation qualification.
+Status: **Partial — not accepted**. Current Data Center pagination and endpoint-selected create context were repaired from real failures with zero writes before refusal. Both complete catalog groups created with supported required fields and transitioned with the required custom value and resolution in one action, verified by remote status/field readback. Unknown plugin/verb and metadata-bound value refusals have deterministic proofs. The complete restricted/invalid-field and unsupported-field presentation matrix remains open.
 
 - [ ] **AC4:** Pagination, empty results, partial results, bounds, timeout and cancellation behave deterministically. Jira content and tool metadata cannot modify the tool allowlist, credential, chat binding, read grant or approval state.
 
-Status: **Partial — not accepted**. Bounded pagination/results, cancellation and schema/context override protection have retained domain/SDK tests. Hostile and pagination lab fixtures exist. Full per-operation bounded/failure and hostile-content ordinary-Chat qualification remains open.
+Status: **Partial — not accepted**. Bounded pagination/results, schema/context override refusal and cancellation have retained domain/SDK tests; the real catalog groups read the seeded pagination and hostile-comment fixtures. Mixed empty results are usable only after an actual successful sanitized observation. Full per-operation bounds/failure and hostile-content product qualification remains open.
 
 - [ ] **AC5:** Tests distinguish malformed/truncated acknowledged 2xx from unknown remote effects, and prove no blind mutation replay after timeout, committed-then-5xx or cancellation. They cover intervening field/assignee changes and operation-aware retry safety, not only duplicate POST. Route, canonical tool outcome, activity and UI folds agree; an empty reconciliation search never authorizes a retry. Approved action changes invalidate stale approval. Document the concurrency limit of operations without an atomic Jira precondition; do not claim universal exactly-once execution or lost-update prevention.
 
-Status: **Partial — not accepted**. The durable canonical-turn journal, acknowledgement distinction, GET-only retries, independent readback and operation-aware confirmation are implemented. SDK tests cover all five writes under response loss; late acknowledgement survives cancellation and a fresh SQLite reader. Browser lost-response/duplicate/Regenerate remote-count proofs and final failure matrix remain open; Jira concurrency limitations must remain explicit.
+Status: **Partial — not accepted**. Durable canonical-turn journaling, GET-only retries, operation-aware confirmation and distinct acknowledged/unknown outcomes are implemented. All-five-write response-loss SDK proofs and fresh-reader late acknowledgement after cancellation are retained. The 10/10 live fault receipt is diagnostic only because a build changed artifacts mid-group. Repeat the complete stable-artifact fault matrix, including intervening changes, browser duplicates/Regenerate and remote counts; Jira concurrency limits remain explicit.
 
 - [ ] **AC7:** With no explicit ceiling configured, the connector policy evaluates Chat-consumer and Coding-run calls against the same resolved `autonomous-delivery` ceiling; `KEIKO_CODING_DEPLOYMENT_CEILING=governed-assist` clamps both, and an unrecognized value fails closed to `governed-assist`. Proven through the production policy and composition, not a hand-built deps object.
 
-Status: **Partial — not accepted**. The common deployment resolver is composed into both Coding and Chat policy. Default/narrow/invalid ceiling tests and server-derived UI effective-mode projection are recorded. Final full policy/consumer regression and fresh browser ceiling presentation remain open.
+Status: **Partial — not accepted**. The shared deployment resolver composes into Coding and Chat, including default/narrow/invalid ceilings. Server-derived effective modes and real browser Ask/Full journeys are recorded, with all-mode comment groups separately retained. Complete ceiling/clamp browser coverage and final policy/consumer regression remain open.
 
 - [ ] **AC6:** Tool descriptions, inputs and output envelopes contain no PAT; activity/evidence contain no Jira content or private endpoints. Existing Cloud v3 services and Workbench MCP tests remain green.
 
-Status: **Partial — not accepted**. Private connection context and body-free projections/events retain secret-absence and Cloud regression tests. Live Activity Log sweeps are recorded. Final Cloud/Workbench compatibility and full redaction/evidence gates remain open.
+Status: **Partial — not accepted**. Private context and registered events retain secret-absence and Cloud tests. Post-merge preservation tests also prove that the content opt-out keeps configured credentials out of mixed prompts, answers and private history, while buffered/streamed tool arguments retain unconditional protection. Final Cloud/Workbench and full redaction/evidence gates remain open.
 
 ### #4084 — Bind one Jira Pod to ordinary Chat with per-chat mode, Chat authority and a one-time read grant
 
 - [ ] **AC1:** Server-side concurrent connect/replace requests cannot leave two Jira Pods attached to one Chat. The binding, grounding identity and generation update atomically through the authenticated PATCH pattern; restart/reload restores valid bindings without cross-chat or cross-token reuse. A registry entry, guessed ID, client-side edge or another Chat's binding grants no access, and a Chat without a binding offers no Jira tool to the consumer context.
 
-Status: **Partial — not accepted**. Authenticated PATCH atomically persists one verified owned binding, mode and generations, with conflict/reopen tests. Ordinary Chat offers tools only for a binding; workspace edges await acknowledgement. Complete product restart/two-Chat qualification remains open; persisted binding alone grants no authority.
+Status: **Partial — not accepted**. Authenticated PATCH atomically persists one owned verified binding and its generations, with conflict/reopen tests; tools require that binding and edges await acknowledgement. Durable read consent now survives SQLite reopen and fresh registries only under independently valid current authority. Complete process/browser restart and simultaneous two-Chat qualification remain open.
 
 - [ ] **AC2:** All three modes have explicit regression coverage through the shared action-class policy, including per-chat mode persistence, the unconfigured `autonomous-delivery` tool-source ceiling delivered by the one server resolver from #4083 and an explicitly narrower ceiling: required approval precedes network/effect, denied actions make no call, bounded allowed actions execute without invented extra approval. The read grant is requested once, covers only read-class tools of the current binding and credential generation, and never covers writes. Missing/expired authority remains denied in every mode.
 
-Status: **Partial — not accepted**. All three mode/read-grant/write-approval combinations now run through buffered, SSE and browser Chat with the verified real model. Owner/route tests exercise denial, expiry, narrower ceilings and final approval claim. Complete all-operation/permission/final-head qualification remains open.
+Status: **Partial — not accepted**. All three modes have real buffered/SSE/browser comment receipts, separate from the complete 14-operation Ask groups. Read consent, exact action approval/claim, denial, expiry and narrower ceilings have owner/route proofs. Valid consent is reusable across later turns and fresh registries, without restoring authority or budgets. Complete permission/all-operation mode coverage and final-head qualification remain open.
 
 - [ ] **AC3:** Disconnect, replacement, Pod deletion and Keiko-managed token rotation/revocation revoke read grants and invalidate pending approvals and queued calls. Jira-side token revocation is enforced on the next Jira call; observed auth failure invalidates local readiness and pending work without introducing polling or webhooks. Tests cover these changes during approval and before effect; no stale request uses the old or newly substituted credential.
 
-Status: **Partial — not accepted**. Committed lifecycle changes revoke read/write work through existing custody/store owners. Direct credential deletion/rotation, two shared-Pod Chats, late verification and observed-401 handling have actual route tests. Hub controls now use those owners. Full in-flight approval/queued-call races with remote-effect counts remain open.
+Status: **Partial — not accepted**. Lifecycle commits invalidate work through existing custody/store owners. Direct credential routes, shared-Pod Chats, stale verification and observed current 401 have route proofs; a rebuilt browser lifecycle group exercised rename, distinct token replacement, grant revocation, reverification and removal. Pending-consent/approval cancellation tests now drain the decisions with zero Jira calls. The complete queued/in-flight race matrix with independent remote counts remains open.
 
 - [ ] **AC4:** Two chats using different Pods are isolated; two chats deliberately using the same Pod share neither grants nor approval state; a new or copied Chat identity cannot inherit grants or approvals. Data-Pod-only grounding is byte-for-byte unchanged in behaviour and existing Workbench MCP works unchanged.
 
-Status: **Partial — not accepted**. Binding, grant and approval owner tests isolate actors/Chats/Pods, including deliberately shared credentials. Actual route tests preserve unrelated Chats. Complete simultaneous product execution and final Data-only/Workbench compatibility qualification remain open.
+Status: **Partial — not accepted**. Owner/route tests isolate actors, Chats, Pods and shared credentials; retained consent cannot cross its exact subject or generations. Mixed/Data-only/Memory regressions pass, including the merged content-policy compatibility checks. Complete simultaneous product isolation and final Data-only/Workbench qualification remain open.
 
 - [ ] **AC5:** Production-path lifecycle logging for binding, mode, grant and approval is registered and body-free. Restart and authority/mode changes cannot revive expired grants, approvals or queued effects. All applicable gates pass.
 
-Status: **Partial — not accepted**. Binding/mode/grant/approval/claim/revocation logging and journal restart safety have retained proofs. Authority and grant registries remain process-local: cold restart fails closed, but restoration/reuse of a still-valid read grant has not been implemented or qualified. Full restart and applicable gates remain open.
+Status: **Partial — not accepted**. Registered binding/mode/grant/approval lifecycle evidence is retained. Granted consent now persists in the existing bounded SQLite owner with exact subject, generations, disclosure and original expiry; new turns independently re-admit authority and budgets. Pending decisions revoke on shutdown, and read-only history recovery never resumes a turn. Complete process/browser restart and final gates remain open.
 
 - [ ] **AC6:** Through the trusted non-Coding test consumer against local Jira 10.3.26, an admitted read-class call reaches the real provider only with a valid grant, and a write-class call only under the mode matrix or a redeemed approval that re-ran the complete pipeline; a denied, expired or revoked call performs no HTTP request.
 
-Status: **Partial — not accepted**. The trusted ordinary-Chat consumer reaches licensed Jira through the production gateway/binder/host. Nine recorded mode/transport groups prove first-read disclosure and required comment approval; rejection/expiry/revocation have hermetic route proofs. Complete live no-call refusals and final artifact qualification remain open.
+Status: **Partial — not accepted**. The ordinary-Chat consumer reached licensed Jira for all 14 operations in buffered and SSE groups on a preceding artifact. Earlier all-mode comment groups prove read disclosure and required write approval; hermetic routes and actual HTTP cancellation prove zero calls after refused/cancelled work. Complete live denied/expired/revoked cases and final-artifact qualification remain open.
 
 ### #4091 — Run a governed tool loop in ordinary Chat through the shared MCP host
 
 - [ ] **AC1:** Before this child closes, an authenticated normal Chat API performs a read and a governed write through the real gateway → production catalog binder → shared MCP host → local Jira 10.3.26, using a verified tool-capable real model and checking remote state. Exercise both buffered and streaming turns; the unfinished UI is not a substitute runtime or a reason to defer this proof to #4087. A normal Chat with a valid connected Jira Pod discovers and invokes the real provider through the shared host; a Chat without that binding is offered no Jira tool. A registry entry, guessed ID, client-side edge or another Chat's binding grants no access.
 
-Status: **Partial — not accepted**. Authenticated normal buffered/SSE reads and governed comment writes passed with the verified real Qwen model, production catalog/host and licensed Jira, including independent remote counts. Capability/binding tests are retained. Final delivered-head acceptance and broader operation receipts remain open.
+Status: **Partial — not accepted**. Authenticated normal buffered/SSE Chat completed all 14 operations through the verified Qwen gateway, production binder/shared host and licensed Jira, with independent remote readbacks. Binding/capability denial tests remain green. These receipts identify a preceding assembled artifact; final delivered-head acceptance remains open.
 
 - [ ] **AC2:** In-flight cancellation never reports a false rollback or false success. An already applied Jira effect is shown as completed; uncertain outcomes are reconciled or clearly shown as unknown, without automatic duplication.
 
-Status: **Partial — not accepted**. Catalog status and durable remote outcome are separate in transcript, history/compaction and UI. A regression-first repair now projects a late acknowledgement after cancellation and through a fresh SQLite reader without dispatch. Complete browser/live interrupted-write qualification remains open.
+Status: **Partial — not accepted**. Catalog settlement and durable remote outcome remain separate in history, compaction and UI. Late acknowledged effects survive cancellation and fresh SQLite reads without dispatch; cancellation before consent/approval makes zero Jira calls and closes the canonical turn. Complete stable-artifact interrupted-write/browser qualification remains open; the mid-build fault run is diagnostic only.
 
 - [ ] **AC3:** Data-Pod-only grounding is byte-for-byte unchanged in behaviour, the mixed-scope schedule is tested through actual gateway admission, existing Workbench MCP works unchanged, Jira works with no embedding/index setup, and a model without verified tool calling yields the truthful unavailable state instead of silently answering without tools.
 
-Status: **Partial — not accepted**. Mixed Data/Jira preparation and physical synthesis accounting now have actual-gateway tests; Data-only regressions are retained and Jira-only live groups require no embedding. Empty Data-evidence behavior is being completed. Bound Chat now fails closed before model/Jira dispatch for absent, unverified, stale, unsupported or mismatched tool-calling proof. Ten buffered/SSE regressions failed before and now pass; unbound ordinary Chat remains available. Existing desktop error notices provide English/German verification, model-switch and disconnect guidance. Final Workbench/compatibility checks remain open.
+Status: **Partial — not accepted**. Actual-Gateway mixed tests cover Data evidence before tools, local Data Pods, usable empty results, unchanged Data-only abstention, missing-path refusal and independently narrower Memory admission. Failed/denied/unconfirmed tool observations cannot unlock fabricated empty-pack answers. Bound models without current tool proof fail before model/Jira dispatch with EN/DE guidance. Post-merge preservation/grounding regressions pass; final Workbench and comprehensive compatibility qualification remain open.
 
 - [ ] **AC4:** Production-path tool-loop lifecycle logging (offered, started, grant-required, approval-required, completed, failed, unknown) is registered and body-free; the provider receives only authorized scoped calls; tool output and prompt injection cannot extend authority, select a credential or change the binding. All applicable gates pass.
 
-Status: **Partial — not accepted**. Existing registered lifecycle owners now cover offers, grants, exact approvals, dispatch, settlement and late observations without content. Scoped calls and schema/authority injection refusals have retained tests. Full hostile-content normal-Chat qualification and final logging/gates remain open.
+Status: **Partial — not accepted**. Existing registered owners cover offers, consent, exact approvals/claims, dispatch, settlement and late observations without content. Scoped calls, schema/authority injection refusal and hostile-result controls have retained tests; failure-path scanning is clean after the observation repairs. Full normal-Chat hostile-content qualification and final logging/gates remain open.
 
 - [ ] **AC5:** Response-loss, duplicate-delivery, streaming fallback, context-window retry, reconnect, reload and Regenerate tests assert Jira mutation counts. Completed or unresolved effects are not replayed; crash recovery presents unknown outcomes truthfully. Compaction and provider-adapter round trips preserve tool-call/result IDs, relationships and cumulative usage.
 
-Status: **Partial — not accepted**. Duplicate canonical delivery, response loss, unknown/acknowledged recovery, journal restart and structured history/compaction have retained tests. Normal Chat duplicates assert no extra call/effect. Browser response loss, reconnect, Regenerate and the complete fallback/context-retry effect-count matrix remain open.
+Status: **Partial — not accepted**. Canonical duplicates, response loss, late/unknown recovery, journal restart, paired history and compaction have scoped proofs. The 27-case public/Gateway suite now also proves one POST after a committed write followed by context overflow: retries preserve tool/result IDs, canonical replay adds no calls, and the original two-synthesis ceiling blocks a fourth repair request. Pre-admission SSE-to-buffered fallback remains green. Complete reconnect, browser response-loss/Regenerate and final live remote-effect-count qualification remain open.
 
 - [ ] **AC6:** Mixed Jira/Data-Pod turns retain separate source attribution and the existing physical grounded-synthesis ceiling across orchestration, retries and repair. Production-path tests exhaust each cumulative budget without resetting it. Restart and authority/mode changes cannot revive expired grants, approvals or queued effects.
 
-Status: **Partial — not accepted**. The mixed owner prepares Data evidence before tools and retains one cumulative meter plus the physical synthesis/repair ceiling; Jira results are separate from numbered Data citations. Actual-gateway and budget tests are recorded. Empty-pack behavior, exhaustive cumulative exhaustion and full restart/lifecycle qualification remain open.
+Status: **Partial — not accepted**. Data packs precede tools; one cumulative meter and the physical synthesis/repair ceiling span orchestration and retries, with Jira results outside Data citations. The 27-case public/Gateway suite includes post-write overflow, nonincreasing token caps and the retained repair ceiling. Empty-pack safety and independent Memory admission are implemented and regression-tested. Retained consent restores no authority or budgets, and pending decisions revoke on shutdown/cancellation. Exhaustive cumulative exhaustion and full process/browser lifecycle qualification remain open.
 
 ### #4085 — Create and manage Jira access Pods in the existing Knowledge Pods hub
 
 - [ ] **AC1:** The existing Knowledge Pods hub offers Data and Jira creation. A Jira Pod is created using name, address and PAT against the real local lab through the production API; Data creation and existing saved Pods, including synced Jira knowledge Pods, still work and remain distinguishable.
 
-Status: **Partial — not accepted**. The existing Hub offers Data and Jira creation; real browser groups create/verify/connect a Jira Pod through production APIs. Live metadata stays separate from Data/synced-Pod storage. The newest Hub lifecycle artifact needs fresh browser qualification and final existing-Pod compatibility checks.
+Status: **Partial — not accepted**. The existing Hub offers Data and Jira creation. Rebuilt real-browser groups create, verify and connect Jira through production APIs, and a lifecycle group covers rename/rotation/reverification/removal. Direct Data-surface controls preserve a real Data capsule. Complete saved/synced-Jira compatibility and final-artifact qualification remain open.
 
 - [ ] **AC2:** The PAT is write-only, cleared on save/cancel/unmount and never returned in later reads, stored in browser persistence, placed in URLs, screenshots, analytics or error strings. Duplicate submits/retries do not create duplicate Pods or orphan credentials.
 
-Status: **Partial — not accepted**. The PAT clears at dispatch/cancel, late unmounted responses cannot publish, duplicates share one creation intent, and lost mutation responses require state refresh. Custody/public-projection and UI secret-absence tests pass. Complete browser recovery/persistence/screenshot/error and duplicate-retry qualification remains open.
+Status: **Partial — not accepted**. Write-only PAT clearing, duplicate creation intents, late-response refusal and canonical recovery are implemented with custody/UI proofs. Real browser creation and token replacement used synthetic credentials, with private Activity Log content checks. The complete browser persistence/screenshot/error/retry matrix and final-artifact qualification remain open.
 
 - [ ] **AC3:** The card reports actual verification status. Bad/revoked token, inaccessible Jira, trust failure, redirect/HTML response, permission refusal and, where observable, license or read-only restrictions have actionable bounded presentation; saving or probing identity does not promise every action is permitted.
 
-Status: **Partial — not accepted**. The card uses authoritative verification metadata, hides stale readiness during uncertain mutations, provides bounded translated errors and explains permission limits. Actual route races and the complete status-union UI tests are retained. Licensed restrictions and current-artifact negative browser states remain open.
+Status: **Partial — not accepted**. Authoritative verification metadata, uncertain-state readiness suppression, bounded EN/DE errors and permission-limit guidance are implemented. Status-union/race tests and successful rebuilt-browser lifecycle states are retained. The complete revoked/inaccessible/TLS/HTML/permission/license negative presentation matrix remains open.
 
 - [ ] **AC4:** Rename, reverify, token replacement and removal survive reload and use the existing server owner. Tests delete/replace a Pod-owned credential through the existing credential route while two Chats share the Pod and deliver stale verification replies after rotation; neither alternate entry points nor late replies restore stale access. Removal deletes the owned credential and dependent Chat bindings; token rotation preserves their visible association but invalidates authorization, read grants and pending work until re-verification; deleting one Pod never damages unrelated credentials or Data Pods.
 
-Status: **Partial — not accepted**. Rename/rotation/removal now use the existing owner through typed generation-bound PATCH and canonical GET recovery. Actual route tests cover alternate credential entry points, two shared-Pod Chats, unrelated Pods and stale verification. Hub lifecycle tests pass. Complete cold-start/approval races and fresh browser reload/rotation/removal qualification remain open.
+Status: **Partial — not accepted**. Generation-bound rename/rotation/removal and canonical GET recovery use existing owners. Route tests cover alternate credential entry points, shared-Pod Chats, unrelated Pods and stale replies. A rebuilt real-browser lifecycle group verifies rename, distinct token replacement, grant revocation, reverification and removal of credential/binding/edge. Complete process restart and in-flight approval races remain open.
 
 - [ ] **AC5:** The ordinary Jira form requires no email, MCP configuration or vector-index setup. The initial implemented ticket capabilities are explained plainly without claiming all Jira APIs or guaranteed write permissions.
 
@@ -211,79 +219,79 @@ Status: **Partial — not accepted**. The Jira form requires name, HTTPS address
 
 - [ ] **AC6:** The relevant design-state matrix, keyboard/focus/screen-reader behavior, English/German text, light/dark/high-contrast and reduced-motion/zoom proofs pass with synthetic visible data. UI and wired browser gates pass.
 
-Status: **Partial — not accepted**. EN/DE lifecycle and consent/approval UI, keyboard focus and axe checks pass; inherited Cloud light/dark checks remain green. Jira-specific screen-reader/high-contrast/reduced-motion/zoom/narrow-layout evidence, design-state rows and wired browser gates remain open.
+Status: **Partial — not accepted**. The fidelity matrix now names the implemented Hub/Chat owners and states. EN/DE, keyboard/focus, axe, live keyboard/drag journeys and the wired three-case browser lane have scoped proofs. Jira-specific screen-reader/theme/high-contrast/reduced-motion/zoom/narrow-layout visual acceptance and final UI/browser gates remain open; updater evidence is not Jira visual evidence.
 
 - [ ] **AC7:** Live-access Pod variants cannot enter capsule-set composition, capsule export or indexing through either UI or direct server requests. They advertise no fabricated capsule, retrieval or storage state, and unsupported Cloud sync controls are absent. Existing Data and synced-Jira Pods preserve these capabilities.
 
-Status: **Partial — not accepted**. Live Pods remain credential-owned and are absent from Data capsule/index metadata; Hub/Workspace Live variants expose no sync/export/storage controls. Direct-server capsule-set/export/index refusal proofs and preserved Data/synced-Jira capability regression remain explicit outstanding acceptance obligations.
+Status: **Partial — not accepted**. A custody-owned Live Pod receives public-BFF refusals for capsule read, index/reindex and source connection; mixed Live/Data composition creates no partial set, while a real Data control retains its capabilities. The 227-case route/Data run and 12-case card run prove no fabricated capsule/storage or sync/export controls. No capsule-export HTTP route exists in the mounted inventory. Complete synced-Jira compatibility and final gates remain open.
 
 ### #4086 — Connect Jira Pods to Chat using existing workspace connectors and in-Chat tool cards
 
 - [ ] **AC1:** Drag/drop and the existing keyboard alternatives (port buttons and the Chat header select) can place and connect the same saved Jira Pod. The server acknowledges the connection before the UI indicates active tool access; a failed operation leaves no phantom edge or duplicate authority.
 
-Status: **Partial — not accepted**. Saved Jira Pod drag/drop, workspace keyboard ports and Chat selector are implemented; request correlation and server acknowledgement precede activation. Focused tests cover failure, supersession/unmount, wrong windows/Chats and same-binding re-acknowledgement. Fresh production browser/header-edge qualification remains open.
+Status: **Partial — not accepted**. Existing drag/drop, keyboard ports and the Chat selector activate only after server acknowledgement, with failure/supersession/wrong-target tests. Rebuilt real-browser groups passed keyboard connection with Ask approval and native drag with Full access, each with one independently verified remote comment. Final artifact and full header/edge/browser qualification remain open.
 
 - [ ] **AC2:** Connecting a second Jira Pod requires an explicit replacement interaction, and the server still enforces one. Cancel or a failed replacement preserves the old binding. Successful atomic replacement invalidates old grants and pending work without granting both Pods, and replacement/disconnect updates edge, source indicator and tool availability coherently. Data Pod connections continue to function.
 
-Status: **Partial — not accepted**. The shared explicit replacement form, scope precondition and server-owned single binding now serve header and port requests. Tests retain the prior binding on cancel/failure and reject stale acknowledgements. Header/edge coherence and full lifecycle/Data-Pod browser qualification remain open.
+Status: **Partial — not accepted**. The shared explicit replacement interaction and server-owned atomic single binding preserve the old binding on cancel/failure and reject stale acknowledgements. Browser lifecycle removal clears binding and edge; Live-only/mixed Data-source labels now retain independent grounding behavior. Complete replacement/disconnect races and Data-Pod browser compatibility remain open.
 
 - [ ] **AC3:** Before this child closes, the assembled browser journey creates/connects a Pod and performs a read and governed write through normal Chat to the real local Jira lab, verifying remote state. The user can search/read/create/edit/assign/comment/transition via normal Chat through the actual MCP path and see clear sources, progress and remote outcome. Identical ticket keys on different Jira instances are distinguishable in authorized presentation.
 
-Status: **Partial — not accepted**. The preceding production artifact passed real browser creation/binding/read/comment-write in all modes, with independent Jira counts. Nine reads/five writes are implemented, but every remaining operation still needs normal-Chat live receipts. New Hub/mode/connection layout and cross-instance source presentation remain unqualified.
+Status: **Partial — not accepted**. Real-browser creation/connection/read/comment writes passed, followed by rebuilt keyboard/Ask and drag/Full groups with independent one-effect counts. Separate buffered and SSE normal-Chat groups completed all 14 operations with remote readbacks on a preceding artifact. Complete browser operation coverage, cross-instance source presentation and final-artifact acceptance remain open.
 
 - [ ] **AC4:** The read-grant request appears when the current binding/credential generation has no valid grant; a still-valid grant, including one restored after restart, does not prompt again. Approval UI appears exactly when current policy requires it; both identify the proposed scope or action and support deny/cancel. Stale grants or approvals after disconnect/token change cannot execute; pending/expired/unknown/partial/error states are truthful.
 
-Status: **Partial — not accepted**. Current-state GET governs actionable approval cards; read disclosure, concrete preview, deny and truthful remote-outcome states have UI/route tests and live mode groups. Cold-restart restoration of an otherwise valid read grant is still missing; public historical transcript views do not confer authority. Full stale/expired/partial browser qualification remains open.
+Status: **Partial — not accepted**. Current-state GET controls actionable cards; exact previews, disclosure, deny and closed outcomes have UI/route/live-mode proofs. Still-valid read consent now persists across SQLite reopen/fresh registries under current authority, and history can recover a committed decision without reviving work. Cancelled pending decisions revoke. Full browser cold restart, stale/expired/partial states and final-artifact qualification remain open.
 
 - [ ] **AC5:** Reload, network interruption, Pod removal, Jira shutdown and token replacement preserve the authoritative state without stale access. Retry, reconnect and Regenerate never silently repeat a completed or uncertain Jira mutation; retain its canonical outcome and show safe reconciliation. Browser tests lose the response after Jira accepts a write, deliver duplicates and regenerate, then assert remote effect counts. Restored bindings cannot recreate missing/expired grants or approvals. All content-bearing presentation follows existing retention/redaction rules and is excluded from diagnostics/evidence.
 
-Status: **Partial — not accepted**. Generation/request guards and canonical journal projections preserve truthful state and avoid automatic mutation replay in retained tests. Live groups verify reload after a confirmed comment. Browser lost-response, duplicate/Regenerate remote counts, shutdown/rotation/removal and restart failure groups remain open.
+Status: **Partial — not accepted**. Durable outcomes, exact history projection and generation/request guards prevent automatic replay in scoped tests. Real-browser groups verify confirmed-comment reload and token replacement/removal; cancellation preserves late observations truthfully. Complete stable-artifact lost-response/duplicate/Regenerate, Jira shutdown and process-restart browser groups remain open; the 10/10 mid-build fault receipt is not qualification.
 
 - [ ] **AC6:** Root connector/window/tool/source/permission designs and relevant state/accessibility/theme requirements are met; existing workspace/Data Pod/Workbench journeys remain green.
 
-Status: **Partial — not accepted**. Existing connector, Chat, mode and tool-card design owners are reused; scoped workspace/Coding regressions and axe/keyboard tests pass. Root source/header/edge presentation is still being qualified. Complete design-state/accessibility/theme/constrained-layout and existing journey gates remain open.
+Status: **Partial — not accepted**. Existing design owners are reused; source labels, server-confirmed edges, keyboard ports, Hub lifecycle and the shared mode control have scoped tests and rebuilt-browser journeys. The fidelity matrix names their implemented states. Complete screen-reader/theme/contrast/reduced-motion/zoom/constrained-layout and existing workspace/Data/Workbench journey gates remain open.
 
 - [ ] **AC7:** The Chat mode selection persists per chat, defaults to Ask for approval, shows ceiling-clamped modes truthfully, and a model without verified tool calling presents an actionable unavailable state instead of silently answering without tools.
 
-Status: **Partial — not accepted**. Selected mode persists per Chat and defaults to Ask for approval; shared controls display server-derived ceiling/effective mode. Server/UI tests cover clamps. Bound models without current verified tool calling now return the existing unavailable-model contract with English/German verification, model-switch and disconnect guidance, without a model/Jira call. Buffered/SSE and notice regressions pass; fresh browser and final gate qualification remain open.
+Status: **Partial — not accepted**. Per-Chat selected mode defaults to Ask and persists; the shared control displays server-derived effective/clamped modes. Real browser Ask/Full groups and all-mode comment groups are retained. Missing/stale/unsupported tool proof produces actionable EN/DE refusal before provider/Jira dispatch, including the wired browser case. Full clamp/browser state coverage and final gates remain open.
 
 ### #4087 — Qualify the complete Jira Pod to MCP to Chat workflow against local Jira 10.3.26
 
 - [ ] **AC1:** Every initial supported operation has a real end-to-end receipt from normal Chat through the shared MCP host to local Jira 10.3.26, with remote read-after-write verification and only synthetic data. The assembled artifact/source identity, commands, model identity, test versions, wiring class and outcomes are recorded without secrets or bodies.
 
-Status: **Partial — not accepted**. Real normal Chat project-read and comment-write receipts exist for buffered/SSE/browser paths. Other advertised operations lack complete normal-Chat live receipts. Each remaining group must retain source/UI artifact digest, model/configuration proof, versions, command and independent remote outcome; fixture setup alone does not satisfy this criterion.
+Status: **Partial — not accepted**. Complete buffered and streamed 14-operation receipts now exist, with nine reads, five governed writes and independent count/field/changelog/status checks against Jira 10.3.26 and the verified Qwen model. Source/artifact and receipt identities are recorded below. They precede later cancellation repairs/dev integration; repeat relevant complete groups on the final assembled artifact.
 
 - [ ] **AC2:** All-mode, read-grant and Jira permission cases pass: no unauthorized effect; allowed operations work; approval denial/cancellation and stale approval or grant perform no new call. Ordinary Chat is tested directly rather than a Workbench-only substitute.
 
-Status: **Partial — not accepted**. All three mode/transport comment groups passed with mandatory read disclosure and policy-correct write approval. Hermetic route/owner denial tests are retained. Live restricted-user, denied/cancelled/stale-grant/approval no-effect cases and full operation coverage remain open.
+Status: **Partial — not accepted**. All-mode read-disclosure/comment-approval groups and separate complete 14-operation Ask groups passed on preceding artifacts. Deterministic routes and actual HTTP cancellation cover denied/stale/cancelled no-call behavior. A seeded restricted-identity selector is tested; the complete live permission/refusal and final-artifact mode matrix remains open.
 
 - [ ] **AC3:** Isolation/revocation, replay-prevention and restart tests pass, including two chats, deliberate reuse of one Pod, different Pod credentials, replacement, disconnect during approval and token rotation. Tests assert remote effect counts after lost responses, duplicate delivery, retries and Regenerate. Completed remote effects are not falsely described as rolled back; acknowledged-but-unconfirmed and unknown outcomes remain distinct. Old verification replies and alternate credential-management entry points cannot restore revoked readiness.
 
-Status: **Partial — not accepted**. Actual route lifecycle/isolation tests, durable replay barriers, fresh-reader late outcomes and all-operation SDK response-loss tests exist. Complete normal-Chat/browser two-Chat/rotation/disconnect/restart/lost-response/duplicate/Regenerate groups with independent remote counts remain open.
+Status: **Partial — not accepted**. Route lifecycle/isolation, SQLite restart consent, exact crash-history recovery, durable replay barriers and all-write SDK fault cases are retained, plus real browser token/lifecycle groups. The 10/10 live fault receipt is diagnostic because an accidental rebuild changed artifacts mid-group. Repeat the stable-artifact fault matrix and complete two-Chat/replacement/restart/browser duplicate/Regenerate remote-count cases.
 
 - [ ] **AC4:** The small UI flow matches the root design reference and passes keyboard, screen-reader, theme/contrast, reduced-motion and constrained-layout checks. Product readiness does not depend on embedding/indexing.
 
-Status: **Partial — not accepted**. Normal Jira Chat/browser runs without embedding/index setup and focused EN/DE/keyboard/axe tests pass. The design-state matrix and complete screen-reader/theme/contrast/reduced-motion/zoom/constrained-layout evidence for the final artifact remain open.
+Status: **Partial — not accepted**. Jira browser/Chat groups run without embedding/index setup. EN/DE, keyboard/focus/axe, native drag and lifecycle proofs exist; the design fidelity matrix now records actual implemented owners/states. Complete Jira screen-reader/theme/contrast/reduced-motion/zoom/constrained-layout evidence on the final artifact remains open.
 
 - [ ] **AC5:** Existing Data Pod grounding, Cloud connector and Workbench MCP regressions pass, and the deterministic lane runs in its wired CI class. Timeout, pagination, cancellation and response-size tests show bounded behavior; existing performance ceilings remain unchanged.
 
-Status: **Partial — not accepted**. Scoped Data grounding, Cloud and Workbench tests are recorded; provider bounds and cancellation have deterministic suites. The dedicated assembled Jira Chat browser lane now has three passing finite journeys and is wired as a blocking runs-per-pr UI step. It uses the production BFF/gateway/catalog/MCP path with isolated HTTPS Jira and model protocol fixtures. Final delivered-head lane, compatibility and unchanged-performance checks remain open.
+Status: **Partial — not accepted**. Scoped Data/Memory, Cloud, Workbench, provider bounds and cancellation regressions are retained; post-merge content/grounding/approval suites pass. The blocking per-PR three-case browser lane previously passed through the assembled BFF/gateway/catalog/MCP with isolated HTTPS fixtures. Final lane/wiring freshness, complete compatibility and unchanged performance ceilings still require final-artifact checks.
 
 - [ ] **AC6:** The independent local lab preflight proves license validity and both read and write availability. A stopped instance, expired license or missing trusted test endpoint is reported as blocked real qualification; no silent skip, customer fallback, clock change or license modification is accepted.
 
-Status: **Partial — not accepted**. The retained session groups include real HTTPS/license/read/write preflights and completion license checks; an insufficient-license browser attempt was explicitly rejected. Remaining groups need fresh checks and must stop on expired/stopped/untrusted lab state. The bootstrap cold-start path remains separately unqualified.
+Status: **Partial — not accepted**. Opening and closing HTTPS/license/read/write checks passed for the complete catalog groups. Independent empty-volume setup now completes without manual continuation, with retained failed intents and no clock/license-code changes. Every remaining live group needs fresh availability/license checks; expired, stopped or untrusted sessions remain explicit blockers.
 
 - [ ] **AC7:** Applicable local gates including Sonar and the complete required PR checks pass on the delivered head; all review findings are settled. Only then are final evidence and AC completion recorded, with owner-authorized merge verified before issue closure.
 
-Status: **Partial — not accepted**. Final full local quality/coverage/architecture/evidence/Sonar and required current-head GitHub checks have not run to completion. Review settlement remains open. All AC checkboxes stay unchecked; merge and issue closure require separate owner authorization and verified integration.
+Status: **Partial — not accepted**. Scoped post-merge tests, typechecks and lint/format do not replace acceptance. Full local coverage/architecture/evidence/Sonar, final current-head required GitHub checks and review settlement remain open. All 55 checkboxes stay unchecked; merge/issue closure require separate owner authorization and verified integration.
 
 - [ ] **AC8:** User/developer runbooks and release-impact metadata accurately describe initial API coverage, setup, privacy (ticket content reaches the configured model), mode and read-grant behavior, troubleshooting and remaining limitations. No claim of generic full-API coverage, all-source MCP migration or customer-network certification is made.
 
-Status: **Partial — not accepted**. Lab scripts, ADRs and checkpoint evidence describe implemented boundaries. User-facing guide/troubleshooting/design-state documentation still needs Jira Live setup, privacy, mode/grant/recovery and limitations updates; the existing guide still calls Data Center future work. Normalize the epic release-impact record and validate it; final documentation acceptance remains open.
+Status: **Partial — not accepted**. The connector guide, troubleshooting runbook and ADRs now describe Live setup, privacy, modes/consent, exact approvals, field limits, mixed attribution and safe uncertain-write recovery. Stale Cloud-only/future-Data-Center claims and unsafe retry advice were corrected; the design matrix names implemented states. Validate the normalized release-impact record and complete final runbook/evidence review, without claiming generic Jira or customer-network coverage.
 
 - [ ] **AC9:** Before the live run, record the finite acceptance scenario/operation matrix, qualified model configuration and expected outcomes. Every required operation has successful live evidence and every required refusal has evidence of no unauthorized effect. Record failed attempts and repairs as well as the successful run; model retries or selective reruns must not hide failures. The report states the exact Jira/model/deployment scope proved and does not extrapolate to arbitrary customer workflows, plugins or networks.
 
-Status: **Partial — not accepted**. A finite predeclared all-operation/failure/lifecycle matrix and final bounded receipt index are still required. Existing nine mode/transport comment groups are a subset. Preserve failed attempts/repairs, exact Jira/model/artifact scope and no-effect refusal evidence; do not extrapolate fixture or partial groups into full acceptance.
+Status: **Partial — not accepted**. Finite 14-operation and all-five-write/two-fault matrices and the verified model configuration are recorded; failed attempts and independent no-effect reconciliations are retained. Complete catalog receipts exist, but the 10/10 fault run is diagnostic only after a mid-group rebuild. The final bounded receipt index, complete refusal/lifecycle matrix and stable final-artifact repetitions remain required; no broader Jira/plugin/network claim is made.
 
 ## Acceptance audit at checkpoint `2f4f4928495c`
 
@@ -2238,3 +2246,73 @@ Earlier failed groups were retained and reconciled independently before new inte
 Read-only consent-history recovery also closes a crash between committing consent and updating its original transcript, pinning the original canonical message and exact grant identity, subject, generations, disclosure and timestamps. It never writes rows or resumes work. The reusable live harness now drains through the existing Chat serializer before closing SQLite, preserves state on timeout, and atomically fsyncs private intent updates. Twenty focused fault/lifecycle/private-intent tests pass. The finite all-five-write/two-fault live matrix is prepared but has not yet run.
 
 The ordinary PR CI was absent because the PR had merge conflicts with advancing `dev`; the workflow itself remains active. A regular merge of current `dev` into this same feature branch is being prepared. No force-push, new PR, gate bypass or integration into `dev` is authorized by this maintenance step.
+
+### Incremental qualification — renewed laboratory and reproducible cold setup
+
+Epic #4081 / #4082 / #4087: a new isolated synthetic session uses the published test license
+through Jira's normal setup forms, with no clock, licensing-code or database modification.
+Its license expires at `2026-10-28T00:25:46.347Z`. Seeded API/restricted/editor/assignee identities,
+project permissions, required custom field, real transition screen, pagination, hostile-content
+and isolated-project fixtures passed their setup checks. Exact TLS admission, untrusted-CA denial,
+read/write preflight and independent mutation readback passed. Only the previous owned session was
+stopped; its volumes were retained, and the unrelated development Jira was not changed.
+
+Independent empty-volume reproduction found two setup-helper gaps: `FIRST_RUN` can precede the
+normal database-page redirect, and the license wizard requires its existing `next` submitter.
+The helper now waits for the actual application-properties phase, posts that normal submitter once,
+and accepts only the expected same-origin redirect. Body-free stage/status diagnostics preserve
+reconciliation without printing keys, filled values or URLs. Failure-first regression checks cover
+both gaps and foreign redirect refusal. The full corrected script subsequently passed on another
+fresh isolated project without manual continuation: license and mail returned their expected 302s,
+license validity and `RUNNING` were confirmed, the completion receipt existed and the pending marker
+was gone. This proof project was then stopped with its volumes retained and never occupied the main
+HTTPS frontend. Earlier incomplete proof states remain preserved without uncertain POST replay.
+
+The existing normal-Chat helper can now select only a seeded non-admin identity's private PAT;
+its default API identity is unchanged, and unknown/path-like identities fail before HTTP. Six of seven
+custody-selection checks failed meaningfully for the old implementation; the unchanged default-API
+baseline passed. All seven now pass alongside seven setup checks (14 total); scoped lint and formatting pass. This helper change prepares restricted
+identity qualification and does not itself claim that the restricted normal-Chat matrix has run.
+
+### Regular dev integration and observed failure boundaries
+
+The single feature branch incorporates `dev` at `44cfbbb3e` by a regular merge. The five
+Chat/grounding import conflicts preserve both the governed Jira tool loop and the upstream
+authorized-content policy. Cross-policy tests cover both Jira rounds, credential protection,
+separate citations, private Chat content, unconditional tool-argument protection and structured
+history/compaction pairs. This integration does not merge the feature into `dev` or enable auto-merge.
+
+The complete failure-path scan identified six catches needing an explicit observable boundary.
+Pure call validation now reuses the existing safe parser and refuses unserializable or hostile
+arguments; mutation-history projection reuses nonthrowing validation, and corrupt transcripts
+propagate the same fixed body-free error to their existing owner. UI decision, connector and
+consent-observation failures use the existing client diagnostic sink with the original request
+correlation, closed error classification and sanitized evidence. Three UI regressions failed first;
+22 affected UI tests now pass, including the real diagnostic wire validator and unchanged refusal,
+state-refresh and read-only retry behavior. The six contract/store/schema suites pass 251 tests.
+Actual databases at versions 46 through 50 upgrade correctly; only test fixture rewinds required
+correction for the current schema. No migration, legacy exemption or observability gate was weakened.
+
+Canonical operation/failure inventories and tool-catalog migration metadata were regenerated.
+The duplication baseline shrinks from 932 feature-branch entries (933 on dev) to 927. The one
+changed normalized fingerprint is a strictly contained shrink of the same six prior source
+instances after upstream removed a diagnostic string; each range was checked against the prior
+committed group. No new duplicate instance or baseline allowance was added.
+
+All ten real-model normal-Chat fault cases completed: all five mutation types under lost observed
+response and committed-then-503 injection. Independent remote state confirms ten single Chat
+effects and four explicitly separate foreign PUT changes; duplicate canonical delivery, fresh
+process restart and Regenerate preserve the recorded unknown outcome and never add a Chat effect.
+This first group remains diagnostic evidence: the Activity Log gate automatically rebuilt shared
+packages during the run, and no prior artifact digest was captured. A complete fresh-intent repeat
+with frozen before/after artifact inventory is required for qualification. Its completed receipt
+and the post-build inventory are retained privately; no uncertain intent was replayed.
+
+Full final quality/Sonar, current-head CI/reviews, restricted identities, browser fault recovery
+and the remaining integrated evidence remain open. Earlier scoped receipts are not promoted to
+final-head acceptance by this merge.
+
+The architecture aggregate now reaches the catalog performance gate: dependency direction,
+imports, contract boundaries and catalog conformance pass, but the inherited paired measurement
+does not bind the merged producer. It must be reproduced on the committed subject using the
+canonical paired-host procedure and unchanged thresholds; no evidence digest is hand-edited.

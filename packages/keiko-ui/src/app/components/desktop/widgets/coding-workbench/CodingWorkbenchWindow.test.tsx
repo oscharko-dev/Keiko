@@ -4182,13 +4182,17 @@ describe("CodingWorkbenchWindow #3390 verification trust affordance", () => {
 
     expect(trustStatusMock).toHaveBeenCalledExactlyOnceWith("/repos/keiko");
     expect(trustMutateMock).toHaveBeenCalledExactlyOnceWith("/repos/keiko", "grant");
-    expect(diagnostic).toHaveBeenCalledWith("[keiko] coding workbench repository trust bound", {
-      correlationId: "run-script-trust",
-      workspaceTrustBinding: {
-        repositoryId: "repository-1",
-        workspaceId: "workspace-1",
+    expect(diagnostic).toHaveBeenCalledWith(
+      "[keiko] coding workbench interaction: repository-trust-bound",
+      {
+        correlationId: "run-script-trust",
+        codingWorkbenchInteraction: {
+          interaction: "repository-trust-bound",
+          repositoryId: "repository-1",
+          workspaceId: "workspace-1",
+        },
       },
-    });
+    );
   });
 
   it.each<Partial<ActiveWorkspaceApi>>([
@@ -4457,14 +4461,16 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
     // The run's trust binding is judged on its own diagnostics: the LAST binding line names A and no
     // binding line ever names B. Diagnostics about other surfaces (a worktree catalog read this
     // fixture leaves unanswered) are not this pin's subject and may follow it.
+    // #3897: the binding travels as a closed interaction report; the pin's subject is unchanged.
     const bindingLines = diagnostic.mock.calls.filter(
-      ([note]) => note === "[keiko] coding workbench repository trust bound",
+      ([note]) => note === "[keiko] coding workbench interaction: repository-trust-bound",
     );
     expect(bindingLines.at(-1)).toEqual([
-      "[keiko] coding workbench repository trust bound",
+      "[keiko] coding workbench interaction: repository-trust-bound",
       {
         correlationId: "run-correlation-0001",
-        workspaceTrustBinding: {
+        codingWorkbenchInteraction: {
+          interaction: "repository-trust-bound",
           repositoryId: WORKSPACE_A.repositoryId,
           workspaceId: WORKSPACE_A.id,
         },
@@ -5776,9 +5782,11 @@ describe("CodingWorkbenchWindow primary agent switch (#3897)", () => {
 
   it("selects the plan agent through the runtime and reports only the closed agent id", async () => {
     const user = userEvent.setup();
-    const reports: string[] = [];
-    setClientDiagnosticWriter((message) => {
-      reports.push(message);
+    const reports: unknown[] = [];
+    setClientDiagnosticWriter((_message, meta) => {
+      if (meta?.codingWorkbenchInteraction !== undefined) {
+        reports.push(meta.codingWorkbenchInteraction);
+      }
     });
     const liveActions = renderWorkbench(planOffered(), actions());
     expect(screen.getByRole("button", { name: "Build" })).toHaveAttribute("aria-pressed", "true");
@@ -5786,7 +5794,7 @@ describe("CodingWorkbenchWindow primary agent switch (#3897)", () => {
     await user.click(screen.getByRole("button", { name: "Plan" }));
 
     expect(liveActions.setAgent).toHaveBeenCalledExactlyOnceWith("plan");
-    expect(reports).toContain("[keiko] coding workbench agent selected: plan");
+    expect(reports).toContainEqual({ interaction: "agent-selected", agent: "plan" });
   });
 
   it("names the plan agent in the status line and the information panel while it is selected", () => {

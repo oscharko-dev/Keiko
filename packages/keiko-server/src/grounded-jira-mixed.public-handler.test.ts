@@ -172,7 +172,10 @@ function metadata(deps: UiHandlerDeps): AtlassianCredentialMetadata {
     },
   };
 }
-function runtime(mutation = false): {
+function runtime(
+  mutation = false,
+  deployment: Readonly<Record<string, string>> = {},
+): {
   deps: UiHandlerDeps;
   chatId: string;
   root: string;
@@ -189,6 +192,7 @@ function runtime(mutation = false): {
     evidenceDir: join(state, "evidence"),
     uiDbPath: join(state, "ui.db"),
     env: {
+      ...deployment,
       KEIKO_STATE_DIR: state,
       [QUALIFICATION_SPEND_BUDGET_USD_ENV]: "100",
       [QUALIFICATION_SPEND_LEDGER_PATH_ENV]: join(state, "spend.db"),
@@ -463,6 +467,47 @@ it("charges physical overflow before a tool response and denies a third synthesi
   expect(f.jiraRequests).toEqual(["GET"]);
   expect((response.body as GroundedAnswer).content).not.toContain("Jira tool result");
 });
+
+it.each(["answer", "uncited"] as const)(
+  "retains a committed mutation across context overflow and bounded %s synthesis",
+  async (answer) => {
+    const f = runtime(true);
+    const requests = provider(["write", "overflow", answer, "answer"]);
+    const body = {
+      chatId: f.chatId,
+      projectPath: f.root,
+      content: "Explain src/Feature.ts and add the Jira comment.",
+      modelId: MODEL,
+      clientTurnId: `mixed-write-overflow-${answer}`,
+    };
+    const response = await handleSendDesktopChat(context(body), f.deps);
+    expect(response.status).toBe(200);
+    // The overflow and its physical retry spend both synthesis attempts. An uncited retry
+    // cannot reset that meter by requesting a fourth provider call for citation repair.
+    expect(requests).toHaveLength(3);
+    expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
+    const messages = f.deps.store.listMessages(f.chatId);
+    expect(messages).toHaveLength(2);
+    expect(messages[0]?.turnState).toBe("completed");
+    expect(messages[0]?.toolTranscript?.exchanges).toHaveLength(1);
+    expect(messages[0]?.toolTranscript?.exchanges[0]).toMatchObject({
+      call: { id: "mixed-call-1", name: "jira_comment" },
+      mutationOutcome: "succeeded",
+      result: { status: "completed" },
+    });
+    for (const request of requests.slice(1)) {
+      expect(request).toContain('"id":"mixed-call-1"');
+      expect(request).toContain('"tool_call_id":"mixed-call-1"');
+      expect(request).toContain('"role":"tool"');
+    }
+    expect(outputCap(requests[1] ?? "{}")).toBeLessThan(outputCap(requests[0] ?? "{}"));
+    expect(outputCap(requests[2] ?? "{}")).toBeLessThanOrEqual(outputCap(requests[1] ?? "{}"));
+    expect((await handleSendDesktopChat(context(body), f.deps)).status).toBe(200);
+    expect(requests).toHaveLength(3);
+    expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual(["POST"]);
+    expect(f.deps.store.listMessages(f.chatId)).toEqual(messages);
+  },
+);
 
 it("falls back before admission and replays the same mixed canonical turn without a second write", async () => {
   const f = runtime(true);
@@ -892,5 +937,52 @@ it.each(["disabled", "outside-scope"] as const)(
     expect(requests.join(" ")).not.toContain(canary);
     expect((result.body as GroundedAnswer).memory?.context.memories).toEqual([]);
     expect(JSON.stringify(result.body)).not.toContain(canary);
+  },
+);
+
+it.each(["default", "preserve"] as const)(
+  "keeps %s document policy and the credential floor across real mixed Jira rounds",
+  async (policy) => {
+    const secret = "synthetic-configured-infrastructure-value";
+    const phone = "+49 30 12345678";
+    const f = runtime(false, {
+      KEIKO_DEFAULT_API_KEY: secret,
+      ...(policy === "preserve" ? { KEIKO_CONTENT_REDACTION: "off" } : {}),
+    });
+    writeFileSync(
+      join(f.root, "src", "Feature.ts"),
+      [
+        "export function Feature() { return true; }",
+        `// Contact: ${phone}`,
+        `// Infrastructure credential: ${secret}`,
+        "",
+      ].join("\n"),
+    );
+    const requests = provider(
+      ["tool", "answer"],
+      `${CITED} Contact: ${phone}; credential: ${secret}`,
+    );
+    const result = await handleGroundedAsk(
+      context({
+        chatId: f.chatId,
+        content: "Explain src/Feature.ts and list Jira projects.",
+        modelId: MODEL,
+      }),
+      f.deps,
+    );
+    expect(result.status).toBe(200);
+    expect(f.jiraRequests).toEqual(["GET"]);
+    expect(requests).toHaveLength(2);
+    expect(requests.every((request) => request.includes(phone))).toBe(policy === "preserve");
+    expect(requests.every((request) => !request.includes(secret))).toBe(true);
+    const answer = result.body as GroundedAnswer;
+    expect(answer.content.includes(phone)).toBe(policy === "preserve");
+    expect(answer.content).not.toContain(secret);
+    const stored = f.deps.store.listMessages(f.chatId);
+    expect(stored.find((message) => message.role === "assistant")?.content.includes(phone)).toBe(
+      policy === "preserve",
+    );
+    expect(JSON.stringify(stored)).not.toContain(secret);
+    expect(JSON.stringify(answer.citations)).not.toContain("jira");
   },
 );

@@ -1592,8 +1592,32 @@ it("admits closed write-approval SSE frames and rejects private or mismatched pr
     { event: "tool-write-approval", data: { ...data, call: { ...call, authRef: "private" } } },
     {
       event: "tool-write-approval",
+      data: { ...data, call: { ...call, arguments: { toJSON: (): undefined => undefined } } },
+    },
+    {
+      event: "tool-write-approval",
       data: { ...data, call: { ...call, arguments: { body: "x".repeat(262144) } } },
     },
   ])
     expect(isDesktopChatStreamEvent(frame)).toBe(false);
+});
+
+it("refuses a write-call argument accessor without propagating its private exception", () => {
+  const call = { id: "call-1", name: "jira_comment" };
+  Object.defineProperty(call, "arguments", {
+    enumerable: true,
+    get: (): never => {
+      throw new TypeError("private-argument-canary");
+    },
+  });
+  expect(
+    isDesktopChatStreamEvent({
+      event: "tool-write-approval",
+      data: {
+        messageId: "message-1",
+        call,
+        approval: {},
+      },
+    }),
+  ).toBe(false);
 });
