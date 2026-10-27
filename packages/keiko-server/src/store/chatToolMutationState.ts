@@ -7,7 +7,6 @@ import { invalidRequest, UiStoreError } from "./errors.js";
 import type { ChatToolMutationIntent, ChatToolMutationRecord } from "./chatToolMutationTypes.js";
 const OPERATIONS: ReadonlySet<string> = new Set(JIRA_MUTATION_OPERATIONS);
 const OUTCOMES: ReadonlySet<string> = new Set(JIRA_MUTATION_OUTCOMES);
-const KNOWN_REJECTIONS = new Set([400, 401, 403, 404, 405, 409, 412, 413, 415, 422, 429]);
 const DIGEST = /^[a-f0-9]{64}$/;
 const ID = /^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/;
 export function journalConflict(): UiStoreError {
@@ -63,17 +62,18 @@ export function sameMutationIdentity(
 export function acknowledgedStatus(status: number | null): boolean {
   return status !== null && status >= 200 && status < 300;
 }
-const UNSTARTED: ReadonlySet<JiraMutationOutcome> = new Set(["not-dispatched"]);
+// Only a local refusal before dispatch proves that this invocation caused no remote effect.
+const UNSTARTED: ReadonlySet<JiraMutationOutcome> = new Set(["not-dispatched", "rejected"]);
 const ACKNOWLEDGED: ReadonlySet<JiraMutationOutcome> = new Set([
   "succeeded",
   "succeeded-unconfirmed",
 ]);
-const REJECTED: ReadonlySet<JiraMutationOutcome> = new Set(["rejected"]);
 const UNKNOWN: ReadonlySet<JiraMutationOutcome> = new Set(["unknown"]);
 function allowedOutcomes(record: ChatToolMutationRecord): ReadonlySet<JiraMutationOutcome> {
   if (record.phase === "prepared") return UNSTARTED;
   if (acknowledgedStatus(record.httpStatus)) return ACKNOWLEDGED;
-  return record.httpStatus !== null && KNOWN_REJECTIONS.has(record.httpStatus) ? REJECTED : UNKNOWN;
+  // Status alone cannot prove absence of effects: a proxy can replace a response after commit.
+  return UNKNOWN;
 }
 export function validateMutationSettlement(
   record: ChatToolMutationRecord,

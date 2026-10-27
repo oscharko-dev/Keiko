@@ -312,7 +312,11 @@ POST and PUT mutations are dispatched at most once, including responses carrying
 a committed mutation may lose its response, and a repeated PUT may overwrite an
 intervening actor's change. The invocation owner retains the original intent and
 reconciles observed remote state; uncertain effects never trigger an automatic resend
-(#4081/#4083). The shared HTTP transport and existing action Activity Log remain the
+(#4081/#4083). A transport failure reason does not prove absence of a mutation. The durable Chat
+journal treats every post-dispatch non-2xx response, including 400/401/403/429, as an unknown effect;
+a known local rejection is recorded only before dispatch. A proxy may replace a response after
+an upstream commit, so status-only classification cannot remove the turn's uncertainty barrier.
+The shared HTTP transport and existing action Activity Log remain the
 owners of per-request and terminal evidence.
 
 

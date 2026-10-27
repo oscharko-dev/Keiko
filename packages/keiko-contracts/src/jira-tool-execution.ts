@@ -7,6 +7,7 @@ export const JIRA_MUTATION_OPERATIONS = [
   "jira.transition",
 ] as const;
 export type JiraMutationOperation = (typeof JIRA_MUTATION_OPERATIONS)[number];
+/** Rejected means a known local refusal before dispatch; non-2xx status alone remains unknown. */
 export const JIRA_MUTATION_OUTCOMES = [
   "not-dispatched",
   "rejected",

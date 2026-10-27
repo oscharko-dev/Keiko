@@ -326,7 +326,7 @@ response, derived from that check. Missing paths remain listed as `available: fa
 can see and explicitly delete a stale project. This preserves the history and makes the system
 fail-open (show the record) rather than silently destructive (delete the record).
 
-#### Durable Chat tool mutation intents (schema 47, epic #4081)
+#### Durable Chat tool mutation intents (schemas 47–48, epic #4081)
 
 The existing UiStore owns `chat_tool_mutations`, initially for the five Jira write operations.
 It stores canonical user-turn references, actor/Pod identity, binding and authentication generation
@@ -343,8 +343,13 @@ with at most 32 retained intents. Unknown effects block further writes in that t
 already prepared actions. A new explicitly admitted user turn has its own scope.
 
 Response acknowledgement is stored separately from body parsing and later confirmation. Known
-rejection, success, success without confirmation, unknown effect and no dispatch are distinct.
-An observed 2xx cannot be downgraded to unknown/rejected; terminal settlement is immutable.
+local rejection before dispatch, success, success without confirmation, unknown effect and no
+dispatch are distinct. Every non-2xx response after possible dispatch remains unknown: a status code
+alone cannot prove that no mutation occurred, including 400/401/403/429 and proxy-generated replies.
+The transport's diagnostic reason (such as permission denied or rate limited) remains separate
+from this effect classification. Schema 48 repairs the earlier journal's retained post-dispatch
+rejections to unknown before work resumes. An observed 2xx cannot be downgraded to unknown/rejected;
+normal terminal settlement is immutable.
 Removing a message preserves its mutation tombstone; deleting its owning Chat removes the journal.
 Registered body-free state events follow committed state. A pre-effect log failure prevents the
 caller from proceeding, preserving the durable tombstone; terminal log failure cannot overwrite

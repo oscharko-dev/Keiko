@@ -10,7 +10,7 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 47;
+export const SCHEMA_VERSION = 48;
 
 interface Migration {
   readonly version: number;
@@ -1742,6 +1742,12 @@ export const MIGRATIONS: readonly Migration[] = [
     CREATE INDEX chat_tool_mutations_turn ON chat_tool_mutations(chat_id, turn_ref);
     CREATE UNIQUE INDEX chat_tool_mutations_active ON chat_tool_mutations(chat_id, turn_ref)
       WHERE phase IN ('dispatched','acknowledged');`,
+  },
+  {
+    version: 48,
+    // A response can be replaced after commit. Repair retained observations before work resumes.
+    sql: `UPDATE chat_tool_mutations SET outcome = 'unknown'
+      WHERE phase = 'settled' AND outcome = 'rejected' AND http_status IS NOT NULL;`,
   },
 ];
 

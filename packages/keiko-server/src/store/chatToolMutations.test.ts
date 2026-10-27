@@ -268,12 +268,13 @@ describe("remote observation and terminal outcomes", () => {
     );
   });
   it.each([400, 401, 403, 404, 405, 409, 412, 413, 415, 422, 429])(
-    "records known rejection %i without authorizing retry",
+    "never treats HTTP %i alone as proof that no remote effect occurred",
     (status) => {
       const f = fixture();
       dispatch(f);
       f.journal.acknowledge(f.intent.invocationId, status);
-      expect(f.journal.settle(f.intent.invocationId, "rejected").httpStatus).toBe(status);
+      expect(() => f.journal.settle(f.intent.invocationId, "rejected")).toThrow("conflicts");
+      expect(f.journal.settle(f.intent.invocationId, "unknown").httpStatus).toBe(status);
       expect(f.journal.beginDispatch(f.intent.invocationId, () => true)).toBe(false);
     },
   );
@@ -332,3 +333,70 @@ describe("remote observation and terminal outcomes", () => {
       expect(JSON.stringify(f.logs.events)).not.toContain(privateValue);
   });
 });
+
+it("records a known local rejection only before possible dispatch", () => {
+  const f = fixture();
+  f.journal.prepare(f.intent);
+  expect(f.journal.beginDispatch(f.intent.invocationId, () => false)).toBe(false);
+  expect(f.journal.settle(f.intent.invocationId, "rejected")).toMatchObject({
+    outcome: "rejected",
+    httpStatus: null,
+  });
+  expect(f.journal.beginDispatch(f.intent.invocationId, () => true)).toBe(false);
+});
+it.each([400, 401, 403, 429])(
+  "retains unknown effect and both queue barriers after committed HTTP %i across restart",
+  (status) => {
+    const directory = mkdtempSync(join(tmpdir(), "keiko-tool-uncertainty-"));
+    const path = join(directory, "ui.sqlite");
+    let store: UiStore | undefined = createNodeUiStore(path);
+    let effects = 0;
+    try {
+      const project = store.createProject(process.cwd());
+      const intent = intentFor(store, store.createChat(project.path, "Synthetic", "model").id);
+      let journal = journalOf(store);
+      journal.prepare(intent);
+      const queued = { ...intent, invocationId: "queued", actionDigest: "c".repeat(64) };
+      journal.prepare(queued);
+      if (journal.beginDispatch(intent.invocationId, () => true)) effects++;
+      expect(effects).toBe(1); // Synthetic remote effect precedes the error response.
+      journal.acknowledge(intent.invocationId, status);
+      journal.settle(intent.invocationId, "unknown");
+      expect(journal.beginDispatch(queued.invocationId, () => true)).toBe(false);
+      store.close();
+      store = undefined;
+      store = createNodeUiStore(path);
+      intentFor(store, intent.chatId); // Retry the same canonical turn after startup recovery.
+      journal = journalOf(store);
+      expect(journal.find(intent.invocationId)?.outcome).toBe("unknown");
+      if (journal.beginDispatch(intent.invocationId, () => true)) effects++;
+      if (journal.beginDispatch(queued.invocationId, () => true)) effects++;
+      expect(effects).toBe(1);
+      expect(
+        journal.prepare({ ...intent, invocationId: "new-action", actionDigest: "d".repeat(64) }),
+      ).toEqual({ kind: "blocked", reason: "unknown-effect" });
+    } finally {
+      store?.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  },
+);
+it.each([400, 403, 429])(
+  "repairs a schema-47 post-dispatch rejection for HTTP %i on upgrade",
+  (status) => {
+    const f = fixture();
+    dispatch(f);
+    f.journal.acknowledge(f.intent.invocationId, status);
+    f.db
+      .prepare(
+        "UPDATE chat_tool_mutations SET phase = 'settled', outcome = 'rejected' WHERE invocation_id = ?",
+      )
+      .run(f.intent.invocationId);
+    f.db.exec("PRAGMA user_version = 47");
+    runMigrations(f.db);
+    expect(f.journal.find(f.intent.invocationId)?.outcome).toBe("unknown");
+    expect(
+      f.journal.prepare({ ...f.intent, invocationId: "new-action", actionDigest: "d".repeat(64) }),
+    ).toEqual({ kind: "blocked", reason: "unknown-effect" });
+  },
+);

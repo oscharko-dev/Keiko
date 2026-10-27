@@ -961,3 +961,21 @@ settlement. All **257 catalog tests**, **97 registry tests**, build, root typech
 ADR index, error observability and unchanged semantic checks pass. Registry generation resolves
 608 proofs and 30 scenarios without violations. Jira mutation transport, current-authority wiring,
 normal Chat, licensed live qualification and all complete-epic gates remain pending. No AC is accepted.
+
+## Audit repair: status is not effect certainty — #4083 AC5 / #4081
+
+The read-only auditor correctly found that the initial journal classified HTTP 429 as a known
+rejection, contradicting the existing committed-then-429 transport regression. The entire status
+whitelist has been removed: after possible dispatch, every non-2xx response remains an unknown
+remote effect. Diagnostic reasons such as permission denied or rate limited remain separate from
+that effect classification. A known local rejection is permitted only before possible dispatch.
+Schema 48 also repairs retained schema-47 post-dispatch rejections to unknown before work resumes.
+ADRs 0013 and 0128 record the corrected semantics.
+
+Nineteen assertions/cases failed before the repair. Synthetic committed-then-400/401/403/429 tests
+retain the unknown state and prevent both queued and new actions across on-disk restart; migration
+regressions cover the previously persisted incorrect state. These are store/transport proofs, not
+licensed Jira or ordinary Chat acceptance. All **712 store tests**, **31 existing HTTP tests** and
+**97 registry tests** pass, along with build, root typecheck, changed lint/format, ADR index and the
+unchanged semantic gate. Registry generation remains at 608 proofs/30 scenarios without violations.
+The provider/HTTP/authority integration and complete epic qualification remain pending.
