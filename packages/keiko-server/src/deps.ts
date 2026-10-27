@@ -4548,8 +4548,8 @@ function atlassianConnectorCredentialFields(
 ): Pick<UiHandlerDeps, "atlassianConnectorCredentials"> {
   return {
     atlassianConnectorCredentials: buildAtlassianConnectorCredentialDeps({
-      onLivePodInvalidated: (podId, generation) => {
-        invalidateJiraPodChats(args.bundle.uiStore, podId, generation);
+      onLivePodInvalidated: (podId, generation, correlationId) => {
+        invalidateJiraPodChats(args.bundle.uiStore, podId, generation, correlationId);
       },
       networkConfig: () => args.runtimeConfig.current()?.atlassian,
       configPath: args.runtimeConfig.storagePath,

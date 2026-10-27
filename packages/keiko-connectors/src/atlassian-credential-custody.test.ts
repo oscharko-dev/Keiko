@@ -130,7 +130,7 @@ describe("Jira Live Pod custody", () => {
     const check = f.custody.beginVerification(created.authRef);
     assert(check);
     f.custody.finishVerification(created.authRef, 1, check.revision, "auth-failed");
-    expect(invalidated).toHaveBeenCalledExactlyOnceWith(created.livePod.podId, 2);
+    expect(invalidated).toHaveBeenCalledExactlyOnceWith(created.livePod.podId, 2, undefined);
     f.custody.finishVerification(created.authRef, 1, check.revision, "ok");
     expect(invalidated).toHaveBeenCalledTimes(1);
   });
@@ -145,7 +145,7 @@ describe("Jira Live Pod custody", () => {
     });
     expect(() => f.custody.delete(created.authRef)).toThrow("Synthetic metadata write failure");
     expect(f.vault.entries.size).toBe(0);
-    expect(invalidated).toHaveBeenCalledExactlyOnceWith(created.livePod.podId, null);
+    expect(invalidated).toHaveBeenCalledExactlyOnceWith(created.livePod.podId, null, undefined);
   });
 
   it("retains a durable revoked deletion intent when ciphertext removal fails", () => {
@@ -370,7 +370,7 @@ describe("Live Pod credential updates", () => {
     assert(replaced.deployment === "data-center" && replaced.livePod);
     expect(replaced.livePod.podId).toBe(created.livePod.podId);
     expect(replaced.livePod.credentialOperation).toBeUndefined();
-    expect(invalidated).toHaveBeenCalledExactlyOnceWith(created.livePod.podId, 2);
+    expect(invalidated).toHaveBeenCalledExactlyOnceWith(created.livePod.podId, 2, undefined);
     expect(f.custody.finishVerification(created.authRef, 1, probe.revision, "ok")).toBe(false);
     expect(() => f.executionResolver.resolveForExecution(created.authRef, 1)).toThrow();
     expect(f.executionResolver.resolveForExecution(created.authRef, 2).apiToken).toBe(

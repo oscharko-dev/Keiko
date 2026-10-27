@@ -278,8 +278,8 @@ beforeEach(async () => {
   fakePortRequests = [];
   fakePortResult = { kind: "response", status: 200 };
   const built = buildAtlassianConnectorCredentialDeps({
-    onLivePodInvalidated: (podId, generation) => {
-      invalidateJiraPodChats(fixtureStore, podId, generation);
+    onLivePodInvalidated: (podId, generation, correlationId) => {
+      invalidateJiraPodChats(fixtureStore, podId, generation, correlationId);
     },
     configPath,
     env: vaultEnv(),
@@ -1088,6 +1088,7 @@ describe("normal Chat Jira binding through authenticated PATCH", () => {
         controller,
       );
     });
+    let requestCorrelation: string | null = null;
     const sink = createFileServerLogSink(configDir, { level: "debug" });
     setServerLogger(createServerLogger({ sink, level: "debug" }));
     try {
@@ -1098,6 +1099,7 @@ describe("normal Chat Jira binding through authenticated PATCH", () => {
           headers: csrfHeaders(),
         },
       );
+      requestCorrelation = response.headers.get("x-keiko-correlation-id");
       expect(response.status).toBe(200);
       expect(controllers.map((controller) => controller.signal.aborted)).toEqual([
         true,
@@ -1122,6 +1124,8 @@ describe("normal Chat Jira binding through authenticated PATCH", () => {
       "chat.scope.update",
     );
     const events = lines.map((line) => expectActivityLogProof("chat.scope.update.outcome", line));
+    expect(requestCorrelation).not.toBeNull();
+    expect(events.every((event) => event.correlationId === requestCorrelation)).toBe(true);
     expect(events.map((event) => event.outcome)).toEqual([
       "applied",
       "applied",
@@ -1342,18 +1346,22 @@ describe("authenticated Live Pod credential updates", () => {
     const other = await updatedJiraChat(jiraChat(), { jiraPodId: otherId });
     const sink = createFileServerLogSink(configDir, { level: "debug" });
     await rebuild({ ...wiring, activityLog: sink });
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const correlations: (string | null)[] = [];
     try {
       const renamed = await updateJiraCredential(credential.authRef, {
         expectedGeneration: 1,
         displayName: "Renamed Jira",
       });
       expect(renamed.status).toBe(200);
+      correlations.push(renamed.headers.get("x-keiko-correlation-id"));
       expect(await renamed.json()).toMatchObject({ generation: 1, displayName: "Renamed Jira" });
       const replaced = await updateJiraCredential(credential.authRef, {
         expectedGeneration: 1,
         apiToken: SYNTHETIC_TOKEN + "new",
       });
       expect(replaced.status).toBe(200);
+      correlations.push(replaced.headers.get("x-keiko-correlation-id"));
       const response = await replaced.text();
       expect(JSON.parse(response)).toMatchObject({ authRef: credential.authRef, generation: 2 });
       expect(response).not.toContain("livePod");
@@ -1364,6 +1372,7 @@ describe("authenticated Live Pod credential updates", () => {
         apiToken: SYNTHETIC_TOKEN + "newer",
       });
       expect(both.status).toBe(200);
+      correlations.push(both.headers.get("x-keiko-correlation-id"));
       expect(
         (
           await updateJiraCredential(credential.authRef, {
@@ -1385,6 +1394,7 @@ describe("authenticated Live Pod credential updates", () => {
       });
     } finally {
       sink.close?.();
+      resetServerLogger();
     }
     const lines = persistedActivityLogLines(
       readPersistedActivityLog(configDir),
@@ -1399,6 +1409,18 @@ describe("authenticated Live Pod credential updates", () => {
       "rename-and-replace-token",
     ]);
     expect(events.map((event) => event.authenticationGeneration)).toEqual([1, 2, 3]);
+    expect(correlations.every((id) => id !== null)).toBe(true);
+    expect(events.map((event) => event.correlationId)).toEqual(correlations);
+    const scopes = persistedActivityLogLines(
+      readPersistedActivityLog(configDir),
+      "chat.scope.update",
+    ).map((line) => expectActivityLogProof("chat.scope.update.outcome", line));
+    expect(scopes.map((event) => event.correlationId)).toEqual([
+      correlations[1],
+      correlations[1],
+      correlations[2],
+      correlations[2],
+    ]);
     expect(lines.join("\n")).not.toContain(credential.authRef);
     expect(lines.join("\n")).not.toContain(SYNTHETIC_TOKEN);
   });

@@ -1388,3 +1388,14 @@ bulk query. A guarded SQL expression now excludes unreadable JSON from binding s
 regression fails before the change and passes afterward: a valid matching binding is revoked while
 the corrupt Chat remains unreadable and its state is not reset. All 70 binding/credential-route
 tests, package build, root typecheck, changed lint/format and staged semantic checks pass.
+
+### Causal credential lifecycle evidence — #4084 AC5 / #4085 AC4
+
+The trusted request correlation now passes through credential deletion, replacement and verification
+settlement into the existing binding invalidation and turn cancellation. It is separate from user
+payload fields and grants no authority. Operations outside a request retain the server-generated
+correlation fallback. The actual DELETE regression fails before this change; real writer/reader
+proof now ties all its binding effects and cancellation records to the HTTP response. Replacement
+proof similarly reconstructs both shared-Pod Chat updates under each credential update's request.
+All 122 custody/HTTP tests, 97 registry tests, package build, root typecheck, changed lint/format,
+staged semantic and ADR checks pass. Final acceptance and remaining lifecycle/Chat/UI work stay open.

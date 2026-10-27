@@ -33,6 +33,7 @@ function completeProbe(
     ticket.metadata.generation ?? 1,
     ticket.revision,
     status,
+    correlationId,
   );
   recordConnectionCheck(
     deps,

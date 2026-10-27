@@ -385,7 +385,7 @@ export function handleDeleteAtlassianConnectorCredential(
     const metadata = authRef === undefined ? undefined : guard.custody.getMetadata(authRef);
     if (metadata === undefined || !ownsAtlassianCredential(deps, metadata))
       throw new AtlassianCredentialCustodyError("credential-not-found");
-    if (!guard.custody.delete(metadata.authRef)) {
+    if (!guard.custody.delete(metadata.authRef, ctx.correlationId)) {
       return credentialNotFound(ctx.correlationId);
     }
     return { status: 200, body: { ok: true } };
@@ -428,7 +428,7 @@ export function handleUpdateAtlassianConnectorCredential(
     const metadata = authRef === undefined ? undefined : guard.custody.getMetadata(authRef);
     if (metadata === undefined || !ownsAtlassianCredential(deps, metadata))
       throw new AtlassianCredentialCustodyError("credential-not-found");
-    const updated = guard.custody.updateLivePod(metadata.authRef, body);
+    const updated = guard.custody.updateLivePod(metadata.authRef, body, ctx.correlationId);
     recordCredentialUpdated(
       guard,
       ctx.correlationId ?? UNKNOWN_CORRELATION_ID,

@@ -267,7 +267,11 @@ export interface AtlassianCredentialCustody {
   // Accepts the raw secret exactly once (unknown-shaped: hostile input is validated here, at the
   // enforcement point). Returns metadata only. Throws AtlassianCredentialCustodyError.
   readonly create: (input: unknown, livePodOwnerDigest?: string) => AtlassianCredentialMetadata;
-  readonly updateLivePod: (authRef: string, input: unknown) => AtlassianCredentialMetadata;
+  readonly updateLivePod: (
+    authRef: string,
+    input: unknown,
+    correlationId?: string,
+  ) => AtlassianCredentialMetadata;
   readonly beginVerification: (
     authRef: string,
     expectedGeneration?: number,
@@ -277,11 +281,12 @@ export interface AtlassianCredentialCustody {
     generation: number,
     revision: number,
     status: JiraLivePodMetadata["verificationStatus"],
+    correlationId?: string,
   ) => boolean;
   readonly getMetadata: (authRef: string) => AtlassianCredentialMetadata | undefined;
   readonly list: () => readonly AtlassianCredentialMetadata[];
   // Removes ciphertext AND metadata; returns false when the authRef is unknown.
-  readonly delete: (authRef: string) => boolean;
+  readonly delete: (authRef: string, correlationId?: string) => boolean;
 }
 
 export interface AtlassianCredentialCustodyDeps {
@@ -289,7 +294,8 @@ export interface AtlassianCredentialCustodyDeps {
   readonly metadataStore: AtlassianCredentialMetadataStore;
   // Server-owned invalidation follows durable revocation. null means credential removal.
   readonly onLivePodInvalidated?:
-    ((podId: string, authenticationGeneration: number | null) => void) | undefined;
+    | ((podId: string, authenticationGeneration: number | null, correlationId?: string) => void)
+    | undefined;
   readonly now?: () => number;
 }
 
@@ -623,6 +629,7 @@ function finishVerification(
   generation: number,
   revision: number,
   status: JiraLivePodMetadata["verificationStatus"],
+  correlationId?: string,
 ): boolean {
   const metadata = livePodCredential(deps, authRef);
   if (
@@ -640,7 +647,7 @@ function finishVerification(
     livePod: { ...metadata.livePod, verificationInProgress: false, verificationStatus: status },
   });
   if (nextGeneration !== generation)
-    deps.onLivePodInvalidated?.(metadata.livePod.podId, nextGeneration);
+    deps.onLivePodInvalidated?.(metadata.livePod.podId, nextGeneration, correlationId);
   return true;
 }
 
@@ -720,6 +727,7 @@ function pendingLivePodOperation(
   deps: AtlassianCredentialCustodyDeps,
   metadata: LivePodCredential,
   operation: NonNullable<JiraLivePodMetadata["credentialOperation"]>,
+  correlationId?: string,
 ): LivePodCredential {
   const pending: LivePodCredential = {
     ...metadata,
@@ -736,6 +744,7 @@ function pendingLivePodOperation(
   deps.onLivePodInvalidated?.(
     pending.livePod.podId,
     operation === "delete" ? null : pending.generation,
+    correlationId,
   );
   return pending;
 }
@@ -744,6 +753,7 @@ function updateLivePod(
   deps: AtlassianCredentialCustodyDeps,
   authRef: string,
   input: unknown,
+  correlationId?: string,
 ): AtlassianCredentialMetadata {
   const patch = validateLivePodUpdate(input);
   const metadata = livePodCredential(deps, authRef);
@@ -760,7 +770,7 @@ function updateLivePod(
     deps.metadataStore.insert(renamed);
     return renamed;
   }
-  const pending = pendingLivePodOperation(deps, metadata, "replace-token");
+  const pending = pendingLivePodOperation(deps, metadata, "replace-token", correlationId);
   vaultOp(() => {
     deps.vault.set(
       authRef,
@@ -777,15 +787,19 @@ function updateLivePod(
   return settled;
 }
 
-function deleteCredential(deps: AtlassianCredentialCustodyDeps, authRef: string): boolean {
+function deleteCredential(
+  deps: AtlassianCredentialCustodyDeps,
+  authRef: string,
+  correlationId?: string,
+): boolean {
   if (!isAtlassianConnectorAuthRef(authRef)) return false;
   const metadata = deps.metadataStore.get(authRef);
   if (metadata === undefined) return false;
   const livePod = livePodCredential(deps, authRef);
   if (livePod !== undefined) {
     if (livePod.livePod.credentialOperation !== "delete")
-      pendingLivePodOperation(deps, livePod, "delete");
-    else deps.onLivePodInvalidated?.(livePod.livePod.podId, null);
+      pendingLivePodOperation(deps, livePod, "delete", correlationId);
+    else deps.onLivePodInvalidated?.(livePod.livePod.podId, null, correlationId);
   }
   // A durable Live-Pod intent denies execution even if either subsequent cleanup fails.
   // Legacy Cloud deletion retains its original ciphertext-first ordering.
@@ -802,11 +816,12 @@ export function createAtlassianCredentialCustody(
   const custody: AtlassianCredentialCustody = {
     create: (input: unknown, ownerDigest?: string): AtlassianCredentialMetadata =>
       createCredential(deps, now, input, ownerDigest),
-    updateLivePod: (authRef, input) => updateLivePod(deps, authRef, input),
+    updateLivePod: (authRef, input, correlationId) =>
+      updateLivePod(deps, authRef, input, correlationId),
     beginVerification: (authRef, expectedGeneration) =>
       beginVerification(deps, authRef, expectedGeneration),
-    finishVerification: (authRef, generation, revision, status) =>
-      finishVerification(deps, authRef, generation, revision, status),
+    finishVerification: (authRef, generation, revision, status, correlationId) =>
+      finishVerification(deps, authRef, generation, revision, status, correlationId),
     // Re-validated on read (KEIKO-0894), matching resolveForExecution below: an authRef that
     // resolves to a record failing the key allowlist is indistinguishable from one that was never
     // stored.
@@ -824,7 +839,7 @@ export function createAtlassianCredentialCustody(
       [...deps.metadataStore.list()]
         .filter(isAtlassianCredentialMetadata)
         .sort(compareAtlassianCredentialMetadata),
-    delete: (authRef) => deleteCredential(deps, authRef),
+    delete: (authRef, correlationId) => deleteCredential(deps, authRef, correlationId),
   };
   return {
     custody,

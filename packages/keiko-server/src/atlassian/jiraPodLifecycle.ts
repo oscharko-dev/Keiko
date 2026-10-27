@@ -7,8 +7,8 @@ export function invalidateJiraPodChats(
   store: UiStore,
   podId: string,
   authenticationGeneration: number | null,
+  correlationId: string = randomUUID(),
 ): void {
-  const correlationId = randomUUID();
   for (const change of store.invalidateJiraPod(podId, authenticationGeneration, correlationId))
     interruptChangedChatGenerations({ store }, change.previous, change.current, correlationId);
 }

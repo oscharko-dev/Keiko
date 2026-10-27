@@ -425,7 +425,9 @@ This also covers the direct credential-management routes. The existing UI store 
 binding generation, retaining its Pod association on credential invalidation and disconnecting on
 removal. Older/repeated generation notifications are harmless. The existing Chat turn serializer
 then interrupts affected generations; other Pods' Chats remain untouched. Applied scope changes
-and requested cancellation use the registered `chat.scope.update` event. Cleanup failure cannot restore access: incomplete token replacement
+and requested cancellation use the registered `chat.scope.update` event. Request correlation passes
+through custody and invalidation, linking the HTTP result, binding effects and cancellation; only
+operations outside a request mint a fresh server correlation. Cleanup failure cannot restore access: incomplete token replacement
 and deletion are retained in private metadata, with a new generation and unverified readiness, before ciphertext changes.
 Execution and verification refuse these pending records before reading the vault. Token replacement
 settles only after the new sealed value and metadata are both written; a failed replacement requires
