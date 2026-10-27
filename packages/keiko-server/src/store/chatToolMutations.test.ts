@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import type { JiraMutationOutcome } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   expectActivityLogProof,
@@ -404,3 +405,10 @@ it.each([400, 403, 429])(
     ).toEqual({ kind: "blocked", reason: "unknown-effect" });
   },
 );
+
+it("does not allow the non-terminal pending projection to settle a journal record", () => {
+  const f = fixture();
+  f.journal.prepare(f.intent);
+  expect(() => f.journal.settle(f.intent.invocationId, "pending" as JiraMutationOutcome)).toThrow();
+  expect(f.journal.find(f.intent.invocationId)).toMatchObject({ phase: "prepared", outcome: null });
+});

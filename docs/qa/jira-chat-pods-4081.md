@@ -1061,3 +1061,23 @@ Package build, root typecheck, changed lint/format, ADR index, unchanged semanti
 observability pass. The diagnostic emitter is explicit at each caught failure; no legacy failure-path
 exemption was added. Registry generation resolves 608 proofs/30 scenarios without violations and its
 97 drift tests pass. The narrower 18-test composition suite also passed after the diagnostic repair.
+
+## Auditor repair: non-terminal mutation replays — #4083 AC5 / #4091 AC2
+
+The read-only auditor identified a valid distinction lost in the initial composer: a concurrent
+replay of a prepared record said `not-dispatched` while its original owner could still dispatch.
+The closed result-state contract now adds `pending` separately from terminal journal outcomes.
+Every unsettled replay reports `pending`; only a retained settlement is replayed as terminal.
+Missing journal/current admission or a preparation failure also leave prior state unqualified and
+cannot justify a no-effect claim. This state asserts neither an active owner nor permission to take
+one over. Existing journal settlement rules and dispatch barriers remain unchanged.
+
+Eight composer regressions failed before the repair and pass afterward. They cover a waiting owner
+that subsequently writes, a cancelled owner that never dispatches, revocation while HTTP remains
+outstanding, failed terminal persistence, and prepared/dispatched/acknowledged records reopened
+without an owner. An additional store test refuses to settle `pending` as a terminal outcome.
+The full targeted store/port/composer selection passes **797 tests**. Package build, root typecheck,
+changed lint, ADR index and error observability pass. Registry generation still resolves 608 proofs
+and 30 scenarios without violations; all 97 registry tests and the unchanged 938-entry semantic
+baseline check pass. Actual Chat admission and managed writes remain outstanding;
+this repair does not constitute complete acceptance of an epic criterion.

@@ -353,7 +353,12 @@ rejections to unknown before work resumes. An observed 2xx cannot be downgraded 
 normal terminal settlement is immutable.
 The server mutation composer connects this journal to the final Atlassian HTTP admission and
 response-observation callbacks. Only the creator of a new intent executes provider code; replaying
-prepared, in-flight or completed records never takes over execution. Metadata GET responses do not
+prepared, in-flight or completed records never takes over execution. An unsettled replay reports
+`pending`, a non-terminal result state distinct from stored terminal outcomes. It does not assert an
+active executor or permit takeover: the same state covers orphaned records after restart. If current
+admission or journal access prevents qualifying prior state, the composer also reports `pending`;
+it cannot infer that a possibly earlier attempt had no effect. Only a retained settlement is replayed
+as a terminal outcome. Metadata GET responses do not
 acknowledge a mutation. Final dispatch repeats the composing owner's synchronous admission inside
 the durable transaction, and a provider invocation may dispatch at most one mutation request.
 Confirmed results require the operation's validated receipt identities. Failed terminal persistence

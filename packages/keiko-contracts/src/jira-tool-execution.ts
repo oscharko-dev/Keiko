@@ -19,6 +19,11 @@ export const JIRA_MUTATION_OUTCOMES = [
 ] as const;
 export type JiraMutationOutcome = (typeof JIRA_MUTATION_OUTCOMES)[number];
 
+/** Pending means no authoritative final outcome is available, including orphaned records after
+ * restart. It neither asserts an active executor nor permits takeover or another dispatch. */
+export const JIRA_MUTATION_RESULT_STATES = [...JIRA_MUTATION_OUTCOMES, "pending"] as const;
+export type JiraMutationResultState = (typeof JIRA_MUTATION_RESULT_STATES)[number];
+
 /** Validated Jira identities only; remote bodies and headers never become a mutation receipt. */
 export interface JiraMutationReceipt {
   readonly issueKey?: string;

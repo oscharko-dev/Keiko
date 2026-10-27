@@ -1,7 +1,10 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi, type Mock } from "vitest";
 import type { JiraMutationAttempt } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import { buildUiStoreOverDatabase } from "../store/index.js";
+import { buildUiStoreOverDatabase, createNodeUiStore } from "../store/index.js";
 import { runMigrations } from "../store/schema.js";
 import { createChatToolMutationStore } from "../store/chatToolMutations.js";
 import type { ChatToolMutationIntent } from "../store/chatToolMutationTypes.js";
@@ -12,18 +15,22 @@ const cleanup: (() => void)[] = [];
 afterEach(() => {
   for (const close of cleanup.splice(0)) close();
 });
-function fixture(): {
+function fixture(path = ":memory:"): {
   input: JiraChatMutationExecution;
+  close: () => void;
   effects: Mock<typeof fetch>;
   logs: ReturnType<typeof createBufferedServerLogSink>;
 } {
-  const db = new DatabaseSync(":memory:");
+  const db = new DatabaseSync(path);
   db.exec("PRAGMA foreign_keys = ON");
   runMigrations(db);
   const store = buildUiStoreOverDatabase(db);
-  cleanup.push(() => {
-    store.close();
-  });
+  let closed = false;
+  const close = (): void => {
+    if (!closed) store.close();
+    closed = true;
+  };
+  cleanup.push(close);
   const chat = store.createChat(store.createProject(process.cwd()).path, "Synthetic", "model");
   const turn = store.admitChatTurn("synthetic-turn", {
     chatId: chat.id,
@@ -84,7 +91,7 @@ function fixture(): {
       return { ok: true, receipt: { issueKey: parsed.key, issueId: parsed.id } };
     },
   };
-  return { input, effects, logs };
+  return { input, effects, logs, close };
 }
 it("commits before sending, records acknowledgement, and never repeats a completed invocation", async () => {
   const f = fixture();
@@ -161,11 +168,11 @@ it("refuses a missing journal or authority before executing provider code", asyn
   const f = fixture();
   const execute = vi.fn(f.input.execute);
   expect(await executeJiraChatMutation({ ...f.input, journal: undefined, execute })).toMatchObject({
-    data: { outcome: "not-dispatched" },
+    data: { outcome: "pending" },
   });
   expect(
     await executeJiraChatMutation({ ...f.input, beforeEffect: () => false, execute }),
-  ).toMatchObject({ data: { outcome: "not-dispatched" } });
+  ).toMatchObject({ data: { outcome: "pending" } });
   expect(execute).not.toHaveBeenCalled();
   expect(f.effects).not.toHaveBeenCalled();
 });
@@ -210,7 +217,7 @@ it("does not take ownership of a concurrent duplicate while the first invocation
   try {
     await ready;
     expect(await executeJiraChatMutation(input)).toMatchObject({
-      data: { outcome: "not-dispatched", replayed: true },
+      data: { outcome: "pending", replayed: true },
     });
     expect(f.effects).not.toHaveBeenCalled();
     release?.();
@@ -313,7 +320,116 @@ it("retains acknowledged uncertainty when terminal persistence fails", async () 
     data: { outcome: "succeeded-unconfirmed" },
   });
   expect(await executeJiraChatMutation({ ...f.input, journal: broken })).toMatchObject({
-    data: { outcome: "succeeded-unconfirmed", replayed: true },
+    data: { outcome: "pending", replayed: true },
   });
   expect(f.effects).toHaveBeenCalledOnce();
+});
+
+it.each(["prepared", "dispatched", "acknowledged"] as const)(
+  "keeps an orphaned %s record unresolved across restart without taking ownership",
+  async (phase) => {
+    const directory = mkdtempSync(join(tmpdir(), "keiko-mutation-replay-"));
+    const path = join(directory, "ui.sqlite");
+    try {
+      const f = fixture(path);
+      const journal = f.input.journal;
+      if (journal === undefined) throw new Error("Expected journal");
+      journal.prepare(f.input.intent);
+      if (phase !== "prepared") journal.beginDispatch(f.input.intent.invocationId, () => true);
+      if (phase === "acknowledged") journal.acknowledge(f.input.intent.invocationId, 201);
+      f.close();
+      const reopened = createNodeUiStore(path);
+      try {
+        const execute = vi.fn(f.input.execute);
+        expect(
+          await executeJiraChatMutation({
+            ...f.input,
+            journal: reopened.chatToolMutations,
+            execute,
+          }),
+        ).toMatchObject({ data: { outcome: "pending" }, isError: true });
+        expect(reopened.chatToolMutations?.find(f.input.intent.invocationId)).toMatchObject({
+          phase,
+          outcome: null,
+        });
+        expect(execute).not.toHaveBeenCalled();
+        expect(f.effects).not.toHaveBeenCalled();
+      } finally {
+        reopened.close();
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  },
+);
+it("keeps a replay pending until the owner settles a pre-dispatch cancellation", async () => {
+  const f = fixture();
+  const controller = new AbortController();
+  let release: (() => void) | undefined;
+  let entered: (() => void) | undefined;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const ready = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const input: JiraChatMutationExecution = {
+    ...f.input,
+    execute: async (http) => {
+      entered?.();
+      await held;
+      return f.input.execute((request) => http({ ...request, signal: controller.signal }));
+    },
+  };
+  const owner = executeJiraChatMutation(input);
+  try {
+    await ready;
+    expect(await executeJiraChatMutation(input)).toMatchObject({
+      data: { outcome: "pending", replayed: true },
+    });
+    controller.abort();
+    release?.();
+    expect(await owner).toMatchObject({ data: { outcome: "rejected" } });
+    expect(await executeJiraChatMutation(input)).toMatchObject({
+      data: { outcome: "rejected", replayed: true },
+    });
+    expect(f.effects).not.toHaveBeenCalled();
+  } finally {
+    release?.();
+    await owner;
+  }
+});
+it("does not turn revoked admission into a no-effect claim while an HTTP attempt remains outstanding", async () => {
+  const f = fixture();
+  let reject: ((error: Error) => void) | undefined;
+  let entered: (() => void) | undefined;
+  const ready = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  f.effects.mockImplementation(
+    () =>
+      new Promise<Response>((_resolve, rejectAttempt) => {
+        reject = rejectAttempt;
+        entered?.();
+      }),
+  );
+  const owner = executeJiraChatMutation(f.input);
+  try {
+    await ready;
+    expect(await executeJiraChatMutation({ ...f.input, beforeEffect: () => false })).toMatchObject({
+      data: { outcome: "pending", reason: "permission-denied" },
+    });
+    expect(await executeJiraChatMutation(f.input)).toMatchObject({
+      data: { outcome: "pending", replayed: true },
+    });
+    reject?.(new Error("synthetic interrupted response"));
+    expect(await owner).toMatchObject({ data: { outcome: "unknown" } });
+    expect(await executeJiraChatMutation(f.input)).toMatchObject({
+      data: { outcome: "unknown", replayed: true },
+    });
+    expect(f.effects).toHaveBeenCalledOnce();
+  } finally {
+    reject?.(new Error("synthetic cleanup"));
+    await owner;
+  }
 });

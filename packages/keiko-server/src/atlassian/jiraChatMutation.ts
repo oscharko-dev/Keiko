@@ -9,6 +9,7 @@ import {
   type AtlassianConnectorWriteFailureReason,
   type JiraMutationAttempt,
   type JiraMutationOutcome,
+  type JiraMutationResultState,
   type JiraMutationReceipt,
   type JiraMutationOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
@@ -82,7 +83,7 @@ function validAttempt(
   return valid ? { ok: true, receipt } : { ok: false, reason: "malformed-payload" };
 }
 function result(
-  outcome: JiraMutationOutcome,
+  outcome: JiraMutationResultState,
   reason?: AtlassianConnectorWriteFailureReason,
   receipt: JiraMutationReceipt = {},
   replayed = false,
@@ -178,9 +179,9 @@ export async function executeJiraChatMutation(
     transport: Object.freeze({ ...source.transport }),
   };
   const { journal, intent } = input;
-  if (journal === undefined) return result("not-dispatched", "unavailable");
+  if (journal === undefined) return result("pending", "unavailable");
   try {
-    if (!confirmed(input.beforeEffect())) return result("not-dispatched", "permission-denied");
+    if (!confirmed(input.beforeEffect())) return result("pending", "permission-denied");
     const preparation = journal.prepare(intent);
     if (preparation.kind === "blocked")
       return result(
@@ -188,10 +189,10 @@ export async function executeJiraChatMutation(
         preparation.reason === "capacity" ? "bounds-exceeded" : "conflict",
       );
     if (preparation.kind === "replayed")
-      return result(observedOutcome(preparation.record), undefined, {}, true);
+      return result(preparation.record.outcome ?? "pending", undefined, {}, true);
   } catch (error) {
     emitServerDiagnostic(undefined, mutationDiagnostic(intent, error));
-    return result("not-dispatched", "unavailable");
+    return result("pending", "unavailable");
   }
   try {
     return finish(input, journal, await attempt(input, journal));
