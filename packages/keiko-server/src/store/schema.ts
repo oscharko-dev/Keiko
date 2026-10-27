@@ -10,7 +10,7 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 48;
+export const SCHEMA_VERSION = 49;
 
 interface Migration {
   readonly version: number;
@@ -1748,6 +1748,10 @@ export const MIGRATIONS: readonly Migration[] = [
     // A response can be replaced after commit. Repair retained observations before work resumes.
     sql: `UPDATE chat_tool_mutations SET outcome = 'unknown'
       WHERE phase = 'settled' AND outcome = 'rejected' AND http_status IS NOT NULL;`,
+  },
+  {
+    version: 49,
+    sql: "ALTER TABLE chats ADD COLUMN jira_state_json TEXT;",
   },
 ];
 

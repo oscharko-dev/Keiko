@@ -30,8 +30,11 @@ import type {
   UpdateChatOptions,
   UpdateChatPatch,
 } from "./types.js";
-import { invalidRequest, notFound } from "./errors.js";
+import { invalidRequest, notFound, UiStoreError } from "./errors.js";
+import { logChatScopeUpdate } from "../chat-scope-update-log.js";
 import { deriveChatGroundingScopeIdentity } from "./chat-grounding-scope-identity.js";
+import { decodeJiraChatState, jiraChatFields, updatedJiraChatState } from "./chatJiraBinding.js";
+import { withImmediateTransaction } from "./transaction.js";
 
 // Issue #3400 (epic #3384) — a chat rarely connects more than one Git comparison at a time; this
 // cap is deliberately far below the combined-source cap (`combinedSourceCap`, which does not
@@ -76,6 +79,7 @@ interface ChatRow {
   readonly connected_scope_at: number | null;
   readonly local_knowledge_scope_json: string | null;
   readonly git_change_scope_json: string | null;
+  readonly jira_state_json: string | null;
   readonly created_at: number;
   readonly updated_at: number;
 }
@@ -515,6 +519,7 @@ function rowToChat(row: ChatRow): Chat {
   const localKnowledgeScopes = decodeLocalKnowledgeScopes(row.local_knowledge_scope_json);
   const gitChangeScopes = decodeGitChangeScopes(row.git_change_scope_json);
   const chat: Chat = {
+    ...jiraChatFields(decodeJiraChatState(row.jira_state_json)),
     id: row.id,
     projectPath: row.project_path,
     title: row.title,
@@ -542,7 +547,7 @@ function rowToChat(row: ChatRow): Chat {
 const SELECT_COLUMNS =
   "id, project_path, title, selected_model, branch_label, status, " +
   "connected_scope_paths, connected_scope_at, local_knowledge_scope_json, " +
-  "git_change_scope_json, created_at, updated_at";
+  "git_change_scope_json, jira_state_json, created_at, updated_at";
 
 const ORDINARY_CHAT = "NOT EXISTS (SELECT 1 FROM coding_history_tasks WHERE chat_id = chats.id)";
 const SQL_LIST = `SELECT ${SELECT_COLUMNS} FROM chats WHERE project_path = ? AND ${ORDINARY_CHAT} ORDER BY created_at ASC`;
@@ -577,7 +582,7 @@ RETURNING ${SELECT_COLUMNS}
 // (Issue #3400) git-change scopes use the same 3-state encoding against a single JSON column.
 // Parameter order: title, model, branch, status, updated_at, apply_scope, scope_paths,
 // apply_scope, scope_at, apply_local_scope, local_scope_json, apply_git_change_scope,
-// git_change_scope_json, id.
+// git_change_scope_json, apply_jira_state, jira_state_json, id.
 const SQL_UPDATE = `
 UPDATE chats SET
   title = COALESCE(?, title),
@@ -588,7 +593,8 @@ UPDATE chats SET
   connected_scope_paths = CASE WHEN ? = 1 THEN ? ELSE connected_scope_paths END,
   connected_scope_at    = CASE WHEN ? = 1 THEN ? ELSE connected_scope_at END,
   local_knowledge_scope_json = CASE WHEN ? = 1 THEN ? ELSE local_knowledge_scope_json END,
-  git_change_scope_json = CASE WHEN ? = 1 THEN ? ELSE git_change_scope_json END
+  git_change_scope_json = CASE WHEN ? = 1 THEN ? ELSE git_change_scope_json END,
+  jira_state_json = CASE WHEN ? = 1 THEN ? ELSE jira_state_json END
 WHERE id = ?
 RETURNING ${SELECT_COLUMNS}
 `;
@@ -1064,12 +1070,14 @@ export function previewChatScopeUpdate(
   const connected = resolveScopePatch(patch);
   const local = resolveLocalKnowledgeScopePatch(patch);
   const git = resolveGitChangeScopePatch(patch);
+  const jira = updatedJiraChatState(existing, patch, options, existing.updatedAt);
   // Explicit empty lists supersede legacy singular fields in the canonical identity.
   return {
     ...existing,
     ...(connected === undefined ? {} : { connectedScopes: connected ?? [] }),
     ...(local === undefined ? {} : { localKnowledgeScopes: local ?? [] }),
     ...(git === undefined ? {} : { gitChangeScopes: git ?? [] }),
+    ...(jira === undefined ? {} : jiraChatFields(jira)),
   };
 }
 
@@ -1127,7 +1135,45 @@ export function updateChat(
   now: number,
   options?: UpdateChatOptions,
 ): Chat {
-  validateChatUpdate(findChatById(db, id), patch, options);
+  const result = withImmediateTransaction(db, () => {
+    const existing = findChatById(db, id);
+    if (existing === undefined) throw notFound("Chat");
+    assertCurrentScope(existing, patch, options);
+    return { existing, chat: updateChatRow(db, existing, patch, now, options) };
+  });
+  if (result.existing.jiraBindingGeneration !== result.chat.jiraBindingGeneration) {
+    logChatScopeUpdate("applied", result.existing, result.chat, patch, options?.correlationId);
+  }
+  return result.chat;
+}
+
+function assertCurrentScope(
+  existing: Chat,
+  patch: UpdateChatPatch,
+  options?: UpdateChatOptions,
+): void {
+  if (
+    patch.expectedGroundingScopeIdentity === undefined ||
+    patch.expectedGroundingScopeIdentity === deriveChatGroundingScopeIdentity(existing)
+  )
+    return;
+  logChatScopeUpdate("conflict", existing, existing, patch, options?.correlationId);
+  throw new UiStoreError(
+    "GROUNDING_SCOPE_CHANGED",
+    "The connected sources changed before this update could run.",
+    409,
+  );
+}
+
+function updateChatRow(
+  db: DatabaseSync,
+  existing: Chat,
+  patch: UpdateChatPatch,
+  now: number,
+  options?: UpdateChatOptions,
+): Chat {
+  validateChatUpdate(existing, patch, options);
+  const jira = updatedJiraChatState(existing, patch, options, now);
   const titleParam = patch.title ?? null;
   const modelParam = patch.selectedModel ?? null;
   const branchParam = patch.branchLabel ?? null;
@@ -1151,7 +1197,9 @@ export function updateChat(
       localScope.json,
       gitChangeScope.apply,
       gitChangeScope.json,
-      id,
+      Number(jira !== undefined),
+      jira === undefined ? null : JSON.stringify(jira),
+      existing.id,
     ) as unknown as ChatRow | undefined;
   if (row === undefined) throw notFound("Chat");
   return rowToChat(row);

@@ -39,6 +39,17 @@ accepted Coding mode and the Coding deployment ceiling; their authority must not
 through the independent Memory capture policy, even though the Chat wire carries that mode in
 the shared request field. Existing description-scope and envelope validation still apply.
 
+Epic #4081 / #4084 adds ordinary Chat's persisted tool-mode selection, defaulting to Ask for
+approval, and one opaque Jira Pod binding with monotonic binding/authentication generations.
+The selection and binding are state, not an Authority Envelope or consent. They do not advertise
+or execute tools by themselves. Schema 49 keeps this state in the existing Chat row; an atomic
+update checks the current grounding identity and advances the binding generation for an effective
+mode, Pod or authentication-generation change. Disconnect retains that generation. Legacy Chats
+without Jira state retain their previous grounding identity. Endpoint and credential custody stay
+outside the Chat database. Registered scope-update evidence records counts, generation and mode,
+without Pod identifiers or content. Authenticated Pod resolution, grants and approvals must still
+compose through the shared authority owner before this persisted selection can authorize effects.
+
 ## Context
 
 ADR-0124 defined the three Coding Workbench autonomy modes (`governed-assist`,

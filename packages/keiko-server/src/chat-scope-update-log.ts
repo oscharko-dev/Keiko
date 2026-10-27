@@ -30,6 +30,14 @@ const CHAT_SCOPE_UPDATE = defineActivityLogOperation({
     connectedSourceCount: { type: "integer", dataClass: "count", required: true },
     localKnowledgeSourceCount: { type: "integer", dataClass: "count", required: true },
     gitChangeSourceCount: { type: "integer", dataClass: "count", required: true },
+    jiraSourceCount: { type: "integer", dataClass: "count", required: false },
+    jiraBindingGeneration: { type: "integer", dataClass: "count", required: false },
+    toolMode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["governed-assist", "supervised-coding", "autonomous-delivery"],
+    },
     cancelledGenerationCount: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
@@ -67,9 +75,23 @@ export function logChatScopeUpdate(
         actualScopeDigest: deriveChatGroundingScopeIdentity(existing).slice("gsi-v1:".length),
         resultScopeDigest: deriveChatGroundingScopeIdentity(result).slice("gsi-v1:".length),
         ...chatGroundingSourceCounts(result),
+        ...jiraStateEvidence(result),
         completeness: "complete",
         loss: "none",
       },
     ),
   );
+}
+
+function jiraStateEvidence(chat: Chat): {
+  readonly jiraSourceCount?: number;
+  readonly jiraBindingGeneration?: number;
+  readonly toolMode?: NonNullable<Chat["toolMode"]>;
+} {
+  if ((chat.jiraBindingGeneration ?? 0) === 0) return {};
+  return {
+    jiraSourceCount: Number(chat.jiraPodBinding !== undefined),
+    jiraBindingGeneration: chat.jiraBindingGeneration ?? 0,
+    toolMode: chat.toolMode ?? "governed-assist",
+  };
 }

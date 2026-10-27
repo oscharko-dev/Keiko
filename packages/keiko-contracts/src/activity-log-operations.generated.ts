@@ -2119,6 +2119,22 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: true,
       },
+      jiraSourceCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      jiraBindingGeneration: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      toolMode: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["governed-assist", "supervised-coding", "autonomous-delivery"],
+      },
       cancelledGenerationCount: {
         type: "integer",
         dataClass: "count",

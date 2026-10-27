@@ -1193,3 +1193,27 @@ The **328-test catalog/provider/SDK/field/legacy-live-search selection** passes.
 SDK cases additionally assert the correct qualified link while journal/MCP logs remain endpoint-free.
 Package build, root typecheck and changed lint pass. These synthetic results do not replace the
 outstanding licensed Jira, product Chat or browser qualification.
+
+## Atomic Chat state foundation — #4084 AC1/AC2/AC4/AC5
+
+Schema 49 extends the existing Chat row with versioned Jira state: one independent Pod UUID,
+binding/authentication generations and the selected tool mode. It stores no endpoint, credential
+reference, token, grant or approval. Missing legacy state defaults to Ask for approval and preserves
+the previous grounding identity. Effective Pod, authentication or mode changes advance the binding
+generation; disconnect retains it and an unchanged reconnect does not reset it. The store requires
+a trusted resolved Pod target, rejecting absent/mismatched/invalid targets. Read/preview/commit use
+the same codec and scope projection. Corrupt persisted state fails closed with a body-free error.
+
+The existing transaction helper now protects Chat update validation and writes together. Scope
+preconditions are rechecked inside that transaction, so a stale combined patch cannot partially
+rename or rebind a Chat. Existing registered scope-update logging includes optional Jira counts,
+generation and mode; the persisted reader proof rejects title/Pod-ID leakage. Reopen, corruption,
+separate-Chat defaults and existing scope/store/migration/serializer/route regressions are covered.
+
+Five behavioral tests failed against the preceding implementation after correcting the test's
+temporary-directory prerequisite. The **342-test affected selection** passes, including the actual
+registered writer/reader. The first log assertion used the in-memory event shape instead of the
+persisted flattened record; it was corrected and the full selection rerun. The **97 registry tests**
+also pass; regeneration resolves 608 proofs and 30 scenarios without violations. This checkpoint
+does **not** claim authenticated Pod route resolution, current credential readiness, read grants,
+approval redemption, ordinary Chat execution or any complete acceptance criterion.

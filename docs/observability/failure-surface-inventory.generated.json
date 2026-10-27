@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "a924cabd862c8c35161af7610efb7776cd5023f656f706c4b11a4cfd026a3a90"
+    "catalogDigest": "d8ef0a57db97cb314bf84d9b4336da10fd169c7067e82019348904992fc28423"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -14,6 +14,10 @@
       {
         "op": "atlassian.action.outcome",
         "field": "deploymentCeiling"
+      },
+      {
+        "op": "chat.scope.update",
+        "field": "toolMode"
       },
       {
         "op": "coding-context.pack",
@@ -1248,7 +1252,10 @@
     "chat.response.streamed.emitted-line": [
       "packages/keiko-model-gateway/src/openai-adapter.stream-read.test.ts"
     ],
-    "chat.scope.update.outcome": ["packages/keiko-server/src/store-handlers.test.ts"],
+    "chat.scope.update.outcome": [
+      "packages/keiko-server/src/store-handlers.test.ts",
+      "packages/keiko-server/src/store/chatJiraBinding.test.ts"
+    ],
     "chat.send.rejected.reason": ["packages/keiko-server/src/chat-activity.test.ts"],
     "chat.tool-mutation.emitted-line": [
       "packages/keiko-server/src/store/chatToolMutations.test.ts"

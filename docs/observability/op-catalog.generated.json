@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "a924cabd862c8c35161af7610efb7776cd5023f656f706c4b11a4cfd026a3a90",
+    "catalogDigest": "d8ef0a57db97cb314bf84d9b4336da10fd169c7067e82019348904992fc28423",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -2213,6 +2213,22 @@
             "dataClass": "count",
             "required": true
           },
+          "jiraSourceCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "jiraBindingGeneration": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "toolMode": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["governed-assist", "supervised-coding", "autonomous-delivery"]
+          },
           "cancelledGenerationCount": {
             "type": "integer",
             "dataClass": "count",
@@ -2226,7 +2242,7 @@
         "proofIds": ["chat.scope.update.outcome"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/chat-scope-update-log.ts:13",
-        "emitterSites": ["packages/keiko-server/src/chat-scope-update-log.ts:55"]
+        "emitterSites": ["packages/keiko-server/src/chat-scope-update-log.ts:63"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -54432,6 +54448,18 @@
                   "required": true
                 },
                 {
+                  "name": "jiraBindingGeneration",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "jiraSourceCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "localKnowledgeSourceCount",
                   "type": "integer",
                   "dataClass": "count",
@@ -54448,6 +54476,12 @@
                   "type": "string",
                   "dataClass": "digest",
                   "required": true
+                },
+                {
+                  "name": "toolMode",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
                 }
               ],
               "evidenceClasses": [

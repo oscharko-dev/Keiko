@@ -315,6 +315,12 @@ export interface WorkspaceManifestRootProject {
 }
 
 export interface UpdateChatOptions {
+  readonly correlationId?: string | undefined;
+  /** Trusted, freshly resolved target; never copied from the PATCH body. */
+  readonly verifiedJiraPod?: {
+    readonly podId: string;
+    readonly authenticationGeneration: number;
+  };
   readonly maxConnectedSources?: number;
   readonly maxLocalKnowledgeSources?: number;
 }

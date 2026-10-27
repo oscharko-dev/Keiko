@@ -290,6 +290,21 @@ export interface ChatGitChangeScope {
   readonly connectedAtMs: number;
 }
 
+/** Opaque Pod identity only; credential references and endpoints stay in private custody. */
+export interface ChatJiraPodBinding {
+  readonly podId: string;
+  readonly bindingGeneration: number;
+  readonly authenticationGeneration: number;
+  readonly connectedAtMs: number;
+}
+
+export function isChatJiraPodId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value)
+  );
+}
+
 export interface Chat {
   readonly id: string;
   readonly projectPath: string;
@@ -317,6 +332,11 @@ export interface Chat {
   // facts (contract correction 2). Unlike `connectedScopes`/`localKnowledgeScopes` there is no
   // single-source legacy field: this scope kind was never overloaded onto an earlier shape.
   readonly gitChangeScopes?: readonly ChatGitChangeScope[];
+  readonly jiraPodBinding?: ChatJiraPodBinding | undefined;
+  /** Retained after disconnect so a later connection cannot reuse an earlier generation. */
+  readonly jiraBindingGeneration?: number;
+  /** Absent legacy selections mean Ask for approval. */
+  readonly toolMode?: CodingWorkbenchMode;
   // Path-free server-issued concurrency token for the canonical retrieval-semantic grounding
   // scope. Voice queues echo it back so a final captured under one source set cannot later
   // retrieve under another; lifecycle metadata does not alter the token.
@@ -524,6 +544,9 @@ export interface UpdateProjectPatch {
 // leaves it untouched. The BFF PATCH handler is responsible for validating each scopePath via
 // isValidScopePath; this shape carries the post-validation values across the wire.
 export interface UpdateChatPatch {
+  /** Selection intent only; the server resolves and validates the current Pod generation. */
+  readonly jiraPodId?: string | null;
+  readonly toolMode?: CodingWorkbenchMode;
   /**
    * When supplied, reject any patch if its scope identity is stale, including title-only,
    * status-only and precondition-only updates. This precondition never grants source access.

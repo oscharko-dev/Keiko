@@ -1957,6 +1957,18 @@
               "required": true
             },
             {
+              "name": "jiraBindingGeneration",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "jiraSourceCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "localKnowledgeSourceCount",
               "type": "integer",
               "dataClass": "count",
@@ -1973,6 +1985,12 @@
               "type": "string",
               "dataClass": "digest",
               "required": true
+            },
+            {
+              "name": "toolMode",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
             }
           ],
           "evidenceClasses": ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
