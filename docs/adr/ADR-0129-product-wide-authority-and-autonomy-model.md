@@ -232,8 +232,12 @@ private actor/authority/proof facts; its bounded, closed decision carries only a
 and the current disclosure version. The server re-resolves ownership, binding, verification,
 original authority, read scope and grant lifetime after reading the body, and computes acceptance
 evidence itself. Legacy approval routes cannot consume these grants. Consent changes only the
-existing retained record and never dispatches a tool. Request production, admission at use and
-the ordinary Chat/UI consumers remain separate integration requirements.
+existing retained record and never dispatches a tool. The current-state authority owner now
+requests/reuses consent through that same bounded approval owner. It preserves a retained
+request's issuing authority and expiry, validates both current and issuing authority on reuse,
+and does not automatically repeat a rejected request within the same authority. Expiry is
+bounded by the issuing authority and existing approval TTL. Catalog admission/dispatch and the
+ordinary Chat/UI consumers remain separate integration requirements.
 
 ### D6 — Forward rule for decision records
 

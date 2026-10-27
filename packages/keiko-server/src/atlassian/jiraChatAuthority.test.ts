@@ -1,3 +1,8 @@
+import {
+  AtlassianActionApprovalRegistry,
+  ATLASSIAN_ACTION_APPROVAL_TTL_MS,
+  ATLASSIAN_ACTION_APPROVAL_MAX_PENDING,
+} from "./actionApprovals.js";
 import type { JiraLivePodMetadata } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   createFileServerLogSink,
@@ -29,6 +34,7 @@ import {
 } from "../editor/chatAuthority.test-support.js";
 import { jiraChatActorDigest } from "./jiraPodAccess.js";
 import {
+  requestJiraChatReadGrant,
   resolveCurrentJiraChatAuthority,
   decideGovernedJiraChatAction,
   reserveCurrentJiraChatAuthority,
@@ -371,4 +377,151 @@ it("reconstructs Chat policy and reservation through the real Activity Log", () 
     sink.close?.();
     resetServerLogger();
   }
+});
+
+describe("ordinary Chat first-read consent admission", () => {
+  let grants: AtlassianActionApprovalRegistry;
+  const now = Date.parse(CHAT_AUTHORITY_TEST_NOW);
+  beforeEach(() => {
+    grants = new AtlassianActionApprovalRegistry(() => now);
+  });
+
+  function request(): ReturnType<typeof requestJiraChatReadGrant> {
+    return requestJiraChatReadGrant(
+      { ...deps, atlassianActionApprovalRegistry: grants },
+      chat.id,
+      reference,
+      CHAT_AUTHORITY_TEST_NOW,
+      "read-admission-proof",
+    );
+  }
+
+  function pendingId(): string {
+    const value = request();
+    expect(value.kind).toBe("review-required");
+    if (value.kind === "denied") throw new Error("Expected a grant request");
+    return value.grant.grantId;
+  }
+
+  it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
+    "requests one explicit read grant in %s",
+    (mode) => {
+      store.updateChat(chat.id, { toolMode: mode });
+      registerCurrentAuthority();
+      const first = request();
+      expect(first.kind).toBe("review-required");
+      expect(request()).toEqual(first);
+      if (first.kind === "denied") throw new Error("Expected grant");
+      expect(first.grant.expiresAt).toBe(now + ATLASSIAN_ACTION_APPROVAL_TTL_MS);
+      expect(JSON.stringify(first)).not.toMatch(
+        /actorDigest|consentProofDigest|authority|authRef|baseUrl/,
+      );
+    },
+  );
+
+  it("reuses one pending request across current authorities without replacing its origin", () => {
+    const id = pendingId();
+    const origin = reference;
+    registerCurrentAuthority({ runId: "next-turn" });
+    expect(pendingId()).toBe(id);
+    expect(grants.getChatReadGrant(id)?.authority).toEqual(origin);
+  });
+
+  it("reuses accepted consent only while original and current authorities remain valid", () => {
+    const id = pendingId();
+    const entry = grants.getChatReadGrant(id);
+    if (entry === undefined) throw new Error("Expected pending grant");
+    expect(
+      grants.acceptChatReadGrant(id, entry.grant.subject, entry.authority, "b".repeat(64)).ok,
+    ).toBe(true);
+    expect(request()).toMatchObject({ kind: "granted", grant: { grantId: id } });
+    registerCurrentAuthority({ runId: "later-turn" });
+    expect(request()).toMatchObject({ kind: "granted", grant: { grantId: id } });
+    deps.agentAuthorityRegistry?.revoke(entry.authority);
+    const renewed = pendingId();
+    expect(renewed).not.toBe(id);
+    expect(grants.getChatReadGrant(id)?.grant.state).toBe("revoked");
+  });
+
+  it("does not automatically ask again after rejection within the same authority", () => {
+    const id = pendingId();
+    const entry = grants.getChatReadGrant(id);
+    if (entry === undefined) throw new Error("Expected pending grant");
+    expect(grants.rejectChatReadGrant(id, entry.grant.subject, entry.authority).ok).toBe(true);
+    expect(request()).toEqual({ kind: "denied", reason: "rejected" });
+    registerCurrentAuthority({ runId: "new-human-turn" });
+    expect(pendingId()).not.toBe(id);
+  });
+
+  it("caps the grant lifetime at the original authority expiry", () => {
+    registerCurrentAuthority({ expiresAt: new Date(now + 30_000).toISOString() });
+    const id = pendingId();
+    expect(grants.getChatReadGrant(id)?.grant.expiresAt).toBe(now + 30_000);
+  });
+
+  it("fails closed without a graph approval owner or current read authority", () => {
+    expect(
+      requestJiraChatReadGrant(deps, chat.id, reference, CHAT_AUTHORITY_TEST_NOW, "missing-owner")
+        .kind,
+    ).toBe("denied");
+    registerCurrentAuthority({ connectorScopes: ["issue-tracker.write"] });
+    expect(request().kind).toBe("denied");
+    updatePod({ verificationInProgress: true });
+    expect(request().kind).toBe("denied");
+  });
+
+  it("records one request and causal reuse without private facts", () => {
+    const sink = createFileServerLogSink(project, { level: "debug" });
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    try {
+      const id = pendingId();
+      expect(pendingId()).toBe(id);
+      const lines = persistedActivityLogLines(
+        readPersistedActivityLog(project),
+        "chat.tool-authority.operation",
+      );
+      const records = lines.map((line) =>
+        expectActivityLogProof("chat.tool-authority.operation.read-grant-admission", line),
+      );
+      expect(
+        records.filter((line) => line.grantState === "pending").map((line) => line.affectedCount),
+      ).toEqual([1, 0]);
+      expect(records.every((line) => line.correlationId === "read-admission-proof")).toBe(true);
+      for (const value of [id, chat.id, POD, actor, "private-credential-reference"])
+        expect(lines.join("\n")).not.toContain(value);
+    } finally {
+      sink.close?.();
+      resetServerLogger();
+    }
+  });
+
+  it("fails closed when the authority expires during grant creation", () => {
+    registerCurrentAuthority({ expiresAt: new Date(now + 1).toISOString() });
+    grants = new AtlassianActionApprovalRegistry(() => now + 2);
+    expect(request()).toEqual({ kind: "denied", reason: "unavailable" });
+  });
+
+  it("retains the shared approval capacity bound", () => {
+    const current = resolve();
+    if (!current.ok) throw new Error("Expected authority");
+    for (let i = 0; i < ATLASSIAN_ACTION_APPROVAL_MAX_PENDING; i++) {
+      expect(
+        grants.createChatReadGrant({
+          authority: reference,
+          grant: {
+            schemaVersion: "1",
+            kind: "jira-chat-read-grant",
+            grantId: `occupied-${String(i)}`,
+            subject: { ...current.envelope.subject, bindingGeneration: i + 50 },
+            disclosureVersion: "jira-chat-read-v1",
+            requestedAt: now,
+            expiresAt: now + ATLASSIAN_ACTION_APPROVAL_TTL_MS,
+            state: "pending",
+            consentProofDigest: null,
+          },
+        }).ok,
+      ).toBe(true);
+    }
+    expect(request()).toEqual({ kind: "denied", reason: "capacity-exhausted" });
+  });
 });

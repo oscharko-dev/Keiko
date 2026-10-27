@@ -141,7 +141,7 @@ Status: **Partial — not accepted**. Schema 49 and the authenticated PATCH/seri
 
 - [ ] **AC2:** All three modes have explicit regression coverage through the shared action-class policy, including per-chat mode persistence, the unconfigured `autonomous-delivery` tool-source ceiling delivered by the one server resolver from #4083 and an explicitly narrower ceiling: required approval precedes network/effect, denied actions make no call, bounded allowed actions execute without invented extra approval. The read grant is requested once, covers only read-class tools of the current binding and credential generation, and never covers writes. Missing/expired authority remains denied in every mode.
 
-Status: **Partial — not accepted**. All three mode selections persist through the actual Chat PATCH; the shared action policy and deployment ceiling have scoped regression evidence below. The ordinary Chat contract and shared registry now enforce subject, ceiling, expiry, revocation and cumulative budget boundaries. The existing approval owner now retains bounded, immutable Chat read grants with idempotent acceptance and no TTL renewal. The authenticated consent endpoint now projects and accepts/rejects a retained request after fresh authority, ownership, generation, scope and expiry checks. Once-per-binding request production, write-approval redemption and ordinary-Chat execution remain pending.
+Status: **Partial — not accepted**. All three mode selections persist through the actual Chat PATCH; the shared action policy and deployment ceiling have scoped regression evidence below. The ordinary Chat contract and shared registry now enforce subject, ceiling, expiry, revocation and cumulative budget boundaries. The existing approval owner now retains bounded, immutable Chat read grants with idempotent acceptance and no TTL renewal. The authenticated consent endpoint now projects and accepts/rejects a retained request after fresh authority, ownership, generation, scope and expiry checks. A server admission primitive now requests/reuses consent in all modes, retains the issuing authority and expiry, and does not automatically re-prompt after rejection within the same authority. Actual catalog dispatch composition, write-approval redemption and ordinary-Chat execution remain pending.
 
 - [ ] **AC3:** Disconnect, replacement, Pod deletion and Keiko-managed token rotation/revocation revoke read grants and invalidate pending approvals and queued calls. Jira-side token revocation is enforced on the next Jira call; observed auth failure invalidates local readiness and pending work without introducing polling or webhooks. Tests cover these changes during approval and before effect; no stale request uses the old or newly substituted credential.
 
@@ -1601,3 +1601,27 @@ violations. Logs:
 This endpoint acts only on a request already retained by the trusted server owner. Automatic
 first-read request production, the complete admission/dispatch path, normal Chat orchestration
 and user-facing consent cards remain pending. No complete AC is accepted in this checkpoint.
+
+### First-read request admission checkpoint — #4084 AC2/AC4/AC5
+
+The current-state authority owner now requests/reuses read consent through the existing bounded
+approval owner. All three modes initially require consent. Requests for the same subject reuse
+a pending grant across current authority references without replacing its issuing reference or
+expiry. Granted consent is reused only after validating both the caller's current authority and
+the retained issuing authority. Invalid retained requests are revoked; rejection does not cause
+an automatic repeat prompt within the same authority. A new human-turn authority may request
+consent again. Creation caps expiry at the earlier of the issuing authority deadline and the
+existing approval TTL; a deadline crossed during creation and exhausted registry capacity fail
+closed. The result contains only the public grant projection, shared with the HTTP endpoint.
+
+Eight initial new cases fail before the API exists, while 22 unchanged authority cases pass.
+After implementation, 168 authority/request, real HTTP consent/credential and approval-owner
+tests pass. A registered writer/reader proof reconstructs one request and reuse with affected
+counts `[1, 0]` and a common correlation without private facts. Build, root typecheck, changed
+lint/format, semantic, native ESM import and ADR checks pass; 97 operation-catalog tests pass.
+Generation resolves 617 proofs and 30 scenarios without violations. Logs:
+`/tmp/keiko-4081-read-admission-*.log`.
+
+This primitive neither reserves a tool budget nor dispatches a tool. The trusted non-Coding
+consumer and ordinary Chat still need the complete catalog → policy → consent/approval → budget
+→ MCP/provider → settlement composition. No complete AC is accepted by this checkpoint.

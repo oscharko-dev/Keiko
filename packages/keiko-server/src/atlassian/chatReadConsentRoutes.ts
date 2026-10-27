@@ -1,4 +1,3 @@
-import type { ChatToolReadGrant, ChatToolReadGrantView } from "@oscharko-dev/keiko-contracts";
 import { validateChatToolReadConsentDecision } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
 import { isSafeAtlassianIdentifier } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
@@ -8,24 +7,9 @@ import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import { errorBody } from "../route-error.js";
 import { correlationIdOrUnknown } from "../correlation.js";
 import { recordChatAuthorityResult } from "../editor/chatAuthorityActivity.js";
-import { resolveCurrentJiraChatAuthority } from "./jiraChatAuthority.js";
-import { sameReadGrantSubject, type ChatReadGrantEntry } from "./chatReadGrantState.js";
+import { isCurrentJiraChatReadGrant } from "./jiraChatAuthority.js";
+import { projectChatReadGrant, type ChatReadGrantEntry } from "./chatReadGrantState.js";
 import type { AtlassianActionApprovalRegistry } from "./actionApprovals.js";
-
-export function projectChatReadGrant(grant: ChatToolReadGrant): ChatToolReadGrantView {
-  return {
-    kind: "jira-chat-read",
-    grantId: grant.grantId,
-    chatId: grant.subject.chatId,
-    podId: grant.subject.podId,
-    bindingGeneration: grant.subject.bindingGeneration,
-    authenticationGeneration: grant.subject.authenticationGeneration,
-    state: grant.state,
-    disclosureVersion: grant.disclosureVersion,
-    requestedAt: grant.requestedAt,
-    expiresAt: grant.expiresAt,
-  };
-}
 
 function currentConsent(
   ctx: RouteContext,
@@ -37,19 +21,7 @@ function currentConsent(
   if (registry === undefined || !isSafeAtlassianIdentifier(id)) return undefined;
   const entry = registry.getChatReadGrant(id, ctx.correlationId);
   if (entry === undefined) return undefined;
-  const current = resolveCurrentJiraChatAuthority(
-    deps,
-    entry.grant.subject.chatId,
-    entry.authority,
-    nowIso,
-    correlationIdOrUnknown(ctx.correlationId),
-  );
-  if (
-    !current.ok ||
-    !sameReadGrantSubject(entry.grant, current.envelope.subject) ||
-    !current.envelope.connectorScopes.includes("issue-tracker.read") ||
-    entry.grant.expiresAt > Date.parse(current.envelope.expiresAt)
-  )
+  if (!isCurrentJiraChatReadGrant(deps, entry, nowIso, correlationIdOrUnknown(ctx.correlationId)))
     return undefined;
   return { entry, registry };
 }

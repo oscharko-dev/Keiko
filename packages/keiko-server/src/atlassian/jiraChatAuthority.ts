@@ -1,3 +1,15 @@
+import { randomUUID } from "node:crypto";
+import { CHAT_TOOL_READ_DISCLOSURE_VERSION } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
+import {
+  ATLASSIAN_ACTION_APPROVAL_TTL_MS,
+  ATLASSIAN_ACTION_APPROVAL_MAX_PENDING,
+  type AtlassianActionApprovalRegistry,
+} from "./actionApprovals.js";
+import {
+  projectChatReadGrant,
+  sameReadGrantSubject,
+  type ChatReadGrantEntry,
+} from "./chatReadGrantState.js";
 import {
   ATLASSIAN_AUTHORITY_FAILURE_REASON,
   decideAtlassianEnvelopeAction,
@@ -5,6 +17,8 @@ import {
 } from "./actionPolicy.js";
 import type {
   ChatToolAuthorityEnvelope,
+  ChatToolReadGrant,
+  ChatToolReadGrantView,
   AtlassianConnectorActionType,
   CodingWorkbenchRuntimeDelegationUsage,
   ChatToolAuthoritySubject,
@@ -169,4 +183,119 @@ export function reserveCurrentJiraChatAuthority(
       correlationId,
     );
   return reservation.ok ? current : reservation;
+}
+
+export function isCurrentJiraChatReadGrant(
+  deps: JiraChatAuthorityDeps,
+  entry: ChatReadGrantEntry,
+  nowIso: string,
+  correlationId: string,
+): boolean {
+  const current = resolveCurrentJiraChatAuthority(
+    deps,
+    entry.grant.subject.chatId,
+    entry.authority,
+    nowIso,
+    correlationId,
+  );
+  const now = Date.parse(nowIso);
+  return (
+    current.ok &&
+    entry.grant.requestedAt <= now &&
+    entry.grant.expiresAt > now &&
+    sameReadGrantSubject(entry.grant, current.envelope.subject) &&
+    current.envelope.connectorScopes.includes("issue-tracker.read") &&
+    entry.grant.expiresAt <= Date.parse(current.envelope.expiresAt)
+  );
+}
+
+type ReadAdmissionDenial = "authority-denied" | "unavailable" | "rejected" | "capacity-exhausted";
+export type JiraChatReadGrantAdmission =
+  | { readonly kind: "granted" | "review-required"; readonly grant: ChatToolReadGrantView }
+  | { readonly kind: "denied"; readonly reason: ReadAdmissionDenial };
+
+function readAdmissionDenied(
+  reason: ReadAdmissionDenial,
+  chatId: string,
+  correlationId: string,
+): JiraChatReadGrantAdmission {
+  recordChatAuthorityResult(
+    "read-grant",
+    { ok: false, reason: "invalid" },
+    { chatId },
+    correlationId,
+  );
+  return { kind: "denied", reason };
+}
+
+function pendingChatReadGrant(
+  envelope: ChatToolAuthorityEnvelope,
+  nowIso: string,
+): ChatToolReadGrant {
+  const now = Date.parse(nowIso);
+  return {
+    schemaVersion: "1",
+    kind: "jira-chat-read-grant",
+    grantId: randomUUID(),
+    subject: envelope.subject,
+    disclosureVersion: CHAT_TOOL_READ_DISCLOSURE_VERSION,
+    requestedAt: now,
+    expiresAt: Math.min(Date.parse(envelope.expiresAt), now + ATLASSIAN_ACTION_APPROVAL_TTL_MS),
+    state: "pending",
+    consentProofDigest: null,
+  };
+}
+
+function reuseChatReadGrant(
+  deps: JiraChatAuthorityDeps,
+  registry: AtlassianActionApprovalRegistry,
+  subject: ChatToolAuthoritySubject,
+  authority: EditorAgentGovernedAuthorityReference,
+  nowIso: string,
+  correlationId: string,
+): JiraChatReadGrantAdmission | undefined {
+  for (let attempt = 0; attempt < ATLASSIAN_ACTION_APPROVAL_MAX_PENDING; attempt++) {
+    const entry = registry.findChatReadGrantForRequest(subject, authority, correlationId);
+    if (entry === undefined) break;
+    if (entry.grant.state !== "pending" && entry.grant.state !== "granted")
+      return readAdmissionDenied("rejected", subject.chatId, correlationId);
+    if (isCurrentJiraChatReadGrant(deps, entry, nowIso, correlationId))
+      return {
+        kind: entry.grant.state === "granted" ? "granted" : "review-required",
+        grant: projectChatReadGrant(entry.grant),
+      };
+    registry.revokeChatReadGrant(entry.grant.grantId, correlationId);
+  }
+  return undefined;
+}
+
+/** Request/reuse consent only; callers still admit the tool, reserve its budget and dispatch it. */
+export function requestJiraChatReadGrant(
+  deps: JiraChatAuthorityDeps & Pick<UiHandlerDeps, "atlassianActionApprovalRegistry">,
+  chatId: string,
+  authority: EditorAgentGovernedAuthorityReference,
+  nowIso: string,
+  correlationId: string,
+): JiraChatReadGrantAdmission {
+  const current = resolveCurrentJiraChatAuthority(deps, chatId, authority, nowIso, correlationId);
+  if (!current.ok || !current.envelope.connectorScopes.includes("issue-tracker.read"))
+    return readAdmissionDenied("authority-denied", chatId, correlationId);
+  const registry = deps.atlassianActionApprovalRegistry;
+  if (registry === undefined) return readAdmissionDenied("unavailable", chatId, correlationId);
+  const existing = reuseChatReadGrant(
+    deps,
+    registry,
+    current.envelope.subject,
+    authority,
+    nowIso,
+    correlationId,
+  );
+  if (existing !== undefined) return existing;
+  const grant = pendingChatReadGrant(current.envelope, nowIso);
+  const created = registry.createChatReadGrant({ grant, authority }, correlationId);
+  if (!created.ok) {
+    const reason = created.reason === "capacity-exhausted" ? "capacity-exhausted" : "unavailable";
+    return readAdmissionDenied(reason, chatId, correlationId);
+  }
+  return { kind: "review-required", grant: projectChatReadGrant(grant) };
 }

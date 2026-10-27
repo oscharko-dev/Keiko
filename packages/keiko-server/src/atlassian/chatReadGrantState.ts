@@ -1,6 +1,7 @@
 import type {
   ChatToolAuthoritySubject,
   ChatToolReadGrant,
+  ChatToolReadGrantView,
   EditorAgentGovernedAuthorityReference,
 } from "@oscharko-dev/keiko-contracts";
 import {
@@ -116,4 +117,19 @@ export function invalidReadGrant(correlationId?: string): {
     {},
     correlationId,
   );
+}
+
+export function projectChatReadGrant(grant: ChatToolReadGrant): ChatToolReadGrantView {
+  return {
+    kind: "jira-chat-read",
+    grantId: grant.grantId,
+    chatId: grant.subject.chatId,
+    podId: grant.subject.podId,
+    bindingGeneration: grant.subject.bindingGeneration,
+    authenticationGeneration: grant.subject.authenticationGeneration,
+    state: grant.state,
+    disclosureVersion: grant.disclosureVersion,
+    requestedAt: grant.requestedAt,
+    expiresAt: grant.expiresAt,
+  };
 }

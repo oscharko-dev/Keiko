@@ -293,6 +293,32 @@ export class AtlassianActionApprovalRegistry {
     return undefined;
   }
 
+  public findChatReadGrantForRequest(
+    subject: ChatToolAuthoritySubject,
+    authority: EditorAgentGovernedAuthorityReference,
+    correlationId?: string,
+  ): ChatReadGrantEntry | undefined {
+    const granted = this.findGrantedChatReadGrant(subject, correlationId);
+    const active =
+      granted === undefined ? undefined : this.getChatReadGrant(granted.grantId, correlationId);
+    if (active !== undefined) return active;
+    const matching = Array.from(this.entries.values()).filter(
+      (record): record is RetainedChatReadGrant =>
+        record.kind === "chat-read" && sameReadGrantSubject(record.entry.grant, subject),
+    );
+    const found =
+      matching.find((record) => record.entry.grant.state === "pending") ??
+      matching.find((record) => sameReadGrantAuthority(record.entry, authority));
+    if (found !== undefined) recordReadGrant(snapshotReadGrant(found.entry, correlationId), 0);
+    return found?.entry;
+  }
+
+  public revokeChatReadGrant(grantId: string, correlationId?: string): boolean {
+    this.evictExpired(correlationId);
+    const record = this.entries.get(grantId);
+    return record?.kind === "chat-read" && this.revokeReadGrant(record, correlationId);
+  }
+
   public acceptChatReadGrant(
     grantId: string,
     subject: ChatToolAuthoritySubject,
