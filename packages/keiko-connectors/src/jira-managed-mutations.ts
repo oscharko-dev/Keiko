@@ -283,14 +283,20 @@ function uniqueActiveAssignee(users: readonly unknown[], name: string): boolean 
   return matches.length === 1 && matches[0]?.active === true;
 }
 
+function assignmentName(args: CatalogJsonObject): string | null | undefined {
+  if (!keysAllowed(args, ["issueKey", "assigneeName", "clearAssignee"])) return undefined;
+  if (args.clearAssignee === true && args.assigneeName === undefined) return null;
+  return args.clearAssignee === undefined && userName(args.assigneeName)
+    ? args.assigneeName
+    : undefined;
+}
 async function assignIssue(
   request: JiraMutationRequest,
   args: CatalogJsonObject,
   issueKey: string,
 ): Promise<JiraMutationAttempt> {
-  const name = args.assigneeName;
-  if (!keysAllowed(args, ["issueKey", "assigneeName"]) || (name !== null && !userName(name)))
-    return INVALID;
+  const name = assignmentName(args);
+  if (name === undefined) return INVALID;
   const allowed = await checkAssignee(request, issueKey, name);
   if (!allowed.ok) return allowed;
   const prior = await readJiraMutationIssue(request, issueKey, ["assignee"]);

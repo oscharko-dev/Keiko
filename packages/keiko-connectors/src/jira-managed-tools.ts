@@ -13,7 +13,10 @@ import {
   ATLASSIAN_JQL_MAX_CHARS,
   isSafeAtlassianIdentifier,
   JIRA_MANAGED_READ_TOOLS,
+  JIRA_MUTATION_OPERATIONS,
   type JiraManagedReadToolName,
+  type JiraMutationOperation,
+  type JiraMutationAttempt,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   editMetadataItems,
@@ -35,6 +38,8 @@ import type { JiraManagedConnection } from "./jira-managed-connection.js";
 export type { JiraManagedConnection } from "./jira-managed-connection.js";
 import { asRecord, atlassianApiEndpointsFor, atlassianApiUrl } from "./atlassian-sync-classify.js";
 import { executeAtlassianWriteRequest } from "./atlassian-write-http.js";
+import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
+import { executeJiraManagedMutation } from "./jira-managed-mutations.js";
 
 const ARRAY_READ_NAMES: ReadonlySet<string> = new Set(["jira.projects", "jira.assignable-users"]);
 const ISSUE_READ_NAMES: ReadonlySet<string> = new Set([
@@ -46,7 +51,15 @@ const ISSUE_READ_NAMES: ReadonlySet<string> = new Set([
 export interface JiraManagedProviderDeps<Context extends ManagedMcpInvocationContext> {
   readonly connection: (context: Context) => JiraManagedConnection | Promise<JiraManagedConnection>;
   readonly declarations: readonly ManagedMcpToolDeclaration[];
+  readonly executeMutation?: JiraManagedMutationExecutor<Context>;
 }
+/** The server owns durable intent, current authority and the final credential-bearing transport. */
+export type JiraManagedMutationExecutor<Context extends ManagedMcpInvocationContext> = (
+  operation: JiraMutationOperation,
+  args: CatalogJsonObject,
+  context: Context,
+  execute: (http: AtlassianHttpBodyPort) => Promise<JiraMutationAttempt>,
+) => Promise<ManagedMcpToolResult>;
 
 interface Project extends CatalogJsonObject {
   readonly id: string;
@@ -236,23 +249,40 @@ async function read<Context extends ManagedMcpInvocationContext>(
 }
 
 /** Private connection/context stays outside the MCP declaration and arguments. */
+function managedTool<Context extends ManagedMcpInvocationContext>(
+  declaration: ManagedMcpToolDeclaration,
+  connection: JiraManagedProviderDeps<Context>["connection"],
+  executeMutation: JiraManagedMutationExecutor<Context> | undefined,
+): ManagedMcpTool<Context> {
+  const readName = JIRA_MANAGED_READ_TOOLS.find((name) => name === declaration.name);
+  if (readName !== undefined && declaration.risk === "read")
+    return Object.freeze({
+      ...declaration,
+      execute: (args: CatalogJsonObject, context: Context): Promise<ManagedMcpToolResult> =>
+        read(readName, args, context, connection),
+    });
+  const operation = JIRA_MUTATION_OPERATIONS.find((name) => name === declaration.name);
+  if (operation === undefined || declaration.risk !== "write" || executeMutation === undefined)
+    throw new TypeError("Unsupported Jira declaration");
+  return Object.freeze({
+    ...declaration,
+    execute: async (args: CatalogJsonObject, context: Context): Promise<ManagedMcpToolResult> => {
+      const snapshot = structuredClone(args);
+      const selected = Object.freeze({ ...(await connection(context)) });
+      return executeMutation(operation, structuredClone(snapshot), context, (http) =>
+        executeJiraManagedMutation(operation, snapshot, context, { ...selected, http }),
+      );
+    },
+  });
+}
+
 export function createJiraManagedProvider<Context extends ManagedMcpInvocationContext>(
   deps: JiraManagedProviderDeps<Context>,
 ): ManagedMcpProvider<Context> {
   const connection = deps.connection;
+  const executeMutation = deps.executeMutation;
   const tools: readonly ManagedMcpTool<Context>[] = Object.freeze(
-    deps.declarations.map((declaration) => {
-      const name = JIRA_MANAGED_READ_TOOLS.find((name) => name === declaration.name);
-      if (name === undefined || declaration.risk !== "read")
-        throw new TypeError("Unsupported Jira declaration");
-      return Object.freeze({
-        name,
-        risk: "read" as const,
-        descriptor: declaration.descriptor,
-        execute: (args: CatalogJsonObject, context: Context): Promise<ManagedMcpToolResult> =>
-          read(name, args, context, connection),
-      });
-    }),
+    deps.declarations.map((declaration) => managedTool(declaration, connection, executeMutation)),
   );
   return Object.freeze({ id: "jira", tools: (): readonly ManagedMcpTool<Context>[] => tools });
 }

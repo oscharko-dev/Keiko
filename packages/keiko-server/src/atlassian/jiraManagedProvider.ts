@@ -1,6 +1,7 @@
 import {
   createJiraManagedProvider,
   type JiraManagedConnection,
+  type JiraManagedMutationExecutor,
 } from "@oscharko-dev/keiko-connectors";
 import {
   ATLASSIAN_JQL_MAX_CHARS,
@@ -9,6 +10,7 @@ import {
   JIRA_FIELD_ID_PATTERN,
   JIRA_MANAGED_READ_TOOLS,
   type JiraManagedReadToolName,
+  type JiraMutationOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type {
@@ -18,15 +20,9 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { createToolDescriptor, createToolRef } from "@oscharko-dev/keiko-tool-catalog";
 
-function text(maxLength: number): CatalogJsonObject {
-  return { type: "string", maxLength };
-}
-function object(
-  properties: CatalogJsonObject,
-  required: readonly string[] = [],
-): CatalogJsonObject {
-  return { type: "object", required, additionalProperties: false, properties };
-}
+import { text, object } from "./jiraManagedSchemas.js";
+import { JIRA_MUTATION_DECLARATIONS } from "./jiraManagedMutationDescriptors.js";
+
 const PAGE_NUMBER = { type: "integer", minimum: 0, maximum: 1000000 };
 const REFERENCE = object({
   id: text(256),
@@ -234,17 +230,22 @@ function declaration(name: JiraManagedReadToolName): ManagedMcpToolDeclaration {
   });
   return Object.freeze({ name, risk: "read", descriptor });
 }
-const DECLARATIONS = JIRA_MANAGED_READ_TOOLS.map(declaration);
+const DECLARATIONS = [...JIRA_MANAGED_READ_TOOLS.map(declaration), ...JIRA_MUTATION_DECLARATIONS];
 
 /** Canonical descriptors are built by the server; the connector owns only Jira behavior. */
 export function createJiraProviderForCatalog<Context extends ManagedMcpInvocationContext>(
   connection: (context: Context) => JiraManagedConnection | Promise<JiraManagedConnection>,
-  tools: readonly JiraManagedReadToolName[] = JIRA_MANAGED_READ_TOOLS,
+  tools: readonly (JiraManagedReadToolName | JiraMutationOperation)[] = JIRA_MANAGED_READ_TOOLS,
+  executeMutation?: JiraManagedMutationExecutor<Context>,
 ): ManagedMcpProvider<Context> {
   const selected = tools.map((name) => {
     const declaration = DECLARATIONS.find((item) => item.name === name);
     if (declaration === undefined) throw new TypeError("Unsupported Jira tool");
     return declaration;
   });
-  return createJiraManagedProvider({ connection, declarations: selected });
+  return createJiraManagedProvider({
+    connection,
+    declarations: selected,
+    ...(executeMutation === undefined ? {} : { executeMutation }),
+  });
 }

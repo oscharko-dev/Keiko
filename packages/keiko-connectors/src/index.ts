@@ -186,4 +186,5 @@ export {
   createJiraManagedProvider,
   type JiraManagedConnection,
   type JiraManagedProviderDeps,
+  type JiraManagedMutationExecutor,
 } from "./jira-managed-tools.js";

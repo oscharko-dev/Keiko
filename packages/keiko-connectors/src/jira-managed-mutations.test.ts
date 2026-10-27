@@ -4,87 +4,16 @@ import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/go
 import type { AtlassianHttpBodyPort, AtlassianHttpBodyResult } from "./atlassian-http-port.js";
 import { executeJiraManagedMutation } from "./jira-managed-mutations.js";
 
-function field(id: string, type: string, required = false): Record<string, unknown> {
-  return { fieldId: id, name: id, required, operations: ["set"], schema: { type, system: id } };
-}
-const REQUIRED_CUSTOM = {
-  ...field("customfield_10000", "string", true),
-  schema: { type: "string", custom: "com.atlassian.jira.plugin.system.customfieldtypes:textfield" },
-};
-const LABEL_FIELD = {
-  ...field("labels", "array"),
-  operations: ["set", "add", "remove"],
-  schema: { type: "array", items: "string", system: "labels" },
-};
-const FIELDS = [
-  field("project", "project", true),
-  field("issuetype", "issuetype", true),
-  field("summary", "string", true),
+import {
+  field,
   REQUIRED_CUSTOM,
-];
-function response(body: unknown, status = 200): AtlassianHttpBodyResult {
-  const bodyText = body === undefined ? "" : JSON.stringify(body);
-  return {
-    kind: "response",
-    status,
-    bodyText,
-    bodyBytes: Buffer.byteLength(bodyText),
-    truncated: false,
-  };
-}
-interface SyntheticJira {
-  fields: Record<string, unknown>;
-  comment: string;
-}
-function fixtureRead(path: string, state: SyntheticJira): AtlassianHttpBodyResult {
-  if (path.includes("createmeta"))
-    return response({ values: FIELDS, start: 0, size: 100, last: true, total: FIELDS.length });
-  if (path.endsWith("editmeta"))
-    return response({
-      fields: {
-        summary: field("summary", "string"),
-        assignee: field("assignee", "user"),
-        labels: LABEL_FIELD,
-      },
-    });
-  if (path.endsWith("transitions"))
-    return response({
-      transitions: [{ id: "31", to: { id: "3" }, fields: { customfield_10000: REQUIRED_CUSTOM } }],
-    });
-  if (path.endsWith("assignable/search"))
-    return response([{ name: "synthetic-user", active: true }]);
-  if (path.endsWith("/comment/10002")) return response({ id: "10002", body: state.comment });
-  if (path.endsWith("/issue/SYN-1"))
-    return response({ id: "10001", key: "SYN-1", fields: state.fields });
-  return response({}, 404);
-}
-function fixtureLabelUpdates(mutation: Record<string, unknown>, state: SyntheticJira): void {
-  const update = mutation.update as { labels?: Record<string, string>[] } | undefined;
-  if (update?.labels === undefined) return;
-  const labels = new Set(state.fields.labels as readonly string[]);
-  for (const item of update.labels) {
-    if (item.add !== undefined) labels.add(item.add);
-    if (item.remove !== undefined) labels.delete(item.remove);
-  }
-  state.fields.labels = [...labels];
-}
-function fixtureWrite(
-  path: string,
-  body: string | undefined,
-  state: SyntheticJira,
-): AtlassianHttpBodyResult {
-  const mutation = JSON.parse(body ?? "{}") as Record<string, unknown>;
-  if (typeof mutation.fields === "object" && mutation.fields !== null)
-    state.fields = { ...state.fields, ...mutation.fields };
-  fixtureLabelUpdates(mutation, state);
-  if (path.endsWith("/assignee"))
-    state.fields.assignee = mutation.name === null ? null : { name: mutation.name };
-  if (path.endsWith("/transitions")) state.fields.status = { id: "3" };
-  if (typeof mutation.body === "string") state.comment = mutation.body;
-  if (path.endsWith("/issue")) return response({ key: "SYN-1", id: "10001" }, 201);
-  if (path.endsWith("/comment")) return response({ id: "10002" }, 201);
-  return response(undefined, 204);
-}
+  FIELDS,
+  response,
+  fixtureRead,
+  fixtureWrite,
+  type SyntheticJira,
+} from "../../../tests/support/jira-managed-remote.js";
+
 function fixture(): {
   controller: AbortController;
   beforeEffect: ReturnType<typeof vi.fn<() => boolean>>;
@@ -271,7 +200,7 @@ it("assigns a current active user with Assign permission without depending on ed
 });
 it("clears an assignee only when current metadata permits clearing", async () => {
   const f = fixture();
-  expect(await f.run("jira.assign", { issueKey: "SYN-1", assigneeName: null })).toEqual({
+  expect(await f.run("jira.assign", { issueKey: "SYN-1", clearAssignee: true })).toEqual({
     ok: true,
     receipt: { issueKey: "SYN-1" },
   });
@@ -456,7 +385,7 @@ it.each(["inactive", "unassign-forbidden"] as const)(
     expect(
       await f.run("jira.assign", {
         issueKey: "SYN-1",
-        assigneeName: kind === "inactive" ? "synthetic-user" : null,
+        ...(kind === "inactive" ? { assigneeName: "synthetic-user" } : { clearAssignee: true }),
       }),
     ).toEqual({ ok: false, reason: "field-validation" });
     expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET"]);

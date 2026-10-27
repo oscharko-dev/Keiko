@@ -1128,3 +1128,28 @@ lost-update protection. The earlier ADR choice-list limit is also corrected to t
 500 choices (the separate submitted-array bound remains 100).
 
 Changed lint/format, ADR index and the staged-diff semantic gate pass; the clone ceiling remains 938.
+
+## Managed mutation composition — #4083 AC2/AC5/AC7 / #4089 AC4
+
+The existing Jira provider now accepts an explicit server-owned mutation executor. Without it,
+write declarations are rejected; the default provider remains read-only. The server builds the five
+canonical mutation descriptors and the connector executes only through the HTTP port supplied by
+the durable composer. Independent snapshots prevent later argument or connection mutation from
+changing the admitted operation. Assignment clearing is explicit and ambiguous combinations fail
+before HTTP dispatch. Existing test fixtures were extracted and shared rather than duplicated.
+
+The positive write-declaration test failed before implementation. The **369-test selection** passes
+across provider, connector mutations, journal composer and the complete catalog directory. It
+includes **16 actual SDK integration cases**: all five operations with verified synthetic remote
+state, all five with denied readback and a barrier against further writes in the same turn, all five with a lost
+response after the synthetic remote applied the mutation, and explicit/ambiguous clearing. Every
+case asserts one mutation at most; repeated actions return retained journal outcomes. This path
+uses the real gateway projection, non-Coding binder, MCP SDK, existing HTTP adapter and SQLite
+journal. The consumer's authority port is a trusted test port, not the still-pending product Chat
+authority implementation. No real model, licensed Jira, normal Chat or browser acceptance is claimed.
+
+Package build, root typecheck and changed lint pass. The fixture refactor and provider snapshot
+test are rerun after their final lint/type repairs. Final package, architecture/performance and
+full-quality qualification remain deferred to the agreed overall acceptance.
+
+The final 64-test provider/SDK/non-Coding rerun, changed formatting, ADR index and staged-diff semantic gate pass.

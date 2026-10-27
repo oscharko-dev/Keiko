@@ -375,8 +375,15 @@ therefore remains unconfirmed. Label updates compare only the requested membersh
 replacement sets ignore ordering and reference labels never substitute for identities. Failed or
 contradictory readback remains acknowledged-but-unconfirmed in the server composer and never permits
 automatic mutation replay. These checks observe the requested result; they do not promise exclusive
-causation or atomic protection against concurrent Jira updates. Current managed-provider defaults
-still expose reads; the private executor does not confer journal, Chat or approval authority.
+causation or atomic protection against concurrent Jira updates. Managed-provider defaults expose
+reads. Write declarations require an explicitly injected server executor that composes the durable
+journal, current admission and final HTTP port; the connector cannot dispatch through its read
+connection instead. Arguments and connection selection are captured before asynchronous execution.
+The five canonical write descriptors use closed top-level arguments and result states. Dynamic
+field values are additionally validated against fresh Jira metadata, while additive updates are
+restricted to implemented label verbs. Assignment clearing is explicit (`clearAssignee: true`),
+mutually exclusive with `assigneeName`; absence never means clearing. This composition does not
+confer normal Chat binding, read-consent or approval authority on its own.
 
 ### D4 — Action-class mapping table
 
