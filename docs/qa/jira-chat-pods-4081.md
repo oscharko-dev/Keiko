@@ -107,7 +107,7 @@ Status: **Pending**. Implementation: pending. Verification: pending. Evidence: p
 
 - [ ] **AC1:** Real modern MCP discovery, per-request protocol metadata, `tools/list` and `tools/call` through the shared host exercise the production Jira provider and list exactly the implemented typed capabilities; every listed tool has a catalog descriptor and an ADR-0128 D4 row. Unknown tools, malformed arguments and caller-supplied credentials, arbitrary destinations or connector switching are refused before HTTP execution.
 
-Status: **Partial — not accepted**. Implementation: `jira-managed-tools.ts`, `jiraManagedProvider.ts`, shared catalog/SDK composition. Verification: `catalogNonCodingConsumer.test.ts` (real SDK, synthetic HTTP). Evidence: first-Jira-capability checkpoint below. The provider advertises `jira.projects`, `jira.issue-types`, `jira.create-fields`, `jira.edit-fields`, `jira.search`, `jira.issue` and `jira.comments`; the metadata checkpoint below extends this evidence. Remaining operations and actual Chat admission are pending.
+Status: **Partial — not accepted**. Implementation: `jira-managed-tools.ts`, `jiraManagedProvider.ts`, shared catalog/SDK composition. Verification: `catalogNonCodingConsumer.test.ts` (real SDK, synthetic HTTP). Evidence: first-Jira-capability checkpoint below. The provider advertises `jira.projects`, `jira.issue-types`, `jira.create-fields`, `jira.edit-fields`, `jira.search`, `jira.issue`, `jira.comments`, `jira.transitions` and `jira.assignable-users`; the metadata checkpoint below extends this evidence. Remaining operations and actual Chat admission are pending.
 
 - [ ] **AC2:** Against local Jira 10.3.26, a non-admin PAT searches/reads and performs create/edit/assign/comment/transition where Jira permits them, and the restricted identity is refused truthfully without escalation. The recorded supported-operation matrix names each tested operation, endpoint family and unsupported capability; it never claims full Jira REST coverage.
 
@@ -850,3 +850,19 @@ Three integration cases failed before these capabilities were admitted. After im
 typecheck, changed lint and unchanged semantic checks pass. The tested HTTP is synthetic; live
 DC operation coverage, arbitrary custom-field value reads, transitions, assignable users,
 mutations and actual Chat admission remain open. This checkpoint does not accept a complete AC.
+
+## Workflow and assignment discovery — #4083 AC1/AC3/AC7 / #4081
+
+The provider now offers nine implemented read capabilities. Transition discovery includes current
+screen-field requirements; absent metadata remains explicitly unavailable and is never converted
+into an empty requirement list. Assignable-user discovery requires exactly one issue or creation
+project scope. Results contain only username, display name and activity status, without ancillary
+email, avatar or self-link fields. Totals remain unknown for Jira's array response. Collection
+projection and duplicate-identity rejection share one bounded helper across these and issue reads.
+
+Two capability tests failed before implementation. The resulting 36 binder/SDK integration tests,
+package build, root typecheck, changed lint/format, ADR index and semantic gate pass with the
+unchanged 938 baseline. The synthetic transition requirements are not the still-pending live
+mutation-screen acceptance. Mutations, full custom-field value reads and the normal Chat authority,
+grant and durable invocation paths remain open. Review comment 4384251867 on partial-sync failure
+classification is accepted and queued immediately after this increment.

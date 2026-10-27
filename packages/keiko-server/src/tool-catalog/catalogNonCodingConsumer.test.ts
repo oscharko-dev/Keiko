@@ -921,3 +921,162 @@ it.each([
     await m.managed.close();
   }
 });
+
+it.each([
+  {
+    tool: "jira.transitions",
+    args: { issueKey: "KEIKO-1" },
+    body: {
+      transitions: [
+        {
+          id: "31",
+          name: "Resolve",
+          to: { id: "5", name: "Resolved" },
+          fields: { summary: metadataField },
+        },
+      ],
+    },
+    path: "issue/KEIKO-1/transitions?expand=transitions.fields",
+    expected: {
+      items: [
+        {
+          id: "31",
+          name: "Resolve",
+          metadataAvailable: true,
+          fields: [{ id: "summary", required: true, kind: "text" }],
+        },
+      ],
+    },
+  },
+  {
+    tool: "jira.assignable-users",
+    args: { issueKey: "KEIKO-1", query: "reader", maxResults: 1 },
+    body: [
+      {
+        name: "reader",
+        displayName: "Reader",
+        active: true,
+        self: "private-url",
+        emailAddress: "private-email",
+      },
+    ],
+    path: "user/assignable/search?issueKey=KEIKO-1&username=reader&startAt=0&maxResults=1",
+    expected: { items: [{ name: "reader", displayName: "Reader", active: true }], nextStartAt: 1 },
+  },
+] as const)(
+  "discovers $tool through the production SDK path",
+  async ({ tool, args, body, path, expected }) => {
+    const m = await jiraFixture(body, 200, undefined, tool);
+    const f = fixture(undefined, m.managed);
+    try {
+      const result = await f.binder.dispatch({ ...f.invocation, arguments: args }, identity);
+      expect(result).toMatchObject({
+        kind: "settled",
+        result: { status: "completed", data: { outcome: "succeeded", ...expected } },
+      });
+      expect(m.requests).toEqual([
+        `chat-one:GET:https://jira.example.invalid/context/rest/api/2/${path}`,
+      ]);
+      expect(JSON.stringify(result)).not.toMatch(/private-url|private-email/u);
+    } finally {
+      f.dispose();
+      await m.managed.close();
+    }
+  },
+);
+
+it.each([{}, { issueKey: "KEIKO-1", projectKey: "KEIKO" }])(
+  "refuses ambiguous assignment scope before connection resolution",
+  async (args) => {
+    const m = await jiraFixture([], 200, undefined, "jira.assignable-users");
+    const f = fixture(undefined, m.managed);
+    try {
+      expect(await f.binder.dispatch({ ...f.invocation, arguments: args }, identity)).toMatchObject(
+        { kind: "settled", result: { status: "failed" } },
+      );
+      expect(m.connections).toHaveLength(0);
+      expect(m.requests).toHaveLength(0);
+    } finally {
+      f.dispose();
+      await m.managed.close();
+    }
+  },
+);
+it("keeps missing transition metadata unavailable instead of inventing empty requirements", async () => {
+  const m = await jiraFixture(
+    { transitions: [{ id: "31", name: "Resolve" }] },
+    200,
+    undefined,
+    "jira.transitions",
+  );
+  const f = fixture(undefined, m.managed);
+  try {
+    const result = await f.binder.dispatch(
+      { ...f.invocation, arguments: { issueKey: "KEIKO-1" } },
+      identity,
+    );
+    expect(result).toMatchObject({
+      kind: "settled",
+      result: {
+        status: "completed",
+        data: { items: [{ id: "31", name: "Resolve", metadataAvailable: false }] },
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain('"fields"');
+  } finally {
+    f.dispose();
+    await m.managed.close();
+  }
+});
+it("queries the project scope for creation and preserves an unknown total", async () => {
+  const m = await jiraFixture([], 200, undefined, "jira.assignable-users");
+  const f = fixture(undefined, m.managed);
+  try {
+    const result = await f.binder.dispatch(
+      { ...f.invocation, arguments: { projectKey: "KEIKO" } },
+      identity,
+    );
+    expect(result).toMatchObject({
+      kind: "settled",
+      result: { status: "completed", data: { items: [] } },
+    });
+    expect(m.requests).toEqual([
+      "chat-one:GET:https://jira.example.invalid/context/rest/api/2/user/assignable/search?project=KEIKO&startAt=0&maxResults=25",
+    ]);
+    expect(JSON.stringify(result)).not.toMatch(/"total"|"nextStartAt"/u);
+  } finally {
+    f.dispose();
+    await m.managed.close();
+  }
+});
+
+it.each([
+  {
+    tool: "jira.transitions",
+    body: {
+      transitions: [
+        { id: "31", name: "Resolve", fields: {} },
+        { id: "31", name: "Different", fields: {} },
+      ],
+    },
+  },
+  {
+    tool: "jira.assignable-users",
+    body: [
+      { name: "reader", displayName: "First", active: true },
+      { name: "reader", displayName: "Other", active: false },
+    ],
+  },
+] as const)("refuses ambiguous identity duplicates in $tool", async ({ tool, body }) => {
+  const m = await jiraFixture(body, 200, undefined, tool);
+  const f = fixture(undefined, m.managed);
+  try {
+    expect(
+      await f.binder.dispatch({ ...f.invocation, arguments: { issueKey: "KEIKO-1" } }, identity),
+    ).toMatchObject({ kind: "settled", result: { status: "failed", reason: "handler-failed" } });
+    expect(m.requests).toHaveLength(1);
+  } finally {
+    f.dispose();
+    await m.managed.close();
+  }
+});

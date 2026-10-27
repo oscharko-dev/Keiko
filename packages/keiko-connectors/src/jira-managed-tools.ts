@@ -1,4 +1,9 @@
 import {
+  jiraAssignableUsersPath,
+  jiraAssignableUsersResult,
+  jiraTransitionsResult,
+} from "./jira-managed-workflow-reads.js";
+import {
   jiraIssueReadResult,
   JIRA_MANAGED_ISSUE_FIELDS,
   JIRA_MANAGED_SEARCH_FIELDS,
@@ -30,6 +35,7 @@ import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
 import { asRecord, atlassianApiEndpointsFor, atlassianApiUrl } from "./atlassian-sync-classify.js";
 import { executeAtlassianWriteRequest } from "./atlassian-write-http.js";
 
+const ARRAY_READ_NAMES: ReadonlySet<string> = new Set(["jira.projects", "jira.assignable-users"]);
 const ISSUE_READ_NAMES: ReadonlySet<string> = new Set([
   "jira.search",
   "jira.issue",
@@ -112,11 +118,20 @@ function readPath(
   paging: string,
 ): string | undefined {
   if (name === "jira.projects") return "project";
+  if (name === "jira.assignable-users") return jiraAssignableUsersPath(args, allowed, paging);
   if (name === "jira.search") return searchPath(args, allowed, paging);
   if (name === "jira.issue-types" || name === "jira.create-fields") {
     const path = metadataPath(name, args, allowed);
     return path === undefined ? undefined : `${path}?${paging}`;
   }
+  return issueReadPath(name, args, allowed, paging);
+}
+function issueReadPath(
+  name: JiraManagedReadToolName,
+  args: CatalogJsonObject,
+  allowed: Set<string>,
+  paging: string,
+): string | undefined {
   if (!isSafeAtlassianIdentifier(args.issueKey)) return undefined;
   allowed.add("issueKey");
   const path = `issue/${encodeURIComponent(args.issueKey)}`;
@@ -127,6 +142,10 @@ function readPath(
       return `${path}?fields=${JIRA_MANAGED_ISSUE_FIELDS}`;
     case "jira.comments":
       return `${path}/comment?${paging}`;
+    case "jira.transitions":
+      return `${path}/transitions?expand=transitions.fields`;
+    default:
+      return undefined;
   }
 }
 function searchPath(
@@ -162,6 +181,7 @@ function metadataResult(
   selected: ReadSelection,
 ): ManagedMcpToolResult {
   const { startAt, maxResults } = selected;
+  if (name === "jira.transitions") return jiraTransitionsResult(body, startAt, maxResults);
   if (name === "jira.edit-fields") {
     const items = editMetadataItems(body.fields);
     return items === undefined
@@ -171,6 +191,17 @@ function metadataResult(
   const items =
     name === "jira.issue-types" ? issueTypeItems(body.values) : metadataItems(body.values);
   return remoteJiraPage(body, items, startAt, maxResults);
+}
+function arrayResult(
+  name: JiraManagedReadToolName,
+  values: readonly unknown[] | undefined,
+  startAt: number,
+  maxResults: number,
+): ManagedMcpToolResult {
+  if (values === undefined) return failure("malformed-payload");
+  return name === "jira.projects"
+    ? projectPage(values, startAt, maxResults)
+    : jiraAssignableUsersResult(values, startAt, maxResults);
 }
 async function read<Context extends ManagedMcpInvocationContext>(
   name: JiraManagedReadToolName,
@@ -191,14 +222,11 @@ async function read<Context extends ManagedMcpInvocationContext>(
           ? Promise.resolve({ kind: "network-error" })
           : http(request),
     },
-    { method: "GET", url, expect: name === "jira.projects" ? "json-array" : "json" },
+    { method: "GET", url, expect: ARRAY_READ_NAMES.has(name) ? "json-array" : "json" },
   );
   if (!outcome.ok) return failure(outcome.reason);
   const { startAt, maxResults } = selected;
-  if (name === "jira.projects")
-    return outcome.items === undefined
-      ? failure("malformed-payload")
-      : projectPage(outcome.items, startAt, maxResults);
+  if (ARRAY_READ_NAMES.has(name)) return arrayResult(name, outcome.items, startAt, maxResults);
   if (outcome.body === undefined) return failure("malformed-payload");
   return ISSUE_READ_NAMES.has(name)
     ? jiraIssueReadResult(name, outcome.body, startAt, maxResults)

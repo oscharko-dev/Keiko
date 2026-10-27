@@ -136,6 +136,33 @@ const DEFINITIONS: Readonly<Record<JiraManagedReadToolName, ReadDefinition>> = {
       ["id", "body", "created"],
     ),
   },
+  "jira.transitions": {
+    description:
+      "Read available transitions and their required fields for an issue. Missing metadata is unavailable; it must never be interpreted as an empty set of required fields.",
+    arguments: { issueKey: text(128) },
+    required: ["issueKey"],
+    item: object(
+      {
+        id: text(128),
+        name: text(255),
+        metadataAvailable: { type: "boolean" },
+        fields: { type: "array", maxItems: 500, items: FIELD },
+        to: object({ id: text(128), name: text(255) }, ["id", "name"]),
+      },
+      ["id", "name", "metadataAvailable"],
+    ),
+  },
+  "jira.assignable-users": {
+    description:
+      "Find assignable Jira users. Supply exactly one scope: issueKey for an existing issue, or projectKey for creation. An omitted total is unknown; the next page may be empty.",
+    arguments: { issueKey: text(128), projectKey: text(128), query: text(256) },
+    required: [],
+    item: object({ name: text(256), displayName: text(256), active: { type: "boolean" } }, [
+      "name",
+      "displayName",
+      "active",
+    ]),
+  },
 };
 function declaration(name: JiraManagedReadToolName): ManagedMcpToolDeclaration {
   const definition = DEFINITIONS[name];

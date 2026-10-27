@@ -2,7 +2,7 @@ import { isSafeAtlassianIdentifier } from "@oscharko-dev/keiko-contracts/runtime
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
-import { jiraReadFailure, remoteJiraPage } from "./jira-managed-metadata.js";
+import { jiraReadFailure, remoteJiraPage, projectJiraCollection } from "./jira-managed-metadata.js";
 
 export const JIRA_MANAGED_ISSUE_FIELDS =
   "summary,description,status,issuetype,project,assignee,reporter,priority,labels,duedate,created,updated";
@@ -98,11 +98,7 @@ function items(
   project: (value: unknown) => CatalogJsonObject | undefined,
 ): readonly CatalogJsonObject[] | undefined {
   const values = asArray(value);
-  if (values === undefined || values.length > 100) return undefined;
-  const result = values.map(project);
-  if (result.some((value) => value === undefined)) return undefined;
-  const valid = result.filter((value) => value !== undefined);
-  return new Set(valid.map((value) => value.id)).size === valid.length ? valid : undefined;
+  return values === undefined ? undefined : projectJiraCollection(values, 100, project, "id");
 }
 function page(
   body: Record<string, unknown>,

@@ -20,6 +20,8 @@ export const JIRA_MANAGED_READ_TOOLS = [
   "jira.search",
   "jira.issue",
   "jira.comments",
+  "jira.transitions",
+  "jira.assignable-users",
 ] as const;
 export type JiraManagedReadToolName = (typeof JIRA_MANAGED_READ_TOOLS)[number];
 export type JiraFieldOperation = "set" | "add" | "remove";

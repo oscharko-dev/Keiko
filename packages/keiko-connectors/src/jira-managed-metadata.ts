@@ -59,16 +59,7 @@ function issueType(value: unknown): CatalogJsonObject | undefined {
 }
 export function issueTypeItems(value: unknown): readonly CatalogJsonObject[] | undefined {
   const values = asArray(value);
-  if (values === undefined || values.length > 100) return undefined;
-  const result: CatalogJsonObject[] = [];
-  const ids = new Set<unknown>();
-  for (const value of values) {
-    const item = issueType(value);
-    if (item === undefined || ids.has(item.id)) return undefined;
-    ids.add(item.id);
-    result.push(item);
-  }
-  return result;
+  return values === undefined ? undefined : projectJiraCollection(values, 100, issueType, "id");
 }
 export function localJiraPage(
   items: readonly CatalogJsonObject[],
@@ -125,4 +116,18 @@ export function remoteJiraPage(
       ...(body.last ? {} : { nextStartAt: startAt + items.length }),
     },
   };
+}
+
+/** One bounded, identity-unique projection for Jira collection endpoints. */
+export function projectJiraCollection(
+  values: readonly unknown[],
+  max: number,
+  project: (value: unknown) => CatalogJsonObject | undefined,
+  identity: "id" | "name",
+): readonly CatalogJsonObject[] | undefined {
+  if (values.length > max) return undefined;
+  const projected = values.map(project);
+  if (projected.some((value) => value === undefined)) return undefined;
+  const valid = projected.filter((value) => value !== undefined);
+  return new Set(valid.map((value) => value[identity])).size === valid.length ? valid : undefined;
 }
