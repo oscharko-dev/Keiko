@@ -117,6 +117,108 @@ function signatureFacts(context, signature) {
   };
 }
 
+// This describes only literal OWN data in a readonly declared view. It never certifies a
+// string-key lookup, inherited values, runtime immutability, or callable/semantic admission.
+function intrinsicLiteralLookupType(context, node, name, arity) {
+  return Boolean(
+    node &&
+    ts.isTypeReferenceNode(node) &&
+    ts.isIdentifier(node.typeName) &&
+    node.typeName.text === name &&
+    node.typeArguments?.length === arity &&
+    defaultLibrarySymbol(context, context.checker.getSymbolAtLocation(node.typeName)),
+  );
+}
+
+function readonlyLiteralValueAnnotation(context, annotation) {
+  if (!intrinsicLiteralLookupType(context, annotation, "Readonly", 1)) return null;
+  const record = annotation.typeArguments[0];
+  if (!intrinsicLiteralLookupType(context, record, "Record", 2)) return null;
+  return record.typeArguments[0].kind === ts.SyntaxKind.StringKeyword
+    ? record.typeArguments[1]
+    : null;
+}
+
+function readonlyLiteralDataCandidate(context, symbol, type) {
+  if (!symbol.valueDeclaration || !ts.isVariableDeclaration(symbol.valueDeclaration)) return false;
+  if ((type.flags & ts.TypeFlags.Object) === 0) return false;
+  const index = type.getStringIndexType();
+  return Boolean(
+    index &&
+    finiteStringType(index) &&
+    readonlyLiteralValueAnnotation(context, symbol.valueDeclaration.type),
+  );
+}
+
+function readonlyLiteralDeclaration(node) {
+  return (
+    ts.isVariableDeclaration(node) &&
+    ts.isIdentifier(node.name) &&
+    ts.isVariableDeclarationList(node.parent) &&
+    (node.parent.flags & ts.NodeFlags.Const) !== 0 &&
+    ts.isVariableStatement(node.parent.parent) &&
+    ts.isSourceFile(node.parent.parent.parent) &&
+    exportedDeclaration(node) &&
+    Boolean(node.initializer && ts.isObjectLiteralExpression(node.initializer))
+  );
+}
+
+function readonlyLiteralEntry(property, values) {
+  if (!ts.isPropertyAssignment(property)) return null;
+  if (!ts.isIdentifier(property.name) && !ts.isStringLiteral(property.name)) return null;
+  const key = property.name.text;
+  if (key === "__proto__" || !ts.isStringLiteral(property.initializer)) return null;
+  return values.has(property.initializer.text) ? { key, value: property.initializer.text } : null;
+}
+
+function readonlyLiteralEntries(compiler, declaration, vocabulary) {
+  const entries = [];
+  const keys = new Set();
+  const values = new Set(vocabulary);
+  chargeSymbolVisits(compiler.state, declaration.initializer.properties.length);
+  for (const property of declaration.initializer.properties) {
+    const entry = readonlyLiteralEntry(property, values);
+    if (!entry || keys.has(entry.key)) return null;
+    keys.add(entry.key);
+    entries.push(entry);
+  }
+  return entries.length > 0 ? entries : null;
+}
+
+function readonlyLiteralDomain(compiler, owned, identity) {
+  const annotation = readonlyLiteralValueAnnotation(owned.context, owned.node.type);
+  const domain = annotation && typedDomain(compiler, owned.context, annotation);
+  return domain?.identity.owner === identity.owner ? domain : null;
+}
+
+function readonlyLiteralDataFacts(compiler, symbol, identities) {
+  if (identities.length !== 1 || !ts.isVariableDeclaration(symbol.valueDeclaration)) return null;
+  // The declaration can be emitted data with no initializer. Resolve the actual owned Source
+  // through the existing canonical declaration/provenance mechanism, never callable facts.
+  const owned = ownedDeclaration(compiler, identities[0]);
+  if (!readonlyLiteralDeclaration(owned.node)) return null;
+  const domain = readonlyLiteralDomain(compiler, owned, identities[0]);
+  if (!domain) return null;
+  const members = domain.type.isUnion() ? domain.type.types : [domain.type];
+  chargeSymbolVisits(compiler.state, members.length);
+  const vocabulary = members.map((member) => member.value).toSorted(compareStrings);
+  const entries = readonlyLiteralEntries(compiler, owned.node, vocabulary);
+  if (!entries) return null;
+  return {
+    origin: "readonly-open-string-literal-data",
+    declaration: identities[0],
+    valueDomain: domain.identity,
+    ownEntries: entries,
+    ownValueVocabulary: vocabulary,
+    initializer: {
+      path: identities[0].producer.path,
+      ...nativeDiagnosticPosition(owned.source, owned.node.initializer.getStart()),
+      start: owned.node.initializer.getStart(),
+      end: owned.node.initializer.end,
+    },
+  };
+}
+
 function resolvedFacts(compiler, context, symbol, entry) {
   symbol = qualifiedAlias(context, symbol, compiler.state.limits.aliases);
   const identities = symbol.declarations.map((declaration) =>
@@ -129,11 +231,16 @@ function resolvedFacts(compiler, context, symbol, entry) {
           symbol,
           symbol.valueDeclaration ?? symbol.declarations[0],
         );
-  return {
+  const facts = {
     identities,
     type: typeFacts(type),
     signatures: type.getCallSignatures().map((signature) => signatureFacts(context, signature)),
   };
+  if (facts.signatures.length === 0 && readonlyLiteralDataCandidate(context, symbol, type)) {
+    const literalData = readonlyLiteralDataFacts(compiler, symbol, identities);
+    if (literalData) facts.literalData = literalData;
+  }
+  return facts;
 }
 
 function ownedSource(compiler, path, proof = false) {

@@ -48,6 +48,7 @@ import {
   createPrivateModuleParserFixture,
   createTypedRecheckFixture,
   createCanonicalDecoderFixture,
+  createReadonlyLiteralDataFixture,
 } from "./support/code-quality-responsibility-fixture.mjs";
 import {
   createPublicParserFixture,
@@ -5044,4 +5045,113 @@ describe("unsupported imported callable eligibility (#3918)", () => {
     for (const name of ["owner", "second"])
       expect(slots.filter((slot) => slot.path === `packages/alpha/src/${name}.ts`)).toHaveLength(1);
   }, 30_000);
+});
+
+async function readonlyLiteralDataFixture(variant = "valid") {
+  const own = createReadonlyLiteralDataFixture(variant);
+  fixtures.push(own);
+  own.subject = await collectPolicySubject(own.root);
+  own.resolver = createSymbolResolver(own.subject);
+  return own;
+}
+
+const literalDataReference = {
+  consumerPath: "src/consumer.ts",
+  specifier: "alpha",
+  exportName: "surfaces",
+};
+
+describe("readonly literal data facts without semantic loans (#3918)", () => {
+  it("resolves own literal data through the existing export entrypoint", async () => {
+    const own = await readonlyLiteralDataFixture();
+    const facts = own.resolver.resolveExport(literalDataReference);
+    expect(facts).toMatchObject({
+      signatures: [],
+      literalData: {
+        origin: "readonly-open-string-literal-data",
+        declaration: { producer: { path: "packages/alpha/src/owner.ts" } },
+        valueDomain: { producer: { path: "packages/alpha/src/owner.ts" } },
+        ownEntries: [
+          { key: "one", value: "tools" },
+          { key: "two", value: "runtime" },
+        ],
+        ownValueVocabulary: ["runtime", "tools"],
+        initializer: { path: "packages/alpha/src/owner.ts", line: 2 },
+      },
+    });
+    const source = readFileSync(join(own.root, "packages/alpha/src/owner.ts"), "utf8");
+    const expectedInitializer = '{ one: "tools", two: "runtime" }';
+    const start = source.indexOf(expectedInitializer);
+    expect(start).toBeGreaterThan(0);
+    expect(facts.literalData.initializer).toMatchObject({
+      start,
+      end: start + expectedInitializer.length,
+      column: start - source.indexOf("\n"),
+    });
+    expect(
+      source.slice(facts.literalData.initializer.start, facts.literalData.initializer.end),
+    ).toBe(expectedInitializer);
+  });
+
+  it("keeps canonical data identity through public and runtime aliases", async () => {
+    const own = await readonlyLiteralDataFixture();
+    const publicFacts = own.resolver.resolveExport(literalDataReference);
+    const runtimeFacts = own.resolver.resolveExport({
+      ...literalDataReference,
+      specifier: "alpha/runtime",
+      exportName: "SURFACES",
+    });
+    expect(publicFacts.identities[0].producer).toEqual(runtimeFacts.identities[0].producer);
+    expect(runtimeFacts).toMatchObject({
+      signatures: [],
+      literalData: {
+        origin: "readonly-open-string-literal-data",
+        ownEntries: [
+          { key: "one", value: "tools" },
+          { key: "two", value: "runtime" },
+        ],
+      },
+    });
+  });
+
+  it("continues refusing a data export as a callable responsibility", async () => {
+    const own = await readonlyLiteralDataFixture();
+    const facts = own.resolver.resolveExport(literalDataReference);
+    expect(() => own.resolver.callableSlots(facts.identities[0])).toThrow(
+      "unsupported-responsibility-callable",
+    );
+    expect(() => own.resolver.typedRecheckFacts(facts.identities[0], 0)).toThrow(
+      "unsupported-responsibility-callable",
+    );
+  });
+
+  it.each([
+    "mutable",
+    "mutable-view",
+    "open-value",
+    "unknown-value",
+    "spread",
+    "computed",
+    "accessor",
+    "asserted",
+    "asserted-value",
+    "dynamic",
+    "shadow",
+    "proto",
+  ])("does not claim literal data for the %s declaration", async (variant) => {
+    const own = await readonlyLiteralDataFixture(variant);
+    const facts = own.resolver.resolveExport(literalDataReference);
+    expect(facts.signatures).toEqual([]);
+    expect(facts).not.toHaveProperty("literalData");
+  });
+
+  it("retains subject-currentness refusal after resolving data facts", async () => {
+    const own = await readonlyLiteralDataFixture();
+    own.resolver.resolveExport(literalDataReference);
+    const path = "packages/alpha/src/owner.ts";
+    own.put(path, readFileSync(join(own.root, path), "utf8") + "\n");
+    expect(() => own.resolver.resolveExport(literalDataReference)).toThrow(
+      "symbol-subject-changed",
+    );
+  });
 });

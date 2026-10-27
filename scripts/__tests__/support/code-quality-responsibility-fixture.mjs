@@ -2488,3 +2488,44 @@ it("boolean observation admits marked carrier", () => { expect(observe({marker: 
 it("boolean observation refuses unmarked carrier", () => { expect(observe({})).toBe(false); });
 `;
 }
+
+// A real emitted public DATA export, not a callable or a parser/witness surrogate.
+export function createReadonlyLiteralDataFixture(variant = "valid") {
+  return createSymbolFixture(false, (own) => {
+    own.put("packages/alpha/src/owner.ts", readonlyLiteralDataOwner(variant));
+    own.put("packages/alpha/src/index.ts", 'export { SURFACES as surfaces } from "./owner.js";\n');
+    own.put(
+      "src/consumer.ts",
+      'import { surfaces as accepted } from "alpha"; import { SURFACES as direct } from "alpha/runtime"; export const first = accepted; export const second = direct;\n',
+    );
+  });
+}
+
+function readonlyLiteralDataOwner(variant) {
+  const header = 'export type Surface = "runtime" | "tools";\n';
+  const tables = {
+    valid:
+      'export const SURFACES: Readonly<Record<string, Surface>> = { one: "tools", two: "runtime" };',
+    mutable: 'export let SURFACES: Readonly<Record<string, Surface>> = { one: "tools" };',
+    "mutable-view": 'export const SURFACES: Record<string, Surface> = { one: "tools" };',
+    "open-value": 'export const SURFACES: Readonly<Record<string, string>> = { one: "tools" };',
+    "unknown-value": 'export const SURFACES: Readonly<Record<string, unknown>> = { one: "tools" };',
+    spread:
+      'const base = { one: "tools" as Surface }; export const SURFACES: Readonly<Record<string, Surface>> = { ...base };',
+    computed: 'export const SURFACES: Readonly<Record<string, Surface>> = { ["one"]: "tools" };',
+    accessor:
+      'export const SURFACES: Readonly<Record<string, Surface>> = { get one(): Surface { return "tools"; } };',
+    asserted:
+      'export const SURFACES: Readonly<Record<string, Surface>> = { one: "tools" } as Record<string, Surface>;',
+    "asserted-value":
+      'export const SURFACES: Readonly<Record<string, Surface>> = { one: "foreign" as Surface };',
+    dynamic:
+      'const value: Surface = "tools"; export const SURFACES: Readonly<Record<string, Surface>> = { one: value };',
+    shadow:
+      'type Readonly<T> = T; export const SURFACES: Readonly<Record<string, Surface>> = { one: "tools" };',
+    proto: 'export const SURFACES: Readonly<Record<string, Surface>> = { "__proto__": "tools" };',
+  };
+  const entry = Object.entries(tables).find(([name]) => name === variant);
+  if (!entry) throw new TypeError("unknown literal data fixture variant");
+  return header + entry[1] + "\n";
+}
