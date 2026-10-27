@@ -336,3 +336,30 @@ describe("mutation delivery continuity (#4083/#4081)", () => {
     },
   );
 });
+
+it.each([{ items: [] }, { items: [{ id: "10000", key: "KEIKO" }] }])(
+  "reads bounded Jira collection responses without changing object-response callers",
+  async ({ items }) => {
+    const fixture = scriptedPort([response(200, JSON.stringify(items))]);
+    await expect(
+      executeAtlassianWriteRequest(
+        { http: fixture.port },
+        { method: "GET", url: URL, expect: "json-array" },
+      ),
+    ).resolves.toEqual({ ok: true, status: 200, body: undefined, items });
+    expect(fixture.requests).toHaveLength(1);
+  },
+);
+
+it.each([response(200, "{}"), response(200, "["), response(200, "[]", { truncated: true })])(
+  "refuses malformed or truncated collection responses",
+  async (reply) => {
+    const fixture = scriptedPort([reply]);
+    await expect(
+      executeAtlassianWriteRequest(
+        { http: fixture.port },
+        { method: "GET", url: URL, expect: "json-array" },
+      ),
+    ).resolves.toMatchObject({ ok: false, reason: "malformed-payload" });
+  },
+);

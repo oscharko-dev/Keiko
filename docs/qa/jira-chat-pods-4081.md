@@ -747,3 +747,24 @@ object data; an AST comparison verified all 90 exact keys/reasons unchanged and 
 error observability and the 607-proof/30-scenario registered inventory pass. The prior semantic
 failure is repaired. The separate clean-revision performance measurement and final full gates
 remain open; this increment does not complete any unfinished Jira/Chat acceptance criterion.
+
+## Collection transport — #4083 AC1 / #4081 (foundation)
+
+The existing bounded Atlassian HTTP helper now accepts explicit JSON-array responses for Jira
+collection endpoints while retaining object-response validation, byte/deadline limits and GET-only
+retries. Empty collections are valid; objects in an array response, malformed JSON and truncated
+arrays fail closed. Three new cases failed before implementation; all 55 transport/Jira/Confluence
+write tests now pass, including the unchanged mutation no-retry tests.
+
+The shared pure JSON decoder replaces the previous legacy-listed `parseJsonRecord` catch. One
+exact file/function ownership rule documents propagation to `atlassian.action.outcome`; two real
+transition-route regressions prove exactly one reconstructed failure and no mutation after invalid
+metadata. The legacy register shrank from 1453 to 1452 entries. All prior 90 exceptions are retained;
+this increment explicitly adds one scoped ownership rule, with no generic parser exemption.
+46 route tests and 20 observability-gate tests pass, as do package build, root typecheck, changed
+lint and error observability. Fallow's two regrouped data-only windows involve the added ownership
+text and otherwise untouched translation data; its existing baseline refresh retains 938 groups
+and the semantic gate passes. No executable clone or matching-rule change was introduced.
+
+Production Jira tool composition, live operation acceptance and the remaining Chat/Pod/UI work
+remain open. This checkpoint does not complete #4083 or any other acceptance criterion.

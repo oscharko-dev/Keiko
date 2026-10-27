@@ -1340,3 +1340,28 @@ it("preserves the observed write result and records loss if the terminal log sin
   expect(result.body.result).toMatchObject({ status: "succeeded" });
   expect(activityLogLossCounters()["port-sink-failed"]).toBe(before + 1);
 });
+
+it.each(["{", "[]"])(
+  "records malformed provider metadata before any transition mutation",
+  async (bodyText) => {
+    const counter: FetchCounter = { count: 0, requests: [] };
+    const logs = createBufferedServerLogSink();
+    const guard = { ...guardWith(counter, () => response(200, bodyText)), activityLog: logs };
+    const authority = registerEnvelope("autonomous-delivery", BOTH_WRITE_SCOPES);
+    const result = await postAction("transition-issue", authority, "autonomous-delivery", guard);
+    expect(result.body.result).toMatchObject({ status: "failed", reason: "malformed-payload" });
+    expect(counter.requests.map((request) => request.method)).toEqual(["GET"]);
+    const events = logs.events.filter((event) => event.op === "atlassian.action.outcome");
+    expect(events).toHaveLength(1);
+    const event = events[0];
+    if (event === undefined) throw new Error("Missing metadata failure event");
+    const line = formatActivityLogProofLine(event);
+    expect(expectActivityLogProof("atlassian.action.outcome.line", line)).toMatchObject({
+      outcome: "failed",
+      failureReason: "malformed-payload",
+      actionType: "transition-issue",
+    });
+    expect(analyzeLogText(line).timelines).toHaveLength(1);
+    expect(line).not.toContain(JIRA_AUTH_REF);
+  },
+);

@@ -578,12 +578,6 @@
       "count": 1
     },
     {
-      "path": "packages/keiko-connectors/src/atlassian-sync-classify.ts",
-      "owner": "parseJsonRecord",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-connectors/src/atlassian-sync-lane.ts",
       "owner": "worker",
       "kind": "unregistered-catch",

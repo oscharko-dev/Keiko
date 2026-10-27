@@ -121,6 +121,8 @@ function catchFunctionName(node) {
 // elsewhere.
 const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map(
   Object.entries({
+    "packages/keiko-connectors/src/atlassian-sync-classify.ts:parseAtlassianJsonValue":
+      "Pure bounded JSON syntax validation returns unavailable data; the transport classifier propagates malformed-payload to the owning action. The real transition route proves one registered atlassian.action.outcome, reader reconstruction and zero mutation requests for malformed metadata. This replaces the retired legacy parseJsonRecord catch, without adding a generic parser exemption.",
     "packages/keiko-connectors/src/atlassian-verification-probe.ts:parseAtlassianVerificationProbe":
       "Pure bounded remote-JSON validation returns the closed invalid-response outcome, never remote text or a parser diagnostic. The credential route owns atlassian.connection.checked; the real Cloud client/route integration asserts exactly one registered invalid-response event for Jira and Confluence HTML responses.",
     "packages/keiko-cli/src/ui.ts:prepareUiProcessScope":
