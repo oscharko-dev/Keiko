@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -13,6 +13,16 @@ function makeRoot(): string {
   return root;
 }
 
+function writeInstalledPackage(root: string): string {
+  const packageRoot = join(root, "node_modules", "@oscharko-dev", "keiko");
+  mkdirSync(join(packageRoot, "dist", "cli"), { recursive: true });
+  mkdirSync(join(packageRoot, "dist", "ui", "static"), { recursive: true });
+  writeFileSync(join(packageRoot, "package.json"), '{"version":"0.2.0-beta.5"}\n', "utf8");
+  writeFileSync(join(packageRoot, "dist", "cli", "index.js"), "#!/usr/bin/env node\n", "utf8");
+  writeFileSync(join(packageRoot, "dist", "ui", "static", "index.html"), "<html></html>\n", "utf8");
+  return packageRoot;
+}
+
 afterEach(() => {
   for (const root of tempRoots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
@@ -22,22 +32,48 @@ afterEach(() => {
 describe("doctor", () => {
   it("detects when a stale global binary is running instead of the local package install", () => {
     const root = makeRoot();
-    const packageRoot = join(root, "node_modules", "@oscharko-dev", "keiko");
-    mkdirSync(join(packageRoot, "dist", "cli"), { recursive: true });
-    mkdirSync(join(packageRoot, "dist", "ui", "static"), { recursive: true });
-    writeFileSync(join(packageRoot, "package.json"), '{"version":"0.2.0-beta.5"}\n', "utf8");
-    writeFileSync(join(packageRoot, "dist", "cli", "index.js"), "#!/usr/bin/env node\n", "utf8");
-    writeFileSync(
-      join(packageRoot, "dist", "ui", "static", "index.html"),
-      "<html></html>\n",
-      "utf8",
-    );
+    writeInstalledPackage(root);
     const report = collectDoctorReport({
       cwd: root,
       argv: [process.execPath, "C:\\Users\\dev\\AppData\\Roaming\\npm\\keiko.cmd"],
     });
     expect(report.warning).toContain("different");
     expect(report.warning).toContain("local build");
+  });
+
+  // A project install (`npm install @oscharko-dev/keiko`) runs `node_modules/.bin/keiko`, which npm
+  // links to the package's own `dist/cli/index.js`. That is the installed package, not a stale
+  // binary, and 1.3.0 printed the stale-launch warning on every `keiko start` there (#3897).
+  it("does not warn when the running entry is npm's bin link to the installed package", () => {
+    const root = makeRoot();
+    const packageRoot = writeInstalledPackage(root);
+    const binDir = join(root, "node_modules", ".bin");
+    mkdirSync(binDir, { recursive: true });
+    symlinkSync(
+      join("..", "@oscharko-dev", "keiko", "dist", "cli", "index.js"),
+      join(binDir, "keiko"),
+    );
+    const report = collectDoctorReport({
+      cwd: root,
+      argv: [process.execPath, join(binDir, "keiko")],
+    });
+    expect(report.localPackageInstall?.cliEntry).toBe(join(packageRoot, "dist", "cli", "index.js"));
+    expect(report.warning).toBeUndefined();
+  });
+
+  it("still warns when a bin link leads to another installation", () => {
+    const root = makeRoot();
+    writeInstalledPackage(root);
+    const elsewhere = join(makeRoot(), "keiko.js");
+    writeFileSync(elsewhere, "#!/usr/bin/env node\n", "utf8");
+    const binDir = join(root, "global-bin");
+    mkdirSync(binDir, { recursive: true });
+    symlinkSync(elsewhere, join(binDir, "keiko"));
+    const report = collectDoctorReport({
+      cwd: root,
+      argv: [process.execPath, join(binDir, "keiko")],
+    });
+    expect(report.warning).toContain("different");
   });
 
   it("warns when a built checkout exists but the running entry points elsewhere", () => {

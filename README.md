@@ -71,18 +71,28 @@ Keiko is an open-source project and does not yet buy Apple and Microsoft code-si
 
 ## Install with npm
 
+Install Keiko into a folder of its own and start it from there:
+
 ```bash
-npm install -g @oscharko-dev/keiko
+mkdir keiko && cd keiko && npm init -y
 ```
 
 ```bash
-keiko start
+npm install @oscharko-dev/keiko
 ```
+
+```bash
+npx keiko start
+```
+
+A global installation (`npm install -g`) is not supported yet: npm leaves Keiko's runtime
+dependencies out of it, so `keiko start` fails (see Honest limits).
 
 Connected folders do not need Git metadata or a `package.json`. Run `keiko init` only if you want to add optional commands to an existing Node.js project. `keiko start` and `keiko restart`, including the generated `keiko:start` project script, open an authenticated browser session at `http://127.0.0.1:1983` by default. Use `--no-open` for a headless start. `keiko stop` shuts it down, and `keiko start --port <n>` picks another port. Requires Node.js `>=24.18.0 <25 || >=26.3.0 <27`; the desktop packages bring their own runtime. On macOS, npm selects the optional coding-runtime package for Apple Silicon or Intel, and Keiko verifies its contents before use. A missing or unsupported runtime is reported as unavailable; installing Keiko does not bypass platform checks.
 
 ## Honest limits
 
+- `npm install -g @oscharko-dev/keiko` installs Keiko without its third-party runtime dependencies, and `keiko start` then fails at startup. Install it into a project folder instead, as shown above, or use the desktop packages ([#3582](https://github.com/oscharko-dev/Keiko/issues/3582)).
 - Updating from before 1.2.0 requires manual review of custom support scripts: legacy inclusion flags, filename-based `--out` arguments and sidecar bundles are replaced by the canonical private report workflow. See the [support guide](https://github.com/oscharko-dev/Keiko/blob/dev/docs/observability/support-workspace.md).
 - Windows Chat, Files and manual Editor use are separate from Coding execution. The Windows gateway-filter work remains a development implementation and does not enable the Coding runtime; see the [qualification status](https://github.com/oscharko-dev/Keiko/blob/dev/docs/qa/windows-gateway-runtime-progress.md).
 - Model weights and inference servers are not bundled. Connect a compatible local model server, including a separately installed Gemma server, through Keiko's gateway configuration, directly or through a proxy such as LiteLLM. This release does not install MLX or certify every model and context-window configuration.
