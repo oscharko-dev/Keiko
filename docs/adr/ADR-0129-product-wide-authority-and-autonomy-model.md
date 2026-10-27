@@ -204,6 +204,13 @@ approval. Policy inspection does not reserve budget. Chat reservation refreshes 
 facts before charging the same cumulative authority owner. Neither helper dispatches tools or
 substitutes for explicit consent to model transmission.
 
+The private Jira read-grant contract separately binds actor, Chat, Pod, generations and expiry.
+Its versioned disclosure covers model transmission and conversation retention, without write
+or import authority. Granted state needs a consent-proof digest; pending or rejected state
+cannot claim one. Runtime owners must establish acceptance and invalidate these records;
+structural validation alone never grants access, and browser projections exclude private
+actor/proof facts.
+
 ### D6 — Forward rule for decision records
 
 New ADRs and epics for autonomy-capable surfaces must cite this record and document their

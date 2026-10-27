@@ -68,12 +68,11 @@ function validateKeys(
   value: Record<string, unknown>,
   keys: readonly string[],
   errors: string[],
+  path = "chatAuthority",
 ): void {
   // The shared key checker names unknown keys. This boundary returns only closed diagnostics.
-  if (exactKeys(value, keys, "chatAuthority").length > 0)
-    errors.push("chatAuthority has unknown fields");
-  if (keys.some((key) => !Object.hasOwn(value, key)))
-    errors.push("chatAuthority has missing own fields");
+  if (exactKeys(value, keys, path).length > 0) errors.push(`${path} has unknown fields`);
+  if (keys.some((key) => !Object.hasOwn(value, key))) errors.push(`${path} has missing own fields`);
 }
 
 function validateDigest(value: unknown, path: string, errors: string[]): void {
@@ -164,5 +163,82 @@ export function validateChatToolAuthorityEnvelope(
   validateBudget(value.budget, errors);
   validateStrictUtcInstant(value.expiresAt, "chatAuthority.expiresAt", errors);
   validateDigest(value.approvalProofDigest, "chatAuthority.approvalProofDigest", errors);
+  return result(value, errors);
+}
+
+export const CHAT_TOOL_READ_GRANT_STATES = [
+  "pending",
+  "granted",
+  "rejected",
+  "expired",
+  "revoked",
+] as const;
+export type ChatToolReadGrantState = (typeof CHAT_TOOL_READ_GRANT_STATES)[number];
+export const CHAT_TOOL_READ_DISCLOSURE_VERSION = "jira-chat-read-v1";
+
+interface ChatToolReadGrantFacts {
+  readonly schemaVersion: "1";
+  readonly kind: "jira-chat-read-grant";
+  readonly grantId: string;
+  readonly subject: ChatToolAuthoritySubject;
+  /** Consent covers model transmission and retention in this conversation, not writes or import. */
+  readonly disclosureVersion: typeof CHAT_TOOL_READ_DISCLOSURE_VERSION;
+  readonly requestedAt: number;
+  readonly expiresAt: number;
+}
+
+/** Private server record. Browser projections must omit actor facts and acceptance evidence. */
+export type ChatToolReadGrant = ChatToolReadGrantFacts &
+  (
+    | { readonly state: "pending" | "rejected"; readonly consentProofDigest: null }
+    | { readonly state: "granted"; readonly consentProofDigest: string }
+    | { readonly state: "expired" | "revoked"; readonly consentProofDigest: string | null }
+  );
+
+const READ_GRANT_KEYS = [
+  "schemaVersion",
+  "kind",
+  "grantId",
+  "subject",
+  "disclosureVersion",
+  "requestedAt",
+  "expiresAt",
+  "state",
+  "consentProofDigest",
+] as const;
+const READ_GRANT_STATES: ReadonlySet<unknown> = new Set(CHAT_TOOL_READ_GRANT_STATES);
+
+function validateReadGrantState(value: Record<string, unknown>, errors: string[]): void {
+  if (!READ_GRANT_STATES.has(value.state)) errors.push("chatReadGrant.state is invalid");
+  if (value.state === "granted" || value.consentProofDigest !== null)
+    validateDigest(value.consentProofDigest, "chatReadGrant.consentProofDigest", errors);
+  if (
+    (value.state === "pending" || value.state === "rejected") &&
+    value.consentProofDigest !== null
+  )
+    errors.push("chatReadGrant has unexpected acceptance evidence");
+}
+
+/** Structural validation does not establish consent or extend its lifetime. */
+export function validateChatToolReadGrant(
+  value: unknown,
+): CodingWorkbenchValidationResult<ChatToolReadGrant> {
+  if (!isRecord(value)) return invalid("chatReadGrant must be an object");
+  const errors: string[] = [];
+  validateKeys(value, READ_GRANT_KEYS, errors, "chatReadGrant");
+  if (value.schemaVersion !== "1" || value.kind !== "jira-chat-read-grant")
+    errors.push("chatReadGrant kind or schemaVersion is invalid");
+  validateSafeId(value.grantId, "chatReadGrant.grantId", errors, 128);
+  if (value.disclosureVersion !== CHAT_TOOL_READ_DISCLOSURE_VERSION)
+    errors.push("chatReadGrant.disclosureVersion is invalid");
+  const subject = validateChatToolAuthoritySubject(value.subject);
+  if (!subject.ok) errors.push(...subject.errors);
+  if (
+    !positiveCount(value.requestedAt) ||
+    !positiveCount(value.expiresAt) ||
+    value.expiresAt <= value.requestedAt
+  )
+    errors.push("chatReadGrant lifetime is invalid");
+  validateReadGrantState(value, errors);
   return result(value, errors);
 }

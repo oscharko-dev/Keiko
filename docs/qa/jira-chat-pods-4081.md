@@ -1503,3 +1503,22 @@ states with their closed action types and one correlation; ordinary pending revi
 level. Build, root typecheck and changed lint pass. Catalog generation resolves 613 proofs and
 30 scenarios without violations. Final aggregate gates and actual permission/dispatch composition
 remain pending; no complete AC is accepted here. Logs: `/tmp/keiko-4081-chat-policy-*.log`.
+
+### Read-consent contract checkpoint — #4084
+
+The additive private read-grant contract binds actor, Chat, Pod, both generations and an
+ordered lifetime. The fixed disclosure version covers model transmission and retention in
+this conversation; it confers neither writes nor import rights. Pending/rejected grants have
+no acceptance proof; granted state requires a SHA-256 consent proof, retained if that grant
+later expires or is revoked. Unknown fields, broadened scopes, inherited required facts,
+invalid lifetimes and unknown disclosure versions fail with closed diagnostics. Structural
+validation itself confers no authority; runtime retention, human acceptance and dispatch
+composition remain pending. Browser projections must omit the private actor and proof facts.
+
+Before implementation, 30 new tests fail while all 45 prior authority tests pass. Afterward,
+101 contract, retained Coding validation and ordinary Chat adapter tests pass. The final
+contract-only rerun passes 75 tests after replacing mutation of a test object's dynamic key
+with explicit construction of its own fields. Package build, root typecheck, changed lint,
+format and semantic checks pass; no baseline exemption is added. Logs:
+`/tmp/keiko-4081-read-grant-contract-*.log`. Public package assembly and full gates remain
+scheduled for final acceptance; no complete AC is accepted by this contract increment.
