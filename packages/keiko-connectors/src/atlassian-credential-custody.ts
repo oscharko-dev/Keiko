@@ -27,7 +27,6 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { isChatJiraPodId } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   isAtlassianConnectionVerificationStatus,
-  type AtlassianConnectionVerificationStatus,
   type JiraLivePodMetadata,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { Buffer } from "node:buffer";
@@ -253,12 +252,13 @@ export interface AtlassianCredentialCustody {
   readonly create: (input: unknown, livePodOwnerDigest?: string) => AtlassianCredentialMetadata;
   readonly beginVerification: (
     authRef: string,
+    expectedGeneration?: number,
   ) => { readonly metadata: AtlassianCredentialMetadata; readonly revision: number } | undefined;
   readonly finishVerification: (
     authRef: string,
     generation: number,
     revision: number,
-    status: AtlassianConnectionVerificationStatus,
+    status: JiraLivePodMetadata["verificationStatus"],
   ) => boolean;
   readonly getMetadata: (authRef: string) => AtlassianCredentialMetadata | undefined;
   readonly list: () => readonly AtlassianCredentialMetadata[];
@@ -582,9 +582,12 @@ function advanceGeneration(value: number): number {
 function beginVerification(
   deps: AtlassianCredentialCustodyDeps,
   authRef: string,
+  expectedGeneration?: number,
 ): ReturnType<AtlassianCredentialCustody["beginVerification"]> {
   const metadata = livePodCredential(deps, authRef);
   if (metadata === undefined) return undefined;
+  if (expectedGeneration !== undefined && metadata.generation !== expectedGeneration)
+    throw new AtlassianCredentialCustodyError("credential-changed");
   const revision = advanceGeneration(metadata.livePod.verificationRevision);
   const next = {
     ...metadata,
@@ -599,7 +602,7 @@ function finishVerification(
   authRef: string,
   generation: number,
   revision: number,
-  status: AtlassianConnectionVerificationStatus,
+  status: JiraLivePodMetadata["verificationStatus"],
 ): boolean {
   const metadata = livePodCredential(deps, authRef);
   if (
@@ -608,7 +611,7 @@ function finishVerification(
     !metadata.livePod.verificationInProgress
   )
     return false;
-  if (!isAtlassianConnectionVerificationStatus(status))
+  if (status !== "unverified" && !isAtlassianConnectionVerificationStatus(status))
     throw new AtlassianCredentialCustodyError("invalid-input");
   deps.metadataStore.insert({
     ...metadata,
@@ -659,7 +662,8 @@ export function createAtlassianCredentialCustody(
   const custody: AtlassianCredentialCustody = {
     create: (input: unknown, ownerDigest?: string): AtlassianCredentialMetadata =>
       createCredential(deps, now, input, ownerDigest),
-    beginVerification: (authRef) => beginVerification(deps, authRef),
+    beginVerification: (authRef, expectedGeneration) =>
+      beginVerification(deps, authRef, expectedGeneration),
     finishVerification: (authRef, generation, revision, status) =>
       finishVerification(deps, authRef, generation, revision, status),
     // Re-validated on read (KEIKO-0894), matching resolveForExecution below: an authRef that

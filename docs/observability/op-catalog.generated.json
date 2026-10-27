@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "1657fce3a167224ed1a2593349b04eacbaf0c264cf92851827a68c5fc5cef161",
+    "catalogDigest": "833211795bf77361fba02defb726df743fd84cbaa42b1b11a3a6028480037f25",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -1000,8 +1000,15 @@
               "invalid-response",
               "unsupported-version",
               "tls-failed",
-              "sync-unsupported"
+              "sync-unsupported",
+              "verification-aborted"
             ]
+          },
+          "verificationState": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["applied", "stale"]
           }
         },
         "causal": "correlation",
@@ -1011,7 +1018,7 @@
         "proofIds": ["atlassian.connection.checked.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/atlassian/credentialActivity.ts:86",
-        "emitterSites": ["packages/keiko-server/src/atlassian/credentialActivity.ts:135"]
+        "emitterSites": ["packages/keiko-server/src/atlassian/credentialActivity.ts:143"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -1051,7 +1058,7 @@
         "proofIds": ["atlassian.credential.created.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/atlassian/credentialActivity.ts:55",
-        "emitterSites": ["packages/keiko-server/src/atlassian/credentialActivity.ts:165"]
+        "emitterSites": ["packages/keiko-server/src/atlassian/credentialActivity.ts:174"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -1126,8 +1133,8 @@
         "failureClasses": ["atlassian-credential-custody"],
         "proofIds": ["atlassian.credential.rejected.reason"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/atlassian/credentialRoutes.ts:59",
-        "emitterSites": ["packages/keiko-server/src/atlassian/credentialRoutes.ts:247"]
+        "registrationSite": "packages/keiko-server/src/atlassian/credentialRoutes.ts:54",
+        "emitterSites": ["packages/keiko-server/src/atlassian/credentialRoutes.ts:242"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -54204,6 +54211,12 @@
                   "type": "string",
                   "dataClass": "closed-enum",
                   "required": true
+                },
+                {
+                  "name": "verificationState",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
                 }
               ],
               "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
@@ -101410,7 +101423,7 @@
     {
       "op": "atlassian.connection.checked",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/credentialActivity.ts:150",
+      "site": "packages/keiko-server/src/atlassian/credentialActivity.ts:159",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -101423,7 +101436,7 @@
     {
       "op": "atlassian.credential.created",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/credentialActivity.ts:181",
+      "site": "packages/keiko-server/src/atlassian/credentialActivity.ts:190",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -101449,14 +101462,14 @@
     {
       "op": "atlassian.credential.rejected",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/credentialRoutes.ts:261",
+      "site": "packages/keiko-server/src/atlassian/credentialRoutes.ts:256",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "atlassian.credential.rejected",
       "category": "security",
-      "site": "packages/keiko-server/src/atlassian/credentialRoutes.ts:62",
+      "site": "packages/keiko-server/src/atlassian/credentialRoutes.ts:57",
       "package": "keiko-server"
     },
     {

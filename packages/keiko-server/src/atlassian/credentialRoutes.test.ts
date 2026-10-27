@@ -133,6 +133,49 @@ function livePodCreateInput(): Record<string, unknown> {
   };
 }
 
+function jiraProbeResponse(
+  request: AtlassianHttpBodyRequest,
+  status = 200,
+): AtlassianHttpBodyResult {
+  const bodyText = JSON.stringify(
+    request.url.endsWith("/serverInfo")
+      ? { version: "10.3.26", versionNumbers: [10, 3, 26], deploymentType: "Server" }
+      : { name: "synthetic-user", key: "synthetic-key", active: true },
+  );
+  return {
+    kind: "response",
+    status,
+    bodyText,
+    bodyBytes: Buffer.byteLength(bodyText),
+    truncated: false,
+  };
+}
+
+function verifyCredentialRequest(authRef: string): Promise<Response> {
+  return fetch(
+    `${baseUrl()}/api/atlassian-connectors/credentials/${encodeURIComponent(authRef)}/verify`,
+    { method: "POST", headers: csrfHeaders(), body: "{}" },
+  );
+}
+
+function probeSignal(): { promise: Promise<void>; resolve: () => void } {
+  let resolve = (): void => undefined;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+function readVerificationEvidence(
+  sink: ReturnType<typeof createFileServerLogSink>,
+): readonly Record<string, unknown>[] {
+  sink.close?.();
+  return persistedActivityLogLines(
+    readPersistedActivityLog(configDir),
+    "atlassian.connection.checked",
+  ).map((line) => expectActivityLogProof("atlassian.connection.checked.line", line));
+}
+
 async function listen(srv: Server): Promise<number> {
   await new Promise<void>((resolve) => srv.listen(0, UI_HOST, resolve));
   return (srv.address() as AddressInfo).port;
@@ -689,6 +732,132 @@ describe("redaction under failure", () => {
 });
 
 describe("end-to-end verify through the gateway transport adapter", () => {
+  it("retains successful verification and revokes the generation after a failed recheck", async () => {
+    const created = wiring.custody.create(
+      livePodCreateInput(),
+      jiraChatActorDigest(baseDeps(wiring)),
+    );
+    let status = 200;
+    await rebuild({
+      ...wiring,
+      httpBodyPortFactory:
+        () =>
+        (request): Promise<AtlassianHttpBodyResult> =>
+          Promise.resolve(jiraProbeResponse(request, status)),
+    });
+    expect((await verifyCredentialRequest(created.authRef)).status).toBe(200);
+    expect(wiring.custody.getMetadata(created.authRef)).toMatchObject({
+      generation: 1,
+      livePod: { verificationStatus: "ok", verificationInProgress: false },
+    });
+    status = 401;
+    expect(await (await verifyCredentialRequest(created.authRef)).json()).toMatchObject({
+      status: "auth-failed",
+    });
+    expect(wiring.custody.getMetadata(created.authRef)).toMatchObject({
+      generation: 2,
+      livePod: { verificationStatus: "auth-failed", verificationInProgress: false },
+    });
+  });
+
+  it.each([200, 401])(
+    "rejects a late probe after the newer verification returned %s",
+    async (newerStatus) => {
+      const created = wiring.custody.create(
+        livePodCreateInput(),
+        jiraChatActorDigest(baseDeps(wiring)),
+      );
+      const entered = probeSignal();
+      const release = probeSignal();
+      let attempt = 0;
+      const sink = createFileServerLogSink(configDir, { level: "debug" });
+      await rebuild({
+        ...wiring,
+        activityLog: sink,
+        httpBodyPortFactory: () => {
+          const currentAttempt = ++attempt;
+          return async (request): Promise<AtlassianHttpBodyResult> => {
+            if (currentAttempt === 1 && request.url.endsWith("/serverInfo")) {
+              entered.resolve();
+              await release.promise;
+            }
+            return jiraProbeResponse(
+              request,
+              currentAttempt === 1 ? (newerStatus === 200 ? 401 : 200) : newerStatus,
+            );
+          };
+        },
+      });
+      const earlier = verifyCredentialRequest(created.authRef);
+      await entered.promise;
+      expect((await verifyCredentialRequest(created.authRef)).status).toBe(200);
+      release.resolve();
+      expect((await earlier).status).toBe(409);
+      expect(readVerificationEvidence(sink).map((entry) => entry.verificationState)).toEqual([
+        "applied",
+        "stale",
+      ]);
+      expect(wiring.custody.getMetadata(created.authRef)).toMatchObject({
+        generation: newerStatus === 200 ? 1 : 2,
+        livePod: {
+          verificationStatus: newerStatus === 200 ? "ok" : "auth-failed",
+          verificationRevision: 2,
+          verificationInProgress: false,
+        },
+      });
+    },
+  );
+
+  it("cannot complete a verification after the credential deletion route removed its Pod", async () => {
+    const created = wiring.custody.create(
+      livePodCreateInput(),
+      jiraChatActorDigest(baseDeps(wiring)),
+    );
+    const entered = probeSignal();
+    const release = probeSignal();
+    await rebuild({
+      ...wiring,
+      httpBodyPortFactory:
+        () =>
+        async (request): Promise<AtlassianHttpBodyResult> => {
+          entered.resolve();
+          await release.promise;
+          return jiraProbeResponse(request);
+        },
+    });
+    const pending = verifyCredentialRequest(created.authRef);
+    await entered.promise;
+    const deleted = await fetch(
+      `${baseUrl()}/api/atlassian-connectors/credentials/${encodeURIComponent(created.authRef)}`,
+      { method: "DELETE", headers: csrfHeaders() },
+    );
+    expect(deleted.status).toBe(200);
+    release.resolve();
+    expect((await pending).status).toBe(409);
+    expect(wiring.custody.getMetadata(created.authRef)).toBeUndefined();
+  });
+
+  it("retires an interrupted probe without falsely retaining readiness", async () => {
+    const created = wiring.custody.create(
+      livePodCreateInput(),
+      jiraChatActorDigest(baseDeps(wiring)),
+    );
+    const sink = createFileServerLogSink(configDir, { level: "debug" });
+    await rebuild({
+      ...wiring,
+      activityLog: sink,
+      httpBodyPortFactory: () => (): Promise<AtlassianHttpBodyResult> =>
+        Promise.reject(new TypeError("Synthetic probe failure")),
+    });
+    expect((await verifyCredentialRequest(created.authRef)).status).toBe(500);
+    expect(readVerificationEvidence(sink)).toMatchObject([
+      { verificationState: "applied", outcome: "verification-aborted" },
+    ]);
+    expect(wiring.custody.getMetadata(created.authRef)).toMatchObject({
+      generation: 2,
+      livePod: { verificationStatus: "unverified", verificationInProgress: false },
+    });
+  });
   it("projects existing credential GET without private Pod ownership or creation facts", async () => {
     const sink = createFileServerLogSink(configDir, { level: "debug" });
     await rebuild({ ...wiring, activityLog: sink });

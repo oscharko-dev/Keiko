@@ -112,7 +112,14 @@ const ATLASSIAN_CONNECTION_CHECKED_OPERATION = defineActivityLogOperation({
         "unsupported-version",
         "tls-failed",
         "sync-unsupported",
+        "verification-aborted",
       ],
+    },
+    verificationState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["applied", "stale"],
     },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
@@ -128,7 +135,8 @@ const ATLASSIAN_CONNECTION_CHECKED_OPERATION = defineActivityLogOperation({
 export function recordConnectionCheck(
   deps: Pick<AtlassianConnectorCredentialDeps, "activityLog" | "diagnostics">,
   correlationId: string,
-  result: AtlassianConnectionVerificationStatus | "sync-unsupported",
+  result: AtlassianConnectionVerificationStatus | "sync-unsupported" | "verification-aborted",
+  verificationState?: "applied" | "stale",
 ): void {
   try {
     deps.activityLog?.write(
@@ -138,6 +146,7 @@ export function recordConnectionCheck(
         {
           action: result === "sync-unsupported" ? "sync" : "verify",
           outcome: result,
+          ...(verificationState === undefined ? {} : { verificationState }),
           completeness: "complete",
           loss: "none",
         },

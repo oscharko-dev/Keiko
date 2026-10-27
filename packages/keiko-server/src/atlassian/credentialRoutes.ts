@@ -19,10 +19,9 @@
 // diagnostic sink — the exact contract `check:error-observability` enforces.
 
 import type { IncomingMessage } from "node:http";
+import { verifyStoredCredential } from "./credentialVerification.js";
 import {
   AtlassianCredentialCustodyError,
-  verifyAtlassianConnection,
-  verifyJiraDataCenterConnection,
   type AtlassianCredentialCustody,
   type AtlassianCredentialMetadata,
   type AtlassianHttpBodyPort,
@@ -43,11 +42,7 @@ import {
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
-import {
-  recordCredentialCreated,
-  recordConnectionCheck,
-  recordCredentialsListed,
-} from "./credentialActivity.js";
+import { recordCredentialCreated, recordCredentialsListed } from "./credentialActivity.js";
 import {
   jiraChatActorDigest,
   ownsAtlassianCredential,
@@ -407,20 +402,11 @@ export function handleVerifyAtlassianConnectorCredential(
     const metadata = authRef === undefined ? undefined : guard.custody.getMetadata(authRef);
     if (metadata === undefined || !ownsAtlassianCredential(deps, metadata))
       throw new AtlassianCredentialCustodyError("credential-not-found");
-    const status =
-      metadata.deployment === "data-center"
-        ? await verifyJiraDataCenterConnection(
-            guard.httpBodyPortFactory(metadata, ctx.correlationId ?? UNKNOWN_CORRELATION_ID),
-            metadata.baseUrl,
-          )
-        : await verifyAtlassianConnection(
-            guard.httpBodyPortFactory(metadata, ctx.correlationId ?? UNKNOWN_CORRELATION_ID),
-            {
-              provider: metadata.provider,
-              baseUrl: metadata.baseUrl,
-            },
-          );
-    recordConnectionCheck(guard, ctx.correlationId ?? UNKNOWN_CORRELATION_ID, status);
+    const status = await verifyStoredCredential(
+      guard,
+      metadata,
+      ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+    );
     return { status: 200, body: { authRef: metadata.authRef, status } };
   });
 }

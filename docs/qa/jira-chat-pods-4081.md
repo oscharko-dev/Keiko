@@ -1255,3 +1255,21 @@ changed lint/format, ADR and semantic checks pass. Regeneration resolves 609 pro
 without violations. The diagnostic vocabulary addition required refreshing clone locations;
 the baseline still contains the same 938 group memberships, verified by comparing every member
 path before/after. No duplicated implementation or additional baseline group was accepted.
+
+## Verification completion through HTTP — #4084 AC3/#4085 AC3/AC4
+
+Five real HTTP cases failed before ticket composition: retained success/failure readiness,
+both newer-success and newer-failure races, deletion during a probe, and an internally aborted
+probe. The existing Verify route now uses the custody generation/revision checks. Stale answers
+return 409; failed or aborted current probes advance the generation, and internal aborts become
+unverified instead of remaining in progress. Existing Cloud verification stays unchanged.
+
+The actual Activity Log writer/reader reconstructs applied and stale verification observations
+and aborted probes, without response content. Custody tests also check that a stale start leaves
+the stored revision untouched. Chat binding admission, restart/lifecycle coordination and
+grant/approval invalidations remain separate work; this checkpoint does not complete an AC.
+
+All 107 focused custody/credential-route/Data-Center-verification tests and 97 registry tests pass.
+Package build, root typecheck, changed lint/format, ADR and staged semantic checks pass. Registry
+regeneration resolves 609 proofs and 30 scenarios without violations. Final integrated, live,
+coverage and aggregate gates remain pending as listed above.

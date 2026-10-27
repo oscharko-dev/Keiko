@@ -110,6 +110,31 @@ function livePodInput(): Record<string, unknown> {
 }
 
 describe("Jira Live Pod custody", () => {
+  it("rejects a stale verification intent before changing the stored revision", () => {
+    const f = custodyOverFakes();
+    const created = f.custody.create(livePodInput(), "a".repeat(64));
+    expect(custodyErrorCode(() => f.custody.beginVerification(created.authRef, 2))).toBe(
+      "credential-changed",
+    );
+    expect(f.custody.getMetadata(created.authRef)).toEqual(created);
+  });
+
+  it("retires an aborted recheck with a new generation and unverified readiness", () => {
+    const f = custodyOverFakes();
+    const created = f.custody.create(livePodInput(), "a".repeat(64));
+    const initial = f.custody.beginVerification(created.authRef, 1);
+    assert(initial);
+    expect(f.custody.finishVerification(created.authRef, 1, initial.revision, "ok")).toBe(true);
+    const recheck = f.custody.beginVerification(created.authRef, 1);
+    assert(recheck);
+    expect(f.custody.finishVerification(created.authRef, 1, recheck.revision, "unverified")).toBe(
+      true,
+    );
+    expect(f.custody.getMetadata(created.authRef)).toMatchObject({
+      generation: 2,
+      livePod: { verificationStatus: "unverified", verificationInProgress: false },
+    });
+  });
   it("rejects a stale execution generation before reading ciphertext", () => {
     const f = custodyOverFakes();
     const created = f.custody.create(livePodInput(), "a".repeat(64));

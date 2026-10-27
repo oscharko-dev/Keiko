@@ -411,6 +411,13 @@ the entire private Live-Pod block, including owner and creation-intent digests. 
 only the visible count; unavailable or foreign records share the existing not-found rejection.
 The ordinary Chat consumer needs no Coding session to establish this server-owned actor identity.
 
+The existing Verify route starts a generation-checked ticket and completes only that current
+revision. A successful check retains its generation; failed checks and internally aborted probes
+advance it. Aborted probes return to unverified readiness. Late answers after a newer check or
+deletion return conflict and cannot overwrite current state. The existing connection-check event
+distinguishes applied and stale observations without response content. This verification state
+does not itself grant Chat read or mutation authority.
+
 Both outbound HTTP factories capture the selected credential generation by value. The custody
 resolver checks it against current private metadata before reading ciphertext, so an old transport
 cannot silently materialize a replacement credential. The existing typed rejection event and 409

@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "1657fce3a167224ed1a2593349b04eacbaf0c264cf92851827a68c5fc5cef161"
+    "catalogDigest": "833211795bf77361fba02defb726df743fd84cbaa42b1b11a3a6028480037f25"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -1209,7 +1209,8 @@
       "packages/keiko-server/src/atlassian/writeActionRoutes.test.ts"
     ],
     "atlassian.connection.checked.line": [
-      "packages/keiko-server/src/atlassian/credentialActivity.test.ts"
+      "packages/keiko-server/src/atlassian/credentialActivity.test.ts",
+      "packages/keiko-server/src/atlassian/credentialRoutes.test.ts"
     ],
     "atlassian.credential.created.line": [
       "packages/keiko-server/src/atlassian/credentialActivity.test.ts"
