@@ -270,3 +270,54 @@ model answer. There are no mocked browser, model or Jira transports.
 Stage diagnostics contain no request bodies or credentials. Screenshots stay in
 the private synthetic session directory. A failed or license-budget-rejected run
 is not a completed journey; repeat the entire group in a valid session.
+
+## Ordinary Chat response-loss and restart qualification
+
+Run this finite group only after the licensed HTTPS/read/write preflight and while no other
+stateful laboratory consumer is running:
+
+```sh
+node scripts/testing/jira-chat-lab/chat-faults.mjs "$HOME/.local/share/keiko-jira-4081-new" \
+  keiko-qwen36-35b-8bit
+```
+
+The ten cases cover create, edit, assign, comment and transition under two explicit
+observation faults: a lost response in buffered Chat, and an observed HTTP 503 after the
+real effect in streamed Chat. The real model, authenticated normal Chat, vault, catalog,
+binder, MCP host and production HTTPS port still execute. After real successful response
+headers, a qualification decorator changes only the mutation journal's acknowledgement
+and returned HTTP observation. This is an injected observation fault, not a physical
+connection failure; the transport Activity Log still records the actual successful status.
+
+Each case persists its private canonical intent before dispatch, requires exactly one
+Chat mutation attempt, checks the independent Jira effect, and repeats the canonical
+delivery. Create obtains its previously unknown issue key only through an independent
+marker/count observation. Edit and assign additionally apply a separately counted foreign
+fixture edit, which subsequent replay must preserve. A fresh Node process reopens the same
+SQLite database and encrypted credential store, repeats the original canonical delivery,
+and uses the existing answer-only Regenerate endpoint. The retained transcript must remain
+`unknown`; no restart, duplicate or regeneration may change the independently observed
+remote state. An external guard blocks any second attempted mutation and fails the case;
+a guard hit cannot produce a passing receipt.
+
+`fault-chat.pending.json` is created exclusively and synchronized before dispatch. An
+interruption therefore blocks a new group. The diagnostic command below performs only
+independent reads and saves a private reconciliation snapshot; it never resumes a write:
+
+```sh
+node scripts/testing/jira-chat-lab/chat-faults.mjs "$HOME/.local/share/keiko-jira-4081-new" \
+  keiko-qwen36-35b-8bit --reconcile
+```
+
+Never remove an unresolved pending marker to rerun a mutation. Failed groups remain
+incomplete until reconciled; a successful group retains its private receipt and removes
+the pending marker. The internal `--restart` phase is invoked by the parent harness only
+after its effect and replay observations are durably recorded.
+
+Private intent creation uses exclusive creation and synchronizes the file and parent
+directory before dispatch. Later snapshots use a private temporary file, file synchronization,
+atomic rename and directory synchronization, keeping a complete earlier intent if writing
+the replacement fails. On cancellation, the harness interrupts its Chat generations and
+drains their existing serializer gates before disposing the database. A bounded drain
+failure preserves the open store and retained state; it must never be treated as a completed
+shutdown or as permission to replay the pending action.

@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { closeSync, fsyncSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { TextDecoder } from "node:util";
 import { pathToFileURL } from "node:url";
 import { basicAuth, labRequest, loadSession, requireLicense } from "./lab-client.mjs";
 import { jsonRequest, prepareChat, request, withLiveChat } from "./chat-read.mjs";
+import { privateJson } from "./private-json.mjs";
+export { privateJson };
 
 const MODES = new Set(["governed-assist", "supervised-coding", "autonomous-delivery"]);
 const CONNECTIONS = new Set(["dropdown", "keyboard", "drag"]);
@@ -18,15 +20,6 @@ const WRITE_TOOLS = new Set([
   "jira_transition",
 ]);
 
-export function privateJson(path, value, exclusive = false) {
-  const fd = openSync(path, exclusive ? "wx" : "w", 0o600);
-  try {
-    writeFileSync(fd, JSON.stringify(value));
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
-  }
-}
 function stage(name, extra = {}) {
   console.log(JSON.stringify({ operation: "jira-chat-live-write", stage: name, ...extra }));
 }
@@ -156,13 +149,18 @@ async function observeDecisions(context, chat, intent, signal, settled) {
 }
 
 function payload(context, chat, intent) {
+  const target = toolArguments(intent).issueKey;
+  const targetInstruction =
+    typeof target === "string"
+      ? `The requested issue key is ${target}. Copy that exact identifier. `
+      : "";
   return {
     chatId: chat.id,
     projectPath: context.projectPath,
     modelId: context.modelId,
     clientTurnId: intent.clientTurnId,
     expectedGroundingScopeIdentity: chat.groundingScopeIdentity,
-    content: `Call ${toolName(intent)} exactly once with this exact JSON argument object: ${JSON.stringify(toolArguments(intent))}. Do not call any other mutation tool. Wait for any requested approval. After the tool result, report its outcome briefly and do not repeat the call, even if the outcome is unknown or unconfirmed.`,
+    content: `${targetInstruction}Call ${toolName(intent)} exactly once with this exact JSON argument object: ${JSON.stringify(toolArguments(intent))}. Do not call any other mutation tool. Wait for any requested approval. After the tool result, report its outcome briefly and do not repeat the call, even if the outcome is unknown or unconfirmed.`,
     memory: { enabled: false, budgetTokens: 0, mode: "governed-assist", context: {} },
   };
 }
@@ -243,10 +241,11 @@ function verifyExchange(exchanges, intent, mutation) {
   return expected[0];
 }
 
-export async function runChatToolTurn(context, chat, intent) {
+export async function runObservedChatTurn(context, chat, intent) {
   const controller = new globalThis.AbortController();
   const timeout = globalThis.setTimeout(() => controller.abort(), 240_000);
   const events = new Set();
+  const turnRequest = payload(context, chat, intent);
   let settled = false;
   const pending = sendTurn(context, chat, intent, controller.signal, events);
   void pending.then(
@@ -265,13 +264,18 @@ export async function runChatToolTurn(context, chat, intent) {
       controller.signal,
       () => settled,
     );
-    const exchange = verifyTurn(await pending, decisions, intent, events);
-    return { decisions, exchange };
+    return { completed: await pending, decisions, events, request: turnRequest };
   } finally {
     globalThis.clearTimeout(timeout);
     controller.abort();
     await pending.catch(() => undefined);
   }
+}
+
+export async function runChatToolTurn(context, chat, intent) {
+  const observed = await runObservedChatTurn(context, chat, intent);
+  const exchange = verifyTurn(observed.completed, observed.decisions, intent, observed.events);
+  return { decisions: observed.decisions, exchange };
 }
 
 async function prepareWriteChat(context, intent) {

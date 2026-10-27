@@ -2205,3 +2205,36 @@ The auditor correctly identified that any settled tool result was too broad a pe
 All nine operations in the finite live catalog read group passed. Creation then exposed another real Jira detail: the endpoint-selected issue type advertises no editable operations. Before dispatch, the old field validator rejected it; remote project digest/count and the unique creation marker independently prove zero writes. The correction treats only canonical endpoint-selected project/issue-type values as create context, rejects caller overrides, preserves ordinary field operations and still checks allowed values. The new case failed before repair; 87 targeted metadata/mutation cases, root TypeScript and scoped lint pass afterward. The full buffered/streamed 14-operation acceptance groups remain pending until complete receipts exist.
 
 The new blocking per-PR browser lane passed all three finite cases against the assembled product: read consent, exact approved mutation, claimed history, forged approval digest, revocation/cancellation, and actionable unverified-model refusal. It uses the actual BFF, gateway transport, catalog, MCP and a deterministic HTTPS Jira fixture; it is distinct from the real-Jira/model live lane. There were 509 passing workflow/wiring tests and no weakened gate classification. The complete owned lane command will run again on final artifacts.
+
+### Linux editor bundle qualification — #4081 / #4087
+
+The platform-sensitive bundle obligation above is now resolved on Linux. An isolated source
+snapshot of the current worktree (8,885 files; archive SHA-256
+`5950af139c188b8965a7078363d4dc3069ba4b6312299c1f0b1120ea4c1bacee`) was built as the non-root
+`node` user with the existing local-gates image
+`sha256:11a52911268b6a1eb5bc57ba366921a3043f7bd00816839161193b8ff5b9a349`, Linux arm64,
+Node 24.18.0 and npm 11.16.0. No shared checkout, host dependencies or active Jira build outputs were
+mounted; only the ordinary npm cache was reused. This is deterministic bundle evidence, not D12
+wall-clock evidence or the full local-gates aggregate.
+
+A clean install and canonical package/root/UI build reproduced the stale-record failure:
+`staticExport.fileCount` was 384 while the actual export contained 380 files. The Linux editor
+fingerprint already matched the committed record. A second fresh build of the identical snapshot
+ran the canonical `editor-release-evidence.mjs --json` producer and the unchanged freshness check;
+both passed. The 50 existing release-evidence/bundle-size tests also passed inside Linux. B1 has
+zero Monaco/editor markers across 21 initial scripts; B2 is 1,026,605 / 2,621,440 gzip bytes; B3 is
+110,896 / 768,000 bytes. The generated JSON changes only the measured static-file count to 380;
+fingerprint, byte measurements and budgets remain unchanged. Relevant UI/editor/contracts/security/
+design sources were compared with the shared worktree before copying the generated record back.
+The targeted reproduction is documented in the existing performance-evidence runbook. Final
+exact-head integrated checks remain separate.
+
+### Complete live catalog groups and cancellation recovery
+
+Both complete 14-operation normal Chat groups passed against the licensed Jira10.3.26 HTTPS laboratory and the actually verified `keiko-qwen36-35b-8bit` model: one buffered, one streamed. Each group recorded 14 first-read grants and five exact write approvals, nine successful reads and successful create/edit/assign/comment/transition. Independent Jira queries checked project counts, fields, changelog increments and exactly one comment. Transition supplied the required custom value and the required resolution together; its resulting status, resolution and field value matched. Both opening and closing license checks passed. Private receipt SHA-256: buffered `d5b7c0ae7f71c444de372819357a1a90f7ef96baf3ab0b35bbb61219dfe8eb39`; streamed `3e31d8fe788e37e273a1ddbcf3a7df0ff0e06a27fd5c7057c7eed45ef610c40c`. These cover the assembled working artifact before the subsequent cancellation fix/dev integration; final relevant qualification remains necessary.
+
+Earlier failed groups were retained and reconciled independently before new intents. The missing resolution was correctly rejected before dispatch. A model-proposed wrong issue key was never approved; the existing project digest and target fields were unchanged. No ambiguous write was repeated. That abort exposed product consent waiters using the outer signal instead of the turn's composite cancellation. Eight buffered/SSE read/write regressions failed first; the repair and actual HTTP response-disconnect proofs now cancel canonical turns and revoke unfulfilled decisions with zero Jira calls. Already-granted read consent remains reusable. The owning final run passed 223 tests, root TypeScript and scoped lint/format.
+
+Read-only consent-history recovery also closes a crash between committing consent and updating its original transcript, pinning the original canonical message and exact grant identity, subject, generations, disclosure and timestamps. It never writes rows or resumes work. The reusable live harness now drains through the existing Chat serializer before closing SQLite, preserves state on timeout, and atomically fsyncs private intent updates. Twenty focused fault/lifecycle/private-intent tests pass. The finite all-five-write/two-fault live matrix is prepared but has not yet run.
+
+The ordinary PR CI was absent because the PR had merge conflicts with advancing `dev`; the workflow itself remains active. A regular merge of current `dev` into this same feature branch is being prepared. No force-push, new PR, gate bypass or integration into `dev` is authorized by this maintenance step.

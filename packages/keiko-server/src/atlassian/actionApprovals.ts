@@ -690,6 +690,9 @@ export class AtlassianActionApprovalRegistry {
         this.revokeReadGrant(record, correlationId);
       if (record.kind === "chat-write") this.revokeWriteApproval(record, correlationId);
     }
+    // A persisted state may have advanced in another graph, so a failed revocation CAS
+    // must not retain this graph's pending waiters after shutdown.
+    for (const id of this.waiters.keys()) this.wakeWaiters(id);
     this.entries.clear();
   }
 

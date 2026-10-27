@@ -28,6 +28,7 @@ import {
 } from "../../../packages/keiko-server/dist/coding-app-session/launcherSessionPairingPort.js";
 import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session-pairing";
 import { loadSession, readPrivateFile, requireLicense } from "./lab-client.mjs";
+import { drainLiveChatTurns } from "./chat-lifecycle.mjs";
 
 process.on("warning", (warning) => {
   if (warning.code !== "KEIKO_LOG_SINK_FAILED") return;
@@ -265,9 +266,11 @@ async function readTurn(origin, cookie, chat, projectPath, modelId) {
     controller.abort();
   }
 }
-function createLiveDeps(root, session, secret, retainState) {
-  const credentialKey = randomBytes(32).toString("base64");
-  if (retainState)
+function createLiveDeps(root, session, secret, retainState, restoring = false) {
+  const credentialKey = restoring
+    ? readPrivateFile(join(root, "credential-key"))
+    : randomBytes(32).toString("base64");
+  if (retainState && !restoring)
     writeFileSync(join(root, "credential-key"), credentialKey, { mode: 0o600, flag: "wx" });
   const activityLog = createFileServerLogSink(join(session.directory, "chat-read-logs"), {
     level: "debug",
@@ -340,6 +343,30 @@ async function pairedCookie(origin, secret) {
   return cookie;
 }
 
+function liveStateDirectory(session, retainState, restoreState) {
+  if (restoreState !== undefined && !retainState)
+    throw new TypeError("A reopened laboratory state must be retained");
+  const root =
+    restoreState === undefined
+      ? mkdtempSync(
+          join(retainState ? session.directory : realpathSync(tmpdir()), "keiko-jira-live-chat-"),
+        )
+      : realpathSync(restoreState);
+  if (
+    restoreState !== undefined &&
+    !root.startsWith(`${realpathSync(session.directory)}/keiko-jira-live-chat-`)
+  )
+    throw new TypeError("Reopened state must belong to this synthetic laboratory session");
+  return root;
+}
+
+function decorateCredentialTransport(deps, decorate) {
+  if (decorate === undefined) return;
+  const credentials = deps.atlassianConnectorCredentials;
+  assert.ok(credentials);
+  credentials.httpBodyPortFactory = decorate(credentials.httpBodyPortFactory.bind(credentials));
+}
+
 /** Reuse the paired production server, vault, real model probe and ordinary Chat routes. */
 export async function withLiveChat({
   session,
@@ -348,21 +375,23 @@ export async function withLiveChat({
   retainState = false,
   stateReady,
   browser = false,
+  restoreState,
+  decorateAtlassianHttp,
 }) {
   if (!modelId) throw new TypeError("A locally installed model is required");
   await requireLicense(session);
-  const root = mkdtempSync(
-    join(retainState ? session.directory : realpathSync(tmpdir()), "keiko-jira-live-chat-"),
-  );
+  const root = liveStateDirectory(session, retainState, restoreState);
   const projectPath = join(root, "workspace");
-  mkdirSync(projectPath);
+  mkdirSync(projectPath, { recursive: true });
   const secret = randomBytes(48).toString("hex");
   stateReady?.(root);
-  const deps = createLiveDeps(root, session, secret, retainState);
+  const deps = createLiveDeps(root, session, secret, retainState, restoreState !== undefined);
+  decorateCredentialTransport(deps, decorateAtlassianHttp);
   let server;
   try {
     await configureModel(deps, modelId, session, join(root, "keiko.config.json"));
-    deps.store.createProject(projectPath);
+    if (!deps.store.listProjects().some((project) => project.path === projectPath))
+      deps.store.createProject(projectPath);
     const port = await unusedPort();
     const origin = `http://127.0.0.1:${port}`;
     server = createUiServer({
@@ -378,6 +407,7 @@ export async function withLiveChat({
   } finally {
     server?.closeAllConnections();
     if (server) await new Promise((resolve) => server.close(resolve));
+    await drainLiveChatTurns(deps, projectPath);
     await deps.dispose?.();
     if (!retainState) rmSync(root, { recursive: true, force: true });
   }

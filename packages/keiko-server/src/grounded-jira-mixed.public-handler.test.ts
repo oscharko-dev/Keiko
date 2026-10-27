@@ -689,6 +689,31 @@ function jiraHttpResult(f: ReturnType<typeof runtime>, status: number, body: unk
   );
 }
 
+it("keeps an acknowledged but unconfirmed mixed write in its card without factual synthesis or replay", async () => {
+  const f = runtime(true);
+  rmSync(join(f.root, "src"), { recursive: true });
+  jiraHttpResult(f, 201, {});
+  const requests = provider(
+    ["write", "answer"],
+    "Invented confirmation: the comment was definitely added.",
+  );
+  const body = {
+    chatId: f.chatId,
+    content: "Add a Jira comment.",
+    modelId: MODEL,
+    clientTurnId: "unconfirmed-mixed-write",
+  };
+  const result = await handleGroundedAsk(context(body), f.deps);
+  expect(result.status).toBe(200);
+  expect(requests).toHaveLength(2);
+  expect((result.body as GroundedAnswer).content).not.toContain("Invented confirmation");
+  const exchange = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges[0];
+  expect(exchange?.mutationOutcome).toBe("succeeded-unconfirmed");
+  expect(f.jiraRequests).toEqual(["POST"]);
+  expect((await handleGroundedAsk(context(body), f.deps)).status).toBe(200);
+  expect(f.jiraRequests).toEqual(["POST"]);
+});
+
 it("retains Data-only empty-pack abstention and the missing selected path denial", async () => {
   const f = runtime();
   rmSync(join(f.root, "src"), { recursive: true });

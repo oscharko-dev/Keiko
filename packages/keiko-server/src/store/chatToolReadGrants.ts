@@ -33,19 +33,32 @@ function readGrants(db: DatabaseSync): readonly ChatReadGrantEntry[] {
     )
     .all(ATLASSIAN_ACTION_APPROVAL_MAX_PENDING + 1);
   if (rows.length > ATLASSIAN_ACTION_APPROVAL_MAX_PENDING) throw invalidRecord();
-  return rows.map((row): ChatReadGrantEntry => {
-    if (typeof row.entry_json !== "string") throw invalidRecord();
-    let decoded: unknown;
-    try {
-      decoded = JSON.parse(row.entry_json);
-    } catch {
-      throw invalidRecord();
-    }
-    const entry = validated(decoded);
-    if (row.grant_id !== entry.grant.grantId || row.chat_id !== entry.grant.subject.chatId)
-      throw invalidRecord();
-    return entry;
-  });
+  return rows.map(readGrantRow);
+}
+
+function readGrantRow(row: Record<string, unknown>): ChatReadGrantEntry {
+  if (typeof row.entry_json !== "string") throw invalidRecord();
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(row.entry_json);
+  } catch {
+    throw invalidRecord();
+  }
+  const entry = validated(decoded);
+  if (row.grant_id !== entry.grant.grantId || row.chat_id !== entry.grant.subject.chatId)
+    throw invalidRecord();
+  return entry;
+}
+
+/** Historical projection only; no eviction, state change, authority restoration or admission. */
+export function readChatReadGrant(
+  db: DatabaseSync,
+  grantId: string,
+): ChatReadGrantEntry | undefined {
+  const row = db
+    .prepare("SELECT grant_id, chat_id, entry_json FROM chat_tool_read_grants WHERE grant_id = ?")
+    .get(grantId);
+  return row === undefined ? undefined : readGrantRow(row);
 }
 
 function saveGrant(

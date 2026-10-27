@@ -1,4 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
+import { createServer } from "node:http";
+import { JiraChatToolTurn } from "./jiraChatToolTurn.js";
 import { findMessageById as readStoredMessage } from "../store/messages.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { handleDecideChatWriteApproval } from "./chatWriteApprovalRoutes.js";
@@ -24,7 +26,7 @@ import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "../deps.js";
 import { handleSendDesktopChat } from "../chat-handlers.js";
 import { mockRequest, mockResponse } from "../_support.js";
-import type { RouteContext } from "../routes.js";
+import type { RouteContext, RouteResult } from "../routes.js";
 import type {
   AtlassianCredentialMetadata,
   AtlassianHttpBodyPort,
@@ -187,7 +189,7 @@ function fixture(
     configPath: undefined,
     evidenceDir: join(root, "evidence"),
     uiDbPath: join(root, "ui.db"),
-    env: {},
+    env: { KEIKO_STATE_DIR: root },
     modelPortFactory: () => model,
   });
   cleanups.push(async () => {
@@ -241,14 +243,17 @@ function send(
   return handleSendDesktopChat(sendContext(f, clientTurnId), f.deps);
 }
 function sendContext(f: ReturnType<typeof fixture>, clientTurnId: string): RouteContext {
-  return context({
+  return context(sendBody(f, clientTurnId));
+}
+function sendBody(f: ReturnType<typeof fixture>, clientTurnId: string): Record<string, unknown> {
+  return {
     chatId: f.chatId,
     projectPath: f.root,
     modelId: MODEL,
     content: "List Jira projects",
     clientTurnId,
     memory: { enabled: false, budgetTokens: 0, mode: "governed-assist", context: {} },
-  });
+  };
 }
 describe("normal buffered Chat through the owned Jira catalog", () => {
   it("waits for real consent, executes through MCP, persists pairs and reuses consent next turn", async () => {
@@ -570,3 +575,166 @@ it("retains late acknowledged Jira effects after the Chat has already been cance
   }
   expect(f.writes()).toBe(1);
 });
+
+function consentState(f: ReturnType<typeof fixture>, mutation: boolean): string | undefined {
+  const transcript = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript;
+  return mutation ? transcript?.exchanges[0]?.approval?.state : transcript?.readGrant?.state;
+}
+async function awaitPendingConsent(
+  f: ReturnType<typeof fixture>,
+  mutation: boolean,
+): Promise<void> {
+  if (mutation) await approveReadForWrite(f);
+  await vi.waitFor(() => {
+    expect(consentState(f, mutation)).toBe("pending");
+  });
+}
+function expectCancelledConsent(
+  f: ReturnType<typeof fixture>,
+  mutation: boolean,
+  turnState: string,
+): void {
+  const message = f.deps.store.listMessages(f.chatId)[0];
+  expect(message?.turnState).toBe(turnState);
+  expect(consentState(f, mutation)).toBe("revoked");
+  if (mutation) expect(message?.toolTranscript?.readGrant?.state).toBe("granted");
+  expect(firstToolExchange(f).result?.status).toBe("cancelled");
+  expect(f.requests()).toBe(0);
+  expect(f.writes()).toBe(0);
+  expect(f.calls).toHaveLength(1);
+}
+
+describe.each([false, true])("consent cancellation (stream=%s)", (stream) => {
+  it.each([
+    { mutation: false, cause: "disconnect" },
+    { mutation: true, cause: "disconnect" },
+    { mutation: false, cause: "budget" },
+    { mutation: true, cause: "budget" },
+  ])("drains $cause while mutation=$mutation without dispatch", async ({ mutation, cause }) => {
+    const f = fixture(mutation);
+    const budget = new AbortController();
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- Invoked only with explicit this via original.call below.
+    const original = JiraChatToolTurn.prototype.call;
+    vi.spyOn(JiraChatToolTurn.prototype, "call").mockImplementation(function (
+      this: JiraChatToolTurn,
+      model,
+      request,
+      signal,
+      observe,
+    ): Promise<NormalizedResponse> {
+      return original.call(this, model, request, AbortSignal.any([signal, budget.signal]), observe);
+    });
+    const registry = f.deps.atlassianActionApprovalRegistry;
+    if (registry === undefined) throw new Error("Missing approval owner");
+    const method = mutation ? "waitForChatWriteApproval" : "waitForChatReadGrant";
+    const wait = registry[method].bind(registry);
+    let waitFinished = false;
+    vi.spyOn(registry, method).mockImplementation(async (...args): Promise<void> => {
+      try {
+        await wait(...args);
+      } finally {
+        waitFinished = true;
+      }
+    });
+    const response = mockResponse({ captureBody: true });
+    const ctx = { ...sendContext(f, `cancel-${cause}-${String(mutation)}`), res: response.res };
+    const pending = stream
+      ? handleSendDesktopChatStream(ctx, f.deps)
+      : handleSendDesktopChat(ctx, f.deps);
+    let finished = false;
+    // Buffered unexpected-error mapping belongs to the HTTP boundary; this observer also
+    // drains a rejected handler before the isolated database is closed.
+    const drained = pending
+      .catch(() => undefined)
+      .finally(() => {
+        finished = true;
+      });
+    try {
+      await awaitPendingConsent(f, mutation);
+      if (cause === "budget") budget.abort();
+      else response.res.destroy();
+      await vi.waitFor(
+        () => {
+          expect(waitFinished).toBe(true);
+          expect(finished).toBe(true);
+        },
+        { timeout: 500, interval: 10 },
+      );
+      await drained;
+      expectCancelledConsent(f, mutation, cause === "disconnect" ? "cancelled" : "failed");
+    } finally {
+      response.res.destroy();
+      await drained;
+    }
+  });
+});
+
+it.each([false, true])(
+  "drains a real buffered HTTP disconnect while mutation=%s",
+  async (mutation) => {
+    const f = fixture(mutation);
+    let running: Promise<RouteResult> | undefined;
+    let bodyComplete = false;
+    let bodyAborted = false;
+    const server = createServer((req, res) => {
+      req.once("end", () => {
+        bodyComplete = req.complete;
+      });
+      req.once("aborted", () => {
+        bodyAborted = true;
+      });
+      running = handleSendDesktopChat(
+        {
+          req,
+          res,
+          params: {},
+          url: new URL("http://127.0.0.1/api/desktop/chat"),
+          correlationId: "http-consent-cancellation",
+        },
+        f.deps,
+      );
+      void running
+        .then((result) => {
+          if (!res.destroyed) res.writeHead(result.status).end(JSON.stringify(result.body));
+        })
+        .catch(() => {
+          res.destroy();
+        });
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    if (address === null || typeof address === "string")
+      throw new Error("Missing isolated HTTP listener");
+    const controller = new AbortController();
+    const request = fetch(`http://127.0.0.1:${String(address.port)}/api/desktop/chat`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(sendBody(f, "real-http-disconnect")),
+      signal: controller.signal,
+    }).catch(() => undefined);
+    try {
+      await awaitPendingConsent(f, mutation);
+      controller.abort();
+      await request;
+      await vi.waitFor(() => {
+        expect(f.deps.store.listMessages(f.chatId)[0]?.turnState).toBe("cancelled");
+      });
+      await running;
+      expectCancelledConsent(f, mutation, "cancelled");
+      expect(bodyComplete).toBe(true);
+      expect(bodyAborted).toBe(false);
+    } finally {
+      controller.abort();
+      await request;
+      await running?.catch(() => undefined);
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) reject(error);
+          else resolve();
+        });
+      });
+    }
+  },
+);

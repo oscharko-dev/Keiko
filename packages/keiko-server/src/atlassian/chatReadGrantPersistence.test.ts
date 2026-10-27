@@ -187,3 +187,32 @@ it("removes retained consent when its Chat is deleted", () => {
   f.store.deleteChat(f.entry.grant.subject.chatId);
   expect(persistence(f.store).list()).toEqual([]);
 });
+
+it("drains shutdown waiters when another registry has already accepted the durable consent", async () => {
+  const f = fixture();
+  const first = new AtlassianActionApprovalRegistry(() => NOW, persistence(f.store));
+  expect(first.createChatReadGrant(f.entry).ok).toBe(true);
+  const controller = new AbortController();
+  let finished = false;
+  const pending = first.waitForChatReadGrant(f.entry.grant.grantId, controller.signal).then(() => {
+    finished = true;
+  });
+  try {
+    const second = new AtlassianActionApprovalRegistry(() => NOW, persistence(f.store));
+    expect(
+      second.acceptChatReadGrant(
+        f.entry.grant.grantId,
+        f.entry.grant.subject,
+        f.entry.authority,
+        "c".repeat(64),
+      ).ok,
+    ).toBe(true);
+    first.dispose();
+    await Promise.resolve();
+    expect(finished).toBe(true);
+    expect(second.getChatReadGrant(f.entry.grant.grantId)?.grant.state).toBe("granted");
+  } finally {
+    controller.abort();
+    await pending;
+  }
+});

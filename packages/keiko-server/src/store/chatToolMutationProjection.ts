@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { ChatToolExchange, ChatToolTranscript } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { ChatToolReadGrant, ChatToolReadGrantView } from "@oscharko-dev/keiko-contracts";
 import {
   activityLogEvent,
   defineActivityLogOperation,
@@ -13,6 +14,13 @@ import {
   validateMutationIntent,
 } from "./chatToolMutationState.js";
 import { readChatToolMutationTurn } from "./chatToolMutations.js";
+import { readChatReadGrant } from "./chatToolReadGrants.js";
+import {
+  projectChatReadGrant,
+  recordReadGrant,
+  snapshotReadGrant,
+  type ChatReadGrantEntry,
+} from "../atlassian/chatReadGrantState.js";
 
 const PROJECTED = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -85,10 +93,8 @@ function validObservation(
 
 /** Historical effects remain visible after authority expires or the connection closes.
  * The journal is authoritative; projection neither grants authority nor executes an action. */
-export function projectChatToolMutationHistory(
-  db: DatabaseSync,
-  message: ChatMessage,
-): ChatMessage {
+export function projectChatToolMutationHistory(db: DatabaseSync, input: ChatMessage): ChatMessage {
+  const message = projectChatReadConsentHistory(db, input);
   const transcript = message.toolTranscript;
   if (message.role !== "user" || message.canonicalTurnRef === undefined || transcript === undefined)
     return message;
@@ -114,4 +120,57 @@ export function projectChatToolMutationHistory(
     ),
   );
   return { ...message, toolTranscript: { ...transcript, exchanges } };
+}
+
+function matchesReadConsent(
+  message: ChatMessage,
+  view: ChatToolReadGrantView,
+  entry: ChatReadGrantEntry,
+): boolean {
+  const runId = `chat-${sha256Hex(canonicalise({ chatId: message.chatId, userMessageId: message.id }))}`;
+  return (
+    entry.authority.runId === runId &&
+    view.chatId === message.chatId &&
+    canonicalise({ ...projectChatReadGrant(entry.grant), state: view.state }) === canonicalise(view)
+  );
+}
+
+interface HistoricalReadConsent {
+  readonly transcript: ChatToolTranscript;
+  readonly view: ChatToolReadGrantView;
+}
+function historicalConsent(message: ChatMessage): HistoricalReadConsent | undefined {
+  const transcript = message.toolTranscript;
+  if (message.role !== "user" || message.canonicalTurnRef === undefined || transcript === undefined)
+    return undefined;
+  const view = transcript.readGrant;
+  return view?.state === "pending" || view?.state === "granted" ? { transcript, view } : undefined;
+}
+function observedReadGrant(
+  retained: ChatToolReadGrant,
+  previous: ChatToolReadGrantView["state"],
+  now: number,
+): ChatToolReadGrant | undefined {
+  if (retained.requestedAt > now) return undefined;
+  const grant = retained.expiresAt <= now ? { ...retained, state: "expired" as const } : retained;
+  if (
+    grant.state === "pending" ||
+    grant.state === previous ||
+    (previous === "granted" && grant.state === "rejected")
+  )
+    return undefined;
+  return grant;
+}
+
+/** Recover only the original human decision; observation does not resume its interrupted turn. */
+function projectChatReadConsentHistory(db: DatabaseSync, message: ChatMessage): ChatMessage {
+  const candidate = historicalConsent(message);
+  if (candidate === undefined) return message;
+  const { transcript, view } = candidate;
+  const entry = readChatReadGrant(db, view.grantId);
+  if (entry === undefined || !matchesReadConsent(message, view, entry)) return message;
+  const grant = observedReadGrant(entry.grant, view.state, Date.now());
+  if (grant === undefined) return message;
+  recordReadGrant(snapshotReadGrant({ ...entry, grant }, sha256Hex(message.id)), 0);
+  return { ...message, toolTranscript: { ...transcript, readGrant: projectChatReadGrant(grant) } };
 }

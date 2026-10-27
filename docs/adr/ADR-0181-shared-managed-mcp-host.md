@@ -179,7 +179,17 @@ restored after restart. A later turn must independently pass its current authori
 custody, generation, model-capability and budget checks. Pending decisions still require
 their exact live origin authority and are revoked during shutdown. Lifecycle revocation
 persists; clean shutdown preserves only already granted consent. No turn authority,
-usage budget or pending write approval is restored from this record.
+usage budget or pending write approval is restored from this record. Consent waits observe
+the turn's composite cancellation signal, including a shorter synthesis budget. Cancelling
+unfulfilled consent or an unclaimed write revokes that decision; already granted read
+consent remains governed by its original expiry and current authority checks. Shutdown
+also drains local waiters when a concurrent registry has already advanced the durable row.
+
+If the process stops between the private consent commit and its transcript acknowledgement,
+history reads project the decision only onto the exact originating canonical message and
+matching grant identity, generations, disclosure and expiry. The projection never changes
+the stored transcript or resumes its turn. Existing read-grant observation events retain
+the grant proof and a message-hash correlation without exposing private subject details.
 
 ## Verification
 

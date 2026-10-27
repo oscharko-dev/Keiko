@@ -166,12 +166,17 @@ export class JiraChatToolTurn {
     if (message !== undefined) await this.notify?.(message);
   }
   private async waitForConsent(grant: ChatToolReadGrantView): Promise<void> {
-    const { deps, message, correlationId, signal } = this.options;
+    const { deps, message, correlationId } = this.options;
     const registry = deps.atlassianActionApprovalRegistry;
     requireDispatch(registry !== undefined, "denied", "approval-required");
     deps.store.updateChatToolTranscript(message.id, { kind: "read-consent", grant }, correlationId);
     await this.publish();
-    await registry.waitForChatReadGrant(grant.grantId, signal);
+    await registry.waitForChatReadGrant(grant.grantId, this.context.signal);
+    if (
+      this.context.signal.aborted &&
+      registry.getChatReadGrant(grant.grantId, correlationId)?.grant.state === "pending"
+    )
+      registry.revokeChatReadGrant(grant.grantId, correlationId);
     const current = registry.getChatReadGrant(grant.grantId, correlationId);
     const view =
       current === undefined
@@ -218,7 +223,7 @@ export class JiraChatToolTurn {
     );
   }
   private async waitForWriteConsent(approval: ChatToolWriteApprovalView): Promise<void> {
-    const { deps, message, correlationId, signal } = this.options;
+    const { deps, message, correlationId } = this.options;
     const registry = deps.atlassianActionApprovalRegistry;
     const exchange = this.writeExchange(approval.invocationId);
     requireDispatch(
@@ -235,7 +240,9 @@ export class JiraChatToolTurn {
     };
     save(approval);
     await this.publish();
-    await registry.waitForChatWriteApproval(approval.approvalId, signal);
+    await registry.waitForChatWriteApproval(approval.approvalId, this.context.signal);
+    if (this.context.signal.aborted)
+      registry.revokeChatWriteApproval(approval.approvalId, correlationId);
     save(
       registry.getChatWriteApproval(approval.approvalId, correlationId)?.approval ?? {
         ...approval,
