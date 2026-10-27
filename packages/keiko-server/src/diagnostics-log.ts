@@ -773,6 +773,7 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "functional-workspace-read-permission-denied",
   "atlassian-credential-rejection-activity-log-failed",
   "atlassian-credential-created-activity-log-failed",
+  "atlassian-credential-list-activity-log-failed",
   "atlassian-connection-check-activity-log-failed",
   // #2906 round 3: update-session-lock.ts's corrupt-lock quarantine prune used to swallow
   // directory/stat/unlink failures outright. "-pruned" reports a clean sweep (occurrenceCount is

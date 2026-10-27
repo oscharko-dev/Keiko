@@ -1224,7 +1224,8 @@ The existing custody owns optional Data Center Live-Pod metadata and single-use 
 tickets. Creation needs a trusted owner digest and rejects duplicate creation intent before another
 vault write. Latest-probe and credential-generation checks prevent stale completion and deleted-row
 resurrection. Failed verification advances the generation. These are owner primitives; normal create
-and verification routes still require their Live-Pod composition and authenticated ownership wiring.
+and verification routes required their Live-Pod composition at that checkpoint; see the subsequent
+owner/projection checkpoint below.
 
 All existing production HTTP factories now snapshot the selected generation. Resolution checks that
 generation before reading ciphertext, including when the caller later mutates its metadata object.
@@ -1235,3 +1236,22 @@ also pass the real registered formatter/reader proof. All **97 registry tests** 
 root typecheck and changed lint pass. Final package, full coverage and product/live qualification
 remain open. Token rotation, deletion-driven Chat invalidation and actual binding admission are
 not yet claimed by this checkpoint.
+
+## Credential owner and public projection — #4084 AC3/#4085 AC2/AC4
+
+The auditor identified the conditional metadata leak before Live-Pod creation was wired. Three
+HTTP regressions first failed against the preceding routes: private GET metadata, missing trusted
+owner on Create, and visibility of another operator's Pod. The routes now derive ownership from
+the existing server operator, select only owned Live Pods, and explicitly project public credential
+fields for both GET and Create. Verify/Delete hide foreign records with the existing not-found
+rejection and no outbound Jira call. Legacy Cloud credential behavior remains covered.
+
+The existing Activity Log records only the visible list count, with a registered writer/reader
+reconstruction test. Pod verification completion, binding admission, lifecycle invalidations,
+grants and approvals still require their subsequent composition. This is not AC completion.
+
+All 83 credential custody/route tests and 97 registry tests pass. Package build, root typecheck,
+changed lint/format, ADR and semantic checks pass. Regeneration resolves 609 proofs and 30 scenarios
+without violations. The diagnostic vocabulary addition required refreshing clone locations;
+the baseline still contains the same 938 group memberships, verified by comparing every member
+path before/after. No duplicated implementation or additional baseline group was accepted.

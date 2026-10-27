@@ -8,6 +8,8 @@
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { randomBytes } from "node:crypto";
+import { jiraChatActorDigest } from "./jiraPodAccess.js";
+import { createFileServerLogSink } from "../observability/index.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
@@ -28,6 +30,8 @@ import {
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
+  persistedActivityLogLines,
+  readPersistedActivityLog,
 } from "../../../../tests/support/activity-log-proof.js";
 import { buildCspHeader } from "../csp.js";
 import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "../index.js";
@@ -92,6 +96,7 @@ function fakeHttpBodyPortFactory(): (
 
 function baseDeps(atlassian: AtlassianConnectorCredentialDeps | undefined): UiHandlerDeps {
   return {
+    serverPrincipal: () => activePrincipal,
     config: undefined,
     configPresent: false,
     evidenceStore: {
@@ -111,6 +116,20 @@ function baseDeps(atlassian: AtlassianConnectorCredentialDeps | undefined): UiHa
     modelPortFactory: (): undefined => undefined,
     store: createInMemoryUiStore(),
     ...(atlassian === undefined ? {} : { atlassianConnectorCredentials: atlassian }),
+  };
+}
+
+let activePrincipal = "synthetic-operator";
+
+function livePodCreateInput(): Record<string, unknown> {
+  return {
+    provider: "jira",
+    displayName: "Live Jira",
+    baseUrl: "https://jira.example.invalid/context",
+    authScheme: "bearer-pat",
+    deployment: "data-center",
+    apiToken: SYNTHETIC_TOKEN,
+    livePodCreationRequestId: "6d3eb557-e77f-4215-a806-af1826230b18",
   };
 }
 
@@ -195,6 +214,7 @@ function expectNoSecretBytes(text: string): void {
 }
 
 beforeEach(async () => {
+  activePrincipal = "synthetic-operator";
   // realpath: on macOS tmpdir() lives under the /var -> /private/var symlink, which the vault and
   // private-JSON writers' symlink-refusing path checks correctly reject.
   const realTmp = realpathSync(tmpdir());
@@ -669,6 +689,66 @@ describe("redaction under failure", () => {
 });
 
 describe("end-to-end verify through the gateway transport adapter", () => {
+  it("projects existing credential GET without private Pod ownership or creation facts", async () => {
+    const sink = createFileServerLogSink(configDir, { level: "debug" });
+    await rebuild({ ...wiring, activityLog: sink });
+    const owner = jiraChatActorDigest(baseDeps(wiring));
+    const created = wiring.custody.create(livePodCreateInput(), owner);
+    expect(created).toHaveProperty("livePod");
+    const response = await fetch(`${baseUrl()}/api/atlassian-connectors/credentials`);
+    const body = (await response.json()) as { credentials: readonly Record<string, unknown>[] };
+    expect(response.status).toBe(200);
+    expect(body.credentials).toHaveLength(1);
+    expect(body.credentials[0]).not.toHaveProperty("livePod");
+    expect(JSON.stringify(body)).not.toMatch(/ownerDigest|creationRequestId|verificationRevision/);
+    sink.close?.();
+    const lines = persistedActivityLogLines(
+      readPersistedActivityLog(configDir),
+      "atlassian.credential.listed",
+    );
+    expect(lines).toHaveLength(1);
+    for (const line of lines)
+      expect(expectActivityLogProof("atlassian.credential.listed.line", line)).toMatchObject({
+        visibleCount: 1,
+      });
+  });
+
+  it("creates through the authenticated route with a server owner and public response only", async () => {
+    const response = await fetch(`${baseUrl()}/api/atlassian-connectors/credentials`, {
+      method: "POST",
+      headers: csrfHeaders(),
+      body: JSON.stringify(livePodCreateInput()),
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { authRef: string };
+    expect(body).not.toHaveProperty("livePod");
+    expect(wiring.custody.getMetadata(body.authRef)).toMatchObject({
+      livePod: {
+        ownerDigest: jiraChatActorDigest(baseDeps(wiring)),
+        verificationStatus: "unverified",
+      },
+    });
+  });
+
+  it("hides another operator's Pod from list, verify and delete without HTTP dispatch", async () => {
+    const owner = jiraChatActorDigest(baseDeps(wiring));
+    const created = wiring.custody.create(livePodCreateInput(), owner);
+    activePrincipal = "another-operator";
+    const list = await fetch(`${baseUrl()}/api/atlassian-connectors/credentials`);
+    expect(await list.json()).toEqual({ credentials: [] });
+    for (const [method, suffix] of [
+      ["POST", "/verify"],
+      ["DELETE", ""],
+    ] as const) {
+      const result = await fetch(
+        `${baseUrl()}/api/atlassian-connectors/credentials/${encodeURIComponent(created.authRef)}${suffix}`,
+        { method, headers: csrfHeaders(), body: "{}" },
+      );
+      expect(result.status).toBe(404);
+    }
+    expect(fakePortRequests).toHaveLength(0);
+    expect(wiring.custody.getMetadata(created.authRef)).toBeDefined();
+  });
   it("pins the selected generation in both HTTP factories before credential materialization", async () => {
     let calls = 0;
     const realWiring = buildAtlassianConnectorCredentialDeps({

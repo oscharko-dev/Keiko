@@ -960,6 +960,8 @@ export interface UiHandlerDeps {
   // legacy tests that do not exercise /api/atlassian-connectors/* keep their fixtures unchanged;
   // the routes degrade to 503 when absent.
   readonly atlassianConnectorCredentials?: AtlassianConnectorCredentialDeps | undefined;
+  /** Existing server-owned local operator identity; never supplied by a browser or tool. */
+  readonly serverPrincipal?: (() => string | undefined) | undefined;
   // Exact secret literals used by evidence persistence in addition to gateway redaction patterns.
   readonly redactionSecrets?: readonly string[] | undefined;
   // Optional deployment replacement for the default mode-independent memory category denylist.
@@ -2665,6 +2667,12 @@ function buildMemoryVault(
 // scope needs a scope-carrying write path plus a migration of existing rows, not a read filter.
 const DEFAULT_LOOPBACK_WORKSPACE_ID = "local";
 const DEFAULT_LOOPBACK_MEMORY_REVIEWER_ID = "local-operator" as MemoryReviewerId;
+
+function serverOperatorPrincipal(options: BuildHandlerDepsOptions): () => string | undefined {
+  return (
+    options.codingRuntimeServerPrincipal ?? ((): string => DEFAULT_LOOPBACK_MEMORY_REVIEWER_ID)
+  );
+}
 
 function buildLoopbackMemoryAuthorization(
   memoryVault: MemoryVaultStore,
@@ -4892,6 +4900,7 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     ...buildIntegrationUiHandlerDeps(args),
     ...buildOptionalUiHandlerDeps(args, services),
     ...atlassianRegistries,
+    serverPrincipal: serverOperatorPrincipal(args.options),
     codingAppSessionDenialWindows,
     gitChangeSnapshotService: services.gitChangeSnapshotService,
     // #3399: the durable PR-description status bridge over the SAME node evidence store every
@@ -5074,9 +5083,7 @@ function buildUiCodingRuntimeControlPlane(
     snapshots: args.bundle.codingRuntimeSnapshotStore,
     evidence: codingRuntimeEvidenceAggregator,
     workspaceLifecycle: args.bundle.workspaceLifecycle,
-    serverPrincipal:
-      args.options.codingRuntimeServerPrincipal ??
-      ((): string | undefined => DEFAULT_LOOPBACK_MEMORY_REVIEWER_ID),
+    serverPrincipal: serverOperatorPrincipal(args.options),
     ...(codingRuntimeHost ? { runtimeHost: codingRuntimeHost } : {}),
     projectMemory,
     repositoryInstructions,

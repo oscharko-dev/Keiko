@@ -7,6 +7,51 @@ import type { AtlassianConnectionVerificationStatus } from "@oscharko-dev/keiko-
 import { contentFreeErrorClass, emitServerDiagnostic } from "../diagnostics-log.js";
 import type { AtlassianConnectorCredentialDeps } from "./credentialRoutes.js";
 
+const ATLASSIAN_CREDENTIAL_LISTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "atlassian.credential.listed",
+  category: "setup",
+  owner: "keiko-server",
+  emitter: "atlassian.credentialActivity.recordCredentialsListed",
+  fields: {
+    visibleCount: { type: "number", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["atlassian-credential-custody"],
+  proofIds: ["atlassian.credential.listed.line"],
+  releaseImpact: "patch",
+});
+
+export function recordCredentialsListed(
+  deps: Pick<AtlassianConnectorCredentialDeps, "activityLog" | "diagnostics">,
+  correlationId: string,
+  visibleCount: number,
+): void {
+  try {
+    deps.activityLog?.write(
+      activityLogEvent(
+        ATLASSIAN_CREDENTIAL_LISTED_OPERATION,
+        { correlationId, status: 200 },
+        { visibleCount, completeness: "complete", loss: "none" },
+      ),
+    );
+  } catch (error) {
+    emitServerDiagnostic(deps.diagnostics, {
+      correlationId,
+      timestamp: new Date().toISOString(),
+      operation: "atlassian.credential.listed",
+      source: "atlassian.credential-activity.record-list",
+      errorClass: contentFreeErrorClass(error),
+      message: "atlassian-credential-list-activity-log-failed",
+    });
+  }
+}
+
 const ATLASSIAN_CREDENTIAL_CREATED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,

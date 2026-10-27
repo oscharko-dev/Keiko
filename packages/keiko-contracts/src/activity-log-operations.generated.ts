@@ -1003,6 +1003,37 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "atlassian.credential.listed",
+    category: "setup",
+    owner: "keiko-server",
+    emitter: "atlassian.credentialActivity.recordCredentialsListed",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      visibleCount: {
+        type: "number",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "end",
+    analyzerProjection: "timeline",
+    failureClasses: ["atlassian-credential-custody"],
+    proofIds: ["atlassian.credential.listed.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "atlassian.credential.rejected",
     category: "security",
     owner: "keiko-server",

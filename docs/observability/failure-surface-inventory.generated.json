@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "33208f2b450970bcb0236bf0356653c264de1f7c87347df074f82be21b6b4fbb"
+    "catalogDigest": "1657fce3a167224ed1a2593349b04eacbaf0c264cf92851827a68c5fc5cef161"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,9 +67,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 595,
-    "proofCount": 608,
-    "resolvedProofCount": 608,
+    "operationCount": 596,
+    "proofCount": 609,
+    "resolvedProofCount": 609,
     "failureClassCount": 373,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -102,6 +102,7 @@
         "atlassian.action.outcome",
         "atlassian.connection.checked",
         "atlassian.credential.created",
+        "atlassian.credential.listed",
         "atlassian.credential.rejected",
         "chat.compaction.facts.classified",
         "chat.context.failed",
@@ -1212,6 +1213,9 @@
     ],
     "atlassian.credential.created.line": [
       "packages/keiko-server/src/atlassian/credentialActivity.test.ts"
+    ],
+    "atlassian.credential.listed.line": [
+      "packages/keiko-server/src/atlassian/credentialRoutes.test.ts"
     ],
     "atlassian.credential.rejected.reason": [
       "packages/keiko-server/src/atlassian/credentialRoutes.test.ts"

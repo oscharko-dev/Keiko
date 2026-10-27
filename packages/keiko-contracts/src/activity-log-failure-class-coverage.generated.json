@@ -1622,7 +1622,11 @@
       "lifecycleOperations": {
         "start": [],
         "state": [],
-        "end": ["atlassian.connection.checked", "atlassian.credential.created"],
+        "end": [
+          "atlassian.connection.checked",
+          "atlassian.credential.created",
+          "atlassian.credential.listed"
+        ],
         "failure": ["atlassian.credential.rejected"],
         "loss": []
       },
@@ -1636,12 +1640,20 @@
           "mode": "correlation"
         },
         {
+          "op": "atlassian.credential.listed",
+          "mode": "correlation"
+        },
+        {
           "op": "atlassian.credential.rejected",
           "mode": "none"
         }
       ],
       "lossSignals": [],
-      "resourceSignals": ["atlassian.connection.checked", "atlassian.credential.created"],
+      "resourceSignals": [
+        "atlassian.connection.checked",
+        "atlassian.credential.created",
+        "atlassian.credential.listed"
+      ],
       "replayReferences": [],
       "operations": [
         {
@@ -1701,6 +1713,30 @@
             "causeChain": false
           },
           "proofIds": ["atlassian.credential.created.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "atlassian.credential.listed",
+          "owner": "keiko-server",
+          "category": "setup",
+          "lifecycle": "end",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "visibleCount",
+              "type": "number",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["atlassian.credential.listed.line"],
           "replayReferences": [],
           "missingObligations": []
         },

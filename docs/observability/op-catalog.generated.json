@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "33208f2b450970bcb0236bf0356653c264de1f7c87347df074f82be21b6b4fbb",
+    "catalogDigest": "1657fce3a167224ed1a2593349b04eacbaf0c264cf92851827a68c5fc5cef161",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -1010,8 +1010,8 @@
         "failureClasses": ["atlassian-credential-custody"],
         "proofIds": ["atlassian.connection.checked.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/atlassian/credentialActivity.ts:41",
-        "emitterSites": ["packages/keiko-server/src/atlassian/credentialActivity.ts:90"]
+        "registrationSite": "packages/keiko-server/src/atlassian/credentialActivity.ts:86",
+        "emitterSites": ["packages/keiko-server/src/atlassian/credentialActivity.ts:135"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -1050,8 +1050,41 @@
         "failureClasses": ["atlassian-credential-custody"],
         "proofIds": ["atlassian.credential.created.line"],
         "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/atlassian/credentialActivity.ts:55",
+        "emitterSites": ["packages/keiko-server/src/atlassian/credentialActivity.ts:165"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "atlassian.credential.listed",
+        "category": "setup",
+        "owner": "keiko-server",
+        "emitter": "atlassian.credentialActivity.recordCredentialsListed",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "visibleCount": {
+            "type": "number",
+            "dataClass": "count",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "end",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["atlassian-credential-custody"],
+        "proofIds": ["atlassian.credential.listed.line"],
+        "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/atlassian/credentialActivity.ts:10",
-        "emitterSites": ["packages/keiko-server/src/atlassian/credentialActivity.ts:120"]
+        "emitterSites": ["packages/keiko-server/src/atlassian/credentialActivity.ts:37"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -1093,8 +1126,8 @@
         "failureClasses": ["atlassian-credential-custody"],
         "proofIds": ["atlassian.credential.rejected.reason"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/atlassian/credentialRoutes.ts:50",
-        "emitterSites": ["packages/keiko-server/src/atlassian/credentialRoutes.ts:238"]
+        "registrationSite": "packages/keiko-server/src/atlassian/credentialRoutes.ts:59",
+        "emitterSites": ["packages/keiko-server/src/atlassian/credentialRoutes.ts:247"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -42575,26 +42608,33 @@
         "requiredLifecycleOperations": {
           "start": [],
           "state": [],
-          "end": ["atlassian.connection.checked", "atlassian.credential.created"],
+          "end": [
+            "atlassian.connection.checked",
+            "atlassian.credential.created",
+            "atlassian.credential.listed"
+          ],
           "failure": ["atlassian.credential.rejected"],
           "loss": []
         },
         "requiredCausalOperations": [
           "atlassian.connection.checked",
-          "atlassian.credential.created"
+          "atlassian.credential.created",
+          "atlassian.credential.listed"
         ],
         "requiredLossOperations": [],
         "requiredProofOperations": [
           "atlassian.connection.checked",
           "atlassian.credential.created",
+          "atlassian.credential.listed",
           "atlassian.credential.rejected"
         ],
         "requiredReplayProofIds": [],
         "requiredResourceOperations": [
           "atlassian.connection.checked",
-          "atlassian.credential.created"
+          "atlassian.credential.created",
+          "atlassian.credential.listed"
         ],
-        "requiredEvidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+        "requiredEvidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
         "requiredFrameOperations": [],
         "requiredCauseOperations": []
       },
@@ -54111,7 +54151,11 @@
           "lifecycleOperations": {
             "start": [],
             "state": [],
-            "end": ["atlassian.connection.checked", "atlassian.credential.created"],
+            "end": [
+              "atlassian.connection.checked",
+              "atlassian.credential.created",
+              "atlassian.credential.listed"
+            ],
             "failure": ["atlassian.credential.rejected"],
             "loss": []
           },
@@ -54125,12 +54169,20 @@
               "mode": "correlation"
             },
             {
+              "op": "atlassian.credential.listed",
+              "mode": "correlation"
+            },
+            {
               "op": "atlassian.credential.rejected",
               "mode": "none"
             }
           ],
           "lossSignals": [],
-          "resourceSignals": ["atlassian.connection.checked", "atlassian.credential.created"],
+          "resourceSignals": [
+            "atlassian.connection.checked",
+            "atlassian.credential.created",
+            "atlassian.credential.listed"
+          ],
           "replayReferences": [],
           "operations": [
             {
@@ -54190,6 +54242,30 @@
                 "causeChain": false
               },
               "proofIds": ["atlassian.credential.created.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "atlassian.credential.listed",
+              "owner": "keiko-server",
+              "category": "setup",
+              "lifecycle": "end",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "visibleCount",
+                  "type": "number",
+                  "dataClass": "count",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["completeness-state", "count", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["atlassian.credential.listed.line"],
               "replayReferences": [],
               "missingObligations": []
             },
@@ -101334,40 +101410,53 @@
     {
       "op": "atlassian.connection.checked",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/credentialActivity.ts:105",
+      "site": "packages/keiko-server/src/atlassian/credentialActivity.ts:150",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "atlassian.connection.checked",
       "category": "setup",
-      "site": "packages/keiko-server/src/atlassian/credentialActivity.ts:44",
-      "package": "keiko-server"
-    },
-    {
-      "op": "atlassian.credential.created",
-      "category": "setup",
-      "site": "packages/keiko-server/src/atlassian/credentialActivity.ts:13",
+      "site": "packages/keiko-server/src/atlassian/credentialActivity.ts:89",
       "package": "keiko-server"
     },
     {
       "op": "atlassian.credential.created",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/credentialActivity.ts:136",
+      "site": "packages/keiko-server/src/atlassian/credentialActivity.ts:181",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "atlassian.credential.created",
+      "category": "setup",
+      "site": "packages/keiko-server/src/atlassian/credentialActivity.ts:58",
+      "package": "keiko-server"
+    },
+    {
+      "op": "atlassian.credential.listed",
+      "category": "setup",
+      "site": "packages/keiko-server/src/atlassian/credentialActivity.ts:13",
+      "package": "keiko-server"
+    },
+    {
+      "op": "atlassian.credential.listed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/atlassian/credentialActivity.ts:47",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "atlassian.credential.rejected",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/credentialRoutes.ts:252",
+      "site": "packages/keiko-server/src/atlassian/credentialRoutes.ts:261",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "atlassian.credential.rejected",
       "category": "security",
-      "site": "packages/keiko-server/src/atlassian/credentialRoutes.ts:53",
+      "site": "packages/keiko-server/src/atlassian/credentialRoutes.ts:62",
       "package": "keiko-server"
     },
     {
@@ -103047,7 +103136,7 @@
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:1577",
+      "site": "packages/keiko-server/src/deps.ts:1579",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -103832,7 +103921,7 @@
     {
       "op": "managed-lsp.trust.restrict",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:2428",
+      "site": "packages/keiko-server/src/deps.ts:2430",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -104282,14 +104371,14 @@
     {
       "op": "server.composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:4658",
+      "site": "packages/keiko-server/src/deps.ts:4666",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "server.diagnostic.failure",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/diagnostics-log.ts:1004",
+      "site": "packages/keiko-server/src/diagnostics-log.ts:1005",
       "package": "keiko-server"
     },
     {
@@ -104435,7 +104524,7 @@
     {
       "op": "task-workspace.reconcile.startup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:3270",
+      "site": "packages/keiko-server/src/deps.ts:3278",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -104942,6 +105031,7 @@
     "atlassian.action.outcome",
     "atlassian.connection.checked",
     "atlassian.credential.created",
+    "atlassian.credential.listed",
     "atlassian.credential.rejected",
     "atlassian.http-observation-failed",
     "atlassian.sync-job",

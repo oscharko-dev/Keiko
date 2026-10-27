@@ -404,6 +404,13 @@ and checks the current credential generation and latest probe revision against t
 it cannot recreate deleted metadata. Failed verification advances the authorization generation.
 Starting a new check retains previously observed readiness until that check has a result.
 
+Authenticated credential creation obtains the existing local operator identity from the server;
+the request cannot select an owner. List, verify and delete enforce that owner for Live Pods.
+The legacy credential GET/Create responses use an explicit public field projection and exclude
+the entire private Live-Pod block, including owner and creation-intent digests. Listing emits
+only the visible count; unavailable or foreign records share the existing not-found rejection.
+The ordinary Chat consumer needs no Coding session to establish this server-owned actor identity.
+
 Both outbound HTTP factories capture the selected credential generation by value. The custody
 resolver checks it against current private metadata before reading ciphertext, so an old transport
 cannot silently materialize a replacement credential. The existing typed rejection event and 409

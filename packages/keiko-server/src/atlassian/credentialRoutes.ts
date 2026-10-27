@@ -43,7 +43,16 @@ import {
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
-import { recordCredentialCreated, recordConnectionCheck } from "./credentialActivity.js";
+import {
+  recordCredentialCreated,
+  recordConnectionCheck,
+  recordCredentialsListed,
+} from "./credentialActivity.js";
+import {
+  jiraChatActorDigest,
+  ownsAtlassianCredential,
+  publicAtlassianCredential,
+} from "./jiraPodAccess.js";
 
 const MAX_CREDENTIAL_BODY_BYTES = 16_000;
 
@@ -341,9 +350,9 @@ export async function handleCreateAtlassianConnectorCredential(
   if (isRouteResult(guard)) return guard;
   return runHandler(guard, ctx, async () => {
     const body = await readJsonObject(ctx.req);
-    const metadata = guard.custody.create(body);
+    const metadata = guard.custody.create(body, jiraChatActorDigest(deps));
     recordCredentialCreated(guard, metadata, ctx.correlationId ?? UNKNOWN_CORRELATION_ID);
-    return { status: 200, body: metadata };
+    return { status: 200, body: publicAtlassianCredential(metadata) };
   });
 }
 
@@ -354,10 +363,14 @@ export function handleListAtlassianConnectorCredentials(
 ): Promise<RouteResult> | RouteResult {
   const guard = requireCustody(deps, ctx.correlationId);
   if (isRouteResult(guard)) return guard;
-  return runHandler(guard, ctx, () => ({
-    status: 200,
-    body: { credentials: guard.custody.list() },
-  }));
+  return runHandler(guard, ctx, () => {
+    const credentials = guard.custody
+      .list()
+      .filter((metadata) => ownsAtlassianCredential(deps, metadata))
+      .map(publicAtlassianCredential);
+    recordCredentialsListed(guard, ctx.correlationId ?? UNKNOWN_CORRELATION_ID, credentials.length);
+    return { status: 200, body: { credentials } };
+  });
 }
 
 // DELETE /api/atlassian-connectors/credentials/:authRef — removes ciphertext and metadata in one
@@ -370,7 +383,10 @@ export function handleDeleteAtlassianConnectorCredential(
   if (isRouteResult(guard)) return guard;
   return runHandler(guard, ctx, () => {
     const authRef = decodeAuthRefParam(ctx);
-    if (authRef === undefined || !guard.custody.delete(authRef)) {
+    const metadata = authRef === undefined ? undefined : guard.custody.getMetadata(authRef);
+    if (metadata === undefined || !ownsAtlassianCredential(deps, metadata))
+      throw new AtlassianCredentialCustodyError("credential-not-found");
+    if (!guard.custody.delete(metadata.authRef)) {
       return credentialNotFound(ctx.correlationId);
     }
     return { status: 200, body: { ok: true } };
@@ -389,7 +405,8 @@ export function handleVerifyAtlassianConnectorCredential(
   return runHandler(guard, ctx, async () => {
     const authRef = decodeAuthRefParam(ctx);
     const metadata = authRef === undefined ? undefined : guard.custody.getMetadata(authRef);
-    if (metadata === undefined) return credentialNotFound(ctx.correlationId);
+    if (metadata === undefined || !ownsAtlassianCredential(deps, metadata))
+      throw new AtlassianCredentialCustodyError("credential-not-found");
     const status =
       metadata.deployment === "data-center"
         ? await verifyJiraDataCenterConnection(
