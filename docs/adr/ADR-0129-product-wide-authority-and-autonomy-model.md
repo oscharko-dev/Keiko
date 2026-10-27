@@ -224,8 +224,16 @@ Production lifecycle composition now supplies that same approval owner together 
 existing authority owner to credential invalidation. Committed Chat binding/mode changes,
 closure/deletion, project removal and credential invalidation revoke retained read grants;
 optimistic previews, stale conflicts and unchanged selections do not. Graph disposal resets
-only its own owner with the disposal correlation. Human acceptance and observed tool-call auth
-failures still require their execution-entrypoint integration.
+only its own owner with the disposal correlation. Observed tool-call auth failures still require
+their execution-entrypoint integration.
+
+Human read consent uses a typed subresource of the existing approval API. Its public card omits
+private actor/authority/proof facts; its bounded, closed decision carries only approval/rejection
+and the current disclosure version. The server re-resolves ownership, binding, verification,
+original authority, read scope and grant lifetime after reading the body, and computes acceptance
+evidence itself. Legacy approval routes cannot consume these grants. Consent changes only the
+existing retained record and never dispatches a tool. Request production, admission at use and
+the ordinary Chat/UI consumers remain separate integration requirements.
 
 ### D6 — Forward rule for decision records
 

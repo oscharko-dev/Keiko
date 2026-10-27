@@ -141,7 +141,7 @@ Status: **Partial — not accepted**. Schema 49 and the authenticated PATCH/seri
 
 - [ ] **AC2:** All three modes have explicit regression coverage through the shared action-class policy, including per-chat mode persistence, the unconfigured `autonomous-delivery` tool-source ceiling delivered by the one server resolver from #4083 and an explicitly narrower ceiling: required approval precedes network/effect, denied actions make no call, bounded allowed actions execute without invented extra approval. The read grant is requested once, covers only read-class tools of the current binding and credential generation, and never covers writes. Missing/expired authority remains denied in every mode.
 
-Status: **Partial — not accepted**. All three mode selections persist through the actual Chat PATCH; the shared action policy and deployment ceiling have scoped regression evidence below. The ordinary Chat contract and shared registry now enforce subject, ceiling, expiry, revocation and cumulative budget boundaries. The existing approval owner now retains bounded, immutable Chat read grants with idempotent acceptance and no TTL renewal. Real human acceptance, once-per-binding request composition, write-approval redemption and ordinary-Chat execution remain pending.
+Status: **Partial — not accepted**. All three mode selections persist through the actual Chat PATCH; the shared action policy and deployment ceiling have scoped regression evidence below. The ordinary Chat contract and shared registry now enforce subject, ceiling, expiry, revocation and cumulative budget boundaries. The existing approval owner now retains bounded, immutable Chat read grants with idempotent acceptance and no TTL renewal. The authenticated consent endpoint now projects and accepts/rejects a retained request after fresh authority, ownership, generation, scope and expiry checks. Once-per-binding request production, write-approval redemption and ordinary-Chat execution remain pending.
 
 - [ ] **AC3:** Disconnect, replacement, Pod deletion and Keiko-managed token rotation/revocation revoke read grants and invalidate pending approvals and queued calls. Jira-side token revocation is enforced on the next Jira call; observed auth failure invalidates local readiness and pending work without introducing polling or webhooks. Tests cover these changes during approval and before effect; no stale request uses the old or newly substituted credential.
 
@@ -153,7 +153,7 @@ Status: **Partial — not accepted**. Actual competing binding PATCH tests prese
 
 - [ ] **AC5:** Production-path lifecycle logging for binding, mode, grant and approval is registered and body-free. Restart and authority/mode changes cannot revive expired grants, approvals or queued effects. All applicable gates pass.
 
-Status: **Partial — not accepted**. Existing registered Chat scope evidence reconstructs one application, denials and conflicts without private facts; credential lifecycle evidence is recorded below. Private read-grant evidence now reconstructs creation, acceptance, reuse, revocation and expiry through the real Activity Log writer/reader. Actual credential-deletion evidence additionally correlates read-grant revocation with the HTTP response correlation. Human consent/action-approval entrypoints, the complete restart matrix and final gates remain pending.
+Status: **Partial — not accepted**. Existing registered Chat scope evidence reconstructs one application, denials and conflicts without private facts; credential lifecycle evidence is recorded below. Private read-grant evidence now reconstructs creation, acceptance, reuse, revocation and expiry through the real Activity Log writer/reader. Actual credential-deletion evidence additionally correlates read-grant revocation with the HTTP response correlation. HTTP read-consent acceptance also has a writer/reader proof joined to the response correlation. Action-approval entrypoints, the complete restart matrix and final gates remain pending.
 
 - [ ] **AC6:** Through the trusted non-Coding test consumer against local Jira 10.3.26, an admitted read-class call reaches the real provider only with a valid grant, and a write-class call only under the mode matrix or a redeemed approval that re-ran the complete pipeline; a denied, expired or revoked call performs no HTTP request.
 
@@ -1573,3 +1573,31 @@ TLS failure and revoked target admission produced unreachable. This is connectio
 mutation/model/browser qualification is still pending. Human grant acceptance, action approvals,
 observed tool-call auth failure and the ordinary Chat execution path remain open. No complete
 AC is accepted here.
+
+### Authenticated read-consent checkpoint — #4084 AC2/AC4/AC5
+
+The existing approval API now exposes a typed `chat-read-consent` subresource for a retained
+Chat read grant. GET returns only the public card contract. POST accepts a closed decision and
+current disclosure version, with a 4 KiB body limit and the existing CSRF guard. It re-resolves
+current actor, Chat/Pod generations, verification, original authority, read scope and expiry
+**after** reading the request body. It computes acceptance evidence server-side; caller-supplied
+authority, proof or scope overrides fail. Repeated approval preserves the original proof and
+expiry; rejection cannot become approval. Legacy approval routes continue to exclude these grants.
+No tool or Jira request is executed by this endpoint.
+
+Three actual HTTP regressions return 404 before implementation and pass afterward. The
+204 targeted credential/consent, legacy write/live-search/sync-policy and approval-owner tests
+pass, including malformed/oversized bodies, CSRF, stale state, mismatched subjects, excessive
+lifetimes, absent read scope and expiry. A real writer/reader proof joins the human consent
+request to its response correlation without private identifiers or payloads. Root typecheck,
+changed ESLint, build, formatting, semantic and ADR checks pass; 97 operation-catalog tests pass.
+Registration uses the existing named route-group pattern; semantic baseline remains unchanged.
+The final route-group integration rerun passes all 83 HTTP tests. A direct native ESM import
+exposed an eager cycle, repaired by importing the existing `route-error` owner directly; the
+same native import then succeeds. Generation resolves 616 proofs and 30 scenarios without
+violations. Logs:
+`/tmp/keiko-4081-consent-route-*.log`.
+
+This endpoint acts only on a request already retained by the trusted server owner. Automatic
+first-read request production, the complete admission/dispatch path, normal Chat orchestration
+and user-facing consent cards remain pending. No complete AC is accepted in this checkpoint.

@@ -401,6 +401,7 @@ import {
   handleListAtlassianConnectorActionApprovals,
   handleRejectAtlassianConnectorActionApproval,
 } from "./atlassian/writeActionRoutes.js";
+import { CHAT_READ_CONSENT_ROUTE_GROUP } from "./atlassian/chatReadConsentRoutes.js";
 import { GIT_DELIVERY_ACTION_SHEET_ROUTE_GROUP } from "./gitDelivery/actionSheetRoutes.js";
 import { GIT_DELIVERY_EVIDENCE_ROUTE_GROUP } from "./gitDelivery/evidenceRoutes.js";
 import { GIT_DELIVERY_LOCAL_MUTATION_ROUTE_GROUP } from "./gitDelivery/localMutationRoutes.js";
@@ -1687,6 +1688,7 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     pattern: "/api/diagnostics/report/download/:downloadId",
     handler: handleDownloadSupportReport,
   },
+  ...CHAT_READ_CONSENT_ROUTE_GROUP,
 ];
 
 interface PreparedRoute {

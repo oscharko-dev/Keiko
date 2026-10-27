@@ -195,6 +195,38 @@ export type ChatToolReadGrant = ChatToolReadGrantFacts &
     | { readonly state: "expired" | "revoked"; readonly consentProofDigest: string | null }
   );
 
+/** Public consent card; private actor, authority and acceptance evidence remain server-owned. */
+export interface ChatToolReadGrantView {
+  readonly kind: "jira-chat-read";
+  readonly grantId: string;
+  readonly chatId: string;
+  readonly podId: string;
+  readonly bindingGeneration: number;
+  readonly authenticationGeneration: number;
+  readonly state: ChatToolReadGrantState;
+  readonly disclosureVersion: typeof CHAT_TOOL_READ_DISCLOSURE_VERSION;
+  readonly requestedAt: number;
+  readonly expiresAt: number;
+}
+
+export interface ChatToolReadConsentDecision {
+  readonly decision: "approve" | "reject";
+  readonly disclosureVersion: typeof CHAT_TOOL_READ_DISCLOSURE_VERSION;
+}
+
+export function validateChatToolReadConsentDecision(
+  value: unknown,
+): CodingWorkbenchValidationResult<ChatToolReadConsentDecision> {
+  if (!isRecord(value)) return invalid("chatReadConsent must be an object");
+  const errors: string[] = [];
+  validateKeys(value, ["decision", "disclosureVersion"], errors, "chatReadConsent");
+  if (value.decision !== "approve" && value.decision !== "reject")
+    errors.push("chatReadConsent.decision is invalid");
+  if (value.disclosureVersion !== CHAT_TOOL_READ_DISCLOSURE_VERSION)
+    errors.push("chatReadConsent.disclosureVersion is invalid");
+  return result(value, errors);
+}
+
 const READ_GRANT_KEYS = [
   "schemaVersion",
   "kind",
