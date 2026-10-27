@@ -31,6 +31,7 @@
   "chat.response.streamed": "model-gateway",
   "chat.scope.update": "bff",
   "chat.send.rejected": "bff",
+  "chat.tool-mutation": "bff",
   "chat.turn.started": "bff",
   "cli.audit.completed": "runtime-packages",
   "cli.audit.failed": "runtime-packages",

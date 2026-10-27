@@ -91,9 +91,11 @@ describe("catalog invocation settlement races", () => {
     "settles invalid provider-error data without publishing it or retaining a reservation",
     async (data) => {
       const release = vi.fn();
+      const diagnosticsRecord = vi.fn<ServerDiagnosticSink["record"]>();
       const error = new CatalogDispatchFault("failed", "provider-reported-error", undefined, data);
       const fixture = fixtureWith((f) => ({
         ...f.input,
+        logPort: { ...f.input.logPort, diagnostics: { record: diagnosticsRecord } },
         budgetPort: { ...f.input.budgetPort, release },
         handlerBindings: [
           { ...f.handler, execute: (): Promise<CatalogHandlerResult> => Promise.reject(error) },
@@ -110,6 +112,10 @@ describe("catalog invocation settlement races", () => {
         },
       });
       expect(release).toHaveBeenCalledOnce();
+      expect(diagnosticsRecord).toHaveBeenCalledWith(
+        expect.objectContaining({ operation: "tool-catalog.provider-result-invalid" }),
+      );
+      expect(JSON.stringify(diagnosticsRecord.mock.calls)).not.toContain("private-provider-data");
       expect(JSON.stringify(error)).not.toContain("private-provider-data");
       expect(JSON.stringify(fixture.primary.events)).not.toContain("private-provider-data");
     },

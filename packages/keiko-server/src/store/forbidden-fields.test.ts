@@ -193,6 +193,7 @@ const EXPECTED_TABLES = new Set([
   "browser_approvals",
   "browser_approval_installation",
   "chat_creation_intents",
+  "chat_tool_mutations",
   "chat_drafts",
   "chat_messages",
   "chats",
@@ -690,6 +691,43 @@ describe("forbidden-fields — private instruction library (ADR-0013)", () => {
     const inspector = openMigratedSchema(join(tmpDir, "skill-inventory.db"));
     try {
       expect(new Set(columnNames(inspector, table))).toEqual(new Set(expected));
+    } finally {
+      inspector.close();
+    }
+  });
+});
+
+describe("forbidden-fields — durable chat mutation metadata", () => {
+  it("stores bounded identities, digests and numeric generations without requests or credentials", () => {
+    const inspector = openMigratedSchema(join(tmpDir, "mutation-inventory.db"));
+    try {
+      expect(new Set(columnNames(inspector, "chat_tool_mutations"))).toEqual(
+        new Set([
+          "invocation_id",
+          "chat_id",
+          "user_message_id",
+          "turn_ref",
+          "actor_id",
+          "pod_id",
+          "binding_generation",
+          "authentication_generation",
+          "authority_digest",
+          "action_digest",
+          "operation",
+          "correlation_id",
+          "phase",
+          "outcome",
+          "http_status",
+          "created_at",
+          "updated_at",
+        ]),
+      );
+      // Authentication generation is an integer invalidation counter, never a credential value.
+      const generation = inspector
+        .prepare("PRAGMA table_info(chat_tool_mutations)")
+        .all()
+        .find((column) => column.name === "authentication_generation");
+      expect(generation?.type).toBe("INTEGER");
     } finally {
       inspector.close();
     }

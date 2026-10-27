@@ -241,6 +241,16 @@ export class CatalogInvocation<Consumer extends CatalogConsumer = CodingCatalogC
             );
       candidate = this.envelope(error.status, error.reason, data);
     } catch (invalidResult) {
+      emitServerDiagnostic(
+        this.state.input.logPort.diagnostics,
+        serverDiagnosticFromError({
+          correlationId: correlationIdOrUnknown(this.context.correlationId),
+          operation: "tool-catalog.provider-result-invalid",
+          source: "tool-catalog-settlement",
+          error: invalidResult,
+          redact: () => "server-operation-failed",
+        }),
+      );
       this.finish("failed", "result-contract-failed", undefined, invalidResult);
       return;
     }

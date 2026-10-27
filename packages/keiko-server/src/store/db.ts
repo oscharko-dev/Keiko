@@ -1,3 +1,4 @@
+import { createChatToolMutationStore } from "./chatToolMutations.js";
 import { withImmediateTransaction } from "./transaction.js";
 import { replayChatCreationIntent, withChatCreationIntent } from "./chatCreationIntents.js";
 import { readChatDraft, updateChatDraft } from "./chatDrafts.js";
@@ -718,6 +719,7 @@ function createMessageBatch(
 function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore {
   const stagedTurnAssistants: StagedTurnAssistants = new Map();
   const store: UiStore = {
+    chatToolMutations: createChatToolMutationStore(db, options.now),
     markdownSkills: createMarkdownSkillStore(db, options.now),
     browserApprovals: createBrowserApprovalStore(db),
     listProjects: () => sqlListProjects(db),

@@ -123,7 +123,7 @@ Status: **Partial — not accepted**. Implementation: bounded project pages and 
 
 - [ ] **AC5:** Tests distinguish malformed/truncated acknowledged 2xx from unknown remote effects, and prove no blind mutation replay after timeout, committed-then-5xx or cancellation. They cover intervening field/assignee changes and operation-aware retry safety, not only duplicate POST. Route, canonical tool outcome, activity and UI folds agree; an empty reconciliation search never authorizes a retry. Approved action changes invalidate stale approval. Document the concurrency limit of operations without an atomic Jira precondition; do not claim universal exactly-once execution or lost-update prevention.
 
-Status: **Partial — not accepted**. Implementation: GET-only physical retries in the existing HTTP helper. Verification: POST/PUT committed-error and foreign-change regressions plus real route logging. Evidence: mutation-transport checkpoint below. Durable intent, rich outcome and UI/Chat folds remain pending.
+Status: **Partial — not accepted**. Implementation: GET-only physical retries and a durable canonical-turn journal in the existing UiStore. Verification: transport regressions, real route logging and restart/settlement/storage tests. Evidence: mutation-transport and durable-journal checkpoints below. Connecting the journal to managed writes, rich HTTP outcomes and UI/Chat folds remains pending.
 
 - [ ] **AC7:** With no explicit ceiling configured, the connector policy evaluates Chat-consumer and Coding-run calls against the same resolved `autonomous-delivery` ceiling; `KEIKO_CODING_DEPLOYMENT_CEILING=governed-assist` clamps both, and an unrecognized value fails closed to `governed-assist`. Proven through the production policy and composition, not a hand-built deps object.
 
@@ -928,3 +928,36 @@ existing managed-MCP/catalog lifecycle and its body-free result-byte accounting.
 expansion is documented in [Atlassian's Server REST reference](https://docs.atlassian.com/software/jira/docs/api/REST/9.12.0/).
 Full operation and licensed 10.3.26 live qualification remain pending, as do durable writes and
 ordinary Chat authority. This is not an accepted AC or an epic-completion claim.
+
+## Durable Chat mutation journal — #4083 AC5, #4084 AC5, #4091 / #4081 (foundation)
+
+Schema 47 adds the journal to the existing UiStore. It binds a canonical persisted user turn to
+server-owned invocation/actor/Pod identities, binding/authentication generations and authority/action
+digests. It stores no request, response body, endpoint or credential. A standalone FULL-synchronous
+SQLite transaction records possible dispatch before permission is returned to the caller; savepoints
+and weaker synchronization are refused. Final synchronous authorization can atomically redeem an
+approval, and rejection rolls the transaction back. The journal itself grants no authority.
+
+Equivalent actions in the same turn share a tombstone even with different model call IDs. At most
+32 intents are retained per turn, and only one is active. An unknown effect blocks further mutations
+in that turn, including already prepared work. A new explicit user turn remains separate. Removing
+a message retains the tombstone; deleting the owning Chat removes it. Known rejection, confirmed
+success, acknowledged-but-unconfirmed success, unknown effect and no dispatch are distinct and
+terminal outcomes are immutable. HTTP acknowledgement must be recorded before body processing;
+provider/HTTP composition is still pending. There is no universal exactly-once or lost-update claim.
+
+The original on-disk restart regression failed before implementation. All **704 store tests** now
+pass, including restart, duplicate identity, changed context, guard rollback, storage/log failure,
+ambiguous status, prior acknowledgement, parallel prepared intents, deletion and schema-46 upgrade.
+The schema inventory and shared reverse fixture were extended; no production migration or privacy
+gate was relaxed. The registered `chat.tool-mutation` proof reconstructs committed states without
+private content. Pre-effect logging failure stops the caller; terminal logging failure preserves the
+observed result and enters the existing loss ledger. ADR-0013 documents these boundaries.
+
+The error-observability gate also found a missing explicit diagnostic for rejected structured
+provider results in the preceding catalog increment. Three new assertions failed before the repair;
+the actual validation catch now emits the existing body-free server diagnostic before single
+settlement. All **257 catalog tests**, **97 registry tests**, build, root typecheck, changed lint/format,
+ADR index, error observability and unchanged semantic checks pass. Registry generation resolves
+608 proofs and 30 scenarios without violations. Jira mutation transport, current-authority wiring,
+normal Chat, licensed live qualification and all complete-epic gates remain pending. No AC is accepted.

@@ -326,6 +326,36 @@ response, derived from that check. Missing paths remain listed as `available: fa
 can see and explicitly delete a stale project. This preserves the history and makes the system
 fail-open (show the record) rather than silently destructive (delete the record).
 
+#### Durable Chat tool mutation intents (schema 47, epic #4081)
+
+The existing UiStore owns `chat_tool_mutations`, initially for the five Jira write operations.
+It stores canonical user-turn references, actor/Pod identity, binding and authentication generation
+counters, authority/action digests and closed lifecycle/outcome metadata. `authentication_generation`
+is an integer invalidation counter; credential material remains exclusively in the existing vault.
+No request, response body, private endpoint or token is copied into this journal.
+
+A standalone `BEGIN IMMEDIATE` transaction with SQLite FULL-or-stronger synchronization records
+possible dispatch before the caller may send HTTP. Nested transactions are refused because a
+released savepoint is not a durable commit. A synchronous final guard may redeem existing approval
+state in the same transaction; a denied guard rolls its changes back. One action digest per canonical
+turn prevents a new model call ID from repeating that action. Writes within a turn are serialized,
+with at most 32 retained intents. Unknown effects block further writes in that turn, including
+already prepared actions. A new explicitly admitted user turn has its own scope.
+
+Response acknowledgement is stored separately from body parsing and later confirmation. Known
+rejection, success, success without confirmation, unknown effect and no dispatch are distinct.
+An observed 2xx cannot be downgraded to unknown/rejected; terminal settlement is immutable.
+Removing a message preserves its mutation tombstone; deleting its owning Chat removes the journal.
+Registered body-free state events follow committed state. A pre-effect log failure prevents the
+caller from proceeding, preserving the durable tombstone; terminal log failure cannot overwrite
+an observed result. The existing loss ledger records failures of the logging sink.
+
+This persistence primitive grants no execution authority. Consumer composition must supply current
+binding, mode, grants/approvals and budgets, use the returned dispatch admission exactly once and
+record the actual HTTP observation. Jira HTTP wiring and ordinary Chat integration are separate
+acceptance requirements. This is local duplicate-dispatch suppression, not a universal exactly-once
+or lost-update guarantee for Jira operations without atomic remote preconditions.
+
 #### Durable chat creation intents (schema 46, issues #4040/#4043)
 
 The existing private UiStore retains `chat_creation_intents` in the same transactional database.

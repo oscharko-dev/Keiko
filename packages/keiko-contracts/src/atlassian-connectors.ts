@@ -1452,3 +1452,9 @@ export {
   JIRA_MANAGED_READ_TOOLS,
   type JiraManagedReadToolName,
 } from "./jira-tool-fields.js";
+export {
+  JIRA_MUTATION_OPERATIONS,
+  JIRA_MUTATION_OUTCOMES,
+  type JiraMutationOperation,
+  type JiraMutationOutcome,
+} from "./jira-tool-execution.js";

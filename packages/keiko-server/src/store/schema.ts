@@ -10,7 +10,7 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 46;
+export const SCHEMA_VERSION = 47;
 
 interface Migration {
   readonly version: number;
@@ -1711,6 +1711,37 @@ export const MIGRATIONS: readonly Migration[] = [
       intent_sha256 TEXT NOT NULL CHECK (length(intent_sha256) = 64),
       chat_id TEXT REFERENCES chats(id) ON DELETE SET NULL
     ) STRICT;`,
+  },
+  {
+    version: 47,
+    sql: `CREATE TABLE chat_tool_mutations (
+      invocation_id TEXT PRIMARY KEY CHECK (length(invocation_id) BETWEEN 1 AND 128),
+      chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+      user_message_id TEXT REFERENCES chat_messages(id) ON DELETE SET NULL,
+      turn_ref TEXT NOT NULL CHECK (length(turn_ref) BETWEEN 1 AND 256),
+      actor_id TEXT NOT NULL CHECK (length(actor_id) BETWEEN 1 AND 128),
+      pod_id TEXT NOT NULL CHECK (length(pod_id) BETWEEN 1 AND 128),
+      binding_generation INTEGER NOT NULL CHECK (binding_generation > 0),
+      authentication_generation INTEGER NOT NULL CHECK (authentication_generation > 0),
+      authority_digest TEXT NOT NULL CHECK (length(authority_digest) = 64),
+      action_digest TEXT NOT NULL CHECK (length(action_digest) = 64),
+      operation TEXT NOT NULL CHECK (operation IN ('jira.create','jira.edit','jira.assign','jira.comment','jira.transition')),
+      correlation_id TEXT NOT NULL CHECK (length(correlation_id) BETWEEN 1 AND 128),
+      phase TEXT NOT NULL CHECK (phase IN ('prepared','dispatched','acknowledged','settled')),
+      outcome TEXT CHECK (outcome IS NULL OR outcome IN ('not-dispatched','rejected','succeeded','succeeded-unconfirmed','unknown')),
+      http_status INTEGER CHECK (http_status IS NULL OR http_status BETWEEN 100 AND 599),
+      created_at INTEGER NOT NULL CHECK (created_at >= 0),
+      updated_at INTEGER NOT NULL CHECK (updated_at >= created_at),
+      UNIQUE(chat_id, turn_ref, action_digest),
+      CHECK ((phase = 'settled') = (outcome IS NOT NULL)),
+      CHECK (phase != 'acknowledged' OR (http_status IS NOT NULL AND http_status BETWEEN 200 AND 299)),
+      CHECK (phase != 'prepared' OR http_status IS NULL),
+      CHECK (outcome NOT IN ('succeeded','succeeded-unconfirmed') OR (http_status IS NOT NULL AND http_status BETWEEN 200 AND 299)),
+      CHECK (outcome != 'not-dispatched' OR http_status IS NULL)
+    ) STRICT;
+    CREATE INDEX chat_tool_mutations_turn ON chat_tool_mutations(chat_id, turn_ref);
+    CREATE UNIQUE INDEX chat_tool_mutations_active ON chat_tool_mutations(chat_id, turn_ref)
+      WHERE phase IN ('dispatched','acknowledged');`,
   },
 ];
 
