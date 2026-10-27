@@ -51,19 +51,38 @@ import {
   MEMORY_TYPES,
 } from "./memory-contracts.js";
 import { MEMORY_STRUCTURED_PAYLOAD_KINDS } from "./memory-records.js";
-import { MEMORY_AUDIT_INITIATOR_SURFACES, MEMORY_UPDATE_FIELDS } from "./memory-operations.js";
+import {
+  MEMORY_AUDIT_INITIATOR_SURFACES,
+  MEMORY_UPDATE_FIELDS,
+  type MemoryProposal as SourceMemoryProposal,
+  type MemoryAcceptance as SourceMemoryAcceptance,
+  type MemoryUpdate as SourceMemoryUpdate,
+  type MemoryPin as SourceMemoryPin,
+  type MemoryUnpin as SourceMemoryUnpin,
+  type MemoryArchive as SourceMemoryArchive,
+  type MemoryAuditRecord as SourceMemoryAuditRecord,
+  type MemoryRetrievalRequest as SourceMemoryRetrievalRequest,
+} from "./memory-operations.js";
 import type {
   MemoryEdgeId,
   MemoryId,
   MemoryReviewerId,
   MemoryStatus,
+  MemoryType,
+  MemorySensitivity,
   ProjectId,
   UserId,
   WorkflowDefinitionId,
   WorkspaceId,
 } from "./memory-contracts.js";
 import type { MemoryAuditRecordId } from "./memory-contracts.js";
-import type { MemoryRecord, MemoryEdge } from "./memory-records.js";
+import type {
+  MemoryRecord,
+  MemoryEdge,
+  MemoryStructuredPayload,
+  MemoryValidityInterval,
+  MemoryRetentionHint,
+} from "./memory-records.js";
 import {
   checkStatusTransition,
   hasStaleModelMetadata,
@@ -2863,4 +2882,433 @@ describe("Memory remaining public parsers (#3918)", () => {
       });
     }
   });
+});
+
+function assertProposalPresentUndefinedTypes(): void {
+  expectTypeOf<Required<SourceMemoryProposal>["payload"]>().toEqualTypeOf<
+    MemoryStructuredPayload | undefined
+  >();
+  expectTypeOf<Required<PublicMemoryProposal>["payload"]>().toEqualTypeOf<
+    MemoryStructuredPayload | undefined
+  >();
+  expectTypeOf<Required<SourceMemoryProposal>["retentionHint"]>().toEqualTypeOf<
+    MemoryRetentionHint | undefined
+  >();
+  expectTypeOf<Required<PublicMemoryProposal>["retentionHint"]>().toEqualTypeOf<
+    MemoryRetentionHint | undefined
+  >();
+  expectTypeOf<Required<SourceMemoryProposal>["captureReason"]>().toEqualTypeOf<
+    string | undefined
+  >();
+  expectTypeOf<Required<PublicMemoryProposal>["captureReason"]>().toEqualTypeOf<
+    string | undefined
+  >();
+}
+
+it("preserves source and public Proposal option presence with truthful types", (): void => {
+  assertProposalPresentUndefinedTypes();
+  for (const validate of [validateMemoryProposal, validatePublicMemoryProposal]) {
+    const input = {
+      ...happyProposal(),
+      payload: undefined,
+      retentionHint: undefined,
+      captureReason: undefined,
+    };
+    const result = validate(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new TypeError("Expected admitted own-undefined options");
+    expect(result.value).toBe(input);
+    for (const field of ["payload", "retentionHint", "captureReason"] as const) {
+      expect(Object.hasOwn(result.value, field)).toBe(true);
+      expect(result.value[field]).toBeUndefined();
+    }
+    if ("payload" in result.value) {
+      expectTypeOf(result.value.payload).toEqualTypeOf<MemoryStructuredPayload | undefined>();
+    }
+    if ("retentionHint" in result.value) {
+      expectTypeOf(result.value.retentionHint).toEqualTypeOf<MemoryRetentionHint | undefined>();
+    }
+    if ("captureReason" in result.value) {
+      expectTypeOf(result.value.captureReason).toEqualTypeOf<string | undefined>();
+    }
+  }
+});
+
+function assertAcceptancePresentUndefinedTypes(): void {
+  expectTypeOf<Required<SourceMemoryAcceptance>["bodyOverride"]>().toEqualTypeOf<
+    string | undefined
+  >();
+  expectTypeOf<Required<PublicMemoryAcceptance>["bodyOverride"]>().toEqualTypeOf<
+    string | undefined
+  >();
+  expectTypeOf<Required<SourceMemoryAcceptance>["sensitivityOverride"]>().toEqualTypeOf<
+    MemorySensitivity | undefined
+  >();
+  expectTypeOf<Required<PublicMemoryAcceptance>["sensitivityOverride"]>().toEqualTypeOf<
+    MemorySensitivity | undefined
+  >();
+  expectTypeOf<Required<SourceMemoryAcceptance>["validityOverride"]>().toEqualTypeOf<
+    MemoryValidityInterval | undefined
+  >();
+  expectTypeOf<Required<PublicMemoryAcceptance>["validityOverride"]>().toEqualTypeOf<
+    MemoryValidityInterval | undefined
+  >();
+  expectTypeOf<Required<SourceMemoryAcceptance>["reviewerNote"]>().toEqualTypeOf<
+    string | undefined
+  >();
+  expectTypeOf<Required<PublicMemoryAcceptance>["reviewerNote"]>().toEqualTypeOf<
+    string | undefined
+  >();
+}
+
+it("preserves source and public Acceptance option presence with truthful types", (): void => {
+  assertAcceptancePresentUndefinedTypes();
+  for (const validate of [validateMemoryAcceptance, validatePublicMemoryAcceptance]) {
+    const input = lifecycleProofInput({
+      proposalId: "prop-1",
+      mintedMemoryId: "mem-1",
+      acceptedAt: 0,
+      bodyOverride: undefined,
+      sensitivityOverride: undefined,
+      validityOverride: undefined,
+      reviewerNote: undefined,
+    });
+    const result = validate(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new TypeError("Expected admitted own-undefined options");
+    expect(result.value).toBe(input);
+    for (const field of [
+      "bodyOverride",
+      "sensitivityOverride",
+      "validityOverride",
+      "reviewerNote",
+    ] as const) {
+      expect(Object.hasOwn(result.value, field)).toBe(true);
+      expect(result.value[field]).toBeUndefined();
+    }
+    if ("bodyOverride" in result.value) {
+      expectTypeOf(result.value.bodyOverride).toEqualTypeOf<string | undefined>();
+    }
+    if ("sensitivityOverride" in result.value) {
+      expectTypeOf(result.value.sensitivityOverride).toEqualTypeOf<MemorySensitivity | undefined>();
+    }
+    if ("validityOverride" in result.value) {
+      expectTypeOf(result.value.validityOverride).toEqualTypeOf<
+        MemoryValidityInterval | undefined
+      >();
+    }
+    if ("reviewerNote" in result.value) {
+      expectTypeOf(result.value.reviewerNote).toEqualTypeOf<string | undefined>();
+    }
+  }
+});
+
+function assertUpdateContentPresentUndefinedTypes(): void {
+  expectTypeOf<Required<SourceMemoryUpdate>["bodyPatch"]>().toEqualTypeOf<string | undefined>();
+  expectTypeOf<Required<PublicMemoryUpdate>["bodyPatch"]>().toEqualTypeOf<string | undefined>();
+  expectTypeOf<Required<SourceMemoryUpdate>["payloadPatch"]>().toEqualTypeOf<
+    MemoryStructuredPayload | undefined
+  >();
+  expectTypeOf<Required<PublicMemoryUpdate>["payloadPatch"]>().toEqualTypeOf<
+    MemoryStructuredPayload | undefined
+  >();
+  expectTypeOf<Required<SourceMemoryUpdate>["tagsPatch"]>().toEqualTypeOf<
+    readonly string[] | undefined
+  >();
+  expectTypeOf<Required<PublicMemoryUpdate>["tagsPatch"]>().toEqualTypeOf<
+    readonly string[] | undefined
+  >();
+}
+
+it("preserves source and public UpdateContent option presence with truthful types", (): void => {
+  assertUpdateContentPresentUndefinedTypes();
+  for (const validate of [validateMemoryUpdate, validatePublicMemoryUpdate]) {
+    const input = lifecycleProofInput({
+      updatedAt: 0,
+      retentionHintPatch: { policyKey: "fixture" },
+      bodyPatch: undefined,
+      payloadPatch: undefined,
+      tagsPatch: undefined,
+    });
+    const result = validate(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new TypeError("Expected admitted own-undefined options");
+    expect(result.value).toBe(input);
+    for (const field of ["bodyPatch", "payloadPatch", "tagsPatch"] as const) {
+      expect(Object.hasOwn(result.value, field)).toBe(true);
+      expect(result.value[field]).toBeUndefined();
+    }
+    if ("bodyPatch" in result.value) {
+      expectTypeOf(result.value.bodyPatch).toEqualTypeOf<string | undefined>();
+    }
+    if ("payloadPatch" in result.value) {
+      expectTypeOf(result.value.payloadPatch).toEqualTypeOf<MemoryStructuredPayload | undefined>();
+    }
+    if ("tagsPatch" in result.value) {
+      expectTypeOf(result.value.tagsPatch).toEqualTypeOf<readonly string[] | undefined>();
+    }
+  }
+});
+
+function assertUpdateMetadataPresentUndefinedTypes(): void {
+  expectTypeOf<Required<SourceMemoryUpdate>["validityPatch"]>().toEqualTypeOf<
+    MemoryValidityInterval | undefined
+  >();
+  expectTypeOf<Required<PublicMemoryUpdate>["validityPatch"]>().toEqualTypeOf<
+    MemoryValidityInterval | undefined
+  >();
+  expectTypeOf<Required<SourceMemoryUpdate>["sensitivityPatch"]>().toEqualTypeOf<
+    MemorySensitivity | undefined
+  >();
+  expectTypeOf<Required<PublicMemoryUpdate>["sensitivityPatch"]>().toEqualTypeOf<
+    MemorySensitivity | undefined
+  >();
+  expectTypeOf<Required<SourceMemoryUpdate>["retentionHintPatch"]>().toEqualTypeOf<
+    MemoryRetentionHint | undefined
+  >();
+  expectTypeOf<Required<PublicMemoryUpdate>["retentionHintPatch"]>().toEqualTypeOf<
+    MemoryRetentionHint | undefined
+  >();
+  expectTypeOf<Required<SourceMemoryUpdate>["reviewerNote"]>().toEqualTypeOf<string | undefined>();
+  expectTypeOf<Required<PublicMemoryUpdate>["reviewerNote"]>().toEqualTypeOf<string | undefined>();
+}
+
+it("preserves source and public UpdateMetadata option presence with truthful types", (): void => {
+  assertUpdateMetadataPresentUndefinedTypes();
+  for (const validate of [validateMemoryUpdate, validatePublicMemoryUpdate]) {
+    const input = lifecycleProofInput({
+      updatedAt: 0,
+      bodyPatch: "fixture",
+      validityPatch: undefined,
+      sensitivityPatch: undefined,
+      retentionHintPatch: undefined,
+      reviewerNote: undefined,
+    });
+    const result = validate(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new TypeError("Expected admitted own-undefined options");
+    expect(result.value).toBe(input);
+    for (const field of [
+      "validityPatch",
+      "sensitivityPatch",
+      "retentionHintPatch",
+      "reviewerNote",
+    ] as const) {
+      expect(Object.hasOwn(result.value, field)).toBe(true);
+      expect(result.value[field]).toBeUndefined();
+    }
+    if ("validityPatch" in result.value) {
+      expectTypeOf(result.value.validityPatch).toEqualTypeOf<MemoryValidityInterval | undefined>();
+    }
+    if ("sensitivityPatch" in result.value) {
+      expectTypeOf(result.value.sensitivityPatch).toEqualTypeOf<MemorySensitivity | undefined>();
+    }
+    if ("retentionHintPatch" in result.value) {
+      expectTypeOf(result.value.retentionHintPatch).toEqualTypeOf<
+        MemoryRetentionHint | undefined
+      >();
+    }
+    if ("reviewerNote" in result.value) {
+      expectTypeOf(result.value.reviewerNote).toEqualTypeOf<string | undefined>();
+    }
+  }
+});
+
+function assertRetrievalFiltersPresentUndefinedTypes(): void {
+  expectTypeOf<Required<SourceMemoryRetrievalRequest>["typeFilter"]>().toEqualTypeOf<
+    readonly MemoryType[] | undefined
+  >();
+  expectTypeOf<Required<PublicMemoryRetrievalRequest>["typeFilter"]>().toEqualTypeOf<
+    readonly MemoryType[] | undefined
+  >();
+  expectTypeOf<Required<SourceMemoryRetrievalRequest>["statusFilter"]>().toEqualTypeOf<
+    readonly MemoryStatus[] | undefined
+  >();
+  expectTypeOf<Required<PublicMemoryRetrievalRequest>["statusFilter"]>().toEqualTypeOf<
+    readonly MemoryStatus[] | undefined
+  >();
+  expectTypeOf<Required<SourceMemoryRetrievalRequest>["textQuery"]>().toEqualTypeOf<
+    string | undefined
+  >();
+  expectTypeOf<Required<PublicMemoryRetrievalRequest>["textQuery"]>().toEqualTypeOf<
+    string | undefined
+  >();
+  expectTypeOf<Required<SourceMemoryRetrievalRequest>["tagsFilter"]>().toEqualTypeOf<
+    readonly string[] | undefined
+  >();
+  expectTypeOf<Required<PublicMemoryRetrievalRequest>["tagsFilter"]>().toEqualTypeOf<
+    readonly string[] | undefined
+  >();
+}
+
+it("preserves source and public RetrievalFilters option presence with truthful types", (): void => {
+  assertRetrievalFiltersPresentUndefinedTypes();
+  for (const validate of [validateMemoryRetrievalRequest, validatePublicMemoryRetrievalRequest]) {
+    const input = {
+      schemaVersion: "1",
+      requestedAt: 0,
+      scopes: [happyScopeUser()],
+      typeFilter: undefined,
+      statusFilter: undefined,
+      textQuery: undefined,
+      tagsFilter: undefined,
+    };
+    const result = validate(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new TypeError("Expected admitted own-undefined options");
+    expect(result.value).toBe(input);
+    for (const field of ["typeFilter", "statusFilter", "textQuery", "tagsFilter"] as const) {
+      expect(Object.hasOwn(result.value, field)).toBe(true);
+      expect(result.value[field]).toBeUndefined();
+    }
+    if ("typeFilter" in result.value) {
+      expectTypeOf(result.value.typeFilter).toEqualTypeOf<readonly MemoryType[] | undefined>();
+    }
+    if ("statusFilter" in result.value) {
+      expectTypeOf(result.value.statusFilter).toEqualTypeOf<readonly MemoryStatus[] | undefined>();
+    }
+    if ("textQuery" in result.value) {
+      expectTypeOf(result.value.textQuery).toEqualTypeOf<string | undefined>();
+    }
+    if ("tagsFilter" in result.value) {
+      expectTypeOf(result.value.tagsFilter).toEqualTypeOf<readonly string[] | undefined>();
+    }
+  }
+});
+
+function assertRetrievalBudgetsPresentUndefinedTypes(): void {
+  expectTypeOf<Required<SourceMemoryRetrievalRequest>["maxResults"]>().toEqualTypeOf<
+    number | undefined
+  >();
+  expectTypeOf<Required<PublicMemoryRetrievalRequest>["maxResults"]>().toEqualTypeOf<
+    number | undefined
+  >();
+  expectTypeOf<Required<SourceMemoryRetrievalRequest>["maxBodyChars"]>().toEqualTypeOf<
+    number | undefined
+  >();
+  expectTypeOf<Required<PublicMemoryRetrievalRequest>["maxBodyChars"]>().toEqualTypeOf<
+    number | undefined
+  >();
+  expectTypeOf<Required<SourceMemoryRetrievalRequest>["includeArchived"]>().toEqualTypeOf<
+    boolean | undefined
+  >();
+  expectTypeOf<Required<PublicMemoryRetrievalRequest>["includeArchived"]>().toEqualTypeOf<
+    boolean | undefined
+  >();
+  expectTypeOf<Required<SourceMemoryRetrievalRequest>["includeSuperseded"]>().toEqualTypeOf<
+    boolean | undefined
+  >();
+  expectTypeOf<Required<PublicMemoryRetrievalRequest>["includeSuperseded"]>().toEqualTypeOf<
+    boolean | undefined
+  >();
+}
+
+it("preserves source and public RetrievalBudgets option presence with truthful types", (): void => {
+  assertRetrievalBudgetsPresentUndefinedTypes();
+  for (const validate of [validateMemoryRetrievalRequest, validatePublicMemoryRetrievalRequest]) {
+    const input = {
+      schemaVersion: "1",
+      requestedAt: 0,
+      scopes: [happyScopeUser()],
+      maxResults: undefined,
+      maxBodyChars: undefined,
+      includeArchived: undefined,
+      includeSuperseded: undefined,
+    };
+    const result = validate(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new TypeError("Expected admitted own-undefined options");
+    expect(result.value).toBe(input);
+    for (const field of [
+      "maxResults",
+      "maxBodyChars",
+      "includeArchived",
+      "includeSuperseded",
+    ] as const) {
+      expect(Object.hasOwn(result.value, field)).toBe(true);
+      expect(result.value[field]).toBeUndefined();
+    }
+    if ("maxResults" in result.value) {
+      expectTypeOf(result.value.maxResults).toEqualTypeOf<number | undefined>();
+    }
+    if ("maxBodyChars" in result.value) {
+      expectTypeOf(result.value.maxBodyChars).toEqualTypeOf<number | undefined>();
+    }
+    if ("includeArchived" in result.value) {
+      expectTypeOf(result.value.includeArchived).toEqualTypeOf<boolean | undefined>();
+    }
+    if ("includeSuperseded" in result.value) {
+      expectTypeOf(result.value.includeSuperseded).toEqualTypeOf<boolean | undefined>();
+    }
+  }
+});
+
+function assertLifecycleReasonPresentUndefinedTypes(): void {
+  expectTypeOf<Required<SourceMemoryPin>["reason"]>().toEqualTypeOf<string | undefined>();
+  expectTypeOf<Required<PublicMemoryPin>["reason"]>().toEqualTypeOf<string | undefined>();
+  expectTypeOf<Required<SourceMemoryUnpin>["reason"]>().toEqualTypeOf<string | undefined>();
+  expectTypeOf<Required<PublicMemoryUnpin>["reason"]>().toEqualTypeOf<string | undefined>();
+  expectTypeOf<Required<SourceMemoryArchive>["reason"]>().toEqualTypeOf<string | undefined>();
+  expectTypeOf<Required<PublicMemoryArchive>["reason"]>().toEqualTypeOf<string | undefined>();
+}
+
+it("preserves source and public lifecycle reason presence with truthful types", (): void => {
+  assertLifecycleReasonPresentUndefinedTypes();
+  const cases = [
+    {
+      parsers: [validateMemoryPin, validatePublicMemoryPin],
+      input: lifecycleProofInput({ pinnedAt: 0, reason: undefined }),
+    },
+    {
+      parsers: [validateMemoryUnpin, validatePublicMemoryUnpin],
+      input: lifecycleProofInput({ unpinnedAt: 0, reason: undefined }),
+    },
+    {
+      parsers: [validateMemoryArchive, validatePublicMemoryArchive],
+      input: lifecycleProofInput({ archivedAt: 0, reason: undefined }),
+    },
+  ];
+  for (const { parsers, input } of cases) {
+    for (const parse of parsers) {
+      const result = parse(input);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new TypeError("Expected admitted own-undefined lifecycle reason");
+      expect(result.value).toBe(input);
+      expect(Object.hasOwn(result.value, "reason")).toBe(true);
+      if ("reason" in result.value) {
+        expectTypeOf(result.value.reason).toEqualTypeOf<string | undefined>();
+        expect(result.value.reason).toBeUndefined();
+      }
+    }
+  }
+});
+
+it("keeps source and public own-undefined MemoryAuditRecord.initiatorReviewerId truthful under required presence", (): void => {
+  expectTypeOf<Required<SourceMemoryAuditRecord>["initiatorReviewerId"]>().toEqualTypeOf<
+    MemoryReviewerId | undefined
+  >();
+  expectTypeOf<Required<PublicMemoryAuditRecord>["initiatorReviewerId"]>().toEqualTypeOf<
+    publicMemory.MemoryReviewerId | undefined
+  >();
+  const input = { ...happyAuditRecord(), initiatorReviewerId: undefined };
+  const source = validateMemoryAuditRecord(input);
+  const publicResult = validatePublicMemoryAuditRecord(input);
+  expect(source.ok).toBe(true);
+  expect(publicResult.ok).toBe(true);
+  if (!source.ok || !publicResult.ok)
+    throw new TypeError("Expected accepted own-undefined reviewer");
+  expect(source.value).toBe(input);
+  expect(publicResult.value).toBe(input);
+  expect("initiatorReviewerId" in source.value).toBe(true);
+  expect("initiatorReviewerId" in publicResult.value).toBe(true);
+  if ("initiatorReviewerId" in source.value) {
+    expectTypeOf(source.value.initiatorReviewerId).toEqualTypeOf<MemoryReviewerId | undefined>();
+    expect(source.value.initiatorReviewerId).toBeUndefined();
+  }
+  if ("initiatorReviewerId" in publicResult.value) {
+    expectTypeOf(publicResult.value.initiatorReviewerId).toEqualTypeOf<
+      publicMemory.MemoryReviewerId | undefined
+    >();
+    expect(publicResult.value.initiatorReviewerId).toBeUndefined();
+  }
 });

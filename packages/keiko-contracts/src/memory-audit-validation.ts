@@ -81,7 +81,7 @@ type MemoryAuditActionFields =
 type MemoryAuditRecordFields = Omit<MemoryAuditRecord, "id" | "action" | "initiatorReviewerId"> & {
   readonly id: string;
   readonly action: MemoryAuditActionFields;
-  readonly initiatorReviewerId?: string;
+  readonly initiatorReviewerId?: string | undefined;
 };
 
 function validateAuditScopeArrayField(value: unknown, errors: string[]): boolean {

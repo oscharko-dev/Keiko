@@ -69,17 +69,17 @@ export interface MemoryProposal {
   readonly scope: MemoryScope;
   readonly type: MemoryType;
   readonly body: string;
-  readonly payload?: MemoryStructuredPayload;
+  readonly payload?: MemoryStructuredPayload | undefined;
   readonly tags: readonly string[];
   readonly provenance: MemoryProvenance;
   readonly validity: MemoryValidityInterval;
-  readonly retentionHint?: MemoryRetentionHint;
+  readonly retentionHint?: MemoryRetentionHint | undefined;
   // Initial status MUST be the literal "proposed". Pinning to the literal makes accidental
   // construction of a pre-accepted proposal a compile error.
   readonly initialStatus: "proposed";
   // Optional capture-side hint about why this proposal exists, surfaced verbatim to the
   // reviewer. Capped by the validator.
-  readonly captureReason?: string;
+  readonly captureReason?: string | undefined;
 }
 
 // ─── Acceptance ───────────────────────────────────────────────────────────────
@@ -96,10 +96,10 @@ export interface MemoryAcceptance {
   // Optional per-acceptance overrides: a reviewer may edit the body, sensitivity, or
   // validity before accepting. When present, these REPLACE the proposal's values for the
   // persisted record.
-  readonly bodyOverride?: string;
-  readonly sensitivityOverride?: MemorySensitivity;
-  readonly validityOverride?: MemoryValidityInterval;
-  readonly reviewerNote?: string;
+  readonly bodyOverride?: string | undefined;
+  readonly sensitivityOverride?: MemorySensitivity | undefined;
+  readonly validityOverride?: MemoryValidityInterval | undefined;
+  readonly reviewerNote?: string | undefined;
 }
 
 // ─── Rejection ────────────────────────────────────────────────────────────────
@@ -124,13 +124,13 @@ export interface MemoryUpdate {
   readonly memoryId: MemoryId;
   readonly reviewerId: MemoryReviewerId;
   readonly updatedAt: number;
-  readonly bodyPatch?: string;
-  readonly payloadPatch?: MemoryStructuredPayload;
-  readonly tagsPatch?: readonly string[];
-  readonly validityPatch?: MemoryValidityInterval;
-  readonly sensitivityPatch?: MemorySensitivity;
-  readonly retentionHintPatch?: MemoryRetentionHint;
-  readonly reviewerNote?: string;
+  readonly bodyPatch?: string | undefined;
+  readonly payloadPatch?: MemoryStructuredPayload | undefined;
+  readonly tagsPatch?: readonly string[] | undefined;
+  readonly validityPatch?: MemoryValidityInterval | undefined;
+  readonly sensitivityPatch?: MemorySensitivity | undefined;
+  readonly retentionHintPatch?: MemoryRetentionHint | undefined;
+  readonly reviewerNote?: string | undefined;
 }
 
 // ─── Supersession ─────────────────────────────────────────────────────────────
@@ -157,7 +157,7 @@ export interface MemoryPin {
   readonly memoryId: MemoryId;
   readonly reviewerId: MemoryReviewerId;
   readonly pinnedAt: number;
-  readonly reason?: string;
+  readonly reason?: string | undefined;
 }
 
 export interface MemoryUnpin {
@@ -165,7 +165,7 @@ export interface MemoryUnpin {
   readonly memoryId: MemoryId;
   readonly reviewerId: MemoryReviewerId;
   readonly unpinnedAt: number;
-  readonly reason?: string;
+  readonly reason?: string | undefined;
 }
 
 // ─── Archive ──────────────────────────────────────────────────────────────────
@@ -176,7 +176,7 @@ export interface MemoryArchive {
   readonly memoryId: MemoryId;
   readonly reviewerId: MemoryReviewerId;
   readonly archivedAt: number;
-  readonly reason?: string;
+  readonly reason?: string | undefined;
 }
 
 // ─── Forget ───────────────────────────────────────────────────────────────────
@@ -209,17 +209,17 @@ export interface MemoryRetrievalRequest {
   // anchor for the cross-scope visibility invariant: a request with no `scopes` cannot
   // retrieve any memory at all.
   readonly scopes: readonly MemoryScope[];
-  readonly typeFilter?: readonly MemoryType[];
-  readonly statusFilter?: readonly MemoryStatus[];
-  readonly textQuery?: string;
-  readonly tagsFilter?: readonly string[];
+  readonly typeFilter?: readonly MemoryType[] | undefined;
+  readonly statusFilter?: readonly MemoryStatus[] | undefined;
+  readonly textQuery?: string | undefined;
+  readonly tagsFilter?: readonly string[] | undefined;
   // Optional budget hints. The retrieval layer is free to interpret these, but the values
   // pinned here let the caller bound a query without dipping into a separate config.
-  readonly maxResults?: number;
-  readonly maxBodyChars?: number;
+  readonly maxResults?: number | undefined;
+  readonly maxBodyChars?: number | undefined;
   // Whether to include archived and superseded records. Defaults at the retrieval layer.
-  readonly includeArchived?: boolean;
-  readonly includeSuperseded?: boolean;
+  readonly includeArchived?: boolean | undefined;
+  readonly includeSuperseded?: boolean | undefined;
 }
 
 // ─── Audit action discriminator ───────────────────────────────────────────────
@@ -312,7 +312,7 @@ export interface MemoryAuditRecord {
   readonly actionKind: MemoryAuditActionKind;
   readonly action: MemoryAuditAction;
   readonly initiatorSurface: MemoryAuditInitiatorSurface;
-  readonly initiatorReviewerId?: MemoryReviewerId;
+  readonly initiatorReviewerId?: MemoryReviewerId | undefined;
   readonly occurredAt: number;
   // Short audit-side rationale. Bounded by the validator. NEVER carries raw memory
   // content; the invariant is pinned in the validator and in the audit-layer #214 tests.
