@@ -184,6 +184,7 @@ async function observeDecisions(context, chat, intent, priorUserIds, signal, set
 }
 
 function payload(context, chat, intent) {
+  const question = intent.question === undefined ? "" : `${intent.question}\n\n`;
   const target = toolArguments(intent).issueKey;
   const targetInstruction =
     typeof target === "string"
@@ -195,7 +196,7 @@ function payload(context, chat, intent) {
     modelId: context.modelId,
     clientTurnId: intent.clientTurnId,
     expectedGroundingScopeIdentity: chat.groundingScopeIdentity,
-    content: `${targetInstruction}Call ${toolName(intent)} exactly once with this exact JSON argument object: ${JSON.stringify(toolArguments(intent))}. Do not call any other mutation tool. Wait for any requested approval. After the tool result, report its outcome briefly and do not repeat the call, even if the outcome is unknown or unconfirmed.`,
+    content: `${question}${targetInstruction}Call ${toolName(intent)} exactly once with this exact JSON argument object: ${JSON.stringify(toolArguments(intent))}. Do not call any other mutation tool. Wait for any requested approval. After the tool result, report its outcome briefly and do not repeat the call, even if the outcome is unknown or unconfirmed.`,
     memory: { enabled: false, budgetTokens: 0, mode: "governed-assist", context: {} },
   };
 }

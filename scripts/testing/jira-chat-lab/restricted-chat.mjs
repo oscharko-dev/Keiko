@@ -138,6 +138,11 @@ async function runCase(context, group, fixture, testCase, observer) {
   stage(testCase.id, { passed: true, ...dispatch, remoteEffects, ...observed.decisions });
 }
 
+function assertCompletedGroup(group) {
+  assert.equal(group.results.length, group.suite === "catalog" ? 14 : 8);
+  if (group.suite === "catalog")
+    assert.equal(new Set(group.results.map((item) => item.operation)).size, 14);
+}
 async function main() {
   const session = loadSession(process.argv[2]);
   const modelId = process.argv[3];
@@ -152,6 +157,7 @@ async function main() {
     id: randomUUID(),
     transport,
     suite,
+    modelRetries: 1,
     results: [],
     pendingPath: join(session.directory, "restricted-chat.pending.json"),
   };
@@ -164,6 +170,7 @@ async function main() {
   await withLiveChat({
     session,
     modelId,
+    modelRetries: group.modelRetries,
     retainState: true,
     decorateAtlassianHttp: observer.decorate,
     stateReady: (root) => {
@@ -174,13 +181,17 @@ async function main() {
       for (const testCase of cases) await runCase(context, group, fixture, testCase, observer);
     },
   });
-  assert.equal(group.results.length, suite === "catalog" ? 14 : 8);
-  if (suite === "catalog")
-    assert.equal(new Set(group.results.map((item) => item.operation)).size, 14);
+  assertCompletedGroup(group);
   await requireLicense(session);
   privateJson(join(session.directory, `restricted-chat-${group.id}.json`), group, true);
   rmSync(group.pendingPath);
-  stage("complete", { passed: true, cases: group.results.length, transport, suite });
+  stage("complete", {
+    passed: true,
+    cases: group.results.length,
+    transport,
+    suite,
+    modelRetries: group.modelRetries,
+  });
 }
 
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href)

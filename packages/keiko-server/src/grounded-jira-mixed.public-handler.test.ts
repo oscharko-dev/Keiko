@@ -662,13 +662,13 @@ it("retains acknowledged mutation uncertainty after deletion through the real cu
   expect(realCustodyOwner(f).custody.getMetadata(credential.authRef)).toBeUndefined();
 });
 
-function configure(deps: UiHandlerDeps): void {
+function configure(deps: UiHandlerDeps, modelRetries = 0): void {
   const provider = {
     modelId: MODEL,
     baseUrl: "https://mixed.example.invalid/v1",
     apiKey: "fixture",
     timeoutMs: 5000,
-    maxRetries: 0,
+    maxRetries: modelRetries,
     retryBaseDelayMs: 1,
   };
   const config = deps.gatewayConfig;
@@ -721,7 +721,11 @@ function providerBody(init: RequestInit | undefined): string {
   return typeof init?.body === "string" ? init.body : "";
 }
 function isToolStep(body: string, step: ProviderStep): boolean {
-  return body.includes('"tools":') && (step === "tool" || step === "write");
+  return body.includes('"tools":') && (step === "tool" || step === "write" || step === "malformed");
+}
+function toolArguments(step: ProviderStep, commentBody: string): string {
+  if (step === "write") return JSON.stringify({ issueKey: "KEIKO-1", body: commentBody });
+  return step === "malformed" ? '{"maxResults":0}' : "{}";
 }
 function responseContent(
   body: string,
@@ -738,7 +742,7 @@ function finalContent(step: ProviderStep, steps: readonly ProviderStep[]): strin
   if (step === "uncited") return "Feature returns true.";
   return steps.includes("uncited") ? "Feature returns true [src/Feature.ts:1]." : CITED;
 }
-type ProviderStep = "tool" | "write" | "answer" | "uncited" | "overflow";
+type ProviderStep = "tool" | "write" | "malformed" | "answer" | "uncited" | "overflow";
 function provider(
   steps: readonly ProviderStep[] = ["tool", "answer"],
   answerContent?: string,
@@ -782,13 +786,7 @@ function provider(
                         type: "function",
                         function: {
                           name: step === "write" ? "jira_comment" : "jira_projects",
-                          arguments:
-                            step === "write"
-                              ? JSON.stringify({
-                                  issueKey: "KEIKO-1",
-                                  body: commentBody,
-                                })
-                              : "{}",
+                          arguments: toolArguments(step, commentBody),
                         },
                       },
                     ],
@@ -807,6 +805,32 @@ function provider(
   );
   return requests;
 }
+
+it("repairs one invalid native model call before normal Chat dispatches any Jira effect", async () => {
+  const f = runtime();
+  configure(f.deps, 1);
+  const requests = provider(["malformed", "tool", "answer"]);
+  const native = vi.mocked(fetch).getMockImplementation();
+  if (native === undefined) throw new Error("Missing native model transport");
+  const effectCounts: number[] = [];
+  vi.mocked(fetch).mockImplementation((url, init) => {
+    if (isProductiveRequest(providerBody(init))) effectCounts.push(f.jiraRequests.length);
+    return native(url, init);
+  });
+  const response = await startOwnedTurn(f, f.chatId);
+  expect(response.status).toBe(200);
+  expect(requests).toHaveLength(3);
+  expect(effectCounts).toEqual([0, 0, 1]);
+  expect(requests[1]).toContain("rejected before execution");
+  expect(requests[1]).toContain("maxResults");
+  expect(outputCap(requests[2] ?? "{}")).toBeLessThan(outputCap(requests[0] ?? "{}"));
+  expect(f.jiraRequests).toEqual(["GET"]);
+  expect(ownedExchange(f, f.chatId)).toMatchObject({
+    call: { id: "mixed-call-2" },
+    result: { status: "completed" },
+  });
+  expect(JSON.stringify(f.deps.store.listMessages(f.chatId))).not.toContain("mixed-call-1");
+});
 
 it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
   "refuses an unreviewable secret-bearing write after additional store redaction in %s",

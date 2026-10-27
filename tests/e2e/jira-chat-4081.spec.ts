@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { jiraAccessibilityJourney } from "./support/jira-chat-4081-accessibility.js";
 import {
   api,
   counts,
@@ -100,4 +101,18 @@ test("a bound unverified model shows actionable unavailability without provider 
   await expect(region.getByText(/For Jira access, run the tool-calling check/u)).toBeVisible();
   expect(counts()).toEqual(before);
   await expect(region.getByRole("button", { name: "Allow reading", exact: true })).toHaveCount(0);
+});
+
+test.describe("Jira surfaces accessibility and visual evidence", () => {
+  // Local, committed axe-core injection only; the product server retains its real CSP.
+  test.use({ bypassCSP: true });
+  for (const locale of ["en", "de"] as const) {
+    test(`${locale} Jira Hub, consent, exact approval and result across visual modes`, async ({
+      page,
+    }, info) => {
+      // Eight presentation variants per state share one real read/write journey per locale.
+      test.setTimeout(240_000);
+      await jiraAccessibilityJourney(page, locale, info);
+    });
+  }
 });

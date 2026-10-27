@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { URL } from "node:url";
 
-const FAULTS = new Set(["lost-response", "committed-503"]);
+const FAULTS = new Set(["none", "lost-response", "committed-503"]);
 function originalResponse(lifecycle, request, status) {
   return lifecycle?.onResponse?.(request, status) ?? true;
 }
@@ -11,6 +11,7 @@ function originalResponse(lifecycle, request, status) {
  * request, materializes the credential, checks TLS/egress and invokes beforeDispatch. After
  * real 2xx headers, only the journal-visible acknowledgement/result are changed. Transport
  * logs therefore truthfully retain the actual status; this is not a physical network fault.
+ * `none` retains the same single-effect guard and forwards every acknowledgement unchanged.
  */
 export function observedMutationFault(target, fault, initial = {}) {
   assert.ok(FAULTS.has(fault));
@@ -28,6 +29,7 @@ export function observedMutationFault(target, fault, initial = {}) {
     if (request.method === "GET" || status < 200 || status >= 300)
       return originalResponse(lifecycle, request, status);
     state.actualStatus = status;
+    if (fault === "none") return originalResponse(lifecycle, request, status);
     state.injected += 1;
     assert.equal(state.injected, 1);
     return fault === "lost-response" ? true : originalResponse(lifecycle, request, 503);
@@ -42,6 +44,7 @@ export function observedMutationFault(target, fault, initial = {}) {
       const observed = await port(request);
       if (
         request.method === "GET" ||
+        fault === "none" ||
         observed.kind !== "response" ||
         observed.status < 200 ||
         observed.status >= 300

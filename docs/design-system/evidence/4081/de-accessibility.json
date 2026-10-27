@@ -1,0 +1,1671 @@
+{
+  "schemaVersion": 1,
+  "epic": 4081,
+  "issue": 4086,
+  "evidenceClass": "production-composed-deterministic-browser",
+  "realJiraQualification": false,
+  "realModelQualification": false,
+  "nativeZoomQualification": false,
+  "screenReaderQualification": false,
+  "locale": "de",
+  "platform": "linux",
+  "architecture": "arm64",
+  "node": "v24.18.0",
+  "browser": "156.0.8078.4",
+  "gitHead": "6c63f33a0f7aa37335ac48a6a02ea59b2d1565d2",
+  "sourceHashes": {
+    "tests/e2e/jira-chat-4081.spec.ts": "b2827c40f40f39c35d0ad8e28cf52bb9c656d85b3f68b670cadb33834dde7102",
+    "tests/e2e/support/jira-chat-4081.ts": "9bf8f2a4cc7f4f0bfc0d3df8c0ecfdc335cc4a82232a68dd9118cfe81bf83965",
+    "tests/e2e/support/jira-chat-4081-accessibility.ts": "0d31ca2d4e8d84bb10024b33953b6aa59366c485e2f33a15c6aa3aaf5ec69541",
+    "tests/e2e/support/jira-chat-4081-server.mjs": "a3bec7fdc19fb90ff7a8395cba541a6f09fc1f6dbda9ee6e025aaeb978a97ee3",
+    "tests/e2e/support/jira-chat-4081-transport.mjs": "fd8fb501ce4119c2a37ceabdd7c97df7f61b13e21100f098019edbbcfd3e52b4",
+    "tests/e2e/config/playwright.jira-chat-4081.config.ts": "5106448f5cab263992662d0dd6c6ff635c7eec2727ad42033820719e9899eeef",
+    "packages/keiko-ui/src/app/components/desktop/JiraChatTools.tsx": "c6c85b967531d090eefa08dfc1717bb980a7d6db59073c7082bf834c58703220",
+    "packages/keiko-ui/src/app/components/desktop/JiraChatTools.module.css": "b822a25b12fd9a389f2db755a5c14cee4e37b9bfe9463f6d735363c4a5074b62",
+    "packages/keiko-ui/src/app/components/desktop/JiraWriteApproval.tsx": "724299f09d1a55dbc3c3eab005caacee7ede35b7035dcba9421b97ae2d031384",
+    "packages/keiko-ui/src/app/components/desktop/JiraChatConnection.tsx": "4a3683b4598a14ce9637107f7fbd9ff0b3ec1c76447126e64f1d27d677714b7e",
+    "packages/keiko-ui/src/app/components/desktop/JiraChatConnection.module.css": "af91f55ab4a1d0dbc20dab5aec8ac2793d9fc4c4ffc6d5d892b2708939e7b4ae",
+    "packages/keiko-ui/src/app/globals.css": "83c8add9e6649d843ea177a7279b1014bb046881af7afb781d3365f0d25248e2",
+    "packages/keiko-ui/src/lib/i18n-messages.optional.en.ts": "63aa8f01450d2e7c1e9e988bd9ccbbf2479e73507379e519b3dee64407e8f0c5",
+    "packages/keiko-ui/src/lib/i18n-messages.optional.de.ts": "8d3f2c79bdc769420226e87d920f8c685e620d0af93a7048caf0a6f0a95ee845"
+  },
+  "capturedAt": "2026-10-27T23:48:52.379Z",
+  "captures": [
+    {
+      "stage": "hub-create-context",
+      "mode": "dark",
+      "theme": "dark",
+      "contrast": false,
+      "forcedColors": false,
+      "reducedMotion": false,
+      "deviceScale": 1,
+      "layoutViewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "questionTargets": [],
+      "measurementTarget": "window-body",
+      "clientWidth": 718,
+      "scrollWidth": 718,
+      "horizontalOverflow": false,
+      "withinLayoutViewport": true,
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "summaryContrast": [
+        {
+          "ratio": 7.18,
+          "foreground": "#a9abaa",
+          "background": "#1d1f1d",
+          "minimum": "4.5:1"
+        }
+      ],
+      "screenshotRedaction": "content-colors-only-with-native-clipping",
+      "axeBeforeScreenshotRedaction": true,
+      "screenshotScope": "surface",
+      "axeScope": "document",
+      "axeViolations": [],
+      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-hub-create-context-dark.png",
+      "screenshotSha256": "6fc2f064de988dbd1d7acebd741259cbceb8dbb2f76dd0cfc789678268a7c57e"
+    },
+    {
+      "stage": "hub-create-form",
+      "mode": "dark",
+      "theme": "dark",
+      "contrast": false,
+      "forcedColors": false,
+      "reducedMotion": false,
+      "deviceScale": 1,
+      "layoutViewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "questionTargets": [],
+      "measurementTarget": "surface",
+      "clientWidth": 624,
+      "scrollWidth": 624,
+      "horizontalOverflow": false,
+      "withinLayoutViewport": true,
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "summaryContrast": [
+        {
+          "ratio": 7.18,
+          "foreground": "#a9abaa",
+          "background": "#1d1f1d",
+          "minimum": "4.5:1"
+        }
+      ],
+      "screenshotRedaction": "content-colors-only-with-native-clipping",
+      "axeBeforeScreenshotRedaction": true,
+      "screenshotScope": "surface",
+      "axeScope": "document",
+      "axeViolations": [],
+      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-hub-create-form-dark.png",
+      "screenshotSha256": "a2539ee86e4acf383dd26d8f7d7822c02510a0f2c2667849f88b6330f02dd155"
+    },
+    {
+      "stage": "hub-create-form",
+      "mode": "light",
+      "theme": "light",
+      "contrast": false,
+      "forcedColors": false,
+      "reducedMotion": false,
+      "deviceScale": 1,
+      "layoutViewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "questionTargets": [],
+      "measurementTarget": "surface",
+      "clientWidth": 624,
+      "scrollWidth": 624,
+      "horizontalOverflow": false,
+      "withinLayoutViewport": true,
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "summaryContrast": [
+        {
+          "ratio": 8.41,
+          "foreground": "#484f4b",
+          "background": "#ffffff",
+          "minimum": "4.5:1"
+        }
+      ],
+      "screenshotRedaction": "content-colors-only-with-native-clipping",
+      "axeBeforeScreenshotRedaction": true,
+      "screenshotScope": "surface",
+      "axeScope": "document",
+      "axeViolations": [],
+      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-hub-create-form-light.png",
+      "screenshotSha256": "c206294a1d404b5c262a8c71a0e02904ffd5c3709773b433e27b7ecaa7c873d5"
+    },
+    {
+      "stage": "hub-create-form",
+      "mode": "prefers-contrast",
+      "theme": "dark",
+      "contrast": true,
+      "forcedColors": false,
+      "reducedMotion": false,
+      "deviceScale": 1,
+      "layoutViewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "questionTargets": [],
+      "measurementTarget": "surface",
+      "clientWidth": 624,
+      "scrollWidth": 624,
+      "horizontalOverflow": false,
+      "withinLayoutViewport": true,
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "summaryContrast": [
+        {
+          "ratio": 12.98,
+          "foreground": "#d5d8d6",
+          "background": "#111312",
+          "minimum": "4.5:1"
+        }
+      ],
+      "screenshotRedaction": "content-colors-only-with-native-clipping",
+      "axeBeforeScreenshotRedaction": true,
+      "screenshotScope": "surface",
+      "axeScope": "document",
+      "axeViolations": [],
+      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-hub-create-form-prefers-contrast.png",
+      "screenshotSha256": "8b89a26db0d6d7b61e8ad72133c99ed9dca47b7b136671a30d056fed35b59003"
+    },
+    {
+      "stage": "hub-create-form",
+      "mode": "forced-colors",
+      "theme": "dark",
+      "contrast": false,
+      "forcedColors": true,
+      "reducedMotion": false,
+      "deviceScale": 1,
+      "layoutViewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "questionTargets": [],
+      "measurementTarget": "surface",
+      "clientWidth": 624,
+      "scrollWidth": 624,
+      "horizontalOverflow": false,
+      "withinLayoutViewport": true,
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "summaryContrast": [
+        {
+          "ratio": 9.09,
+          "foreground": "#a9abaa",
+          "background": "#000000",
+          "minimum": "4.5:1"
+        }
+      ],
+      "screenshotRedaction": "content-colors-only-with-native-clipping",
+      "axeBeforeScreenshotRedaction": true,
+      "screenshotScope": "surface",
+      "axeScope": "document",
+      "axeViolations": [],
+      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-hub-create-form-forced-colors.png",
+      "screenshotSha256": "b55b5b1633318801a7c010dd85ca5cf230f4f125a33786534d3148106fd1d827"
+    },
+    {
+      "stage": "hub-create-form",
+      "mode": "reduced-motion",
+      "theme": "dark",
+      "contrast": false,
+      "forcedColors": false,
+      "reducedMotion": true,
+      "deviceScale": 1,
+      "layoutViewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "questionTargets": [],
+      "measurementTarget": "surface",
+      "clientWidth": 624,
+      "scrollWidth": 624,
+      "horizontalOverflow": false,
+      "withinLayoutViewport": true,
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "summaryContrast": [
+        {
+          "ratio": 7.18,
+          "foreground": "#a9abaa",
+          "background": "#1d1f1d",
+          "minimum": "4.5:1"
+        }
+      ],
+      "screenshotRedaction": "content-colors-only-with-native-clipping",
+      "axeBeforeScreenshotRedaction": true,
+      "screenshotScope": "surface",
+      "axeScope": "document",
+      "axeViolations": [],
+      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-hub-create-form-reduced-motion.png",
+      "screenshotSha256": "900569d2e520034e6d237472ab0b0e7e73d214a8911116bf869f2eefe99db907"
+    },
+    {
+      "stage": "hub-create-form",
+      "mode": "narrow-390",
+      "theme": "light",
+      "contrast": false,
+      "forcedColors": false,
+      "reducedMotion": false,
+      "deviceScale": 1,
+      "layoutViewport": {
+        "width": 390,
+        "height": 1100
+      },
+      "questionTargets": [],
+      "measurementTarget": "surface",
+      "clientWidth": 206,
+      "scrollWidth": 206,
+      "horizontalOverflow": false,
+      "withinLayoutViewport": true,
+      "viewport": {
+        "width": 390,
+        "height": 1100
+      },
+      "summaryContrast": [],
+      "screenshotRedaction": "content-colors-only-with-native-clipping",
+      "axeBeforeScreenshotRedaction": true,
+      "screenshotScope": "surface",
+      "axeScope": "document",
+      "axeViolations": [],
+      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-hub-create-form-narrow-390.png",
+      "screenshotSha256": "5be1c69f9fe7a2572ffb979999fa0b825fd20296e7dd17c297da77e2256f13ee"
+    },
+    {
+      "stage": "hub-create-form",
+      "mode": "maximized",
+      "theme": "dark",
+      "contrast": false,
+      "forcedColors": false,
+      "reducedMotion": false,
+      "deviceScale": 1,
+      "layoutViewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "questionTargets": [],
+      "measurementTarget": "surface",
+      "clientWidth": 806,
+      "scrollWidth": 806,
+      "horizontalOverflow": false,
+      "withinLayoutViewport": true,
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "summaryContrast": [],
+      "screenshotRedaction": "content-colors-only-with-native-clipping",
+      "axeBeforeScreenshotRedaction": true,
+      "screenshotScope": "surface",
+      "axeScope": "document",
+      "axeViolations": [],
+      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-hub-create-form-maximized.png",
+      "screenshotSha256": "3cfa3024530af0ff4a0819447cef03c6915d5a55035b3cf6b1eb84d9d63f1a94"
+    },
+    {
+      "stage": "hub-create-form",
+      "mode": "viewport-device-scale-200-percent-emulation",
+      "theme": "light",
+      "contrast": false,
+      "forcedColors": false,
+      "reducedMotion": false,
+      "deviceScale": 2,
+      "layoutViewport": {
+        "width": 720,
+        "height": 550
+      },
+      "questionTargets": [],
+      "measurementTarget": "surface",
+      "clientWidth": 508,
+      "scrollWidth": 508,
+      "horizontalOverflow": false,
+      "withinLayoutViewport": true,
+      "viewport": {
+        "width": 720,
+        "height": 550
+      },
+      "summaryContrast": [],
+      "screenshotRedaction": "content-colors-only-with-native-clipping",
+      "axeBeforeScreenshotRedaction": true,
+      "screenshotScope": "viewport",
+      "zoomKeyboardControlCount": 5,
+      "zoomLastControlVisible": true,
+      "zoomControlsScreenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-hub-create-form-viewport-device-scale-200-percent-emulation-keyboard-controls.png",
+      "zoomControlsScreenshotSha256": "f551d9ec7587de2c1d32fa679232278709428a18164652f128121a003ae87cc0",
+      "axeScope": "document",
+      "axeViolations": [],
+      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-hub-create-form-viewport-device-scale-200-percent-emulation.png",
+      "screenshotSha256": "8dfb9a66f09af47c6dd6009fe04491323fcfaa0b7ade20eeb2ce81ca627b8c7d"
+    },
+    {
+      "stage": "confirmed-chat-binding",
+      "mode": "dark",
+      "theme": "dark",
+      "contrast": false,
+      "forcedColors": false,
+      "reducedMotion": false,
+      "deviceScale": 1,
+      "layoutViewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "questionTargets": [],
+      "measurementTarget": "surface",
+      "clientWidth": 448,
+      "scrollWidth": 448,
+      "horizontalOverflow": false,
+      "withinLayoutViewport": true,
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "summaryContrast": [
+        {
+          "ratio": 7.18,
+          "foreground": "#a9abaa",
+          "background": "#1d1f1d",
+          "minimum": "4.5:1"
+        },
+        {
+          "ratio": 7.18,
+          "foreground": "#a9abaa",
+          "background": "#1d1f1d",
+          "minimum": "4.5:1"
+        },
+        {
+          "ratio": 7.18,
+          "foreground": "#a9abaa",
+          "background": "#1d1f1d",
+          "minimum": "4.5:1"
+        }
+      ],
+      "screenshotRedaction": "content-colors-only-with-native-clipping",
+      "axeBeforeScreenshotRedaction": true,
+      "screenshotScope": "surface",
+      "axeScope": "document",
+      "axeViolations": [],
+      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-confirmed-chat-binding-dark.png",
+      "screenshotSha256": "a611267d19c9c52ac96eea4d89f459f9641ceaae8281e72ca443c7daca0a6a58"
+    },
+    {
+      "stage": "confirmed-chat-binding",
+      "mode": "light",
+      "theme": "light",
+      "contrast": false,
+      "forcedColors": false,
+      "reducedMotion": false,
+      "deviceScale": 1,
+      "layoutViewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "questionTargets": [],
+      "measurementTarget": "surface",
+      "clientWidth": 448,
+      "scrollWidth": 448,
+      "horizontalOverflow": false,
+      "withinLayoutViewport": true,
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "summaryContrast": [
+        {
+          "ratio": 8.41,
+          "foreground": "#484f4b",
+          "background": "#ffffff",
+          "minimum": "4.5:1"
+        },
+        {
+          "ratio": 8.41,
+          "foreground": "#484f4b",
+          "background": "#ffffff",
+          "minimum": "4.5:1"
+        },
+        {
+          "ratio": 8.41,
+          "foreground": "#484f4b",
+          "background": "#ffffff",
+          "minimum": "4.5:1"
+        }
+      ],
+      "screenshotRedaction": "content-colors-only-with-native-clipping",
+      "axeBeforeScreenshotRedaction": true,
+      "screenshotScope": "surface",
+      "axeScope": "document",
+      "axeViolations": [],
+      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-confirmed-chat-binding-light.png",
+      "screenshotSha256": "cdd022b0abcc2f7f3ac880ead5b0c7e367fd105e8bd508a808b18190a9129c0f"
+    },
+    {
+      "stage": "confirmed-chat-binding",
+      "mode": "prefers-contrast",
+      "theme": "dark",
+      "contrast": true,
+      "forcedColors": false,
+      "reducedMotion": false,
+      "deviceScale": 1,
+      "layoutViewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "questionTargets": [],
+      "measurementTarget": "surface",
+      "clientWidth": 448,
+      "scrollWidth": 448,
+      "horizontalOverflow": false,
+      "withinLayoutViewport": true,
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "summaryContrast": [
+        {
+          "ratio": 12.98,
+          "foreground": "#d5d8d6",
+          "background": "#111312",
+          "minimum": "4.5:1"
+        },
+        {
+          "ratio": 12.98,
+          "foreground": "#d5d8d6",
+          "background": "#111312",
+          "minimum": "4.5:1"
+        },
+        {
+          "ratio": 12.98,
+          "foreground": "#d5d8d6",
+          "background": "#111312",
+          "minimum": "4.5:1"
+        }
+      ],
+      "screenshotRedaction": "content-colors-only-with-native-clipping",
+      "axeBeforeScreenshotRedaction": true,
+      "screenshotScope": "surface",
+      "axeScope": "document",
+      "axeViolations": [],
+      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-confirmed-chat-binding-prefers-contrast.png",
+      "screenshotSha256": "8968276a1b7004eac85e0d594305f3263b6d69e778efa34ec6d9f2922202a6e0"
+    },
+    {
+      "stage": "confirmed-chat-binding",
+      "mode": "forced-colors",
+      "theme": "dark",
+      "contrast": false,
+      "forcedColors": true,
+      "reducedMotion": false,
+      "deviceScale": 1,
+      "layoutViewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "questionTargets": [],
+      "measurementTarget": "surface",
+      "clientWidth": 448,
+      "scrollWidth": 448,
+      "horizontalOverflow": false,
+      "withinLayoutViewport": true,
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "summaryContrast": [
+        {
+          "ratio": 9.09,
+          "foreground": "#a9abaa",
+          "background": "#000000",
+          "minimum": "4.5:1"
+        },
+        {
+          "ratio": 9.09,
+          "foreground": "#a9abaa",
+          "background": "#000000",
+          "minimum": "4.5:1"
+        },
+        {
+          "ratio": 9.09,
+          "foreground": "#a9abaa",
+          "background": "#000000",
+          "minimum": "4.5:1"
+        }
+      ],
+      "screenshotRedaction": "content-colors-only-with-native-clipping",
+      "axeBeforeScreenshotRedaction": true,
+      "screenshotScope": "surface",
+      "axeScope": "document",
+      "axeViolations": [],
+      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-confirmed-chat-binding-forced-colors.png",
+      "screenshotSha256": "eb2527e33725a03cf107833f9fac250239c24163a546b26c3c851d342ff6db33"
+    },
+    {
+      "stage": "confirmed-chat-binding",
+      "mode": "reduced-motion",
+      "theme": "dark",
+      "contrast": false,
+      "forcedColors": false,
+      "reducedMotion": true,
+      "deviceScale": 1,
+      "layoutViewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "questionTargets": [],
+      "measurementTarget": "surface",
+      "clientWidth": 448,
+      "scrollWidth": 448,
+      "horizontalOverflow": false,
+      "withinLayoutViewport": true,
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "summaryContrast": [
+        {
+          "ratio": 7.18,
+          "foreground": "#a9abaa",
+          "background": "#1d1f1d",
+          "minimum": "4.5:1"
+        },
+        {
+          "ratio": 7.18,
+          "foreground": "#a9abaa",
+          "background": "#1d1f1d",
+          "minimum": "4.5:1"
+        },
+        {
+          "ratio": 7.18,
+          "foreground": "#a9abaa",
+          "background": "#1d1f1d",
+          "minimum": "4.5:1"
+        }
+      ],
+      "screenshotRedaction": "content-colors-only-with-native-clipping",
+      "axeBeforeScreenshotRedaction": true,
+      "screenshotScope": "surface",
+      "axeScope": "document",
+      "axeViolations": [],
+      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-confirmed-chat-binding-reduced-motion.png",
+      "screenshotSha256": "129442b82a9af02349682d4b1a7201ab56db4d204c6bbfc89064177c4cf7cb35"
+    },
+    {
+      "stage": "confirmed-chat-binding",
+      "mode": "narrow-390",
+      "theme": "light",
+      "contrast": false,
+      "forcedColors": false,
+      "reducedMotion": false,
+      "deviceScale": 1,
+      "layoutViewport": {
+        "width": 390,
+        "height": 1100
+      },
+      "questionTargets": [],
+      "measurementTarget": "surface",
+      "clientWidth": 268,
+      "scrollWidth": 268,
+      "horizontalOverflow": false,
+      "withinLayoutViewport": true,
+      "viewport": {
+        "width": 390,
+        "height": 1100
+      },
+      "summaryContrast": [],
+      "screenshotRedaction": "content-colors-only-with-native-clipping",
+      "axeBeforeScreenshotRedaction": true,
+      "screenshotScope": "surface",
+      "axeScope": "document",
+      "axeViolations": [],
+      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-confirmed-chat-binding-narrow-390.png",
+      "screenshotSha256": "e964cb409d809a1be902868ce46d94f26a85e945fa18c6d65807bba18101d29d"
+    },
+    {
+      "stage": "confirmed-chat-binding",
+      "mode": "maximized",
+      "theme": "dark",
+      "contrast": false,
+      "forcedColors": false,
+      "reducedMotion": false,
+      "deviceScale": 1,
+      "layoutViewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "questionTargets": [],
+      "measurementTarget": "surface",
+      "clientWidth": 448,
+      "scrollWidth": 448,
+      "horizontalOverflow": false,
+      "withinLayoutViewport": true,
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "summaryContrast": [],
+      "screenshotRedaction": "content-colors-only-with-native-clipping",
+      "axeBeforeScreenshotRedaction": true,
+      "screenshotScope": "surface",
+      "axeScope": "document",
+      "axeViolations": [],
+      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-confirmed-chat-binding-maximized.png",
+      "screenshotSha256": "0f24cb09671181146c8ecb5984b1413dbb1b20070309a88e4599ae8eb912d1c8"
+    },
+    {
+      "stage": "confirmed-chat-binding",
+      "mode": "viewport-device-scale-200-percent-emulation",
+      "theme": "light",
+      "contrast": false,
+      "forcedColors": false,
+      "reducedMotion": false,
+      "deviceScale": 2,
+      "layoutViewport": {
+        "width": 720,
+        "height": 550
+      },
+      "questionTargets": [],
+      "measurementTarget": "surface",
+      "clientWidth": 448,
+      "scrollWidth": 448,
+      "horizontalOverflow": false,
+      "withinLayoutViewport": true,
+      "viewport": {
+        "width": 720,
+        "height": 550
+      },
+      "summaryContrast": [],
+      "screenshotRedaction": "content-colors-only-with-native-clipping",
+      "axeBeforeScreenshotRedaction": true,
+      "screenshotScope": "viewport",
+      "zoomKeyboardControlCount": 3,
+      "zoomLastControlVisible": true,
+      "zoomControlsScreenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-confirmed-chat-binding-viewport-device-scale-200-percent-emulation-keyboard-controls.png",
+      "zoomControlsScreenshotSha256": "1c2ff12a0e1078a4962b094011189d671c2ae67132e585b8eec8f2697584bed0",
+      "axeScope": "document",
+      "axeViolations": [],
+      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-confirmed-chat-binding-viewport-device-scale-200-percent-emulation.png",
+      "screenshotSha256": "631ca76ff713604ed804c993f2e194715ff7c8a4531e817cb3ebf9d58e4ba116"
+    },
+    {
+      "stage": "pending-read-consent",
+      "mode": "dark",
+      "theme": "dark",
+      "contrast": false,
+      "forcedColors": false,
+      "reducedMotion": false,
+      "deviceScale": 1,
+      "layoutViewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "questionTargets": [],
+      "measurementTarget": "surface",
+      "clientWidth": 660,
+      "scrollWidth": 660,
+      "horizontalOverflow": false,
+      "withinLayoutViewport": true,
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "summaryContrast": [],
+      "screenshotRedaction": "content-colors-only-with-native-clipping",
+      "axeBeforeScreenshotRedaction": true,
+      "screenshotScope": "surface",
+      "axeScope": "document",
+      "axeViolations": [],
+      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-pending-read-consent-dark.png",
+      "screenshotSha256": "a6cec49e6bed21817c7f3a4bcb2d2b480a0e24799273440975f4aa10133134b6"
+    },
+    {
+      "stage": "pending-read-consent",
+      "mode": "light",
+      "theme": "light",
+      "contrast": false,
+      "forcedColors": false,
+      "reducedMotion": false,
+      "deviceScale": 1,
+      "layoutViewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "questionTargets": [],
+      "measurementTarget": "surface",
+      "clientWidth": 660,
+      "scrollWidth": 660,
+      "horizontalOverflow": false,
+      "withinLayoutViewport": true,
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "summaryContrast": [],
+      "screenshotRedaction": "content-colors-only-with-native-clipping",
+      "axeBeforeScreenshotRedaction": true,
+      "screenshotScope": "surface",
+      "axeScope": "document",
+      "axeViolations": [],
+      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-pending-read-consent-light.png",
+      "screenshotSha256": "de67d025ab4995e1ded273e5b90f36b3f57320004600ebc8a62eb4ad97a9eb10"
+    },
+    {
+      "stage": "pending-read-consent",
+      "mode": "prefers-contrast",
+      "theme": "dark",
+      "contrast": true,
+      "forcedColors": false,
+      "reducedMotion": false,
+      "deviceScale": 1,
+      "layoutViewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "questionTargets": [],
+      "measurementTarget": "surface",
+      "clientWidth": 660,
+      "scrollWidth": 660,
+      "horizontalOverflow": false,
+      "withinLayoutViewport": true,
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "summaryContrast": [],
+      "screenshotRedaction": "content-colors-only-with-native-clipping",
+      "axeBeforeScreenshotRedaction": true,
+      "screenshotScope": "surface",
+      "axeScope": "document",
+      "axeViolations": [],
+      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-pending-read-consent-prefers-contrast.png",
+      "screenshotSha256": "3a77dbbdd4a84d7b3d451230fe73e8c953b8c5808baed65892e11f4e9d338319"
+    },
+    {
+      "stage": "pending-read-consent",
+      "mode": "forced-colors",
+      "theme": "dark",
+      "contrast": false,
+      "forcedColors": true,
+      "reducedMotion": false,
+      "deviceScale": 1,
+      "layoutViewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "questionTargets": [],
+      "measurementTarget": "surface",
+      "clientWidth": 660,
+      "scrollWidth": 660,
+      "horizontalOverflow": false,
+      "withinLayoutViewport": true,
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "summaryContrast": [],
+      "screenshotRedaction": "content-colors-only-with-native-clipping",
+      "axeBeforeScreenshotRedaction": true,
+      "screenshotScope": "surface",
+      "axeScope": "document",
+      "axeViolations": [],
+      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-pending-read-consent-forced-colors.png",
+      "screenshotSha256": "52b00e88b07469c33382adf247800756a080a4ab6242e615ba7dbc4806d67693"
+    },
+    {
+      "stage": "pending-read-consent",
+      "mode": "reduced-motion",
+      "theme": "dark",
+      "contrast": false,
+      "forcedColors": false,
+      "reducedMotion": true,
+      "deviceScale": 1,
+      "layoutViewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "questionTargets": [],
+      "measurementTarget": "surface",
+      "clientWidth": 660,
+      "scrollWidth": 660,
+      "horizontalOverflow": false,
+      "withinLayoutViewport": true,
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "summaryContrast": [],
+      "screenshotRedaction": "content-colors-only-with-native-clipping",
+      "axeBeforeScreenshotRedaction": true,
+      "screenshotScope": "surface",
+      "axeScope": "document",
+      "axeViolations": [],
+      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-pending-read-consent-reduced-motion.png",
+      "screenshotSha256": "b75d49217fa9043e999767c8279447a8b7a2843c78c3b6d15c3f2d4bd38fd261"
+    },
+    {
+      "stage": "pending-read-consent",
+      "mode": "narrow-390",
+      "theme": "light",
+      "contrast": false,
+      "forcedColors": false,
+      "reducedMotion": false,
+      "deviceScale": 1,
+      "layoutViewport": {
+        "width": 390,
+        "height": 1100
+      },
+      "questionTargets": [],
+      "measurementTarget": "surface",
+      "clientWidth": 217,
+      "scrollWidth": 217,
+      "horizontalOverflow": false,
+      "withinLayoutViewport": true,
+      "viewport": {
+        "width": 390,
+        "height": 1100
+      },
+      "summaryContrast": [],
+      "screenshotRedaction": "content-colors-only-with-native-clipping",
+      "axeBeforeScreenshotRedaction": true,
+      "screenshotScope": "surface",
+      "axeScope": "document",
+      "axeViolations": [],
+      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-pending-read-consent-narrow-390.png",
+      "screenshotSha256": "a1105f3929eb5bcba3c5545b8c001cccbb493e4769380901ac1502e80b9dbf83"
+    },
+    {
+      "stage": "pending-read-consent",
+      "mode": "maximized",
+      "theme": "dark",
+      "contrast": false,
+      "forcedColors": false,
+      "reducedMotion": false,
+      "deviceScale": 1,
+      "layoutViewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "questionTargets": [],
+      "measurementTarget": "surface",
+      "clientWidth": 893,
+      "scrollWidth": 893,
+      "horizontalOverflow": false,
+      "withinLayoutViewport": true,
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "summaryContrast": [],
+      "screenshotRedaction": "content-colors-only-with-native-clipping",
+      "axeBeforeScreenshotRedaction": true,
+      "screenshotScope": "surface",
+      "axeScope": "document",
+      "axeViolations": [],
+      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-pending-read-consent-maximized.png",
+      "screenshotSha256": "e756f8838c6b493581b145920281481e86d14e8597cf2dfd66f33871fe087e39"
+    },
+    {
+      "stage": "pending-read-consent",
+      "mode": "viewport-device-scale-200-percent-emulation",
+      "theme": "light",
+      "contrast": false,
+      "forcedColors": false,
+      "reducedMotion": false,
+      "deviceScale": 2,
+      "layoutViewport": {
+        "width": 720,
+        "height": 550
+      },
+      "questionTargets": [],
+      "measurementTarget": "surface",
+      "clientWidth": 473,
+      "scrollWidth": 473,
+      "horizontalOverflow": false,
+      "withinLayoutViewport": true,
+      "viewport": {
+        "width": 720,
+        "height": 550
+      },
+      "summaryContrast": [],
+      "screenshotRedaction": "content-colors-only-with-native-clipping",
+      "axeBeforeScreenshotRedaction": true,
+      "screenshotScope": "viewport",
+      "zoomKeyboardControlCount": 2,
+      "zoomLastControlVisible": true,
+      "zoomControlsScreenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-pending-read-consent-viewport-device-scale-200-percent-emulation-keyboard-controls.png",
+      "zoomControlsScreenshotSha256": "38bb9e27fc7e15df2558c6dbd76fd7cca9abc88510ed0e3460093b4166d26ff2",
+      "axeScope": "document",
+      "axeViolations": [],
+      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-pending-read-consent-viewport-device-scale-200-percent-emulation.png",
+      "screenshotSha256": "07f66f70eb1b87793d3097c23e8fc42e06b0006033883e205b87d9c22b703de6"
+    },
+    {
+      "stage": "pending-exact-write-approval",
+      "mode": "dark",
+      "theme": "dark",
+      "contrast": false,
+      "forcedColors": false,
+      "reducedMotion": false,
+      "deviceScale": 1,
+      "layoutViewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "questionTargets": [
+        {
+          "width": 48,
+          "height": 24,
+          "centerX": 132,
+          "centerY": 199
+        },
+        {
+          "width": 48,
+          "height": 24,
+          "centerX": 132,
+          "centerY": 225
+        }
+      ],
+      "measurementTarget": "surface",
+      "clientWidth": 622,
+      "scrollWidth": 622,
+      "horizontalOverflow": false,
+      "withinLayoutViewport": true,
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "summaryContrast": [],
+      "screenshotRedaction": "content-colors-only-with-native-clipping",
+      "axeBeforeScreenshotRedaction": true,
+      "screenshotScope": "surface",
+      "axeScope": "document",
+      "axeViolations": [],
+      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-pending-exact-write-approval-dark.png",
+      "screenshotSha256": "99333dc428fe4f2e51967b8c9f4a913dd9248e1d5114f897f635ceb51f6945d2"
+    },
+    {
+      "stage": "pending-exact-write-approval",
+      "mode": "light",
+      "theme": "light",
+      "contrast": false,
+      "forcedColors": false,
+      "reducedMotion": false,
+      "deviceScale": 1,
+      "layoutViewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "questionTargets": [
+        {
+          "width": 48,
+          "height": 24,
+          "centerX": 132,
+          "centerY": 199
+        },
+        {
+          "width": 48,
+          "height": 24,
+          "centerX": 132,
+          "centerY": 225
+        }
+      ],
+      "measurementTarget": "surface",
+      "clientWidth": 622,
+      "scrollWidth": 622,
+      "horizontalOverflow": false,
+      "withinLayoutViewport": true,
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "summaryContrast": [],
+      "screenshotRedaction": "content-colors-only-with-native-clipping",
+      "axeBeforeScreenshotRedaction": true,
+      "screenshotScope": "surface",
+      "axeScope": "document",
+      "axeViolations": [],
+      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-pending-exact-write-approval-light.png",
+      "screenshotSha256": "15e5d4d2d6e0dca3dd658f1c62068eb78799632d5eb2fd11d5015c52c9ff51ae"
+    },
+    {
+      "stage": "pending-exact-write-approval",
+      "mode": "prefers-contrast",
+      "theme": "dark",
+      "contrast": true,
+      "forcedColors": false,
+      "reducedMotion": false,
+      "deviceScale": 1,
+      "layoutViewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "questionTargets": [
+        {
+          "width": 48,
+          "height": 24,
+          "centerX": 132,
+          "centerY": 199
+        },
+        {
+          "width": 48,
+          "height": 24,
+          "centerX": 132,
+          "centerY": 225
+        }
+      ],
+      "measurementTarget": "surface",
+      "clientWidth": 622,
+      "scrollWidth": 622,
+      "horizontalOverflow": false,
+      "withinLayoutViewport": true,
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "summaryContrast": [],
+      "screenshotRedaction": "content-colors-only-with-native-clipping",
+      "axeBeforeScreenshotRedaction": true,
+      "screenshotScope": "surface",
+      "axeScope": "document",
+      "axeViolations": [],
+      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-pending-exact-write-approval-prefers-contrast.png",
+      "screenshotSha256": "4084a51675b71dea369a8376990f96c7ab434b80b3453d2bb1d774a705c70604"
+    },
+    {
+      "stage": "pending-exact-write-approval",
+      "mode": "forced-colors",
+      "theme": "dark",
+      "contrast": false,
+      "forcedColors": true,
+      "reducedMotion": false,
+      "deviceScale": 1,
+      "layoutViewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "questionTargets": [
+        {
+          "width": 48,
+          "height": 24,
+          "centerX": 132,
+          "centerY": 199
+        },
+        {
+          "width": 48,
+          "height": 24,
+          "centerX": 132,
+          "centerY": 225
+        }
+      ],
+      "measurementTarget": "surface",
+      "clientWidth": 622,
+      "scrollWidth": 622,
+      "horizontalOverflow": false,
+      "withinLayoutViewport": true,
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "summaryContrast": [],
+      "screenshotRedaction": "content-colors-only-with-native-clipping",
+      "axeBeforeScreenshotRedaction": true,
+      "screenshotScope": "surface",
+      "axeScope": "document",
+      "axeViolations": [],
+      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-pending-exact-write-approval-forced-colors.png",
+      "screenshotSha256": "a8a07f7006901d956981230a20e5f5276ade1f537693a1963baf3112a3bcc011"
+    },
+    {
+      "stage": "pending-exact-write-approval",
+      "mode": "reduced-motion",
+      "theme": "dark",
+      "contrast": false,
+      "forcedColors": false,
+      "reducedMotion": true,
+      "deviceScale": 1,
+      "layoutViewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "questionTargets": [
+        {
+          "width": 48,
+          "height": 24,
+          "centerX": 132,
+          "centerY": 199
+        },
+        {
+          "width": 48,
+          "height": 24,
+          "centerX": 132,
+          "centerY": 225
+        }
+      ],
+      "measurementTarget": "surface",
+      "clientWidth": 622,
+      "scrollWidth": 622,
+      "horizontalOverflow": false,
+      "withinLayoutViewport": true,
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "summaryContrast": [],
+      "screenshotRedaction": "content-colors-only-with-native-clipping",
+      "axeBeforeScreenshotRedaction": true,
+      "screenshotScope": "surface",
+      "axeScope": "document",
+      "axeViolations": [],
+      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-pending-exact-write-approval-reduced-motion.png",
+      "screenshotSha256": "a63741b0767dc85c31baad082152ed6d4906abdbc8bea8b86f152f1a87be8b35"
+    },
+    {
+      "stage": "pending-exact-write-approval",
+      "mode": "narrow-390",
+      "theme": "light",
+      "contrast": false,
+      "forcedColors": false,
+      "reducedMotion": false,
+      "deviceScale": 1,
+      "layoutViewport": {
+        "width": 390,
+        "height": 1100
+      },
+      "questionTargets": [
+        {
+          "width": 0,
+          "height": 0,
+          "centerX": 0,
+          "centerY": 0
+        },
+        {
+          "width": 0,
+          "height": 0,
+          "centerX": 0,
+          "centerY": 0
+        }
+      ],
+      "measurementTarget": "surface",
+      "clientWidth": 217,
+      "scrollWidth": 217,
+      "horizontalOverflow": false,
+      "withinLayoutViewport": true,
+      "viewport": {
+        "width": 390,
+        "height": 1100
+      },
+      "summaryContrast": [],
+      "screenshotRedaction": "content-colors-only-with-native-clipping",
+      "axeBeforeScreenshotRedaction": true,
+      "screenshotScope": "surface",
+      "axeScope": "document",
+      "axeViolations": [],
+      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-pending-exact-write-approval-narrow-390.png",
+      "screenshotSha256": "14ffbb8ee2556ce3f7e2c15dbb72c8406578326cb5ca348a55c2e7a4620f5418"
+    },
+    {
+      "stage": "pending-exact-write-approval",
+      "mode": "maximized",
+      "theme": "dark",
+      "contrast": false,
+      "forcedColors": false,
+      "reducedMotion": false,
+      "deviceScale": 1,
+      "layoutViewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "questionTargets": [
+        {
+          "width": 48,
+          "height": 24,
+          "centerX": 100,
+          "centerY": 169
+        },
+        {
+          "width": 48,
+          "height": 24,
+          "centerX": 100,
+          "centerY": 195
+        }
+      ],
+      "measurementTarget": "surface",
+      "clientWidth": 855,
+      "scrollWidth": 855,
+      "horizontalOverflow": false,
+      "withinLayoutViewport": true,
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "summaryContrast": [],
+      "screenshotRedaction": "content-colors-only-with-native-clipping",
+      "axeBeforeScreenshotRedaction": true,
+      "screenshotScope": "surface",
+      "axeScope": "document",
+      "axeViolations": [],
+      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-pending-exact-write-approval-maximized.png",
+      "screenshotSha256": "af96c4c906b71bfdc5231261479bd0200f7cc571f7329dd2320424b193a0d7d2"
+    },
+    {
+      "stage": "pending-exact-write-approval",
+      "mode": "viewport-device-scale-200-percent-emulation",
+      "theme": "light",
+      "contrast": false,
+      "forcedColors": false,
+      "reducedMotion": false,
+      "deviceScale": 2,
+      "layoutViewport": {
+        "width": 720,
+        "height": 550
+      },
+      "questionTargets": [
+        {
+          "width": 24,
+          "height": 24,
+          "centerX": 84,
+          "centerY": 236
+        },
+        {
+          "width": 24,
+          "height": 24,
+          "centerX": 84,
+          "centerY": 262
+        }
+      ],
+      "measurementTarget": "surface",
+      "clientWidth": 452,
+      "scrollWidth": 452,
+      "horizontalOverflow": false,
+      "withinLayoutViewport": true,
+      "viewport": {
+        "width": 720,
+        "height": 550
+      },
+      "summaryContrast": [],
+      "screenshotRedaction": "content-colors-only-with-native-clipping",
+      "axeBeforeScreenshotRedaction": true,
+      "screenshotScope": "viewport",
+      "zoomKeyboardControlCount": 3,
+      "zoomLastControlVisible": true,
+      "zoomControlsScreenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-pending-exact-write-approval-viewport-device-scale-200-percent-emulation-keyboard-controls.png",
+      "zoomControlsScreenshotSha256": "8587f037afec2621f5a8d8bdcbe0ec43b957d144d6f7d23bd7c88e967188682c",
+      "axeScope": "document",
+      "axeViolations": [],
+      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-pending-exact-write-approval-viewport-device-scale-200-percent-emulation.png",
+      "screenshotSha256": "9f7b3112c7d5c0fd9fcf22f22a35cee5b7c18747236362df15f890fdb1689b8e"
+    },
+    {
+      "stage": "settled-jira-result",
+      "mode": "dark",
+      "theme": "dark",
+      "contrast": false,
+      "forcedColors": false,
+      "reducedMotion": false,
+      "deviceScale": 1,
+      "layoutViewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "questionTargets": [
+        {
+          "width": 48,
+          "height": 24,
+          "centerX": 132,
+          "centerY": 199
+        },
+        {
+          "width": 48,
+          "height": 24,
+          "centerX": 132,
+          "centerY": 225
+        }
+      ],
+      "measurementTarget": "surface",
+      "clientWidth": 622,
+      "scrollWidth": 622,
+      "horizontalOverflow": false,
+      "withinLayoutViewport": true,
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "summaryContrast": [],
+      "screenshotRedaction": "content-colors-only-with-native-clipping",
+      "axeBeforeScreenshotRedaction": true,
+      "screenshotScope": "surface",
+      "axeScope": "document",
+      "axeViolations": [],
+      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-settled-jira-result-dark.png",
+      "screenshotSha256": "0bf1689491e74a2754dd04648f9fd25ac2b1728ea0be012dcf3663d874c00fc4"
+    },
+    {
+      "stage": "settled-jira-result",
+      "mode": "light",
+      "theme": "light",
+      "contrast": false,
+      "forcedColors": false,
+      "reducedMotion": false,
+      "deviceScale": 1,
+      "layoutViewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "questionTargets": [
+        {
+          "width": 48,
+          "height": 24,
+          "centerX": 132,
+          "centerY": 199
+        },
+        {
+          "width": 48,
+          "height": 24,
+          "centerX": 132,
+          "centerY": 225
+        }
+      ],
+      "measurementTarget": "surface",
+      "clientWidth": 622,
+      "scrollWidth": 622,
+      "horizontalOverflow": false,
+      "withinLayoutViewport": true,
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "summaryContrast": [],
+      "screenshotRedaction": "content-colors-only-with-native-clipping",
+      "axeBeforeScreenshotRedaction": true,
+      "screenshotScope": "surface",
+      "axeScope": "document",
+      "axeViolations": [],
+      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-settled-jira-result-light.png",
+      "screenshotSha256": "0b3e07258c59042cedb637c9a41b41db9676f80f0a93db7a50c9689e50972bfd"
+    },
+    {
+      "stage": "settled-jira-result",
+      "mode": "prefers-contrast",
+      "theme": "dark",
+      "contrast": true,
+      "forcedColors": false,
+      "reducedMotion": false,
+      "deviceScale": 1,
+      "layoutViewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "questionTargets": [
+        {
+          "width": 48,
+          "height": 24,
+          "centerX": 132,
+          "centerY": 199
+        },
+        {
+          "width": 48,
+          "height": 24,
+          "centerX": 132,
+          "centerY": 225
+        }
+      ],
+      "measurementTarget": "surface",
+      "clientWidth": 622,
+      "scrollWidth": 622,
+      "horizontalOverflow": false,
+      "withinLayoutViewport": true,
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "summaryContrast": [],
+      "screenshotRedaction": "content-colors-only-with-native-clipping",
+      "axeBeforeScreenshotRedaction": true,
+      "screenshotScope": "surface",
+      "axeScope": "document",
+      "axeViolations": [],
+      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-settled-jira-result-prefers-contrast.png",
+      "screenshotSha256": "74d15785784f0b6811ed975eac74bad06e863bc4783832cbc0d1f8d47e154603"
+    },
+    {
+      "stage": "settled-jira-result",
+      "mode": "forced-colors",
+      "theme": "dark",
+      "contrast": false,
+      "forcedColors": true,
+      "reducedMotion": false,
+      "deviceScale": 1,
+      "layoutViewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "questionTargets": [
+        {
+          "width": 48,
+          "height": 24,
+          "centerX": 132,
+          "centerY": 199
+        },
+        {
+          "width": 48,
+          "height": 24,
+          "centerX": 132,
+          "centerY": 225
+        }
+      ],
+      "measurementTarget": "surface",
+      "clientWidth": 622,
+      "scrollWidth": 622,
+      "horizontalOverflow": false,
+      "withinLayoutViewport": true,
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "summaryContrast": [],
+      "screenshotRedaction": "content-colors-only-with-native-clipping",
+      "axeBeforeScreenshotRedaction": true,
+      "screenshotScope": "surface",
+      "axeScope": "document",
+      "axeViolations": [],
+      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-settled-jira-result-forced-colors.png",
+      "screenshotSha256": "0d6057560250ffb583e8e99f5feaf0326f27a55dbfd3958b8a90124911d7f6ac"
+    },
+    {
+      "stage": "settled-jira-result",
+      "mode": "reduced-motion",
+      "theme": "dark",
+      "contrast": false,
+      "forcedColors": false,
+      "reducedMotion": true,
+      "deviceScale": 1,
+      "layoutViewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "questionTargets": [
+        {
+          "width": 48,
+          "height": 24,
+          "centerX": 132,
+          "centerY": 199
+        },
+        {
+          "width": 48,
+          "height": 24,
+          "centerX": 132,
+          "centerY": 225
+        }
+      ],
+      "measurementTarget": "surface",
+      "clientWidth": 622,
+      "scrollWidth": 622,
+      "horizontalOverflow": false,
+      "withinLayoutViewport": true,
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "summaryContrast": [],
+      "screenshotRedaction": "content-colors-only-with-native-clipping",
+      "axeBeforeScreenshotRedaction": true,
+      "screenshotScope": "surface",
+      "axeScope": "document",
+      "axeViolations": [],
+      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-settled-jira-result-reduced-motion.png",
+      "screenshotSha256": "0bf1689491e74a2754dd04648f9fd25ac2b1728ea0be012dcf3663d874c00fc4"
+    },
+    {
+      "stage": "settled-jira-result",
+      "mode": "narrow-390",
+      "theme": "light",
+      "contrast": false,
+      "forcedColors": false,
+      "reducedMotion": false,
+      "deviceScale": 1,
+      "layoutViewport": {
+        "width": 390,
+        "height": 1100
+      },
+      "questionTargets": [
+        {
+          "width": 0,
+          "height": 0,
+          "centerX": 0,
+          "centerY": 0
+        },
+        {
+          "width": 0,
+          "height": 0,
+          "centerX": 0,
+          "centerY": 0
+        }
+      ],
+      "measurementTarget": "surface",
+      "clientWidth": 217,
+      "scrollWidth": 217,
+      "horizontalOverflow": false,
+      "withinLayoutViewport": true,
+      "viewport": {
+        "width": 390,
+        "height": 1100
+      },
+      "summaryContrast": [],
+      "screenshotRedaction": "content-colors-only-with-native-clipping",
+      "axeBeforeScreenshotRedaction": true,
+      "screenshotScope": "surface",
+      "axeScope": "document",
+      "axeViolations": [],
+      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-settled-jira-result-narrow-390.png",
+      "screenshotSha256": "a16236ddaa8bd0e8eedcc91053c05324ac3501babeb3848766b73a43785aed28"
+    },
+    {
+      "stage": "settled-jira-result",
+      "mode": "maximized",
+      "theme": "dark",
+      "contrast": false,
+      "forcedColors": false,
+      "reducedMotion": false,
+      "deviceScale": 1,
+      "layoutViewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "questionTargets": [
+        {
+          "width": 48,
+          "height": 24,
+          "centerX": 100,
+          "centerY": 169
+        },
+        {
+          "width": 48,
+          "height": 24,
+          "centerX": 100,
+          "centerY": 195
+        }
+      ],
+      "measurementTarget": "surface",
+      "clientWidth": 855,
+      "scrollWidth": 855,
+      "horizontalOverflow": false,
+      "withinLayoutViewport": true,
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "summaryContrast": [],
+      "screenshotRedaction": "content-colors-only-with-native-clipping",
+      "axeBeforeScreenshotRedaction": true,
+      "screenshotScope": "surface",
+      "axeScope": "document",
+      "axeViolations": [],
+      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-settled-jira-result-maximized.png",
+      "screenshotSha256": "66313bb43b4ac5b2bd2a1dfd2632a157530a7277ae46108d9f332ee58598b797"
+    },
+    {
+      "stage": "settled-jira-result",
+      "mode": "viewport-device-scale-200-percent-emulation",
+      "theme": "light",
+      "contrast": false,
+      "forcedColors": false,
+      "reducedMotion": false,
+      "deviceScale": 2,
+      "layoutViewport": {
+        "width": 720,
+        "height": 550
+      },
+      "questionTargets": [
+        {
+          "width": 24,
+          "height": 24,
+          "centerX": 84,
+          "centerY": 236
+        },
+        {
+          "width": 24,
+          "height": 24,
+          "centerX": 84,
+          "centerY": 262
+        }
+      ],
+      "measurementTarget": "surface",
+      "clientWidth": 452,
+      "scrollWidth": 452,
+      "horizontalOverflow": false,
+      "withinLayoutViewport": true,
+      "viewport": {
+        "width": 720,
+        "height": 550
+      },
+      "summaryContrast": [],
+      "screenshotRedaction": "content-colors-only-with-native-clipping",
+      "axeBeforeScreenshotRedaction": true,
+      "screenshotScope": "viewport",
+      "zoomKeyboardControlCount": 1,
+      "zoomLastControlVisible": true,
+      "zoomControlsScreenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-settled-jira-result-viewport-device-scale-200-percent-emulation-keyboard-controls.png",
+      "zoomControlsScreenshotSha256": "f6f88eb52258f17534440851e5b14a64e67776f002f2b2c02ace6fbf1cc552f2",
+      "axeScope": "document",
+      "axeViolations": [],
+      "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/de-settled-jira-result-viewport-device-scale-200-percent-emulation.png",
+      "screenshotSha256": "adb4ca04575bc1c588a9d6373aec564bc7f9cf9eeb7862e4805d670270928363"
+    }
+  ]
+}

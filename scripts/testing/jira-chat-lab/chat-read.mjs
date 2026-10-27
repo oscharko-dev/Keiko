@@ -19,6 +19,7 @@ import {
 import {
   parseGatewayConfig,
   createDefaultChatCapability,
+  createDefaultEmbeddingCapability,
   toolCallingConfigurationFingerprint,
 } from "../../../packages/keiko-model-gateway/dist/index.js";
 import { probeGatewayToolCalling } from "../../../packages/keiko-server/dist/gateway-tool-calling-probe.js";
@@ -76,15 +77,41 @@ export async function request(origin, cookie, name, path, body, method = "POST",
 export async function jsonRequest(origin, cookie, name, path, body, method, signal) {
   return (await request(origin, cookie, name, path, body, method, signal)).json();
 }
-async function configureModel(deps, modelId, session, configPath) {
+function assertLiveModelOptions(modelId, modelRetries, embeddingModelId) {
+  if (modelRetries !== 0 && modelRetries !== 1)
+    throw new TypeError("Live model retries must be zero or one");
+  if (
+    embeddingModelId !== undefined &&
+    (typeof embeddingModelId !== "string" ||
+      embeddingModelId.trim() !== embeddingModelId ||
+      !embeddingModelId ||
+      embeddingModelId === modelId)
+  )
+    throw new TypeError("A distinct nonempty embedding model is required");
+}
+function liveModelProviders(modelId, { modelRetries = 0, embeddingModelId } = {}) {
+  assertLiveModelOptions(modelId, modelRetries, embeddingModelId);
   const provider = {
     modelId,
     baseUrl: "http://127.0.0.1:11434/v1",
     apiKey: "ollama-local",
     timeoutMs: 45000,
-    maxRetries: 0,
+    maxRetries: modelRetries,
     retryBaseDelayMs: 1,
   };
+  return {
+    provider,
+    additionalProviders:
+      embeddingModelId === undefined ? [] : [{ ...provider, modelId: embeddingModelId }],
+    embeddingCapabilities:
+      embeddingModelId === undefined ? [] : [createDefaultEmbeddingCapability(embeddingModelId)],
+  };
+}
+export async function configureModel(deps, modelId, session, configPath, options) {
+  const { provider, additionalProviders, embeddingCapabilities } = liveModelProviders(
+    modelId,
+    options,
+  );
   const capability = {
     ...createDefaultChatCapability(modelId),
     contextWindow: 32768,
@@ -93,8 +120,8 @@ async function configureModel(deps, modelId, session, configPath) {
     toolCalling: true,
   };
   const raw = {
-    providers: [provider],
-    capabilities: [capability],
+    providers: [provider, ...additionalProviders],
+    capabilities: [capability, ...embeddingCapabilities],
     atlassian: {
       privateTargets: [{ baseUrl: "https://127.0.0.1:18443", addressClass: "loopback" }],
     },
@@ -108,7 +135,10 @@ async function configureModel(deps, modelId, session, configPath) {
     probe: "gateway-tool-calling-v1",
     configurationFingerprint: toolCallingConfigurationFingerprint(provider),
   };
-  const configured = { ...raw, capabilities: [{ ...capability, toolCallingVerification: proof }] };
+  const configured = {
+    ...raw,
+    capabilities: [{ ...capability, toolCallingVerification: proof }, ...embeddingCapabilities],
+  };
   writeFileSync(configPath, JSON.stringify(configured), { mode: 0o600 });
   deps.gatewayConfig.set(parseGatewayConfig(configured), true);
   deps.gatewayConfig.recordVerifiedCapability(
@@ -369,6 +399,12 @@ function decorateCredentialTransport(deps, decorate) {
   credentials.httpBodyPortFactory = decorate(credentials.httpBodyPortFactory.bind(credentials));
 }
 
+function createLiveUiServer({ port, deps, root, browser, configureServer }) {
+  const server = createUiServer({ port, handlerDeps: deps, ...uiSurface(root, browser) });
+  configureServer?.({ server, store: deps.store });
+  return server;
+}
+
 /** Reuse the paired production server, vault, real model probe and ordinary Chat routes. */
 export async function withLiveChat({
   session,
@@ -379,6 +415,9 @@ export async function withLiveChat({
   browser = false,
   restoreState,
   decorateAtlassianHttp,
+  configureServer,
+  modelRetries,
+  embeddingModelId,
 }) {
   if (!modelId) throw new TypeError("A locally installed model is required");
   await requireLicense(session);
@@ -391,16 +430,15 @@ export async function withLiveChat({
   decorateCredentialTransport(deps, decorateAtlassianHttp);
   let server;
   try {
-    await configureModel(deps, modelId, session, join(root, "keiko.config.json"));
+    await configureModel(deps, modelId, session, join(root, "keiko.config.json"), {
+      modelRetries,
+      embeddingModelId,
+    });
     if (!deps.store.listProjects().some((project) => project.path === projectPath))
       deps.store.createProject(projectPath);
     const port = await unusedPort();
     const origin = `http://127.0.0.1:${port}`;
-    server = createUiServer({
-      port,
-      handlerDeps: deps,
-      ...uiSurface(root, browser),
-    });
+    server = createLiveUiServer({ port, deps, root, browser, configureServer });
     await new Promise((resolve) => server.listen(port, "127.0.0.1", resolve));
     const cookie = await pairedCookie(origin, secret);
     await run({ origin, cookie, session, projectPath, modelId, secret, root });

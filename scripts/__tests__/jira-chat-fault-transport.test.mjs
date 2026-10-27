@@ -33,6 +33,20 @@ function fixture(fault, responseStatus = 204) {
 }
 
 describe("real-port mutation observation fault", () => {
+  it("guards a confirmed effect while preserving the real Jira acknowledgement without injection", async () => {
+    const f = fixture("none");
+    expect(await f.port(mutation)).toMatchObject({ kind: "response", status: 204 });
+    expect(f.onResponse).toHaveBeenCalledWith(mutation, 204);
+    expect(f.observer.snapshot()).toEqual({
+      attempts: 1,
+      forwarded: 1,
+      injected: 0,
+      actualStatus: 204,
+    });
+    await expect(f.port(mutation)).rejects.toThrow("repeated mutation");
+    expect(f.effects).toHaveLength(1);
+  });
+
   it.each(["lost-response", "committed-503"])(
     "keeps admission and one real effect for %s",
     async (fault) => {

@@ -83,7 +83,7 @@ const projectPath = join(directory, "workspace");
 mkdirSync(projectPath, { recursive: true });
 deps.store.createProject(projectPath);
 const chats = Object.fromEntries(
-  ["approval", "revocation", "unavailable"].map((name) => [
+  ["approval", "revocation", "unavailable", "accessibility-en", "accessibility-de"].map((name) => [
     name,
     deps.store.createChat(
       projectPath,

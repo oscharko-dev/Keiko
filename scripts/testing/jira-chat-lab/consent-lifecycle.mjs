@@ -123,6 +123,13 @@ export function lifecycleTurnReceipt(group, observed, intent, dispatch) {
   };
 }
 
+export function requireLifecycleModelConfig(context, group) {
+  assert.equal(group.modelRetries, 1);
+  const configured = JSON.parse(readPrivateFile(join(context.root, "keiko.config.json")));
+  const provider = configured.providers.find((entry) => entry.modelId === context.modelId);
+  assert.equal(provider?.maxRetries, group.modelRetries);
+}
+
 function turnIntent(group, id, expectedReadGrants, write, before) {
   return {
     id,
@@ -149,6 +156,7 @@ function captureReadGrant(group, observed, chat) {
   group.readGrant = grant;
 }
 async function turn(context, group, observer, chat, id, expectedReadGrants, write = false) {
+  requireLifecycleModelConfig(context, group);
   await requireLicense(context.session);
   const before = await commentState(context.session, group.key, group.marker);
   assert.equal(before.matches, 0);
@@ -253,6 +261,7 @@ async function resume(session, modelId, pendingPath) {
   await withLiveChat({
     session,
     modelId,
+    modelRetries: group.modelRetries,
     retainState: true,
     restoreState: group.stateDirectory,
     decorateAtlassianHttp: observer.decorate,
@@ -314,6 +323,7 @@ async function main() {
     parentProcessId: process.pid,
     pendingPath,
     results: [],
+    modelRetries: 1,
     key: fixture.issueKeys[0],
     marker: `Synthetic lifecycle ${randomUUID()}`,
     phase: "prepared",
@@ -323,6 +333,7 @@ async function main() {
   await withLiveChat({
     session,
     modelId,
+    modelRetries: group.modelRetries,
     retainState: true,
     decorateAtlassianHttp: observer.decorate,
     stateReady: (root) => {

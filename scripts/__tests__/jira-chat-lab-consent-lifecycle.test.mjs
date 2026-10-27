@@ -1,8 +1,41 @@
-import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   consentLifecycleObserver,
   lifecycleTurnReceipt,
+  requireLifecycleModelConfig,
 } from "../testing/jira-chat-lab/consent-lifecycle.mjs";
+
+const roots = [];
+afterEach(() => {
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+it.each([
+  { savedRetries: 1, requestedRetries: 1, modelId: "model", valid: true },
+  { savedRetries: 0, requestedRetries: 1, modelId: "model", valid: false },
+  { savedRetries: 0, requestedRetries: 0, modelId: "model", valid: false },
+  { savedRetries: 1, requestedRetries: 1, modelId: "other-model", valid: false },
+])("checks the fresh process's actual saved configuration before effects: %j", (testCase) => {
+  const root = mkdtempSync(join(tmpdir(), "keiko-jira-lifecycle-config-"));
+  roots.push(root);
+  writeFileSync(
+    join(root, "keiko.config.json"),
+    JSON.stringify({
+      providers: [{ modelId: testCase.modelId, maxRetries: testCase.savedRetries }],
+    }),
+    { mode: 0o600 },
+  );
+  const check = () =>
+    requireLifecycleModelConfig(
+      { root, modelId: "model" },
+      { modelRetries: testCase.requestedRetries },
+    );
+  if (testCase.valid) expect(check).not.toThrow();
+  else expect(check).toThrow();
+});
 
 function fixture(write = false) {
   const group = { key: "KEIKO-1", results: [] };

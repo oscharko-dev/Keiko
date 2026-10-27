@@ -2,7 +2,7 @@
   "issue": 3405,
   "epic": 3403,
   "verdict": "PASS",
-  "cssSha256": "b4db5a8c3b03e43a4a518a26bf2ada6aef94e0b33f31a5e86a8a444b58e1aa90",
+  "cssSha256": "83c8add9e6649d843ea177a7279b1014bb046881af7afb781d3365f0d25248e2",
   "sourceProvenanceVersion": 2,
   "sourceFiles": [
     {
@@ -79,7 +79,7 @@
     },
     {
       "path": "packages/keiko-ui/src/app/globals.css",
-      "sha256": "b4db5a8c3b03e43a4a518a26bf2ada6aef94e0b33f31a5e86a8a444b58e1aa90"
+      "sha256": "83c8add9e6649d843ea177a7279b1014bb046881af7afb781d3365f0d25248e2"
     },
     {
       "path": "packages/keiko-ui/src/lib/api.ts",
@@ -115,7 +115,7 @@
   "harness": "tests/e2e/config/playwright.issue-1696-update-ui.config.ts",
   "route": "/",
   "appPath": "packaged-cli-ui",
-  "generatedAt": "2026-10-27T22:45:32.161Z",
+  "generatedAt": "2026-10-27T23:45:45.586Z",
   "visualFixtureScope": "All screenshot captures use deterministic /api/update/* fixtures. They prove rendered UI behavior only, never native handoff, real package replacement, or production-BFF update success.",
   "captures": [
     {

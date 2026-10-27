@@ -374,6 +374,10 @@ node scripts/testing/jira-chat-lab/restricted-chat.mjs /absolute/private/session
 node scripts/testing/jira-chat-lab/restricted-chat.mjs /absolute/private/session actual-model-id stream catalog
 ```
 
+Restricted groups explicitly configure `modelRetries: 1` for the existing bounded Gateway schema
+repair; other live helpers default to zero, physical model attempts retain budget accounting, and
+Jira mutation POSTs are never retried. Each restricted receipt records this configuration.
+
 The focused group contains eight cases: the isolated identity's visible and hidden issues,
 its denied comment, the editor identity's read/edit and denied transition, and omitted required
 create/transition fields under the API identity. The latter refusals require **zero attempted
@@ -426,3 +430,46 @@ live groups. The private pending intent and product database survive failure; ne
 internal `--resume` phase manually or replay a potentially dispatched mutation. A completed receipt
 requires all four turns, distinct process IDs, independent remote verification, and a closing valid
 license check.
+
+## Physical browser connection loss after a committed write
+
+```bash
+node scripts/testing/jira-chat-lab/browser-disconnect.mjs /absolute/private/session actual-model-id
+```
+
+Run this separate group after a fresh licensed HTTPS/read/write preflight, with other live groups
+stopped. Pin both the compiled runtime and the served `packages/keiko-ui/out` files, together with
+the browser helper closure, before and after the group. The browser creates and verifies a Pod in
+the Hub, connects the ordinary Chat through keyboard workspace ports, grants reading, and approves
+the exact comment preview. Jira receives one real request through the production HTTP port; its
+acknowledgement is preserved without injecting a Jira fault.
+
+A qualification-only listener on the actual BFF server intercepts the exact terminal SSE `done`
+frame. It first checks that the matching user turn and assistant answer are already committed in
+the real store, then destroys the actual HTTP response without transmitting that completion frame.
+The earlier read-grant and write-approval frames remain delivered. Chromium's failed-request metadata
+must confirm the interruption. An existing canonical buffered fallback is permitted and counted;
+the driver never automatically replays a mutation.
+
+The subsequent reload must display **Jira change confirmed**, preserving the durable `succeeded`
+outcome. An explicit canonical duplicate, another reload, and the visible Regenerate control must
+retain the same user, call and assistant identities and an independent remote comment count of one.
+This physical BFF-to-browser loss is distinct from `browser-faults.mjs`, whose Jira acknowledgement
+faults remain `unknown`. Both forms are required; neither substitutes for the other.
+
+`browser-disconnect.pending.json` and the retained product database survive any failure. The same
+command with `--reconcile` only reads the remote comment state and saves a private receipt. It never
+resumes a write. A complete group writes a private `browser-disconnect-<id>.json` receipt, checks
+the license again, and removes its pending marker. Helper tests alone are not live qualification.
+
+## Mixed Data Pod and Jira Chat qualification
+
+```bash
+node scripts/testing/jira-chat-lab/mixed-chat.mjs <private-session> keiko-qwen36-35b-8bit qwen3-embedding:8b
+```
+
+This separate live group creates and indexes a real synthetic Data Pod with the named embedding
+model, then performs a buffered mixed read and an approved Jira comment through the ordinary Chat
+path. It requires the licensed Jira preflight and exclusive access to the laboratory and model
+runtimes. The driver is prepared; complete live qualification is still pending until its full
+scenario and independent remote-state checks pass on the frozen runtime.

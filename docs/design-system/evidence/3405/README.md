@@ -57,6 +57,18 @@ harness digests from the worktree. The unchanged freshness gate and 23 focused u
 evidence contract tests pass. This remains updater fixture evidence; Jira-specific visual
 acceptance and the platform-sensitive Linux editor bundle fingerprint are separate obligations.
 
+The Jira accessibility repair regenerated this producer again on 2026-10-27 (UTC) in an isolated
+Linux arm64 container with an init process, Node 24.18.0, npm 11.16.0, Playwright 1.64.1 and
+Chromium 156.0.8078.4. The source was signed head `6c63f33a0f7aa37335ac48a6a02ea59b2d1565d2`
+plus the question-map target-size repair in `globals.css`. The unchanged freshness gate first
+rejected that stylesheet's old digest. The complete original nine-case producer then passed in
+59.7 seconds, including real BFF stop/restart. All 14 PNGs changed on Linux and were visually
+inspected; all three producer-generated JSON records bind the exact 25 source and four harness
+digests in the reviewed worktree. The unchanged freshness gate, 23 updater/editor evidence
+contract tests and both Linux Editor bundle gates pass. No numerical ceiling changed and the
+Editor fingerprint remains unchanged. This qualifies the updater fixtures and BFF recovery,
+not native update installation, real Jira/model behavior or final integrated-head acceptance.
+
 ## Reproduce
 
 Use the supported Node 24 runtime and the checkout's own dependencies:

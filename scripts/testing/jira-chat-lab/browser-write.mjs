@@ -8,6 +8,11 @@ import { qualifyBrowserLifecycle } from "./browser-lifecycle.mjs";
 import { requestWorkspaceJiraConnection } from "./browser-connections.mjs";
 import { openBrowser, createPod } from "./browser-read.mjs";
 
+const OUTCOME_LABELS = new Map([
+  ["succeeded", "Jira change confirmed"],
+  ["unknown", "Jira outcome unknown"],
+]);
+
 function stage(value) {
   console.log(JSON.stringify({ operation: "jira-chat-browser-write", stage: value }));
 }
@@ -127,12 +132,10 @@ export async function runBrowserWrite({
   onIntent,
   observe,
   expectedMutationOutcome = "succeeded",
+  beforeOutcome,
   afterCompleted,
 }) {
-  const outcomeLabel = new Map([
-    ["succeeded", "Jira change confirmed"],
-    ["unknown", "Jira outcome unknown"],
-  ]).get(expectedMutationOutcome);
+  const outcomeLabel = OUTCOME_LABELS.get(expectedMutationOutcome);
   assert.ok(outcomeLabel, "Unsupported browser qualification outcome");
   const { browser, page } = await openBrowser(chat);
   try {
@@ -150,6 +153,7 @@ export async function runBrowserWrite({
     await decideRead(region, beforeDecision);
     const approvals = await decideWrite(region, intent, beforeDecision);
     const completed = await completedTurn(observe);
+    await beforeOutcome?.({ page, region, completed });
     await region.getByText(outcomeLabel, { exact: true }).waitFor();
     assert.equal(
       await region.getByRole("region", { name: "Review Jira action", exact: true }).count(),

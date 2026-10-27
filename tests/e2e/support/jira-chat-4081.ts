@@ -9,9 +9,47 @@ import { mintLauncherPairingAttestation } from "../../../packages/keiko-server/s
 export interface JiraBrowserFixture {
   readonly secret: string;
   readonly projectPath: string;
-  readonly chats: Readonly<Record<"approval" | "revocation" | "unavailable", Chat>>;
+  readonly chats: Readonly<
+    Record<
+      "approval" | "revocation" | "unavailable" | "accessibility-en" | "accessibility-de",
+      Chat
+    >
+  >;
   readonly jiraBaseUrl: string;
 }
+export type JiraBrowserLocale = "en" | "de";
+export const JIRA_BROWSER_COPY = {
+  en: {
+    hub: "Local Knowledge",
+    create: "Create Jira Pod",
+    label: "Label",
+    url: "Base URL",
+    token: "API token",
+    save: "Save connector",
+    verify: "Verify connection",
+    connection: "Jira connection",
+    pod: "Jira Pod",
+    apply: "Apply Jira settings",
+    connected: "Jira Pod connected by the server",
+    message: "Chat message",
+    send: "Send message",
+  },
+  de: {
+    hub: "Lokales Wissen",
+    create: "Jira-Pod erstellen",
+    label: "Bezeichnung",
+    url: "Basis-URL",
+    token: "API-Token",
+    save: "Connector speichern",
+    verify: "Verbindung prüfen",
+    connection: "Jira-Verbindung",
+    pod: "Jira-Pod",
+    apply: "Jira-Einstellungen übernehmen",
+    connected: "Jira-Pod vom Server verbunden",
+    message: "Chatnachricht",
+    send: "Nachricht senden",
+  },
+} as const;
 export interface JiraFixtureCounts {
   readonly models: number;
   readonly jiraRequests: number;
@@ -36,11 +74,13 @@ export function counts(): JiraFixtureCounts {
 export async function openJiraChat(
   page: Page,
   name: keyof JiraBrowserFixture["chats"],
+  locale: JiraBrowserLocale = "en",
 ): Promise<Locator> {
   const state = fixture();
   const chat = state.chats[name];
   await page.addInitScript(
-    ({ id, title }) => {
+    ({ id, title, locale }) => {
+      window.localStorage.setItem("keiko.locale", locale);
       window.localStorage.setItem(
         "keiko.workspace.v4",
         JSON.stringify([
@@ -59,7 +99,7 @@ export async function openJiraChat(
       );
       window.localStorage.removeItem("keiko.conns.v1");
     },
-    { id: chat.id, title: chat.title },
+    { id: chat.id, title: chat.title, locale },
   );
   const fragment = encodeCodingAppSessionPairingFragment(
     mintLauncherPairingAttestation({
@@ -69,29 +109,50 @@ export async function openJiraChat(
     }),
   );
   await page.goto(`/${fragment}`);
-  const region = page.getByRole("region", { name: new RegExp(`Jira browser ${name}`, "u") });
-  await expect(region.getByRole("textbox", { name: "Chat message", exact: true })).toBeVisible();
+  const region = page.locator('section.window[data-window-id="jira-fixture-chat"]');
+  await expect(region).toHaveRole("region");
+  await expect(region).toHaveAccessibleName(new RegExp(`Jira browser ${name}`, "u"));
+  await expect(
+    region.getByRole("textbox", { name: JIRA_BROWSER_COPY[locale].message, exact: true }),
+  ).toBeVisible();
   return region;
 }
 
-export async function createAndConnect(page: Page, region: Locator, name: string): Promise<void> {
-  await page.getByRole("button", { name: "Local Knowledge", exact: true }).click();
-  const hub = page.getByRole("region", { name: /Local Knowledge/u });
-  await hub.getByRole("button", { name: "Create Jira Pod", exact: true }).click();
+interface CreateOptions {
+  readonly locale?: JiraBrowserLocale;
+  readonly activate?: (control: Locator) => Promise<void>;
+  readonly inspectForm?: (form: Locator, hub: Locator) => Promise<void>;
+}
+export async function createAndConnect(
+  page: Page,
+  region: Locator,
+  name: string,
+  options: CreateOptions = {},
+): Promise<void> {
+  const copy = JIRA_BROWSER_COPY[options.locale ?? "en"];
+  const activate = options.activate ?? ((control: Locator): Promise<void> => control.click());
+  await activate(page.getByRole("button", { name: copy.hub, exact: true }));
+  const hub = page.getByRole("region", { name: new RegExp(copy.hub, "u") });
+  await activate(hub.getByRole("button", { name: copy.create, exact: true }));
   const form = hub.getByTestId("acx-add-form");
-  await form.getByLabel("Label", { exact: true }).fill(name);
-  await form.getByLabel("Base URL", { exact: true }).fill(fixture().jiraBaseUrl);
-  await form.getByLabel("API token", { exact: true }).fill("synthetic-jira-browser-fixture-pat");
-  await form.getByRole("button", { name: "Save connector", exact: true }).click();
+  await options.inspectForm?.(form, hub);
+  await form.getByLabel(copy.label, { exact: true }).fill(name);
+  await form.getByLabel(copy.url, { exact: true }).fill(fixture().jiraBaseUrl);
+  await form.getByLabel(copy.token, { exact: true }).fill("synthetic-jira-browser-fixture-pat");
+  await activate(form.getByRole("button", { name: copy.save, exact: true }));
   const card = hub.getByTestId("acx-connector").filter({ hasText: name });
-  await card.getByRole("button", { name: "Verify connection", exact: true }).click();
+  await activate(card.getByRole("button", { name: copy.verify, exact: true }));
   await expect(card.locator('[data-status="ok"]')).toBeVisible();
-  await page.getByRole("button", { name: "Local Knowledge", exact: true }).click();
-  await region.getByText("Jira connection", { exact: true }).click();
-  await region.getByRole("combobox", { name: /^Jira Pod/u }).selectOption({ label: name });
-  await region.getByRole("button", { name: "Apply Jira settings", exact: true }).click();
-  await expect(region.getByText("Jira Pod connected by the server", { exact: true })).toBeVisible();
-  await region.getByText("Jira connection", { exact: true }).click();
+  await activate(page.getByRole("button", { name: copy.hub, exact: true }));
+  const connection = region.getByTestId("jira-chat-connection").locator("summary");
+  await expect(connection).toHaveAccessibleName(new RegExp(`^${copy.connection}`, "u"));
+  await activate(connection);
+  await region
+    .getByRole("combobox", { name: new RegExp(`^${copy.pod}`, "u") })
+    .selectOption({ label: name });
+  await activate(region.getByRole("button", { name: copy.apply, exact: true }));
+  await expect(region.getByText(copy.connected, { exact: true })).toBeVisible();
+  await activate(connection);
 }
 
 export async function send(region: Locator, content: string): Promise<void> {

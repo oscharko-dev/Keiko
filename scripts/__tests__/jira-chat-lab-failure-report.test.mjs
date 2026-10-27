@@ -8,16 +8,20 @@ afterEach(() => {
 });
 
 describe("body-free live qualification failures", () => {
-  it("reports restricted harness coordinates without private path or content", () => {
+  it.each([
+    "restricted-catalog-cases",
+    "browser-disconnect",
+    "browser-response-drop",
+    "browser-recovery",
+  ])("reports %s coordinates without private path or content", (source) => {
     const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const error = new Error("private fixture content");
-    error.stack =
-      "Error: private fixture content\n at run (/private/customer/restricted-catalog-cases.mjs:24:2)";
+    error.stack = `Error: private fixture content\n at run (/private/customer/${source}.mjs:24:2)`;
     reportFaultQualificationFailure("jira-chat-restricted", error);
     expect(JSON.parse(log.mock.calls[0][0])).toEqual({
       qualification: "jira-chat-restricted",
       passed: false,
-      location: ["restricted-catalog-cases.mjs:24:2"],
+      location: [`${source}.mjs:24:2`],
     });
     expect(JSON.stringify(log.mock.calls)).not.toContain("private fixture content");
     expect(JSON.stringify(log.mock.calls)).not.toContain("/private/customer");

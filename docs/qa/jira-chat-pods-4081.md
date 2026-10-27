@@ -251,7 +251,7 @@ Status: **Partial — not accepted**. Durable outcomes, exact history projection
 
 - [ ] **AC6:** Root connector/window/tool/source/permission designs and relevant state/accessibility/theme requirements are met; existing workspace/Data Pod/Workbench journeys remain green.
 
-Status: **Partial — not accepted**. Existing design owners are reused; source labels, server-confirmed edges, keyboard ports, Hub lifecycle and the shared mode control have scoped tests and rebuilt-browser journeys. The fidelity matrix names their implemented states. Complete screen-reader/theme/contrast/reduced-motion/zoom/constrained-layout and existing workspace/Data/Workbench journey gates remain open.
+Status: **Partial — not accepted**. The five-case wired browser lane now covers both languages and all principal surfaces, with 83 full-document axe checks, keyboard/focus, themes, contrast, reduced motion, narrow/maximized layout and explicit 200% viewport emulation. Eight inspected redacted captures and source-bound receipts are retained. The question-map target/focus defect is repaired. Native assistive-technology execution is not claimed; final UI coverage and existing workspace/Data/Workbench regression gates remain open.
 
 - [ ] **AC7:** The Chat mode selection persists per chat, defaults to Ask for approval, shows ceiling-clamped modes truthfully, and a model without verified tool calling presents an actionable unavailable state instead of silently answering without tools.
 
@@ -2429,3 +2429,50 @@ scoped ESLint/Prettier and unchanged semantic-duplication gate pass.
 
 Restricted identities, live consent reuse and rotation, physical browser response loss, complete
 visual acceptance, final aggregate/Sonar and required current-head checks remain outstanding.
+
+### Browser accessibility and bounded live-model correction
+
+Epic #4081 / #4086 / #4087: the wired deterministic Jira browser lane now passes five cases,
+including English/German journeys through the actual UI, BFF, Gateway, catalog, MCP host and HTTPS
+fixture. Its 83 full-document axe checks report zero violations, without exclusions. All five
+surfaces are checked across themes, contrast/forced colors, reduced motion, narrow/maximized
+windows and explicit 200% viewport/device-scale emulation. Keyboard controls remain reachable.
+The [retained producer receipts and eight inspected captures](../design-system/evidence/4081/README.md)
+state the exact source hashes, environment and limits; native zoom/screen-reader execution is not
+claimed by this evidence.
+
+The browser run exposed a real question-map target-size failure: existing targets were 48×6 CSS
+pixels, only eight pixels apart. The existing global stylesheet now gives them 48×24 targets,
+visible focus and bounded vertical scrolling, while keeping their two-pixel marks. Thirty actual
+questions remain keyboard reachable and first/last navigation adds no Jira request. The two
+existing component regressions also pass. No light-theme color change was retained: the initial
+contrast sample occurred during an animation; stable measured contrast already passed.
+
+The unchanged canonical Updater producer passes all nine cases and regenerates its required
+source-bound evidence. Its freshness gate and 23 evidence contracts pass. Both Linux Editor
+bundle gates pass without restamping evidence or changing any limit. Root TypeScript, scoped
+lint/format and E2E wiring pass. These checks supplement, rather than replace, the final aggregate.
+
+Restricted live runs exposed malformed optional model arguments before tool admission. Failed
+groups retain their incomplete receipts; independent reconciliation found no mutation-journal row
+or remote effect. The lab can now explicitly select one existing Gateway retry, with its schema
+correction and original budgets; the default remains zero. A composed normal-Chat regression
+observes three physical model requests, remote-effect snapshots of zero/zero/one, and only the
+valid call persisted. The affected Gateway/Chat/helper suites pass 173 cases. Seven configuration
+checks failed before the helper correction; the unchanged default baseline passed throughout.
+
+Both focused restricted groups now pass 8/8, buffered and SSE, with one allowed edit each,
+zero denied-write effects, canonical no-replay and both required-field refusals before dispatch.
+Their before/after inventories match across 6,827 files, digest
+`6886b63c775c83ca19306b78d354027b21b75cbb92c2c2b71b7b7743be458904`.
+The buffered receipt SHA-256 is
+`60b1802bf014f32348a1e304300281de506d7dbd3457479097c6395d3a52104c`.
+The complete restricted catalog groups and live retained-consent lifecycle remain in progress.
+
+Browser fault drivers now share their canonical recovery observer. A separate fixture physically
+destroys the actual BFF response only after it observes a durably completed approved turn; real
+loopback HTTP tests prove interruption and refuse premature completion. This harness proof does
+not claim the licensed browser group has run. An independent mixed-source driver creates and
+indexes a real Data Pod with an explicitly selected embedding model, then checks ordinary mixed
+read/approved-write turns and Data-only citations. Its live group is also pending. Existing
+defaults are preserved, and no product retry, schema, authority or budget was widened.

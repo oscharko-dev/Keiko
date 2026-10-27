@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { verifyBrowserFaultTurn } from "../testing/jira-chat-lab/browser-faults.mjs";
+import { verifyBrowserToolTurn } from "../testing/jira-chat-lab/browser-recovery.mjs";
 
 const intent = { key: "SYN-1", marker: "Synthetic browser fault" };
 
@@ -50,4 +51,13 @@ it("rejects an extra mutation even when the expected comment result appears firs
     call: { id: "second", name: "jira_edit", arguments: {} },
   });
   expect(() => verifyBrowserFaultTurn(completed, intent)).toThrow();
+});
+
+it("keeps a physically dropped browser completion distinct from unknown Jira acknowledgements", () => {
+  expect(verifyBrowserToolTurn(transcript("succeeded"), intent, "succeeded")).toEqual({
+    userId: "user",
+    callId: "call",
+    assistantId: "assistant",
+  });
+  expect(() => verifyBrowserToolTurn(transcript("unknown"), intent, "succeeded")).toThrow();
 });
