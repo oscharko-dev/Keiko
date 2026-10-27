@@ -1,4 +1,10 @@
 import {
+  jiraIssueReadResult,
+  JIRA_MANAGED_ISSUE_FIELDS,
+  JIRA_MANAGED_SEARCH_FIELDS,
+} from "./jira-managed-issue-reads.js";
+import {
+  ATLASSIAN_JQL_MAX_CHARS,
   isSafeAtlassianIdentifier,
   JIRA_MANAGED_READ_TOOLS,
   type AtlassianConnectorDeployment,
@@ -23,6 +29,12 @@ import type {
 import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
 import { asRecord, atlassianApiEndpointsFor, atlassianApiUrl } from "./atlassian-sync-classify.js";
 import { executeAtlassianWriteRequest } from "./atlassian-write-http.js";
+
+const ISSUE_READ_NAMES: ReadonlySet<string> = new Set([
+  "jira.search",
+  "jira.issue",
+  "jira.comments",
+]);
 
 export interface JiraManagedConnection {
   readonly deployment: AtlassianConnectorDeployment;
@@ -86,22 +98,50 @@ function selection(
   const startAt = pageNumber(args.startAt, 0, 0, 1000000);
   const maxResults = pageNumber(args.maxResults, 25, 1, 100);
   if (startAt === undefined || maxResults === undefined) return undefined;
-  const allowed = new Set(["startAt", "maxResults"]);
-  let path: string;
-  if (name === "jira.projects") path = "project";
-  else if (name === "jira.edit-fields") {
-    if (!isSafeAtlassianIdentifier(args.issueKey)) return undefined;
-    allowed.add("issueKey");
-    path = `issue/${encodeURIComponent(args.issueKey)}/editmeta`;
-  } else {
-    const metadata = metadataPath(name, args, allowed);
-    if (metadata === undefined) return undefined;
-    path = `${metadata}?startAt=${String(startAt)}&maxResults=${String(maxResults)}`;
-  }
-  return Object.keys(args).every((key) => allowed.has(key))
+  const allowed = new Set(name === "jira.issue" ? [] : ["startAt", "maxResults"]);
+  const paging = `startAt=${String(startAt)}&maxResults=${String(maxResults)}`;
+  const path = readPath(name, args, allowed, paging);
+  return path !== undefined && Object.keys(args).every((key) => allowed.has(key))
     ? { path, startAt, maxResults }
     : undefined;
 }
+function readPath(
+  name: JiraManagedReadToolName,
+  args: CatalogJsonObject,
+  allowed: Set<string>,
+  paging: string,
+): string | undefined {
+  if (name === "jira.projects") return "project";
+  if (name === "jira.search") return searchPath(args, allowed, paging);
+  if (name === "jira.issue-types" || name === "jira.create-fields") {
+    const path = metadataPath(name, args, allowed);
+    return path === undefined ? undefined : `${path}?${paging}`;
+  }
+  if (!isSafeAtlassianIdentifier(args.issueKey)) return undefined;
+  allowed.add("issueKey");
+  const path = `issue/${encodeURIComponent(args.issueKey)}`;
+  switch (name) {
+    case "jira.edit-fields":
+      return `${path}/editmeta`;
+    case "jira.issue":
+      return `${path}?fields=${JIRA_MANAGED_ISSUE_FIELDS}`;
+    case "jira.comments":
+      return `${path}/comment?${paging}`;
+  }
+}
+function searchPath(
+  args: CatalogJsonObject,
+  allowed: Set<string>,
+  paging: string,
+): string | undefined {
+  if (!text(args.jql, ATLASSIAN_JQL_MAX_CHARS)) return undefined;
+  allowed.add("jql");
+  const query = new URLSearchParams({ jql: args.jql });
+  for (const [key, value] of new URLSearchParams(paging)) query.set(key, value);
+  query.set("fields", JIRA_MANAGED_SEARCH_FIELDS);
+  return `search?${query.toString()}`;
+}
+
 function metadataPath(
   name: JiraManagedReadToolName,
   args: CatalogJsonObject,
@@ -160,7 +200,9 @@ async function read<Context extends ManagedMcpInvocationContext>(
       ? failure("malformed-payload")
       : projectPage(outcome.items, startAt, maxResults);
   if (outcome.body === undefined) return failure("malformed-payload");
-  return metadataResult(name, outcome.body, selected);
+  return ISSUE_READ_NAMES.has(name)
+    ? jiraIssueReadResult(name, outcome.body, startAt, maxResults)
+    : metadataResult(name, outcome.body, selected);
 }
 
 /** Private connection/context stays outside the MCP declaration and arguments. */

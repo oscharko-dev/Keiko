@@ -107,7 +107,7 @@ Status: **Pending**. Implementation: pending. Verification: pending. Evidence: p
 
 - [ ] **AC1:** Real modern MCP discovery, per-request protocol metadata, `tools/list` and `tools/call` through the shared host exercise the production Jira provider and list exactly the implemented typed capabilities; every listed tool has a catalog descriptor and an ADR-0128 D4 row. Unknown tools, malformed arguments and caller-supplied credentials, arbitrary destinations or connector switching are refused before HTTP execution.
 
-Status: **Partial — not accepted**. Implementation: `jira-managed-tools.ts`, `jiraManagedProvider.ts`, shared catalog/SDK composition. Verification: `catalogNonCodingConsumer.test.ts` (real SDK, synthetic HTTP). Evidence: first-Jira-capability checkpoint below. The provider advertises `jira.projects`, `jira.issue-types`, `jira.create-fields` and `jira.edit-fields`; the metadata checkpoint below extends this evidence. Remaining operations and actual Chat admission are pending.
+Status: **Partial — not accepted**. Implementation: `jira-managed-tools.ts`, `jiraManagedProvider.ts`, shared catalog/SDK composition. Verification: `catalogNonCodingConsumer.test.ts` (real SDK, synthetic HTTP). Evidence: first-Jira-capability checkpoint below. The provider advertises `jira.projects`, `jira.issue-types`, `jira.create-fields`, `jira.edit-fields`, `jira.search`, `jira.issue` and `jira.comments`; the metadata checkpoint below extends this evidence. Remaining operations and actual Chat admission are pending.
 
 - [ ] **AC2:** Against local Jira 10.3.26, a non-admin PAT searches/reads and performs create/edit/assign/comment/transition where Jira permits them, and the restricted identity is refused truthfully without escalation. The recorded supported-operation matrix names each tested operation, endpoint family and unsupported capability; it never claims full Jira REST coverage.
 
@@ -835,3 +835,18 @@ provider evidence, not ordinary Chat or a current live Jira qualification. The e
 must be replaced by a fresh legitimate session before the next full live group. No AC is closed.
 
 Targeted checks for this increment: package build, root typecheck, changed lint/format, ADR index and unchanged semantic-duplication gate pass; 21 binder/SDK tests and 70 connector field/write/ADF tests pass. Final package-surface, architecture/performance, complete coverage and live acceptance remain open.
+
+## Issue content reads — #4083 AC1/AC2/AC7 / #4081
+
+The same provider now includes bounded opaque JQL search, individual issue reads with selected
+standard fields and plain-text descriptions, and independently paged comments. Raw self links,
+email fields and avatars are excluded. Search never returns descriptions or reporter data even
+when an upstream response includes those unrequested fields. Missing totals remain absent; a
+nonempty page provides a continuation and an empty page ends that unknown-total traversal.
+Cloud ADF in this DC-only lane and oversized content fail closed instead of being silently cut.
+
+Three integration cases failed before these capabilities were admitted. After implementation,
+28 binder/SDK tests and 66 existing live-search/document/HTTP tests pass. Package build, root
+typecheck, changed lint and unchanged semantic checks pass. The tested HTTP is synthetic; live
+DC operation coverage, arbitrary custom-field value reads, transitions, assignable users,
+mutations and actual Chat admission remain open. This checkpoint does not accept a complete AC.

@@ -373,6 +373,7 @@ uniformly: reads name the `CodingWorkbenchActionClass`, writes name the
 | 10 | `add-page-comment` | Confluence | `connector-write` | `knowledge-base.write` | low | review-required | review-required | allowed |
 | 11 | `jira.projects` | Jira | `connector-access` | `issue-tracker.read` | low | review-required | review-required | allowed |
 | 12–14 | `jira.issue-types`, `jira.create-fields`, `jira.edit-fields` | Jira | `connector-access` | `issue-tracker.read` | low | review-required | review-required | allowed |
+| 15–17 | `jira.search`, `jira.issue`, `jira.comments` | Jira | `connector-access` | `issue-tracker.read` | low | review-required | review-required | allowed |
 
 **Risk-tier rationale (fixed here so #2244 does not have to invent it):** reads are uniformly `low`
 — every read is non-mutating, trivially reversible (re-run the query), and bounded by D5/D3.
@@ -411,7 +412,7 @@ mapping resolves back to `connector-access`, carrying the additional approval-ri
 supervised-action path. Only the scope enum grows.
 
 Managed Jira catalog operations use the same `connector-access` effect class. The current
-`jira.projects`, `jira.issue-types`, `jira.create-fields` and `jira.edit-fields` capabilities map to `issue-tracker.read` (low risk). In ordinary Chat, every mode
+project, issue-type, create/edit metadata, search, issue and comment read capabilities map to `issue-tracker.read` (low risk). In ordinary Chat, every mode
 requires the current binding's first-read grant before HTTP; a valid grant permits subsequent
 read-class calls only within the current authority, binding and credential generation. That bounded
 read grant supplies the standing approval for read-class calls; it never approves writes. Missing or

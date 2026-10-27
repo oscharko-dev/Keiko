@@ -17,6 +17,9 @@ export const JIRA_MANAGED_READ_TOOLS = [
   "jira.issue-types",
   "jira.create-fields",
   "jira.edit-fields",
+  "jira.search",
+  "jira.issue",
+  "jira.comments",
 ] as const;
 export type JiraManagedReadToolName = (typeof JIRA_MANAGED_READ_TOOLS)[number];
 export type JiraFieldOperation = "set" | "add" | "remove";
