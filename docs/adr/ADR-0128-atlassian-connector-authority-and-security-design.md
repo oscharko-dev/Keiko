@@ -478,6 +478,8 @@ The existing server action owner also projects SyncRun completion through the re
 `atlassian.action.outcome` Activity Log operation. The connector activity ring remains the UI
 projection; it is not the sole audit store. A partial sync is explicitly `partial` in the global
 log, with a warning level and the actual closed failure reason rather than a governance rationale.
+Partial sync-only failure reasons remain classified as failures in the global projection; governance approval reasons are not reclassified as execution failures.
+
 Malformed list/metadata JSON, individual Jira/Confluence item bodies and live-search responses
 are covered through the real routes and the existing log reader. Managed Jira tools use the shared
 `mcp.managed.lifecycle` producer; HTTP/provider failures are refused through that owner. No response

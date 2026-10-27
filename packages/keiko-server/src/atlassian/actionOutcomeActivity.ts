@@ -6,6 +6,8 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS,
+  isAtlassianSyncFailureReason,
+  type AtlassianConnectorWriteFailureReason,
   type AtlassianConnectorActivityRecord,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { AtlassianConnectorCredentialDeps } from "./credentialRoutes.js";
@@ -102,6 +104,23 @@ const OUTCOME_LEVEL = {
   "pending-review": "info",
 } as const;
 
+function failureReason(
+  record: AtlassianConnectorActivityRecord,
+  outcome: keyof typeof OUTCOME_LEVEL,
+): AtlassianConnectorWriteFailureReason | "other" | "none" {
+  if (record.reasonCode === undefined) return "none";
+  const known = ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS.find(
+    (reason) => reason === record.reasonCode,
+  );
+  if (known !== undefined) return known;
+  if (
+    outcome === "failed" ||
+    (outcome === "partial" && isAtlassianSyncFailureReason(record.reasonCode))
+  )
+    return "other";
+  return "none";
+}
+
 /** Project the existing action owner's result, excluding targets, credential refs and content. */
 export function recordAtlassianActionOutcome(
   deps: Pick<AtlassianConnectorCredentialDeps, "activityLog" | "diagnostics">,
@@ -109,26 +128,22 @@ export function recordAtlassianActionOutcome(
   deploymentCeiling: CodingWorkbenchMode,
 ): void {
   try {
+    const outcome = record.syncSummary?.outcome ?? record.outcome;
     (deps.activityLog ?? processServerLogSink()).write(
       activityLogEvent(
         ACTION_OUTCOME,
         {
           correlationId: record.correlationId,
-          level: OUTCOME_LEVEL[record.syncSummary?.outcome ?? record.outcome],
+          level: OUTCOME_LEVEL[outcome],
         },
         {
           provider: record.provider,
           actionType: record.actionType,
           disposition: record.disposition,
-          outcome: record.syncSummary?.outcome ?? record.outcome,
+          outcome,
           durationMs: record.durationMs,
           deploymentCeiling,
-          failureReason:
-            record.reasonCode === undefined
-              ? "none"
-              : (ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS.find(
-                  (reason) => reason === record.reasonCode,
-                ) ?? (record.outcome === "failed" ? "other" : "none")),
+          failureReason: failureReason(record, outcome),
           completeness: "complete",
           loss: "none",
         },

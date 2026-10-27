@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "20e8560ffcd021071d0f0a0682d46447d700d1019e7d52eb1380842b63f3be64",
+    "catalogDigest": "c1cab0fc43d2fac58759f10ebfce32353cb1336d9d136db59c0bfcd93665c14d",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -949,8 +949,8 @@
         "failureClasses": ["atlassian-action-execution"],
         "proofIds": ["atlassian.action.outcome.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/atlassian/actionOutcomeActivity.ts:15",
-        "emitterSites": ["packages/keiko-server/src/atlassian/actionOutcomeActivity.ts:113"]
+        "registrationSite": "packages/keiko-server/src/atlassian/actionOutcomeActivity.ts:17",
+        "emitterSites": ["packages/keiko-server/src/atlassian/actionOutcomeActivity.ts:133"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -101074,14 +101074,14 @@
     {
       "op": "atlassian.action.log-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/actionOutcomeActivity.ts:143",
+      "site": "packages/keiko-server/src/atlassian/actionOutcomeActivity.ts:158",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "atlassian.action.outcome",
       "category": "process",
-      "site": "packages/keiko-server/src/atlassian/actionOutcomeActivity.ts:18",
+      "site": "packages/keiko-server/src/atlassian/actionOutcomeActivity.ts:20",
       "package": "keiko-server"
     },
     {

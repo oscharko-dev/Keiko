@@ -866,3 +866,17 @@ unchanged 938 baseline. The synthetic transition requirements are not the still-
 mutation-screen acceptance. Mutations, full custom-field value reads and the normal Chat authority,
 grant and durable invocation paths remain open. Review comment 4384251867 on partial-sync failure
 classification is accepted and queued immediately after this increment.
+
+## Partial-sync error classification repair — #4081 / #4087, review 4384251867
+
+A partial sync with a sync-only failure (for example `scope-exceeded`) previously emitted
+`failureReason: none`, because its legacy UI activity record uses `succeeded`. The registered
+projection now derives one effective outcome and maps such partial failures to `other`. A partial
+record carrying a governance approval reason still emits `none`; existing detailed transport
+failure codes remain intact. One regression failed before the fix and both controls passed.
+
+After repair, 83 route/projection tests pass. The new case uses the registered production formatter
+and real Activity Log reader. Regeneration resolves 607 proofs and 30 scenarios with zero
+violations; all 97 registry tests pass. Package build, root typecheck, changed lint/format and
+semantic gate pass. This closes the concrete classification finding, not the outstanding full
+Activity Log/architecture/performance qualification.
