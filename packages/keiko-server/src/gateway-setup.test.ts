@@ -12464,12 +12464,18 @@ describe("selected metadata responsiveness", () => {
     setServerLogger(createServerLogger({ sink, level: "info" }));
     vi.useFakeTimers();
     metadataAbortTimers();
-    const fetcher = vi.fn((url: Parameters<typeof fetch>[0], init?: RequestInit) =>
-      fetchInputUrl(url).endsWith("/model/info")
-        ? slowMetadataResponse(init?.signal)
-        : Promise.resolve(new Response(null, { status: 404 })),
-    );
+    // Setup reads the management route before it saves the configuration. The save starts the
+    // background catalog refresh on the same handler graph, which reads the route again under the
+    // next configuration generation, so each request is attributed to the generation it ran under.
+    const metadataGenerations: number[] = [];
+    const fetcher = vi.fn((url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      if (!fetchInputUrl(url).endsWith("/model/info"))
+        return Promise.resolve(new Response(null, { status: 404 }));
+      metadataGenerations.push(deps.gatewayConfig?.generation() ?? -1);
+      return slowMetadataResponse(init?.signal);
+    });
     vi.stubGlobal("fetch", fetcher);
+    const setupGeneration = deps.gatewayConfig?.generation() ?? -1;
     const setup = handleGatewaySetup(selectedMetadataContext(), deps);
     await vi.advanceTimersByTimeAsync(14_000);
     expect((await setup).status).toBe(200);
@@ -12477,10 +12483,12 @@ describe("selected metadata responsiveness", () => {
       contextWindow: 32_768,
       maxOutputTokens: 4_096,
     });
-    const metadataCalls = fetcher.mock.calls.filter(([url]) =>
-      fetchInputUrl(url).endsWith("/model/info"),
-    );
-    expect(metadataCalls).toHaveLength(1);
+    // Exactly one request belongs to setup; any other is the refresh the save started.
+    const savedGeneration = deps.gatewayConfig?.generation() ?? -1;
+    expect(savedGeneration).toBeGreaterThan(setupGeneration);
+    const [setupRequest, ...refreshRequests] = metadataGenerations;
+    expect(setupRequest).toBe(setupGeneration);
+    expect(refreshRequests).toEqual(refreshRequests.map(() => savedGeneration));
     const event = sink.events.find((entry) => entry.op === "gateway.setup.metadata.resolved");
     expect(event?.extra).toMatchObject({
       outcome: "available",

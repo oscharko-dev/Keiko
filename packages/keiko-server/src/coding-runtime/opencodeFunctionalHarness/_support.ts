@@ -570,11 +570,34 @@ class FakeOpenCodeChild {
       json(response, { data: [...this.questions.values()].map((pending) => pending.row) });
     } else if (method === "GET" && path === `/api/session/${FAKE_SESSION_ID}/message`) {
       json(response, { data: this.v2Messages().slice().reverse() });
+    } else if (this.routeTurnLists(method, path, response)) {
+      return;
     } else if (this.routePermission(method, path, body, response)) {
       return;
     } else {
       this.routeDynamic(method, path, body, response);
     }
+  }
+
+  // OpenCode 2.1.4 lists a location's background shell jobs and the prompts a session holds in its
+  // inbox; the runtime's interrupt reads both before it settles a turn. This child starts no shell
+  // job and takes every accepted prompt onto its own turn chain, so both lists are empty.
+  private routeTurnLists(method: string, path: string, response: ServerResponse): boolean {
+    if (method !== "GET") return false;
+    if (path === "/api/shell") {
+      json(response, {
+        ...(this.sessionDirectory === undefined
+          ? {}
+          : { location: { directory: this.sessionDirectory } }),
+        data: [],
+      });
+      return true;
+    }
+    if (path === `/api/session/${FAKE_SESSION_ID}/inbox`) {
+      json(response, { data: [] });
+      return true;
+    }
+    return false;
   }
 
   private routePermission(

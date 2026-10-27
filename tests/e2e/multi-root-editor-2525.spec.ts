@@ -7,8 +7,10 @@ import {
   createEditorWorkspace,
   EDITOR_SELECTORS,
   firstPane,
+  openEditorWorkspace,
   revokeEditorWorkspaceTrust,
 } from "./support/editorWorkspace.js";
+import { expectEditorWorkspaceRestricted } from "./support/editorWorkspaceTrust.js";
 import { replaceEditorBuffer } from "./support/editor-chord.js";
 import { editorM11PairingFragment } from "./support/editor-m11-app-session.js";
 import { formatViolations, runAxe, seriousOrCritical } from "./support/axe.js";
@@ -133,6 +135,42 @@ async function storedWorkspace(page: Page): Promise<string> {
   return page.evaluate((key) => window.localStorage.getItem(key) ?? "", WORKSPACE_KEY);
 }
 
+// A card shows the project name and its canonical path; the path is unique to one fixture, so the
+// lookup stays unambiguous even when an earlier journey registered a project of the same name.
+function trustCardFor(page: Page, projectRoot: string): Locator {
+  return page
+    .getByTestId("workspace-trust-panel")
+    .getByTestId("workspace-trust-root")
+    .filter({ hasText: projectRoot });
+}
+
+// Opening a root never raises a trust dialog (ADR-0147 as amended by PR #3685, which removed the
+// opening prompt), so the grant is an explicit, server-acknowledged decision in the Workspace
+// Trust management window.
+async function grantRootTrust(page: Page, root: Locator, projectRoot: string): Promise<void> {
+  const trustCard = trustCardFor(page, projectRoot);
+  await expect(trustCard).toBeVisible();
+  await expect(trustCard.getByRole("button", { name: "Trust", exact: true })).toBeEnabled();
+  const grantResponse = page.waitForResponse(
+    (candidate) =>
+      candidate.request().method() === "POST" &&
+      candidate.url().endsWith("/api/editor/verification/trust"),
+  );
+  // The seeded Workspace Trust window sits beyond the default viewport (x 990 + w 400 > 1280), so
+  // the card control is activated in place, exactly as `revokeRootTrust` does for the same window.
+  await trustCard
+    .getByRole("button", { name: "Trust", exact: true })
+    .evaluate((button: HTMLElement) => {
+      button.click();
+    });
+  await page
+    .getByRole("alertdialog", { name: "Trust this workspace?" })
+    .getByRole("button", { name: "Trust workspace" })
+    .click();
+  expect((await grantResponse).status()).toBe(200);
+  await expect(root.getByLabel("Trusted workspace")).toBeVisible();
+}
+
 async function revokeRootTrust(page: Page, root: Locator, projectName: string): Promise<void> {
   const revokeButton = page.getByRole("button", { name: "Revoke", exact: true });
   const trustCard = page
@@ -206,17 +244,13 @@ test("two roots retain independent editor and trust state through focused-root c
   await expect(rootA).toBeVisible();
   await expect(rootB).toBeVisible();
   await openFileFromRoot(page, rootA, "a.txt");
-  const grantResponse = page.waitForResponse(
-    (candidate) =>
-      candidate.request().method() === "POST" &&
-      candidate.url().endsWith("/api/editor/verification/trust"),
-  );
-  await page
-    .getByRole("alertdialog", { name: "Trust this workspace?" })
-    .getByRole("button", { name: "Trust workspace" })
-    .click();
-  expect((await grantResponse).status()).toBe(200);
-  await expect(rootA.getByLabel("Trusted workspace")).toBeVisible();
+  await openEditorWorkspace(page, { dismissTrustPrompt: false });
+  const trustPrompt = page.getByRole("alertdialog", { name: "Trust this workspace?" });
+  await expect(rootA.getByLabel("Restricted Mode")).toBeVisible();
+  await expect(trustPrompt).toHaveCount(0);
+  await expectEditorWorkspaceRestricted(page.request, a.root);
+  await grantRootTrust(page, rootA, a.root);
+  await expectEditorWorkspaceRestricted(page.request, b.root);
 
   const editor = page.locator(`${EDITOR_SELECTORS.workspace}:visible`);
   await replaceEditorBuffer(page, firstPane(editor), "dirty root A\n", a.root);
@@ -225,13 +259,11 @@ test("two roots retain independent editor and trust state through focused-root c
   await expect.poll(() => storedWorkspace(page)).toContain("a.txt");
 
   await page.getByRole("tab", { name: /Multi-root B/u }).click();
-  const trustPrompt = page.getByRole("alertdialog", { name: "Trust this workspace?" });
-  await expect(trustPrompt).toBeVisible();
-  await trustPrompt.getByRole("button", { name: "Stay restricted" }).click();
   await editor.locator('[role="treeitem"].tr-file[data-path="b.txt"]').click();
   await expect(rootB).toHaveAttribute("aria-selected", "true");
   await expect(editor).toContainText("b.txt");
   await expect.poll(() => storedWorkspace(page)).toContain("b.txt");
+  await expect(trustPrompt).toHaveCount(0);
   await page.getByRole("tab", { name: /Multi-root A/u }).click();
   await expect(editor.locator(`${EDITOR_SELECTORS.tab}[data-dirty='true']`)).toHaveCount(1);
   await expect(editor).toContainText("a.txt");

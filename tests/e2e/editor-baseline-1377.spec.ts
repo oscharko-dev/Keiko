@@ -46,6 +46,12 @@ const README_FILE = "README.md";
 const TSCONFIG_FILE = "tsconfig.json";
 const OPEN_FILES = [APP_FILE, UTIL_FILE, README_FILE] as const;
 const MISSING_FILE = "src/does-not-exist.ts";
+// The dirty-close prompt is a native `<dialog open aria-modal>`: its `dialog` role is implicit, so
+// the explicit `[role='dialog']` that EDITOR_SELECTORS.dirtyDialog still carries matches nothing
+// (#2930). It is also portaled into `document.body` so the modal lock can isolate the whole
+// background (#2981), so it is addressed from the page, never from inside `.editor-workspace`.
+// Kept here rather than in editorWorkspace.ts, which is part of the D12 measurement toolchain digest.
+const DIRTY_DIALOG = "dialog.ed-dirty-dialog[aria-modal='true']";
 
 const WORKSPACE_FILES = [
   {
@@ -467,7 +473,7 @@ async function scenarioDirtyCloseGuard(page: Page, testInfo: TestInfo): Promise<
   await expect(tabFor(pane, APP_FILE)).toHaveAttribute("data-dirty", "true");
 
   await closeButton(pane, APP_FILE).click();
-  const dialog = workspace.locator(EDITOR_SELECTORS.dirtyDialog);
+  const dialog = page.locator(DIRTY_DIALOG);
   await expect(dialog).toBeVisible();
   await expect(dialog.locator(`#${EDITOR_SELECTORS.dirtyDialogTitleId}`)).toHaveText(
     "Unsaved editor changes",
@@ -507,8 +513,27 @@ async function scenarioRecovery(page: Page, testInfo: TestInfo): Promise<void> {
   expect(errors).toEqual([]);
 }
 
+// An editor window without a root of its own follows the Workbench-wide selected project (#2835),
+// and `keiko ui` seeds its launch directory as that project (#918). "No root" therefore means "no
+// project is available", which this serves for the project list instead of seeding an unreachable
+// window shape.
+async function serveNoAvailableProject(page: Page): Promise<void> {
+  await page.route(
+    (url) => url.pathname === "/api/projects",
+    (route) =>
+      route.request().method() === "GET"
+        ? route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({ projects: [] }),
+          })
+        : route.fallback(),
+  );
+}
+
 async function scenarioEmptyState(page: Page, testInfo: TestInfo): Promise<void> {
   const errors = collectPageErrors(page);
+  await serveNoAvailableProject(page);
   await seedEditorWindow(page, { windowId: "issue-1377-empty", resetWorkspace: true });
   await page.goto("/");
 
@@ -520,25 +545,77 @@ async function scenarioEmptyState(page: Page, testInfo: TestInfo): Promise<void>
   expect(errors).toEqual([]);
 }
 
+// The editor offers Retry only for a failure the server may recover from (a 5xx, a timeout or a
+// transport error). A permanent 4xx such as a missing path cannot succeed on a second read, so it
+// shows the alert alone (#3685, pinned by EditorWidget.test.tsx).
+async function failFileContentReads(
+  page: Page,
+  file: string,
+  state: { failing: boolean },
+): Promise<void> {
+  await page.route(
+    (url) => url.pathname === "/api/files/content" && url.searchParams.get("path") === file,
+    (route) =>
+      state.failing && route.request().method() === "GET"
+        ? route.fulfill({
+            status: 503,
+            contentType: "application/json",
+            body: JSON.stringify({
+              error: { code: "UNAVAILABLE", message: "The server is temporarily unavailable." },
+            }),
+          })
+        : route.fallback(),
+  );
+}
+
 async function scenarioLoadFailure(page: Page, testInfo: TestInfo): Promise<void> {
   const { root } = createEditorWorkspace(WORKSPACE_FILES);
+  const outage = { failing: true };
+  await failFileContentReads(page, APP_FILE, outage);
   await seedEditorWindow(page, {
     root,
-    openFiles: [MISSING_FILE],
-    active: MISSING_FILE,
+    openFiles: [APP_FILE],
+    active: APP_FILE,
     windowId: "issue-1377-error",
     resetWorkspace: true,
   });
   await page.goto("/");
   const workspace = await openEditorWorkspace(page);
 
-  const alert = workspace.locator(`${EDITOR_SELECTORS.host} ${EDITOR_SELECTORS.loadError}`);
+  const host = workspace.locator(EDITOR_SELECTORS.host);
+  const alert = host.locator(EDITOR_SELECTORS.loadError);
   await expect(alert).toBeVisible();
-  await expect(alert.getByRole("button", { name: "Retry" })).toBeVisible();
-  await expect(
-    workspace.locator(`${EDITOR_SELECTORS.host} ${EDITOR_SELECTORS.monaco}`),
-  ).toHaveCount(0);
+  const retry = alert.getByRole("button", { name: "Retry" });
+  await expect(retry).toBeVisible();
+  await expect(host.locator(EDITOR_SELECTORS.monaco)).toHaveCount(0);
   await attachShot(page, testInfo, "load-error.png");
+
+  // Retry is a working recovery path, not decoration: once the server answers, it mounts the editor.
+  outage.failing = false;
+  await retry.click();
+  await expect(host.locator(EDITOR_SELECTORS.monaco)).toBeVisible();
+  await expect(alert).toHaveCount(0);
+}
+
+async function scenarioMissingFile(page: Page, testInfo: TestInfo): Promise<void> {
+  const { root } = createEditorWorkspace(WORKSPACE_FILES);
+  await seedEditorWindow(page, {
+    root,
+    openFiles: [MISSING_FILE],
+    active: MISSING_FILE,
+    windowId: "issue-1377-missing",
+    resetWorkspace: true,
+  });
+  await page.goto("/");
+  const workspace = await openEditorWorkspace(page);
+
+  const host = workspace.locator(EDITOR_SELECTORS.host);
+  const alert = host.locator(EDITOR_SELECTORS.loadError);
+  await expect(alert).toBeVisible();
+  await expect(alert).toContainText(/not found/iu);
+  await expect(alert.getByRole("button", { name: "Retry" })).toHaveCount(0);
+  await expect(host.locator(EDITOR_SELECTORS.monaco)).toHaveCount(0);
+  await attachShot(page, testInfo, "missing-file.png");
 }
 
 async function scenarioAccessibility(page: Page): Promise<void> {
@@ -581,8 +658,11 @@ async function scenarioAccessibility(page: Page): Promise<void> {
   await expect(tabHit(appPane, APP_FILE)).toHaveAttribute("aria-selected", "true");
   await replaceEditorBuffer(page, appPane, "export const a11y = true;\n", root);
   await closeButton(appPane, APP_FILE).click();
-  const dialog = workspace.locator(EDITOR_SELECTORS.dirtyDialog);
+  const dialog = page.locator(DIRTY_DIALOG);
   await expect(dialog).toBeVisible();
+  // A native <dialog> carries its role implicitly, so the accessibility tree is the contract: the
+  // modal is exposed as a dialog named by its heading.
+  await expect(page.getByRole("dialog", { name: "Unsaved editor changes" })).toBeVisible();
   // The modal labels itself via its heading, takes focus on open, and Escape dismisses it.
   await expect(dialog).toHaveAttribute("aria-labelledby", EDITOR_SELECTORS.dirtyDialogTitleId);
   await expect(dialog).toBeFocused();
@@ -811,4 +891,6 @@ test.describe("@editor-baseline editor browser regression and accessibility gate
     scenarioQuickFix(page, testInfo));
   test("q. shows signature help while typing a call", ({ page }, testInfo) =>
     scenarioSignatureHelp(page, testInfo));
+  test("r. surfaces a missing file without a retry and no editor", ({ page }, testInfo) =>
+    scenarioMissingFile(page, testInfo));
 });

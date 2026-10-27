@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "fc9586150f220421239dafd0679cd180358f1b035b57fdbaa48f8cc48fd75886",
+    "catalogDigest": "4eaa5a5ef92c9a0846d87ed1ce8ae303a1ae4313dc2c4f9eff4b21e352d97172",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -13554,8 +13554,8 @@
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeActivityOperations.ts:3",
         "emitterSites": [
           "packages/keiko-server/src/coding-runtime/codingToolGovernedDelegate.ts:139",
-          "packages/keiko-server/src/coding-runtime/codingToolAuthorityPort.ts:1399",
-          "packages/keiko-server/src/coding-runtime/codingToolAuthorityPort.ts:1677",
+          "packages/keiko-server/src/coding-runtime/codingToolAuthorityPort.ts:1413",
+          "packages/keiko-server/src/coding-runtime/codingToolAuthorityPort.ts:1691",
           "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1160",
           "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1179",
           "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1214"
@@ -27296,7 +27296,7 @@
         "proofIds": ["git.verified-commit.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:112",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:1079"]
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:1097"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -30536,8 +30536,8 @@
         "failureClasses": ["pr-description-apply-blocked"],
         "proofIds": ["pr-description.apply.blocked.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:910",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:998"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:915",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:1003"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -30601,8 +30601,8 @@
         "failureClasses": ["pr-description-apply-failed"],
         "proofIds": ["pr-description.apply.failed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:925",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:1008"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:930",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:1013"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -30666,8 +30666,8 @@
         "failureClasses": ["pr-description-apply"],
         "proofIds": ["pr-description.apply.started.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:880",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:990"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:885",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:995"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -30731,8 +30731,8 @@
         "failureClasses": ["pr-description-apply"],
         "proofIds": ["pr-description.apply.succeeded.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:895",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:993"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:900",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:998"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -31256,8 +31256,8 @@
         "failureClasses": ["pr-description-model-egress"],
         "proofIds": ["pr-description.model-egress.denied.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:941",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:1024"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:946",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:1029"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -31475,8 +31475,8 @@
         "failureClasses": ["pr-description-repository-binding"],
         "proofIds": ["pr-description.repository.mismatch.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:957",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:1038"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:962",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:1043"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -101526,7 +101526,7 @@
     {
       "op": "coding-runtime.functional-workspace-read",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.functional/_support.ts:495",
+      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.functional/_support.ts:501",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -102091,7 +102091,7 @@
     {
       "op": "coding-runtime.tool-result",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingToolAuthorityPort.ts:1419",
+      "site": "packages/keiko-server/src/coding-runtime/codingToolAuthorityPort.ts:1433",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -103511,25 +103511,25 @@
     {
       "op": "pr-description.apply.blocked",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:913",
+      "site": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:918",
       "package": "keiko-server"
     },
     {
       "op": "pr-description.apply.failed",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:928",
+      "site": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:933",
       "package": "keiko-server"
     },
     {
       "op": "pr-description.apply.started",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:883",
+      "site": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:888",
       "package": "keiko-server"
     },
     {
       "op": "pr-description.apply.succeeded",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:898",
+      "site": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:903",
       "package": "keiko-server"
     },
     {
@@ -103559,13 +103559,13 @@
     {
       "op": "pr-description.model-egress.denied",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:944",
+      "site": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:949",
       "package": "keiko-server"
     },
     {
       "op": "pr-description.repository.mismatch",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:960",
+      "site": "packages/keiko-server/src/gitDelivery/prDescriptionRoutes.ts:965",
       "package": "keiko-server"
     },
     {

@@ -386,6 +386,15 @@ export function notifyCodingAppSessionChanged(): void {
   publishSessionRefresh();
 }
 
+/**
+ * A run control refused with the existence-concealing not-found result (ADR-0141 D6) may mean the
+ * app session was revoked. Every session-dependent read runs again so the honest pairing state
+ * surfaces (#2478); it only inspects and never establishes authentication.
+ */
+export function requestCodingAppSessionReinspection(): void {
+  publishSessionRefresh();
+}
+
 /** How many pairings or local restores this window completed after boot; session reads re-run on it. */
 export function useCodingAppSessionRedemptions(): number {
   return useSyncExternalStore(subscribeToRedemptions, redemptionCount, () => 0);

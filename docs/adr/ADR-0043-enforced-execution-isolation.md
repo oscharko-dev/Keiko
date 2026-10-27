@@ -192,6 +192,12 @@ namespace reaps detached descendants when the main command exits. The compatibil
 wrapper retains its existing contract. Actual compiled `runCommand` controls qualify both an owned
 foreign-process signal/visibility refusal and zero acting descendants after successful settlement,
 with a held-main detached-write positive control.
+The child's `/tmp`, `HOME` and `TMPDIR` are the caller's per-run ephemeral home: a direct child of
+the mounted root, created before spawn and removed in every settle path, because whatever the child
+writes there (npm logs, Node's compile cache) would otherwise stay in the real workspace and make a
+later verified commit's clean-candidate fact false (PR #4095). Without one, the shared
+`.keiko-sandbox-tmp` directory of the root is used; a per-run directory anywhere else fails closed
+before spawn.
 On macOS, assured execution-root runs select Docker/Podman with its existing private PID namespace
 and container lifetime; without one, admission fails closed before spawn. Filesystem-scoped Seatbelt
 cannot own a detached `setsid` descendant after the command exits, so it no longer qualifies for

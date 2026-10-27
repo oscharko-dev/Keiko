@@ -266,7 +266,12 @@ async function applyMode(page: Page, mode: EvidenceMode): Promise<void> {
 
 async function openHealthScan(page: Page): Promise<Locator> {
   await page.getByRole("button", { name: "MemoriaViva" }).click();
-  const window = page.getByRole("region", { name: "MemoriaViva", exact: true });
+  // Activating a window from the rail now also selects it (503ff11a4 / #3506, "unify primary window
+  // activation"), and a selected window region carries the "— selected" suffix in its accessible
+  // name (workspace.window.selectedLabel, pinned in WindowFrame.test.tsx). The name stays anchored
+  // on both sides: the window also contains regions such as "MemoriaViva request settings", which a
+  // bare prefix match would select as well.
+  const window = page.getByRole("region", { name: /^MemoriaViva(?: — selected)?$/u });
   await expect(window).toBeVisible();
   await window.getByRole("button", { name: "Health scan" }).click();
   await expect(window.getByRole("heading", { name: "Health scan" })).toBeVisible();
