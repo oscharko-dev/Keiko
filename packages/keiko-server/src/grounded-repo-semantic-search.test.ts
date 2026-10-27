@@ -1229,6 +1229,8 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
   ] as const)(
     "projects refreshed text for %s under its own content policy",
     async (_caller, contentRedaction, kept) => {
+      // The environment alone must never reach the Coding Workbench (the first #4098 draft did).
+      vi.stubEnv("KEIKO_CONTENT_REDACTION", "off");
       const fixture = await staleFixture();
       fixture.files["src/auth.ts"] =
         "export const sessionState = 'session renewal changed +49 30 12345678';\n";
@@ -1257,6 +1259,7 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
         expect(fragments[0]?.includes("+49 30 12345678")).toBe(kept);
       } finally {
         fixture.close();
+        vi.unstubAllEnvs();
       }
     },
   );

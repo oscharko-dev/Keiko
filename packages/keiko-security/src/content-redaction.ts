@@ -30,7 +30,9 @@ export function resolveContentRedactionPolicy(env: EnvSource): ResolvedContentRe
  * Projects authorized document or model content under the selected policy, never diagnostics or
  * exported evidence. `redact` is the default heuristic projection. `preserve` keeps personal data,
  * configuration values and code, and still removes configured secrets (with their encoded
- * spellings) and the credential shapes of `redactCredentialShapes`.
+ * spellings) and the credential shapes of `redactCredentialShapes`. With
+ * `preserveSourceLineBreaks`, a removed multi-line span keeps its line count, so source coordinates
+ * stay physical.
  */
 export function redactContent(
   input: string,
@@ -39,7 +41,7 @@ export function redactContent(
   options: Parameters<typeof redact>[2] = {},
 ): string {
   if (policy === "redact") return redact(input, secrets, options);
-  const exact = redactCredentialShapes(input, secrets);
+  const exact = redactCredentialShapes(input, secrets, options.preserveSourceLineBreaks === true);
   const spellings = createSecretSpellingStreamRedactor(
     secrets.filter((secret) => secret.length >= 4 && /^[\x20-\x7E]*$/u.test(secret)),
   );

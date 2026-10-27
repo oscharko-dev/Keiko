@@ -1,9 +1,9 @@
-import type { ContentRedactionPolicy } from "@oscharko-dev/keiko-contracts";
 import { currentContentRedactor } from "./content-redactor.js";
 import { isAbsolute, relative, resolve } from "node:path";
 import { createHash } from "node:crypto";
 
 import {
+  type ContentRedactionPolicy,
   type KnowledgeCapsule,
   type EmbeddingModelIdentity,
   type KnowledgeSource,

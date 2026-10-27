@@ -23,12 +23,6 @@ export function currentContentRedactor(deps: UiHandlerDeps): Redactor {
     deepRedactStrings(value, (text) => redactContent(text, "preserve", secrets));
 }
 
-/** The string form of `currentContentRedactor` for one stored or displayed Chat text. */
-export function redactChatContent(deps: UiHandlerDeps, value: string): string {
-  const redacted = currentContentRedactor(deps)(value);
-  return typeof redacted === "string" ? redacted : value;
-}
-
 /**
  * Hands a Chat answer model port the deployment policy, so the gateway preserves the answer only
  * for the Chat calls that ask for it. Under the default policy the port is returned unchanged.

@@ -56,9 +56,9 @@ deployment policy appropriate for those destinations. It is not a complete perso
 anonymizer in either mode. Model-provider policies may independently affect the answer.
 
 Even with the setting, Keiko still removes configured Keiko/provider credential literals, private
-keys, credentials embedded in URLs, credential-shaped `Bearer`/`Basic` values and known API token
-shapes; the model is told never to reconstruct such text. The Coding Workbench and its repository
-search, compaction summaries, filesystem containment and denied paths, authority and budgets,
+keys, credentials embedded in URLs, `Authorization` header values, encoded-looking
+`Bearer`/`Basic` values and known API token shapes; the model is told never to reconstruct such
+text. The Coding Workbench and its repository search, compaction summaries, memory proposals, filesystem containment and denied paths, authority and budgets,
 tool-argument protections, audit artifacts, diagnostics and support exports retain their existing
 protections. They do not inherit the content-policy opt-out.
 

@@ -19,7 +19,8 @@ export function redactWorkspaceSource(
   preserveSourceLineBreaks = true,
   policy: ContentRedactionPolicy = "redact",
 ): string {
-  if (policy === "preserve") return redactContent(text, "preserve");
+  if (policy === "preserve")
+    return redactContent(text, "preserve", [], { preserveSourceLineBreaks });
   const sourceFile = isEcosystemSourceFile(scopePath);
   const language = sourceFile ? workspaceLanguageForPath(scopePath) : undefined;
   const sourceLanguage = projectionLanguage(language, scopePath);

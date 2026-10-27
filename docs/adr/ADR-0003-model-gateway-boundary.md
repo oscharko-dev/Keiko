@@ -177,7 +177,8 @@ the exact value `off` was configured. Every other caller, including the Coding W
 route, compaction summaries and evaluation, keeps the default heuristic redaction. A preserved
 answer still loses its credential floor: configured provider and Keiko credential literals of at
 least four characters and their encoded spellings, PEM private-key blocks, URL credentials,
-credential-shaped Bearer/Basic values and the known issuer token shapes. Streaming keeps the
+`Authorization` header values, encoded-looking Bearer/Basic values and the known issuer token
+shapes. Memory proposals project a preserved answer with the default redactor again. Streaming keeps the
 configured-secret buffering, and cancellation discards pending text. Tool arguments, error
 constructors, logs, support reports and audit artifacts retain their unconditional redactors.
 `chat.request.dispatch.contentRedactionEnabled` records the policy the call actually used as a

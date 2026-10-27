@@ -1496,8 +1496,10 @@ policy travels explicitly (`WorkspaceInfo.contentRedaction`, `GatewayCallRequest
 and the deps graph); no lower layer reads the environment. Missing, empty or `on` values retain the
 original content redaction; any other value also retains it and records a `warn`-level
 `chat.content-policy.resolved` line. Preserved content still loses the credential floor (configured
-secret literals, private keys, URL credentials, credential-shaped Bearer/Basic values and known
-token shapes). The existing `redacted` atom state means the guarded content policy has been
+secret literals, private keys, URL credentials, `Authorization` header values, encoded-looking
+Bearer/Basic values and known token shapes). A removed multi-line span keeps its line count, so
+source coordinates and line hints stay physical. Memory proposals derived from a preserved answer
+use the default projection again. The existing `redacted` atom state means the guarded content policy has been
 applied; it is not a claim that all personal data was anonymized. `raw-internal` packs remain
 rejected. The conversation and grounded system prompts in this mode request source fidelity, tell
 the model never to reconstruct `[REDACTED]` text, and keep the instruction not to expose API keys,

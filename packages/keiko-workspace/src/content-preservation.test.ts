@@ -115,6 +115,19 @@ describe("Chat-only content preservation in the evidence lane", () => {
     }
   });
 
+  it("keeps physical line coordinates after a removed private key block", () => {
+    const key = [
+      "-----BEGIN RSA PRIVATE KEY-----",
+      "MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun",
+      "-----END RSA PRIVATE KEY-----",
+    ].join("\n");
+    const text = `line1\n${key}\nline6\nline7\n`;
+    const preserved = redactWorkspaceSource(text, "notes.txt", true, "preserve");
+    expect(preserved.split("\n")).toHaveLength(text.split("\n").length);
+    expect(preserved.split("\n")[4]).toBe("line6");
+    expect(preserved).not.toContain("MIIEowIBAAKCAQEA");
+  });
+
   it("projects source without a parser under the opt-out instead of refusing it", () => {
     const source = 'class Example { string password = @"private-first""private-second"; }';
     expect(() => redactWorkspaceSource(source, "source.cs")).toThrow(

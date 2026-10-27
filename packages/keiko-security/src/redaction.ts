@@ -420,16 +420,19 @@ function redactIssuerTokens(input: string): string {
   return output;
 }
 
-// An authorization header value is a credential only when it looks like one: prose such as
-// "Bearer authentication" or "Basic configuration" stays readable under the content opt-out.
-const AUTHORIZATION_VALUE_PATTERN = /\b(Bearer|Basic)([ \t]+)([\w.\-+/=]{16,})/gi;
+// The value of an `Authorization` header is always a credential. Elsewhere a Bearer or Basic value
+// counts as one when it looks encoded (a digit, `+`, `/` or `=`), so prose such as "Bearer
+// authentication" or "Basic configuration" stays readable under the content opt-out.
+const AUTHORIZATION_HEADER_PATTERN =
+  /\b((?:proxy-)?authorization["']?[ \t]*[:=][ \t]*["']?(?:(?:Bearer|Basic|Token)[ \t]+)?)([^\s"',;]{4,})/gi;
+const AUTHORIZATION_VALUE_PATTERN = /\b(Bearer|Basic)([ \t]+)([\w.\-+/=~]{8,})/gi;
 
 function redactAuthorizationValues(input: string): string {
-  return input.replace(
-    AUTHORIZATION_VALUE_PATTERN,
-    (match, scheme: string, gap: string, value: string) =>
+  return input
+    .replace(AUTHORIZATION_HEADER_PATTERN, (_match, prefix: string) => `${prefix}${REDACTED}`)
+    .replace(AUTHORIZATION_VALUE_PATTERN, (match, scheme: string, gap: string, value: string) =>
       /[\d+/=]/u.test(value) ? `${scheme}${gap}${REDACTED}` : match,
-  );
+    );
 }
 
 /**
@@ -439,12 +442,17 @@ function redactAuthorizationValues(input: string): string {
  * data, account numbers, configuration values or code, and it is not a diagnostic redactor:
  * logs, evidence and support artifacts keep `redact()`.
  */
-export function redactCredentialShapes(input: string, secrets: readonly string[] = []): string {
+export function redactCredentialShapes(
+  input: string,
+  secrets: readonly string[] = [],
+  preserveSourceLineBreaks = false,
+): string {
   const literals = keepLongEnough(secrets);
+  const lines = preserveSourceLineBreaks;
   const output = redactAuthorizationValues(
-    redactUrlCredentials(redactPrivateKeyBlocks(redactLiteralSpans(input, literals, false), false)),
+    redactUrlCredentials(redactPrivateKeyBlocks(redactLiteralSpans(input, literals, lines), lines)),
   );
-  return redactLiteralSpans(redactIssuerTokens(output), literals, false);
+  return redactLiteralSpans(redactIssuerTokens(output), literals, lines);
 }
 
 /**

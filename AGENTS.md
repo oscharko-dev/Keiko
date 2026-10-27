@@ -111,7 +111,8 @@ This shapes the product _and_ how you work on it:
   carry the preserving policy; the Coding Workbench, its search and semantic refresh, evidence,
   audit, logs, support exports and tool arguments keep their default or unconditional redaction.
   Preserved content still loses the credential floor: configured secret literals, private keys,
-  URL credentials, credential-shaped Bearer/Basic values and known token shapes. Workspace
+  URL credentials, `Authorization` header values, encoded-looking Bearer/Basic values and known
+  token shapes; memory proposals keep the default projection. Workspace
   authority, containment, deny-lists and budgets are unchanged. See ADR-0003 D7 and ADR-0022 D4.
 - Source redaction preserves TypeScript/JavaScript and Java syntax at the shared security boundary;
   syntax metadata never exempts credential literal data or configured secrets. JSON/JSONC and YAML

@@ -99,6 +99,10 @@ describe("credential floor of preserved content", () => {
     ["a token used as URL user", "clone https://ghtoken123456@git.example.test/o/r.git"],
     ["a bearer credential", "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.e30.c2lnbmF0dXJl"],
     ["a basic credential", "Authorization: Basic dXNlcjpwYXNzd29yZA=="],
+    ["a short basic credential", "Authorization: Basic cm9vdDp0b29y"],
+    ["a letters-only header value", '"authorization": "Bearer abcdefghijklmnop"'],
+    ["a proxy header value", "Proxy-Authorization: Token abcd"],
+    ["a short bearer value", "use Bearer abc123def456 for staging"],
     ["a private key block", PRIVATE_KEY],
   ])("removes %s", (_label, text) => {
     const preserved = redactContent(text, "preserve");
@@ -116,6 +120,14 @@ describe("credential floor of preserved content", () => {
       "const password = readConfig('db');",
     ].join("\n");
     expect(redactContent(text, "preserve")).toBe(text);
+  });
+
+  it("keeps physical line coordinates when the caller asks for them", () => {
+    const text = `line1\n${PRIVATE_KEY}\nline6\nline7`;
+    const preserved = redactContent(text, "preserve", [], { preserveSourceLineBreaks: true });
+    expect(preserved.split("\n")).toHaveLength(text.split("\n").length);
+    expect(preserved.split("\n")[4]).toBe("line6");
+    expect(preserved).not.toContain("MIIEowIBAAKCAQEA");
   });
 
   it("removes the whole private key block, the same way the default projection does", () => {

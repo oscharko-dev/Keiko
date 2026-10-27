@@ -55,8 +55,9 @@ setting once at startup and records `chat.content-policy.resolved` (`policy`, `s
 an unrecognized value, which keeps redaction). Only Chat model ports and the Chat connected-context
 workspace receive the preserving policy explicitly; the gateway, workspace and store never read the
 environment, and the Coding Workbench keeps the default projection. Preserved content still loses
-configured infrastructure-secret literals, private keys, URL credentials, credential-shaped
-Bearer/Basic values and known token shapes. Diagnostics, audit evidence, support exports and
+configured infrastructure-secret literals, private keys, URL credentials, `Authorization` header
+values, encoded-looking Bearer/Basic values and known token shapes, and memory proposals keep the
+default projection. Diagnostics, audit evidence, support exports and
 tool-argument protections remain unconditional. The setting applies to every configured provider;
 it does not infer trust from a provider hostname. `chat.request.dispatch` records the per-call
 `contentRedactionEnabled` without source text. See

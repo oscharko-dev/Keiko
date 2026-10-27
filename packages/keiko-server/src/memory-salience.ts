@@ -38,6 +38,7 @@ import {
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentGatewayConfig, currentRedactionSecrets } from "./deps.js";
+import { chatContentPolicy } from "./content-redactor.js";
 import {
   conversationMemoryScopes,
   type ConversationMemoryRuntimeContext,
@@ -513,6 +514,14 @@ function logSalienceCaptureDropped(
   );
 }
 
+// #4098: the Chat content opt-out preserves an answer for the person reading it, not for memory.
+// Memory proposals keep the default projection, so a preserved answer is projected again here.
+function memoryAssistantText(deps: UiHandlerDeps, assistantText: string): string {
+  return chatContentPolicy(deps) === "preserve"
+    ? String(deps.redactor(assistantText))
+    : assistantText;
+}
+
 export function scheduleMemorySalienceCapture(
   deps: UiHandlerDeps,
   request: SalienceTurnRequest,
@@ -530,16 +539,9 @@ export function scheduleMemorySalienceCapture(
     return;
   }
   pendingSalienceCaptures += 1;
+  const memoryText = memoryAssistantText(deps, assistantText);
   setImmediate(() => {
-    void captureSalientFromTurn(
-      deps,
-      request,
-      context,
-      modelId,
-      assistantText,
-      surface,
-      correlationId,
-    )
+    void captureSalientFromTurn(deps, request, context, modelId, memoryText, surface, correlationId)
       .catch((error: unknown) => {
         logSalienceCaptureFailure(surface, error, deps, correlationId);
       })
