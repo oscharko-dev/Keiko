@@ -880,3 +880,17 @@ and real Activity Log reader. Regeneration resolves 607 proofs and 30 scenarios 
 violations; all 97 registry tests pass. Package build, root typecheck, changed lint/format and
 semantic gate pass. This closes the concrete classification finding, not the outstanding full
 Activity Log/architecture/performance qualification.
+
+## Structured MCP failure preservation — #4089 / #4083 AC4 / #4081
+
+The host previously discarded structured provider failures and retained only `tool-error`.
+It now captures and bounds provider results, validates their declared output schema even for
+MCP error results, and retains valid failure data through an immutable, non-enumerable accessor.
+Arbitrary thrown exceptions, malformed result shapes, unexpected fields and oversized error
+results remain generic. The registered failed lifecycle still settles once and contains no data.
+
+One regression failed before the fix. All 18 SDK-host tests, 36 existing binder/provider tests
+and 97 registry tests pass, along with package build, root typecheck, changed lint/format,
+ADR index and unchanged semantic checks. Catalog failure-envelope propagation, durable mutation
+intent and explicit Jira remote-result states are the next integration step; preserving data in
+the host alone does not complete the user-visible outcome requirements.

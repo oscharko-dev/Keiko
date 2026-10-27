@@ -8,6 +8,7 @@ import {
   type ManagedMcpLogPort,
   type ManagedMcpProvider,
   type ManagedMcpTool,
+  type ManagedMcpToolResult,
   type ManagedMcpToolDeclaration,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import {
@@ -49,6 +50,22 @@ function withSignal<Context extends ManagedMcpInvocationContext>(
     signal,
     beforeEffect: () => !signal.aborted && context.beforeEffect() && !signal.aborted,
   };
+}
+
+async function capturedResult<Context extends ManagedMcpInvocationContext>(
+  tool: ManagedMcpTool<Context>,
+  result: ManagedMcpToolResult,
+): Promise<CatalogJsonObject> {
+  const encoded = JSON.stringify(result.data);
+  if (Buffer.byteLength(encoded) > tool.descriptor.bounds.maxResultBytes)
+    throw new ManagedMcpError("protocol-error");
+  // Capture before the asynchronous validator so a provider cannot mutate an admitted result.
+  const captured: unknown = JSON.parse(encoded);
+  const validated = await fromJsonSchema<CatalogJsonObject>(tool.descriptor.resultSchema)[
+    "~standard"
+  ].validate(captured);
+  if (validated.issues !== undefined) throw new ManagedMcpError("protocol-error");
+  return validated.value;
 }
 
 class ManagedHost<Context extends ManagedMcpInvocationContext> implements ManagedMcpHost<Context> {
@@ -153,14 +170,12 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
               args,
               this.invocationContext(context, sdkContext.mcpReq.signal),
             );
-            if (
-              Buffer.byteLength(JSON.stringify(result.data)) > tool.descriptor.bounds.maxResultBytes
-            )
-              throw new ManagedMcpError("protocol-error");
+            const isError = result.isError === true;
+            const structuredContent = await capturedResult(tool, result);
             return {
               content: [],
-              structuredContent: result.data,
-              isError: result.isError === true,
+              structuredContent,
+              isError,
             };
           } catch {
             // The SDK renders handler error messages as content; discard arbitrary provider errors.
@@ -334,7 +349,11 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
           { signal: bound.signal, timeout },
         );
       });
-      if (result.isError) throw new ManagedMcpError("tool-error");
+      if (result.isError)
+        throw new ManagedMcpError(
+          "tool-error",
+          result.structuredContent as CatalogJsonObject | undefined,
+        );
       if (result.structuredContent === undefined) throw new ManagedMcpError("protocol-error");
       return result.structuredContent as CatalogJsonObject;
     } catch (error) {

@@ -95,7 +95,7 @@ The host never automatically repeats an invocation. Protocol or handler failure 
 not establish absence of a remote effect. Domain handlers and the existing invocation
 owner retain durable intent and observed outcomes; confirmed, unconfirmed, rejected and
 unknown-effect states remain distinguishable. Arbitrary provider errors are replaced
-before the SDK can render them into content.
+before the SDK can render them into content. Explicit structured provider failures are byte-bounded, captured before asynchronous validation and checked against the admitted result schema, including when MCP marks the result as an error. Their immutable data is available only through a non-enumerable error accessor; error messages and Activity Log records retain only closed classifications. Consumer result settlement must preserve the distinction between protocol failure and the observed remote effect.
 
 A failed pre-effect log write fails closed. A failed terminal write never changes an
 already observed execution outcome: it increments the existing process-wide Activity

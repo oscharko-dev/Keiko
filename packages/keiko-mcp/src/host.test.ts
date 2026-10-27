@@ -11,7 +11,7 @@ import type {
   ManagedMcpTool,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { activityLogLossCounters } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { createManagedMcpHost } from "./index.js";
+import { createManagedMcpHost, ManagedMcpError } from "./index.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -434,4 +434,52 @@ describe("managed MCP effect and evidence boundaries", () => {
     expect(phases).not.toContain("failed");
     expect(activityLogLossCounters()["port-sink-failed"]).toBe(before + 1);
   });
+});
+
+it("preserves a bounded structured provider error privately with one failed settlement", async () => {
+  const lines: string[] = [];
+  const execute = vi.fn<ManagedMcpTool<Context>["execute"]>((_args, ctx) =>
+    Promise.resolve({
+      data: { text: "private-provider-error", binding: ctx.binding },
+      isError: true,
+    }),
+  );
+  const { host } = fixture(execute, {
+    write: (event) => {
+      lines.push(formatActivityLogProofLine(event));
+    },
+  });
+  await host.admit("admission-fixture");
+  const error: unknown = await host
+    .call("fixture.echo", { text: "one" }, context("first"))
+    .catch((error: unknown) => error);
+  expect(error).toBeInstanceOf(ManagedMcpError);
+  if (!(error instanceof ManagedMcpError)) throw new Error("Expected managed failure");
+  expect(error.reason).toBe("tool-error");
+  expect(error.structuredResult).toEqual({ text: "private-provider-error", binding: "first" });
+  expect(Object.isFrozen(error.structuredResult)).toBe(true);
+  expect(JSON.stringify(error)).not.toContain("private-provider-error");
+  expect(lines.join()).not.toContain("private-provider-error");
+  expect(
+    lines
+      .map((line) => expectActivityLogProof("mcp.managed.lifecycle.line", line))
+      .filter((event) => event.phase === "failed"),
+  ).toHaveLength(1);
+  expect(execute).toHaveBeenCalledTimes(1);
+});
+
+it.each([
+  { data: { text: 42, binding: "first" } },
+  { data: { text: "private-error", binding: "first", credential: "unwanted-field" } },
+  { data: { text: "x".repeat(2048), binding: "first" } },
+])("does not preserve invalid or oversized provider error data", async ({ data }) => {
+  const { host } = fixture(() => Promise.resolve({ data, isError: true }));
+  await host.admit("admission-fixture");
+  const error: unknown = await host
+    .call("fixture.echo", { text: "one" }, context("first"))
+    .catch((error: unknown) => error);
+  expect(error).toBeInstanceOf(ManagedMcpError);
+  if (!(error instanceof ManagedMcpError)) throw new Error("Expected managed failure");
+  expect(error.structuredResult).toBeUndefined();
+  expect(JSON.stringify(error)).not.toMatch(/private-error|unwanted-field/u);
 });

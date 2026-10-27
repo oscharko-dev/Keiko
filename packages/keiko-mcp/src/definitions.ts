@@ -1,4 +1,6 @@
 import type { Tool } from "@modelcontextprotocol/client";
+import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { deepFreeze } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
 import { canonicalise } from "@oscharko-dev/keiko-security/hashing";
 import type {
   ManagedMcpFailure,
@@ -8,9 +10,21 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 
 export class ManagedMcpError extends Error {
-  public constructor(public readonly reason: ManagedMcpFailure) {
+  readonly #structuredResult: CatalogJsonObject | undefined;
+
+  public constructor(
+    public readonly reason: ManagedMcpFailure,
+    structuredResult?: CatalogJsonObject,
+  ) {
     super("Managed MCP operation failed");
     this.name = "ManagedMcpError";
+    this.#structuredResult =
+      structuredResult === undefined ? undefined : deepFreeze(structuredResult);
+  }
+
+  /** Validated provider data; deliberately absent from enumerable error diagnostics. */
+  public get structuredResult(): CatalogJsonObject | undefined {
+    return this.#structuredResult;
   }
 }
 const RISKS: ReadonlySet<string> = new Set(["read", "write"]);
