@@ -5291,7 +5291,11 @@
       "id": "context-compaction-record-diagnostic-public-proof",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "diagnostic-checker",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": [
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type"
+      ],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/context-engineering-compaction.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation",

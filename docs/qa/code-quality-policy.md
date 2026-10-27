@@ -1095,9 +1095,20 @@ Seven compaction diagnostic validators use the existing `diagnostic-checker` rol
 with a closed `ContextValidationResult` envelope. Their canonical same-owner public
 proofs count actual failure reasons through `result.ok ? 0 : result.reasons.length`;
 there is no parsed value, new public export, or production behavior change.
-The records authorize only unknown parameter zero, subject to actual capability
+The records retain their unknown-parameter-zero obligations, subject to actual capability
 assessment and proof qualification. Source preparation alone does not establish
 readiness, helper closure completion, activation, or a green 96-record inventory.
+
+Only `context-compaction-record-diagnostic-public-proof` additionally declares
+`anti-slop/no-runtime-typeof` and `anti-slop/no-unsafe-dictionary-type`; the other six records
+remain unknown-only. The existing checker determines eligibility for exact raw-origin `typeof` operands;
+dictionary eligibility is limited to intrinsic string/unknown members in supported boolean or
+identifier-predicate checking helpers. Static eligibility does not replace the required fresh
+semantic proof qualification. Exact raw-origin `typeof` checks within data-returning collectors can remain eligible. Dictionary
+annotations in those collectors, typed `typeof` operands, unsupported callbacks and unqualified helper
+references gain no exemption. All existing public diagnostic witnesses,
+ordered-refusal proofs, raw-input obligations and unadapted findings remain authoritative;
+neither declaration nor structural readiness activates a scope.
 
 Production provenance remains distinct from these public API proof bindings:
 `validateContextCompactionRecord` is used by `buildCompactionRecords` in workflows
