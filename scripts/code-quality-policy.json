@@ -2358,7 +2358,11 @@
       "id": "documentation-navigation-request-public-parser",
       "owner": "@oscharko-dev/keiko-contracts",
       "kind": "public-parser",
-      "rules": ["anti-slop/no-unknown-parameters"],
+      "rules": [
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type"
+      ],
       "input": {
         "consumerPath": "packages/keiko-contracts/src/documentation-browser.test.ts",
         "specifier": "@oscharko-dev/keiko-contracts/runtime/documentation-browser",

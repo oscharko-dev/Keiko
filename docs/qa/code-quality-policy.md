@@ -804,8 +804,14 @@ unknown-parameter obligations, bringing the register to 45. Their public wrapper
 fresh output, bounded primitives, optional-field normalization, exact eager refusals and original
 getter phases. The existing BFF consumers use checked target, port and advisory reason fields;
 healthy and refused real-server controls preserve redaction and the absence of persistent or model
-work. A client-reported lastNavigationReason grants no consent or crawl authority. Optional typeof
-and dictionary adaptations remain withheld pending actual checker eligibility. No scope is activated.
+work. A client-reported lastNavigationReason grants no consent or crawl authority.
+
+The existing navigation-request record additionally declares `anti-slop/no-runtime-typeof` and
+`anti-slop/no-unsafe-dictionary-type`, retaining its unknown-parameter obligation and exact public
+proof selectors. Only checker-supported raw-origin operands and intrinsic unknown dictionary members
+may qualify; the data-returning error collector and typed checks gain no exemption. Declaration
+alone establishes neither eligible slots nor qualification, and unadapted findings remain visible.
+The separate manual-proposal record retains unknown-only rules. No scope is activated.
 
 Four Workbench question/research public parsers extend the register from 45 to 49 mandatory
 unknown-parameter obligations: answer admission, runtime list response, questions channel and
