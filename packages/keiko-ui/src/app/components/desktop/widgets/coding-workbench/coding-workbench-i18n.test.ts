@@ -104,8 +104,9 @@ describe("Coding Workbench translations", () => {
 
   it.each([
     "codingWorkbench.activity.reasoning.title",
-    "codingWorkbench.activity.reasoning.badge",
     "codingWorkbench.activity.reasoning.note",
+    "codingWorkbench.activity.exitCode",
+    "codingWorkbench.activity.toolError",
   ] as const)("localizes the reasoning label %s in both catalogs", (key) => {
     const en = translateCodingWorkbench("en", key);
     const de = translateCodingWorkbench("de", key);

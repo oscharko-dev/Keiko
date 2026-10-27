@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, type ReactNode } from "react";
 import type { CodingWorkbenchRuntimeStateName } from "@oscharko-dev/keiko-contracts";
-import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { reportCodingWorkbenchInteraction } from "@/lib/coding-workbench-interaction";
 import { useCodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import styles from "./CodingWorkbenchProgress.module.css";
 
@@ -28,7 +28,7 @@ function focusDecision(id: string): void {
   const heading = document.getElementById(id);
   heading?.scrollIntoView({ block: "start" });
   heading?.focus({ preventScroll: true });
-  reportClientDiagnostic("[keiko] coding workbench pending decision focused");
+  reportCodingWorkbenchInteraction({ interaction: "pending-decision-focused" });
 }
 
 function progressDecisionId(status: CodingProgressState, review: boolean): string {
@@ -56,7 +56,7 @@ export function CodingWorkbenchProgress({
   const decisionId = progressDecisionId(status, review);
   const mark = progressMark(status);
   useEffect(() => {
-    reportClientDiagnostic(`[keiko] coding workbench progress state: ${status}`);
+    reportCodingWorkbenchInteraction({ interaction: "progress-state", progressState: status });
   }, [status]);
   if (status === "ready") return null;
   return (

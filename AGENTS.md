@@ -103,6 +103,21 @@ This shapes the product _and_ how you work on it:
   Optional Apple signing evidence must remain truthful and cannot become a hidden update gate.
 - Secrets stay out of code, logs, evidence, config, and tests. Evidence and diagnostics are
   body-free: counts, hashes, redacted summaries — never raw content, keys, endpoints, or PII.
+- **Authorized content preservation (owner decision, 2026-10-27, #4098):** the deployment operator
+  may set `KEIKO_CONTENT_REDACTION=off` before starting Keiko so Chat keeps authorized document
+  context, answers and private chat history. The server resolves it once at startup into the deps
+  graph (`chat.content-policy.resolved`; an unrecognized value warns and keeps redaction); no
+  package reads it per request. Only Chat model ports and the Chat connected-context workspace
+  carry the preserving policy from this switch. Independently of it, the OpenCode runtime is its own
+  producer and uses the gateway as infrastructure only: the Coding Workbench sidecar route always
+  hands it the model's answer, reasoning and structured output under the preserving policy (owner
+  decision, 2026-10-27). Coding repository search and semantic refresh, Coding History exports and
+  imports, evidence, audit, logs, support exports and tool arguments keep their default or
+  unconditional redaction.
+  Preserved content still loses the credential floor: configured secret literals, private keys,
+  URL credentials, `Authorization` header values, encoded-looking Bearer/Basic values and known
+  token shapes; memory proposals keep the default projection. Workspace
+  authority, containment, deny-lists and budgets are unchanged. See ADR-0003 D7 and ADR-0022 D4.
 - Source redaction preserves TypeScript/JavaScript and Java syntax at the shared security boundary;
   syntax metadata never exempts credential literal data or configured secrets. JSON/JSONC and YAML
   use parsed value boundaries. Ordinary unified diffs reuse the canonical parser at the contracts
@@ -1038,6 +1053,15 @@ cause chain), a completion the source, message, omitted, skipped and redacted-me
 byte size. The file's text is untrusted, so it is redacted again before it is stored; no text,
 title or path ever enters the line (ADR-0137 D4).
 
+`client.coding-workbench.interaction` records, at info and on the routine budget, what the human
+did on the Coding Workbench page (#3897): a disclosure opened or closed (`section`, `expanded`), the
+progress state (`progressState`), the agent picked (`build`, `plan` or `custom`, never a custom
+agent's name), a jump to a pending decision, a repository bound for trust (its two body-free ids)
+and a changeset received for review (`fileCount`). These were warn/unknown `client.diagnostic`
+notes before and buried the rare real browser failures. `gateway.setup.target.accepted` records,
+at info, that Gateway Setup accepted a loopback target (KEIKO-0884), with the request correlation
+and the closed `targetClass`; it is no longer an error-level `server.diagnostic.failure`.
+
 `gateway.conversation.admission` records the closed decision before a conversation model call,
 with admitted and current configuration generations and the request correlation. A fresh probe
 and a turn-local successful-call continuation remain distinct; failed, cancelled or filtered terminal
@@ -1230,7 +1254,7 @@ missing evidence under Rule 1, then fix the behaviour.
 
 ## 9. Traps specific to this repo (learn these once)
 
-Repository lessons now live in [Experience.md](Experience.md). Before changing UI styling,
+Repository lessons now live in [EXPERIENCE.md](EXPERIENCE.md). Before changing UI styling,
 performance evidence, package exports, workflow branch lists or coverage gates, read the matching
 entry there. In particular, the assembled package-surface check prunes the live dependency tree:
 read its ordering warning before running it. The applicable constraints are unchanged.

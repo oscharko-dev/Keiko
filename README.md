@@ -34,7 +34,7 @@
   ·
   <a href="#install-with-npm">npm</a>
   ·
-  <a href="#whats-in-12">What's in 1.2</a>
+  <a href="#whats-new-in-130">What's new in 1.3</a>
   ·
   <a href="https://github.com/oscharko-dev/Keiko/blob/dev/CONTRIBUTING.md">Contributing</a>
   ·
@@ -89,6 +89,15 @@ Connected folders do not need Git metadata or a `package.json`. Run `keiko init`
 - The CLI, the UI and the SDK share one product. Surface coverage is intentionally not identical. `keiko gen-tests` and `keiko investigate` print a reviewable report but do not persist an evidence manifest.
 - The UI can create a local runtime config during first-run setup. To list models, Keiko calls the gateway model list endpoint you configured — credentials stay in your local config.
 - Keiko serves loopback only: `keiko start` and the UI validate a loopback host value, and the server always binds `127.0.0.1`. `keiko start --port <n>` sets the Port to bind (default: 1983).
+
+## What's new in 1.3.0
+
+- **A stronger coding engine, still under your control.** On macOS the Coding Workbench now runs the original OpenCode 2.1.4 engine with its own tools for searching, reading, editing and running checks. Keiko's three modes — Ask for approval, Supervised workspace and Full access — still decide what it may do, and models are reached only through your configured gateway.
+- **Work the way you think.** Plan first or build right away, undo the latest turn, queue follow-up messages, and read formulas and diagrams directly in the task timeline.
+- **Pick up where you left off.** Continue or branch off a finished task, export it as JSON or Markdown, or import a saved task into Coding History. Secrets in imported text are masked before it is stored.
+- **Honest status.** Without a network, web lookups and remote skills end promptly with a clear message instead of waiting. The Workbench shows which coding engine is installed and the latest Keiko release.
+
+Your tasks and Coding History carry over unchanged; the first new run of an earlier task starts a fresh engine session with that task's history as context. The macOS desktop packages and npm installations include the new engine. On Linux the Workbench keeps Keiko's own coding tools, and Windows Coding remains unavailable (see Honest limits).
 
 ## What's new in 1.2.6
 

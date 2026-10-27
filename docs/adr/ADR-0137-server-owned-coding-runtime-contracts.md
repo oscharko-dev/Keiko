@@ -888,8 +888,11 @@ the reasoning that providers return beside the answer (LiteLLM's `reasoning_cont
   `reasoning_content`; the runtime records it as a reasoning part, and the live safe-activity
   projection carries it beside its assistant message, never inside the answer. The timeline shows
   it as a collapsible "Model reasoning" block labelled as unverified model reasoning, collapsed
-  until the reader opens it — also while its turn streams. The session stream is a `role="log"`,
-  whose additions a screen reader announces, so up to 8 KiB of unverified reasoning per message
+  until the reader opens it. The label is the opened block's first line and the timeline's boundary
+  copy, not a badge on the summary: the summary sits among tool rows whose badges are statuses, and
+  a warning-coloured "Unverified" there read as a failed check on every step (#3897, owner
+  feedback 2026-10-27). It stays collapsed also while its turn streams. The session stream is a
+  `role="log"`, whose additions a screen reader announces, so up to 8 KiB of unverified reasoning per message
   must not crowd out the answer: a collapsed block exposes only its summary, and an opened block
   keeps its streaming text out of the announcement with a nested `aria-live="off"` (#3873 review;
   an earlier text opened the block while its turn streamed). The boundary copy says what is shown
@@ -1927,7 +1930,8 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   the history reads the finished part's whole command line (`exitStatusCheck`, body-free) and the
   settlement owner accepts the status only when that line names the admitted check. That exit
   status, which the producer reports as `metadata.exit` on a completed part (a non-zero exit is
-  projected as a failed call), becomes the same `verification-summarized` event, so the
+  projected as a failed call, and the timeline shows the status, the number alone, as the call's
+  `presentation.exitCode`, so a failed command says why it failed), becomes the same `verification-summarized` event, so the
   settlement's verification continuation,
   `verification-not-evidenced`, the human-refusal blocker and the Workbench's verification card
   treat both alike. A refused, backgrounded or unreported check proves nothing; a check admitted

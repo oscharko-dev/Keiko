@@ -87,6 +87,16 @@ describe("coding safe-activity contract", () => {
         withPresentation({ bridgeDurationMs: 3, refusalReason: "CONTENT_HASH_MISMATCH" }),
       ).ok,
     ).toBe(true);
+    for (const exitCode of [
+      0,
+      1,
+      127,
+      -1073741819,
+      Number.MIN_SAFE_INTEGER,
+      Number.MAX_SAFE_INTEGER,
+    ]) {
+      expect(validateCodingSafeActivityFeed(withPresentation({ exitCode })).ok).toBe(true);
+    }
     for (const invalid of [
       { ...presentation, stdout: "RAW_OUTPUT_SENTINEL" },
       { ...presentation, relativePath: "/private/absolute.ts" },
@@ -98,6 +108,11 @@ describe("coding safe-activity contract", () => {
       { ...presentation, readByteCount: 0.5 },
       { ...presentation, returnedPathCount: -1 },
       { ...presentation, refusalReason: "arbitrary provider text" },
+      { ...presentation, exitCode: 1.5 },
+      { ...presentation, exitCode: "1" },
+      { ...presentation, exitCode: Number.NaN },
+      { ...presentation, exitCode: Number.MIN_SAFE_INTEGER - 1 },
+      { ...presentation, exitCode: Number.MAX_SAFE_INTEGER + 1 },
     ]) {
       expect(validateCodingSafeActivityFeed(withPresentation(invalid)).ok).toBe(false);
     }

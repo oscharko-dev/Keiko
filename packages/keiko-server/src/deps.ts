@@ -88,6 +88,9 @@ import {
   bindSecurityLogCorrelation,
   keikoApiKeySecretValues,
   redact,
+  redactContent,
+  resolveContentRedactionPolicy,
+  type ResolvedContentRedactionPolicy,
 } from "@oscharko-dev/keiko-security";
 import type { PortableReleaseTrustedKey } from "@oscharko-dev/keiko-security/portable-release-trust";
 import type {
@@ -97,6 +100,7 @@ import type {
   CodingWorkbenchRuntimeVersion,
   CodingWorkbenchRuntimeUnavailableReason,
   CommandTerminationEvidence,
+  ContentRedactionPolicy,
   DebugDeploymentPolicy,
   DebugProductSupport,
   DebugProvisioning,
@@ -155,6 +159,7 @@ import { newCorrelationId, UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { inspectWorkspaceRootIdentity } from "./workspace-root-identity.js";
 import type { WorkspaceRootIdentity } from "./workspace-root-identity.js";
 import {
+  logChatContentPolicyResolved,
   logMemoryAuditStateCacheSeeded,
   logRuntimeShutdown,
   logTaskWorkspaceManifestReconnected,
@@ -480,6 +485,7 @@ import { createBrowserApprovalService } from "./coding-app-session/browserApprov
 import type { SessionPairingPort } from "./coding-app-session/sessionPairingPort.js";
 import { resolveLauncherSessionPairingPort } from "./coding-app-session/launcherSessionPairingPort.js";
 import { CodingAppSessionDenialWindows } from "./coding-app-session/denialWindows.js";
+import { abortCodingRunSessionLeases } from "./coding-app-session/codingRunSessionLease.js";
 import {
   admitCodingRunModel,
   createOpenCodeGatewayReadinessRegistry,
@@ -763,6 +769,9 @@ export interface UiHandlerDeps {
   readonly egress?: GatewayEgressConfig | undefined;
   // Live-payload redactor (D9). Applied to run reports, projections, and SSE event data.
   readonly redactor: Redactor;
+  // #4098: the Chat content policy resolved once at startup from `KEIKO_CONTENT_REDACTION`. Absent
+  // means `redact`; only Chat reads it, never diagnostics, evidence or another surface.
+  readonly contentRedaction?: ContentRedactionPolicy | undefined;
   // RB-6 (GEN-OBS-DIAGNOSTICS-901/602/603) — operator diagnostic sink for server-side error causes.
   // Optional: when undefined the server falls back to the default stderr sink. Tests inject a
   // capturing sink to assert that a handler throw / mid-stream failure emits a correlation-keyed,
@@ -2207,6 +2216,20 @@ export function buildRedactor(env: EnvSource, config?: GatewayConfig): Redactor 
   return (value: unknown): unknown => deepRedactStrings(value, redactString);
 }
 
+// #4098: the private Chat history redactor. Under the default policy it is the live redactor
+// itself; only the deployment opt-out keeps authorized content and removes the credential floor.
+function runtimeContentRedactString(
+  env: EnvSource,
+  runtimeConfig: RuntimeGatewayConfig,
+  egress: GatewayConfig["egress"],
+  redactString: (value: string) => string,
+  policy: ResolvedContentRedactionPolicy,
+): (value: string) => string {
+  if (policy.policy === "redact") return redactString;
+  return (value): string =>
+    redactContent(value, "preserve", runtimeRedactionSecrets(env, runtimeConfig, egress));
+}
+
 export function currentRedactionSecrets(deps: UiHandlerDeps): readonly string[] {
   return redactionSecrets(
     deps.env,
@@ -2734,6 +2757,15 @@ interface PersistenceRuntimeContext {
   readonly env: EnvSource;
   readonly diagnostics: ServerDiagnosticSink | undefined;
   readonly bootstrapCorrelationId: string;
+  readonly redactContentString: (value: string) => string;
+}
+
+function privateUiStore(
+  db: DatabaseSync,
+  redactString: (value: string) => string,
+  redactContentString: (value: string) => string,
+): UiStore {
+  return buildUiStoreOverDatabase(db, { redactString, redactContentString });
 }
 
 function composePersistence(
@@ -2760,7 +2792,7 @@ function composePersistence(
     runtime.diagnostics,
     runtime.bootstrapCorrelationId,
   );
-  const store = buildUiStoreOverDatabase(db, { redactString });
+  const store = privateUiStore(db, redactString, runtime.redactContentString);
   const relationship: RelationshipHandlerDeps = {
     scopeResolver: (): { readonly workspaceId: string } => ({
       workspaceId: resolveLoopbackWorkspaceId(runtime.env),
@@ -4317,14 +4349,15 @@ function buildPersistenceBundle(
   redactString: (value: string) => string,
   evidenceStore: EvidenceStore,
   bootstrapCorrelationId: string,
+  redactContentString: (value: string) => string,
 ): PersistenceBundle {
   const persistence = composeUiPersistence(
     options,
     resolvedUiDbPath,
     redactString,
     bootstrapCorrelationId,
+    redactContentString,
   );
-  const { store, dispose, relationship } = persistence;
   try {
     const { workspaceScriptTrust, services } = composePersistenceTaskWorkspaceServices(
       options,
@@ -4334,10 +4367,10 @@ function buildPersistenceBundle(
       redactString,
     );
     return {
-      uiStore: store,
+      uiStore: persistence.store,
       workspaceScriptTrust,
-      dispose,
-      relationship,
+      dispose: persistence.dispose,
+      relationship: persistence.relationship,
       codingRuntimeSnapshotStore: persistence.codingRuntimeSnapshotStore,
       codingRuntimeDescriptionJobStore: persistence.codingRuntimeDescriptionJobStore,
       ...services,
@@ -4347,7 +4380,7 @@ function buildPersistenceBundle(
         options.diagnostics,
       ),
       preferredProjectPath: seedInitialProject(
-        store,
+        persistence.store,
         resolvedUiDbPath,
         options.initialProjectPath,
         workspaceScriptTrust,
@@ -4356,7 +4389,7 @@ function buildPersistenceBundle(
       ),
     };
   } catch (error) {
-    dispose?.();
+    persistence.dispose?.();
     throw error;
   }
 }
@@ -4386,6 +4419,7 @@ function composeUiPersistence(
   resolvedUiDbPath: string,
   redactString: (value: string) => string,
   bootstrapCorrelationId: string,
+  redactContentString: (value: string) => string,
 ): ReturnType<typeof composePersistence> {
   return composePersistence(
     options.store,
@@ -4393,7 +4427,12 @@ function composeUiPersistence(
     options.codingRuntimeDescriptionJobStore,
     resolvedUiDbPath,
     redactString,
-    { env: options.env, diagnostics: options.diagnostics, bootstrapCorrelationId },
+    {
+      env: options.env,
+      diagnostics: options.diagnostics,
+      bootstrapCorrelationId,
+      redactContentString,
+    },
   );
 }
 
@@ -4473,6 +4512,8 @@ interface UiHandlerDepsAssemblyArgs {
   readonly bundle: PersistenceBundle;
   readonly contextProfileForModel: ContextProfileResolver;
   readonly bootstrapCorrelationId: string;
+  /** #4098: the Chat content policy resolved once from the deployment environment. */
+  readonly contentPolicy: ResolvedContentRedactionPolicy;
   /** The one native session continuity service the runtime host and the orchestrator share. */
   readonly codingSessionContinuity: CodingSessionContinuity;
   /** The one MCP relay the runtime host binds and the relay route serves (#3903 AC3). */
@@ -4922,7 +4963,15 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   return installConversationReadinessInitialization(deps);
 }
 
-function installConversationReadinessInitialization(deps: UiHandlerDeps): UiHandlerDeps {
+/**
+ * Starts the configured conversation readiness checks and wires their shutdown into the graph's own
+ * `dispose`. The graph keeps its identity: the Workbench description dispatcher, the semantic search
+ * lease and every cache keyed by the graph (the PR-description application services among them) were
+ * attached to this exact object, and the server hands the SAME object to its routes. Returning a
+ * spread copy (#3676) left the mounted review route reading an empty cache for a proposal the
+ * dispatcher had just retained, so a generated description could never be reviewed.
+ */
+export function installConversationReadinessInitialization(deps: UiHandlerDeps): UiHandlerDeps {
   const startup = createGatewayStartupChecks(deps);
   startup.start(deps.gatewayConfig?.initializationCorrelationId);
   // A provider-stated window replaces an assumed one wherever it is observed: in every overflow
@@ -4937,8 +4986,8 @@ function installConversationReadinessInitialization(deps: UiHandlerDeps): UiHand
       startup.start(correlationId ?? newCorrelationId());
     });
   });
-  return {
-    ...deps,
+  const disposeServices = deps.dispose;
+  return Object.assign(deps, {
     refreshGatewayCatalog: startup.refresh,
     dispose: async (): Promise<void> => {
       unsubscribe?.();
@@ -4946,9 +4995,9 @@ function installConversationReadinessInitialization(deps: UiHandlerDeps): UiHand
       await startup.stop();
       await conversationShutdown;
       await stopAssumedContextWindowDiscovery(deps);
-      await deps.dispose?.();
+      await disposeServices?.();
     },
-  };
+  });
 }
 
 function createDapRuntimeReference(options: BuildHandlerDepsOptions): DapRuntimeReference {
@@ -5429,6 +5478,7 @@ type BaseUiHandlerDeps = ReturnType<typeof gatewayConfigFields> &
     | "uiDbPath"
     | "preferredProjectPath"
     | "conversationAttachmentStore"
+    | "contentRedaction"
   >;
 
 function buildBaseUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): BaseUiHandlerDeps {
@@ -5439,6 +5489,7 @@ function buildBaseUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): BaseUiHandlerD
     env: args.options.env,
     egress: args.egress,
     redactor: args.liveRedactor,
+    contentRedaction: args.contentPolicy.policy,
     diagnostics: args.options.diagnostics,
     activityLog: args.options.activityLog ?? processServerLogSink(),
     store: args.bundle.uiStore,
@@ -5691,6 +5742,25 @@ async function runTeardownSteps(steps: readonly (() => void | Promise<void>)[]):
   if (failures.length > 1) throw new TeardownFaults(failures, "runtime-teardown-faulted");
 }
 
+// Coding run state ends with its graph: the projection is purged, and a run lease must not outlive
+// the graph either, so each held one ends as aborted and its observation stops.
+function codingRunTeardownSteps(
+  services: UiHandlerRuntimeServices,
+  correlationId: string,
+): readonly (() => void)[] {
+  return [
+    (): void => {
+      services.codingRuntimeControlPlane?.safeActivityProjection?.purgeAll(
+        "shutdown",
+        correlationId,
+      );
+    },
+    (): void => {
+      abortCodingRunSessionLeases(services.codingAppSessionChannel);
+    },
+  ];
+}
+
 async function disposeRuntimeServices(
   args: UiHandlerDepsAssemblyArgs,
   services: UiHandlerRuntimeServices,
@@ -5705,12 +5775,7 @@ async function disposeRuntimeServices(
     (): void => {
       services.runtimeComposition.dispose?.();
     },
-    (): void => {
-      services.codingRuntimeControlPlane?.safeActivityProjection?.purgeAll(
-        "shutdown",
-        correlationId,
-      );
-    },
+    ...codingRunTeardownSteps(services, correlationId),
     async (): Promise<void> => {
       await shutdownHostLspPool();
     },
@@ -6461,6 +6526,21 @@ function buildCodingSessionContinuity(
   });
 }
 
+function localKnowledgeKeys(env: EnvSource): ReturnType<typeof createLocalKnowledgeKeyProvider> {
+  return createLocalKnowledgeKeyProvider({ env, securityLogSink: processServerLogSink() });
+}
+
+// #4098: the Chat content policy is resolved once per deps graph and recorded on the startup
+// correlation, so a misspelled opt-out is visible as a warning instead of a silent default.
+function resolveLoggedContentPolicy(
+  env: EnvSource,
+  correlationId: string,
+): ResolvedContentRedactionPolicy {
+  const policy = resolveContentRedactionPolicy(env);
+  logChatContentPolicyResolved(processServerLogSink(), correlationId, policy);
+  return policy;
+}
+
 export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerDeps {
   const bootstrapCorrelationId = newCorrelationId();
   const { resolvedUiDbPath, runtimeConfigPath } = runtimePathFields(options);
@@ -6477,16 +6557,15 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     createNodeEvidenceStore(join(resolvedEvidenceDir, "coding-workbench"));
   const redactString = runtimeRedactString(options.env, runtimeConfig, egress);
   const liveRedactor = (value: unknown): unknown => deepRedactStrings(value, redactString);
-  const localKnowledgeKeyProvider = createLocalKnowledgeKeyProvider({
-    env: options.env,
-    securityLogSink: processServerLogSink(),
-  });
+  const localKnowledgeKeyProvider = localKnowledgeKeys(options.env);
+  const contentPolicy = resolveLoggedContentPolicy(options.env, bootstrapCorrelationId);
   const bundle = buildPersistenceBundle(
     options,
     resolvedUiDbPath,
     redactString,
     evidenceStore,
     bootstrapCorrelationId,
+    runtimeContentRedactString(options.env, runtimeConfig, egress, redactString, contentPolicy),
   );
   const contextProfileForModel = buildContextProfileResolver(() => runtimeConfig.current());
   reconcileNodeStoreAtStartup(options, bundle, bootstrapCorrelationId);
@@ -6507,6 +6586,7 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     bundle,
     contextProfileForModel,
     bootstrapCorrelationId,
+    contentPolicy,
     codingSessionContinuity,
     mcpCredentialRelay: createMcpCredentialRelay(),
   });

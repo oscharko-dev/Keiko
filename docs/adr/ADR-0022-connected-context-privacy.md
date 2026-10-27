@@ -1487,6 +1487,29 @@ retains a single `no-evidence` marker, and budget clipping remains `budget-clipp
 
 ### D4 — The summary is structurally redaction-free, and we prove it
 
+**Authorized content amendment (owner decision, 2026-10-27, #4098).** A user permitted to read
+connected documents must be able to receive their contents under the deployment's processing
+policy. `KEIKO_CONTENT_REDACTION=off`, resolved once at server startup, gives Chat a preserving
+content policy for connected-folder reads and extracted documents, single-source, multi-source and
+hybrid prompt content, Chat semantic refresh, history rehydration and private chat answers. The
+policy travels explicitly (`WorkspaceInfo.contentRedaction`, `GatewayCallRequest.contentRedaction`
+and the deps graph); no lower layer reads the environment. Missing, empty or `on` values retain the
+original content redaction; any other value also retains it and records a `warn`-level
+`chat.content-policy.resolved` line. Preserved content still loses the credential floor (configured
+secret literals, private keys, URL credentials, `Authorization` header values, encoded-looking
+Bearer/Basic values and known token shapes). A removed multi-line span keeps its line count, so
+source coordinates and line hints stay physical. Memory proposals derived from a preserved answer
+use the default projection again. The existing `redacted` atom state means the guarded content policy has been
+applied; it is not a claim that all personal data was anonymized. `raw-internal` packs remain
+rejected. The conversation and grounded system prompts in this mode request source fidelity, tell
+the model never to reconstruct `[REDACTED]` text, and keep the instruction not to expose API keys,
+tokens, private keys or URL credentials; the default prompts are byte-identical to the previous
+ones. This does not widen source authorization or any read/output budget. Coding repository
+search, counts-only summaries and audit manifests retain their existing redaction and body-free
+contracts, and conversation-history compaction summaries keep the default projection. The Coding
+Workbench agent's answers follow ADR-0003 D7 independently of this switch. Already masked historic chat text
+cannot be recovered: re-read sources and generate a new answer.
+
 The wire boundary is asserted by `grounded-qa.redaction.test.ts`: an attacker-controlled
 pack with secret-shaped strings (`sk-…`, `ghp_…`, `AKIA…`, `xoxb-…`, `Bearer …`, PEM
 blocks) in every string field flows through `runAsk`, and the test asserts:

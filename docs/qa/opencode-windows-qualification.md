@@ -22,6 +22,46 @@ into `dev` at `37b1ee9d0c6308b1a59eef3470aa47036fb8362b`, the fetched base of th
 All W1–W15 acceptance groups remain open. Individual component results below do not close their
 broader Workbench acceptance group.
 
+## Revalidation on 2026-10-27
+
+The continuation starts from PR #4088 head `475e91a3f9745a70a3371400c9fe265adf363bae` and
+integrates completed `dev` work through `44cfbbb3e` (Keiko 1.3.0, including #4092, #4080, #4095,
+#4096 and #4098). The original environment and artifact observations below retain their original
+source identity; this merge does not turn them into release or final-head evidence.
+
+The latest completed [CI run 40403258236](https://github.com/oscharko-dev/Keiko/actions/runs/40403258236),
+its duplicate run 40403248564, and customer-shape run 40403248664 failed before functional tests
+at `Verify pull-request merge candidate consistency`. The event expected base
+`1c4464abbf1b352d3c280e7c67d9dcf2f1b22f10`, but the checked-out GitHub merge commit
+`d2bcb8dc4dd6f91fc79a713d2e13346d0c309364` had release commit
+`f9b26cc59b8f5a383fc88775114a3397da0bd67e` as its first parent. This is a base/merge-ref race,
+not evidence that those platform tests executed and failed. Dependency Review, Workflow hygiene,
+CodeQL and semantic duplication passed. The consistency guard remains unchanged; the updated
+feature branch requires a fresh GitHub merge candidate and new current-head results.
+
+The sole merge conflict was the generated semantic-duplication baseline. Regenerating it with
+the existing shrink-only producer preserves both changes and reduces 933 groups on `dev` to 932.
+Fresh native Windows `npm ci` installs the current lockfile (989 packages, zero audit findings);
+build, typecheck and package graph pass. Nine affected test files yield **138 passed, one failed,
+five skipped**. The failure is the unchanged macOS native-profile PATH fixture constructing a
+POSIX policy with Windows temporary paths (`runtime-gateway-policy-invalid`); the five skips
+remain explicit foreign-platform proofs. The real supervisor harness separately passes ordinary
+and detached descendants, cancellation and control EOF against the retained quality-build binary.
+
+The two substantive blockers remain unchanged:
+
+- The helper approval test still gives **four passed, one failed**, with approved source
+  `88fb376091f406c3fa63c05d0f963d7ba038f650c0824f893ac77089bb30b28b` versus current source
+  `29f5e262d3d268b9785a1a2ae7a2875107a5ce106f1cb7d655ec37e97bf0249b`.
+  No runtime approval, source pin or assertion is changed.
+- [PR #4090](https://github.com/oscharko-dev/Keiko/pull/4090) remains draft at
+  `38f7e01d432e283ca14c21e9f7e650c4085559d0`. Installed service/state machine, helper/server
+  composition, restart reconciliation, installer/runtime packaging and actual Workbench execution
+  remain outstanding. Production still refuses non-macOS gateway confinement before spawn.
+
+No inline review threads or PR discussion findings were present when rechecked. Full W1–W15
+acceptance and merge readiness remain unclaimed.
+
 ## Environment and artifact identity
 
 | Item           | Observed value                                                                                                                        |

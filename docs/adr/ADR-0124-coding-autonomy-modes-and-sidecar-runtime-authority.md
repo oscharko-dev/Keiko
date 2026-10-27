@@ -314,6 +314,18 @@ late ask took the expired one's place (1.1.9 lab: the expired card stayed on scr
 failed as `invalid-intent`, and the model's next ask expired unseen behind it). An approval that is
 decided, retired, or whose run settles takes its expiry timer with it.
 
+A mapped research fetch (`keiko_research_fetch`, #2387) asks through the research grant, not
+through an approval proof. Below Full access a deployment opens research only through the
+`governed-egress` network policy, and the tool facade hands such an `egress` request to the research
+port, whose fetch needs a human-approved grant bound to the exact request line. When no grant covers
+the request, the port raises the content-free `network-egress` request
+(`coding-runtime.approval.waiting`), fails the call closed, and the next ask after approval fetches
+under the minted grant. Any other envelope below Full access still refuses `egress` at the facade
+(`coding-runtime.tool-authority.denied`); in particular, narrowing keeps `governed-egress` only for
+an envelope already minted with it, so a broad envelope narrowed below Full access stays refused.
+From #3394 until this repair the facade required an approval proof that `egress` cannot carry, so
+research could not ask in Ask for approval or Supervised workspace.
+
 ### D7 — Coding evidence is content-free by construction
 
 Coding Workbench evidence records are contract-validated and redacted before persistence or review.

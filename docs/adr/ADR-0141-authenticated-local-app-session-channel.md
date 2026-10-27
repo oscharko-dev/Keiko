@@ -307,6 +307,25 @@ is active, the existing bounded capacity remains authoritative and evicts the ol
 registered pairing result records expired-session count and a closed eviction class, without IDs.
 No timer, polling or passive SSE renews it.
 
+A Coding Workbench run is one such explicit operation that outlives the request that admitted it
+(#3897): a model turn can stay quiet for longer than the idle window, and in the Keiko 1.3.0 test
+the window that started a run was unpaired mid-run (`coding-app-session.expired`, inactivity). When
+an admitted run mutation of the existing `mutation()` funnel answers with the run in `starting`,
+`ready`, `running`, `awaiting-approval` or `stopping`, the requesting session holds the existing
+operation lease on the `coding-run` surface, correlated by the run id, once per session and run.
+A run-state observation every five seconds only releases that lease once the run has left those
+states (paused, settled, taken over, recovery-required or gone); it never renews, extends or
+re-acquires anything, and holding the session again after a pause takes a new admitted mutation.
+A rotation replaces the session record without its operations, so the rotated credential holds the
+lease again on its next admitted mutation, which first ends the predecessor's lease. An unreadable
+run state counts as settled, each lease releases independently, and either failure records a
+body-free server diagnostic. The lease protects only inactivity, like every other: revocation, rotation, restart, capacity
+eviction and the absolute lifetime still end the session at once. Leases are bounded per composed
+channel (eight runs, four sessions per run); a session the registry revoked, evicted or expired
+gives up its place before that bound refuses another session, and graph disposal releases every one
+as `aborted`. The
+existing `coding-app-session.operation.state` acquisition and release lines record it.
+
 The same admitted-operation protection covers normal Chat regeneration and Git-description work.
 The registered `coding-app-session.operation.state` event records acquisition and idempotent release
 through the existing session activity port: a closed surface and release reason, observed concurrent
@@ -330,6 +349,19 @@ It is not backpressure. The writer separately handles a false write result and a
 exception, including the initial reset, live snapshot and heartbeat. Closure must not turn a
 successful terminal write into an error or allow a previously queued snapshot to reopen the
 stream. Existing stream counters and correlated activity-log events record genuine write errors.
+
+A false write result is Node's own buffer accounting above the high-water mark; it does not by
+itself mean the reader stalled. In the Keiko 1.3.0 test one near-capacity activity snapshot to an
+idle local browser closed the live stream as `sse-backpressure` (#3897). The writer therefore waits
+for `drain`, keeps only the newest pending snapshot while it waits (a later snapshot supersedes the
+pending one; a terminal frame still ends the stream once written) and skips heartbeats meanwhile.
+Only a stream that does not drain within `CODING_APP_SESSION_STREAM_DRAIN_TIMEOUT_MS` (one second)
+is a stalled reader: it records `sse-backpressure`, stops its live source and closes, exactly as
+before. The KEIKO-0225 regression pin for that diagnostic was relocated to this bound, not relaxed.
+The live stream's closed line counts `drainWaitCount` and `coalescedSnapshotCount`. The browser
+reconnects a dropped live channel by itself, at most five times with growing pauses, and gets a
+fresh budget only after a reconnected channel stayed live for 30 seconds; the Reconnect action
+remains after the last attempt.
 The routes log the session's lifecycle body-free (PR #3452, F65): a pairing that issued a session
 (`coding-app-session.paired`), a rotation, a sign-out that revoked a session, each fetch stream's
 opening, live or content-free, and a live stream's close with how long it stayed open. A denied

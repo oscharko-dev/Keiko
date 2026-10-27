@@ -13,6 +13,7 @@ import type {
   CodingWorkbenchRuntimeReadiness,
   CodingWorkbenchRuntimeResearchChannelPayload,
   CodingWorkbenchRuntimeSkillsChannelPayload,
+  CodingWorkbenchRuntimeSnapshot,
   CodingWorkbenchRuntimeSseEvent,
   CodingWorkbenchRuntimeStateName,
 } from "@oscharko-dev/keiko-contracts";
@@ -38,6 +39,7 @@ import {
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { resolveAppSessionReadAuthority } from "../coding-app-session/appSessionReadAuthority.js";
+import { holdAppSessionForCodingRun } from "../coding-app-session/codingRunSessionLease.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { processServerLogSink } from "../process-log-sink.js";
@@ -436,6 +438,18 @@ function requireMutationAuthority(
     : notFound(ctx.correlationId);
 }
 
+// An admitted mutation that leaves its run active keeps the requesting session active for the run
+// (ADR-0141 D5): a quiet model turn must not unpair the window that started it.
+function admittedMutation(
+  deps: UiHandlerDeps,
+  ctx: RouteContext,
+  orchestrator: CodingRuntimeOrchestrator,
+  snapshot: CodingWorkbenchRuntimeSnapshot,
+): RouteResult {
+  holdAppSessionForCodingRun(deps, ctx.req, snapshot, (id) => orchestrator.getSnapshot(id)?.state);
+  return { status: 200, body: snapshot };
+}
+
 async function mutation(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -470,7 +484,7 @@ async function mutation(
         return failureResult("invalid-intent", ctx.correlationId);
       }
       const result = await invoke(required.orchestrator, body, ctx.correlationId);
-      if (result.ok) return { status: 200, body: result.snapshot };
+      if (result.ok) return admittedMutation(deps, ctx, required.orchestrator, result.snapshot);
       // The refusal line names the run the refusal happened under, so this request-scoped line joins
       // the run-scoped lines that carry the cause (see CodingRuntimeOrchestratorResult.runId). The
       // result's run id comes first: a refused start or retry minted a NEW run before it was refused,

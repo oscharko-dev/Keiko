@@ -778,6 +778,9 @@ function typedRegistryProgram(repoRoot) {
         "@oscharko-dev/keiko-contracts/runtime/pr-description": [
           "packages/keiko-contracts/src/pr-description.ts",
         ],
+        "@oscharko-dev/keiko-contracts/runtime/verification": [
+          "packages/keiko-contracts/src/verification.ts",
+        ],
         "@oscharko-dev/keiko-model-gateway": ["packages/keiko-model-gateway/src/index.ts"],
       },
       target: ts.ScriptTarget.ES2022,

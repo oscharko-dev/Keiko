@@ -735,7 +735,7 @@ const GOVERNED_FAILURE_GUIDANCE: Readonly<Record<string, Readonly<Record<string,
     // model picked another verifier at once without knowing why. A run cancelled after a passing
     // step still checked something, so the guidance claims no more than the named steps (PR #3452).
     VERIFICATION_NOT_RUN:
-      "Not every verification step ran; where the detail names a step, it says why. A missing script means package.json defines no script for that verifier: choose a verifier the repository defines, or add the script as part of your change. Dependencies that did not install, a policy denial or a cancellation are blockers to report. Do not retry the same verifier unchanged.",
+      "Not every verification step ran; where the detail names a step, it says why. A missing script means package.json defines no script for that verifier: choose a verifier the repository defines, or add the script as part of your change. A step to run in your own shell cannot run in the isolated verifier on this host: run the repository's own command for that check (its package script, or the tool itself) in your shell, where its result counts as that verification. Dependencies that did not install, a policy denial or a cancellation are blockers to report. Do not retry the same verifier unchanged.",
   },
   git: {
     "git-proposal-unknown":
@@ -758,6 +758,8 @@ function governedFailureCoaching(
 const NOT_RUN_WORDS: Readonly<Record<VerificationNotRunReason, string>> = {
   "script-missing": "no such script in package.json",
   "dependencies-unavailable": "dependencies did not install",
+  "native-shell-required":
+    "the isolated verifier cannot install dependencies for this host; run this check in your own shell",
   denied: "denied by policy",
   cancelled: "cancelled",
   skipped: "skipped",

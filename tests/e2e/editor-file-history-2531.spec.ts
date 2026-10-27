@@ -12,6 +12,7 @@ import {
   seedEditorWindow,
 } from "./support/editorWorkspace.js";
 import { replaceEditorBuffer } from "./support/editor-chord.js";
+import { documentAction } from "./support/editor-document-actions.js";
 import { formatViolations, runAxe, seriousOrCritical } from "./support/axe.js";
 import { FILE_HISTORY_APP_SESSION_LAUNCHER_SECRET } from "./support/file-history-2531.js";
 
@@ -65,7 +66,8 @@ function historyRows(pane: Locator): Locator {
 }
 
 async function openHistory(pane: Locator): Promise<void> {
-  await pane.getByRole("button", { name: "Open file history" }).click();
+  // File history is a secondary document action: it lives in the "More file actions" menu (#3685).
+  await (await documentAction(pane, "Open file history")).click();
   await expect(pane.getByRole("complementary", { name: "File history" })).toBeVisible();
 }
 

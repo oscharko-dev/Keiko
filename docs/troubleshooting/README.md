@@ -71,6 +71,9 @@ Chat answers that request a file already inside the connected folder are covered
 [Restore connected-folder file grounding](chat-connected-folder-file-not-read.md). Use that entry
 for explicit path admission, narrowed scope, low-confidence selection, and insufficient follow-ups.
 
+For document or code content replaced by `[REDACTED]`, see
+[Preserve authorized document content in Chat](chat-content-redaction.md).
+
 ## Severity scale
 
 The severity field on each entry uses the following scale. It is a

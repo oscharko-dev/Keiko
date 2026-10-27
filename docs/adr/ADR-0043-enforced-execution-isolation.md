@@ -192,6 +192,12 @@ namespace reaps detached descendants when the main command exits. The compatibil
 wrapper retains its existing contract. Actual compiled `runCommand` controls qualify both an owned
 foreign-process signal/visibility refusal and zero acting descendants after successful settlement,
 with a held-main detached-write positive control.
+The child's `/tmp`, `HOME` and `TMPDIR` are the caller's per-run ephemeral home: a direct child of
+the mounted root, created before spawn and removed in every settle path, because whatever the child
+writes there (npm logs, Node's compile cache) would otherwise stay in the real workspace and make a
+later verified commit's clean-candidate fact false (PR #4095). Without one, the shared
+`.keiko-sandbox-tmp` directory of the root is used; a per-run directory anywhere else fails closed
+before spawn.
 On macOS, assured execution-root runs select Docker/Podman with its existing private PID namespace
 and container lifetime; without one, admission fails closed before spawn. Filesystem-scoped Seatbelt
 cannot own a detached `setsid` descendant after the command exits, so it no longer qualifies for
@@ -636,7 +642,16 @@ the host platform (`sharedHostPlatform`), and the bootstrap refuses an install w
 target has another operating system or CPU (`install-target-foreign`) before npm writes the tree.
 The refusal tells the model to run the project's own checks in the native shell, which the native
 policy reads as verification evidence (#3901). A run without a host-native consumer installs for
-its measured target as before.
+its measured target as before. Every refused bootstrap carries its closed `refusalReason` on the
+dependency summary and on `editor.verification.dependencies`. The coding facade names a step behind
+an `install-target-foreign` refusal `native-shell-required` instead of `dependencies-unavailable`,
+with guidance to run the repository's own command for that check in the shell: in the Keiko 1.3.0
+test on macOS the generic reason left the model without a check it could run, and the run settled
+`verification-not-evidenced` (#3897). The refused bootstrap still fails the report (D17), so the
+port presents such a report, in which every step was skipped, to the model as not run: the reason
+and its guidance reach the model instead of a generic verification failure. Every other refused
+bootstrap remains a failed verification. Isolation, the refusal and its evidence rules are
+unchanged.
 
 Host network makes every source npm would contact part of that boundary (PR #3452 review: CWE-918,
 CWE-494). Before npm runs, the bootstrap checks every source it would be handed. Each specifier in

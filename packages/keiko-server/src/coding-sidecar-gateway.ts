@@ -1223,14 +1223,19 @@ function chatFactoryFor(deps: UiHandlerDeps, gateway: Gateway): CodingSidecarGat
 // Workbench. This route is the only one that sets the last two: an interactive surface that borrows
 // the latency profile for its timeout floors (the commit draft) keeps the fail-fast attempt count
 // and receives its answer without the model's reasoning.
+// The OpenCode runtime is its own producer and uses the gateway as infrastructure only (owner
+// decision, 2026-10-27, #4098): it receives the model's answer, reasoning and structured output as
+// written, never Keiko's content heuristics, which replaced a quoted diff with `[REDACTED]`. The
+// gateway still removes the credential floor, and tool-call arguments keep their own redaction.
 const CODING_TURN_GATEWAY_POLICY = {
   latencyProfile: "coding-workbench",
   outagePolicy: "outage-window",
   reasoningDelivery: "forward",
   answerRepair: "steered",
+  contentRedaction: "preserve",
 } as const satisfies Pick<
   GatewayCallRequest,
-  "latencyProfile" | "outagePolicy" | "reasoningDelivery" | "answerRepair"
+  "latencyProfile" | "outagePolicy" | "reasoningDelivery" | "answerRepair" | "contentRedaction"
 >;
 
 function defaultChatFactoryFor(gateway: Gateway): CodingSidecarGatewayChatFactory {

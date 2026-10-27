@@ -19,6 +19,7 @@ import { CONVERSATION_SYSTEM_PROMPT } from "./conversation-prompt.js";
 
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import type {
+  ContentRedactionPolicy,
   ContextCompactionRecord,
   ContextProfile,
   ContextTokenAccounting,
@@ -50,6 +51,8 @@ export interface ConversationCompactionOptions {
   readonly effectiveInputBudget?: number | undefined;
   readonly redactionSecrets?: readonly string[] | undefined;
   readonly preserveNewestTurn?: boolean | undefined;
+  /** The deployment content policy of the Chat whose prompt this builds (#4098). */
+  readonly contentRedaction?: ContentRedactionPolicy | undefined;
 }
 
 export interface ConversationCompactionOutcome {
@@ -88,7 +91,7 @@ export function conversationForGatewayWithCompaction(
   opts: ConversationCompactionOptions = {},
 ): ConversationCompactionOutcome {
   const filtered = usableGatewayTurns(messages);
-  const gatewayMessages = conversationForGateway(messages);
+  const gatewayMessages = conversationForGateway(messages, opts.contentRedaction);
   const systemMessage = gatewayMessages[0];
   const activeProfile = opts.contextProfile ?? DEFAULT_CONTEXT_PROFILE;
   const effectiveInputBudget = opts.effectiveInputBudget ?? activeProfile.effectiveInputBudget;

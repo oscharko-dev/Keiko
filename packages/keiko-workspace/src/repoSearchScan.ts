@@ -24,6 +24,8 @@ import {
   type InternalWorkspaceTextByteRead,
   readWorkspaceFileTextForInternalUse,
   type WorkspaceContentLane,
+  workspaceContentPolicy,
+  workspaceContentSecrets,
 } from "./discovery.js";
 import {
   FileTooLargeError,
@@ -1034,7 +1036,15 @@ function recordSizeExceeded(relativePath: string, candidates: CandidateFile[]): 
 // boundary, so no secret-shaped byte can reach an evidence atom, the persisted index, or a grounded
 // answer. The editor lane keeps the raw bytes: see `SearchTextRunner.contentLane`.
 function laneText(runner: SearchTextRunner, text: string, relativePath: string): string {
-  return runner.contentLane === "editor" ? text : redactWorkspaceSource(text, relativePath);
+  return runner.contentLane === "editor"
+    ? text
+    : redactWorkspaceSource(
+        text,
+        relativePath,
+        true,
+        workspaceContentPolicy(runner.scope.workspace),
+        workspaceContentSecrets(runner.scope.workspace),
+      );
 }
 
 async function readRawTextForScan(

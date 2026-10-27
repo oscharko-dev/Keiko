@@ -10,6 +10,10 @@ import {
   seedEditorWindow,
 } from "./support/editorWorkspace.js";
 import { editorModifier, focusMonacoInput } from "./support/editor-chord.js";
+import {
+  documentAction,
+  expectFormatActionAvailability,
+} from "./support/editor-document-actions.js";
 
 const TAG = "@language-intelligence-1383";
 const TS_FILE = "app.ts";
@@ -224,6 +228,45 @@ async function drainLanguageRequestWindow(page: Page): Promise<void> {
   }, DRAIN_SENTINEL_PATH);
 }
 
+const TIMELINE_METHODS = [
+  "mark",
+  "measure",
+  "getEntries",
+  "getEntriesByName",
+  "getEntriesByType",
+  "clearMarks",
+  "clearMeasures",
+] as const;
+
+interface PlaywrightClockHandle {
+  readonly builtins?: { readonly performance?: Performance };
+}
+
+/**
+ * Give the fake-clock page its real performance timeline back, leaving `now()` to the clock.
+ *
+ * Playwright's clock swaps `performance` for a stub whose `getEntriesByName` always answers an
+ * empty list. Monaco's input-latency recorder reads `getEntriesByName(...)[0].duration` once a
+ * keystroke has been rendered, so under the stub every completed keystroke throws a page error
+ * from the editor's own key handler or from a timer the drain below fires. That is an artifact of
+ * the stub, not of the editor, and `collectPageErrors` is right to report it. The clock keeps
+ * `performance.now()`; marks, measures and entries go back to the browser's own timeline, which is
+ * all the recorder needs and nothing the drains observe.
+ */
+async function restorePerformanceTimeline(page: Page): Promise<void> {
+  await page.evaluate((methods) => {
+    const handle = (window as unknown as { __pwClock?: PlaywrightClockHandle }).__pwClock;
+    const real = handle?.builtins?.performance;
+    if (real === undefined) {
+      throw new Error("The Playwright clock no longer exposes the real performance timeline.");
+    }
+    for (const method of methods) {
+      const original = Reflect.get(real, method) as (...args: readonly unknown[]) => unknown;
+      Reflect.set(window.performance, method, original.bind(real));
+    }
+  }, TIMELINE_METHODS);
+}
+
 async function openMatrixWorkspace(page: Page): Promise<Locator> {
   const { root } = createEditorWorkspace([
     { path: TS_FILE, content: "const greeting: string = 42;\ngreeting;\n" },
@@ -246,6 +289,7 @@ async function openMatrixWorkspace(page: Page): Promise<Locator> {
   expect(created.ok(), await created.text()).toBe(true);
   await seedEditorWindow(page, { root, openFiles: [TS_FILE], active: TS_FILE });
   await page.goto("/");
+  await restorePerformanceTimeline(page);
   return openEditorWorkspace(page);
 }
 
@@ -259,19 +303,37 @@ async function hoverOnGreeting(page: Page, workspace: Locator): Promise<void> {
   }
 }
 
+// A hover stays open while the pointer rests on its anchor, and a Playwright click aims at the
+// centre of the part of the editor that is inside the viewport, which can fall inside that open
+// widget. Monaco's hover carries a Copy button, so such a click presses it and asks the browser for
+// clipboard write access the context never granted. Move the pointer away and wait for the widget
+// to close before addressing the editor itself.
+async function dismissHover(page: Page): Promise<void> {
+  await page.mouse.move(0, 0);
+  await expect(page.locator(".monaco-hover:visible")).toHaveCount(0);
+}
+
 async function triggerSymbols(page: Page, workspace: Locator): Promise<void> {
+  await dismissHover(page);
   await workspace.locator(EDITOR_SELECTORS.monaco).first().click();
   const modifier = await editorModifier(page);
   await page.keyboard.press(`${modifier}+Shift+KeyO`);
 }
 
-async function triggerFormat(workspace: Locator, force = false): Promise<void> {
-  const button = workspace.getByRole("button", { name: "Format", exact: true });
-  if (force) {
-    await button.dispatchEvent("click");
-    return;
-  }
-  await button.click();
+// Format is a secondary document action: it lives in the "More file actions" menu and is offered
+// only while formatting is available for the open file (#3685).
+async function triggerFormat(workspace: Locator): Promise<void> {
+  await (await documentAction(workspace, "Format")).click();
+}
+
+// With formatting unavailable or degraded the menu offers no Format action, so there is nothing to
+// click. Prove that from an opened menu, then still try to format the way a user without the
+// action would, through Monaco's native Format Document chord; callers assert that no formatting
+// request reached the language service.
+async function attemptUnavailableFormat(page: Page, workspace: Locator): Promise<void> {
+  await expectFormatActionAvailability(workspace, false);
+  await focusMonacoInput(workspace);
+  await page.keyboard.press("Shift+Alt+KeyF");
 }
 
 async function assertAvailableStatus(workspace: Locator): Promise<void> {
@@ -293,10 +355,7 @@ async function assertAvailableStatus(workspace: Locator): Promise<void> {
     "aria-label",
     "Document formatting available",
   );
-  await expect(workspace.getByRole("button", { name: "Format", exact: true })).toHaveAttribute(
-    "aria-disabled",
-    "false",
-  );
+  await expectFormatActionAvailability(workspace, true);
 }
 
 async function assertDiagnosticsAndHover(page: Page, workspace: Locator): Promise<void> {
@@ -375,11 +434,7 @@ async function assertUnavailableProvider(
     "Language provider unavailable: Host Python provider is disabled by policy.",
   );
   await expect(statusField(workspace, "formatting")).toHaveText("Format unavailable");
-  await expect(workspace.getByRole("button", { name: "Format", exact: true })).toHaveAttribute(
-    "aria-disabled",
-    "true",
-  );
-  await triggerFormat(workspace, true);
+  await attemptUnavailableFormat(page, workspace);
   await replaceMonacoText(page, workspace, "value = 2\n");
   await expect(statusField(workspace, "save")).toHaveText("Unsaved");
   await drainLanguageRequestWindow(page);
@@ -407,11 +462,7 @@ async function assertDegradedProvider(
     "Governed completions unavailable for this file type",
   );
   await expect(statusField(workspace, "formatting")).toHaveText("Format unavailable");
-  await expect(workspace.getByRole("button", { name: "Format", exact: true })).toHaveAttribute(
-    "aria-disabled",
-    "true",
-  );
-  await triggerFormat(workspace, true);
+  await attemptUnavailableFormat(page, workspace);
   await triggerSymbols(page, workspace);
   await expect(workspace.locator(".squiggly-error, .squiggly-warning")).toHaveCount(0);
   await drainLanguageRequestWindow(page);

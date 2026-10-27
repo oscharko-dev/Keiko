@@ -497,6 +497,46 @@ describe("coding-sidecar gateway", () => {
     }
   });
 
+  // #4098 (owner decision): OpenCode receives the model's answer as written, credential floor only,
+  // whatever the deployment's Chat content policy, so a quoted diff no longer becomes `[REDACTED]`.
+  it.each([
+    { label: "buffered, Chat opted out", stream: false, policy: "preserve" as const },
+    { label: "streamed, Chat opted out", stream: true, policy: "preserve" as const },
+    { label: "buffered, default", stream: false, policy: undefined },
+    { label: "streamed, default", stream: true, policy: undefined },
+  ])("preserves the answer of a $label coding turn", async ({ stream, policy }) => {
+    resetGatewayInstanceCacheForTests();
+    const captured: GatewayCallRequest[] = [];
+    const chat = vi.spyOn(Gateway.prototype, "chat").mockImplementation((request) => {
+      captured.push(request);
+      return Promise.resolve(assistantResponse("azure-coding-model"));
+    });
+    const chatStream = vi.spyOn(Gateway.prototype, "chatStream").mockImplementation((request) => {
+      captured.push(request);
+      return streamedResponse(assistantResponse("azure-coding-model"));
+    });
+    try {
+      const deps = depsValue(configValue(provider(), capability()));
+      await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "azure-coding-model",
+          stream,
+          messages: [{ role: "user", content: "continue" }],
+          tools: [],
+        }),
+        policy === undefined ? deps : { ...deps, contentRedaction: policy },
+      );
+
+      expect(captured).toHaveLength(1);
+      expect(captured[0]?.contentRedaction).toBe("preserve");
+      expect(captured[0]).toMatchObject({ latencyProfile: "coding-workbench" });
+    } finally {
+      chat.mockRestore();
+      chatStream.mockRestore();
+      resetGatewayInstanceCacheForTests();
+    }
+  });
+
   it.each([
     { label: "buffered", stream: false },
     { label: "streaming", stream: true },

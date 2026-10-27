@@ -3,7 +3,7 @@
 // byte budget. The extractor is mocked so the redaction step and the budget arithmetic are
 // exercised deterministically without crafting secret-bearing or 32 KiB binary documents.
 
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 
 import {
   DEFAULT_EXPLORATION_BUDGET,
@@ -110,7 +110,49 @@ beforeEach(() => {
   extractMock.mockReset();
 });
 
+afterEach(() => vi.unstubAllEnvs());
+
 describe("collectConnectedDocumentEvidence with a mocked extractor", () => {
+  // #4098: only a Chat workspace that carries the deployment opt-out keeps extracted documents;
+  // the environment alone never does.
+  it.each([
+    ["pdf", "preserve", true],
+    ["docx", "preserve", true],
+    ["xlsx", "preserve", true],
+    ["pdf", undefined, false],
+  ] as const)(
+    "projects authorized %s content under the workspace policy %s",
+    async (format, policy, kept) => {
+      vi.stubEnv("KEIKO_CONTENT_REDACTION", "off");
+      const text = 'Contact: +49 30 12345678\npassword: "customer-owned-example"';
+      extractMock.mockResolvedValue({
+        outcome: "extracted",
+        format,
+        text,
+        extractedBytes: Buffer.byteLength(text),
+        truncated: false,
+        diagnostics: [],
+      });
+      const path = `docs/customer.${format}`;
+      const result = await run([path], {
+        searchScope: {
+          workspace: {
+            ...workspace(),
+            ...(policy === undefined ? {} : { contentRedaction: policy }),
+          },
+          scopeId: "scope-docs",
+          relativePaths: [path],
+        },
+      });
+      const content = result.excerpts
+        .get(path)
+        ?.map((window) => window.content)
+        .join("\n");
+      if (kept) expect(content).toBe(text);
+      else expect(content).not.toContain("+49 30 12345678");
+    },
+  );
+
   it.each([
     { label: "redaction expansion", text: "api_key=a", excerptBytesMax: 9 },
     { label: "window separators", text: "x".repeat(8193), excerptBytesMax: 8193 },

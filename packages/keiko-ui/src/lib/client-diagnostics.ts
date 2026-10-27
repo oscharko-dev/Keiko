@@ -48,6 +48,7 @@ import {
   type ClientDiagnosticScopeNotice,
   type ClientDiagnosticEvidenceInspection,
   type ClientDiagnosticCodingRunRestore,
+  type ClientDiagnosticCodingWorkbenchInteraction,
   type ClientSupportReportDelivery,
   type ClientSupportReportPreparation,
   type ClientFilesScopeDecision,
@@ -200,6 +201,9 @@ export interface ClientDiagnosticMeta {
   // messages went — the timeline, or the transcript when the feed's bounds could not hold them —
   // and how many were cut, never a message, path or run name.
   readonly codingRunRestore?: ClientDiagnosticCodingRunRestore | undefined;
+  // What the human did on the Coding Workbench page (#3897): closed values, a trust binding's two
+  // body-free ids and a changeset's file count — routine evidence, never a failure.
+  readonly codingWorkbenchInteraction?: ClientDiagnosticCodingWorkbenchInteraction | undefined;
   readonly codingIssueOutcome?: "multiple-issues" | undefined;
   readonly codingHistoryScope?: ClientDiagnosticCodingHistoryScope | undefined;
   readonly stageReport?: ClientDiagnosticStageReport | undefined;

@@ -5,7 +5,8 @@ import {
   containsAbsolutePath,
   stripUnsafeFormatChars,
 } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
-import { redact } from "@oscharko-dev/keiko-security";
+import type { ContentRedactionPolicy } from "@oscharko-dev/keiko-contracts";
+import { redactContent } from "@oscharko-dev/keiko-security";
 import type { ChatMessage, UiStore } from "./store/index.js";
 import { logChatRehydration, type ChatRehydrationEvidence } from "./chat-continuity-log.js";
 
@@ -48,8 +49,13 @@ function matchingExcerpts(
   message: ChatMessage,
   terms: readonly string[],
   secrets: readonly string[],
+  contentRedaction: ContentRedactionPolicy,
 ): readonly string[] {
-  const safe = stripUnsafeFormatChars(redact(message.content, secrets)).normalize("NFKC");
+  // Stored turns are projected again under the CURRENT policy (#4098): history written during the
+  // opt-out is redacted when the deployment returns to the default.
+  const safe = stripUnsafeFormatChars(
+    redactContent(message.content, contentRedaction, secrets),
+  ).normalize("NFKC");
   const starts = new Set<number>();
   // queryTerms emits only Unicode letters; offsets remain in the original normalized text.
   for (const match of safe.matchAll(new RegExp(terms.join("|"), "giu"))) {
@@ -121,6 +127,12 @@ function complementaryExcerpts(candidates: readonly SourceExcerpt[]): readonly s
   return selected.map(({ excerpt }) => excerpt);
 }
 
+function normalizeRecallQuery(query: string): string | undefined {
+  return query.length <= MAX_SCAN_CHARS
+    ? query.normalize("NFKC").replace(/\s+/gu, " ").trim()
+    : undefined;
+}
+
 /** Re-read only eligible turns from the same chat. Search cannot widen a connector/workspace scope. */
 export function rehydrateChatHistory(
   store: UiStore,
@@ -129,6 +141,7 @@ export function rehydrateChatHistory(
   excludedIds: ReadonlySet<string>,
   secrets: readonly string[],
   correlationId?: string,
+  contentRedaction: ContentRedactionPolicy = "redact",
 ): string | undefined {
   const terms = queryTerms(query);
   const state: RecallScan = {
@@ -138,16 +151,20 @@ export function rehydrateChatHistory(
     order: 0,
     scanDisposition: terms.length === 0 ? "no-query-terms" : "complete",
   };
-  const normalizedQuery =
-    query.length <= MAX_SCAN_CHARS
-      ? query.normalize("NFKC").replace(/\s+/gu, " ").trim()
-      : undefined;
+  const normalizedQuery = normalizeRecallQuery(query);
   if (terms.length > 0)
     store.visitGatewayMessageUnits(chatId, "", (unit) => {
       state.unitsVisited += 1;
       for (const message of [...unit].reverse()) {
         if (state.scannedChars >= MAX_SCAN_CHARS) break;
-        scanMessage(state, message, { terms, excludedIds, secrets, query, normalizedQuery });
+        scanMessage(state, message, {
+          terms,
+          excludedIds,
+          secrets,
+          query,
+          normalizedQuery,
+          contentRedaction,
+        });
       }
       return continueRecallScan(state, terms.length);
     });
@@ -194,6 +211,7 @@ function scanMessage(
     readonly secrets: readonly string[];
     readonly query: string;
     readonly normalizedQuery: string | undefined;
+    readonly contentRedaction: ContentRedactionPolicy;
   },
 ): void {
   state.order += 1;
@@ -209,7 +227,8 @@ function scanMessage(
   const source = { ...message, content: bounded.slice(overlap) };
   if (source.content.normalize("NFKC").replace(/\s+/gu, " ").trim() === input.normalizedQuery)
     return;
-  for (const [index, text] of matchingExcerpts(source, input.terms, input.secrets).entries()) {
+  const excerpts = matchingExcerpts(source, input.terms, input.secrets, input.contentRedaction);
+  for (const [index, text] of excerpts.entries()) {
     const excerpt = rehydrateMessage(
       message.id,
       { messages: { read: (id) => (id === message.id ? text : undefined) } },
