@@ -131,3 +131,12 @@ use the real SDK path. Architecture fixtures prove both the import isolation and
 contracts/security package boundary. Registered producer-line and analyzer proofs,
 production non-Coding binder coverage, Workbench regressions and the complete dependency,
 package and release gates are required before final acceptance.
+
+
+The ordinary Chat consumer retains one bounded invocation loop per accepted human
+turn, including context-window retries. Its gateway physical-attempt hook charges
+shared authority budgets before dispatch and settles observed usage once. Catalog
+transport wrappers have a separate fixed depth allowance; each descriptor/schema and
+all model arguments retain their original bounds and closed validation. Historical
+completed tool results retain their validated descriptor/projection snapshot privately
+in the existing Chat row; the public serializer omits that qualification metadata.

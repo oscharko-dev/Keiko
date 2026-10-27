@@ -17,6 +17,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import {
   captureCatalogJson,
+  captureCatalogEnvelope,
   createToolInvocationNormalizer,
   OPENCODE_NATIVE_EXTENSION_DEFINITIONS,
   ToolCatalogError,
@@ -297,7 +298,7 @@ function capturedAdvertisement(input: unknown): GatewayToolAdvertisement {
     typeof input === "object" && input !== null && dataField(input, "kind") === "native";
   const value = native
     ? captureCatalogJson(input, GATEWAY_NATIVE_ADVERTISEMENT_CAPTURE_BYTES)
-    : captureCatalogJson(input);
+    : captureCatalogEnvelope(input);
   requireBridge(
     typeof value === "object" && value !== null && !Array.isArray(value),
     "projection-mismatch",

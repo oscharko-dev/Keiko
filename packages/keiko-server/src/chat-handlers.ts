@@ -1,3 +1,8 @@
+import {
+  createJiraChatToolTurn,
+  scopeJiraChatToolTurn,
+  type JiraChatToolTurn,
+} from "./atlassian/jiraChatToolTurn.js";
 import { raceAbort } from "./abort-race.js";
 import { logChatCreationIntent } from "./store/chatCreationIntents.js";
 import { resolveRegisteredWorkspaceProjectPath } from "./workspace-root-identity.js";
@@ -1201,7 +1206,8 @@ export function completeDesktopChatTurn(
   assistantMessage: ChatMessage,
 ): readonly [ChatMessage, ChatMessage] {
   const { request, turnIdentityContent } = prepared;
-  if (request.clientTurnId === undefined) return [userMessage, assistantMessage];
+  if (request.clientTurnId === undefined)
+    return [deps.store.findMessageById(userMessage.id) ?? userMessage, assistantMessage];
   const completion = deps.store.completeChatTurn(
     request.chatId,
     request.clientTurnId,
@@ -2439,6 +2445,7 @@ function buildBufferedGatewayAssembly(
 // The per-attempt inputs of one buffered assembly: the turn's abort signal and correlation, and the
 // context-window attempt that decides whether a failure is retried with the adopted window.
 interface BufferedAssemblyAttempt {
+  readonly toolTurn?: JiraChatToolTurn | undefined;
   readonly signal: AbortSignal;
   readonly correlationId: string | undefined;
   readonly attempt: ContextWindowAttempt;
@@ -2492,17 +2499,18 @@ function callPreparedAssembly(
   assembly: GatewayPromptAssembly,
   signal: AbortSignal,
   correlationId: string | undefined,
+  toolTurn: JiraChatToolTurn | undefined,
 ): Promise<NormalizedResponse> {
-  return model.call(
-    {
-      modelId,
-      messages: assembly.messages,
-      ...gatewayAssemblyOutputAllocation(assembly),
-      stream: false,
-      logContext: { correlationId },
-    },
-    signal,
-  );
+  const request = {
+    modelId,
+    messages: assembly.messages,
+    ...gatewayAssemblyOutputAllocation(assembly),
+    stream: false,
+    logContext: { correlationId },
+  };
+  return toolTurn === undefined
+    ? model.call(request, signal)
+    : toolTurn.call(model, request, signal);
 }
 
 // One assembled attempt: plans the prompt from the CURRENT context profile, re-checks the provider
@@ -2550,6 +2558,7 @@ async function assembleAndCallBuffered(
     assembly,
     abortSignal,
     correlationId,
+    run.toolTurn,
   );
   return { assembly, response };
 }
@@ -2569,35 +2578,85 @@ async function executeBufferedModelTurn(
   onAdmitted();
   const { admitted } = outcome;
   const { userMessage } = admitted;
-  const snapshot = captureAdmittedSnapshot(deps, prepared, admitted, abortSignal, correlationId);
-  const memory = await resolveBufferedMemory(deps, prepared, admitted, abortSignal, correlationId);
+  const toolTurn = await createJiraChatToolTurn(
+    deps,
+    modelId,
+    userMessage,
+    abortSignal,
+    correlationId,
+  );
+  const turnDeps = scopeJiraChatToolTurn(deps, toolTurn);
+  const snapshot = captureAdmittedSnapshot(
+    turnDeps,
+    prepared,
+    admitted,
+    abortSignal,
+    correlationId,
+  );
+  const memory = await resolveBufferedMemory(
+    turnDeps,
+    prepared,
+    admitted,
+    abortSignal,
+    correlationId,
+  );
   if (isRouteResult(memory)) return memory;
+  return executePreparedBufferedModelTurn(turnDeps, prepared, outcome, {
+    memory,
+    snapshot,
+    toolTurn,
+    abortSignal,
+    messageCountBeforeTurn,
+    startedAt,
+    correlationId,
+  });
+}
+
+interface PreparedBufferedRun {
+  readonly memory: ConversationMemoryResultWire;
+  readonly snapshot: GatewayTurnSnapshot;
+  readonly toolTurn: JiraChatToolTurn | undefined;
+  readonly abortSignal: AbortSignal;
+  readonly messageCountBeforeTurn: number;
+  readonly startedAt: number;
+  readonly correlationId: string | undefined;
+}
+async function executePreparedBufferedModelTurn(
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatSend,
+  outcome: {
+    readonly admitted: AdmittedTurnHandle;
+    readonly executionAdmission: DesktopChatExecutionAdmission;
+  },
+  run: PreparedBufferedRun,
+): Promise<RouteResult> {
   const called = await withAdoptedContextWindowRetry(
     deps,
-    { modelId, surface: "chat-buffered", correlationId },
+    { modelId: prepared.modelId, surface: "chat-buffered", correlationId: run.correlationId },
     (attempt) =>
-      assembleAndCallBuffered(deps, prepared, memory, outcome, snapshot, {
-        signal: abortSignal,
-        correlationId,
+      assembleAndCallBuffered(deps, prepared, run.memory, outcome, run.snapshot, {
+        signal: run.abortSignal,
+        correlationId: run.correlationId,
         attempt,
+        toolTurn: run.toolTurn,
       }),
   );
   if (isRouteResult(called)) return called;
   const { assembly, response } = called;
-  const cancelledAfterCall = bufferedTurnCancellationResult(deps, prepared, abortSignal);
+  const cancelledAfterCall = bufferedTurnCancellationResult(deps, prepared, run.abortSignal);
   if (cancelledAfterCall !== undefined) return cancelledAfterCall;
   return finalizeAndRecordBufferedTurn(
     deps,
     prepared,
-    memory,
-    { userMessage, response },
-    abortSignal,
+    run.memory,
+    { userMessage: outcome.admitted.userMessage, response },
+    run.abortSignal,
     {
       assembly,
-      messageCount: messageCountBeforeTurn,
-      startedAt,
-      historyPrefix: gatewayHistoryPrefix(snapshot),
-      correlationId,
+      messageCount: run.messageCountBeforeTurn,
+      startedAt: run.startedAt,
+      historyPrefix: gatewayHistoryPrefix(run.snapshot),
+      correlationId: run.correlationId,
     },
   );
 }

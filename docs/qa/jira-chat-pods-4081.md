@@ -1786,3 +1786,32 @@ An interrupted observation is projected as unavailable with unknown effect. Thre
 failed before the change; 140 scoped store/migration/history/prompt/compaction tests passed afterward
 before two additional bounds/consent tests. The new registered Activity Log proof checks redaction,
 production formatting and analyzer projection. Normal Chat execution/UI wiring remains pending.
+
+### Buffered Chat execution checkpoint — #4091, #4084, #4089 / #4081
+
+The canonical buffered Chat handler now mints authority from the admitted human row,
+uses the graph-owned catalog and the actual gateway binding, awaits the existing
+read-grant owner, and resumes only after fresh binder admission. No Coding session is
+created. The same turn object survives context-window retries. Physical gateway
+attempts, including retries and memory/compaction calls, use the existing admission
+hook and cumulative authority budget; uncertain usage fails closed. Harness counters
+bound iterations and tool calls. Model capability/fingerprint proof is checked each round.
+
+The deterministic normal-route test proves zero HTTP requests before consent, one
+read afterward, matching gateway tool/result IDs, persisted completion, read-grant
+reuse on the next human turn, and no new effect on duplicate canonical delivery.
+An unverified model receives no tool advertisement. This uses a synthetic model and
+injected Jira HTTP response; it is not the real-model/live Chat acceptance.
+
+Two integration faults were repaired: catalog/projection/binding wrappers no longer
+consume the individual descriptor/schema depth budget (the descriptor, argument,
+byte and shape limits remain unchanged); completed transcript results retain a private,
+validated descriptor/projection snapshot so reload can qualify them. This snapshot
+is stripped from the public message. Redaction requalifies the result and byte count.
+
+Checks: 566 catalog, gateway bridge, normal Chat, grant/store and operation-registry
+tests pass. The nested-schema regression failed before the correction. Earlier waiter
+regressions covered acceptance, rejection/revocation, reset, cancellation and expiry.
+Package build, root typecheck and scoped lint pass. Streaming, concrete mutation
+approval/journal wiring, UI and real-model/browser qualification remain pending;
+this checkpoint does not complete an acceptance criterion.

@@ -14,6 +14,7 @@ const ENCODER = new TextEncoder();
 const UNSAFE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 interface CopyBudget {
   readonly maxBytes: number;
+  readonly maxDepth: number;
   readonly ancestors: Set<object>;
   bytes: number;
 }
@@ -102,7 +103,7 @@ function copyObject(value: object, budget: CopyBudget, depth: number): CatalogJs
 // array/object arms both assign the same declared `CatalogJsonValue` union before one trailing
 // return, rather than returning from inside each branch.
 function copyValue(value: unknown, budget: CopyBudget, depth: number): CatalogJsonValue {
-  requireCatalog(depth <= TOOL_CATALOG_LIMITS.maxSchemaDepth, "input-bound");
+  requireCatalog(depth <= budget.maxDepth, "input-bound");
   let result: CatalogJsonValue;
   if (typeof value !== "object" || value === null) {
     result = scalar(value, budget);
@@ -122,6 +123,19 @@ export function copyCatalogJson(
   value: unknown,
   maxBytes: number = TOOL_CATALOG_LIMITS.maxArgumentBytes,
 ): CatalogJsonValue {
+  return copyWithinBounds(value, maxBytes, TOOL_CATALOG_LIMITS.maxSchemaDepth);
+}
+
+/** Catalog/projection/binding wrappers add levels; descriptors are still independently qualified. */
+export function copyCatalogEnvelope(value: unknown): CatalogJsonValue {
+  return copyWithinBounds(
+    value,
+    TOOL_CATALOG_LIMITS.maxArgumentBytes,
+    TOOL_CATALOG_LIMITS.maxSchemaDepth + 6,
+  );
+}
+
+function copyWithinBounds(value: unknown, maxBytes: number, maxDepth: number): CatalogJsonValue {
   requireCatalog(
     Number.isSafeInteger(maxBytes) &&
       maxBytes > 0 &&
@@ -129,7 +143,7 @@ export function copyCatalogJson(
     "input-bound",
   );
   try {
-    return copyValue(value, { maxBytes, ancestors: new Set(), bytes: 0 }, 1);
+    return copyValue(value, { maxBytes, maxDepth, ancestors: new Set(), bytes: 0 }, 1);
   } catch (error) {
     if (error instanceof ToolCatalogError) throw error;
     throw new ToolCatalogError("invalid-shape");

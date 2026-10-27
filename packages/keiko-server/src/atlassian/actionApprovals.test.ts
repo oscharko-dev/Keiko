@@ -16,7 +16,7 @@ import { chatAuthorityFixture } from "../editor/chatAuthority.test-support.js";
 // Hermetic tests for the bounded pending-approval registry (Issue #2244): injected clock (no
 // wall-clock races), TTL eviction, capacity, and single-use consumption.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AtlassianConnectorPendingApproval } from "@oscharko-dev/keiko-contracts";
 import {
   ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS,
@@ -800,4 +800,62 @@ it("reconstructs read-grant acceptance, reuse, revocation and expiry through the
     resetServerLogger();
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+describe("pending Chat consent waiters", () => {
+  it.each(["accept", "revoke", "reset"] as const)(
+    "resumes only after %s changes the existing grant",
+    async (action) => {
+      const registry = new AtlassianActionApprovalRegistry(() => T0);
+      const pending = readGrantEntry();
+      registry.createChatReadGrant(pending);
+      let resumed = false;
+      const waiting = registry
+        .waitForChatReadGrant(pending.grant.grantId, new AbortController().signal)
+        .then(() => {
+          resumed = true;
+        });
+      await Promise.resolve();
+      expect(resumed).toBe(false);
+      if (action === "accept")
+        registry.acceptChatReadGrant(
+          pending.grant.grantId,
+          pending.grant.subject,
+          pending.authority,
+          "a".repeat(64),
+        );
+      else if (action === "revoke") registry.revokeChatReadGrant(pending.grant.grantId);
+      else registry.reset();
+      await waiting;
+      expect(resumed).toBe(true);
+    },
+  );
+  it("cancellation releases the waiter without granting consent", async () => {
+    const registry = new AtlassianActionApprovalRegistry(() => T0);
+    const pending = readGrantEntry();
+    registry.createChatReadGrant(pending);
+    const controller = new AbortController();
+    const waiting = registry.waitForChatReadGrant(pending.grant.grantId, controller.signal);
+    controller.abort();
+    await waiting;
+    expect(registry.getChatReadGrant(pending.grant.grantId)?.grant.state).toBe("pending");
+  });
+  it("expires the wait at the grant deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(T0);
+      const registry = new AtlassianActionApprovalRegistry();
+      const pending = readGrantEntry();
+      registry.createChatReadGrant(pending);
+      const waiting = registry.waitForChatReadGrant(
+        pending.grant.grantId,
+        new AbortController().signal,
+      );
+      await vi.advanceTimersByTimeAsync(ATLASSIAN_ACTION_APPROVAL_TTL_MS);
+      await waiting;
+      expect(registry.getChatReadGrant(pending.grant.grantId)).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

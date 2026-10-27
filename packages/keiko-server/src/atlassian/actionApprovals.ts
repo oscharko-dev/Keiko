@@ -210,6 +210,7 @@ type RetainedApproval =
 
 export class AtlassianActionApprovalRegistry {
   private readonly entries = new Map<string, RetainedApproval>();
+  private readonly readWaiters = new Map<string, Set<() => void>>();
   private readonly now: () => number;
 
   public constructor(now: () => number = Date.now) {
@@ -374,10 +375,36 @@ export class AtlassianActionApprovalRegistry {
       : undefined;
   }
 
+  /** Wake on a state change; completion itself is never proof of consent. */
+  public waitForChatReadGrant(grantId: string, signal: AbortSignal): Promise<void> {
+    const entry = this.getChatReadGrant(grantId);
+    if (entry?.grant.state !== "pending" || signal.aborted) return Promise.resolve();
+    const waiters = this.readWaiters.get(grantId) ?? new Set<() => void>();
+    if (waiters.size >= ATLASSIAN_ACTION_APPROVAL_MAX_PENDING) return Promise.resolve();
+    return new Promise((resolve) => {
+      const finish = (): void => {
+        clearTimeout(timer);
+        signal.removeEventListener("abort", finish);
+        waiters.delete(finish);
+        if (waiters.size === 0) this.readWaiters.delete(grantId);
+        resolve();
+      };
+      const timer = setTimeout(finish, Math.max(0, entry.grant.expiresAt - this.now()));
+      waiters.add(finish);
+      this.readWaiters.set(grantId, waiters);
+      signal.addEventListener("abort", finish, { once: true });
+    });
+  }
+
+  private wakeReadWaiters(grantId: string): void {
+    for (const finish of this.readWaiters.get(grantId) ?? []) finish();
+  }
+
   private retainReadGrant(entry: ChatReadGrantEntry, correlationId?: string): ChatToolReadGrant {
     const record = snapshotReadGrant(entry, correlationId);
     this.entries.set(entry.grant.grantId, record);
     recordReadGrant(record);
+    if (record.entry.grant.state !== "pending") this.wakeReadWaiters(entry.grant.grantId);
     return record.entry.grant;
   }
 
@@ -414,6 +441,7 @@ export class AtlassianActionApprovalRegistry {
         );
       }
       this.entries.delete(id);
+      this.wakeReadWaiters(id);
     }
   }
 }

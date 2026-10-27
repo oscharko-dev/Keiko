@@ -4,7 +4,12 @@ import type { ChatToolReadGrantView } from "@oscharko-dev/keiko-contracts";
 import type { ToolResultEnvelope } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { CHAT_TOOL_READ_DISCLOSURE_VERSION } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
 import { canonicalise, deepRedactStrings, sha256Hex } from "@oscharko-dev/keiko-security";
-import { captureCatalogJson, validateToolResultEnvelope } from "@oscharko-dev/keiko-tool-catalog";
+import {
+  captureCatalogJson,
+  validateToolResultEnvelope,
+  verifyToolDescriptor,
+  type ToolResultValidationBinding,
+} from "@oscharko-dev/keiko-tool-catalog";
 import {
   activityLogEvent,
   defineActivityLogOperation,
@@ -15,8 +20,19 @@ import { withImmediateTransaction } from "./transaction.js";
 
 export type ChatToolTranscriptUpdate =
   | { readonly kind: "started"; readonly call: ChatToolExchange["call"] }
-  | { readonly kind: "settled"; readonly callId: string; readonly result: ToolResultEnvelope }
+  | {
+      readonly kind: "settled";
+      readonly callId: string;
+      readonly result: ToolResultEnvelope;
+      readonly binding?: ToolResultValidationBinding;
+    }
   | { readonly kind: "read-consent"; readonly grant: ChatToolReadGrantView };
+interface StoredExchange extends ChatToolExchange {
+  readonly resultBinding?: ToolResultValidationBinding;
+}
+interface StoredTranscript extends ChatToolTranscript {
+  readonly exchanges: readonly StoredExchange[];
+}
 const MAX_EXCHANGES = 30;
 const MAX_TRANSCRIPT_BYTES = 4_194_304;
 const UPDATE = defineActivityLogOperation({
@@ -64,9 +80,25 @@ function validCall(value: unknown): value is ChatToolExchange["call"] {
     object(captureCatalogJson(value.arguments, 262_144))
   );
 }
-function validExchange(value: unknown): value is ChatToolExchange {
-  if (!object(value) || !exact(value, ["call", "result"]) || !validCall(value.call)) return false;
-  if (value.result !== undefined) validateToolResultEnvelope(value.result);
+function validExchange(value: unknown): value is StoredExchange {
+  if (
+    !object(value) ||
+    !exact(value, ["call", "result", "resultBinding"]) ||
+    !validCall(value.call)
+  )
+    return false;
+  if (
+    value.resultBinding !== undefined &&
+    (!object(value.resultBinding) ||
+      !exact(value.resultBinding, ["descriptor", "projectionDigest"]))
+  )
+    return false;
+  if (value.result !== undefined)
+    validateToolResultEnvelope(
+      value.result,
+      value.resultBinding as ToolResultValidationBinding | undefined,
+    );
+  else if (value.resultBinding !== undefined) return false;
   return true;
 }
 const GRANT_STATES = new Set(["pending", "granted", "rejected", "expired", "revoked"]);
@@ -102,7 +134,7 @@ function validReadGrant(value: unknown): value is ChatToolReadGrantView {
     GRANT_STATES.has(value.state)
   );
 }
-function validTranscript(value: unknown): value is ChatToolTranscript {
+function validTranscript(value: unknown): value is StoredTranscript {
   if (!object(value) || !exact(value, ["schemaVersion", "exchanges", "readGrant"])) return false;
   if (
     value.schemaVersion !== 1 ||
@@ -118,6 +150,18 @@ function validTranscript(value: unknown): value is ChatToolTranscript {
   );
 }
 export function decodeChatToolTranscript(json: string | null): ChatToolTranscript | undefined {
+  const stored = decodeStoredTranscript(json);
+  return stored === undefined
+    ? undefined
+    : {
+        ...stored,
+        exchanges: stored.exchanges.map(({ call, result }) => ({
+          call,
+          ...(result === undefined ? {} : { result }),
+        })),
+      };
+}
+function decodeStoredTranscript(json: string | null): StoredTranscript | undefined {
   if (json === null) return undefined;
   try {
     if (Buffer.byteLength(json) > MAX_TRANSCRIPT_BYTES) throw new TypeError();
@@ -128,10 +172,20 @@ export function decodeChatToolTranscript(json: string | null): ChatToolTranscrip
   }
   throw new TypeError("Stored Chat tool transcript is invalid.");
 }
+function sameSettlement(
+  existing: StoredExchange,
+  update: Extract<ChatToolTranscriptUpdate, { kind: "settled" }>,
+): boolean {
+  return (
+    existing.result === undefined ||
+    (canonicalise(existing.result) === canonicalise(update.result) &&
+      canonicalise(existing.resultBinding ?? null) === canonicalise(update.binding ?? null))
+  );
+}
 function applyExchange(
-  current: ChatToolTranscript,
+  current: StoredTranscript,
   update: Exclude<ChatToolTranscriptUpdate, { kind: "read-consent" }>,
-): ChatToolTranscript {
+): StoredTranscript {
   const id = update.kind === "started" ? update.call.id : update.callId;
   const existing = current.exchanges.find((exchange) => exchange.call.id === id);
   if (update.kind === "started") {
@@ -142,26 +196,41 @@ function applyExchange(
     }
     return { ...current, exchanges: [...current.exchanges, { call: update.call }] };
   }
-  if (
-    existing === undefined ||
-    (existing.result !== undefined && canonicalise(existing.result) !== canonicalise(update.result))
-  )
+  if (existing === undefined || !sameSettlement(existing, update))
     throw invalidRequest("Tool result identity conflict.");
   return {
     ...current,
     exchanges: current.exchanges.map((exchange) =>
-      exchange.call.id === id ? { ...exchange, result: update.result } : exchange,
+      exchange.call.id === id
+        ? {
+            ...exchange,
+            result: update.result,
+            ...(update.binding === undefined ? {} : { resultBinding: update.binding }),
+          }
+        : exchange,
     ),
   };
 }
 function applyUpdate(
-  current: ChatToolTranscript,
+  current: StoredTranscript,
   update: ChatToolTranscriptUpdate,
   chatId: string,
-): ChatToolTranscript {
+): StoredTranscript {
   if (update.kind !== "read-consent") return applyExchange(current, update);
   if (update.grant.chatId !== chatId) throw invalidRequest("Tool consent Chat mismatch.");
   return { ...current, readGrant: update.grant };
+}
+function redactResult(
+  update: Extract<ChatToolTranscriptUpdate, { kind: "settled" }>,
+  redact: (value: string) => string,
+): ToolResultEnvelope {
+  const verified = validateToolResultEnvelope(update.result, update.binding);
+  const data = deepRedactStrings(verified.data, redact);
+  const metrics = {
+    ...verified.metrics,
+    outputBytes: data === null ? 0 : Buffer.byteLength(JSON.stringify(data)),
+  };
+  return validateToolResultEnvelope({ ...verified, data, metrics }, update.binding);
 }
 function redactUpdate(
   update: ChatToolTranscriptUpdate,
@@ -175,7 +244,15 @@ function redactUpdate(
   if (update.kind === "settled")
     return {
       ...update,
-      result: validateToolResultEnvelope(deepRedactStrings(update.result, redact)),
+      result: redactResult(update, redact),
+      ...(update.binding === undefined
+        ? {}
+        : {
+            binding: {
+              ...update.binding,
+              descriptor: verifyToolDescriptor(update.binding.descriptor),
+            },
+          }),
     };
   if (!validReadGrant(update.grant)) throw invalidRequest("Invalid tool consent projection.");
   return update;
@@ -197,7 +274,7 @@ export function updateChatToolTranscript(
     if (row === undefined || typeof row.chat_id !== "string") throw notFound("Message");
     if (row.client_turn_state !== null && row.client_turn_state !== "pending")
       throw invalidRequest("Tool turn is no longer pending.");
-    const current = decodeChatToolTranscript(row.tool_transcript_json as string | null) ?? {
+    const current = decodeStoredTranscript(row.tool_transcript_json as string | null) ?? {
       schemaVersion: 1,
       exchanges: [],
     };
