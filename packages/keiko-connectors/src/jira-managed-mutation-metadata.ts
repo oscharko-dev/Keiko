@@ -1,6 +1,7 @@
-import type {
-  AtlassianConnectorWriteFailureReason,
-  JiraFieldMetadata,
+import {
+  isSafeAtlassianIdentifier,
+  type AtlassianConnectorWriteFailureReason,
+  type JiraFieldMetadata,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
 import type {
@@ -84,11 +85,25 @@ export async function jiraEditMutationMetadata(
     ? parsedMetadata(parseJiraFieldMap(response.body.fields))
     : MALFORMED;
 }
+export type JiraTransitionMutationMetadata =
+  | Extract<JiraMutationMetadata, { ok: false }>
+  | {
+      readonly ok: true;
+      readonly fields: readonly JiraFieldMetadata[];
+      readonly targetStatusId: string;
+    };
+function selectedTransitionMetadata(value: unknown): JiraTransitionMutationMetadata {
+  const transition = asRecord(value);
+  const targetStatusId = asRecord(transition?.to)?.id;
+  if (!isSafeAtlassianIdentifier(targetStatusId)) return MALFORMED;
+  const parsed = parsedMetadata(parseJiraFieldMap(transition?.fields));
+  return parsed.ok ? { ...parsed, targetStatusId } : parsed;
+}
 export async function jiraTransitionMutationMetadata(
   request: JiraMutationRequest,
   issueKey: string,
   transitionId: string,
-): Promise<JiraMutationMetadata> {
+): Promise<JiraTransitionMutationMetadata> {
   const response = await request(
     `issue/${encodeURIComponent(issueKey)}/transitions?expand=transitions.fields`,
   );
@@ -98,6 +113,5 @@ export async function jiraTransitionMutationMetadata(
     return MALFORMED;
   const matches = transitions.map(asRecord).filter((item) => item?.id === transitionId);
   if (matches.length === 0) return { ok: false, reason: "invalid-transition" };
-  if (matches.length !== 1) return MALFORMED;
-  return parsedMetadata(parseJiraFieldMap(matches[0]?.fields));
+  return matches.length === 1 ? selectedTransitionMetadata(matches[0]) : MALFORMED;
 }

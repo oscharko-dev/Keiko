@@ -11,6 +11,11 @@ const REQUIRED_CUSTOM = {
   ...field("customfield_10000", "string", true),
   schema: { type: "string", custom: "com.atlassian.jira.plugin.system.customfieldtypes:textfield" },
 };
+const LABEL_FIELD = {
+  ...field("labels", "array"),
+  operations: ["set", "add", "remove"],
+  schema: { type: "array", items: "string", system: "labels" },
+};
 const FIELDS = [
   field("project", "project", true),
   field("issuetype", "issuetype", true),
@@ -27,6 +32,59 @@ function response(body: unknown, status = 200): AtlassianHttpBodyResult {
     truncated: false,
   };
 }
+interface SyntheticJira {
+  fields: Record<string, unknown>;
+  comment: string;
+}
+function fixtureRead(path: string, state: SyntheticJira): AtlassianHttpBodyResult {
+  if (path.includes("createmeta"))
+    return response({ values: FIELDS, start: 0, size: 100, last: true, total: FIELDS.length });
+  if (path.endsWith("editmeta"))
+    return response({
+      fields: {
+        summary: field("summary", "string"),
+        assignee: field("assignee", "user"),
+        labels: LABEL_FIELD,
+      },
+    });
+  if (path.endsWith("transitions"))
+    return response({
+      transitions: [{ id: "31", to: { id: "3" }, fields: { customfield_10000: REQUIRED_CUSTOM } }],
+    });
+  if (path.endsWith("assignable/search"))
+    return response([{ name: "synthetic-user", active: true }]);
+  if (path.endsWith("/comment/10002")) return response({ id: "10002", body: state.comment });
+  if (path.endsWith("/issue/SYN-1"))
+    return response({ id: "10001", key: "SYN-1", fields: state.fields });
+  return response({}, 404);
+}
+function fixtureLabelUpdates(mutation: Record<string, unknown>, state: SyntheticJira): void {
+  const update = mutation.update as { labels?: Record<string, string>[] } | undefined;
+  if (update?.labels === undefined) return;
+  const labels = new Set(state.fields.labels as readonly string[]);
+  for (const item of update.labels) {
+    if (item.add !== undefined) labels.add(item.add);
+    if (item.remove !== undefined) labels.delete(item.remove);
+  }
+  state.fields.labels = [...labels];
+}
+function fixtureWrite(
+  path: string,
+  body: string | undefined,
+  state: SyntheticJira,
+): AtlassianHttpBodyResult {
+  const mutation = JSON.parse(body ?? "{}") as Record<string, unknown>;
+  if (typeof mutation.fields === "object" && mutation.fields !== null)
+    state.fields = { ...state.fields, ...mutation.fields };
+  fixtureLabelUpdates(mutation, state);
+  if (path.endsWith("/assignee"))
+    state.fields.assignee = mutation.name === null ? null : { name: mutation.name };
+  if (path.endsWith("/transitions")) state.fields.status = { id: "3" };
+  if (typeof mutation.body === "string") state.comment = mutation.body;
+  if (path.endsWith("/issue")) return response({ key: "SYN-1", id: "10001" }, 201);
+  if (path.endsWith("/comment")) return response({ id: "10002" }, 201);
+  return response(undefined, 204);
+}
 function fixture(): {
   controller: AbortController;
   beforeEffect: ReturnType<typeof vi.fn<() => boolean>>;
@@ -36,30 +94,22 @@ function fixture(): {
     args: CatalogJsonObject,
   ) => ReturnType<typeof executeJiraManagedMutation>;
 } {
+  const state: SyntheticJira = {
+    fields: {
+      summary: "Original",
+      assignee: { name: "previous-user" },
+      status: { id: "1" },
+      labels: ["initial"],
+    },
+    comment: "",
+  };
   const http = vi.fn<AtlassianHttpBodyPort>((request) => {
     const path = new URL(request.url).pathname;
-    if (request.method === "GET") {
-      if (path.includes("createmeta"))
-        return Promise.resolve(
-          response({ values: FIELDS, start: 0, size: 100, last: true, total: FIELDS.length }),
-        );
-      if (path.endsWith("editmeta"))
-        return Promise.resolve(
-          response({
-            fields: { summary: field("summary", "string"), assignee: field("assignee", "user") },
-          }),
-        );
-      if (path.endsWith("transitions"))
-        return Promise.resolve(
-          response({ transitions: [{ id: "31", fields: { customfield_10000: REQUIRED_CUSTOM } }] }),
-        );
-      if (path.endsWith("assignable/search"))
-        return Promise.resolve(response([{ name: "synthetic-user", active: true }]));
-    }
-    if (path.endsWith("/issue"))
-      return Promise.resolve(response({ key: "SYN-1", id: "10001" }, 201));
-    if (path.endsWith("/comment")) return Promise.resolve(response({ id: "10002" }, 201));
-    return Promise.resolve(response(undefined, 204));
+    return Promise.resolve(
+      request.method === "GET"
+        ? fixtureRead(path, state)
+        : fixtureWrite(path, request.bodyJson, state),
+    );
   });
   const controller = new AbortController();
   const beforeEffect = vi.fn(() => true);
@@ -90,11 +140,15 @@ it("creates through current paged metadata and the selected numeric routing iden
       fields: { summary: "Synthetic", customfield_10000: "Required" },
     }),
   ).toEqual({ ok: true, receipt: { issueKey: "SYN-1", issueId: "10001" } });
-  expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET", "POST"]);
+  expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET", "POST", "GET"]);
   expect(f.http.mock.calls[0]?.[0].url).toContain(
     "/context/rest/api/2/issue/createmeta/10000/issuetypes/10001?startAt=0&maxResults=100",
   );
-  expect(JSON.parse(f.http.mock.calls[1]?.[0].bodyJson ?? "null")).toEqual({
+  expect(
+    JSON.parse(
+      f.http.mock.calls.find(([request]) => request.method !== "GET")?.[0].bodyJson ?? "null",
+    ),
+  ).toEqual({
     fields: {
       project: { id: "10000" },
       issuetype: { id: "10001" },
@@ -110,11 +164,65 @@ it("edits only fields available in freshly retrieved edit metadata", async () =>
     ok: true,
     receipt: { issueKey: "SYN-1" },
   });
-  expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET", "PUT"]);
-  expect(JSON.parse(f.http.mock.calls[1]?.[0].bodyJson ?? "null")).toEqual({
+  expect(f.http.mock.calls.map(([request]) => request.method)).toEqual([
+    "GET",
+    "GET",
+    "PUT",
+    "GET",
+  ]);
+  expect(
+    JSON.parse(
+      f.http.mock.calls.find(([request]) => request.method !== "GET")?.[0].bodyJson ?? "null",
+    ),
+  ).toEqual({
     fields: { summary: "Changed" },
     update: {},
   });
+});
+it("confirms changed label membership while preserving unrelated labels", async () => {
+  const f = fixture();
+  expect(
+    await f.run("jira.edit", {
+      issueKey: "SYN-1",
+      updates: [{ fieldId: "labels", operation: "add", value: "triage" }],
+    }),
+  ).toEqual({ ok: true, receipt: { issueKey: "SYN-1" } });
+  expect(f.http.mock.calls.filter(([request]) => request.method === "PUT")).toHaveLength(1);
+});
+it("does not attribute a label operation whose final membership already held", async () => {
+  const f = fixture();
+  expect(
+    await f.run("jira.edit", {
+      issueKey: "SYN-1",
+      updates: [{ fieldId: "labels", operation: "add", value: "initial" }],
+    }),
+  ).toEqual({ ok: false, reason: "conflict" });
+  expect(f.http.mock.calls.filter(([request]) => request.method === "PUT")).toHaveLength(1);
+});
+it("compares replaced label sets independently of their returned order", async () => {
+  const f = fixture();
+  const original = f.http.getMockImplementation();
+  let written = false;
+  f.http.mockImplementation(async (request) => {
+    const result = await original?.(request);
+    if (request.method === "PUT") written = true;
+    else if (written && request.method === "GET")
+      return response({ id: "10001", key: "SYN-1", fields: { labels: ["b", "a"] } });
+    return result ?? response({}, 500);
+  });
+  expect(await f.run("jira.edit", { issueKey: "SYN-1", fields: { labels: ["a", "b"] } })).toEqual({
+    ok: true,
+    receipt: { issueKey: "SYN-1" },
+  });
+});
+it("confirms explicit clearing without treating omitted fields as clears", async () => {
+  const f = fixture();
+  expect(await f.run("jira.edit", { issueKey: "SYN-1", fields: { labels: null } })).toEqual({
+    ok: true,
+    receipt: { issueKey: "SYN-1" },
+  });
+  const body = f.http.mock.calls.find(([request]) => request.method === "PUT")?.[0].bodyJson;
+  expect(JSON.parse(body ?? "null")).toEqual({ fields: { labels: null }, update: {} });
 });
 it("submits required transition fields and the transition in the same POST", async () => {
   const f = fixture();
@@ -125,8 +233,17 @@ it("submits required transition fields and the transition in the same POST", asy
       fields: { customfield_10000: "Screen value" },
     }),
   ).toEqual({ ok: true, receipt: { issueKey: "SYN-1", transitionId: "31" } });
-  expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET", "POST"]);
-  expect(JSON.parse(f.http.mock.calls[1]?.[0].bodyJson ?? "null")).toEqual({
+  expect(f.http.mock.calls.map(([request]) => request.method)).toEqual([
+    "GET",
+    "GET",
+    "POST",
+    "GET",
+  ]);
+  expect(
+    JSON.parse(
+      f.http.mock.calls.find(([request]) => request.method !== "GET")?.[0].bodyJson ?? "null",
+    ),
+  ).toEqual({
     transition: { id: "31" },
     fields: { customfield_10000: "Screen value" },
     update: {},
@@ -137,9 +254,18 @@ it("assigns a current active user with Assign permission without depending on ed
   expect(await f.run("jira.assign", { issueKey: "SYN-1", assigneeName: "synthetic-user" })).toEqual(
     { ok: true, receipt: { issueKey: "SYN-1" } },
   );
-  expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET", "PUT"]);
+  expect(f.http.mock.calls.map(([request]) => request.method)).toEqual([
+    "GET",
+    "GET",
+    "PUT",
+    "GET",
+  ]);
   expect(f.http.mock.calls[0]?.[0].url).toContain("/user/assignable/search?");
-  expect(JSON.parse(f.http.mock.calls[1]?.[0].bodyJson ?? "null")).toEqual({
+  expect(
+    JSON.parse(
+      f.http.mock.calls.find(([request]) => request.method !== "GET")?.[0].bodyJson ?? "null",
+    ),
+  ).toEqual({
     name: "synthetic-user",
   });
 });
@@ -149,7 +275,11 @@ it("clears an assignee only when current metadata permits clearing", async () =>
     ok: true,
     receipt: { issueKey: "SYN-1" },
   });
-  expect(JSON.parse(f.http.mock.calls[1]?.[0].bodyJson ?? "null")).toEqual({ name: null });
+  expect(
+    JSON.parse(
+      f.http.mock.calls.find(([request]) => request.method !== "GET")?.[0].bodyJson ?? "null",
+    ),
+  ).toEqual({ name: null });
 });
 it("writes Data Center plain text comments and requires the returned comment identity", async () => {
   const f = fixture();
@@ -157,7 +287,7 @@ it("writes Data Center plain text comments and requires the returned comment ide
     ok: true,
     receipt: { issueKey: "SYN-1", commentId: "10002" },
   });
-  expect(f.http).toHaveBeenCalledOnce();
+  expect(f.http).toHaveBeenCalledTimes(2);
   expect(JSON.parse(f.http.mock.calls[0]?.[0].bodyJson ?? "null")).toEqual({
     body: "Synthetic\ncomment",
   });
@@ -283,7 +413,13 @@ it("revalidates metadata when edit operations change between actions", async () 
     response({ fields: { summary: { ...field("summary", "string"), operations: [] } } }),
   );
   expect(await f.run("jira.edit", args)).toEqual({ ok: false, reason: "field-validation" });
-  expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET", "PUT", "GET"]);
+  expect(f.http.mock.calls.map(([request]) => request.method)).toEqual([
+    "GET",
+    "GET",
+    "PUT",
+    "GET",
+    "GET",
+  ]);
 });
 it("keeps approved arguments stable while metadata is outstanding", async () => {
   const f = fixture();
@@ -299,7 +435,11 @@ it("keeps approved arguments stable while metadata is outstanding", async () => 
   args.fields.summary = "Changed after admission";
   release?.(response({ fields: { summary: field("summary", "string") } }));
   expect((await pending).ok).toBe(true);
-  expect(JSON.parse(f.http.mock.calls[1]?.[0].bodyJson ?? "null")).toEqual({
+  expect(
+    JSON.parse(
+      f.http.mock.calls.find(([request]) => request.method !== "GET")?.[0].bodyJson ?? "null",
+    ),
+  ).toEqual({
     fields: { summary: "Approved" },
     update: {},
   });
@@ -426,3 +566,184 @@ it("refuses contradictory duplicate assignment identities before PUT", async () 
   );
   expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET"]);
 });
+
+const CONFIRMED_OPERATIONS: [JiraMutationOperation, CatalogJsonObject][] = [
+  [
+    "jira.create",
+    {
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: "Synthetic", customfield_10000: "Required" },
+    },
+  ],
+  ["jira.edit", { issueKey: "SYN-1", fields: { summary: "Synthetic" } }],
+  ["jira.assign", { issueKey: "SYN-1", assigneeName: "synthetic-user" }],
+  ["jira.comment", { issueKey: "SYN-1", body: "Synthetic" }],
+  [
+    "jira.transition",
+    { issueKey: "SYN-1", transitionId: "31", fields: { customfield_10000: "Required" } },
+  ],
+];
+it.each(CONFIRMED_OPERATIONS)(
+  "does not confirm %s when the acknowledged mutation cannot be read back",
+  async (operation, args) => {
+    const f = fixture();
+    const original = f.http.getMockImplementation();
+    if (original === undefined) throw new Error("Expected fixture");
+    f.http.mockImplementation((request) => {
+      const path = new URL(request.url).pathname;
+      const afterWrite = f.http.mock.calls.some(([call]) => call.method !== "GET");
+      return afterWrite &&
+        request.method === "GET" &&
+        (path.endsWith("/issue/SYN-1") || path.endsWith("/comment/10002"))
+        ? Promise.resolve(response({}, 403))
+        : original(request);
+    });
+    expect(await f.run(operation, args)).toEqual({
+      ok: false,
+      reason: "permission-denied",
+      httpStatus: 403,
+    });
+    expect(f.http.mock.calls.filter(([request]) => request.method !== "GET")).toHaveLength(1);
+  },
+);
+it.each(CONFIRMED_OPERATIONS)(
+  "does not confirm %s when independent state contradicts the acknowledged action",
+  async (operation, args) => {
+    const f = fixture();
+    const original = f.http.getMockImplementation();
+    if (original === undefined) throw new Error("Expected fixture");
+    f.http.mockImplementation((request) => {
+      const path = new URL(request.url).pathname;
+      const afterWrite = f.http.mock.calls.some(([call]) => call.method !== "GET");
+      if (afterWrite && request.method === "GET" && path.endsWith("/comment/10002"))
+        return Promise.resolve(response({ id: "10002", body: "Changed by another actor" }));
+      if (afterWrite && request.method === "GET" && path.endsWith("/issue/SYN-1"))
+        return Promise.resolve(
+          response({
+            id: "10001",
+            key: "SYN-1",
+            fields: {
+              summary: "Changed by another actor",
+              assignee: { name: "another-user" },
+              status: { id: "1" },
+              customfield_10000: "Other",
+            },
+          }),
+        );
+      return original(request);
+    });
+    expect(await f.run(operation, args)).toEqual({ ok: false, reason: "conflict" });
+    expect(f.http.mock.calls.filter(([request]) => request.method !== "GET")).toHaveLength(1);
+  },
+);
+it("does not attribute an unchanged pre-existing summary to a newly acknowledged edit", async () => {
+  const f = fixture();
+  expect(await f.run("jira.edit", { issueKey: "SYN-1", fields: { summary: "Original" } })).toEqual({
+    ok: false,
+    reason: "conflict",
+  });
+  expect(f.http.mock.calls.filter(([request]) => request.method !== "GET")).toHaveLength(1);
+});
+it("does not attribute a pre-existing assignee to a newly acknowledged assignment", async () => {
+  const f = fixture();
+  f.http.mockResolvedValueOnce(response([{ name: "previous-user", active: true }]));
+  expect(await f.run("jira.assign", { issueKey: "SYN-1", assigneeName: "previous-user" })).toEqual({
+    ok: false,
+    reason: "conflict",
+  });
+  expect(f.http.mock.calls.filter(([request]) => request.method !== "GET")).toHaveLength(1);
+});
+it("does not attribute an already-held target status to a transition from matching fields alone", async () => {
+  const f = fixture();
+  const original = f.http.getMockImplementation();
+  if (original === undefined) throw new Error("Expected fixture");
+  f.http.mockImplementation((request) => {
+    const path = new URL(request.url).pathname;
+    if (request.method === "GET" && path.endsWith("transitions"))
+      return Promise.resolve(
+        response({
+          transitions: [
+            { id: "31", to: { id: "1" }, fields: { customfield_10000: REQUIRED_CUSTOM } },
+          ],
+        }),
+      );
+    if (
+      request.method === "GET" &&
+      path.endsWith("/issue/SYN-1") &&
+      f.http.mock.calls.some(([call]) => call.method !== "GET")
+    )
+      return Promise.resolve(
+        response({
+          id: "10001",
+          key: "SYN-1",
+          fields: { status: { id: "1" }, customfield_10000: "Required" },
+        }),
+      );
+    return original(request);
+  });
+  expect(
+    await f.run("jira.transition", {
+      issueKey: "SYN-1",
+      transitionId: "31",
+      fields: { customfield_10000: "Required" },
+    }),
+  ).toEqual({ ok: false, reason: "conflict" });
+  expect(f.http.mock.calls.filter(([request]) => request.method !== "GET")).toHaveLength(1);
+});
+it("does not repeat an acknowledged edit when authority is lost before readback", async () => {
+  const f = fixture();
+  f.beforeEffect
+    .mockReturnValueOnce(true)
+    .mockReturnValueOnce(true)
+    .mockReturnValueOnce(true)
+    .mockReturnValue(false);
+  expect((await f.run("jira.edit", { issueKey: "SYN-1", fields: { summary: "Changed" } })).ok).toBe(
+    false,
+  );
+  expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET", "GET", "PUT"]);
+});
+it("refuses an edit before PUT when its prior issue state cannot be read", async () => {
+  const f = fixture();
+  const original = f.http.getMockImplementation();
+  if (original === undefined) throw new Error("Expected fixture");
+  f.http.mockImplementation((request) =>
+    new URL(request.url).pathname.endsWith("/issue/SYN-1")
+      ? Promise.resolve(response({}, 403))
+      : original(request),
+  );
+  expect((await f.run("jira.edit", { issueKey: "SYN-1", fields: { summary: "Changed" } })).ok).toBe(
+    false,
+  );
+  expect(f.http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
+});
+it.each(["jira.create", "jira.comment"] as const)(
+  "requires the created %s identity as well as matching content",
+  async (operation) => {
+    const f = fixture();
+    const original = f.http.getMockImplementation();
+    if (original === undefined) throw new Error("Expected fixture");
+    f.http.mockImplementation(async (request) => {
+      const result = await original(request);
+      const path = new URL(request.url).pathname;
+      if (
+        request.method !== "GET" ||
+        (!path.endsWith("/issue/SYN-1") && !path.endsWith("/comment/10002")) ||
+        result.kind !== "response"
+      )
+        return result;
+      const body = JSON.parse(result.bodyText) as Record<string, unknown>;
+      return response({ ...body, id: "different-resource" });
+    });
+    const args: CatalogJsonObject =
+      operation === "jira.create"
+        ? {
+            projectId: "10000",
+            issueTypeId: "10001",
+            fields: { summary: "Synthetic", customfield_10000: "Required" },
+          }
+        : { issueKey: "SYN-1", body: "Synthetic" };
+    expect(await f.run(operation, args)).toEqual({ ok: false, reason: "conflict" });
+    expect(f.http.mock.calls.filter(([request]) => request.method !== "GET")).toHaveLength(1);
+  },
+);

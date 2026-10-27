@@ -1106,3 +1106,25 @@ remain responsible for correlated runtime evidence; no additional logging subsys
 
 The 45 executor tests were rerun successfully after extracting the unique-active-assignee check.
 Changed formatting, ADR index and the staged-diff semantic gate also pass.
+
+## Auditor repair: independent mutation confirmation — #4083 AC3/AC5
+
+The auditor correctly identified that an expected 201/204 response was only an acknowledgement.
+The private Data Center executor now reads the exact affected resource after every acknowledged
+operation and validates identity plus the requested state. Edits, assignments and transitions also
+read the relevant state before dispatch; already matching state and self-transitions do not establish
+a new effect. Transition metadata must identify its target status. Failed or contradictory readback
+returns a failed attempt without repeating the mutation; the existing journal composer retains the
+acknowledgement as `succeeded-unconfirmed`. The provider/composer/SDK integration proof is still pending.
+
+Sixteen tests failed against the acknowledgement-only implementation. The resulting **403-test
+selection** passes, including **66 mutation tests**. All five operations cover forbidden and
+contradictory post-write reads with exactly one mutation; additional cases cover wrong returned
+identity, unchanged state, lost authority before readback, refused prerequisite reads, explicit
+clearing, reordered replacements and additive label membership. Package build and root typecheck
+passed after the runtime changes. This remains synthetic component evidence, not licensed Jira,
+normal Chat or browser acceptance. Readback does not establish exclusive causation or atomic
+lost-update protection. The earlier ADR choice-list limit is also corrected to the implemented
+500 choices (the separate submitted-array bound remains 100).
+
+Changed lint/format, ADR index and the staged-diff semantic gate pass; the clone ceiling remains 938.

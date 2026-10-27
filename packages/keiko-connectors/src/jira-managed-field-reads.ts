@@ -90,7 +90,10 @@ function referenceValue(field: JiraFieldMetadata, value: unknown): CatalogJsonOb
   if (!validated.ok) return { state: "unavailable" };
   return refs.length === 0 ? { state: "empty" } : { state: "value", references: refs };
 }
-function valueProjection(field: JiraFieldMetadata, value: unknown): CatalogJsonObject {
+export function projectJiraFieldReadValue(
+  field: JiraFieldMetadata,
+  value: unknown,
+): CatalogJsonObject {
   if (Object.hasOwn(REFERENCE_SHAPES, field.kind)) return referenceValue(field, value);
   const validated = validateJiraFieldValue(field, value, "data-center");
   if (!validated.ok) return { state: "unavailable" };
@@ -140,5 +143,5 @@ function selectedValue(
 ): CatalogJsonObject {
   if (field.kind === "unsupported") return { state: "unsupported" };
   if (values === undefined || !Object.hasOwn(values, field.id)) return { state: "unavailable" };
-  return valueProjection(field, values[field.id]);
+  return projectJiraFieldReadValue(field, values[field.id]);
 }

@@ -335,7 +335,7 @@ owners of per-request and terminal evidence.
 for its managed Jira provider. It admits standard text, finite numbers, calendar dates,
 millisecond datetime values, user/option references and explicit bounded list types. Core Jira
 custom-field types are named explicitly; an unknown plugin type is unsupported even if its base
-schema looks familiar. A choice list above 100 entries makes only that field unsupported; other
+schema looks familiar. A choice list above 500 entries makes only that field unsupported; other
 fields remain usable, and a required unsupported field without a server default still blocks
 creation. Unsupported plugin choice structures are not interpreted. Known-field structural errors
 remain malformed metadata. Offered verbs are intersected with the implemented field/verb matrix;
@@ -366,7 +366,16 @@ named active user checks the current issue-scoped assignable-user endpoint witho
 permission; unassignment additionally requires metadata that permits clearing. Comments remain
 Data Center plain text. The executor snapshots inputs before metadata I/O, shares one aggregate
 deadline across phases, and rechecks admission for every request. Only the documented 201/204
-mutation responses with required identities confirm an attempt. Current managed-provider defaults
+mutation responses with required identities acknowledge an attempt. Confirmation additionally
+requires a bounded direct read of the affected resource: returned creation/comment identity and
+requested content, edited field values, assignment identity, or the transition's current target
+status and requested fields. Edit/assignment/transition capture the relevant state before dispatch.
+A state that already matched before dispatch does not establish a new effect; a self-transition
+therefore remains unconfirmed. Label updates compare only the requested membership changes, while
+replacement sets ignore ordering and reference labels never substitute for identities. Failed or
+contradictory readback remains acknowledged-but-unconfirmed in the server composer and never permits
+automatic mutation replay. These checks observe the requested result; they do not promise exclusive
+causation or atomic protection against concurrent Jira updates. Current managed-provider defaults
 still expose reads; the private executor does not confer journal, Chat or approval authority.
 
 ### D4 — Action-class mapping table

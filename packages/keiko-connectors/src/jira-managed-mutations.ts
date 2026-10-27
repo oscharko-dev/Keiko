@@ -2,6 +2,7 @@ import {
   isSafeAtlassianIdentifier,
   type JiraMutationAttempt,
   type JiraMutationOperation,
+  type JiraFieldMetadata,
   type JiraMutationReceipt,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
@@ -27,6 +28,16 @@ import {
   type JiraMutationRequest,
 } from "./jira-managed-mutation-metadata.js";
 
+import {
+  confirmJiraAssignment,
+  confirmJiraComment,
+  confirmJiraMutationFields,
+  jiraMutationFieldSelection,
+  readJiraMutationIssue,
+  type JiraValidatedMutationFields,
+} from "./jira-mutation-confirmation.js";
+
+type MutationValidation = { readonly ok: true } | Extract<JiraMutationAttempt, { ok: false }>;
 const INVALID = { ok: false, reason: "field-validation" } as const;
 const MALFORMED = { ok: false, reason: "malformed-payload" } as const;
 // eslint-disable-next-line no-control-regex -- HTTP reference values must not contain control characters.
@@ -79,11 +90,10 @@ async function statusMutation(
   path: string,
   method: "POST" | "PUT",
   body: Readonly<Record<string, unknown>>,
-  receipt: JiraMutationReceipt,
-): Promise<JiraMutationAttempt> {
+): Promise<MutationValidation> {
   const response = await request(path, method, body, "none");
   if (!response.ok) return response;
-  return response.status === 204 ? { ok: true, receipt } : MALFORMED;
+  return response.status === 204 ? { ok: true } : MALFORMED;
 }
 async function createIssue(
   request: JiraMutationRequest,
@@ -112,15 +122,43 @@ async function createIssue(
     update: validated.update,
   });
   if (!response.ok) return response;
-  return createdReceipt(response);
+  return confirmCreatedIssue(request, response, metadata.fields, validated);
 }
-function createdReceipt(
+function confirmCreatedIssue(
+  request: JiraMutationRequest,
   response: Extract<AtlassianWriteHttpOutcome, { ok: true }>,
-): JiraMutationAttempt {
+  metadata: readonly JiraFieldMetadata[],
+  values: JiraValidatedMutationFields,
+): Promise<JiraMutationAttempt> {
   const { key, id } = response.body ?? {};
-  return response.status === 201 && isSafeAtlassianIdentifier(key) && numericId(id)
-    ? { ok: true, receipt: { issueKey: key, issueId: id } }
-    : MALFORMED;
+  if (response.status !== 201 || !isSafeAtlassianIdentifier(key) || !numericId(id))
+    return Promise.resolve(MALFORMED);
+  return confirmJiraMutationFields(request, {
+    issueKey: key,
+    receipt: { issueKey: key, issueId: id },
+    metadata,
+    values,
+  });
+}
+interface FieldMutationTarget {
+  readonly path: string;
+  readonly method: "POST" | "PUT";
+  readonly body: Readonly<Record<string, unknown>>;
+  readonly receipt: JiraMutationReceipt;
+}
+function fieldMutationTarget(
+  issueKey: string,
+  transitionId: string | undefined,
+): FieldMutationTarget {
+  const path = `issue/${encodeURIComponent(issueKey)}`;
+  return transitionId === undefined
+    ? { path, method: "PUT", body: {}, receipt: { issueKey } }
+    : {
+        path: `${path}/transitions`,
+        method: "POST",
+        body: { transition: { id: transitionId } },
+        receipt: { issueKey, transitionId },
+      };
 }
 async function fieldMutation(
   request: JiraMutationRequest,
@@ -128,6 +166,7 @@ async function fieldMutation(
   args: CatalogJsonObject,
   purpose: "edit" | "transition",
   issueKey: string,
+  targetStatusId?: string,
 ): Promise<JiraMutationAttempt> {
   if (!metadata.ok) return metadata;
   const validated = validateJiraFieldChanges(
@@ -138,19 +177,31 @@ async function fieldMutation(
     args.updates ?? [],
   );
   if (!validated.ok) return INVALID;
-  const transitionId = args.transitionId;
-  const transition = purpose === "transition" && typeof transitionId === "string";
-  return statusMutation(
+  const transitionId =
+    purpose === "transition" && typeof args.transitionId === "string"
+      ? args.transitionId
+      : undefined;
+  const target = fieldMutationTarget(issueKey, transitionId);
+  const prior = await readJiraMutationIssue(
     request,
-    `issue/${encodeURIComponent(issueKey)}${transition ? "/transitions" : ""}`,
-    transition ? "POST" : "PUT",
-    {
-      fields: validated.fields,
-      update: validated.update,
-      ...(transition ? { transition: { id: transitionId } } : {}),
-    },
-    { issueKey, ...(transition ? { transitionId } : {}) },
+    issueKey,
+    jiraMutationFieldSelection(validated, transitionId !== undefined),
   );
+  if (!prior.ok) return prior;
+  const acknowledged = await statusMutation(request, target.path, target.method, {
+    fields: validated.fields,
+    update: validated.update,
+    ...target.body,
+  });
+  if (!acknowledged.ok) return acknowledged;
+  return confirmJiraMutationFields(request, {
+    issueKey,
+    receipt: target.receipt,
+    metadata: metadata.fields,
+    values: validated,
+    prior,
+    ...(targetStatusId === undefined ? {} : { targetStatusId }),
+  });
 }
 async function editIssue(
   request: JiraMutationRequest,
@@ -187,13 +238,9 @@ async function transitionIssue(
     asArray(args.updates ?? []) === undefined
   )
     return INVALID;
-  return fieldMutation(
-    request,
-    await jiraTransitionMutationMetadata(request, issueKey, transitionId),
-    args,
-    "transition",
-    issueKey,
-  );
+  const metadata = await jiraTransitionMutationMetadata(request, issueKey, transitionId);
+  if (!metadata.ok) return metadata;
+  return fieldMutation(request, metadata, args, "transition", issueKey, metadata.targetStatusId);
 }
 function userName(value: unknown): value is string {
   return (
@@ -207,7 +254,7 @@ async function checkAssignee(
   request: JiraMutationRequest,
   issueKey: string,
   name: string | null,
-): Promise<JiraMutationAttempt> {
+): Promise<MutationValidation> {
   if (name === null) {
     const metadata = await jiraEditMutationMetadata(request, issueKey);
     if (!metadata.ok) return metadata;
@@ -217,7 +264,7 @@ async function checkAssignee(
       "edit",
       "data-center",
     );
-    return validated.ok ? { ok: true, receipt: {} } : INVALID;
+    return validated.ok ? { ok: true } : INVALID;
   }
   const params = new URLSearchParams({ issueKey, username: name, startAt: "0", maxResults: "100" });
   const response = await request(
@@ -229,7 +276,7 @@ async function checkAssignee(
   if (!response.ok) return response;
   const users = response.items;
   if (response.status !== 200 || users === undefined || users.length > 100) return MALFORMED;
-  return uniqueActiveAssignee(users, name) ? { ok: true, receipt: {} } : INVALID;
+  return uniqueActiveAssignee(users, name) ? { ok: true } : INVALID;
 }
 function uniqueActiveAssignee(users: readonly unknown[], name: string): boolean {
   const matches = users.map(asRecord).filter((user) => user?.name === name);
@@ -246,13 +293,15 @@ async function assignIssue(
     return INVALID;
   const allowed = await checkAssignee(request, issueKey, name);
   if (!allowed.ok) return allowed;
-  return statusMutation(
+  const prior = await readJiraMutationIssue(request, issueKey, ["assignee"]);
+  if (!prior.ok) return prior;
+  const acknowledged = await statusMutation(
     request,
     `issue/${encodeURIComponent(issueKey)}/assignee`,
     "PUT",
     { name },
-    { issueKey },
   );
+  return acknowledged.ok ? confirmJiraAssignment(request, issueKey, name, prior) : acknowledged;
 }
 async function addComment(
   request: JiraMutationRequest,
@@ -271,7 +320,7 @@ async function addComment(
   if (!response.ok) return response;
   const id = response.body?.id;
   return response.status === 201 && numericId(id)
-    ? { ok: true, receipt: { issueKey, commentId: id } }
+    ? confirmJiraComment(request, issueKey, id, body)
     : MALFORMED;
 }
 
