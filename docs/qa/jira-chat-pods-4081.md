@@ -55,7 +55,9 @@ The [complete catalog groups](#complete-live-catalog-groups-and-cancellation-rec
 [UI/Data-surface proofs](#incremental-qualification--capability-empty-evidence-and-current-jira-pages)
 and [fresh setup](#incremental-qualification--renewed-laboratory-and-reproducible-cold-setup)
 are scoped evidence; live receipts from prior artifacts do not establish acceptance at the final PR head.
-The 10/10 fault receipt interrupted by an artifact rebuild is diagnostic only.
+The initial 10/10 fault receipt interrupted by an artifact rebuild is diagnostic only.
+The subsequent [stable-artifact fault group](#stable-artifact-fault-qualification-and-custody-races)
+passes all ten cases on `6c63f33a0f7a`; its scope remains separate from browser transport loss.
 
 ### #4082 — Support Jira Data Center PAT connections through the existing Atlassian connector
 
@@ -95,7 +97,7 @@ Status: **Partial — not accepted**. Canonical discovery compilation, bound gat
 
 - [ ] **AC3:** Call context is injected server-side only; routing and authority overrides are refused. Ordinary links in supported issue content remain data. Interleaved calls from two differently bound consumers, with cancellation and reversed completion order, cannot observe or use each other's context. Unsupported SDK input fulfillment or retries cannot bypass canonical admission and invocation accounting.
 
-Status: **Partial — not accepted**. Server-only invocation context, override rejection and interleaved/cancelled SDK calls have retained proofs. Ordinary Chat adds actor, binding and generation checks. The complete two-Chat/reversed-completion product scenario matrix remains open.
+Status: **Partial — not accepted**. Server-only invocation context, override rejection and interleaved/cancelled SDK calls have retained proofs. The actual-Gateway suite now proves same-Pod and different-Pod Chats with reversed completion, separate grants/call IDs and correct credential routing. Real custody/PATCH routes additionally prove selective invalidation while another Pod completes. Final integrated and gate qualification remains open.
 
 - [ ] **AC4:** The admission pipeline composes stricter-wins in all three modes; a denied call performs no handler call; approval and grant redemption re-validate binding, generation, envelope, mode and budget; cancellation and timeout settle exactly once.
 
@@ -133,7 +135,7 @@ Status: **Partial — not accepted**. Bounded pagination/results, schema/context
 
 - [ ] **AC5:** Tests distinguish malformed/truncated acknowledged 2xx from unknown remote effects, and prove no blind mutation replay after timeout, committed-then-5xx or cancellation. They cover intervening field/assignee changes and operation-aware retry safety, not only duplicate POST. Route, canonical tool outcome, activity and UI folds agree; an empty reconciliation search never authorizes a retry. Approved action changes invalidate stale approval. Document the concurrency limit of operations without an atomic Jira precondition; do not claim universal exactly-once execution or lost-update prevention.
 
-Status: **Partial — not accepted**. Durable canonical-turn journaling, GET-only retries, operation-aware confirmation and distinct acknowledged/unknown outcomes are implemented. All-five-write response-loss SDK proofs and fresh-reader late acknowledgement after cancellation are retained. The 10/10 live fault receipt is diagnostic only because a build changed artifacts mid-group. Repeat the complete stable-artifact fault matrix, including intervening changes, browser duplicates/Regenerate and remote counts; Jira concurrency limits remain explicit.
+Status: **Partial — not accepted**. Durable canonical-turn journaling, GET-only retries, operation-aware confirmation and distinct acknowledged/unknown outcomes are implemented. The complete stable-artifact real-model fault group passes all five mutations under lost observation and committed-then-503, with canonical duplicates, fresh-process restart, Regenerate and independent remote counts. Four separate foreign PUT changes remain preserved. Browser transport-loss qualification and final gates remain open; Jira concurrency limits remain explicit.
 
 - [ ] **AC7:** With no explicit ceiling configured, the connector policy evaluates Chat-consumer and Coding-run calls against the same resolved `autonomous-delivery` ceiling; `KEIKO_CODING_DEPLOYMENT_CEILING=governed-assist` clamps both, and an unrecognized value fails closed to `governed-assist`. Proven through the production policy and composition, not a hand-built deps object.
 
@@ -267,7 +269,7 @@ Status: **Partial — not accepted**. All-mode read-disclosure/comment-approval 
 
 - [ ] **AC3:** Isolation/revocation, replay-prevention and restart tests pass, including two chats, deliberate reuse of one Pod, different Pod credentials, replacement, disconnect during approval and token rotation. Tests assert remote effect counts after lost responses, duplicate delivery, retries and Regenerate. Completed remote effects are not falsely described as rolled back; acknowledged-but-unconfirmed and unknown outcomes remain distinct. Old verification replies and alternate credential-management entry points cannot restore revoked readiness.
 
-Status: **Partial — not accepted**. Route lifecycle/isolation, SQLite restart consent, exact crash-history recovery, durable replay barriers and all-write SDK fault cases are retained, plus real browser token/lifecycle groups. The 10/10 live fault receipt is diagnostic because an accidental rebuild changed artifacts mid-group. Repeat the stable-artifact fault matrix and complete two-Chat/replacement/restart/browser duplicate/Regenerate remote-count cases.
+Status: **Partial — not accepted**. The stable-artifact ten-case real-model fault group now proves single effects through canonical duplicates, real process restart and Regenerate, including four distinct foreign PUT changes. Actual-Gateway tests add shared/distinct-Pod reversed completion, real credential rotation during two pending writes, selective disconnect and acknowledged deletion races. Browser transport loss, live consent reuse/rotation and remaining final-artifact groups are still open.
 
 - [ ] **AC4:** The small UI flow matches the root design reference and passes keyboard, screen-reader, theme/contrast, reduced-motion and constrained-layout checks. Product readiness does not depend on embedding/indexing.
 
@@ -2398,3 +2400,32 @@ build, editor release-evidence gate, bundle-size gate and 50 related tests. The 
 evidence matched without regeneration or changed limits. All nine reviewed bot conversations were
 answered with fixes or the documented raw-digest rebuttal and resolved. Final aggregate/Sonar,
 current-head checks, remaining live groups and complete Jira visual acceptance remain open.
+
+### Stable-artifact fault qualification and custody races
+
+Epic #4081 / #4083 / #4084 / #4091 / #4087: the fresh real-model fault group passes **10/10**
+on committed `6c63f33a0f7a`. Every create/edit/assign/comment/transition case covers a lost observed
+response or a committed-then-503 observation, original duplicate delivery, a duplicate from a
+fresh Node process and actual-model Regenerate. Independent Jira state confirms exactly ten Chat
+effects and four separately requested foreign PUT effects. No duplicate, restart or Regenerate
+adds a remote effect. The fault injection changes the journal-visible response after real Jira
+acceptance; it does not claim a physical browser socket interruption.
+
+All 6,824 compiled/helper files match before and after the complete group, with inventory digest
+`6836cb923f68d84e603dce9182e23a0ad2d89d2ae7d4b6030e2ea75c011bf876`.
+The retained private completion receipt has SHA-256
+`2c6bbe7c67b81e837ce6f688a134d3085c5cfe2d6a815257356c2a6ee65f0bdd`.
+Opening and closing license checks found 9,571 and 9,145 seconds remaining. There is no pending
+intent for this group. Earlier diagnostic/incomplete groups remain retained and are not relabelled.
+
+Three additional hermetic production-path tests use actual credential creation/verification,
+vault custody, Chat PATCH, Gateway, catalog/MCP, grants and approvals. Token rotation cancels
+both same-Pod pending writes with zero effects while the distinct Pod writes once. Disconnect
+discards a delayed private result while another Pod completes. Credential deletion after remote
+acknowledgement retains `succeeded-unconfirmed` even when delivery is cancelled. Only the remote
+HTTP tail supplies controlled responses/barriers. No product change was needed for these proofs.
+The complete mixed suite passes 35 cases; its final three targeted cases, root TypeScript,
+scoped ESLint/Prettier and unchanged semantic-duplication gate pass.
+
+Restricted identities, live consent reuse and rotation, physical browser response loss, complete
+visual acceptance, final aggregate/Sonar and required current-head checks remain outstanding.

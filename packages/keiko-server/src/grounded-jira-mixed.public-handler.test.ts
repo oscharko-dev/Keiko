@@ -1,4 +1,14 @@
 import type { MemoryId, ProjectId, UserId } from "@oscharko-dev/keiko-contracts/memory";
+import { randomBytes, randomUUID } from "node:crypto";
+import { handleUpdateChat } from "./store-handlers.js";
+import { deriveChatGroundingScopeIdentity } from "./store/chat-grounding-scope-identity.js";
+import { interruptChatGenerations } from "./chat-turn-serializer.js";
+import {
+  handleCreateAtlassianConnectorCredential,
+  handleDeleteAtlassianConnectorCredential,
+  handleUpdateAtlassianConnectorCredential,
+  handleVerifyAtlassianConnectorCredential,
+} from "./atlassian/credentialRoutes.js";
 import { AtlassianActionApprovalRegistry } from "./atlassian/actionApprovals.js";
 import { EditorAgentAuthorityRegistry } from "./editor/agentAuthorityRegistry.js";
 import { createJiraChatCatalogRuntime } from "./atlassian/jiraChatCatalogRuntime.js";
@@ -27,11 +37,11 @@ import type {
   AtlassianHttpBodyPort,
   AtlassianCredentialMetadata,
 } from "@oscharko-dev/keiko-connectors";
-import type { GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { ChatToolExchange, GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import { handleGroundedAsk } from "./grounded-qa.js";
 import { mockRequest, mockResponse } from "./_support.js";
-import type { RouteContext } from "./routes.js";
+import type { RouteContext, RouteResult } from "./routes.js";
 import { jiraChatActorDigest } from "./atlassian/jiraPodAccess.js";
 import { handleDecideChatReadConsent } from "./atlassian/chatReadConsentRoutes.js";
 import {
@@ -368,6 +378,290 @@ function runtime(
   });
   return { deps, chatId: chat.id, root, jiraRequests };
 }
+
+function credentialContext(authRef: string, body: Record<string, unknown> = {}): RouteContext {
+  return { ...context(body), params: { authRef } };
+}
+type OwnedJiraCredential = Extract<
+  AtlassianCredentialMetadata,
+  { readonly deployment: "data-center" }
+>;
+type OwnedRuntime = ReturnType<typeof runtime> & {
+  readonly pods: readonly [OwnedJiraCredential, OwnedJiraCredential];
+  readonly chats: readonly [string, string, string];
+};
+function realCustodyOwner(
+  f: ReturnType<typeof runtime>,
+): NonNullable<UiHandlerDeps["atlassianConnectorCredentials"]> {
+  const owner = f.deps.atlassianConnectorCredentials;
+  if (owner === undefined) throw new Error("Missing real credential owner");
+  return owner;
+}
+async function patchOwnedChat(
+  f: ReturnType<typeof runtime>,
+  chatId: string,
+  podId: string | null,
+): Promise<void> {
+  const existing = f.deps.store.findChatById(chatId);
+  if (existing === undefined) throw new Error("Missing existing Chat");
+  const response = await handleUpdateChat(
+    {
+      ...context({
+        jiraPodId: podId,
+        expectedGroundingScopeIdentity: deriveChatGroundingScopeIdentity(existing),
+      }),
+      url: new URL(`http://127.0.0.1/api/chats?id=${encodeURIComponent(chatId)}`),
+    },
+    f.deps,
+  );
+  expect(response.status).toBe(200);
+}
+async function createOwnedPod(
+  f: ReturnType<typeof runtime>,
+  label: string,
+): Promise<OwnedJiraCredential> {
+  const created = await handleCreateAtlassianConnectorCredential(
+    context({
+      displayName: label,
+      provider: "jira",
+      deployment: "data-center",
+      authScheme: "bearer-pat",
+      baseUrl: `https://${label}.example.invalid`,
+      apiToken: "synthetic-custody-pat",
+      livePodCreationRequestId: randomUUID(),
+    }),
+    f.deps,
+  );
+  expect(created.status).toBe(200);
+  const authRef = (created.body as { readonly authRef: string }).authRef;
+  const verified = await handleVerifyAtlassianConnectorCredential(
+    credentialContext(authRef),
+    f.deps,
+  );
+  expect(verified.body).toMatchObject({ status: "ok" });
+  const stored = realCustodyOwner(f).custody.getMetadata(authRef);
+  if (stored?.deployment !== "data-center" || stored.livePod === undefined)
+    throw new Error("Missing verified owned Pod");
+  return stored;
+}
+function enableRealCustody(f: ReturnType<typeof runtime>): void {
+  const owner = realCustodyOwner(f);
+  vi.mocked(owner.custody.list).mockRestore();
+  const original = vi.mocked(owner.httpBodyPortFactory).getMockImplementation();
+  if (original === undefined) throw new Error("Missing remote HTTP fixture");
+  vi.mocked(owner.httpBodyPortFactory).mockImplementation((...args) => {
+    const port = original(...args);
+    return (request): ReturnType<AtlassianHttpBodyPort> => {
+      const path = new URL(request.url).pathname;
+      if (!path.endsWith("/serverInfo") && !path.endsWith("/myself")) return port(request);
+      const bodyText = JSON.stringify(
+        path.endsWith("/serverInfo")
+          ? { version: "10.3.26", versionNumbers: [10, 3, 26], deploymentType: "Server" }
+          : { name: "synthetic-user", key: "synthetic-key", active: true },
+      );
+      return Promise.resolve({
+        kind: "response",
+        status: 200,
+        bodyText,
+        bodyBytes: Buffer.byteLength(bodyText),
+        truncated: false,
+      });
+    };
+  });
+}
+async function ownedRuntime(mutation: boolean, pendingApproval = false): Promise<OwnedRuntime> {
+  const f = runtime(mutation, {
+    KEIKO_ATLASSIAN_CONNECTOR_CREDENTIALS_KEY: randomBytes(32).toString("base64"),
+  });
+  enableRealCustody(f);
+  if (pendingApproval) vi.spyOn(approvalOwner(f.deps), "waitForChatWriteApproval").mockRestore();
+  const pods = [
+    await createOwnedPod(f, "first-owned"),
+    await createOwnedPod(f, "other-owned"),
+  ] as const;
+  const chats = [
+    f.chatId,
+    f.deps.store.createChat(f.root, "Same Pod", MODEL).id,
+    f.deps.store.createChat(f.root, "Other Pod", MODEL).id,
+  ] as const;
+  for (const [index, chatId] of chats.entries()) {
+    const pod = pods[index === 2 ? 1 : 0].livePod;
+    if (pod === undefined) throw new Error("Missing owned Pod binding");
+    await patchOwnedChat(f, chatId, pod.podId);
+  }
+  return { ...f, pods, chats };
+}
+function ownedExchange(f: ReturnType<typeof runtime>, chatId: string): ChatToolExchange {
+  const exchange = f.deps.store.listMessages(chatId).find((message) => message.role === "user")
+    ?.toolTranscript?.exchanges[0];
+  if (exchange === undefined) throw new Error("Missing normal Chat exchange");
+  return exchange;
+}
+function startOwnedTurn(f: ReturnType<typeof runtime>, chatId: string): Promise<RouteResult> {
+  const pending = handleSendDesktopChat(
+    context({
+      chatId,
+      projectPath: f.root,
+      content: "Use the requested Jira tool once.",
+      modelId: MODEL,
+      clientTurnId: randomUUID(),
+    }),
+    f.deps,
+  );
+  void pending.catch(() => undefined);
+  return pending;
+}
+async function waitPendingWrite(
+  f: ReturnType<typeof runtime>,
+  chatId: string,
+): Promise<NonNullable<ChatToolExchange["approval"]>> {
+  await vi.waitFor(() => {
+    expect(ownedExchange(f, chatId).approval?.state).toBe("pending");
+  });
+  const approval = ownedExchange(f, chatId).approval;
+  if (approval === undefined) throw new Error("Missing concrete approval");
+  return approval;
+}
+
+function expectRevokedOwnedWrites(f: OwnedRuntime): void {
+  for (const id of f.chats.slice(0, 2)) {
+    expect(ownedExchange(f, id).approval?.state).toBe("revoked");
+    expect(ownedExchange(f, id).result?.status).toBe("cancelled");
+    expect(f.deps.store.findChatById(id)?.jiraPodBinding?.authenticationGeneration).toBe(2);
+  }
+}
+it("rotates real custody during pending normal Chat writes and preserves the other Pod", async () => {
+  const f = await ownedRuntime(true, true);
+  const other = f.chats[2];
+  const credential = f.pods[0];
+  const otherBefore = structuredClone(f.deps.store.findChatById(other)?.jiraPodBinding);
+  provider(["write", "write", "write", "answer"]);
+  const pending: Promise<RouteResult>[] = [];
+  try {
+    for (const id of f.chats) {
+      pending.push(startOwnedTurn(f, id));
+      await waitPendingWrite(f, id);
+    }
+    const retained = await waitPendingWrite(f, other);
+    const rotated = await handleUpdateAtlassianConnectorCredential(
+      credentialContext(credential.authRef, {
+        expectedGeneration: 1,
+        apiToken: "synthetic-replacement-pat",
+      }),
+      f.deps,
+    );
+    expect(rotated.status).toBe(200);
+    await Promise.all(pending.slice(0, 2));
+    expectRevokedOwnedWrites(f);
+    expect(f.deps.store.findChatById(other)?.jiraPodBinding).toEqual(otherBefore);
+    expect(f.jiraRequests).toEqual([]);
+    expect(ownedExchange(f, other).approval?.state).toBe("pending");
+    const approved = await handleDecideChatWriteApproval(
+      context({ decision: "approve", actionDigest: retained.actionDigest }, retained.approvalId),
+      f.deps,
+    );
+    expect(approved.status).toBe(200);
+    await pending[2];
+    expect(f.jiraRequests.filter((method) => method === "POST")).toHaveLength(1);
+    expect(ownedExchange(f, other).mutationOutcome).toBe("succeeded");
+  } finally {
+    for (const id of f.chats) interruptChatGenerations(f.deps, id);
+    await Promise.allSettled(pending);
+  }
+});
+
+function holdOwnedResponse(
+  f: ReturnType<typeof runtime>,
+  authRef: string,
+  method: "GET" | "POST",
+  privateBody?: string,
+): { readonly release: () => void; readonly reached: () => boolean } {
+  const owner = realCustodyOwner(f);
+  const original = vi.mocked(owner.httpBodyPortFactory).getMockImplementation();
+  if (original === undefined) throw new Error("Missing original remote transport");
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  if (release === undefined) throw new Error("Missing response barrier");
+  let reached = false;
+  vi.mocked(owner.httpBodyPortFactory).mockImplementation((credential, correlation, lifecycle) => {
+    const port = original(credential, correlation, lifecycle);
+    return async (request): ReturnType<AtlassianHttpBodyPort> => {
+      const result = await port(request);
+      if (credential.authRef !== authRef || request.method !== method) return result;
+      reached = true;
+      await gate;
+      if (privateBody === undefined || result.kind !== "response") return result;
+      return { ...result, bodyText: privateBody, bodyBytes: Buffer.byteLength(privateBody) };
+    };
+  });
+  return { release, reached: (): boolean => reached };
+}
+
+it("discards a delayed normal Chat read after the real disconnect route while another Pod completes", async () => {
+  const f = await ownedRuntime(false);
+  const credential = f.pods[0];
+  const other = f.chats[2];
+  const privateLabel = "Isolated delayed Jira project";
+  const barrier = holdOwnedResponse(
+    f,
+    credential.authRef,
+    "GET",
+    JSON.stringify([{ id: "10001", key: "PRIVATE", name: privateLabel }]),
+  );
+  const calls = provider(["tool", "tool", "answer"]);
+  const pending = startOwnedTurn(f, f.chatId);
+  try {
+    await vi.waitFor(() => {
+      expect(barrier.reached()).toBe(true);
+    });
+    expect((await startOwnedTurn(f, other)).status).toBe(200);
+    await patchOwnedChat(f, f.chatId, null);
+    await pending;
+  } finally {
+    barrier.release();
+    interruptChatGenerations(f.deps, f.chatId);
+    await pending;
+  }
+  // Consume the released SDK/provider promise chain before checking its private result stayed discarded.
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(ownedExchange(f, f.chatId).result?.status).toBe("cancelled");
+  expect(ownedExchange(f, other).result?.status).toBe("completed");
+  expect(f.jiraRequests).toEqual(["GET", "GET"]);
+  expect(JSON.stringify(calls)).not.toContain(privateLabel);
+  expect(JSON.stringify(f.deps.store.listMessages(f.chatId))).not.toContain(privateLabel);
+});
+
+it("retains acknowledged mutation uncertainty after deletion through the real custody route", async () => {
+  const f = await ownedRuntime(true);
+  const credential = f.pods[0];
+  const barrier = holdOwnedResponse(f, credential.authRef, "POST");
+  provider(["write", "answer"]);
+  const pending = startOwnedTurn(f, f.chatId);
+  try {
+    await vi.waitFor(() => {
+      expect(barrier.reached()).toBe(true);
+    });
+    const deleted = await handleDeleteAtlassianConnectorCredential(
+      credentialContext(credential.authRef),
+      f.deps,
+    );
+    expect(deleted.status).toBe(200);
+    await pending;
+  } finally {
+    barrier.release();
+    interruptChatGenerations(f.deps, f.chatId);
+    await pending;
+  }
+  await vi.waitFor(() => {
+    expect(ownedExchange(f, f.chatId).mutationOutcome).toBe("succeeded-unconfirmed");
+  });
+  expect(ownedExchange(f, f.chatId).result?.status).toBe("cancelled");
+  expect(f.jiraRequests.filter((method) => method === "POST")).toHaveLength(1);
+  expect(realCustodyOwner(f).custody.getMetadata(credential.authRef)).toBeUndefined();
+});
+
 function configure(deps: UiHandlerDeps): void {
   const provider = {
     modelId: MODEL,
