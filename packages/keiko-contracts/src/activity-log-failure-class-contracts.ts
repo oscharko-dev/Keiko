@@ -7355,6 +7355,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "chat-content-policy",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["chat.content-policy.resolved"],
+      end: [],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["chat.content-policy.resolved"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["chat.content-policy.resolved"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["chat.content-policy.resolved"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "memory-audit-state-cache",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {

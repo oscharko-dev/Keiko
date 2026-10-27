@@ -187,6 +187,7 @@ interface ResolvedFactoryOptions {
   // A chat id is persisted by the browser as a window reference (#3557 review).
   readonly newChatId: (correlationId: string | undefined) => string;
   readonly redactString: (s: string) => string;
+  readonly redactContentString: (s: string) => string;
 }
 
 // An injected id source (tests) keeps its ids; otherwise a chat id is a reference id.
@@ -197,12 +198,16 @@ function chatIdFactory(
   return (correlationId): string => newReferenceId({ kind: "chat", correlationId });
 }
 
-function resolveOptions(opts: UiStoreFactoryOptions | undefined): ResolvedFactoryOptions {
+function resolveOptions(opts: UiStoreFactoryOptions = {}): ResolvedFactoryOptions {
+  const redactString = opts.redactString ?? DEFAULT_REDACT;
   return {
-    now: opts?.now ?? ((): number => Date.now()),
-    newId: opts?.newId ?? randomUUID,
-    newChatId: chatIdFactory(opts?.newId),
-    redactString: opts?.redactString ?? DEFAULT_REDACT,
+    now: opts.now ?? ((): number => Date.now()),
+    newId: opts.newId ?? randomUUID,
+    newChatId: chatIdFactory(opts.newId),
+    redactString,
+    // #4098: a store keeps private Chat content only when its composer hands it the deployment's
+    // preserving redactor; every other store projects that content like everything else.
+    redactContentString: opts.redactContentString ?? redactString,
   };
 }
 
@@ -270,7 +275,7 @@ function createMessageRecord(
       db,
       messageId,
       msg,
-      options.redactString,
+      options,
       clientTurnId,
       clientTurnState,
       clientTurnContentDigest,
@@ -613,7 +618,7 @@ function persistStagedAssistant(
         assistantMessageId,
         pending.draft.groundedAnswer,
         pending.previewCitations,
-        options.redactString,
+        options.redactContentString,
       )
     : assistant;
 }
@@ -835,7 +840,7 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
         id,
         answer,
         previewCitations,
-        options.redactString,
+        options.redactContentString,
       ),
     findGroundedPreviewCitations: (id: string) => sqlFindGroundedPreviewCitations(db, id),
     createAssistantResponseVersion: (id: string, content: string, timestamp: number): ChatMessage =>

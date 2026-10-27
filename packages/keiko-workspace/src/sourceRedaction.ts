@@ -1,5 +1,6 @@
 import { extname } from "node:path";
-import { redact } from "@oscharko-dev/keiko-security";
+import type { ContentRedactionPolicy } from "@oscharko-dev/keiko-contracts";
+import { redactContent } from "@oscharko-dev/keiko-security";
 import { isEcosystemSourceFile, workspaceLanguageForPath } from "./ecosystems.js";
 import { WorkspaceReadError } from "./errors.js";
 
@@ -9,22 +10,26 @@ import { WorkspaceReadError } from "./errors.js";
  * a consumer that receives workspace text from another read boundary (the Coding runtime's secure
  * read helper, say) imports it through the `./source-redaction` subpath instead of a second copy.
  * Throws `WorkspaceReadError` when no safe projection is available, so callers fail closed.
+ * `preserve` (#4098) is the Chat content opt-out: it keeps the source as it is and removes only the
+ * credential floor (credential shapes and the configured `secrets`), so no code projection can be
+ * unavailable.
  */
 export function redactWorkspaceSource(
   text: string,
   scopePath: string,
   preserveSourceLineBreaks = true,
+  policy: ContentRedactionPolicy = "redact",
+  secrets: readonly string[] = [],
 ): string {
+  if (policy === "preserve")
+    return redactContent(text, "preserve", secrets, { preserveSourceLineBreaks });
   const sourceFile = isEcosystemSourceFile(scopePath);
   const language = sourceFile ? workspaceLanguageForPath(scopePath) : undefined;
-  const sourceLanguage =
-    language === "typescript" || language === "javascript" || language === "java"
-      ? language
-      : DOCUMENT_FORMATS.get(extname(scopePath).toLowerCase());
+  const sourceLanguage = projectionLanguage(language, scopePath);
   if (hasUnsupportedCsharpLiteral(language, text))
     throw new WorkspaceReadError("code source redaction is unavailable", scopePath);
   const status = { unavailable: false };
-  const safe = redact(text, [], {
+  const safe = redactContent(text, "redact", [], {
     preserveSourceLineBreaks,
     inferSourceLanguage: !sourceFile || sourceLanguage !== undefined,
     ...(sourceLanguage === undefined ? {} : { sourceLanguage }),
@@ -35,6 +40,15 @@ export function redactWorkspaceSource(
   if (status.unavailable)
     throw new WorkspaceReadError("code source redaction is unavailable", scopePath);
   return safe;
+}
+
+function projectionLanguage(
+  language: ReturnType<typeof workspaceLanguageForPath>,
+  scopePath: string,
+): "typescript" | "javascript" | "java" | "json" | "yaml" | undefined {
+  return language === "typescript" || language === "javascript" || language === "java"
+    ? language
+    : DOCUMENT_FORMATS.get(extname(scopePath).toLowerCase());
 }
 
 function hasUnsupportedCsharpLiteral(

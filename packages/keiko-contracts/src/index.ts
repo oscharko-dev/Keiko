@@ -386,6 +386,7 @@ export type {
   WorkspaceSummary,
   AuditEntry,
   AuditSummary,
+  ContentRedactionPolicy,
 } from "./workspace.js";
 export type {
   DEFAULT_DISCOVERY_OPTIONS,

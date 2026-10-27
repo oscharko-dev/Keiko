@@ -135,6 +135,16 @@ serious/critical violations and zero unresolved incomplete findings, and all 108
 captures with zero page errors, unexpected API requests, missing selectors, crashed windows or
 unavailable workspace-trust states. No gate, fixture or rule was changed.
 
+## qs override 6.16.1 — 2026-10-27
+
+Raising the `qs` override to 6.16.1 for GHSA-6pq8-jhm2-2vcw (#4098) changes `package.json` and
+`package-lock.json`, which these producers bind. The same four original producers were rerun on that
+tree on Node 24.18.0 (macOS arm64) and all passed: component fidelity with zero gated differences,
+editor token fidelity with all 14 reference captures, the seven-mode accessibility proof with zero
+serious/critical violations and zero unresolved incomplete findings, and all 108 running-app captures
+with zero page errors, unexpected API requests, missing selectors, crashed windows or unavailable
+workspace-trust states. No gate, fixture or rule was changed.
+
 ## Release 1.3.1 — 2026-10-27
 
 The 1.3.1 version bump changes `package.json`, `package-lock.json` and

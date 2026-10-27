@@ -1,3 +1,4 @@
+import { currentContentRedactor, withChatContentPolicy } from "./content-redactor.js";
 import { setImmediate as yieldHttpWrites } from "node:timers/promises";
 import { createStreamingRedactor } from "@oscharko-dev/keiko-security/redaction";
 import { currentRedactionSecrets } from "./deps.js";
@@ -216,7 +217,7 @@ async function streamConversation(
 ): Promise<StreamedTurn | undefined> {
   const iterator = stream[Symbol.asyncIterator]();
   const publication = createStreamingRedactor(
-    (text): string => deps.redactor(text) as string,
+    (text): string => currentContentRedactor(deps)(text) as string,
     currentRedactionSecrets(deps),
   );
   const publish = tokenPublisher(ctx, controller, termination);
@@ -273,7 +274,7 @@ async function persistStreamedTurn(
   signal: AbortSignal,
 ): Promise<DesktopChatSendResponse | undefined> {
   const { request, chat, modelId, memoryContext } = prepared;
-  const redactedContent = deps.redactor(turn.response.content) as string;
+  const redactedContent = currentContentRedactor(deps)(turn.response.content) as string;
   const actions: readonly ConversationMemoryActionWire[] = await collectMemoryActions(
     deps,
     request,
@@ -683,7 +684,9 @@ function resolveDesktopChatStreamCall(
     );
     return asCallableOrRouteResult<StreamCall>(invalidExecution);
   }
-  const model = deps.modelPortFactory(prepared.modelId);
+  const resolvedModel = deps.modelPortFactory(prepared.modelId);
+  const model =
+    resolvedModel === undefined ? undefined : withChatContentPolicy(deps, resolvedModel);
   return model?.callStream === undefined
     ? asCallableOrRouteResult<StreamCall>(streamingUnsupportedOutcome(correlationId))
     : asCallableOrRouteResult<StreamCall>(model.callStream.bind(model));

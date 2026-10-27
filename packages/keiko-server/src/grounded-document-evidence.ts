@@ -38,7 +38,7 @@ import {
   type UncertaintyMarker,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
-import { redact } from "@oscharko-dev/keiko-security";
+import { redactContent } from "@oscharko-dev/keiko-security";
 import {
   containedRealPathInfo,
   evidenceAtomStableId,
@@ -633,7 +633,11 @@ function boundedDocumentProjection(
   acc: MutableEvidence,
   nowMs: number,
 ): { readonly windows: readonly ExcerptWindow[]; readonly truncated: boolean } {
-  const windows = windowExtractedText(redact(stripUnsafeFormatChars(extraction.text)));
+  // #4098: a preserving Chat workspace keeps the extracted document; every other one redacts it.
+  const policy = inputs.searchScope.workspace.contentRedaction ?? "redact";
+  const windows = windowExtractedText(
+    redactContent(stripUnsafeFormatChars(extraction.text), policy),
+  );
   if (inputs.budget === undefined || windows.length === 0)
     return { windows, truncated: extraction.truncated };
   const content = documentProjectionText(windows);

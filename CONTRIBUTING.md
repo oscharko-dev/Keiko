@@ -49,9 +49,26 @@ remain truthful and cannot become a hidden prerequisite for an unsigned update.
 
 ### Activity Log runtime changes
 
+The deployment operator can set `KEIKO_CONTENT_REDACTION=off` before startup so Chat preserves
+authorized document context, answers and private chat history (#4098). The server resolves the
+setting once at startup and records `chat.content-policy.resolved` (`policy`, `setting`; `warn` for
+an unrecognized value, which keeps redaction). Only Chat model ports and the Chat connected-context
+workspace receive the preserving policy from it; the gateway, workspace and store never read the
+environment. Independently of the setting, the Coding Workbench sidecar route always gives the
+OpenCode runtime the model's answer under the preserving policy (credential floor only), because
+OpenCode is its own producer and uses the gateway as infrastructure; Coding repository search and
+Coding History exports and imports keep the default projection. Preserved content still loses
+configured infrastructure-secret literals, private keys, URL credentials, `Authorization` header
+values, encoded-looking Bearer/Basic values and known token shapes, and memory proposals keep the
+default projection. Diagnostics, audit evidence, support exports and
+tool-argument protections remain unconditional. The setting applies to every configured provider;
+it does not infer trust from a provider hostname. `chat.request.dispatch` records the per-call
+`contentRedactionEnabled` without source text. See
+[the operator procedure](docs/troubleshooting/chat-content-redaction.md).
+
 Source redaction uses the shared security owner to preserve language syntax while masking credential
-values, including escaped JSON/JSONC and YAML scalars. An unsafe or ambiguous projection, or an
-existing source-size limit, produces a body-free refusal; connected retrieval treats that source as
+values under the default content policy, including escaped JSON/JSONC and YAML scalars. An unsafe or
+ambiguous projection, or an existing source-size limit, produces a body-free refusal; connected retrieval treats that source as
 unavailable. EOF-only JSON prefixes and public, unquoted Java fragments retain their safe text
 projection under the documented guards (ADR-0022). Gateway
 and BFF streaming retain incomplete source/credential context and discard pending text on cancellation.

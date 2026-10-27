@@ -1,3 +1,4 @@
+import { currentContentRedactor } from "./content-redactor.js";
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
 import {
   DEFAULT_EXPLORATION_BUDGET,
@@ -17,7 +18,7 @@ const MAX_CANDIDATE_DOCUMENT_CHARS = 2_000;
 
 function redactText(deps: UiHandlerDeps, value: string): string {
   const safe = stripUnsafeFormatChars(value);
-  const redacted = deps.redactor(safe);
+  const redacted = currentContentRedactor(deps)(safe);
   return typeof redacted === "string" ? redacted : safe;
 }
 
