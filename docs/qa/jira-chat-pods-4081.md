@@ -1174,3 +1174,22 @@ The corresponding English/German labels pass **11 UI tests**, UI typecheck and f
 Package build, root typecheck, changed backend lint/format and ADR index pass. The optional message
 catalog changes require final UI-evidence regeneration; full UI coverage, aggregate Activity Log,
 architecture/performance and remaining final gates are not claimed by these focused results.
+
+## Instance-qualified results — #4083 AC1/AC2/AC4/AC7
+
+Issue reads/search hits, issue-scoped read results and mutation results now derive browse links
+from the selected connection's HTTPS instance and context path. Remote `self` URLs are ignored.
+The existing live-search base-path helper was extracted and reused. Links are attached outside
+the durable journal; the existing content-free log tests continue to reject endpoint leakage.
+Create replays without a retained issue identity omit a link instead of inventing one.
+
+Two SDK regressions failed before implementation: the missing qualified issue link and an oversized
+search-page projection with long context-path links. Read results now account for the complete
+serialized data plus the existing envelope reserve. Oversized pages retain a fitting prefix and
+resume at the first unreturned item, preserving the remote total; an individually oversized item
+fails explicitly. No byte ceiling was widened. Result-schema versions advance consistently.
+
+The **328-test catalog/provider/SDK/field/legacy-live-search selection** passes. All five mutation
+SDK cases additionally assert the correct qualified link while journal/MCP logs remain endpoint-free.
+Package build, root typecheck and changed lint pass. These synthetic results do not replace the
+outstanding licensed Jira, product Chat or browser qualification.

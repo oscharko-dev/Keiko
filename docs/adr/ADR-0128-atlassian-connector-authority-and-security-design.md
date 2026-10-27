@@ -353,7 +353,7 @@ readable values. Missing values or schemas remain unavailable, null/empty values
 and unknown plugin values remain unsupported without exposing their content. User/option
 references retain only the deployment identity and bounded display label; email addresses and
 self links are omitted. Datetimes accept both ISO offsets and Jira's compact offset representation.
-The expanded `jira.issue` input/result contract is version 2; its ordinary unexpanded read remains
+The expanded `jira.issue` input/result contract is version 3; its ordinary unexpanded read remains
 compatible. The transport's overall byte bound still applies to the selected result.
 
 
@@ -384,6 +384,16 @@ field values are additionally validated against fresh Jira metadata, while addit
 restricted to implemented label verbs. Assignment clearing is explicit (`clearAssignee: true`),
 mutually exclusive with `assigneeName`; absence never means clearing. This composition does not
 confer normal Chat binding, read-consent or approval authority on its own.
+
+Authorized tool results include instance-qualified issue links derived from the private selected
+connection and validated issue keys, preserving the context path. Jira-supplied `self` URLs are never
+used for them. Links are added after journal composition and stay out of receipts, journal rows and
+Activity Log evidence. A replay of a create without a retained issue identity does not fabricate a
+link. Read and mutation descriptors carry the additive result field in their new contract versions
+(reads and writes v2, issue read v3). Complete read-page byte accounting includes the links and
+reserves the existing catalog envelope budget. When a page exceeds that budget, a fitting prefix
+is returned with `nextStartAt` pointing to its first unreturned item; an item that cannot fit alone
+produces the existing bounded failure instead of a misleading empty page.
 
 ### D4 — Action-class mapping table
 

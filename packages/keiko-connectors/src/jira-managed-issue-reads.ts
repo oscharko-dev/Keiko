@@ -1,3 +1,4 @@
+import { jiraBrowseUrl } from "./jira-browse-url.js";
 import {
   jiraSelectedFieldValues,
   jiraProjectionBytes,
@@ -7,6 +8,7 @@ import { isSafeAtlassianIdentifier } from "@oscharko-dev/keiko-contracts/runtime
 import {
   TOOL_CATALOG_LIMITS,
   type CatalogJsonObject,
+  type CatalogJsonValue,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
@@ -71,7 +73,11 @@ function issueDetails(
   }
   return result;
 }
-function issue(value: unknown, includeDescription: boolean): CatalogJsonObject | undefined {
+function issue(
+  value: unknown,
+  includeDescription: boolean,
+  baseUrl: string,
+): CatalogJsonObject | undefined {
   const raw = asRecord(value);
   const fields = asRecord(raw?.fields);
   if (
@@ -83,9 +89,16 @@ function issue(value: unknown, includeDescription: boolean): CatalogJsonObject |
   )
     return undefined;
   const details = issueDetails(fields, includeDescription);
-  return details === undefined
+  const browseUrl = jiraBrowseUrl(baseUrl, raw.key);
+  return details === undefined || browseUrl === undefined
     ? undefined
-    : { id: raw.id, key: raw.key, summary: fields.summary, ...details };
+    : {
+        id: raw.id,
+        key: raw.key,
+        summary: fields.summary,
+        browseUrl,
+        ...details,
+      };
 }
 function comment(value: unknown): CatalogJsonObject | undefined {
   const raw = asRecord(value);
@@ -140,8 +153,9 @@ function singleIssueData(value: CatalogJsonObject): CatalogJsonObject {
 function singleIssueResult(
   body: Record<string, unknown>,
   selected: readonly string[],
+  baseUrl: string,
 ): ManagedMcpToolResult {
-  let value = issue(body, true);
+  let value = issue(body, true, baseUrl);
   if (value === undefined) return jiraReadFailure("malformed-payload");
   if (typeof value.description === "string" && !jiraProjectionTextFits(value.description))
     return jiraReadFailure("bounds-exceeded");
@@ -158,18 +172,44 @@ function singleIssueResult(
 }
 export function jiraIssueReadResult(
   name: string,
+  baseUrl: string,
   body: Record<string, unknown>,
   startAt: number,
   maxResults: number,
   selectedFields: readonly string[] = [],
 ): ManagedMcpToolResult {
-  if (name === "jira.issue") return singleIssueResult(body, selectedFields);
+  if (name === "jira.issue") return singleIssueResult(body, selectedFields, baseUrl);
   return name === "jira.search"
     ? page(
         body,
-        items(body.issues, (value) => issue(value, false)),
+        items(body.issues, (value) => issue(value, false, baseUrl)),
         startAt,
         maxResults,
       )
     : page(body, items(body.comments, comment), startAt, maxResults);
+}
+
+/** Retain a fitting prefix and resume at its first unreturned item; never silently skip a page. */
+export function boundJiraReadResult(result: ManagedMcpToolResult): ManagedMcpToolResult {
+  if (jiraProjectionBytes(result.data) <= ISSUE_DATA_MAX_BYTES) return result;
+  const start = result.data.startAt;
+  const values = result.data.items;
+  if (typeof start !== "number" || !Array.isArray(values))
+    return jiraReadFailure("bounds-exceeded");
+  const source = values as readonly CatalogJsonValue[];
+  const items: CatalogJsonValue[] = [];
+  const base = { ...result.data, items: [], nextStartAt: start + source.length };
+  let remaining = ISSUE_DATA_MAX_BYTES - jiraProjectionBytes(base);
+  for (const item of source) {
+    const cost = jiraProjectionBytes(item) + (items.length === 0 ? 0 : 1);
+    if (cost > remaining) break;
+    items.push(item);
+    remaining -= cost;
+  }
+  return items.length === 0
+    ? jiraReadFailure("bounds-exceeded")
+    : {
+        ...result,
+        data: { ...result.data, items, nextStartAt: start + items.length },
+      };
 }

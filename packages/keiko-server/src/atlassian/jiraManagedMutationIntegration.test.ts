@@ -267,7 +267,14 @@ it.each(JIRA_MUTATION_OPERATIONS)(
     const f = await fixture();
     expect(await f.invoke(operation)).toMatchObject({
       kind: "settled",
-      result: { status: "completed", data: { outcome: "succeeded", issueKey: "SYN-1" } },
+      result: {
+        status: "completed",
+        data: {
+          outcome: "succeeded",
+          issueKey: "SYN-1",
+          browseUrl: "https://jira.example.invalid/context/browse/SYN-1",
+        },
+      },
     });
     expect(f.writes()).toBe(1);
     expect(f.state).toMatchObject(REMOTE_STATE[operation]);

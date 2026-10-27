@@ -301,6 +301,7 @@ async function jiraFixture(
   status = 200,
   rawBody?: string,
   tool: JiraManagedReadToolName = "jira.projects",
+  baseUrl = "https://jira.example.invalid/context",
 ): Promise<{
   managed: ManagedProviderCatalog<ConversationConsumer>;
   logs: ReturnType<typeof createBufferedServerLogSink>;
@@ -314,7 +315,7 @@ async function jiraFixture(
     (context) => {
       connections.push(context.chatId);
       return {
-        baseUrl: "https://jira.example.invalid/context",
+        baseUrl,
         deployment: "data-center",
         http: (request): Promise<AtlassianHttpBodyResult> => {
           requests.push(`${context.chatId}:${request.method}:${request.url}`);
@@ -1125,6 +1126,82 @@ it("reports a base description exceeding the catalog string ceiling as a structu
       },
     });
     expect(m.requests).toHaveLength(1);
+  } finally {
+    f.dispose();
+    await m.managed.close();
+  }
+});
+
+it("returns issue links from the selected instance instead of Jira-provided self URLs", async () => {
+  const m = await jiraFixture(
+    {
+      id: "10001",
+      key: "SYN-1",
+      self: "https://hostile.invalid/",
+      fields: { summary: "Synthetic" },
+    },
+    200,
+    undefined,
+    "jira.issue",
+  );
+  const f = fixture(undefined, m.managed);
+  try {
+    const result = await f.binder.dispatch(
+      { ...f.invocation, arguments: { issueKey: "SYN-1" } },
+      identity,
+    );
+    expect(result).toMatchObject({
+      kind: "settled",
+      result: {
+        status: "completed",
+        data: { items: [{ browseUrl: "https://jira.example.invalid/context/browse/SYN-1" }] },
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain("hostile.invalid");
+  } finally {
+    f.dispose();
+    await m.managed.close();
+  }
+});
+it("budgets qualified search links and resumes at the first unreturned issue", async () => {
+  const baseUrl = `https://jira.example.invalid/${"context".repeat(270)}`;
+  const issues = Array.from({ length: 100 }, (_, index) => ({
+    id: String(10000 + index),
+    key: `SYN-${String(index + 1)}`,
+    fields: {
+      summary: "s".repeat(255),
+      status: { name: "s".repeat(256) },
+      assignee: { name: "a".repeat(256) },
+      priority: { name: "p".repeat(256) },
+    },
+  }));
+  const m = await jiraFixture(
+    { issues, startAt: 0, maxResults: 100, total: 100 },
+    200,
+    undefined,
+    "jira.search",
+    baseUrl,
+  );
+  const f = fixture(undefined, m.managed);
+  try {
+    const result = await f.binder.dispatch(
+      { ...f.invocation, arguments: { jql: "project = SYN", maxResults: 100 } },
+      identity,
+    );
+    expect(result.kind).toBe("settled");
+    if (result.kind !== "settled") throw new Error("Expected settled result");
+    expect(result.result.status).toBe("completed");
+    const data = result.result.data as {
+      items: { browseUrl: string }[];
+      nextStartAt: number;
+      total: number;
+    };
+    expect(data.items.length).toBeGreaterThan(0);
+    expect(data.items.length).toBeLessThan(100);
+    expect(data.nextStartAt).toBe(data.items.length);
+    expect(data.total).toBe(100);
+    expect(data.items[0]?.browseUrl).toBe(`${baseUrl}/browse/SYN-1`);
+    expect(Buffer.byteLength(JSON.stringify(result.result))).toBeLessThanOrEqual(262144);
   } finally {
     f.dispose();
     await m.managed.close();

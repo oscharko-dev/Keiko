@@ -1,3 +1,4 @@
+import { jiraBrowseUrl } from "./jira-browse-url.js";
 import { jiraIssueFieldsQuery, selectedJiraReadFields } from "./jira-managed-field-reads.js";
 import {
   jiraAssignableUsersPath,
@@ -6,6 +7,7 @@ import {
 } from "./jira-managed-workflow-reads.js";
 import {
   jiraIssueReadResult,
+  boundJiraReadResult,
   JIRA_MANAGED_ISSUE_FIELDS,
   JIRA_MANAGED_SEARCH_FIELDS,
 } from "./jira-managed-issue-reads.js";
@@ -241,11 +243,31 @@ async function read<Context extends ManagedMcpInvocationContext>(
   );
   if (!outcome.ok) return failure(outcome.reason);
   const { startAt, maxResults } = selected;
-  if (ARRAY_READ_NAMES.has(name)) return arrayResult(name, outcome.items, startAt, maxResults);
+  if (ARRAY_READ_NAMES.has(name))
+    return boundJiraReadResult(
+      withIssueLink(arrayResult(name, outcome.items, startAt, maxResults), baseUrl, args.issueKey),
+    );
   if (outcome.body === undefined) return failure("malformed-payload");
-  return ISSUE_READ_NAMES.has(name)
-    ? jiraIssueReadResult(name, outcome.body, startAt, maxResults, selected.fields)
+  const result = ISSUE_READ_NAMES.has(name)
+    ? jiraIssueReadResult(name, baseUrl, outcome.body, startAt, maxResults, selected.fields)
     : metadataResult(name, outcome.body, selected);
+  return boundJiraReadResult(
+    name === "jira.issue" || name === "jira.search"
+      ? result
+      : withIssueLink(result, baseUrl, args.issueKey),
+  );
+}
+
+function withIssueLink(
+  result: ManagedMcpToolResult,
+  baseUrl: string,
+  issueKey: unknown,
+): ManagedMcpToolResult {
+  const data = { ...result.data };
+  delete data.browseUrl;
+  const url = jiraBrowseUrl(baseUrl, data.issueKey ?? issueKey);
+  if (url !== undefined) data.browseUrl = url;
+  return { ...result, data };
 }
 
 /** Private connection/context stays outside the MCP declaration and arguments. */
@@ -269,8 +291,13 @@ function managedTool<Context extends ManagedMcpInvocationContext>(
     execute: async (args: CatalogJsonObject, context: Context): Promise<ManagedMcpToolResult> => {
       const snapshot = structuredClone(args);
       const selected = Object.freeze({ ...(await connection(context)) });
-      return executeMutation(operation, structuredClone(snapshot), context, (http) =>
+      const result = await executeMutation(operation, structuredClone(snapshot), context, (http) =>
         executeJiraManagedMutation(operation, snapshot, context, { ...selected, http }),
+      );
+      return withIssueLink(
+        result,
+        selected.baseUrl,
+        operation === "jira.create" ? undefined : snapshot.issueKey,
       );
     },
   });
