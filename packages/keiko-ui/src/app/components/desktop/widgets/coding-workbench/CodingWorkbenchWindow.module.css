@@ -1479,6 +1479,13 @@ details[open] > .cmpActivitySummary::after {
   white-space: nowrap;
 }
 
+/* Why a call ended as it did: a plain fact in the card's secondary text, not a second alarm. */
+.toolOutcome {
+  margin: var(--space-1) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--text-body-sm);
+}
+
 .toolCount {
   color: var(--text-tertiary);
   font-family: var(--font-mono);

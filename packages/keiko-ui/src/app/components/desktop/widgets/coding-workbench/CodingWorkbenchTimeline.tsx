@@ -985,9 +985,15 @@ function ToolOutcome({
 }): ReactNode {
   const exitCode = tool.presentation?.exitCode;
   if (exitCode !== undefined) {
-    return <p>{t("codingWorkbench.activity.exitCode", { code: exitCode })}</p>;
+    return (
+      <p className={styles.toolOutcome}>
+        {t("codingWorkbench.activity.exitCode", { code: exitCode })}
+      </p>
+    );
   }
-  return tool.state === "failed" ? <p>{t("codingWorkbench.activity.toolError")}</p> : null;
+  return tool.state === "failed" ? (
+    <p className={styles.toolOutcome}>{t("codingWorkbench.activity.toolError")}</p>
+  ) : null;
 }
 
 function ToolPresentationDetails({
