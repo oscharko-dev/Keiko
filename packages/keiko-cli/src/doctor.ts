@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 // From the contracts leaf, not the keiko-sdk fat barrel (GEN-PERF-CLI-001).
@@ -61,13 +61,26 @@ function resolveRunningEntry(argv: readonly string[] | undefined): string | unde
 }
 
 // npm links `node_modules/.bin/keiko` to the installed package's own `dist/cli/index.js`, so a
-// project install runs the very file it reports, under another name. Compare where both entries
-// lead, not how they are spelled; an entry that does not exist keeps its spelling.
+// project install runs the very file it reports, under another name. Compare which file both
+// entries are, not how they are spelled: the file identity also holds on a case-insensitive
+// filesystem, where realpath keeps the casing it was given. Without an identity (an entry that
+// does not exist, or a filesystem without inode numbers) compare where the entries lead.
+function entryIdentity(entry: string): string | undefined {
+  const stat = statSync(entry, { bigint: true, throwIfNoEntry: false });
+  if (stat === undefined || stat.ino === 0n) return undefined;
+  return `${String(stat.dev)}:${String(stat.ino)}`;
+}
+
 function canonicalEntry(entry: string): string {
   return existsSync(entry) ? realpathSync(entry) : entry;
 }
 
 function isOtherEntry(runningEntry: string, expectedEntry: string): boolean {
+  const runningIdentity = entryIdentity(runningEntry);
+  const expectedIdentity = entryIdentity(expectedEntry);
+  if (runningIdentity !== undefined && expectedIdentity !== undefined) {
+    return runningIdentity !== expectedIdentity;
+  }
   return canonicalEntry(runningEntry) !== canonicalEntry(expectedEntry);
 }
 
