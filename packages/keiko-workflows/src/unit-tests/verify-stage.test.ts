@@ -6,7 +6,10 @@
 // dependency only, so a governed-shaped deps object never degrades a network:"none" step to
 // inherited network.
 
-import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { memFs } from "@oscharko-dev/keiko-workspace/testing";
 import {
   detectWorkspace,
@@ -17,7 +20,7 @@ import type { SpawnFn } from "@oscharko-dev/keiko-tools";
 import { buildRunState, type RunState } from "./internal.js";
 import { runWorkflowVerification } from "./verify-stage.js";
 import type { UnitTestWorkflowDeps, UnitTestWorkflowInput } from "./types.js";
-import { confinedVerificationRoot, recordingSpawn, scriptChildClose } from "./_support.js";
+import { recordingSpawn, scriptChildClose } from "./_support.js";
 
 vi.mock("@oscharko-dev/keiko-verification", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@oscharko-dev/keiko-verification")>();
@@ -25,7 +28,10 @@ vi.mock("@oscharko-dev/keiko-verification", async (importOriginal) => {
   return withConfinedVerificationFixture(actual);
 });
 
-const ROOT = confinedVerificationRoot();
+// A strict bubblewrap execution-root run creates its per-run home inside the execution root before
+// spawn (PR #4095), so this suite's root must exist on disk; its contents stay in memFs.
+const ROOT = realpathSync(mkdtempSync(join(tmpdir(), "keiko-workflow-verify-")));
+afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
 
 function runState(deps: Partial<UnitTestWorkflowDeps>): {
   state: RunState;

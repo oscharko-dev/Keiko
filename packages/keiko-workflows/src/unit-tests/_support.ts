@@ -3,10 +3,6 @@
 // canned NormalizedResponse. No real timers, network, or fs.
 
 import { EventEmitter } from "node:events";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterAll } from "vitest";
 import type { ChildProcess } from "node:child_process";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
@@ -189,18 +185,6 @@ export function scriptChildClose(
     }
     child.emit("close", opts.exitCode ?? 0, opts.signal ?? null);
   });
-}
-
-// A strict bubblewrap execution-root run creates its per-run home inside the execution root before
-// spawn and removes it when the run settles (PR #4095), so the root a confined verification runs in
-// must exist on disk even though these suites keep its contents in memFs. Each suite gets an empty
-// one, removed after the suite.
-export function confinedVerificationRoot(): string {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-workflow-verify-")));
-  afterAll(() => {
-    rmSync(root, { recursive: true, force: true });
-  });
-  return root;
 }
 
 // Qualify only the fake host effects. The real verification orchestrator and sandbox planner
