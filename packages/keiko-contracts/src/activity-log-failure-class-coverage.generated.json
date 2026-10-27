@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 373,
-  "completeClassCount": 373,
+  "supportedClassCount": 374,
+  "completeClassCount": 374,
   "completeness": "complete",
   "classes": [
     {
@@ -2661,6 +2661,116 @@
             "causeChain": false
           },
           "proofIds": ["chat.draft.operation.lifecycle"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "chat-tool-authority",
+      "requirementContract": "chat-tool-authority",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["state"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": ["chat.tool-authority.operation"],
+        "end": [],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "chat.tool-authority.operation",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["chat.tool-authority.operation"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "chat.tool-authority.operation",
+          "owner": "keiko-server",
+          "category": "security",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "capability",
+          "safeContextFields": [
+            {
+              "name": "actorDigest",
+              "type": "string",
+              "dataClass": "digest",
+              "required": false
+            },
+            {
+              "name": "affectedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "authenticationGeneration",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "authorityDigest",
+              "type": "string",
+              "dataClass": "digest",
+              "required": false
+            },
+            {
+              "name": "bindingGeneration",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "chatDigest",
+              "type": "string",
+              "dataClass": "digest",
+              "required": false
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "phase",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "podDigest",
+              "type": "string",
+              "dataClass": "digest",
+              "required": false
+            },
+            {
+              "name": "promptTokens",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "toolCalls",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["chat.tool-authority.operation.lifecycle"],
           "replayReferences": [],
           "missingObligations": []
         }

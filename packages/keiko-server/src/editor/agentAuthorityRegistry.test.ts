@@ -1,6 +1,21 @@
 import { describe, expect, it } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  createFileServerLogSink,
+  createServerLogger,
+  setServerLogger,
+} from "../observability/index.js";
+import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
+import {
+  expectActivityLogProof,
+  readPersistedActivityLog,
+  persistedActivityLogLines,
+} from "../../../../tests/support/activity-log-proof.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type {
+  ChatToolAuthorityEnvelope,
   CodingWorkbenchAuthorityEnvelope,
   CodingWorkbenchRuntimeAuthorityEnvelope,
   EditorAgentAction,
@@ -771,4 +786,311 @@ describe("EditorAgentAuthorityRegistry.runtimePromptAllowanceExhausted (F9)", ()
     registry.revoke(reference);
     expect(registry.runtimePromptAllowanceExhausted(reference, 5_000, NOW)).toBe(false);
   });
+});
+
+function chatEnvelope(
+  overrides: Partial<ChatToolAuthorityEnvelope> = {},
+): ChatToolAuthorityEnvelope {
+  const {
+    schemaVersion,
+    runId,
+    requestedMode,
+    deploymentCeiling,
+    effectiveMode,
+    expiresAt,
+    approvalProofDigest,
+    budget,
+  } = envelope();
+  return {
+    schemaVersion,
+    kind: "chat-tool-authority",
+    runId,
+    requestedMode,
+    deploymentCeiling,
+    effectiveMode,
+    expiresAt,
+    approvalProofDigest,
+    subject: {
+      actorDigest: "c".repeat(64),
+      chatId: "chat-1",
+      podId: "d5f5681e-ce98-4c3c-b27e-51d707c9d018",
+      bindingGeneration: 2,
+      authenticationGeneration: 3,
+    },
+    actionClasses: ["connector-access", "network-egress"],
+    connectorScopes: ["issue-tracker.read", "issue-tracker.write"],
+    budget: { ...budget, maxPatchBytes: 0 },
+    ...overrides,
+  };
+}
+
+function registerChat(
+  registry: EditorAgentAuthorityRegistry,
+  value = chatEnvelope(),
+): { readonly runId: string; readonly envelopeDigest: string } {
+  const registered = registry.registerChat(value, "autonomous-delivery", NOW);
+  expect(registered.ok).toBe(true);
+  if (!registered.ok) throw new Error("expected Chat registration");
+  return registered.authorityRef;
+}
+
+describe("ordinary Chat authority in the existing registry (#4084)", () => {
+  it("resolves a Chat without a Coding record and refuses Coding consumers of that reference", () => {
+    const registry = new EditorAgentAuthorityRegistry();
+    const value = chatEnvelope();
+    const reference = registerChat(registry, value);
+    expect(registry.resolveChat(reference, value.subject, "autonomous-delivery", NOW)).toEqual({
+      ok: true,
+      envelope: value,
+    });
+    expect(registry.resolve(reference, ROOT, "autonomous-delivery", NOW)).toEqual({
+      ok: false,
+      reason: "invalid",
+    });
+    expect(registry.reserveForConnector(reference, ROOT, "autonomous-delivery", NOW).ok).toBe(
+      false,
+    );
+    expect(registry.rollbackActionReservation(reference, 0)).toBe(false);
+  });
+
+  it("refuses a Coding reference in the Chat consumer", () => {
+    const registry = new EditorAgentAuthorityRegistry();
+    const registration = registry.register(envelope(), "autonomous-delivery", NOW);
+    if (!registration.ok) throw new Error("expected Coding registration");
+    expect(
+      registry.resolveChat(
+        registration.authorityRef,
+        chatEnvelope().subject,
+        "autonomous-delivery",
+        NOW,
+      ),
+    ).toEqual({ ok: false, reason: "invalid" });
+  });
+
+  it.each([
+    { actorDigest: "d".repeat(64) },
+    { chatId: "chat-2" },
+    { podId: "d5f5681e-ce98-4c3c-b27e-51d707c9d019" },
+    { bindingGeneration: 3 },
+    { authenticationGeneration: 4 },
+  ])("revalidates each current subject fact %j", (patch) => {
+    const registry = new EditorAgentAuthorityRegistry();
+    const value = chatEnvelope();
+    const reference = registerChat(registry, value);
+    expect(
+      registry.resolveChat(reference, { ...value.subject, ...patch }, "autonomous-delivery", NOW),
+    ).toEqual({ ok: false, reason: "invalid" });
+    expect(registry.resolveChat(reference, value.subject, "autonomous-delivery", NOW).ok).toBe(
+      true,
+    );
+  });
+
+  it("rejects ceiling drift and an unregistered digest", () => {
+    const registry = new EditorAgentAuthorityRegistry();
+    const value = chatEnvelope();
+    const reference = registerChat(registry, value);
+    expect(registry.resolveChat(reference, value.subject, "governed-assist", NOW).ok).toBe(false);
+    expect(
+      registry.resolveChat(
+        { ...reference, envelopeDigest: "f".repeat(64) },
+        value.subject,
+        "autonomous-delivery",
+        NOW,
+      ).ok,
+    ).toBe(false);
+    expect(registry.registerChat(value, "governed-assist", NOW).ok).toBe(false);
+    expect(registry.registerChat({ ...value, workspace: {} }, "autonomous-delivery", NOW).ok).toBe(
+      false,
+    );
+  });
+
+  it("retains a private copy instead of trusting a caller-mutated subject or budget", () => {
+    const registry = new EditorAgentAuthorityRegistry();
+    const value = chatEnvelope();
+    const subject = { ...value.subject };
+    const reference = registerChat(registry, value);
+    Object.assign(value.subject, { chatId: "chat-other" });
+    Object.assign(value.budget, { maxToolCalls: 100_000 });
+    const resolved = registry.resolveChat(reference, subject, "autonomous-delivery", NOW);
+    expect(resolved).toMatchObject({
+      ok: true,
+      envelope: { subject: { chatId: "chat-1" }, budget: { maxToolCalls: 20 } },
+    });
+  });
+
+  it("shares cumulative reservation rules and never resets them on duplicate registration", () => {
+    const registry = new EditorAgentAuthorityRegistry();
+    const value = chatEnvelope();
+    const reference = registerChat(registry, value);
+    const reserve = (toolCalls: number, promptTokens = 0): boolean =>
+      registry.reserveForChat(
+        reference,
+        value.subject,
+        "autonomous-delivery",
+        { toolCalls, promptTokens, patchBytes: 0 },
+        NOW,
+      ).ok;
+    expect(reserve(19, 9_999)).toBe(true);
+    expect(registerChat(registry, value)).toEqual(reference);
+    expect(reserve(2)).toBe(false);
+    expect(reserve(1, 1)).toBe(true);
+    expect(reserve(0, 1)).toBe(false);
+    expect(reserve(1)).toBe(false);
+  });
+
+  it("denies invalid usage and file patches before charging any budget", () => {
+    const registry = new EditorAgentAuthorityRegistry();
+    const value = chatEnvelope();
+    const reference = registerChat(registry, value);
+    for (const usage of [
+      { toolCalls: -1, promptTokens: 0, patchBytes: 0 },
+      { toolCalls: 1, promptTokens: 0, patchBytes: 1 },
+      { toolCalls: 0, promptTokens: Number.NaN, patchBytes: 0 },
+    ])
+      expect(
+        registry.reserveForChat(reference, value.subject, "autonomous-delivery", usage, NOW).ok,
+      ).toBe(false);
+    expect(
+      registry.reserveForChat(
+        reference,
+        value.subject,
+        "autonomous-delivery",
+        { toolCalls: 20, promptTokens: 10_000, patchBytes: 0 },
+        NOW,
+      ).ok,
+    ).toBe(true);
+  });
+
+  it("enforces expiry and elapsed runtime on registration and every resolution", () => {
+    const registry = new EditorAgentAuthorityRegistry();
+    const value = chatEnvelope();
+    const reference = registerChat(registry, value);
+    expect(
+      registry.resolveChat(
+        reference,
+        value.subject,
+        "autonomous-delivery",
+        "2026-07-09T12:01:00.001Z",
+      ),
+    ).toEqual({ ok: false, reason: "budget-exceeded" });
+    expect(registry.resolveChat(reference, value.subject, "autonomous-delivery", FUTURE)).toEqual({
+      ok: false,
+      reason: "expired",
+    });
+    expect(registry.registerChat(value, "autonomous-delivery", FUTURE)).toEqual({
+      ok: false,
+      reason: "expired",
+    });
+    expect(registry.registerChat(value, "autonomous-delivery", "invalid").ok).toBe(false);
+  });
+
+  it("revokes all authority for one Chat without touching another Chat or Coding", () => {
+    const registry = new EditorAgentAuthorityRegistry();
+    const first = chatEnvelope();
+    const second = chatEnvelope({ runId: "run-2" });
+    const other = chatEnvelope({ runId: "run-3", subject: { ...first.subject, chatId: "chat-2" } });
+    const firstRef = registerChat(registry, first);
+    const secondRef = registerChat(registry, second);
+    const otherRef = registerChat(registry, other);
+    const coding = registry.register(envelope(), "autonomous-delivery", NOW);
+    expect(registry.revokeChatAuthorities("chat-1")).toBe(2);
+    expect(registry.revokeChatAuthorities("chat-1")).toBe(0);
+    for (const reference of [firstRef, secondRef])
+      expect(registry.resolveChat(reference, first.subject, "autonomous-delivery", NOW)).toEqual({
+        ok: false,
+        reason: "revoked",
+      });
+    expect(registry.registerChat(first, "autonomous-delivery", NOW).ok).toBe(false);
+    expect(registry.resolveChat(otherRef, other.subject, "autonomous-delivery", NOW).ok).toBe(true);
+    if (!coding.ok) throw new Error("expected Coding registration");
+    expect(registry.resolve(coding.authorityRef, ROOT, "autonomous-delivery", NOW).ok).toBe(true);
+    registry.revoke(otherRef);
+    expect(registry.resolveChat(otherRef, other.subject, "autonomous-delivery", NOW)).toEqual({
+      ok: false,
+      reason: "revoked",
+    });
+  });
+
+  it("shares the existing bounded capacity across Chat and Coding records", () => {
+    const registry = new EditorAgentAuthorityRegistry();
+    for (let index = 0; index < EDITOR_AGENT_AUTHORITY_MAX_RECORDS; index++) {
+      registerChat(registry, chatEnvelope({ runId: `chat-authority-${String(index)}` }));
+    }
+    expect(registry.register(envelope(), "autonomous-delivery", NOW).ok).toBe(false);
+    expect(registry.registerChat(chatEnvelope(), "autonomous-delivery", NOW).ok).toBe(false);
+    registry.reset();
+    expect(registry.register(envelope(), "autonomous-delivery", NOW).ok).toBe(true);
+  });
+});
+
+it("reconstructs Chat authority decisions through the real writer and reader without identity contents", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "keiko-chat-authority-"));
+  const sink = createFileServerLogSink(directory, { level: "debug" });
+  setServerLogger(createServerLogger({ sink, level: "debug" }));
+  try {
+    const registry = new EditorAgentAuthorityRegistry();
+    const value = chatEnvelope();
+    const correlation = "chat-authority-proof";
+    const registration = registry.registerChat(value, "autonomous-delivery", NOW, correlation);
+    if (!registration.ok) throw new Error("expected Chat registration");
+    const reference = registration.authorityRef;
+    registry.resolveChat(
+      reference,
+      { ...value.subject, bindingGeneration: 3 },
+      "autonomous-delivery",
+      NOW,
+      correlation,
+    );
+    registry.reserveForChat(
+      reference,
+      value.subject,
+      "autonomous-delivery",
+      { toolCalls: 20, promptTokens: 1, patchBytes: 0 },
+      NOW,
+      correlation,
+    );
+    registry.reserveForChat(
+      reference,
+      value.subject,
+      "autonomous-delivery",
+      { toolCalls: 1, promptTokens: 0, patchBytes: 0 },
+      NOW,
+      correlation,
+    );
+    registry.revokeChatAuthorities(value.subject.chatId, correlation);
+    registry.resolveChat(reference, value.subject, "autonomous-delivery", NOW, correlation);
+    registry.revoke(reference, correlation);
+    sink.close?.();
+    const lines = persistedActivityLogLines(
+      readPersistedActivityLog(directory),
+      "chat.tool-authority.operation",
+    );
+    const records = lines.map((line) =>
+      expectActivityLogProof("chat.tool-authority.operation.lifecycle", line),
+    );
+    expect(records.map(({ phase, outcome }) => [phase, outcome])).toEqual([
+      ["register", "allowed"],
+      ["resolve", "invalid"],
+      ["reserve", "allowed"],
+      ["reserve", "budget-exceeded"],
+      ["revoke", "allowed"],
+      ["resolve", "revoked"],
+      ["revoke", "allowed"],
+    ]);
+    expect(records.every((record) => record.correlationId === correlation)).toBe(true);
+    expect(records[0]).toMatchObject({
+      authorityDigest: reference.envelopeDigest,
+      bindingGeneration: 2,
+      authenticationGeneration: 3,
+    });
+    expect(records[1]).toMatchObject({ bindingGeneration: 3 });
+    expect(records[4]).toMatchObject({ affectedCount: 1 });
+    expect(records[6]).toMatchObject({ affectedCount: 0 });
+    for (const identity of [value.runId, value.subject.chatId, value.subject.podId])
+      expect(lines.join("\n")).not.toContain(identity);
+  } finally {
+    sink.close?.();
+    resetServerLogger();
+    await rm(directory, { recursive: true, force: true });
+  }
 });

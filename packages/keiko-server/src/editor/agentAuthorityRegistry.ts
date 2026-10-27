@@ -1,6 +1,8 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type {
+  ChatToolAuthorityEnvelope,
+  ChatToolAuthoritySubject,
   CodingWorkbenchAuthorityEnvelope,
   CodingWorkbenchConnectorScope,
   CodingWorkbenchMode,
@@ -11,12 +13,18 @@ import type {
   EditorAgentAction,
   EditorAgentGovernedAuthorityReference,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  validateChatToolAuthorityEnvelope,
+  validateChatToolAuthoritySubject,
+} from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
 import { codingWorkbenchPolicyEffectFor } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
   validateCodingWorkbenchRuntimeAuthorityEnvelope,
   validateCodingWorkbenchRuntimeAuthorityFacts,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { validateCodingWorkbenchAuthorityEnvelope } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
+
+import { recordChatAuthorityResult } from "./chatAuthorityActivity.js";
 
 export const EDITOR_AGENT_AUTHORITY_MAX_RECORDS = 64;
 export type EditorAgentAuthorityFailureReason =
@@ -30,6 +38,14 @@ export type EditorAgentAuthorityResolution =
   | { readonly ok: true; readonly envelope: CodingWorkbenchAuthorityEnvelope }
   | { readonly ok: false; readonly reason: EditorAgentAuthorityFailureReason };
 
+export type ChatToolAuthorityResolution =
+  | { readonly ok: true; readonly envelope: ChatToolAuthorityEnvelope }
+  | { readonly ok: false; readonly reason: EditorAgentAuthorityFailureReason };
+
+type ChatRecordResolution =
+  | { readonly ok: true; readonly record: ChatAuthorityRecord }
+  | { readonly ok: false; readonly reason: EditorAgentAuthorityFailureReason };
+
 export interface EditorAgentRuntimeDelegationRequest {
   readonly liveFacts: CodingWorkbenchRuntimeAuthorityFacts;
   readonly delegationId: string;
@@ -40,11 +56,22 @@ export interface EditorAgentRuntimeDelegationRequest {
   readonly nowIso: string;
 }
 
-interface AuthorityRecord {
-  readonly envelope: CodingWorkbenchAuthorityEnvelope;
+type AuthorityEnvelope = CodingWorkbenchAuthorityEnvelope | ChatToolAuthorityEnvelope;
+
+interface RetainedAuthorityRecord<T extends AuthorityEnvelope = AuthorityEnvelope> {
+  readonly envelope: T;
   readonly digest: string;
   readonly registeredAtMs: number;
   readonly usage: AuthorityUsage;
+  revoked: boolean;
+}
+
+interface ChatAuthorityRecord extends RetainedAuthorityRecord<ChatToolAuthorityEnvelope> {
+  readonly kind: "chat";
+}
+
+interface AuthorityRecord extends RetainedAuthorityRecord<CodingWorkbenchAuthorityEnvelope> {
+  readonly kind: "coding";
   sessionId?: string | undefined;
   readonly runtimeEnvelope?: CodingWorkbenchRuntimeAuthorityEnvelope | undefined;
   readonly runtimeDelegations?: Map<string, RuntimeDelegationReservation> | undefined;
@@ -56,7 +83,6 @@ interface AuthorityRecord {
    * different issue in `runtimeDrift`).
    */
   readonly runtimeIssueBindingDigest?: string | undefined;
-  revoked: boolean;
 }
 
 interface AuthorityUsage {
@@ -108,7 +134,7 @@ function expired(nowIso: string, expiresAt: string): boolean {
   return Number.isNaN(now) || Number.isNaN(expiry) || now >= expiry;
 }
 
-function runtimeBudgetExceeded(record: AuthorityRecord, nowIso: string): boolean {
+function runtimeBudgetExceeded(record: RetainedAuthorityRecord, nowIso: string): boolean {
   const nowMs = Date.parse(nowIso);
   return Number.isNaN(nowMs) || nowMs - record.registeredAtMs > record.envelope.budget.maxRuntimeMs;
 }
@@ -132,7 +158,7 @@ function recordKey(reference: EditorAgentGovernedAuthorityReference): string {
 }
 
 export class EditorAgentAuthorityRegistry {
-  private readonly records = new Map<string, AuthorityRecord>();
+  private readonly records = new Map<string, AuthorityRecord | ChatAuthorityRecord>();
 
   public register(
     value: unknown,
@@ -143,26 +169,155 @@ export class EditorAgentAuthorityRegistry {
     if (!parsed.ok || parsed.value.deploymentCeiling !== deploymentCeiling) {
       return { ok: false, reason: "invalid" };
     }
-    if (expired(nowIso, parsed.value.expiresAt)) return { ok: false, reason: "expired" };
-    const digest = editorAgentAuthorityEnvelopeDigest(parsed.value);
-    const authorityRef = { runId: parsed.value.runId, envelopeDigest: digest };
+    return this.retain({ kind: "coding", ...initialRecord(parsed.value, nowIso) }, nowIso);
+  }
+
+  private retain(
+    record: AuthorityRecord | ChatAuthorityRecord,
+    nowIso: string,
+  ): EditorAgentAuthorityRegistration {
+    if (expired(nowIso, record.envelope.expiresAt)) return { ok: false, reason: "expired" };
+    const authorityRef = { runId: record.envelope.runId, envelopeDigest: record.digest };
     const key = recordKey(authorityRef);
     const existing = this.records.get(key);
     if (existing !== undefined) {
       return existing.revoked ? { ok: false, reason: "revoked" } : { ok: true, authorityRef };
     }
     this.evictInactive(nowIso);
-    if (this.records.size >= EDITOR_AGENT_AUTHORITY_MAX_RECORDS) {
+    if (this.records.size >= EDITOR_AGENT_AUTHORITY_MAX_RECORDS)
+      return { ok: false, reason: "invalid" };
+    this.records.set(key, record);
+    return { ok: true, authorityRef };
+  }
+
+  private codingRecord(key: string): AuthorityRecord | undefined {
+    const record = this.records.get(key);
+    return record?.kind === "coding" ? record : undefined;
+  }
+
+  public registerChat(
+    value: unknown,
+    deploymentCeiling: CodingWorkbenchMode,
+    nowIso: string,
+    correlationId?: string,
+  ): EditorAgentAuthorityRegistration {
+    const parsed = validateChatToolAuthorityEnvelope(value);
+    if (!parsed.ok || parsed.value.deploymentCeiling !== deploymentCeiling) {
+      return recordChatAuthorityResult(
+        "register",
+        { ok: false, reason: "invalid" },
+        {},
+        correlationId,
+      );
+    }
+    const record = { kind: "chat", ...initialRecord(chatSnapshot(parsed.value), nowIso) } as const;
+    return recordChatAuthorityResult(
+      "register",
+      this.retain(record, nowIso),
+      {
+        subject: record.envelope.subject,
+        authorityDigest: record.digest,
+      },
+      correlationId,
+    );
+  }
+
+  public resolveChat(
+    reference: EditorAgentGovernedAuthorityReference,
+    subject: ChatToolAuthoritySubject,
+    deploymentCeiling: CodingWorkbenchMode,
+    nowIso: string,
+    correlationId?: string,
+  ): ChatToolAuthorityResolution {
+    const resolved = this.resolveChatRecord(reference, subject, deploymentCeiling, nowIso);
+    const result: ChatToolAuthorityResolution = resolved.ok
+      ? { ok: true, envelope: resolved.record.envelope }
+      : resolved;
+    return recordChatAuthorityResult(
+      "resolve",
+      result,
+      { subject, authorityDigest: reference.envelopeDigest },
+      correlationId,
+    );
+  }
+
+  public reserveForChat(
+    reference: EditorAgentGovernedAuthorityReference,
+    subject: ChatToolAuthoritySubject,
+    deploymentCeiling: CodingWorkbenchMode,
+    usage: CodingWorkbenchRuntimeDelegationUsage,
+    nowIso: string,
+    correlationId?: string,
+  ): ChatToolAuthorityResolution {
+    const result = this.reserveChatUsage(reference, subject, deploymentCeiling, usage, nowIso);
+    return recordChatAuthorityResult(
+      "reserve",
+      result,
+      {
+        subject,
+        authorityDigest: reference.envelopeDigest,
+        toolCalls: usage.toolCalls,
+        promptTokens: usage.promptTokens,
+      },
+      correlationId,
+    );
+  }
+
+  private reserveChatUsage(
+    reference: EditorAgentGovernedAuthorityReference,
+    subject: ChatToolAuthoritySubject,
+    deploymentCeiling: CodingWorkbenchMode,
+    usage: CodingWorkbenchRuntimeDelegationUsage,
+    nowIso: string,
+  ): ChatToolAuthorityResolution {
+    if (usage.patchBytes !== 0 || ![usage.toolCalls, usage.promptTokens].every(validUsageCount)) {
       return { ok: false, reason: "invalid" };
     }
-    this.records.set(key, {
-      envelope: parsed.value,
-      digest,
-      registeredAtMs: Date.parse(nowIso),
-      usage: { toolCalls: 0, patchBytes: 0, promptTokens: 0 },
-      revoked: false,
-    });
-    return { ok: true, authorityRef };
+    const resolved = this.resolveChatRecord(reference, subject, deploymentCeiling, nowIso);
+    if (!resolved.ok) return resolved;
+    return reserveUsage(resolved.record, usage)
+      ? { ok: true, envelope: resolved.record.envelope }
+      : { ok: false, reason: "budget-exceeded" };
+  }
+
+  public revokeChatAuthorities(chatId: string, correlationId?: string): number {
+    let count = 0;
+    for (const record of this.records.values()) {
+      if (record.kind !== "chat" || record.envelope.subject.chatId !== chatId || record.revoked)
+        continue;
+      record.revoked = true;
+      count++;
+    }
+    recordChatAuthorityResult(
+      "revoke",
+      { ok: true },
+      { chatId, affectedCount: count },
+      correlationId,
+    );
+    return count;
+  }
+
+  private resolveChatRecord(
+    reference: EditorAgentGovernedAuthorityReference,
+    subject: ChatToolAuthoritySubject,
+    deploymentCeiling: CodingWorkbenchMode,
+    nowIso: string,
+  ): ChatRecordResolution {
+    const key = recordKey(reference);
+    const record = this.records.get(key);
+    if (record?.kind !== "chat" || !validateChatToolAuthoritySubject(subject).ok)
+      return { ok: false, reason: "invalid" };
+    if (record.revoked) return { ok: false, reason: "revoked" };
+    if (expired(nowIso, record.envelope.expiresAt)) {
+      this.records.delete(key);
+      return { ok: false, reason: "expired" };
+    }
+    if (runtimeBudgetExceeded(record, nowIso)) return { ok: false, reason: "budget-exceeded" };
+    const matches =
+      record.envelope.deploymentCeiling === deploymentCeiling &&
+      safeEqual(canonicalise(record.envelope.subject), canonicalise(subject)) &&
+      safeEqual(record.digest, sha256Hex(canonicalise(record.envelope)));
+    return matches ? { ok: true, record } : { ok: false, reason: "invalid" };
   }
 
   public registerRuntime(
@@ -177,7 +332,7 @@ export class EditorAgentAuthorityRegistry {
     const registration = this.register(envelope.authority, deploymentCeiling, nowIso);
     if (!registration.ok) return registration;
     const key = recordKey(registration.authorityRef);
-    const record = this.records.get(key);
+    const record = this.codingRecord(key);
     if (record === undefined) return { ok: false, reason: "invalid" };
     if (record.runtimeEnvelope !== undefined) {
       return canonicalise(record.runtimeEnvelope) === canonicalise(envelope)
@@ -343,7 +498,7 @@ export class EditorAgentAuthorityRegistry {
     reference: EditorAgentGovernedAuthorityReference,
     nowIso: string,
   ): RuntimeRecordResolution {
-    const record = this.records.get(recordKey(reference));
+    const record = this.codingRecord(recordKey(reference));
     if (record?.runtimeEnvelope === undefined) {
       return { ok: false, reason: "authority-resolution-failed" };
     }
@@ -370,7 +525,7 @@ export class EditorAgentAuthorityRegistry {
         ok: false,
         reason: runtimeResolutionFailureReason(resolved.reason),
       };
-    const record = this.records.get(recordKey(reference));
+    const record = this.codingRecord(recordKey(reference));
     return record?.runtimeEnvelope !== undefined &&
       record.runtimeDelegations !== undefined &&
       record.runtimeIdempotencyKeys !== undefined
@@ -385,7 +540,7 @@ export class EditorAgentAuthorityRegistry {
     nowIso: string,
   ): EditorAgentAuthorityResolution {
     const key = recordKey(reference);
-    const record = this.records.get(key);
+    const record = this.codingRecord(key);
     if (record === undefined) return { ok: false, reason: "invalid" };
     if (record.revoked) return { ok: false, reason: "revoked" };
     if (expired(nowIso, record.envelope.expiresAt)) {
@@ -409,7 +564,7 @@ export class EditorAgentAuthorityRegistry {
   ): EditorAgentAuthorityResolution {
     const resolved = this.resolve(reference, workspaceRoot, deploymentCeiling, nowIso);
     if (!resolved.ok) return resolved;
-    const record = this.records.get(recordKey(reference));
+    const record = this.codingRecord(recordKey(reference));
     if (record === undefined) return { ok: false, reason: "invalid" };
     if (record.sessionId === undefined) {
       record.sessionId = action.sessionId;
@@ -433,7 +588,7 @@ export class EditorAgentAuthorityRegistry {
     }
     const resolved = this.resolve(reference, workspaceRoot, deploymentCeiling, nowIso);
     if (!resolved.ok) return resolved;
-    const record = this.records.get(recordKey(reference));
+    const record = this.codingRecord(recordKey(reference));
     if (record === undefined) {
       return { ok: false, reason: "invalid" };
     }
@@ -459,7 +614,7 @@ export class EditorAgentAuthorityRegistry {
       nowIso,
     );
     if (!resolved.ok) return resolved;
-    const record = this.records.get(recordKey(reference));
+    const record = this.codingRecord(recordKey(reference));
     if (record === undefined) return { ok: false, reason: "invalid" };
     if (!reserveUsage(record, { toolCalls: 1, patchBytes, promptTokens: 0 })) {
       return { ok: false, reason: "budget-exceeded" };
@@ -476,7 +631,7 @@ export class EditorAgentAuthorityRegistry {
     patchBytes: number,
   ): boolean {
     if (!Number.isSafeInteger(patchBytes) || patchBytes < 0) return false;
-    const record = this.records.get(recordKey(reference));
+    const record = this.codingRecord(recordKey(reference));
     if (
       record === undefined ||
       record.usage.toolCalls < 1 ||
@@ -501,7 +656,7 @@ export class EditorAgentAuthorityRegistry {
   ): EditorAgentAuthorityResolution {
     const resolved = this.resolve(reference, workspaceRoot, deploymentCeiling, nowIso);
     if (!resolved.ok) return resolved;
-    const record = this.records.get(recordKey(reference));
+    const record = this.codingRecord(recordKey(reference));
     if (record === undefined) {
       return { ok: false, reason: "invalid" };
     }
@@ -513,9 +668,21 @@ export class EditorAgentAuthorityRegistry {
     return resolved;
   }
 
-  public revoke(reference: EditorAgentGovernedAuthorityReference): void {
+  public revoke(reference: EditorAgentGovernedAuthorityReference, correlationId?: string): void {
     const record = this.records.get(recordKey(reference));
+    const changed = record !== undefined && !record.revoked;
     if (record !== undefined) record.revoked = true;
+    if (record?.kind === "chat")
+      recordChatAuthorityResult(
+        "revoke",
+        { ok: true },
+        {
+          subject: record.envelope.subject,
+          authorityDigest: record.digest,
+          affectedCount: changed ? 1 : 0,
+        },
+        correlationId,
+      );
   }
 
   public reset(): void {
@@ -546,6 +713,28 @@ export class EditorAgentAuthorityRegistry {
       }
     }
   }
+}
+
+function initialRecord<T extends AuthorityEnvelope>(
+  envelope: T,
+  nowIso: string,
+): RetainedAuthorityRecord<T> {
+  return {
+    envelope,
+    digest: sha256Hex(canonicalise(envelope)),
+    registeredAtMs: Date.parse(nowIso),
+    usage: { toolCalls: 0, patchBytes: 0, promptTokens: 0 },
+    revoked: false,
+  };
+}
+
+function chatSnapshot(value: ChatToolAuthorityEnvelope): ChatToolAuthorityEnvelope {
+  const snapshot = structuredClone(value);
+  Object.freeze(snapshot.subject);
+  Object.freeze(snapshot.budget);
+  Object.freeze(snapshot.actionClasses);
+  Object.freeze(snapshot.connectorScopes);
+  return Object.freeze(snapshot);
 }
 
 function nonEmptyIdentity(value: string): boolean {
@@ -591,7 +780,10 @@ function admitRuntimeDelegation(
 
 // Whether `usage` fits on top of what the record already booked: the one budget rule the
 // reservation and the non-reserving fit check (#3417) both apply.
-function usageFits(record: AuthorityRecord, usage: CodingWorkbenchRuntimeDelegationUsage): boolean {
+function usageFits(
+  record: RetainedAuthorityRecord,
+  usage: CodingWorkbenchRuntimeDelegationUsage,
+): boolean {
   return (
     [usage.toolCalls, usage.patchBytes, usage.promptTokens].every(validUsageCount) &&
     record.usage.toolCalls + usage.toolCalls <= record.envelope.budget.maxToolCalls &&
@@ -601,7 +793,7 @@ function usageFits(record: AuthorityRecord, usage: CodingWorkbenchRuntimeDelegat
 }
 
 function reserveUsage(
-  record: AuthorityRecord,
+  record: RetainedAuthorityRecord,
   usage: CodingWorkbenchRuntimeDelegationUsage,
 ): boolean {
   if (!usageFits(record, usage)) return false;

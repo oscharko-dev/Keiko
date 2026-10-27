@@ -141,7 +141,7 @@ Status: **Partial — not accepted**. Schema 49 and the authenticated PATCH/seri
 
 - [ ] **AC2:** All three modes have explicit regression coverage through the shared action-class policy, including per-chat mode persistence, the unconfigured `autonomous-delivery` tool-source ceiling delivered by the one server resolver from #4083 and an explicitly narrower ceiling: required approval precedes network/effect, denied actions make no call, bounded allowed actions execute without invented extra approval. The read grant is requested once, covers only read-class tools of the current binding and credential generation, and never covers writes. Missing/expired authority remains denied in every mode.
 
-Status: **Partial — not accepted**. All three mode selections persist through the actual Chat PATCH; the shared action policy and deployment ceiling have scoped regression evidence below. Once-per-binding read grants, approval redemption and ordinary-Chat execution remain pending.
+Status: **Partial — not accepted**. All three mode selections persist through the actual Chat PATCH; the shared action policy and deployment ceiling have scoped regression evidence below. The ordinary Chat contract and shared registry now enforce subject, ceiling, expiry, revocation and cumulative budget boundaries. Once-per-binding read grants, approval redemption and ordinary-Chat execution remain pending.
 
 - [ ] **AC3:** Disconnect, replacement, Pod deletion and Keiko-managed token rotation/revocation revoke read grants and invalidate pending approvals and queued calls. Jira-side token revocation is enforced on the next Jira call; observed auth failure invalidates local readiness and pending work without introducing polling or webhooks. Tests cover these changes during approval and before effect; no stale request uses the old or newly substituted credential.
 
@@ -149,7 +149,7 @@ Status: **Partial — not accepted**. HTTP generation capture, verification tick
 
 - [ ] **AC4:** Two chats using different Pods are isolated; two chats deliberately using the same Pod share neither grants nor approval state; a new or copied Chat identity cannot inherit grants or approvals. Data-Pod-only grounding is byte-for-byte unchanged in behaviour and existing Workbench MCP works unchanged.
 
-Status: **Partial — not accepted**. Actual competing binding PATCH tests preserve one binding and leave another Chat unchanged. Shared-Pod grants/approvals, parallel tool execution isolation and final Data-Pod/Workbench regressions remain pending.
+Status: **Partial — not accepted**. Actual competing binding PATCH tests preserve one binding and leave another Chat unchanged. Shared registry tests additionally isolate every Chat subject and reject cross-consumer Coding/Chat references. Shared-Pod grants/approvals, parallel tool execution isolation and final Data-Pod/Workbench regressions remain pending.
 
 - [ ] **AC5:** Production-path lifecycle logging for binding, mode, grant and approval is registered and body-free. Restart and authority/mode changes cannot revive expired grants, approvals or queued effects. All applicable gates pass.
 
@@ -1414,3 +1414,28 @@ suites pass 198 tests after implementation. This is a structural contract checkp
 registry admission, current-state enforcement, consent, approvals and the ordinary Chat
 execution loop are not yet implemented or accepted. Final assembled-package qualification
 remains pending and runs after the other gates because it prunes the live dependency tree.
+
+### Shared authority registry checkpoint — #4084 AC2–AC5
+
+The existing registry now retains discriminated Coding/Chat records in the same bounded
+store. It uses the existing canonical digest, cumulative budget rules, expiry and revocation.
+Every Chat resolution compares current actor, Chat, Pod, binding generation, credential
+generation and deployment ceiling. A private immutable snapshot prevents caller mutation.
+Coding consumers cannot resolve or refund Chat records, and Chat consumers cannot resolve
+Coding records. Duplicate registration preserves usage and revocation; Chat-wide revocation
+leaves other Chats and Coding records untouched. This private API is not an HTTP authority
+registration route and does not yet compose human acceptance, read grants or approvals.
+
+Before implementation, 14 new registry tests fail while 33 retained tests pass. Afterward,
+249 contract/registry tests and 235 existing connector-policy, agent-run and Coding-runtime
+consumer tests pass. Three additional regressions fail before rejecting inherited subject,
+budget and envelope facts; required facts must be own fields. A real Activity Log writer/reader
+proof reconstructs register, changed-generation refusal, cumulative reservation, exhausted
+budget, revoke and revoked-reference refusal under one correlation. Repeated revocation records
+zero affected entries. No raw Chat/Pod/run identifiers enter those records.
+
+Package builds, root typecheck, changed lint, staged semantic and the 97-test operation-registry
+check pass; the generator resolves 611 proofs and 30 scenarios with no violations. Final
+aggregate gates and product Chat/lifecycle integration remain pending. No AC is accepted by
+this checkpoint alone. Retained logs: `/tmp/keiko-4081-chat-authority-registry-*.log` and
+`/tmp/keiko-4081-chat-authority-own-facts-before.log`.

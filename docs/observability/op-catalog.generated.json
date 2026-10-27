@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "29f85927e71ac306270aaa32b5b4fff3e4de768ed08bca44146f79b8f6a324d4",
+    "catalogDigest": "2bf36ee574acfc50a5777426d7e6a80ede80c05e9d255dd08baa714bad14be00",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -2376,6 +2376,95 @@
         "proofIds": ["chat.send.rejected.reason"],
         "registrationSite": "packages/keiko-server/src/chat-activity.ts:100",
         "emitterSites": ["packages/keiko-server/src/chat-activity.ts:398"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "chat.tool-authority.operation",
+        "category": "security",
+        "owner": "keiko-server",
+        "emitter": "editor.chatAuthorityActivity.recordChatAuthorityResult",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "phase": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["register", "resolve", "reserve", "revoke"]
+          },
+          "outcome": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["allowed", "invalid", "expired", "budget-exceeded", "revoked"]
+          },
+          "authorityDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": false,
+            "maxLength": 64
+          },
+          "actorDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": false,
+            "maxLength": 64
+          },
+          "chatDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": false,
+            "maxLength": 64
+          },
+          "podDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": false,
+            "maxLength": 64
+          },
+          "bindingGeneration": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "authenticationGeneration": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "toolCalls": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "promptTokens": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "affectedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "capability",
+        "failureClasses": ["chat-tool-authority"],
+        "proofIds": ["chat.tool-authority.operation.lifecycle"],
+        "releaseImpact": "minor",
+        "registrationSite": "packages/keiko-server/src/editor/chatAuthorityActivity.ts:22",
+        "emitterSites": ["packages/keiko-server/src/editor/chatAuthorityActivity.ts:96"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -41896,6 +41985,33 @@
       {
         "contractKind": "activity-log-failure-class",
         "schemaVersion": 1,
+        "failureClass": "chat-tool-authority",
+        "requiredProductSurfaces": ["keiko-server"],
+        "requiredLifecycleOperations": {
+          "start": [],
+          "state": ["chat.tool-authority.operation"],
+          "end": [],
+          "failure": [],
+          "loss": []
+        },
+        "requiredCausalOperations": ["chat.tool-authority.operation"],
+        "requiredLossOperations": [],
+        "requiredProofOperations": ["chat.tool-authority.operation"],
+        "requiredReplayProofIds": [],
+        "requiredResourceOperations": ["chat.tool-authority.operation"],
+        "requiredEvidenceClasses": [
+          "closed-enum",
+          "completeness-state",
+          "count",
+          "digest",
+          "loss-state"
+        ],
+        "requiredFrameOperations": [],
+        "requiredCauseOperations": []
+      },
+      {
+        "contractKind": "activity-log-failure-class",
+        "schemaVersion": 1,
         "failureClass": "chat-tool-mutation",
         "requiredProductSurfaces": ["keiko-server"],
         "requiredLifecycleOperations": {
@@ -52580,8 +52696,8 @@
     "failureClassCoverage": {
       "schemaVersion": 1,
       "releaseExpectation": "100%-complete",
-      "supportedClassCount": 373,
-      "completeClassCount": 373,
+      "supportedClassCount": 374,
+      "completeClassCount": 374,
       "completeness": "complete",
       "classes": [
         {
@@ -55250,6 +55366,122 @@
                 "causeChain": false
               },
               "proofIds": ["chat.draft.operation.lifecycle"],
+              "replayReferences": [],
+              "missingObligations": []
+            }
+          ],
+          "missingObligations": [],
+          "completeness": "complete"
+        },
+        {
+          "failureClass": "chat-tool-authority",
+          "requirementContract": "chat-tool-authority",
+          "productSurfaces": ["keiko-server"],
+          "lifecycleTransitions": ["state"],
+          "lifecycleOperations": {
+            "start": [],
+            "state": ["chat.tool-authority.operation"],
+            "end": [],
+            "failure": [],
+            "loss": []
+          },
+          "causalEdges": [
+            {
+              "op": "chat.tool-authority.operation",
+              "mode": "correlation"
+            }
+          ],
+          "lossSignals": [],
+          "resourceSignals": ["chat.tool-authority.operation"],
+          "replayReferences": [],
+          "operations": [
+            {
+              "op": "chat.tool-authority.operation",
+              "owner": "keiko-server",
+              "category": "security",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "capability",
+              "safeContextFields": [
+                {
+                  "name": "actorDigest",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": false
+                },
+                {
+                  "name": "affectedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "authenticationGeneration",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "authorityDigest",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": false
+                },
+                {
+                  "name": "bindingGeneration",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "chatDigest",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": false
+                },
+                {
+                  "name": "outcome",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "phase",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "podDigest",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": false
+                },
+                {
+                  "name": "promptTokens",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "toolCalls",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                }
+              ],
+              "evidenceClasses": [
+                "closed-enum",
+                "completeness-state",
+                "count",
+                "digest",
+                "loss-state"
+              ],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["chat.tool-authority.operation.lifecycle"],
               "replayReferences": [],
               "missingObligations": []
             }
@@ -101698,6 +101930,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "chat.tool-authority.operation",
+      "category": "security",
+      "site": "packages/keiko-server/src/editor/chatAuthorityActivity.ts:25",
+      "package": "keiko-server"
+    },
+    {
       "op": "chat.tool-mutation",
       "category": "process",
       "site": "packages/keiko-server/src/store/chatToolMutationActivity.ts:12",
@@ -105163,6 +105401,7 @@
     "chat.response.streamed",
     "chat.scope.update",
     "chat.send.rejected",
+    "chat.tool-authority.operation",
     "chat.tool-mutation",
     "chat.turn.started",
     "cli.audit.completed",

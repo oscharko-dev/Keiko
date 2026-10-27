@@ -126,4 +126,11 @@ describe("ordinary Chat tool authority contract (#4084)", () => {
     expect(result.ok).toBe(false);
     expect(JSON.stringify(result)).not.toContain(privateText);
   });
+
+  it.each(["envelope", "subject", "budget"] as const)("rejects inherited %s facts", (target) => {
+    const value = envelope();
+    const inherited: unknown = Object.create(target === "envelope" ? value : value[target]);
+    const candidate = target === "envelope" ? inherited : { ...value, [target]: inherited };
+    expect(validateChatToolAuthorityEnvelope(candidate).ok).toBe(false);
+  });
 });

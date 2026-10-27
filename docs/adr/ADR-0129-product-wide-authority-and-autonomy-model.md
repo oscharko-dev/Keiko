@@ -79,8 +79,8 @@ at trust boundaries that ADR-0124 was written to prevent inside the Coding Workb
 ### D1 — The three modes are the product-wide authority model
 
 Every autonomy-capable surface in Keiko — current and future — is governed by the three modes
-defined in ADR-0124 and corrected by ADR-0125, displayed as **Ask for approval**
-(`governed-assist`), **Approve for me** (`supervised-coding`), and **Full access**
+defined in ADR-0124 and corrected by ADR-0125 and ADR-0138, displayed as **Ask for approval**
+(`governed-assist`), **Supervised workspace** (`supervised-coding`), and **Full access**
 (`autonomous-delivery`). No surface may introduce an additional user-facing autonomy mode, a
 surface-local approval envelope, or a parallel authority stack.
 
@@ -170,6 +170,17 @@ Coding/Editor session is needed. Unknown fields, invalid generations, inconsiste
 modes and non-Jira capabilities fail structural validation with content-free diagnostics.
 This contract does not itself confer authority: registration, current-state revalidation,
 read consent, approvals and budget reservation remain server responsibilities.
+
+The existing `EditorAgentAuthorityRegistry` retains both Coding and Chat variants in one
+bounded store. Its historical name does not imply an Editor session. Consumer-specific
+resolution refuses the other variant; Chat resolution compares the current actor, Chat, Pod,
+both generations and deployment ceiling on every use. Chat records retain an immutable private
+snapshot. Both variants use the same cumulative budget rule, expiry handling and capacity;
+re-registering an identical authority does not reset usage or revive revocation. Chat-wide
+revocation leaves other Chats and Coding records untouched. Registered
+`chat.tool-authority.operation` evidence carries closed decisions, digests, generations and
+counts on the existing Activity Log. Product entrypoints still have to establish human
+acceptance and current live facts before calling this private registry.
 
 ### D6 — Forward rule for decision records
 

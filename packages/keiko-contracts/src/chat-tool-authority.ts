@@ -72,6 +72,8 @@ function validateKeys(
   // The shared key checker names unknown keys. This boundary returns only closed diagnostics.
   if (exactKeys(value, keys, "chatAuthority").length > 0)
     errors.push("chatAuthority has unknown fields");
+  if (keys.some((key) => !Object.hasOwn(value, key)))
+    errors.push("chatAuthority has missing own fields");
 }
 
 function validateDigest(value: unknown, path: string, errors: string[]): void {
