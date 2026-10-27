@@ -100,6 +100,7 @@ export class JiraChatToolTurn {
   private readonly budget: ReturnType<typeof createHarnessCatalogBudget>;
   private readonly binder: ReturnType<typeof createCatalogToolBinder<JiraChatCatalogConsumer>>;
   private readonly continuation: GatewayMessage[] = [];
+  private usableObservation = false;
   private readonly callIds = new Set<string>();
   private notify: ((message: ChatMessage) => void | Promise<void>) | undefined;
   private uncertainBudget = false;
@@ -157,8 +158,8 @@ export class JiraChatToolTurn {
   public onTranscript(listener: (message: ChatMessage) => void | Promise<void>): void {
     this.notify = listener;
   }
-  public hasSettledExchange(): boolean {
-    return this.continuation.some((message) => message.role === "tool");
+  public hasUsableObservation(): boolean {
+    return this.usableObservation;
   }
   private async publish(): Promise<void> {
     const message = this.options.deps.store.findMessageById(this.options.message.id);
@@ -426,6 +427,14 @@ export class JiraChatToolTurn {
       ?.toolTranscript?.exchanges.find((exchange) => exchange.call.id === id);
     requireDispatch(stored?.result !== undefined, "invalid", "recovery-required");
     this.continuation.push(...gatewayMessagesForToolExchange(stored));
+    // Only this turn's validated, redacted result actually published to the model is evidence.
+    // A successful empty list is useful; a settled denial, failure or missing payload is not.
+    if (
+      stored.result.status === "completed" &&
+      stored.result.data !== null &&
+      (stored.mutationOutcome === undefined || stored.mutationOutcome === "succeeded")
+    )
+      this.usableObservation = true;
   }
 
   public async *stream(

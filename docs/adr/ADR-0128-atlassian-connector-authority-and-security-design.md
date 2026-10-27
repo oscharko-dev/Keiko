@@ -328,7 +328,12 @@ journal treats every post-dispatch non-2xx response, including 400/401/403/429, 
 a known local rejection is recorded only before dispatch. A proxy may replace a response after
 an upstream commit, so status-only classification cannot remove the turn's uncertainty barrier.
 The shared HTTP transport and existing action Activity Log remain the
-owners of per-request and terminal evidence.
+owners of per-request and terminal evidence. The managed catalog envelope retains its own
+cancellation/denial and settlement status; a matching journal outcome is projected separately as
+`exchange.mutationOutcome`, with exact actor, Chat, binding, credential, canonical-turn, action and
+argument identity checks. Transcript reload and model-history projection keep that outcome paired
+with the original call/result IDs. A later abort or authority loss cannot erase an already observed
+remote effect or imply rollback, and an orphaned pending record never authorizes takeover/replay.
 
 
 **Bounded Jira field validation (#4083).** The connector owns one metadata-driven field matrix
@@ -365,9 +370,10 @@ editing those routing fields or adding undeclared compound effects is unsupporte
 named active user checks the current issue-scoped assignable-user endpoint without requiring edit
 permission; unassignment additionally requires metadata that permits clearing. Comments remain
 Data Center plain text. The executor snapshots inputs before metadata I/O, shares one aggregate
-deadline across phases, and rechecks admission for every request. Only the documented 201/204
-mutation responses with required identities acknowledge an attempt. Confirmation additionally
-requires a bounded direct read of the affected resource: returned creation/comment identity and
+deadline across phases, and rechecks admission for every request. The HTTP response observer
+records a successful status in the durable journal before response-body consumption. Only the
+operation's documented 201/204 response, required identity and successful bounded direct readback
+establish a confirmed result. Confirmation checks the affected resource: returned creation/comment identity and
 requested content, edited field values, assignment identity, or the transition's current target
 status and requested fields. Edit/assignment/transition capture the relevant state before dispatch.
 A state that already matched before dispatch does not establish a new effect; a self-transition
@@ -438,8 +444,12 @@ The authenticated credential resource accepts PATCH with `expectedGeneration` an
 uses the same public metadata allowlist and cannot expose the private lifecycle block or token.
 Applied rename/replacement events record only action and generation on the existing Activity Log.
 A logging fault after commit produces a diagnostic without converting success into a retryable
-mutation failure. Restart reconciliation of dependent UI state, management UI and Chat grant/approval
-revocation remain separate completion work.
+mutation failure. The Knowledge Pods hub's rename, token replacement, reverify and removal controls
+use these same authenticated owners. Public metadata is refetched after a lifecycle request settles
+(including an uncertain failure) and on window focus; a browser notification carries no credential,
+readiness or authority. Matching Chat bindings and grants/approvals are invalidated by the same
+lifecycle owner, including mutations through the direct credential routes. The current qualification
+coverage, including restart cases, remains explicit in the epic evidence matrix.
 
 Both outbound HTTP factories forward the private dispatch/response hooks so the same current
 policy guard can run after transport preparation and before credential materialization. A
@@ -457,8 +467,9 @@ Both outbound HTTP factories capture the selected credential generation by value
 resolver checks it against current private metadata before reading ciphertext, so an old transport
 cannot silently materialize a replacement credential. The existing typed rejection event and 409
 mapping cover creation conflicts and changed credentials. The authenticated Pod lifecycle routes
-must compose these primitives with owner checks, invalidation, grants and approvals; the metadata
-and transport primitives alone do not expose a Live Pod in ordinary Chat.
+compose these primitives with owner checks and invalidation; the ordinary Chat consumer separately
+admits its current binding, read grant and exact mutation approval before execution. The metadata
+and transport primitives alone confer none of that authority.
 
 ### D4 — Action-class mapping table
 
@@ -552,10 +563,27 @@ project, issue-type, create/edit metadata, search, issue, comment, transition-me
 requires the current binding's first-read grant before HTTP; a valid grant permits subsequent
 read-class calls only within the current authority, binding and credential generation. That bounded
 read grant supplies the standing approval for read-class calls; it never approves writes. Missing or
-expired authority is denied. This consumer admission is being implemented under #4084: the
-provider factory and catalog/SDK integration do not themselves expose a Chat route or confer a
-grant. The descriptor keeps the catalog's conservative server-generated invocation key requirement
-for external connector effects.
+expired authority is denied. The ordinary buffered and streaming Chat paths compose this admission
+under #4084/#4091 through the shared catalog binder and managed host described in
+[ADR-0181](ADR-0181-shared-managed-mcp-host.md). The provider factory and SDK host never confer
+consumer authority themselves. The descriptor keeps the catalog's conservative server-generated
+invocation key requirement for external connector effects.
+
+The authenticated Chat PATCH and serializer own the single Jira binding and saved human mode.
+Responses add the server-resolved ceiling and effective mode without replacing the saved selection.
+The existing Chat settings, Knowledge Pods hub and workspace ports use that same PATCH; a
+presentation edge appears only after confirmation for the exact requested Chat and Pod. Replacing
+a binding requires explicit confirmation. Cancelled/superseded UI requests and late replies cannot
+create an edge for a different selection. A workspace node, drag payload or display of a verified
+Pod never grants authority. The existing shared mode selector disables options above the ceiling.
+
+Ask for approval and Supervised workspace require a concrete write approval. Full access omits
+per-action write approval only inside current validated authority. Approvals bind the canonical turn,
+action digest, arguments and current subject generations; the mutation journal claims an approval
+once at actual mutation dispatch, after metadata reads. Every mode still needs first-read consent,
+including the metadata reads required to prepare a mutation. Mixed Data-Pod/Jira turns preserve
+existing grounding citations and attribute Jira results separately; their orchestration phases share
+the original turn budgets.
 
 ### D5 — Sync bounds and lifecycle
 
@@ -681,18 +709,19 @@ The following capabilities remain deferred:
 
 A synced pod, and every live read or write action, reflects the visibility and permissions of the
 **token identity at the moment of the call** — a point-in-time snapshot, not a live or continuously
-re-evaluated permission set. Keiko applies no additional per-user or per-team access control on top
-of what the connected Atlassian token can already see; it does not replicate Confluence space
-permissions or Jira project/issue-level security schemes into a local ACL model. This is a
-deliberate v1 scope limitation, not an oversight, and must be documented as such wherever a
-connector is configured or a synced pod is presented to a user.
+re-evaluated permission set. Keiko does not replicate Confluence space permissions or Jira
+project/issue-level security schemes into a local ACL over synced content. Ordinary Chat calls
+additionally require the current Keiko actor-owned binding, authority, read consent and any concrete
+write approval; those checks never widen the Atlassian identity's permissions. The synced-content
+limitation must be documented wherever a connector or its persisted knowledge is presented.
 
 **Guidance for regulated deployments:** use a dedicated service-account API token scoped to only
 the projects/spaces the deployment intends to expose, rather than a broad personal token — the
 local pod inherits that token's full read scope for every local user of the workspace the pod is
-part of. Rotate the token on the organization's existing credential-rotation cadence (D2's
-`authRef` indirection makes rotation a `vault.set` on the same reference, with no descriptor or
-pod-metadata change required). Treat a synced pod as equivalent, from an access-control perspective,
+part of. Rotate the token on the organization's existing credential-rotation cadence. The `authRef`
+and Live-Pod identity stay stable, while custody and matching Chat bindings advance their
+generations and access remains unavailable until verification and fresh consent. Treat a synced
+pod as equivalent, from an access-control perspective,
 to a local export of everything that token could read at sync time, and govern its local retention
 and distribution accordingly.
 
@@ -709,9 +738,9 @@ and distribution accordingly.
   the Figma connector and the Local Knowledge intranet-manual fetcher.
 - `keiko-connectors` stays a small, independently testable leaf (fixture-injected transport port),
   matching the dependency shape of every other domain leaf package in the repository.
-- The mapping table's risk-tier split (low reads/comments, medium field edits, high
-  creates/transitions) gives "Approve for me" a real, defensible distinction between writes that
-  proceed unattended and writes that pause for review, rather than treating all writes identically.
+- The mapping table retains concrete risk descriptions for reads/comments, field edits and
+  creates/transitions. Under ADR-0138, Ask for approval and Supervised workspace require approval
+  for connector writes at every tier; Full access still requires current bounded authority.
 
 ### Negative
 

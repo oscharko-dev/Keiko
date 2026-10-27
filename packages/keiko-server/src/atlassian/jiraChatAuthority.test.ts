@@ -587,7 +587,7 @@ describe("ordinary Chat first-read consent admission", () => {
   let grants: AtlassianActionApprovalRegistry;
   const now = Date.parse(CHAT_AUTHORITY_TEST_NOW);
   beforeEach(() => {
-    grants = new AtlassianActionApprovalRegistry(() => now);
+    grants = new AtlassianActionApprovalRegistry(() => now, store.chatToolReadGrants);
   });
 
   function request(): ReturnType<typeof requestJiraChatReadGrant> {
@@ -631,7 +631,7 @@ describe("ordinary Chat first-read consent admission", () => {
     expect(grants.getChatReadGrant(id)?.authority).toEqual(origin);
   });
 
-  it("reuses accepted consent only while original and current authorities remain valid", () => {
+  it("retains consent across originating-turn changes but still requires current authority", () => {
     const id = pendingId();
     const entry = grants.getChatReadGrant(id);
     if (entry === undefined) throw new Error("Expected pending grant");
@@ -642,9 +642,9 @@ describe("ordinary Chat first-read consent admission", () => {
     registerCurrentAuthority({ runId: "later-turn" });
     expect(request()).toMatchObject({ kind: "granted", grant: { grantId: id } });
     deps.agentAuthorityRegistry?.revoke(entry.authority);
-    const renewed = pendingId();
-    expect(renewed).not.toBe(id);
-    expect(grants.getChatReadGrant(id)?.grant.state).toBe("revoked");
+    expect(request()).toMatchObject({ kind: "granted", grant: { grantId: id } });
+    deps.agentAuthorityRegistry?.revoke(reference);
+    expect(request()).toEqual({ kind: "denied", reason: "authority-denied" });
   });
 
   it("does not automatically ask again after rejection within the same authority", () => {

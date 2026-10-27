@@ -1,4 +1,10 @@
 import type { MemoryId, ProjectId, UserId } from "@oscharko-dev/keiko-contracts/memory";
+import { AtlassianActionApprovalRegistry } from "./atlassian/actionApprovals.js";
+import { EditorAgentAuthorityRegistry } from "./editor/agentAuthorityRegistry.js";
+import { createJiraChatCatalogRuntime } from "./atlassian/jiraChatCatalogRuntime.js";
+import { projectChatReadGrant } from "./atlassian/chatReadGrantState.js";
+import { processServerLogSink } from "./process-log-sink.js";
+import { defaultServerDiagnosticSink } from "./diagnostics-log.js";
 import {
   openKnowledgeStore,
   resolveKnowledgeStorePath,
@@ -48,6 +54,92 @@ afterEach(async () => {
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
 });
+
+it.each(["new-turn", "fresh-registries"] as const)(
+  "reuses still-valid read consent for a real mixed Gateway call after %s",
+  async (kind) => {
+    const f = runtime();
+    const original = approvalOwner(f.deps);
+    const firstDecision = vi.spyOn(original, "waitForChatReadGrant");
+    provider();
+    const request = {
+      chatId: f.chatId,
+      content: "Read the feature and Jira projects.",
+      modelId: MODEL,
+    };
+    expect((await handleGroundedAsk(context(request), f.deps)).status).toBe(200);
+    expect(firstDecision).toHaveBeenCalledTimes(1);
+    const first = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.readGrant;
+    if (first === undefined) throw new Error("Missing consent projection");
+    let deps = f.deps;
+    if (kind === "fresh-registries") {
+      original.dispose();
+      deps = restartConsentGraph(deps);
+    }
+    const owner = approvalOwner(deps);
+    const furtherDecision = vi
+      .spyOn(owner, "waitForChatReadGrant")
+      .mockRejectedValue(new Error("A valid Chat consent must not request another approval"));
+    furtherDecision.mockClear();
+    const requests = provider();
+    const result = await handleGroundedAsk(context(request), deps);
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(requests).toHaveLength(2);
+    expect(f.jiraRequests).toEqual(["GET", "GET"]);
+    expect(furtherDecision).not.toHaveBeenCalled();
+    const retained = owner.getChatReadGrant(first.grantId);
+    if (retained === undefined) throw new Error("Missing retained consent");
+    expect(projectChatReadGrant(retained.grant)).toEqual(first);
+    assertContinuedObservation(deps, f.chatId);
+    if (kind === "fresh-registries") assertOriginAuthorityNotRestored(deps, retained);
+    owner.dispose();
+  },
+);
+
+function assertContinuedObservation(deps: UiHandlerDeps, chatId: string): void {
+  const last = deps.store
+    .listMessages(chatId)
+    .filter((message) => message.role === "user")
+    .at(-1);
+  expect(last?.toolTranscript?.exchanges[0]?.result?.status).toBe("completed");
+}
+
+function assertOriginAuthorityNotRestored(
+  deps: UiHandlerDeps,
+  entry: import("./atlassian/chatReadGrantState.js").ChatReadGrantEntry,
+): void {
+  expect(
+    deps.agentAuthorityRegistry?.resolveChat(
+      entry.authority,
+      entry.grant.subject,
+      "autonomous-delivery",
+      new Date().toISOString(),
+    ).ok,
+  ).toBe(false);
+}
+
+function approvalOwner(deps: UiHandlerDeps): AtlassianActionApprovalRegistry {
+  if (deps.atlassianActionApprovalRegistry === undefined) throw new Error("Missing approval owner");
+  return deps.atlassianActionApprovalRegistry;
+}
+
+function restartConsentGraph(deps: UiHandlerDeps): UiHandlerDeps {
+  const next = {
+    ...deps,
+    agentAuthorityRegistry: new EditorAgentAuthorityRegistry(),
+    atlassianActionApprovalRegistry: new AtlassianActionApprovalRegistry(
+      Date.now,
+      deps.store.chatToolReadGrants,
+    ),
+  };
+  const catalog = createJiraChatCatalogRuntime(next, {
+    primary: processServerLogSink(),
+    diagnostics: defaultServerDiagnosticSink,
+  });
+  cleanup.push(() => catalog.close());
+  return { ...next, jiraChatCatalog: catalog };
+}
+
 function context(body: Record<string, unknown>, approvalId?: string): RouteContext {
   return {
     req: mockRequest({ body: JSON.stringify(body) }),
@@ -548,6 +640,55 @@ it("abstains when a tool-only empty-pack model invents an answer without invokin
   expect((result.body as GroundedAnswer).citations).toEqual([]);
 });
 
+it.each([403, 200])(
+  "requires successful published Jira evidence after HTTP %s, including empty lists",
+  async (status) => {
+    const f = runtime();
+    rmSync(join(f.root, "src"), { recursive: true });
+    jiraHttpResult(f, status, status === 200 ? [] : {});
+    const answer =
+      status === 200
+        ? "The connected Jira contains no projects."
+        : "Invented Jira fact: project SYN was released.";
+    const requests = provider(["tool", "answer"], answer);
+    const result = await handleGroundedAsk(
+      context({ chatId: f.chatId, content: "List Jira projects.", modelId: MODEL }),
+      f.deps,
+    );
+    expect(result.status).toBe(200);
+    expect(requests).toHaveLength(2);
+    expect(f.jiraRequests).toEqual(["GET"]);
+    const content = (result.body as GroundedAnswer).content;
+    if (status === 200) expect(content).toBe(answer);
+    else expect(content).not.toContain("Invented Jira fact");
+    expect((result.body as GroundedAnswer).citations).toEqual([]);
+    expect(
+      f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges[0]?.result?.status,
+    ).toBe(status === 200 ? "completed" : "failed");
+  },
+);
+
+function jiraHttpResult(f: ReturnType<typeof runtime>, status: number, body: unknown): void {
+  const credentials = f.deps.atlassianConnectorCredentials;
+  if (credentials === undefined) throw new Error("Missing HTTP owner");
+  vi.spyOn(credentials, "httpBodyPortFactory").mockImplementation(
+    (_metadata, _correlation, lifecycle) =>
+      (request): ReturnType<AtlassianHttpBodyPort> => {
+        expect(lifecycle?.beforeDispatch?.(request)).toBe(true);
+        f.jiraRequests.push(request.method);
+        lifecycle?.onResponse?.(request, status);
+        const bodyText = JSON.stringify(body);
+        return Promise.resolve({
+          kind: "response",
+          status,
+          bodyText,
+          bodyBytes: Buffer.byteLength(bodyText),
+          truncated: false,
+        });
+      },
+  );
+}
+
 it("retains Data-only empty-pack abstention and the missing selected path denial", async () => {
   const f = runtime();
   rmSync(join(f.root, "src"), { recursive: true });
@@ -641,7 +782,7 @@ it("keeps Memory capture governed when an empty-pack Jira turn has Full access",
   expect((result.body as GroundedAnswer).memory?.context.memories).toEqual([]);
 });
 
-it("explains refused Jira consent with empty Data evidence without any remote request", async () => {
+it("abstains from fabricated Jira facts after refused consent with empty Data evidence", async () => {
   const f = runtime();
   rmSync(join(f.root, "src"), { recursive: true });
   const registry = f.deps.atlassianActionApprovalRegistry;
@@ -656,7 +797,7 @@ it("explains refused Jira consent with empty Data evidence without any remote re
       ).status,
     ).toBe(200);
   });
-  const requests = provider(["tool", "answer"], "Jira access was denied by the user.");
+  const requests = provider(["tool", "answer"], "Invented Jira fact: project SYN was released.");
   const result = await handleGroundedAsk(
     context({ chatId: f.chatId, content: "List Jira projects.", modelId: MODEL }),
     f.deps,
@@ -664,7 +805,7 @@ it("explains refused Jira consent with empty Data evidence without any remote re
   expect(result.status).toBe(200);
   expect(requests).toHaveLength(2);
   expect(f.jiraRequests).toEqual([]);
-  expect((result.body as GroundedAnswer).content).toContain("denied");
+  expect((result.body as GroundedAnswer).content).not.toContain("Invented Jira fact");
   expect((result.body as GroundedAnswer).citations).toEqual([]);
   expect(f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges[0]?.result?.status).toBe(
     "denied",

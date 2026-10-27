@@ -12,7 +12,7 @@ const LABEL_FIELD = {
   operations: ["set", "add", "remove"],
   schema: { type: "array", items: "string", system: "labels" },
 };
-export const FIELDS = [
+export const FIELDS: readonly Record<string, unknown>[] = [
   field("project", "project", true),
   field("issuetype", "issuetype", true),
   field("summary", "string", true),

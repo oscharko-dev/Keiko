@@ -30,7 +30,7 @@ export async function projectState(session) {
 export async function issueState(session, key, fieldId) {
   const issue = await remoteRead(
     session,
-    `/rest/api/2/issue/${encodeURIComponent(key)}?fields=summary,status,assignee,${fieldId}&expand=changelog`,
+    `/rest/api/2/issue/${encodeURIComponent(key)}?fields=summary,status,resolution,assignee,${fieldId}&expand=changelog`,
   );
   assert.ok(Number.isSafeInteger(issue.changelog.total));
   return { fields: issue.fields, historyCount: issue.changelog.total };

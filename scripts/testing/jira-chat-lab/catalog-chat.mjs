@@ -144,7 +144,12 @@ async function qualifyWrites(context, group, fixture) {
   );
   const transition = metadata.transitions.find((item) => item.name === "Done");
   assert.ok(transition?.fields[fixture.requiredFieldId]?.required);
-  const fields = { [fixture.requiredFieldId]: "Synthetic transition screen value" };
+  const resolutionId = transition.fields.resolution.allowedValues[0].id;
+  assert.equal(typeof resolutionId, "string");
+  const fields = {
+    [fixture.requiredFieldId]: "Synthetic transition screen value",
+    resolution: { id: resolutionId },
+  };
   await qualifyFieldMutation(
     context,
     group,
@@ -154,6 +159,7 @@ async function qualifyWrites(context, group, fixture) {
     { transitionId: transition.id, fields },
     (observed) => {
       assert.equal(observed.status.id, transition.to.id);
+      assert.equal(observed.resolution.id, resolutionId);
       assert.equal(observed[fixture.requiredFieldId], fields[fixture.requiredFieldId]);
     },
   );

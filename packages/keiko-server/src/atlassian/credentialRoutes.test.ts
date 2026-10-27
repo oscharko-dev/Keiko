@@ -1,4 +1,11 @@
-import type { ChatToolAuthoritySubject, ChatToolReadGrant } from "@oscharko-dev/keiko-contracts";
+import type {
+  ChatToolAuthoritySubject,
+  ChatToolReadGrant,
+  KnowledgeCapsuleId,
+} from "@oscharko-dev/keiko-contracts";
+import { standardPodModelUsePolicy } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
+import { createCapsule, listCapsules } from "@oscharko-dev/keiko-local-knowledge";
+import { openKnowledgeStoreForDeps } from "../local-knowledge-store-open.js";
 import {
   AtlassianActionApprovalRegistry,
   ATLASSIAN_ACTION_APPROVAL_TTL_MS,
@@ -32,7 +39,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AtlassianCredentialCustodyError,
   createAtlassianCredentialCustody,
@@ -1463,6 +1470,7 @@ describe("normal Chat Jira binding through authenticated PATCH", () => {
     const first = await updatedJiraChat(jiraChat(), { jiraPodId: podId });
     const second = await updatedJiraChat(jiraChat(), { jiraPodId: podId });
     const other = await updatedJiraChat(jiraChat(), { jiraPodId: otherPodId });
+    const otherStoredBefore = structuredClone(fixtureStore.findChatById(other.id));
     const credential = wiring.custody
       .list()
       .find((row) => row.deployment === "data-center" && row.livePod?.podId === podId);
@@ -1515,7 +1523,7 @@ describe("normal Chat Jira binding through authenticated PATCH", () => {
         expect(fixtureStore.findChatById(chat.id)?.jiraPodBinding).toBeUndefined();
         expect(fixtureStore.findChatById(chat.id)?.jiraBindingGeneration).toBe(2);
       }
-      expect(fixtureStore.findChatById(other.id)).toEqual(other);
+      expect(fixtureStore.findChatById(other.id)).toEqual(otherStoredBefore);
     } finally {
       release();
       await Promise.all(turns);
@@ -1750,6 +1758,7 @@ describe("authenticated Live Pod credential updates", () => {
     const second = await updatedJiraChat(jiraChat(), { jiraPodId: podId });
     const otherId = await readyJiraPod();
     const other = await updatedJiraChat(jiraChat(), { jiraPodId: otherId });
+    const otherStoredBefore = structuredClone(fixtureStore.findChatById(other.id));
     const grants = [first, second, other].map((chat) => retainedChatReadGrant(chat));
     const sink = createFileServerLogSink(configDir, { level: "debug" });
     await rebuild({ ...wiring, activityLog: sink });
@@ -1794,7 +1803,7 @@ describe("authenticated Live Pod credential updates", () => {
           authenticationGeneration: 3,
           bindingGeneration: 3,
         });
-      expect(fixtureStore.findChatById(other.id)).toEqual(other);
+      expect(fixtureStore.findChatById(other.id)).toEqual(otherStoredBefore);
       expect(grants.map((state) => state())).toEqual(["revoked", "revoked", "granted"]);
       expect(wiring.custody.getMetadata(credential.authRef)).toMatchObject({
         generation: 3,
@@ -2195,5 +2204,121 @@ describe("public Live Pod projection", () => {
       /ownerDigest|creationRequestId|credentialOperation/,
     );
     expectNoSecretBytes(JSON.stringify(created));
+  });
+});
+
+async function livePodDataBoundaryFixture(): Promise<{
+  readonly podId: string;
+  readonly dataId: KnowledgeCapsuleId;
+  readonly deps: UiHandlerDeps;
+}> {
+  const podId = await readyJiraPod();
+  const deps: UiHandlerDeps = {
+    ...baseDeps(wiring),
+    uiDbPath: join(configDir, "ui.db"),
+    localKnowledgeEmbeddingRequest: vi.fn(() =>
+      Promise.reject(new Error("Unexpected embedding request")),
+    ),
+  };
+  const dataId = "cap-data-control" as KnowledgeCapsuleId;
+  const knowledge = openKnowledgeStoreForDeps(deps);
+  try {
+    createCapsule(knowledge.store, {
+      id: dataId,
+      displayName: "Data control",
+      tags: [],
+      retrievalEffort: "default",
+      outputMode: "snippets",
+      answerGroundingPolicy: "require-citations",
+      modelUsePolicy: standardPodModelUsePolicy(),
+      embeddingModelIdentity: {
+        provider: "openai",
+        modelId: "text-embedding-3-small",
+        vectorDimensions: 1536,
+        vectorMetric: "cosine",
+      },
+      lifecycleState: "ready",
+      storageReference: "capsules/cap-data-control",
+    });
+  } finally {
+    knowledge.close();
+  }
+  await closeServer();
+  ({ server, port } = await buildServer(deps));
+  return { podId, dataId, deps };
+}
+
+describe("Jira Live Pod direct Data-surface isolation", () => {
+  it.each([
+    { method: "GET", suffix: "" },
+    { method: "POST", suffix: "/index" },
+    { method: "POST", suffix: "/reindex" },
+    { method: "POST", suffix: "/connection" },
+  ])(
+    "rejects $method capsule$suffix for an actual verified Live Pod",
+    async ({ method, suffix }) => {
+      const { podId, dataId, deps } = await livePodDataBoundaryFixture();
+      const probeCount = fakePortRequests.length;
+      const response = await fetch(
+        `${baseUrl()}/api/local-knowledge/capsules/${encodeURIComponent(podId)}${suffix}`,
+        {
+          method,
+          headers: csrfHeaders(),
+          ...(method === "GET"
+            ? {}
+            : {
+                body: JSON.stringify(
+                  suffix === "/connection"
+                    ? { scope: { kind: "folder", rootPath: configDir, recursive: true } }
+                    : {},
+                ),
+              }),
+        },
+      );
+      expect(response.status).toBe(404);
+      expect((await response.json()) as unknown).toMatchObject({ error: { code: "NOT_FOUND" } });
+      expect(fakePortRequests).toHaveLength(probeCount);
+      expect(deps.localKnowledgeEmbeddingRequest).not.toHaveBeenCalled();
+      const knowledge = openKnowledgeStoreForDeps(deps);
+      try {
+        expect(listCapsules(knowledge.store).map((capsule) => capsule.id)).toEqual([dataId]);
+        expect(
+          knowledge.store._internal.db.prepare("SELECT COUNT(*) AS count FROM indexing_jobs").get(),
+        ).toMatchObject({ count: 0 });
+      } finally {
+        knowledge.close();
+      }
+    },
+  );
+
+  it("refuses mixed Live/Data set membership without changing the existing Data Pod capabilities", async () => {
+    const { podId, dataId, deps } = await livePodDataBoundaryFixture();
+    const probeCount = fakePortRequests.length;
+    const createSet = (capsuleIds: readonly string[]): Promise<Response> =>
+      fetch(`${baseUrl()}/api/local-knowledge/capsule-sets`, {
+        method: "POST",
+        headers: csrfHeaders(),
+        body: JSON.stringify({ displayName: "Boundary control", capsuleIds }),
+      });
+    expect((await createSet([dataId, podId])).status).toBe(404);
+    const afterDenied = await fetch(`${baseUrl()}/api/local-knowledge/capsule-sets`);
+    expect((await afterDenied.json()) as unknown).toMatchObject({ capsuleSets: [] });
+    const dataSet = await createSet([dataId]);
+    expect(dataSet.status).toBe(201);
+    expect((await dataSet.json()) as unknown).toMatchObject({
+      capsuleSet: { capsuleIds: [dataId], capsuleCount: 1 },
+    });
+    const dataRead = await fetch(`${baseUrl()}/api/local-knowledge/capsules/${dataId}`);
+    expect(dataRead.status).toBe(200);
+    expect((await dataRead.json()) as unknown).toMatchObject({ capsule: { id: dataId } });
+    const dataIndex = await fetch(`${baseUrl()}/api/local-knowledge/capsules/${dataId}/index`, {
+      method: "POST",
+      headers: csrfHeaders(),
+      body: "{}",
+    });
+    // The Data route admits this identity, then correctly rejects its empty source set.
+    expect(dataIndex.status).toBe(409);
+    expect(fakePortRequests).toHaveLength(probeCount);
+    expect(deps.localKnowledgeEmbeddingRequest).not.toHaveBeenCalled();
   });
 });

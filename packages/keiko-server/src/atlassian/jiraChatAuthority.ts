@@ -294,12 +294,43 @@ export function reserveCurrentJiraChatAuthority(
   return reservation.ok ? current : reservation;
 }
 
+// Accepted consent never restores its originating turn's authority or usage budget.
+function currentGrantedConsent(
+  deps: JiraChatAuthorityDeps,
+  entry: ChatReadGrantEntry,
+  nowIso: string,
+  correlationId: string,
+): boolean {
+  const facts = currentFacts(deps, entry.grant.subject.chatId);
+  const now = Date.parse(nowIso);
+  const current =
+    facts.ok &&
+    entry.grant.requestedAt <= now &&
+    entry.grant.expiresAt > now &&
+    sameReadGrantSubject(entry.grant, facts.subject);
+  return recordChatAuthorityResult(
+    "read-grant",
+    current ? { ok: true } : { ok: false, reason: "invalid" },
+    {
+      subject: entry.grant.subject,
+      grantId: entry.grant.grantId,
+      grantState: entry.grant.state,
+      authorityDigest: entry.authority.envelopeDigest,
+      consentProofDigest: entry.grant.consentProofDigest ?? undefined,
+      affectedCount: 0,
+    },
+    correlationId,
+  ).ok;
+}
+
 export function isCurrentJiraChatReadGrant(
   deps: JiraChatAuthorityDeps,
   entry: ChatReadGrantEntry,
   nowIso: string,
   correlationId: string,
 ): boolean {
+  if (entry.grant.state === "granted")
+    return currentGrantedConsent(deps, entry, nowIso, correlationId);
   const current = resolveCurrentJiraChatAuthority(
     deps,
     entry.grant.subject.chatId,

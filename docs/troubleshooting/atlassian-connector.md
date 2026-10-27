@@ -18,6 +18,30 @@ All examples use synthetic hosts, keys, and identifiers (`example.atlassian.net`
 `<correlation-id>`). Never paste a real token, tenant name, private endpoint, or unredacted log line
 into a finding.
 
+## Jira Live Pod result safety
+
+For ordinary Chat Jira writes, distinguish the persisted mutation result from a generic transport
+error. **Jira change confirmed** means successful acknowledgement and readback. **Jira accepted the
+change; confirmation incomplete** means acknowledgement was recorded but full readback is missing.
+**Jira outcome unknown** means the effect cannot be determined; even a post-dispatch 4xx or 5xx
+response may have come from a proxy after a commit. Cancellation, reload or a later permission loss
+does not undo a completed remote write. Inspect Jira before proposing another mutation. Keiko does
+not automatically resend a possibly executed mutation, including PUT, regenerate and streaming
+fallback. A pending result is not evidence that a worker is still running or permission to retry.
+
+For an unverified Live Pod, use **Verify connection** after replacing the token. Replacement retains
+the Pod identity and Chat association but revokes prior access and approvals. Use **Refresh status**
+when a lifecycle request's response is uncertain. Removing the Pod deletes its credential and Chat
+bindings. See the [Live Pod guide](../local-knowledge/atlassian-connector-guide.md#jira-live-pods-in-chat)
+for the first-read disclosure, per-action write approvals and current platform limits.
+
+Data Center verification additionally reports `unsupported-version` for a version other than the
+supported 10.3.26, `invalid-response` for malformed JSON or a browser login page,
+`redirect-refused` for a redirect, and `tls-failed` for certificate validation failure. Check the
+canonical HTTPS base URL/context path, reverse proxy and trusted CA. Private destinations need
+exact operator admission. Do not disable TLS verification or broaden the target policy to clear
+an error.
+
 ## Reason-code index
 
 Every status and degradation reason the connector can surface maps to one entry below.
@@ -52,8 +76,9 @@ Every status and degradation reason the connector can surface maps to one entry 
 
 **Symptom**
 
-Verify reports `auth-failed`, or a sync run or write action ends with the `auth-failed` reason. The
-identity call was rejected before any content was read or written.
+Verify reports `auth-failed`, or a sync run or write action ends with the `auth-failed` reason.
+During Verify, the rejected request is a read-only identity probe. For a mutation, consult its
+persisted result above: a status code alone cannot establish that no remote effect occurred.
 
 **Root Cause**
 
@@ -233,7 +258,8 @@ saturated proxy, or a very large page of results.
 
 **Diagnostic Steps**
 
-1. Retry the operation. A single transient timeout that does not recur needs no further action.
+1. For a read-only verification or query, retry within its normal bounds. For a mutation, inspect
+   the persisted outcome and current Jira state first; do not blindly repeat a timed-out write.
 2. Measure round-trip latency to the site through the same path Keiko uses (including any proxy):
 
    ```bash
@@ -268,12 +294,12 @@ more times than the connector's bounded retry budget could absorb.
 
 **Root Cause**
 
-The connector already retries 429 and 5xx responses with bounded exponential backoff (500 ms
-initial, factor 2, capped at 8 seconds per attempt, maximum 5 attempts), honoring a `Retry-After`
-header when present (itself capped at 8 seconds so a hostile or misconfigured upstream cannot stall a
-run past its budget). A `rate-limited` outcome means the retries were exhausted — the site is
-throttling this identity harder than the bounded backoff can wait out, often because another
-integration shares the same token, or a large sync coincides with other automation.
+GET requests retry 429 and 5xx responses with bounded exponential backoff (500 ms initial,
+factor 2, capped at 8 seconds per attempt, maximum 5 attempts), honoring a bounded `Retry-After`
+header. Reads remain within the current run budget. Mutation POST/PUT requests are dispatched at
+most once, including responses with `Retry-After`; a rate-limit response after dispatch does not
+prove absence of an effect. A read's `rate-limited` outcome means its retry budget was exhausted,
+often because another integration shares the token or a large sync coincides with other automation.
 
 **Diagnostic Steps**
 
@@ -284,8 +310,8 @@ integration shares the same token, or a large sync coincides with other automati
 
 **Resolution**
 
-1. Wait and re-run. The throttle is upstream and time-based; the connector will re-run the same
-   bounded fetch cleanly once the limit clears.
+1. For a read or sync fetch, wait and run the bounded fetch again once the limit clears. For a
+   mutation, inspect Jira and its persisted outcome before proposing any new action.
 2. Reduce concurrent pressure: run the sync when other integrations are idle, or narrow the scope so
    fewer requests are issued per run.
 3. Use a dedicated token for the connector so its request budget is not shared with other tools.

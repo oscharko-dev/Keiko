@@ -159,9 +159,10 @@ without source content. Data-only preparation and synthesis keep their existing 
 
 An empty connected-evidence pack still permits the already admitted Jira turn to run.
 When neither governed Memory context nor the existing own-assessment policy permits an
-answer, that exception requires a settled tool exchange; a model that never calls a tool
-retains the deterministic Data-only abstention. Jira facts and denied tool results carry
-no Data citations. Missing or denied source paths retain their existing failure behavior.
+answer, that exception requires a successful usable tool observation published to this
+turn's model continuation. Successful empty results are observations; denied, failed or
+unavailable results preserve deterministic Data-only abstention even if the model invents
+facts. Their structured cards remain visible. Jira observations carry no Data citations. Missing or denied source paths retain their existing failure behavior.
 This exception never changes Memory admission, capture mode, or its deployment ceiling.
 
 Grounded mixed responses use the existing buffered transport and canonical turn owner.
@@ -170,6 +171,15 @@ turn, and the client follows its existing buffered fallback. That fallback and a
 share the canonical identity; neither dispatches a second remote mutation. Pending read
 consent and exact write approvals remain visible through the existing canonical-row GET
 observer while the buffered grounded request is running.
+
+Accepted read disclosure consent is retained in the existing private SQLite store by the
+existing approval registry, bounded by the original subject, disclosure version, proof
+and expiry. Its originating turn reference remains provenance, not an execution lease
+restored after restart. A later turn must independently pass its current authority,
+custody, generation, model-capability and budget checks. Pending decisions still require
+their exact live origin authority and are revoked during shutdown. Lifecycle revocation
+persists; clean shutdown preserves only already granted consent. No turn authority,
+usage budget or pending write approval is restored from this record.
 
 ## Verification
 

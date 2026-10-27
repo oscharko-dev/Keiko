@@ -47,6 +47,16 @@ producer ran again on 2026-10-24 with Node 24.22.0. All nine Chromium cases pass
 including the real-BFF outage case; only `11-progress-state.png` changed bytes. The three JSON
 records bind the merged sources, and the evidence freshness gate passed.
 
+The Jira Chat changes (Epic #4081, PR #4093) regenerated the complete original producer on
+2026-10-27 with Node 24.22.0, npm 11.19.1 and Playwright 1.64.1 after a fresh production package/UI
+build. All nine Chromium cases passed in 49.1 seconds, including the real-BFF outage case. Three
+PNGs changed bytes (`10-responsive-manual-path.png`, `11-progress-state.png` and
+`13-reconnecting-state-mocked.png`); their rendered output was inspected. The other eleven PNGs
+remain byte-identical. The three JSON records now bind all 25 declared source digests and four
+harness digests from the worktree. The unchanged freshness gate and 23 focused updater/editor
+evidence contract tests pass. This remains updater fixture evidence; Jira-specific visual
+acceptance and the platform-sensitive Linux editor bundle fingerprint are separate obligations.
+
 ## Reproduce
 
 Use the supported Node 24 runtime and the checkout's own dependencies:
@@ -67,8 +77,8 @@ npm run test:e2e:update-ui-1696 -- --grep @real-bff-outage
 
 ## Evidence and limits
 
-- [Manifest](manifest.json): 14 screenshots, the proof documents, eight current UI source hashes,
-  and four harness provenance hashes.
+- [Manifest](manifest.json): 14 screenshots, the proof documents, 25 declared source digests
+  (including style/token/translation dependencies), and four harness provenance hashes.
 - [Fidelity proof](update-experience-fidelity-proof.json): seven canonical modes, responsive/manual,
   progress, critical notice, portable eligibility, reconnect and remediation captures.
 - [Accessibility proof](a11y-proof.json): axe-core 4.12.1 reported no violations in its 12 recorded

@@ -4545,14 +4545,15 @@ function autonomousDeliveryFields(
 // share approvals, sync jobs, or activity records (PR #3289 review; see deps.test.ts's isolation
 // coverage). The resolvers fall back to the module singleton only for a `UiHandlerDeps`-shaped
 // value that skips this factory (e.g. a hand-rolled test double).
-function atlassianConnectorRegistryFields(options: BuildHandlerDepsOptions): Pick<
-  UiHandlerDeps,
-  "atlassianActionApprovalRegistry" | "atlassianSyncJobRegistry"
-> & {
+function atlassianConnectorRegistryFields(
+  options: BuildHandlerDepsOptions,
+  store: UiStore,
+): Pick<UiHandlerDeps, "atlassianActionApprovalRegistry" | "atlassianSyncJobRegistry"> & {
   readonly agentAuthorityRegistry: EditorAgentAuthorityRegistry;
 } {
   const approvalRegistry =
-    options.atlassianActionApprovalRegistry ?? new AtlassianActionApprovalRegistry();
+    options.atlassianActionApprovalRegistry ??
+    new AtlassianActionApprovalRegistry(Date.now, store.chatToolReadGrants);
   const syncRegistry = options.atlassianSyncJobRegistry ?? new AtlassianSyncJobRegistry();
   return {
     atlassianActionApprovalRegistry: approvalRegistry,
@@ -4909,7 +4910,7 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   // buildIntegrationUiHandlerDeps, so createUiHandlerDispose can capture and reset the SAME
   // instances this graph's deps object exposes -- see its own comment for why disposal must reach
   // these registries, not just construct them fresh per graph.
-  const atlassianRegistries = atlassianConnectorRegistryFields(args.options);
+  const atlassianRegistries = atlassianConnectorRegistryFields(args.options, args.bundle.uiStore);
   // #2906 round 3: constructed once per composed deps graph (mirrors atlassianRegistries above)
   // so createUiHandlerDispose can reset the SAME instance this graph's deps object exposes --
   // see denialWindows.ts for why this must not be a module singleton.
@@ -5774,9 +5775,10 @@ async function disposeRuntimeServices(
     // OWN fresh registry has no record of that still-running job and could admit a duplicate for
     // the same capsule (hasActiveRunForCapsule sees an empty registry). reset() aborts every
     // active job's controller and drops pending approvals/activity before the bundle itself goes
-    // away, so nothing on this graph outlives it as observable state on the NEXT graph.
+    // away. Already granted Chat disclosure consent is the one durable exception: its original
+    // subject, proof and expiry survive, never a turn authority, pending action or usage budget.
     (): void => {
-      atlassianRegistries.atlassianActionApprovalRegistry?.reset(correlationId);
+      atlassianRegistries.atlassianActionApprovalRegistry?.dispose(correlationId);
       atlassianRegistries.agentAuthorityRegistry.reset(correlationId);
     },
     (): void => {

@@ -3800,10 +3800,10 @@ it("shares one lazy Jira catalog per graph and closes it on disposal (#4089)", a
     expect(
       activityLog.events.filter((event) => event.op === "mcp.managed.lifecycle"),
     ).toMatchObject([
-      { extra: { phase: "listed", toolCount: 9, reason: "none" } },
-      { extra: { phase: "admitted", toolCount: 9, reason: "none" } },
+      { extra: { phase: "listed", toolCount: 14, reason: "none" } },
+      { extra: { phase: "admitted", toolCount: 14, reason: "none" } },
     ]);
-    expect(first.handlerBindings).toHaveLength(9);
+    expect(first.handlerBindings).toHaveLength(14);
     expect(first.handlerBindings.every((handler) => handler.readiness() === "ready")).toBe(true);
     await deps.dispose?.();
     await expect(runtime.get()).rejects.toMatchObject({ reason: "handler-unavailable" });

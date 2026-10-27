@@ -267,7 +267,7 @@ Status: **Partial — not accepted**. Normal Jira Chat/browser runs without embe
 
 - [ ] **AC5:** Existing Data Pod grounding, Cloud connector and Workbench MCP regressions pass, and the deterministic lane runs in its wired CI class. Timeout, pagination, cancellation and response-size tests show bounded behavior; existing performance ceilings remain unchanged.
 
-Status: **Partial — not accepted**. Scoped Data grounding, Cloud and Workbench tests are recorded; provider bounds and cancellation have deterministic suites. Existing root Vitest selection reaches unit/integration files, but no dedicated assembled Jira Chat/browser CI lane was found. Wire and execute the required deterministic journey, final compatibility and unchanged-performance checks.
+Status: **Partial — not accepted**. Scoped Data grounding, Cloud and Workbench tests are recorded; provider bounds and cancellation have deterministic suites. The dedicated assembled Jira Chat browser lane now has three passing finite journeys and is wired as a blocking runs-per-pr UI step. It uses the production BFF/gateway/catalog/MCP path with isolated HTTPS Jira and model protocol fixtures. Final delivered-head lane, compatibility and unchanged-performance checks remain open.
 
 - [ ] **AC6:** The independent local lab preflight proves license validity and both read and write availability. A stopped instance, expired license or missing trusted test endpoint is reported as blocked real qualification; no silent skip, customer fallback, clock change or license modification is accepted.
 
@@ -312,6 +312,43 @@ Prioritized work identified at that checkpoint (later repairs are reflected in t
    checks on the delivered head, then settle reviews. No merge authority is implied.
 
 ## Verification checkpoints
+
+### Deterministic normal-Chat browser CI lane — #4087 AC5 (partial)
+
+`npm run test:e2e:jira-chat` owns `playwright.jira-chat-4081.config.ts` and
+`jira-chat-4081.spec.ts`. Its blocking UI workflow step is classified
+`runs-per-pr` by `check:e2e-suite-wiring`; no unwired-suite exemption was added.
+The fixture composes `buildUiHandlerDeps` and the real BFF, gateway HTTP adapter,
+canonical catalog/binder, managed MCP host, vault, consent/approval and mutation
+journal. The only controlled peers are an OpenAI-compatible HTTP provider and a
+Jira REST-v2 HTTPS fixture with an ephemeral trusted certificate, exact loopback
+allowance and a `/jira` context path. It creates no Coding task or session.
+
+The three browser journeys cover:
+
+- Hub creation and verification, server-confirmed Chat binding, mandatory read
+  disclosure, real project read, exact write preview, explicit approval, one
+  confirmed comment and persisted `claimed` approval history.
+- A wrong action digest refused with 409 and a disconnect invalidating the pending
+  action before dispatch; the stale decision is refused with 404, the canonical
+  turn is cancelled, and write/readback counts remain unchanged.
+- A bound model without verified tool calling presenting actionable unavailability
+  while every physical provider/Jira request counter remains unchanged.
+
+The full fresh-build invocation first passed two journeys; the cancellation test
+incorrectly expected `failed` although disconnect correctly settles `cancelled`.
+After correcting that fixture assertion, all three journeys passed against the
+same assembled product without rebuilding during the separate live lab group.
+Final counters were 8 model requests (including readiness), 9 Jira HTTP requests
+(including six verification probes), 1 project read, 1 write, 1 readback and zero
+credential disclosures to model bodies. Earlier fixture preparation also corrected
+an incomplete synthetic identity and a Chat snapshot request missing project scope.
+These fixture results do not qualify a real Jira deployment or a real model.
+
+Scoped ESLint, root typecheck, formatting, 422 workflow-consumer tests, 87 wiring
+gate tests, wiring classification, branch parity, required-workflow names and
+Zizmor anchors passed. Logs are `/tmp/keiko-4081-e2e-{lane,assembled,lint,types,workflow-tests,wiring-tests,wiring,final-format}.log`.
+The delivered-head full invocation and all remaining final gates stay open.
 
 ### Initial Cloud creation regression (#4082 AC1, partial)
 
@@ -2112,3 +2149,59 @@ The rebuilt real browser artifact passes keyboard connection plus Ask/approved w
 The new finite 14-operation normal Chat driver exposed an actual Jira10.3.26 metadata-envelope incompatibility before any mutation. Independent reads confirmed no remote change. The shared parser now accepts each complete known envelope separately, rejects mixed or contradictory fields, and supplies the same normalized terminal flag to read and create consumers. The regression failed before correction; 81 targeted metadata/mutation tests pass afterward. The API shape is independently observed in the licensed laboratory and documented by the [Atlassian REST examples](https://developer.atlassian.com/server/jira/platform/jira-rest-api-examples/). The rerun progressed through seven reads, then exposed a harness expectation against an empty comment fixture; that case now targets the deliberately seeded hostile-comment fixture. The complete 14-operation group has **not yet passed**.
 
 Four normal Chat tests also reproduced an approval transcript remaining `approved` after consumption; the turn owner now refreshes the exact approval identity from its existing registry before settlement. All 23 normal Chat tests pass, including claimed state in buffered/streamed Ask and Supervised modes and no approval in Full mode. New durable-grant restoration, deterministic browser CI, the remaining live/failure matrix and final aggregate gates remain separate outstanding work. No acceptance checkbox is closed by this checkpoint.
+
+The final bound-Jira source-label correction has two meaningful failing-before/passing-after
+locale cases. A Live-only Chat now labels the existing picker **Data sources / No Data sources**
+(with German equivalents); a mixed Chat retains its selected Data grounding, and clearing that
+selection does not disconnect Jira. The unchanged unbound labels remain covered. The three owning
+suites (`ChatWindow.test.tsx`, `ChatWindow.a11y.test.tsx`, `JiraChatConnection.test.tsx`) pass
+**177/177**; the UI typecheck, scoped normal ESLint, Prettier and whitespace checks pass. This last
+copy change is included in the fresh production UI build used by the passing canonical updater
+evidence regeneration below.
+
+Three existing operator documents now match the implemented path: the connector guide describes
+Live-Pod creation/ports, selected and effective modes, read grants, exact write approvals, field
+limits, mixed citation attribution and lifecycle; ADR-0128 records acknowledgement before body
+consumption and the separate durable remote outcome; the troubleshooting runbook removes unsafe
+write-retry advice for timeouts and 429/5xx responses. False Cloud-only, unchanged-generation
+rotation and unrestricted Chat-ACL claims were corrected in place. The ADR index and scoped
+Markdown formatting checks pass. These corrections do not close an acceptance criterion or imply
+that the remaining live/final gate matrix has passed.
+
+Direct Data-surface compatibility proof now uses a verified, custody-owned Jira Live Pod and an
+independent real Data capsule through the public BFF. Live identity receives 404 on capsule read,
+index, reindex and source connection, and mixed Live/Data set composition fails without creating a
+partial set. The Data control still reads, composes, and reaches its proper empty-source 409 indexing
+response. No Jira calls, embedding requests, fabricated capsules or indexing jobs are created by the
+refused requests. The complete credential-route and Data-handler suites pass 227/227. Two pre-existing
+unrelated-Pod invariance assertions now compare a complete stored-before snapshot with stored-after,
+because server-projected effective-mode fields intentionally are not persisted. Scoped lint,
+no-emit TypeScript, formatting and whitespace checks pass. There is no capsule-export HTTP route in
+the mounted server inventory; this proof does not invent an export endpoint or claim a new Data
+export capability. A semantic Hub regression confirms real Verify/Rename/Add-to-workspace controls
+while no index, reindex, sync, export or fabricated capsule/storage state appears; the two owning
+Live/Cloud card suites pass 12/12. The remaining complete synced-Jira regression is a separate
+acceptance obligation.
+
+The design-system fidelity matrix now names the actual Hub/Chat owners and their implemented states,
+with pending visual acceptance retained. The update-UI source-digest check correctly detects stale
+shared API/catalog evidence. One canonical producer run was interrupted before its final evidence
+case because its build overlapped the reserved live-API qualification slot; its 8 completed updater
+cases are not counted as accepted regeneration. The subsequent complete canonical run passes all
+9 cases (49.1 seconds), including the real-BFF outage journey. Its unchanged freshness gate and
+23 focused updater/editor evidence contract tests pass. All 17 artifacts were produced through the
+original browser harness; 3 PNGs and the 3 provenance records differ, with 25 actual source digests
+and 4 harness digests verified. Changed renders were inspected. This is updater evidence, not Jira
+visual acceptance. The macOS editor bundle measurement meets B1/B2/B3 budgets, but `check:editor-release-evidence` fails its
+committed fingerprint comparison. Existing repository guidance requires a Linux build/check for this
+platform-sensitive record; no committed fingerprint was replaced by macOS measurements.
+
+### Incremental qualification — retained consent and controlled empty-evidence answers
+
+Epic #4081 / #4083 / #4084 / #4086 / #4087 / #4091: granted read consent now persists through the existing bounded private UiStore/registry, with exact-entry state transitions before publication. Later turns still require their own current authority, actor, binding and credential generations, expiry and budgets; an old authority is never restored. Pending decisions are revoked on disposal. Owner, route, migration and actual Gateway restart/next-turn coverage totals 358 distinct tests, including the separately rerun 109-case composition suite after correcting its stale tool-count fixture. Read-only public-history recovery for a crash between consent commit and transcript publication is still being completed separately.
+
+The auditor correctly identified that any settled tool result was too broad a permission for an empty-Data answer. A true failing public-path test reproduced model fabrication after denied consent. Only a successful non-null sanitized observation appended by this exact turn now permits the answer; denied/failed/unavailable and unknown/unconfirmed mutations use the existing abstention, while their structured cards remain available. Successful empty lists remain usable observations.
+
+All nine operations in the finite live catalog read group passed. Creation then exposed another real Jira detail: the endpoint-selected issue type advertises no editable operations. Before dispatch, the old field validator rejected it; remote project digest/count and the unique creation marker independently prove zero writes. The correction treats only canonical endpoint-selected project/issue-type values as create context, rejects caller overrides, preserves ordinary field operations and still checks allowed values. The new case failed before repair; 87 targeted metadata/mutation cases, root TypeScript and scoped lint pass afterward. The full buffered/streamed 14-operation acceptance groups remain pending until complete receipts exist.
+
+The new blocking per-PR browser lane passed all three finite cases against the assembled product: read consent, exact approved mutation, claimed history, forged approval digest, revocation/cancellation, and actionable unverified-model refusal. It uses the actual BFF, gateway transport, catalog, MCP and a deterministic HTTPS Jira fixture; it is distinct from the real-Jira/model live lane. There were 509 passing workflow/wiring tests and no weakened gate classification. The complete owned lane command will run again on final artifacts.

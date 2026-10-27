@@ -60,14 +60,81 @@ function fixture(): {
       ),
   };
 }
-it.each(["legacy", "current"])(
+it.each(["project", "issuetype"])("rejects a caller routing override in fields.%s", async (id) => {
+  const f = fixture();
+  expect(
+    await f.run("jira.create", {
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: "Synthetic", customfield_10000: "Required", [id]: { id: "10002" } },
+    }),
+  ).toEqual({ ok: false, reason: "field-validation" });
+  expect(f.http).not.toHaveBeenCalled();
+});
+
+it.each(["summary", "customfield_10000"])(
+  "does not widen an immutable ordinary field %s",
+  async (id) => {
+    const f = fixture();
+    f.http.mockResolvedValueOnce(
+      response({
+        values: FIELDS.map((value) =>
+          value.fieldId === id ? { ...value, operations: [] } : value,
+        ),
+        startAt: 0,
+        maxResults: 100,
+        isLast: true,
+        total: FIELDS.length,
+      }),
+    );
+    expect(
+      await f.run("jira.create", {
+        projectId: "10000",
+        issueTypeId: "10001",
+        fields: { summary: "Synthetic", customfield_10000: "Required" },
+      }),
+    ).toEqual({ ok: false, reason: "field-validation" });
+    expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET"]);
+  },
+);
+
+it("keeps selected routing references inside current metadata allowed values", async () => {
+  const f = fixture();
+  f.http.mockResolvedValueOnce(
+    response({
+      values: FIELDS.map((value) =>
+        value.fieldId === "issuetype"
+          ? { ...value, operations: [], allowedValues: [{ id: "10002", name: "Other" }] }
+          : value,
+      ),
+      startAt: 0,
+      maxResults: 100,
+      isLast: true,
+      total: FIELDS.length,
+    }),
+  );
+  expect(
+    await f.run("jira.create", {
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: "Synthetic", customfield_10000: "Required" },
+    }),
+  ).toEqual({ ok: false, reason: "field-validation" });
+  expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET"]);
+});
+it.each(["legacy", "current", "immutable-current"])(
   "creates through %s paged metadata and numeric routing identities",
   async (format) => {
     const f = fixture();
-    if (format === "current")
+    if (format !== "legacy")
       f.http.mockResolvedValueOnce(
         response({
-          values: FIELDS,
+          values:
+            format === "immutable-current"
+              ? FIELDS.map((value) =>
+                  value.fieldId === "issuetype" ? { ...value, operations: [] } : value,
+                )
+              : FIELDS,
           startAt: 0,
           maxResults: 100,
           isLast: true,

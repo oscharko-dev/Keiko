@@ -46,6 +46,7 @@ import {
   errorRecord,
   isSqliteCorruptionError,
 } from "@oscharko-dev/keiko-security/sqlite-corruption";
+import { createChatReadGrantStore } from "./chatToolReadGrants.js";
 import type {
   Chat,
   ChatMessage,
@@ -727,6 +728,7 @@ function createMessageBatch(
 function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore {
   const stagedTurnAssistants: StagedTurnAssistants = new Map();
   const store: UiStore = {
+    chatToolReadGrants: createChatReadGrantStore(db),
     chatToolMutations: createChatToolMutationStore(db, options.now),
     markdownSkills: createMarkdownSkillStore(db, options.now),
     browserApprovals: createBrowserApprovalStore(db),

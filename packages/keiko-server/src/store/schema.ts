@@ -10,7 +10,7 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 50;
+export const SCHEMA_VERSION = 51;
 
 interface Migration {
   readonly version: number;
@@ -1759,6 +1759,15 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE TRIGGER chat_tool_transcript_revision AFTER UPDATE OF tool_transcript_json ON chat_messages
       WHEN OLD.tool_transcript_json IS NOT NEW.tool_transcript_json
       BEGIN UPDATE chats SET history_revision = history_revision + 1 WHERE id = OLD.chat_id; END;`,
+  },
+  {
+    version: 51,
+    sql: `CREATE TABLE chat_tool_read_grants (
+      grant_id TEXT PRIMARY KEY,
+      chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+      entry_json TEXT NOT NULL CHECK (length(entry_json) BETWEEN 1 AND 8192)
+    ) STRICT;
+    CREATE INDEX idx_chat_tool_read_grants_chat ON chat_tool_read_grants(chat_id);`,
   },
 ];
 

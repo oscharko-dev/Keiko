@@ -22,9 +22,31 @@ export interface RetainedChatReadGrant {
   readonly entry: ChatReadGrantEntry;
   readonly correlationId: string;
 }
+/** Private persistence of the existing consent owner; never an executable authority. */
+export interface ChatReadGrantStore {
+  readonly list: () => readonly ChatReadGrantEntry[];
+  readonly save: (entry: ChatReadGrantEntry, previous?: ChatReadGrantEntry) => boolean;
+  readonly remove: (grantId: string) => void;
+}
 export type ChatReadGrantResult =
   | { readonly ok: true; readonly grant: ChatToolReadGrant }
   | { readonly ok: false; readonly reason: "invalid" };
+
+export function parseChatReadGrantEntry(value: unknown): ChatReadGrantEntry | undefined {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Object.keys(value).length !== 2 ||
+    !("grant" in value) ||
+    !("authority" in value)
+  )
+    return undefined;
+  const parsed = validateChatToolReadGrant(value.grant);
+  if (!parsed.ok || !isEditorAgentGovernedAuthorityReference(value.authority)) return undefined;
+  const authority = value.authority;
+  if (!sameReadGrantAuthority({ authority }, authority)) return undefined;
+  return { grant: parsed.value, authority };
+}
 
 export function validReadGrantRequest(
   entry: ChatReadGrantEntry,

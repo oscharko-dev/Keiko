@@ -58,6 +58,17 @@ function rotated(): AtlassianConnectorMetadata {
   };
 }
 describe("Jira Pod lifecycle in the existing Hub", () => {
+  it("exposes Live actions without Data indexing, sync, export or invented storage state", async () => {
+    render(<AtlassianConnectorsPanel client={client()} jiraLive />);
+    const card = await screen.findByTestId("acx-connector");
+    expect(within(card).getByRole("button", { name: "Verify connection" })).toBeVisible();
+    expect(within(card).getByRole("button", { name: "Rename Pod" })).toBeVisible();
+    expect(within(card).getByRole("button", { name: "Add to workspace" })).toBeVisible();
+    expect(
+      within(card).queryByRole("button", { name: /\b(?:index|reindex|sync|export|capsule)\b/iu }),
+    ).not.toBeInTheDocument();
+    expect(card).not.toHaveTextContent(/\b(?:storage|indexed|vectors?|chunks?|capsules?)\b/iu);
+  });
   it("uses the canonical Pod card as the sole verification owner after Jira creation", async () => {
     const api = client({
       listConnectors: vi.fn().mockResolvedValueOnce([]).mockResolvedValue([LIVE]),

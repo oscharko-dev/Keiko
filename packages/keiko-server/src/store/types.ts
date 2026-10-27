@@ -1,5 +1,6 @@
 import type { ChatToolTranscriptUpdate } from "./chatToolTranscript.js";
 import type { ChatToolMutationStore } from "./chatToolMutationTypes.js";
+import type { ChatReadGrantStore } from "../atlassian/chatReadGrantState.js";
 // ADR-0013 D4 — UiStore port and entity types. The port is the seam for testing; the concrete
 // `createNodeUiStore` adapter and the `createInMemoryUiStore` test adapter both implement it.
 //
@@ -124,6 +125,7 @@ export type ChatTurnCompletion =
   | { readonly kind: "conflict" };
 
 export interface UiStore {
+  readonly chatToolReadGrants?: ChatReadGrantStore;
   readonly chatToolMutations?: ChatToolMutationStore;
   readonly markdownSkills: MarkdownSkillStore;
   readonly browserApprovals?: BrowserApprovalStore | undefined;

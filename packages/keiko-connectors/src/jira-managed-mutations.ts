@@ -95,6 +95,18 @@ async function statusMutation(
   if (!response.ok) return response;
   return response.status === 204 ? { ok: true } : MALFORMED;
 }
+function isCreateRoutingField(id: string): boolean {
+  return id === "project" || id === "issuetype";
+}
+function createContextFields(fields: readonly JiraFieldMetadata[]): readonly JiraFieldMetadata[] {
+  // Jira may mark the endpoint-selected issue type immutable. Only canonical routing
+  // values are inserted here; ordinary fields retain their advertised operations.
+  return fields.map((field) =>
+    isCreateRoutingField(field.id) && field.operations.length === 0
+      ? { ...field, operations: ["set"] }
+      : field,
+  );
+}
 async function createIssue(
   request: JiraMutationRequest,
   args: CatalogJsonObject,
@@ -108,10 +120,11 @@ async function createIssue(
     fields === undefined
   )
     return INVALID;
+  if (Object.keys(fields).some(isCreateRoutingField)) return INVALID;
   const metadata = await jiraCreateMutationMetadata(request, projectId, issueTypeId);
   if (!metadata.ok) return metadata;
   const validated = validateJiraFieldChanges(
-    metadata.fields,
+    createContextFields(metadata.fields),
     { ...fields, project: { id: projectId }, issuetype: { id: issueTypeId } },
     "create",
     "data-center",

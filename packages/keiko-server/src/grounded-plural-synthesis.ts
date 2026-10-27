@@ -181,7 +181,7 @@ export async function callGroundedSynthesisModel(
       tracker.remainingSynthesisCalls(),
     );
   });
-  return requireToolResult && !toolTurn.hasSettledExchange()
+  return requireToolResult && !toolTurn.hasUsableObservation()
     ? { ...result, content: connectedSearchNoEvidenceAnswer() }
     : result;
 }

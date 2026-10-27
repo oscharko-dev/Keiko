@@ -9,6 +9,33 @@ Prerequisites: Docker Compose, the repository’s supported Node version, OpenSS
 and built workspace packages. State, passwords, PATs, license material and private
 keys stay outside the repository in a private session directory.
 
+## Finite normal-Chat catalog qualification
+
+After setup, identity/field fixtures and preflight, use the actual locally verified
+tool-calling model to exercise all nine reads and five writes through normal Chat:
+
+```sh
+node scripts/testing/jira-chat-lab/catalog-chat.mjs /absolute/private/session actual-model-id buffered
+node scripts/testing/jira-chat-lab/catalog-chat.mjs /absolute/private/session actual-model-id stream
+```
+
+Run groups serially with all other laboratory writers stopped. Each operation has
+its own authenticated Chat, first-read grant and exact write approval. The group
+creates one uniquely marked synthetic issue, edits it, assigns it, comments once,
+then sends the required transition-screen field and transition together. Independent
+Jira reads verify project counts, current field values, comment counts and change
+history. The comments case reads the hostile-comment fixture while requiring zero
+model-requested mutations. No API token or fixture content is printed.
+
+The driver fsyncs a private group/intent before dispatch and retains both that record
+and its product database on failure. A pending group prevents another run. Read its
+private state and reconcile Jira independently before archiving the pending record;
+never replay an uncertain mutation. A successful receipt is emitted only after all
+14 operations and the closing license check pass. An expired or incomplete group
+does not count as acceptance and must be qualified again as a complete new group
+after reconciliation. Raw REST fixture setup is not a substitute for this product
+path. The final acceptance record identifies the exact tested product artifact.
+
 ## Start an isolated session
 
 The directory’s parent must already exist. Initialization refuses an existing directory.
