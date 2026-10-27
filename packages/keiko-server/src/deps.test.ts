@@ -1,3 +1,7 @@
+import {
+  chatAuthorityFixture,
+  CHAT_AUTHORITY_TEST_NOW,
+} from "./editor/chatAuthority.test-support.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -3770,4 +3774,68 @@ describe("production OpenCode tool profile (#3897)", () => {
     expect(productionOpenCodeToolProfile("linux")).toBe("direct");
     expect(productionOpenCodeToolProfile("win32")).toBe("direct");
   });
+});
+
+it("owns Chat authority per deps graph and clears only that graph on disposal (#4084)", async () => {
+  const first = buildUiHandlerDeps({
+    configPath: undefined,
+    evidenceDir: tmp("chat-authority-a-"),
+    env: {},
+    store: createInMemoryUiStore(),
+  });
+  const second = buildUiHandlerDeps({
+    configPath: undefined,
+    evidenceDir: tmp("chat-authority-b-"),
+    env: {},
+    store: createInMemoryUiStore(),
+  });
+  try {
+    expect(first.agentAuthorityRegistry).toBeDefined();
+    expect(first.agentAuthorityRegistry).not.toBe(second.agentAuthorityRegistry);
+    const firstRegistry = first.agentAuthorityRegistry;
+    const secondRegistry = second.agentAuthorityRegistry;
+    if (firstRegistry === undefined || secondRegistry === undefined)
+      throw new Error("Expected graph-owned registries");
+    const value = chatAuthorityFixture();
+    const registered = firstRegistry.registerChat(
+      value,
+      "autonomous-delivery",
+      CHAT_AUTHORITY_TEST_NOW,
+    );
+    if (!registered.ok) throw new Error("Expected graph-owned authority");
+    expect(
+      secondRegistry.resolveChat(
+        registered.authorityRef,
+        value.subject,
+        "autonomous-delivery",
+        CHAT_AUTHORITY_TEST_NOW,
+      ).ok,
+    ).toBe(false);
+    const other = secondRegistry.registerChat(
+      { ...value, runId: "graph-b-authority" },
+      "autonomous-delivery",
+      CHAT_AUTHORITY_TEST_NOW,
+    );
+    if (!other.ok) throw new Error("Expected independent authority");
+    await first.dispose?.();
+    expect(
+      firstRegistry.resolveChat(
+        registered.authorityRef,
+        value.subject,
+        "autonomous-delivery",
+        CHAT_AUTHORITY_TEST_NOW,
+      ).ok,
+    ).toBe(false);
+    expect(
+      secondRegistry.resolveChat(
+        other.authorityRef,
+        value.subject,
+        "autonomous-delivery",
+        CHAT_AUTHORITY_TEST_NOW,
+      ).ok,
+    ).toBe(true);
+  } finally {
+    await first.dispose?.();
+    await second.dispose?.();
+  }
 });

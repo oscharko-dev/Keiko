@@ -1,3 +1,4 @@
+import { chatAuthorityFixture as chatEnvelope } from "./chatAuthority.test-support.js";
 import { describe, expect, it } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -15,7 +16,6 @@ import {
 } from "../../../../tests/support/activity-log-proof.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type {
-  ChatToolAuthorityEnvelope,
   CodingWorkbenchAuthorityEnvelope,
   CodingWorkbenchRuntimeAuthorityEnvelope,
   EditorAgentAction,
@@ -787,42 +787,6 @@ describe("EditorAgentAuthorityRegistry.runtimePromptAllowanceExhausted (F9)", ()
     expect(registry.runtimePromptAllowanceExhausted(reference, 5_000, NOW)).toBe(false);
   });
 });
-
-function chatEnvelope(
-  overrides: Partial<ChatToolAuthorityEnvelope> = {},
-): ChatToolAuthorityEnvelope {
-  const {
-    schemaVersion,
-    runId,
-    requestedMode,
-    deploymentCeiling,
-    effectiveMode,
-    expiresAt,
-    approvalProofDigest,
-    budget,
-  } = envelope();
-  return {
-    schemaVersion,
-    kind: "chat-tool-authority",
-    runId,
-    requestedMode,
-    deploymentCeiling,
-    effectiveMode,
-    expiresAt,
-    approvalProofDigest,
-    subject: {
-      actorDigest: "c".repeat(64),
-      chatId: "chat-1",
-      podId: "d5f5681e-ce98-4c3c-b27e-51d707c9d018",
-      bindingGeneration: 2,
-      authenticationGeneration: 3,
-    },
-    actionClasses: ["connector-access", "network-egress"],
-    connectorScopes: ["issue-tracker.read", "issue-tracker.write"],
-    budget: { ...budget, maxPatchBytes: 0 },
-    ...overrides,
-  };
-}
 
 function registerChat(
   registry: EditorAgentAuthorityRegistry,

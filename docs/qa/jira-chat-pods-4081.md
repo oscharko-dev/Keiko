@@ -1439,3 +1439,25 @@ check pass; the generator resolves 611 proofs and 30 scenarios with no violation
 aggregate gates and product Chat/lifecycle integration remain pending. No AC is accepted by
 this checkpoint alone. Retained logs: `/tmp/keiko-4081-chat-authority-registry-*.log` and
 `/tmp/keiko-4081-chat-authority-own-facts-before.log`.
+
+### Graph-owned authority lifecycle checkpoint — #4084 AC3–AC5, #4085 AC4
+
+Production composition gives each server graph its own instance of the existing authority
+registry and clears it on disposal. Credential invalidation passes that same instance to the
+existing Pod/Chat lifecycle callback. Committed Chat mode/binding changes, closure and deletion
+revoke the affected Chat's authority. Unchanged mode selection and rejected stale PATCH requests
+do not revoke valid authority. This does not replace the still-pending current-state checks
+at actual Chat tool dispatch, grant/approval invalidation or the complete restart scenarios.
+
+Three regression cases fail before implementation: graph ownership/disposal, committed Chat
+changes and direct credential deletion across two shared-Pod Chats plus an unrelated Pod.
+After implementation, 387 tests pass across dependency composition, actual credential/Chat HTTP
+routes, existing store handlers and the authority registry. The shared fixture contains only
+ordinary Chat facts and uses the production mode resolver. Build and root typecheck pass;
+changed lint is green after simplifying the graph fixture's optional access. The registry dependency is declared once for composition input and output. The duplicate
+baseline is unchanged; no new groups or exemptions are admitted. Final aggregate gates and complete ordinary Chat execution remain
+pending; no AC is accepted by this checkpoint alone.
+
+The final focused registry rerun passes 48 tests and the regenerated operation catalog passes
+all 97 gate tests. Regeneration was repeated after the dependency interface extraction moved
+source positions; neither operation definitions nor the duplicate baseline were relaxed.

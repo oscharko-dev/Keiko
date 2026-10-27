@@ -1,3 +1,4 @@
+import { revokeChangedJiraChatAuthority } from "./atlassian/jiraPodLifecycle.js";
 import { readChatContextStatus, compactChatContext } from "./chat-context-status.js";
 import { logChatContextManagement } from "./chat-context-log.js";
 import {
@@ -1359,6 +1360,7 @@ function applyChatUpdate(
     ...jiraChatUpdateOptions(deps, safePatch, existing, correlationId),
     ...(correlationId === undefined ? {} : { correlationId }),
   });
+  revokeChangedJiraChatAuthority(deps, existing, chat, correlationId);
   recordAppliedChatUpdate(existing, chat, patch, correlationId);
   if (patchTouchesGroundingScope(safePatch) || safePatch.status !== undefined) {
     clearGroundedContextIndexesForConversation(id);
@@ -1412,6 +1414,7 @@ export async function handleDeleteChat(
         // leaves the chat intact, so the UI can retry rather than orphaning content-bearing blobs.
         deps.conversationAttachmentStore?.deleteForChat(projectPath, id);
         deps.store.deleteChat(id);
+        deps.agentAuthorityRegistry?.revokeChatAuthorities(id, ctx.correlationId);
         clearGroundedContextIndexesForConversation(id);
         clearGroundedTurnsForConversation(id);
         return { status: 204, body: null };

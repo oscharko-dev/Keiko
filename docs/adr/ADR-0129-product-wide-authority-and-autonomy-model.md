@@ -182,6 +182,13 @@ revocation leaves other Chats and Coding records untouched. Registered
 counts on the existing Activity Log. Product entrypoints still have to establish human
 acceptance and current live facts before calling this private registry.
 
+Production Chat instances of this owner belong to the composed server dependency graph;
+there is no process-singleton fallback for Chat. Graph disposal clears its authority without
+touching another graph. Committed Jira binding/mode changes, Chat closure/deletion and the
+credential owner's invalidation callback revoke affected Chat authorities. A preview, stale
+update conflict or unchanged mode does not revoke them. Current-state checking at dispatch
+remains mandatory in addition to this lifecycle invalidation.
+
 ### D6 — Forward rule for decision records
 
 New ADRs and epics for autonomy-capable surfaces must cite this record and document their

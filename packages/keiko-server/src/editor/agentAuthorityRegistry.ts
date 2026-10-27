@@ -685,7 +685,12 @@ export class EditorAgentAuthorityRegistry {
       );
   }
 
-  public reset(): void {
+  public reset(correlationId?: string): void {
+    const chatIds = new Set<string>();
+    for (const record of this.records.values()) {
+      if (record.kind === "chat" && !record.revoked) chatIds.add(record.envelope.subject.chatId);
+    }
+    for (const chatId of chatIds) this.revokeChatAuthorities(chatId, correlationId);
     this.records.clear();
   }
 

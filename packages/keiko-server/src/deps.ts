@@ -1,3 +1,4 @@
+import { EditorAgentAuthorityRegistry } from "./editor/agentAuthorityRegistry.js";
 import { createNativeHistoryCapture } from "./coding-runtime/codingRuntimeHistory.js";
 import {
   createStateCodingSessionContinuity,
@@ -750,7 +751,12 @@ export type GatewayModelDiscoveryOutput = readonly string[] | GatewayDiscoveredM
 export type ContextProfileResolver = (modelId: string) => ContextProfile;
 export type CodingSidecarGatewayModelSourceResolver = () => CodingWorkbenchModelSource;
 
-export interface UiHandlerDeps {
+// Shared by composition input and its assembled output; the instance belongs to one server graph.
+interface AgentAuthorityRegistryDependency {
+  readonly agentAuthorityRegistry?: EditorAgentAuthorityRegistry | undefined;
+}
+
+export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   /** Server-only, request-scoped revalidation of the paired session using a private skill. */
   readonly markdownSkillAuthority?: (() => boolean) | undefined;
   // The resolved gateway config, or undefined when no config file was provided / it failed to load.
@@ -1241,7 +1247,7 @@ export interface UiHandlerDeps {
     ((request: RealtimeNegotiationRequest) => Promise<RealtimeNegotiationOutcome>) | undefined;
 }
 
-export interface BuildHandlerDepsOptions {
+export interface BuildHandlerDepsOptions extends AgentAuthorityRegistryDependency {
   /** Server-composed upstream seam shared by preview, provisioning and runtime intake. */
   readonly codingContextGitHubPort?: GitHubCodeContextApiPort | undefined;
   // Path to a gateway config file (`keiko ui --config`); undefined → no config inspector data.
@@ -4528,14 +4534,18 @@ function autonomousDeliveryFields(
 // share approvals, sync jobs, or activity records (PR #3289 review; see deps.test.ts's isolation
 // coverage). The resolvers fall back to the module singleton only for a `UiHandlerDeps`-shaped
 // value that skips this factory (e.g. a hand-rolled test double).
-function atlassianConnectorRegistryFields(
-  options: BuildHandlerDepsOptions,
-): Pick<UiHandlerDeps, "atlassianActionApprovalRegistry" | "atlassianSyncJobRegistry"> {
+function atlassianConnectorRegistryFields(options: BuildHandlerDepsOptions): Pick<
+  UiHandlerDeps,
+  "atlassianActionApprovalRegistry" | "atlassianSyncJobRegistry"
+> & {
+  readonly agentAuthorityRegistry: EditorAgentAuthorityRegistry;
+} {
   const approvalRegistry =
     options.atlassianActionApprovalRegistry ?? new AtlassianActionApprovalRegistry();
   const syncRegistry = options.atlassianSyncJobRegistry ?? new AtlassianSyncJobRegistry();
   return {
     atlassianActionApprovalRegistry: approvalRegistry,
+    agentAuthorityRegistry: options.agentAuthorityRegistry ?? new EditorAgentAuthorityRegistry(),
     atlassianSyncJobRegistry: syncRegistry,
   };
 }
@@ -4545,11 +4555,18 @@ function atlassianConnectorRegistryFields(
 // outbound request from the live runtime config (first-run onboarding updates are honored).
 function atlassianConnectorCredentialFields(
   args: UiHandlerDepsAssemblyArgs,
+  agentAuthorityRegistry: EditorAgentAuthorityRegistry,
 ): Pick<UiHandlerDeps, "atlassianConnectorCredentials"> {
   return {
     atlassianConnectorCredentials: buildAtlassianConnectorCredentialDeps({
       onLivePodInvalidated: (podId, generation, correlationId) => {
-        invalidateJiraPodChats(args.bundle.uiStore, podId, generation, correlationId);
+        invalidateJiraPodChats(
+          args.bundle.uiStore,
+          podId,
+          generation,
+          correlationId,
+          agentAuthorityRegistry,
+        );
       },
       networkConfig: () => args.runtimeConfig.current()?.atlassian,
       configPath: args.runtimeConfig.storagePath,
@@ -4901,7 +4918,7 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   const deps: UiHandlerDeps = {
     ...buildBaseUiHandlerDeps(args),
     ...buildRuntimeUiHandlerDeps(args, services),
-    ...buildIntegrationUiHandlerDeps(args),
+    ...buildIntegrationUiHandlerDeps(args, atlassianRegistries.agentAuthorityRegistry),
     ...buildOptionalUiHandlerDeps(args, services),
     ...atlassianRegistries,
     serverPrincipal: serverOperatorPrincipal(args.options),
@@ -5545,8 +5562,11 @@ type IntegrationUiHandlerDeps = ReturnType<typeof autonomousDeliveryFields> &
     | "consolidationJobs"
   >;
 
-function buildIntegrationUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): IntegrationUiHandlerDeps {
-  const atlassian = atlassianConnectorCredentialFields(args);
+function buildIntegrationUiHandlerDeps(
+  args: UiHandlerDepsAssemblyArgs,
+  agentAuthorityRegistry: EditorAgentAuthorityRegistry,
+): IntegrationUiHandlerDeps {
+  const atlassian = atlassianConnectorCredentialFields(args, agentAuthorityRegistry);
   return {
     ...autonomousDeliveryFields(args.options),
     ...atlassian,
@@ -5747,6 +5767,7 @@ async function disposeRuntimeServices(
     // away, so nothing on this graph outlives it as observable state on the NEXT graph.
     (): void => {
       atlassianRegistries.atlassianActionApprovalRegistry?.reset();
+      atlassianRegistries.agentAuthorityRegistry.reset(correlationId);
     },
     (): void => {
       atlassianRegistries.atlassianSyncJobRegistry?.reset();
