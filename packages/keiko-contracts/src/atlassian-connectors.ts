@@ -32,6 +32,9 @@ import {
   stripUnsafeFormatChars,
 } from "./text-safety.js";
 
+import { JIRA_MANAGED_READ_TOOLS, type JiraManagedReadToolName } from "./jira-tool-fields.js";
+import type { JiraMutationOperation } from "./jira-tool-execution.js";
+
 // ─── Schema version ───────────────────────────────────────────────────────────
 // Pinned to "1". A breaking change introduces a NEW literal rather than mutating "1", the same
 // evolution rule as `CODING_WORKBENCH_SCHEMA_VERSION` and the other audit surfaces.
@@ -496,6 +499,8 @@ export type AtlassianSyncJobState =
 
 // ─── Governed action vocabulary and effect-class table (ADR-0128 D4) ──────────
 export type AtlassianConnectorActionType =
+  | JiraManagedReadToolName
+  | "assign-issue"
   | "sync-space"
   | "sync-project"
   | "search-issues-live"
@@ -519,7 +524,32 @@ export const ATLASSIAN_CONNECTOR_ACTION_TYPES: readonly AtlassianConnectorAction
     "create-page",
     "update-page",
     "add-page-comment",
+    ...JIRA_MANAGED_READ_TOOLS,
+    "assign-issue",
   ] as const satisfies readonly AtlassianConnectorActionType[]);
+
+/** One mapping from canonical tools to the existing connector policy vocabulary. */
+export const JIRA_MANAGED_ACTION_TYPES: Readonly<
+  Record<JiraManagedReadToolName | JiraMutationOperation, AtlassianConnectorActionType>
+> = Object.freeze({
+  ...(Object.fromEntries(JIRA_MANAGED_READ_TOOLS.map((name) => [name, name])) as Record<
+    JiraManagedReadToolName,
+    JiraManagedReadToolName
+  >),
+  "jira.create": "create-issue",
+  "jira.edit": "update-issue-fields",
+  "jira.assign": "assign-issue",
+  "jira.comment": "add-issue-comment",
+  "jira.transition": "transition-issue",
+});
+function jiraReadActionValues<Value extends string>(
+  value: Value,
+): Record<JiraManagedReadToolName, Value> {
+  return Object.fromEntries(JIRA_MANAGED_READ_TOOLS.map((name) => [name, value])) as Record<
+    JiraManagedReadToolName,
+    Value
+  >;
+}
 
 // The D4 "Action class" column, verbatim. `connector-access` is the shared
 // `CodingWorkbenchActionClass` that admits connector operations into the Authority Envelope;
@@ -537,6 +567,8 @@ export const ATLASSIAN_CONNECTOR_ACTION_CLASSES: readonly AtlassianConnectorActi
 export const ATLASSIAN_CONNECTOR_ACTION_CLASS: Readonly<
   Record<AtlassianConnectorActionType, AtlassianConnectorActionClass>
 > = Object.freeze({
+  ...jiraReadActionValues("connector-access"),
+  "assign-issue": "connector-write",
   "sync-space": "connector-access",
   "sync-project": "connector-access",
   "search-issues-live": "connector-access",
@@ -552,6 +584,8 @@ export const ATLASSIAN_CONNECTOR_ACTION_CLASS: Readonly<
 export const ATLASSIAN_CONNECTOR_ACTION_PROVIDER: Readonly<
   Record<AtlassianConnectorActionType, AtlassianConnectorProvider>
 > = Object.freeze({
+  ...jiraReadActionValues("jira"),
+  "assign-issue": "jira",
   "sync-space": "confluence",
   "sync-project": "jira",
   "search-issues-live": "jira",
@@ -567,6 +601,8 @@ export const ATLASSIAN_CONNECTOR_ACTION_PROVIDER: Readonly<
 export const ATLASSIAN_CONNECTOR_ACTION_REQUIRED_SCOPE: Readonly<
   Record<AtlassianConnectorActionType, CodingWorkbenchConnectorScope>
 > = Object.freeze({
+  ...jiraReadActionValues("issue-tracker.read"),
+  "assign-issue": "issue-tracker.write",
   "sync-space": "knowledge-base.read",
   "sync-project": "issue-tracker.read",
   "search-issues-live": "issue-tracker.read",
@@ -585,6 +621,8 @@ export const ATLASSIAN_CONNECTOR_ACTION_REQUIRED_SCOPE: Readonly<
 export const ATLASSIAN_CONNECTOR_ACTION_APPROVAL_RISK: Readonly<
   Record<AtlassianConnectorActionType, CodingWorkbenchApprovalRisk>
 > = Object.freeze({
+  ...jiraReadActionValues("low"),
+  "assign-issue": "medium",
   "sync-space": "low",
   "sync-project": "low",
   "search-issues-live": "low",

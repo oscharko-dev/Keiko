@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "25fb9ec4b0cff52afcf62c5d755195c872bafb4d73b39d1c670faed80c26e6d0",
+    "catalogDigest": "a924cabd862c8c35161af7610efb7776cd5023f656f706c4b11a4cfd026a3a90",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -896,7 +896,17 @@
               "add-issue-comment",
               "create-page",
               "update-page",
-              "add-page-comment"
+              "add-page-comment",
+              "jira.projects",
+              "jira.issue-types",
+              "jira.create-fields",
+              "jira.edit-fields",
+              "jira.search",
+              "jira.issue",
+              "jira.comments",
+              "jira.transitions",
+              "jira.assignable-users",
+              "assign-issue"
             ]
           },
           "disposition": {
@@ -950,7 +960,7 @@
         "proofIds": ["atlassian.action.outcome.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/atlassian/actionOutcomeActivity.ts:17",
-        "emitterSites": ["packages/keiko-server/src/atlassian/actionOutcomeActivity.ts:133"]
+        "emitterSites": ["packages/keiko-server/src/atlassian/actionOutcomeActivity.ts:143"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -101275,7 +101285,7 @@
     {
       "op": "atlassian.action.log-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/actionOutcomeActivity.ts:158",
+      "site": "packages/keiko-server/src/atlassian/actionOutcomeActivity.ts:168",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

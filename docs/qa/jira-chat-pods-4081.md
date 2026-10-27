@@ -1153,3 +1153,24 @@ test are rerun after their final lint/type repairs. Final package, architecture/
 full-quality qualification remain deferred to the agreed overall acceptance.
 
 The final 64-test provider/SDK/non-Coding rerun, changed formatting, ADR index and staged-diff semantic gate pass.
+
+## Shared Jira policy vocabulary — #4083 AC3/AC6 / #4084 AC2
+
+The nine managed read actions and `assign-issue` now belong to the existing closed connector action
+vocabulary. A single mapping connects the fourteen canonical Jira tools to those policy actions.
+Reads require `issue-tracker.read` with low risk; assignment requires `issue-tracker.write` with
+medium risk. Existing action-class, scope and strictest-mode decisions remain authoritative.
+No Chat read grant or action approval is implied by adding these vocabulary entries.
+
+Ten recognition regressions failed before implementation. The **315-test contract/validation/
+policy/activity selection** passes: its expanded integration matrix drives the old HTTP routes and
+new managed admission through the real authority registry across all three modes, including absent
+scopes. The existing route compatibility cases remain. Every new action also passes the registered
+formatter and Activity Log reader proof. All **97 registry tests** pass after regeneration: 608
+proofs, 30 scenarios, no violations. The static registry requires explicit closed field literals;
+the outcome definition retains that representation and its typed producer and tests prevent drift.
+
+The corresponding English/German labels pass **11 UI tests**, UI typecheck and full UI lint.
+Package build, root typecheck, changed backend lint/format and ADR index pass. The optional message
+catalog changes require final UI-evidence regeneration; full UI coverage, aggregate Activity Log,
+architecture/performance and remaining final gates are not claimed by these focused results.

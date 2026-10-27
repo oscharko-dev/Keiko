@@ -428,6 +428,13 @@ uniformly: reads name the `CodingWorkbenchActionClass`, writes name the
 | 12–14 | `jira.issue-types`, `jira.create-fields`, `jira.edit-fields` | Jira | `connector-access` | `issue-tracker.read` | low | review-required | review-required | allowed |
 | 15–17 | `jira.search`, `jira.issue`, `jira.comments` | Jira | `connector-access` | `issue-tracker.read` | low | review-required | review-required | allowed |
 | 18–19 | `jira.transitions`, `jira.assignable-users` | Jira | `connector-access` | `issue-tracker.read` | low | review-required | review-required | allowed |
+| 20 | `assign-issue` | Jira | `connector-write` | `issue-tracker.write` | medium | review-required | review-required | allowed |
+
+The shared action vocabulary and registered outcome event include all twenty rows. The managed
+tools map to this same table: `jira.create` → `create-issue`, `jira.edit` → `update-issue-fields`,
+`jira.assign` → `assign-issue`, `jira.comment` → `add-issue-comment`, and `jira.transition` →
+`transition-issue`. The nine read tools retain their names. Assignment has the same medium risk
+as a bounded field edit; no separate policy subsystem or broader connector scope is introduced.
 
 **Risk-tier rationale (fixed here so #2244 does not have to invent it):** reads are uniformly `low`
 — every read is non-mutating, trivially reversible (re-run the query), and bounded by D5/D3.
