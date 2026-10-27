@@ -315,14 +315,22 @@ describe("CodingWorkbenchTimeline", () => {
         questions={IDLE_QUESTIONS}
       />,
     );
-    const cards = [...container.querySelectorAll<HTMLDetailsElement>('[data-tool-state="failed"]')];
-    expect(cards).toHaveLength(2);
-    const [execute, shell] = cards;
+    const failed = [
+      ...container.querySelectorAll<HTMLDetailsElement>('[data-tool-state="failed"]'),
+    ];
+    expect(failed).toHaveLength(1);
+    const [execute] = failed;
     expect(execute?.open).toBe(true);
+    expect(execute).toHaveTextContent("Failed");
     expect(execute).toHaveTextContent("The tool reported an error to the model.");
     expect(execute).not.toHaveTextContent("exited with code");
+    // A command that ran and returned non-zero shows its exit code, as OpenCode reports it, not a
+    // red "Failed"; it still opens to the reason (#4098 acceptance).
+    const shell = container.querySelector<HTMLDetailsElement>('[data-tool-state="exited"]');
     expect(shell?.open).toBe(true);
+    expect(shell?.querySelector('[data-state="exited"]')).toHaveTextContent("Exit code 1");
     expect(shell).toHaveTextContent("The command exited with code 1.");
+    expect(shell).not.toHaveTextContent("Failed");
     expect(shell).not.toHaveTextContent("reported an error");
   });
 
