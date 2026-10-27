@@ -101297,6 +101297,13 @@
       "package": "keiko-server"
     },
     {
+      "op": "atlassian.http-observation-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/atlassian/httpRequestLifecycle.ts:38",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
       "op": "atlassian.sync-job",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/atlassian/syncService.ts:783",
@@ -104855,6 +104862,7 @@
     "atlassian.connection.checked",
     "atlassian.credential.created",
     "atlassian.credential.rejected",
+    "atlassian.http-observation-failed",
     "atlassian.sync-job",
     "chat.compaction.evidence",
     "chat.compaction.facts.classified",

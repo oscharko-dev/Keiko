@@ -1000,3 +1000,20 @@ lint/format, ADR index, error observability and unchanged semantic checks pass. 
 HTTP lifecycle operations retain their body-free evidence; ADR-0038 describes the boundary.
 Connecting the Atlassian credential owner, durable journal and ordinary Chat authority to this seam
 remains pending. No AC is accepted by this transport checkpoint.
+
+## Atlassian final request boundary — #4082 AC2 / #4083 AC5 / #4084 AC3
+
+Both existing Atlassian ports now use final gateway preparation for credential resolution. A trusted
+synchronous admission callback sees a frozen request snapshot and runs before secret materialization;
+false, asynchronous or throwing callbacks stop the request. Credential and admission failures retain
+their original identity instead of becoming retryable network errors. POST and PUT select the
+single-attempt transport. Response observers run before body consumption, preserving the distinction
+between an observed status and a later body failure. Observer failure cancels the unread stream and
+emits the existing body-free diagnostic channel. ADR-0128 documents the composition boundary.
+
+The initial three regressions failed before implementation. All **60 port tests** pass, including
+held native DNS with subsequent revocation, immutable request identity, cancelled requests, custody
+errors, asynchronous callback rejection and response-stream cleanup. All **168 connector integration
+and HTTP helper tests** pass. Build, root typecheck, changed lint and error observability pass.
+This increment supplies the concrete transport hooks; durable journal/current-authority composition,
+managed Jira mutations, ordinary Chat and complete epic qualification remain pending. No AC is accepted.

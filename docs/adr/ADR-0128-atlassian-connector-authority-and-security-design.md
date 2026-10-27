@@ -204,6 +204,17 @@ connector descriptor returns only the non-secret projection (`id`, `provider`, `
 accepts the raw secret in the request body exactly once, calls `vault.set(authRef, secret)`, and
 discards the request-body value after that call returns.
 
+Both concrete HTTP ports materialize that header through the gateway's final preparation callback,
+after pinned DNS/body preparation and, when proxied, CONNECT/TLS. A server-owned synchronous
+admission callback runs before credential resolution against the immutable request snapshot. Only
+an explicit `true` admits; custody/admission exceptions retain their identity instead of becoming
+retriable network failures. POST and PUT use the gateway's single-attempt transport with configured
+CA trust from the first attempt. An optional synchronous response observer records the HTTP status
+before body consumption, so truncated or failed body reads cannot erase an observed acknowledgement.
+Observer failures release the unread body, emit a content-free server diagnostic and propagate.
+These callbacks do not themselves grant authority: the composing owner must supply the current
+binding, mode, approval, budget and durable mutation checks before exposing a write operation.
+
 **Deletion:** removing a connector calls `vault.delete(authRef)` and deletes the descriptor row in
 the same server-side operation; `LocalSecretVault.delete` is already atomic and crash-safe.
 

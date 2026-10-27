@@ -20,7 +20,6 @@
 import {
   ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES,
   AtlassianCredentialCustodyError,
-  atlassianAuthorizationHeaderValue,
   type AtlassianCredentialExecutionResolver,
   type AtlassianHttpBodyPort,
   type AtlassianHttpBodyRequest,
@@ -42,6 +41,10 @@ import {
 } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
+import {
+  atlassianHttpRequestLifecycle,
+  type AtlassianHttpLifecycleOptions,
+} from "./httpRequestLifecycle.js";
 
 // Hard per-request ceiling: the largest ADR-0128 D3 budget (bulk sync pagination). Requests ask
 // for less (the verify probe asks for 30 000 ms); a hostile or buggy caller can never widen it.
@@ -74,7 +77,7 @@ export function exceedsBodyByteCeiling(bytes: number, ceilingBytes: number): boo
   return !Number.isFinite(ceilingBytes) || bytes > ceilingBytes;
 }
 
-export interface CreateAtlassianHttpPortOptions {
+export interface CreateAtlassianHttpPortOptions extends AtlassianHttpLifecycleOptions {
   readonly privateTargets?: () => readonly AtlassianPrivateTarget[];
   readonly deniedLoopbackPorts?: () => readonly number[];
   readonly baseUrl: string;
@@ -227,28 +230,30 @@ export function createGatewayAtlassianHttpPort(
   options: CreateAtlassianHttpPortOptions,
 ): AtlassianHttpPort {
   const base = atlassianPortBaseUrl(options.baseUrl);
-  return async (request: AtlassianHttpRequest): Promise<AtlassianHttpResult> => {
+  return async (input: AtlassianHttpRequest): Promise<AtlassianHttpResult> => {
+    const request = Object.freeze({ ...input });
     const target = assertAllowlistedTarget(base, request.url);
     const egress = connectorEgressConfig(options);
     if (outboundTargetBlockedReason(target, egress) !== undefined) return { kind: "network-error" };
-    // Resolved immediately before the outbound call; never stored on the port instance.
-    const credential = options.credentials.resolveForExecution(options.authRef);
+    const lifecycle = atlassianHttpRequestLifecycle(
+      { ...options, correlationId: options.correlationId ?? UNKNOWN_CORRELATION_ID },
+      request,
+    );
     try {
       const response = await gatewayFetch(target.toString(), {
         method: request.method,
-        headers: {
-          authorization: atlassianAuthorizationHeaderValue(credential),
-          accept: "application/json",
-        },
+        prepareHeaders: lifecycle.prepareHeaders,
         signal: AbortSignal.timeout(boundedTimeoutMs(request.timeoutMs)),
         egress,
         log: processServerLogSink(),
         logContext: { correlationId: options.correlationId ?? UNKNOWN_CORRELATION_ID },
         ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
       });
+      await lifecycle.observe(response);
       await discardBody(response);
       return { kind: "response", status: response.status };
     } catch (error) {
+      lifecycle.rethrowFailure();
       return classifyTransportError(error);
     }
   };
@@ -334,21 +339,21 @@ export function createGatewayAtlassianHttpBodyPort(
   options: CreateAtlassianHttpPortOptions,
 ): AtlassianHttpBodyPort {
   const base = atlassianPortBaseUrl(options.baseUrl);
-  return async (request: AtlassianHttpBodyRequest): Promise<AtlassianHttpBodyResult> => {
+  return async (input: AtlassianHttpBodyRequest): Promise<AtlassianHttpBodyResult> => {
+    const request = Object.freeze({ ...input });
     const target = assertAllowlistedTarget(base, request.url);
     const egress = connectorEgressConfig(options);
     if (outboundTargetBlockedReason(target, egress) !== undefined) return { kind: "network-error" };
     assertValidRequestBody(request);
-    // Resolved immediately before the outbound call; never stored on the port instance.
-    const credential = options.credentials.resolveForExecution(options.authRef);
+    const lifecycle = atlassianHttpRequestLifecycle(
+      { ...options, correlationId: options.correlationId ?? UNKNOWN_CORRELATION_ID },
+      request,
+    );
     try {
       const response = await gatewayFetch(target.toString(), {
         method: request.method,
-        headers: {
-          authorization: atlassianAuthorizationHeaderValue(credential),
-          accept: "application/json",
-          ...(request.bodyJson === undefined ? {} : { "content-type": "application/json" }),
-        },
+        prepareHeaders: lifecycle.prepareHeaders,
+        singleAttempt: request.method !== "GET",
         ...(request.bodyJson === undefined ? {} : { body: request.bodyJson }),
         signal: composeBodyRequestSignal(request),
         egress,
@@ -356,6 +361,7 @@ export function createGatewayAtlassianHttpBodyPort(
         logContext: { correlationId: options.correlationId ?? UNKNOWN_CORRELATION_ID },
         ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
       });
+      await lifecycle.observe(response);
       const retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"), Date.now());
       const body = await readBodyBounded(response, request.maxBodyBytes);
       return {
@@ -367,6 +373,7 @@ export function createGatewayAtlassianHttpBodyPort(
         ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
       };
     } catch (error) {
+      lifecycle.rethrowFailure();
       return classifyTransportError(error);
     }
   };
