@@ -1262,7 +1262,11 @@ describe("GET /api/chats", () => {
       url(`/api/chats?projectPath=${encodeURIComponent(projDir)}&id=${oldest.id}`),
     );
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ chats: [oldest] });
+    expect(await res.json()).toEqual({
+      chats: [
+        { ...oldest, toolModeCeiling: "governed-assist", effectiveToolMode: "governed-assist" },
+      ],
+    });
     expect(listSpy).not.toHaveBeenCalled();
     listSpy.mockRestore();
   });
@@ -2893,6 +2897,25 @@ describe("chat scope precondition review regressions", () => {
 });
 
 describe("GET chats by ID review regressions", () => {
+  it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
+    "projects the actual %s ceiling without changing the retained mode selection",
+    (ceiling) => {
+      store.createProject(projDir);
+      const chat = store.createChat(projDir, "Selected mode", "m");
+      const selected = store.updateChat(chat.id, { toolMode: "autonomous-delivery" });
+      const result = handleListChats(
+        directRouteContext(`/api/chats?projectPath=${encodeURIComponent(projDir)}&id=${chat.id}`)
+          .ctx,
+        deps({ autonomousDeliveryDeploymentCeiling: ceiling }),
+      );
+      expect(result).toEqual({
+        status: 200,
+        body: { chats: [{ ...selected, toolModeCeiling: ceiling, effectiveToolMode: ceiling }] },
+      });
+      expect(store.listChats(projDir).find((item) => item.id === chat.id)).toEqual(selected);
+    },
+  );
+
   it.each(["id=", "id=known&limit=invalid", "id=known&limit=0", "id=known&limit=201"])(
     "validates all supplied query fields for %s",
     (query) => {
@@ -2924,7 +2947,14 @@ describe("GET chats by ID review regressions", () => {
       );
     expect(history.get(coding.id)).toBeDefined();
     expect(lookup(coding.id)).toEqual({ status: 200, body: { chats: [] } });
-    expect(lookup(ordinary.id)).toEqual({ status: 200, body: { chats: [ordinary] } });
+    expect(lookup(ordinary.id)).toEqual({
+      status: 200,
+      body: {
+        chats: [
+          { ...ordinary, toolModeCeiling: "governed-assist", effectiveToolMode: "governed-assist" },
+        ],
+      },
+    });
   });
 });
 

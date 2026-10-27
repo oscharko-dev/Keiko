@@ -4300,28 +4300,33 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   // Issue #152 Layer 3 — non-streaming fallback path (canStream=false or
   // StreamingUnavailableError pre-stream). Kept separate so sendUngrounded
   // stays within the 50-line function limit.
-  const watchBufferedConsent = useCallback((request: UngroundedSendRequest): (() => void) => {
-    const clientTurnId = request.clientTurnId;
-    return watchChatToolConsent(
-      request.chat,
-      request.project.path,
-      clientTurnId === undefined
-        ? undefined
-        : (): Promise<string> => canonicalTurnReferenceForClient(request.chat.id, clientTurnId),
-      request.signal,
-      (message) => {
-        if (isSupersededOrAborted(request.chat.id, request.signal)) return;
-        setState((previous) => ({
-          ...previous,
-          messages: replaceCanonicalTurnMessages(
-            previous.messages,
-            [request.optimisticId],
-            [message],
-          ),
-        }));
-      },
-    );
-  }, []);
+  const watchBufferedConsent = useCallback(
+    (
+      request: Pick<SendAttemptRequest, "chat" | "clientTurnId" | "signal" | "optimisticId">,
+    ): (() => void) => {
+      const clientTurnId = request.clientTurnId;
+      return watchChatToolConsent(
+        request.chat,
+        request.chat.projectPath,
+        clientTurnId === undefined
+          ? undefined
+          : (): Promise<string> => canonicalTurnReferenceForClient(request.chat.id, clientTurnId),
+        request.signal,
+        (message) => {
+          if (isSupersededOrAborted(request.chat.id, request.signal)) return;
+          setState((previous) => ({
+            ...previous,
+            messages: replaceCanonicalTurnMessages(
+              previous.messages,
+              [request.optimisticId],
+              [message],
+            ),
+          }));
+        },
+      );
+    },
+    [],
+  );
   const sendUngroundedBuffered = useCallback(
     async (request: UngroundedSendRequest): Promise<SendAttemptOutcome> => {
       const { chat, optimisticId, signal } = request;
@@ -4408,6 +4413,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       // Copilot PR #258 finding: clear the previous answer at the START of a new send so a
       // stale citation block doesn't briefly flash next to the new question.
       setLatestGrounded(undefined);
+      const stopConsentWatch = watchBufferedConsent({ chat, clientTurnId, signal, optimisticId });
       try {
         updateOwnedSendStatus(signal, "contacting");
         const result = await askGrounded(
@@ -4478,9 +4484,11 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         const failure = canonicalTurnInProgressFailure(error_);
         if (failure.canonicalTurnInProgress !== true) setError(errorMessage(error_));
         return failure;
+      } finally {
+        stopConsentWatch();
       }
     },
-    [canonicalVoiceProjectionRef, updateOwnedSendStatus],
+    [canonicalVoiceProjectionRef, updateOwnedSendStatus, watchBufferedConsent],
   );
 
   const executeSendAttempt = useCallback(

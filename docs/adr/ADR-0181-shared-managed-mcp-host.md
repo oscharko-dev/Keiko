@@ -122,6 +122,13 @@ reloaded history, compaction, and result card. Approval state reports consent on
 not imply a remote effect. A failed UI decision request requires an explicit state refresh;
 it never causes an automatic mutation or approval POST retry.
 
+When a Jira acknowledgement arrives after the Chat has already ended, message projection
+reads the existing durable turn journal and matches the original message, invocation,
+operation and exact arguments. It folds that later observation beside the unchanged
+catalog envelope, including after reopening the store or when no catalog result was
+saved. Current authority is not reacquired to display a historical effect. This read
+path neither dispatches nor permits retry; prepared active work remains pending.
+
 A failed pre-effect log write fails closed. A failed terminal write never changes an
 already observed execution outcome: it increments the existing process-wide Activity
 Log loss ledger, whose registered heartbeat/exit summary reports missing evidence.
@@ -139,6 +146,23 @@ remain owned by ADR-0137. Managed providers are declared by server composition a
 not add registry entries. Exposing them to OpenCode or external MCP clients and migrating
 other sources are outside this epic. Retrieval, citations and conversation budgets
 remain owned by their existing paths.
+
+Mixed Chat turns create that same accepted-turn authority before continuity, memory and
+retrieval preparation. Existing grounding owners assemble their evidence packs before
+productive Jira orchestration. Every gateway attempt retains its cumulative token and
+time charge. Only the exact, fully observed tool-call response releases its provisional
+synthesis slot; discarded, failed or ambiguous attempts retain theirs. The final answer
+and citation repair share the existing two-attempt synthesis ceiling. Jira results stay
+in the tool transcript and are attributed separately from connected-evidence citations.
+`chat.grounded-tool-round.completed` records that phase and remaining synthesis count
+without source content. Data-only preparation and synthesis keep their existing path.
+
+Grounded mixed responses use the existing buffered transport and canonical turn owner.
+The ordinary streaming endpoint returns `STREAMING_UNSUPPORTED` before admitting a mixed
+turn, and the client follows its existing buffered fallback. That fallback and any replay
+share the canonical identity; neither dispatches a second remote mutation. Pending read
+consent and exact write approvals remain visible through the existing canonical-row GET
+observer while the buffered grounded request is running.
 
 ## Verification
 

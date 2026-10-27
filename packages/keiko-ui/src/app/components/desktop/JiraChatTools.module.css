@@ -1,10 +1,10 @@
-.stack {
+.cmpStack {
   display: grid;
   gap: 8px;
   margin-block: 12px;
   min-width: 0;
 }
-.card {
+.cmpCard {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -16,15 +16,15 @@
   min-width: 0;
   overflow-wrap: anywhere;
 }
-.card p {
+.cmpCard p {
   margin: 0;
 }
-.actions {
+.cmpActions {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
 }
-.result {
+.cmpResult {
   max-height: 18rem;
   overflow: auto;
   white-space: pre-wrap;
@@ -32,7 +32,7 @@
   font-size: inherit;
 }
 
-.preview {
+.cmpPreview {
   width: 100%;
   resize: vertical;
   padding: 8px;
@@ -42,7 +42,7 @@
   color: inherit;
   font: inherit;
 }
-.preview:focus-visible {
+.cmpPreview:focus-visible {
   outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }

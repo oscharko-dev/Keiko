@@ -1,4 +1,33 @@
+import { EN_AUTONOMY_MODE_LABELS } from "@/lib/autonomy-mode-labels";
 export const OPTIONAL_WIDGET_EN_MESSAGES = {
+  ...EN_AUTONOMY_MODE_LABELS,
+  "atlassianConnectors.live.rename": "Rename Pod",
+  "atlassianConnectors.live.renameTitle": "Rename Jira Pod",
+  "atlassianConnectors.live.rotateTitle": "Replace Jira token",
+  "atlassianConnectors.live.replaceToken": "Replace token",
+  "atlassianConnectors.live.newToken": "New API token",
+  "atlassianConnectors.live.saveName": "Save name",
+  "atlassianConnectors.live.saveToken": "Save token",
+  "atlassianConnectors.live.saving": "Saving changes…",
+  "atlassianConnectors.live.rotateHint":
+    "The Pod and its Chat connections stay in place. Replacing the token stops current access and pending work. Verify the connection again and grant new Chat consent before continuing.",
+  "atlassianConnectors.live.operationFailed":
+    "The operation could not be confirmed. Refresh the Pod status before making another change.",
+  "atlassianConnectors.live.refresh": "Refresh status",
+  "atlassianConnectors.live.refreshRequired":
+    "The current connection status is unknown. Refresh it before using this Pod.",
+  "atlassianConnectors.live.verifyRequired": "Verify this connection before using it in Chat.",
+  "atlassianConnectors.live.remove": "Remove Pod",
+  "atlassianConnectors.live.keep": "Keep Pod",
+  "atlassianConnectors.live.removeConfirm":
+    "Remove this Jira Pod and its saved token? This disconnects all connected Chats and cancels their pending permissions.",
+  "atlassianConnectors.live.capabilities":
+    "Chat can search and read Jira issues and metadata, and create, edit, assign, comment on or change the status of issues. Jira permissions and Chat approvals govern each action.",
+  "atlassianConnectors.live.readCapabilities":
+    "Chat can search and read Jira issues and metadata after your consent. Access still depends on the Jira account permissions.",
+  "atlassianConnectors.live.patHint":
+    "Create a personal access token in your Jira profile. It is used only to save this connection and is never shown again.",
+
   "chat.jira.writeApproval.unavailable": "Action approval is currently unavailable",
   "chat.jira.writeApproval.title": "Review Jira action",
   "chat.jira.writeApproval.pending": "Waiting for your decision",
@@ -37,6 +66,13 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.noPod": "No Jira Pod",
   "chat.jira.podUnavailable": "Current Pod unavailable",
   "chat.jira.verifyRequired": "Verification required",
+  "chat.jira.addToWorkspace": "Add to workspace",
+  "chat.jira.workspaceHint":
+    "Drag this Jira Pod onto the workspace, or add it with this button. Connect its port to a Chat.",
+  "chat.jira.liveTools": "Live Jira tools",
+  "chat.jira.liveReady": "Verified Jira Pod",
+  "chat.jira.liveUnavailable": "Jira Pod unavailable; open Knowledge Pods to verify or reconnect.",
+  "chat.jira.effectiveMode": "Effective mode: {mode}",
   "chat.jira.modeLabel": "Chat autonomy mode",
   "chat.jira.modeHelp":
     "The first Jira read always requires consent. Deployment limits and the current Chat permissions continue to apply.",

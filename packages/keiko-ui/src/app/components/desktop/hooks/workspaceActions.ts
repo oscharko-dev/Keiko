@@ -36,7 +36,12 @@ import type {
   QualityIntelligenceImageSource,
   WorkspaceUiSelectionState,
 } from "@oscharko-dev/keiko-contracts";
-import type { ChatConnectedScope, ChatGitChangeScope, ChatLocalKnowledgeScope } from "@/lib/types";
+import type {
+  ChatConnectedScope,
+  ChatGitChangeScope,
+  ChatConnectorSelection,
+  ChatLocalKnowledgeScope,
+} from "@/lib/types";
 import {
   EDITOR_SIDEBAR_DEFAULT_WIDTH,
   EDITOR_SIDEBAR_MIN_WIDTH,
@@ -1057,7 +1062,7 @@ export function makeSnapActions({
   return { setSnap, commitSnap };
 }
 
-interface ConnectArgs {
+export interface ConnectArgs {
   readonly onConnectionOutcome?: ((outcome: ConnectionOutcome) => void) | undefined;
   readonly wsRef: RefObject<HTMLElement | null>;
   readonly viewRef: RefObject<View>;
@@ -1092,19 +1097,19 @@ interface ConnectArgs {
       ) => boolean | Promise<boolean>)
     | undefined;
   // Epic #189 Slice 3 M3 — invoked when a Connector↔Chat relationship edge is created/removed,
-  // with the selected ChatLocalKnowledgeScope from the connector window's cfg. The composition
+  // with the selected ChatConnectorSelection from the connector window's cfg. The composition
   // root (AppShell) appends/removes it from the active chat's localKnowledgeScopes.
   readonly onConnectorBind?:
     | ((
         chatWindowId: string,
-        scope: ChatLocalKnowledgeScope,
+        scope: ChatConnectorSelection,
         target?: ChatBindingTarget,
       ) => boolean | Promise<boolean>)
     | undefined;
   readonly onConnectorUnbind?:
     | ((
         chatWindowId: string,
-        scope: ChatLocalKnowledgeScope,
+        scope: ChatConnectorSelection,
         target?: ChatUnbindTarget,
       ) => boolean | Promise<boolean>)
     | undefined;
@@ -1139,7 +1144,7 @@ interface BindAcceptance {
 interface ConnectionBindingSelection {
   readonly boundScope: ChatConnectedScope | null;
   readonly chatWindowId: string | null;
-  readonly connectorScope: ChatLocalKnowledgeScope | null;
+  readonly connectorScope: ChatConnectorSelection | null;
   readonly gitChangeSelection: GitChangeBindSelection | null;
 }
 
@@ -1149,7 +1154,7 @@ interface ConnectionAttempt {
   readonly boundScope: ChatConnectedScope | null;
   readonly chatWindowId: string | null;
   readonly chatConversationIdAtBind: string | undefined;
-  readonly connectorScope: ChatLocalKnowledgeScope | null;
+  readonly connectorScope: ChatConnectorSelection | null;
   readonly gitChangeSelection: GitChangeBindSelection | null;
   readonly bindingTarget: ChatBindingTarget | undefined;
   readonly hadGitConnectionBeforeBind: boolean;
@@ -1158,7 +1163,7 @@ interface ConnectionAttempt {
 interface BindAcceptanceInput {
   readonly chatWindowId: string | null;
   readonly boundScope: ChatConnectedScope | null;
-  readonly connectorScope: ChatLocalKnowledgeScope | null;
+  readonly connectorScope: ChatConnectorSelection | null;
   readonly gitChangeSelection: GitChangeBindSelection | null;
   readonly onScopeBind: ConnectArgs["onScopeBind"];
   readonly onConnectorBind: ConnectArgs["onConnectorBind"];
@@ -1170,7 +1175,7 @@ interface ConnectionUnbindAcceptanceInput {
   readonly connectionId: string;
   readonly chatWindowId: string;
   readonly boundScope: ChatConnectedScope | null;
-  readonly connectorScope: ChatLocalKnowledgeScope | null;
+  readonly connectorScope: ChatConnectorSelection | null;
   readonly gitChangeRelationshipId: string | null;
   readonly target: ChatUnbindTarget | undefined;
   readonly onScopeUnbind: ConnectArgs["onScopeUnbind"];
@@ -1186,7 +1191,7 @@ interface ApplyConnectionInput {
   readonly chatWindowId: string | null;
   readonly chatConversationIdAtBind: string | undefined;
   readonly boundScope: ChatConnectedScope | null;
-  readonly connectorScope: ChatLocalKnowledgeScope | null;
+  readonly connectorScope: ChatConnectorSelection | null;
   readonly gitChangeSelection: GitChangeBindSelection | null;
 }
 
@@ -1296,11 +1301,12 @@ function resolveScopeBindAcceptance(
 
 function resolveConnectorBindAcceptance(
   chatWindowId: string | null,
-  scope: ChatLocalKnowledgeScope,
+  scope: ChatConnectorSelection,
   onConnectorBind: ConnectArgs["onConnectorBind"],
   target: ChatBindingTarget | undefined,
 ): Promise<BindAcceptance> | BindAcceptance {
-  if (chatWindowId === null) return { accepted: false };
+  if (chatWindowId === null || (scope.kind === "jira-live" && onConnectorBind === undefined))
+    return { accepted: false };
   return Promise.resolve(onConnectorBind?.(chatWindowId, scope, target)).then(
     booleanBindAcceptance,
   );
@@ -1388,11 +1394,13 @@ async function connectionUnbindAccepted(input: ConnectionUnbindAcceptanceInput):
 }
 
 function connectionConnectorFields(
-  connectorScope: ChatLocalKnowledgeScope | null,
+  connectorScope: ChatConnectorSelection | null,
 ): Partial<Pick<Connection, "boundConnectorKind" | "boundConnectorId">> {
   if (connectorScope === null) {
     return {};
   }
+  if (connectorScope.kind === "jira-live")
+    return { boundConnectorKind: "jira-live", boundConnectorId: connectorScope.podId };
   if (connectorScope.kind === "capsule") {
     return {
       boundConnectorKind: "capsule",
@@ -1411,7 +1419,7 @@ function connectionConnectorFields(
 function connectionScopeFields(
   chatWindowId: string | null,
   boundScope: ChatConnectedScope | null,
-  connectorScope: ChatLocalKnowledgeScope | null,
+  connectorScope: ChatConnectorSelection | null,
   gitChangeSelection: GitChangeBindSelection | null,
   gitChangeRelationshipId: string | undefined,
 ): Partial<
@@ -1452,6 +1460,16 @@ function connectionScopeFields(
   };
 }
 
+function validConnectionSelection(
+  from: AppWindow,
+  to: AppWindow,
+  gitChange: GitChangeBindSelection | null,
+): boolean {
+  if (isGitChangeChatPair(from, to) && gitChange === null) return false;
+  if (windowOfType(from, to, "connector")?.cfg["selectedKind"] !== "jira-live") return true;
+  return windowOfType(from, to, "chat") !== null && connectorChatBind(from, to) !== null;
+}
+
 function connectionBindingSelection(
   from: AppWindow,
   to: AppWindow,
@@ -1463,7 +1481,7 @@ function connectionBindingSelection(
     boundScope === null && connectorScope === null && isGitChangePair
       ? gitChangeChatBind(from, to)
       : null;
-  if (isGitChangePair && gitChangeSelection === null) return null;
+  if (!validConnectionSelection(from, to, gitChangeSelection)) return null;
   const chatWindowId =
     boundScope !== null || connectorScope !== null || gitChangeSelection !== null
       ? chatWindowIdInPair(from, to)
@@ -1473,7 +1491,7 @@ function connectionBindingSelection(
 
 function connectionHasUnbindWork(
   boundScope: ChatConnectedScope | null,
-  connectorScope: ChatLocalKnowledgeScope | null,
+  connectorScope: ChatConnectorSelection | null,
   gitChangeRelationshipId: string | null,
   onScopeUnbind: ConnectArgs["onScopeUnbind"],
   onConnectorUnbind: ConnectArgs["onConnectorUnbind"],
@@ -1721,14 +1739,27 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     if (!binding.accepted) return false;
     if (!endpointsStillCurrent(fromId, toId, chatWindowId, chatConversationIdAtBind, winById))
       return false;
+    if (connectorScope?.kind === "jira-live") {
+      const from = winById(fromId);
+      const to = winById(toId);
+      const current = from === undefined || to === undefined ? null : connectorChatBind(from, to);
+      if (current?.kind !== "jira-live" || current.podId !== connectorScope.podId) return false;
+    }
     // Snapshot WHAT the edge bound at bind time. Unbind paths (removeConn / close teardown) must
     // use this snapshot: re-deriving from the window's current cfg unbinds the wrong source after
     // the user navigated the Files window or re-selected another capsule.
-    setConns((cs) =>
-      isDuplicate(cs, fromId, toId)
-        ? cs
+    setConns((cs) => {
+      const retained =
+        connectorScope?.kind === "jira-live"
+          ? cs.filter(
+              (edge) =>
+                edge.boundConnectorKind !== "jira-live" || edge.boundChatWindowId !== chatWindowId,
+            )
+          : cs;
+      return isDuplicate(retained, fromId, toId)
+        ? retained
         : [
-            ...cs,
+            ...retained,
             {
               id: `${fromId}~${toId}`,
               a: fromId,
@@ -1741,8 +1772,8 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
                 binding.gitChangeRelationshipId,
               ),
             },
-          ],
-    );
+          ];
+    });
     focus(toId);
     return true;
   };
@@ -2077,6 +2108,11 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     const left = winById(a);
     const right = winById(b);
     if (left === undefined || right === undefined || !canConnect(left.type, right.type)) return;
+    if (windowOfType(left, right, "connector")?.cfg["selectedKind"] === "jira-live") {
+      const attempt = connectionAttemptFor(a, b, left, right);
+      if (attempt !== null && attempt !== "already-connected") beginConnectionAttempt(attempt);
+      return;
+    }
     setConns((cs) => (isDuplicate(cs, a, b) ? cs : [...cs, { id: `${a}~${b}`, a, b }]));
   };
 
@@ -2670,10 +2706,12 @@ export function removeConnectorScope(
  * `connectedAtMs: 0` is fine — unbind paths only match on kind + id.
  */
 export function boundConnectorScopeOf(conn: {
-  readonly boundConnectorKind?: "capsule" | "capsule-set";
+  readonly boundConnectorKind?: "capsule" | "capsule-set" | "jira-live";
   readonly boundConnectorId?: string;
-}): ChatLocalKnowledgeScope | null {
+}): ChatConnectorSelection | null {
   if (typeof conn.boundConnectorId !== "string" || conn.boundConnectorId.length === 0) return null;
+  if (conn.boundConnectorKind === "jira-live")
+    return { kind: "jira-live", podId: conn.boundConnectorId, connectedAtMs: 0 };
   if (conn.boundConnectorKind === "capsule") {
     return {
       kind: "capsule",
@@ -2743,7 +2781,7 @@ function isGitChangeChatPair(a: AppWindow, b: AppWindow): boolean {
  * window's cfg when exactly one side is a `"connector"` window and the other
  * is a `"chat"` window; otherwise null.
  */
-export function connectorChatBind(a: AppWindow, b: AppWindow): ChatLocalKnowledgeScope | null {
+export function connectorChatBind(a: AppWindow, b: AppWindow): ChatConnectorSelection | null {
   const connector = windowOfType(a, b, "connector");
   const chatWin = windowOfType(a, b, "chat");
   if (connector === null || chatWin === null) return null;
@@ -2752,6 +2790,8 @@ export function connectorChatBind(a: AppWindow, b: AppWindow): ChatLocalKnowledg
   if (typeof kind !== "string" || typeof id !== "string") return null;
   const selectedId = id.trim();
   if (selectedId.length === 0) return null;
+  if (kind === "jira-live")
+    return { kind: "jira-live", podId: selectedId, connectedAtMs: Date.now() };
   if (kind === "capsule") {
     return {
       kind: "capsule",

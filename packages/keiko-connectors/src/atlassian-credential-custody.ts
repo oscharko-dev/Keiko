@@ -32,6 +32,7 @@ import {
 import { Buffer } from "node:buffer";
 import type {
   AtlassianCredentialMetadata,
+  AtlassianLivePodUpdateRequest,
   AtlassianCredentialCreateRequest,
   AtlassianConnectorProvider,
 } from "@oscharko-dev/keiko-contracts";
@@ -730,26 +731,24 @@ function resolveForExecution(
   return resolved;
 }
 
-interface LivePodUpdate {
-  readonly expectedGeneration: number;
-  readonly displayName?: string;
-  readonly apiToken?: string;
-}
-
 const LIVE_POD_UPDATE_KEYS = new Set(["expectedGeneration", "displayName", "apiToken"]);
 
-function validateLivePodUpdate(input: unknown): LivePodUpdate {
+function validateLivePodUpdate(input: unknown): AtlassianLivePodUpdateRequest {
   if (!isRecord(input) || Object.keys(input).some((key) => !LIVE_POD_UPDATE_KEYS.has(key)))
     throw new AtlassianCredentialCustodyError("invalid-input");
   const generation = input.expectedGeneration;
   if (typeof generation !== "number" || !Number.isSafeInteger(generation) || generation < 1)
     throw new AtlassianCredentialCustodyError("invalid-input");
   if (!validLivePodUpdateValues(input)) throw new AtlassianCredentialCustodyError("invalid-input");
-  return {
-    expectedGeneration: generation,
-    ...(typeof input.displayName === "string" ? { displayName: input.displayName } : {}),
-    ...(typeof input.apiToken === "string" ? { apiToken: input.apiToken } : {}),
-  };
+  if (typeof input.apiToken === "string")
+    return {
+      expectedGeneration: generation,
+      apiToken: input.apiToken,
+      ...(typeof input.displayName === "string" ? { displayName: input.displayName } : {}),
+    };
+  if (typeof input.displayName === "string")
+    return { expectedGeneration: generation, displayName: input.displayName };
+  throw new AtlassianCredentialCustodyError("invalid-input");
 }
 
 function validLivePodUpdateValues(input: Record<string, unknown>): boolean {

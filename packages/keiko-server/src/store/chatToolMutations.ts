@@ -47,6 +47,20 @@ function timestamp(now: () => number, previous = 0): number {
 function rowRecord(value: unknown): ChatToolMutationRecord | undefined {
   return value === undefined ? undefined : Object.freeze(value as ChatToolMutationRecord);
 }
+/** Read the already admitted canonical turn; this never prepares or dispatches an action. */
+export function readChatToolMutationTurn(
+  db: DatabaseSync,
+  chatId: string,
+  turnRef: string,
+): readonly ChatToolMutationRecord[] {
+  return db
+    .prepare(
+      `SELECT ${COLUMNS} FROM chat_tool_mutations WHERE chat_id = ? AND turn_ref = ? LIMIT 33`,
+    )
+    .all(chatId, turnRef)
+    .map((row) => Object.freeze(row as unknown as ChatToolMutationRecord));
+}
+
 function assertCurrentTurn(
   db: DatabaseSync,
   intent: Pick<ChatToolMutationRecord, "userMessageId" | "chatId" | "turnRef">,

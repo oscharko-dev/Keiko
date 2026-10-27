@@ -1,10 +1,12 @@
 "use client";
 
+import { requestJiraChatConnection } from "./jira-chat-connection-request";
 import { chatConnectedScopeIdentity } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   adoptableGitChat,
   committedGitChat,
   withGroundingScopeRefresh,
+  updateGroundingScopes,
 } from "@/lib/chat-grounding-mutation";
 import type { ClientFilesScopeDecision } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 
@@ -88,6 +90,7 @@ import type {
   ChatConnectedScope,
   ChatGitChangeScope,
   ChatLocalKnowledgeScope,
+  ChatConnectorSelection,
   GroundingLimits,
 } from "@/lib/types";
 import { recordReadsContextRelationship } from "../../relationships/connector-relationship";
@@ -2484,9 +2487,19 @@ function AppShellInner(): ReactNode {
   const handleConnectorBind = useCallback(
     async (
       chatWindowId: string,
-      scope: ChatLocalKnowledgeScope,
+      scope: ChatConnectorSelection,
       target?: ChatBindingTarget,
     ): Promise<boolean> => {
+      if (scope.kind === "jira-live") {
+        const chat = await resolveChatForWindow(chatWindowId, target);
+        if (chat === undefined || (target !== undefined && !target.isCurrent())) return false;
+        return requestJiraChatConnection(
+          chatWindowId,
+          chat.id,
+          scope.podId,
+          () => target?.isCurrent() ?? true,
+        );
+      }
       try {
         return await serializeChatMutation(
           groundingMutationQueueRef.current,
@@ -2504,12 +2517,72 @@ function AppShellInner(): ReactNode {
         );
       }
     },
-    [groundingMutationKey, handleConnectorBindNow, rejectForConnectionFailure, t],
+    [
+      groundingMutationKey,
+      handleConnectorBindNow,
+      rejectForConnectionFailure,
+      resolveChatForWindow,
+      t,
+    ],
+  );
+  const replaceJiraChat = session.replaceChat;
+  const unbindJiraChat = useCallback(
+    async (
+      chat: Chat,
+      podId: string,
+      attempt: ChatMutationAttempt,
+      target: ChatUnbindTarget | undefined,
+    ): Promise<boolean> => {
+      if (chat.jiraPodBinding?.podId !== podId) return true;
+      if (!attempt.isCurrent() || !chatLookupTargetIsCurrent(target)) return false;
+      const updated = await updateGroundingScopes(chat, { jiraPodId: null }, replaceJiraChat);
+      rememberGroundingChat(updated);
+      if (!attempt.isCurrent() || !chatLookupTargetIsCurrent(target)) return false;
+      replaceJiraChat(updated);
+      setSourceConnectionNotice(null);
+      return updated.jiraPodBinding === undefined;
+    },
+    [rememberGroundingChat, replaceJiraChat],
+  );
+  const removeChatScopes = useCallback(
+    async <T,>(
+      chat: Chat,
+      current: readonly T[],
+      next: readonly T[],
+      persist: (
+        id: string,
+        scopes: readonly T[] | null,
+        expectedIdentity?: string,
+        correlationId?: string,
+      ) => Promise<{ readonly chat: Chat }>,
+      attempt: ChatMutationAttempt,
+      target: ChatUnbindTarget | undefined,
+    ): Promise<boolean> => {
+      const updated = await persistCurrentChatScopes(
+        target,
+        attempt,
+        chat.id,
+        current,
+        next,
+        persist,
+        {
+          remember: rememberGroundingChat,
+          expectedIdentity: chat.groundingScopeIdentity,
+          chat,
+          refreshed: replaceJiraChat,
+        },
+      );
+      if (updated === undefined) return false;
+      replaceJiraChat(updated);
+      setSourceConnectionNotice(null);
+      return true;
+    },
+    [rememberGroundingChat, replaceJiraChat],
   );
   const handleConnectorUnbind = useCallback(
     async (
       chatWindowId: string,
-      scope: ChatLocalKnowledgeScope,
+      scope: ChatConnectorSelection,
       target?: ChatUnbindTarget,
     ): Promise<boolean> => {
       try {
@@ -2522,30 +2595,22 @@ function AppShellInner(): ReactNode {
               if (chat === undefined) {
                 return rejectForConnectionFailure(t("scope.disconnect.error"));
               }
+              if (scope.kind === "jira-live")
+                return unbindJiraChat(chat, scope.podId, attempt, target);
               const key =
                 scope.kind === "capsule"
                   ? `capsule:${scope.capsuleId}`
                   : `set:${scope.capsuleSetId}`;
               const current = effectiveLocalKnowledgeScopes(chat);
               const next = removeConnectorScope(current, key);
-              const persisted = await persistCurrentChatScopes(
-                target,
-                attempt,
-                chat.id,
+              return removeChatScopes(
+                chat,
                 current,
                 next,
                 updateChatLocalKnowledgeScopes,
-                {
-                  remember: rememberGroundingChat,
-                  expectedIdentity: chat.groundingScopeIdentity,
-                  chat,
-                  refreshed: session.replaceChat,
-                },
+                attempt,
+                target,
               );
-              if (persisted === undefined) return false;
-              session.replaceChat(persisted);
-              setSourceConnectionNotice(null);
-              return true;
             }, attempt),
           "local-knowledge",
         );
@@ -2555,13 +2620,12 @@ function AppShellInner(): ReactNode {
         );
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- GEN-PERF-RENDER-001 stable-member narrowing
     [
       groundingMutationKey,
-      rememberGroundingChat,
+      unbindJiraChat,
+      removeChatScopes,
       rejectForConnectionFailure,
       resolveChatForWindow,
-      session.replaceChat,
       t,
     ],
   );
@@ -2652,24 +2716,14 @@ function AppShellInner(): ReactNode {
               if (chat === undefined) return true;
               const current = chat.gitChangeScopes ?? [];
               const next = removeGitChangeScope(current, relationshipId);
-              const persisted = await persistCurrentChatScopes(
-                target,
-                attempt,
-                chat.id,
+              return removeChatScopes(
+                chat,
                 current,
                 next,
                 updateChatGitChangeScopes,
-                {
-                  remember: rememberGroundingChat,
-                  expectedIdentity: chat.groundingScopeIdentity,
-                  chat,
-                  refreshed: session.replaceChat,
-                },
+                attempt,
+                target,
               );
-              if (persisted === undefined) return false;
-              session.replaceChat(persisted);
-              setSourceConnectionNotice(null);
-              return true;
             }, attempt),
           "git-change",
         );
@@ -2679,15 +2733,7 @@ function AppShellInner(): ReactNode {
         );
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- GEN-PERF-RENDER-001 stable-member narrowing
-    [
-      groundingMutationKey,
-      rememberGroundingChat,
-      rejectForConnectionFailure,
-      resolveChatForWindow,
-      session.replaceChat,
-      t,
-    ],
+    [groundingMutationKey, removeChatScopes, rejectForConnectionFailure, resolveChatForWindow, t],
   );
   const [cameraSmoothness, setCameraSmoothness] = useState<number>(readWorkspaceCameraSmoothness);
 
@@ -2741,6 +2787,17 @@ function AppShellInner(): ReactNode {
   // on the same linkRevision the WindowFrame memo contract uses: it bumps exactly
   // when conns, the window set, or any window's cfg identity change.
   const workspaceLinkRevision = useLinkRevision(ws.wins, ws.conns);
+  useEffect(() => {
+    const chats = new Map(session.chats.map((chat) => [chat.id, chat]));
+    if (session.activeChat !== undefined) chats.set(session.activeChat.id, session.activeChat);
+    for (const edge of wsConnectionsForBindingRef.current) {
+      if (edge.boundConnectorKind !== "jira-live" || edge.boundChatWindowId === undefined) continue;
+      const chatId = mountedChatConversationId(wsWinsForBindingRef.current, edge.boundChatWindowId);
+      const chat = chatId === undefined ? undefined : chats.get(chatId);
+      if (chat !== undefined && chat.jiraPodBinding?.podId !== edge.boundConnectorId)
+        ws.api.removeConn(edge.id, { unbind: false });
+    }
+  }, [workspaceLinkRevision, session.chats, session.activeChat, ws.api]);
   const chatConversationIdsRef = useRef<ReadonlyMap<string, string | undefined>>(new Map());
   const changedChatWindowIdsRef = useRef<ReadonlySet<string>>(new Set());
   useLayoutEffect((): void => {

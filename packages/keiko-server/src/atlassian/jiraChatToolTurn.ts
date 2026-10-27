@@ -101,6 +101,7 @@ export class JiraChatToolTurn {
   private readonly callIds = new Set<string>();
   private notify: ((message: ChatMessage) => void | Promise<void>) | undefined;
   private uncertainBudget = false;
+  private readonly abortController = new AbortController();
   private promptTokens = 0;
   private completionTokens = 0;
   public constructor(private readonly options: TurnOptions) {
@@ -114,7 +115,7 @@ export class JiraChatToolTurn {
       authorityReference: authority.reference,
       authorityExpiresAt: authority.envelope.expiresAt,
       deadlineAt: authority.envelope.expiresAt,
-      signal,
+      signal: AbortSignal.any([signal, this.abortController.signal]),
     };
     this.budget = createHarnessCatalogBudget({
       ...this.context,
@@ -432,10 +433,36 @@ export class JiraChatToolTurn {
     );
   }
 
+  public get signal(): AbortSignal {
+    return this.context.signal;
+  }
+  public get deadlineAtMs(): number {
+    return Date.parse(this.context.authorityExpiresAt);
+  }
+
   public async call(
     model: ModelPort,
     request: GatewayCallRequest,
     signal: AbortSignal,
+    observeRound?: (response: NormalizedResponse) => void,
+  ): Promise<NormalizedResponse> {
+    const cancel = (): void => {
+      this.abortController.abort();
+    };
+    signal.addEventListener("abort", cancel, { once: true });
+    if (signal.aborted) cancel();
+    try {
+      return await this.runRounds(model, request, signal, observeRound);
+    } finally {
+      signal.removeEventListener("abort", cancel);
+    }
+  }
+
+  private async runRounds(
+    model: ModelPort,
+    request: GatewayCallRequest,
+    signal: AbortSignal,
+    observeRound?: (response: NormalizedResponse) => void,
   ): Promise<NormalizedResponse> {
     const { managed } = this.options;
     while (this.counters.iterations < DEFAULT_LIMITS.maxIterations) {
@@ -455,6 +482,7 @@ export class JiraChatToolTurn {
         },
         this.context.signal,
       );
+      observeRound?.(response);
       this.promptTokens +=
         response.usage.promptTokens + (response.discardedAttemptUsage?.promptTokens ?? 0);
       this.completionTokens +=
@@ -529,6 +557,7 @@ export function scopeJiraChatToolTurn(
   if (turn === undefined) return deps;
   return {
     ...deps,
+    jiraChatToolTurn: turn,
     modelPortFactory: (id): ReturnType<UiHandlerDeps["modelPortFactory"]> => {
       const model = deps.modelPortFactory(id);
       return model === undefined ? undefined : turn.meter(model);

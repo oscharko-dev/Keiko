@@ -1,16 +1,16 @@
-.root {
+.cmpRoot {
   max-inline-size: 100%;
 }
-.root > summary {
+.cmpRoot > summary {
   cursor: pointer;
 }
-.panel {
+.cmpPanel {
   padding: 12px;
   max-inline-size: 28rem;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
 }
-.fields {
+.cmpFields {
   border: 0;
   padding: 0;
   margin: 0;
@@ -18,13 +18,13 @@
   gap: 12px;
   min-inline-size: 0;
 }
-.fields label {
+.cmpFields label {
   display: grid;
   gap: 4px;
 }
-.fields select {
+.cmpFields select {
   max-inline-size: 100%;
 }
-.fields p {
+.cmpFields p {
   margin: 0;
 }

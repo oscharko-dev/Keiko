@@ -16,7 +16,8 @@ import { markdownSkillCompactionReserve } from "./markdown-skill-prompt.js";
 import { CONVERSATION_SYSTEM_PROMPT } from "./conversation-prompt.js";
 import { withMarkdownSkillAdmission } from "./markdown-skill-admission.js";
 import { CancelledError } from "@oscharko-dev/keiko-security/errors/gateway";
-import { hasGroundingScope } from "./chat-grounding.js";
+import { hasGroundingScope, hasMixedJiraGroundingScope } from "./chat-grounding.js";
+import { runMixedGroundedChat } from "./grounded-qa.js";
 import {
   withAdoptedContextWindowRetry,
   type ContextWindowAttempt,
@@ -3897,6 +3898,8 @@ export async function handleSendDesktopChat(
     const parsed = await parseDesktopChatSend(ctx, deps, cancellation.signal);
     if (cancellation.signal.aborted) return requestCancelledResult();
     if (isRouteResult(parsed)) return parsed;
+    if (hasMixedJiraGroundingScope(parsed.chat))
+      return await runMixedGroundedChat(parsed, deps, cancellation.signal, ctx.correlationId);
     const prepared = validateDesktopChatSend(parsed, deps);
     if (isRouteResult(prepared)) return prepared;
     const gitChangeDenial = admitPreparedGitChangeTurn(deps, prepared, ctx.correlationId);

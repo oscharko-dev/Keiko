@@ -1,3 +1,6 @@
+import type { GatewayCallRequest } from "@oscharko-dev/keiko-model-gateway";
+import { createGroundedSynthesisCallBudget } from "./grounded-answer.js";
+import { callPluralGroundedSynthesis } from "./grounded-plural-synthesis.js";
 import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { withMarkdownSkillAdmission } from "./markdown-skill-admission.js";
 import {
@@ -742,6 +745,7 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
   private sentReferences: readonly RetrievalReference[] = [];
   private sent: SentKnowledgePrompt | undefined;
   private measuredPromptTokens = 0;
+  private readonly synthesis = createGroundedSynthesisCallBudget();
 
   public constructor(
     private readonly model: ModelPort,
@@ -841,7 +845,7 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
       profile?.effectiveInputBudget ?? 0,
       profile?.tokenAccounting,
     );
-    return this.model.call(
+    return this.callModel(
       {
         modelId: this.modelId,
         messages: fitted.prompt.messages,
@@ -849,7 +853,36 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
         logContext: { correlationId: this.context.correlationId },
       },
       input.signal ?? new AbortController().signal,
+      profile,
     );
+  }
+
+  private callModel(
+    request: GatewayCallRequest,
+    signal: AbortSignal,
+    profile: ContextProfile | undefined,
+  ): Promise<NormalizedResponse> {
+    const toolTurn = this.context.deps.jiraChatToolTurn;
+    if (toolTurn === undefined) return this.model.call(request, signal);
+    const limits = profile ?? DEFAULT_CONTEXT_PROFILE;
+    const outputTokensMax = limits.reservedOutputTokens;
+    return callPluralGroundedSynthesis({
+      model: this.model,
+      deps: this.context.deps,
+      signal,
+      budget: this.synthesis,
+      accounting: limits.tokenAccounting,
+      grants: {
+        inputTokensMax: limits.effectiveInputBudget,
+        outputTokensMax,
+        deadlineAtMs: toolTurn.deadlineAtMs,
+        signal,
+      },
+      request: {
+        ...request,
+        maxOutputTokens: outputTokensMax - this.synthesis.pendingUsage().completionTokens,
+      },
+    });
   }
 }
 

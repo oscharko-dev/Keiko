@@ -1099,6 +1099,7 @@ async function hybridGatewayAnswer(
   const profile =
     ctx.deps === undefined ? undefined : currentContextProfileForModel(ctx.deps, ctx.modelId);
   const response = await callPluralGroundedSynthesis({
+    deps: ctx.deps,
     model: ctx.model,
     signal: ctx.signal,
     budget: ctx.synthesisBudget,
@@ -1237,6 +1238,7 @@ async function hybridGatewayRepair(
     return uninvokedCitationRepair(original);
   ensureNotCancelled(signal);
   const response = await callPluralGroundedSynthesis({
+    deps: ctx.deps,
     model: ctx.model,
     signal,
     budget: ctx.synthesisBudget,

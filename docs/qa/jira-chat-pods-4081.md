@@ -2021,3 +2021,58 @@ Remaining: actual browser-write qualification, complete operation/failure/lifecy
 matrix, mixed-source grounding, remaining Hub lifecycle and drag/drop UI, full
 compatibility/quality/evidence/Sonar/current-head checks. No AC is promoted to final
 acceptance by this checkpoint. PR #4093 remains open against dev with auto-merge off.
+
+## 2026-10-27 late observations, mixed scope and Pod lifecycle checkpoint
+
+Refs #4081, #4084, #4085, #4086, #4091, #4087. A regression demonstrated a
+cancelled Chat retaining `unknown` after Jira had subsequently acknowledged the write.
+The existing message owner now projects the durable journal for the exact canonical
+turn, call, operation and arguments. It preserves the original catalog envelope and
+never dispatches or reacquires authority. A fresh SQLite reader sees the late
+`succeeded-unconfirmed` observation; no-result history can also recover it. Active
+prepared work remains pending. Tampered identity/action metadata is not attached to
+another exchange. The new registered body-free observation event records only a digest
+and count; independent failure-class obligations include the new operation.
+
+Mixed scope now assembles the existing Data-source evidence pack before Jira tool
+orchestration. One accepted-turn meter covers preparation, retrieval model calls, tools,
+answer and repair. The physical synthesis tracker only releases the exact fully
+observed tool-call attempt; discarded/ambiguous attempts and every token remain charged.
+Jira results stay outside the numbered Data-source citations. The normal desktop
+buffered adapter uses that same owner. Mixed streaming explicitly returns
+`STREAMING_UNSUPPORTED` before turn admission/effects and the existing client falls back
+to buffered execution with the same canonical identity. Empty Data evidence remains a
+separate open qualification edge; this checkpoint does not claim that case complete.
+
+The existing Hub now owns rename, token replacement/reverification and removal with
+fresh generation checks, secret clearing, duplicate-submit/unmount guards and GET-only
+recovery after uncertain mutation responses. Jira creation leaves exactly one canonical
+Pod verification owner; the Cloud inline flow remains. Shared mode controls show the
+server-derived deployment ceiling/effective mode. Existing saved-Pod drag/drop and
+keyboard ports reuse the explicit replacement form and authenticated Chat PATCH; visual
+edges follow server acknowledgement. Remaining connection races/header presentation and
+fresh production-browser qualification are recorded as open.
+
+Scoped evidence (suite counts overlap):
+
+- Late outcome/transcript/ordinary Chat: 92 tests pass, including the meaningful
+  before-failure and fresh-reader recovery. Package build and operation-catalog
+  generation pass with no typed-registry violations.
+- Mixed: 6 actual-gateway integrations, 15 physical budget tests, 45 retry tests,
+  320 plural/local grounding regressions, 217 UI observer/hook tests, 31 schedule-log
+  proofs and 16 selected desktop regressions pass.
+- Hub/API/accessibility/DE-EN/style: 73 tests; custody: 71 tests. Ordinary UI lint and
+  UI typecheck pass; obsolete suppressions are removed, none added.
+- Mode projection: 182 server tests. Connection/workspace/Coding UI regression group:
+  787 tests pass before the final small port re-acknowledgement fix; its focused
+  regression failed before the fix and then passed with all10 Jira connection tests;
+  the related AppShell suites pass193 tests. The semantic baseline only shrank938→932,
+  with zero new normalized fingerprints or clone groups.
+- All nine real-model write groups passed on the preceding UI artifact: three modes
+  over buffered API, streamed API and browser. Each independently observed one matching
+  Jira comment and count +1, with the correct disclosure/approval matrix. The current
+  Hub and shared-mode layout must be rebuilt and browser-qualified again. Twelve live
+  Activity Log files contain neither the nine synthetic comment markers nor the PAT.
+
+Final full quality/coverage/compatibility/UI-evidence/Sonar/current-head acceptance
+remains open. This remains one regular PR against dev with auto-merge off.

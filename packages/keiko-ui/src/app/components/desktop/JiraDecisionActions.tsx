@@ -13,7 +13,7 @@ export function JiraDecisionActions({
   readonly submit: (decision: "approve" | "reject") => Promise<void>;
 }): ReactNode {
   return (
-    <div className={styles.actions}>
+    <div className={styles.cmpActions}>
       <button
         type="button"
         className="lk-btn lk-btn-primary"

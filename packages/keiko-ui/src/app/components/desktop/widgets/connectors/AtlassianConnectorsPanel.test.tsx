@@ -2,14 +2,15 @@
 // token flow), verifies, manages (scope + sync), and deletes with confirmation. Whole-panel axe
 // runs in light AND dark.
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
 import { AtlassianConnectorsPanel } from "./AtlassianConnectorsPanel";
-import type {
-  AtlassianConnectorMetadata,
-  AtlassianConnectorsClient,
+import {
+  ATLASSIAN_CONNECTORS_CHANGED_EVENT,
+  type AtlassianConnectorMetadata,
+  type AtlassianConnectorsClient,
 } from "@/lib/atlassian-connectors-api";
 
 const DOCS: AtlassianConnectorMetadata = {
@@ -32,6 +33,7 @@ function makeClient(overrides: Partial<AtlassianConnectorsClient> = {}): Atlassi
   return {
     listConnectors: vi.fn(async () => [DOCS]),
     createConnector: vi.fn(async () => NEWONE),
+    updateConnector: vi.fn(async () => DOCS),
     deleteConnector: vi.fn(async () => ({ ok: true as const })),
     verifyConnector: vi.fn(async () => ({ authRef: DOCS.authRef, status: "ok" as const })),
     startSync: vi.fn(async () => ({ job: { jobId: "j", status: "pending" } as never })),
@@ -71,6 +73,43 @@ describe("AtlassianConnectorsPanel", () => {
     await user.type(screen.getByLabelText("API token"), "tok");
     await user.click(screen.getByRole("button", { name: "Save connector" }));
     expect(await screen.findByText("Ops")).toBeInTheDocument();
+  });
+  it("retains a newly created connector when an earlier list response arrives late", async () => {
+    let finish: ((value: readonly AtlassianConnectorMetadata[]) => void) | undefined;
+    const client = makeClient({
+      listConnectors: vi.fn(
+        () =>
+          new Promise<readonly AtlassianConnectorMetadata[]>((resolve) => {
+            finish = resolve;
+          }),
+      ),
+    });
+    const user = userEvent.setup();
+    render(<AtlassianConnectorsPanel client={client} />);
+    await user.click(screen.getByRole("button", { name: "Add connector" }));
+    await user.type(screen.getByLabelText("Label"), "Ops");
+    await user.type(screen.getByLabelText("Base URL"), "https://x.atlassian.net");
+    await user.type(screen.getByLabelText("Account email"), "me@example.com");
+    await user.type(screen.getByLabelText("API token"), "synthetic-pat");
+    await user.click(screen.getByRole("button", { name: "Save connector" }));
+    expect(await screen.findByText("Ops")).toBeVisible();
+    await act(async () => {
+      finish?.([]);
+    });
+    expect(screen.getByText("Ops")).toBeVisible();
+  });
+  it("observes credential changes through an authoritative GET", async () => {
+    const client = makeClient({
+      listConnectors: vi.fn().mockResolvedValueOnce([DOCS]).mockResolvedValue([]),
+    });
+    render(<AtlassianConnectorsPanel client={client} />);
+    expect(await screen.findByText("Docs")).toBeVisible();
+    act(() => {
+      window.dispatchEvent(new Event(ATLASSIAN_CONNECTORS_CHANGED_EVENT));
+    });
+    await waitFor(() => expect(screen.queryByText("Docs")).toBeNull());
+    expect(client.listConnectors).toHaveBeenCalledTimes(2);
+    expect(client.deleteConnector).not.toHaveBeenCalled();
   });
 
   it("verifies a connector inline and reveals the sync surface on manage", async () => {

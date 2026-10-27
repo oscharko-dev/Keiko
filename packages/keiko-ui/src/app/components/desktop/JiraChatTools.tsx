@@ -38,7 +38,7 @@ export function JiraReadConsent({
     decide: (decision) => decide(grant, decision),
   });
   return (
-    <section className={styles.card} aria-label={t("chat.jira.title")}>
+    <section className={styles.cmpCard} aria-label={t("chat.jira.title")}>
       <strong>{t("chat.jira.title")}</strong>
       <p>{t("chat.jira.disclosure")}</p>
       <output aria-live="polite">{t(busy ? "chat.jira.working" : STATE_KEYS[view.state])}</output>
@@ -65,14 +65,14 @@ function JiraToolExchange({
   const state = jiraToolState(exchange, turnState);
   const help = jiraToolOutcomeHelp(state);
   return (
-    <section className={styles.card} aria-label={t("chat.jira.tool")}>
+    <section className={styles.cmpCard} aria-label={t("chat.jira.tool")}>
       <strong>{t(jiraToolLabel(exchange))}</strong>
       <output>{t(state)}</output>
       {help === undefined ? null : <p>{t(help)}</p>}
       {exchange.result?.data == null ? null : (
         <details>
           <summary>{t("chat.jira.details")}</summary>
-          <pre className={styles.result}>{JSON.stringify(exchange.result.data, null, 2)}</pre>
+          <pre className={styles.cmpResult}>{JSON.stringify(exchange.result.data, null, 2)}</pre>
         </details>
       )}
     </section>
@@ -87,7 +87,7 @@ export function JiraChatTools({
 }): ReactNode {
   if (transcript === undefined) return null;
   return (
-    <div className={styles.stack}>
+    <div className={styles.cmpStack}>
       {transcript.readGrant === undefined ? null : (
         <JiraReadConsent key={transcript.readGrant.grantId} grant={transcript.readGrant} />
       )}

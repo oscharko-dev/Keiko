@@ -13,6 +13,7 @@ import {
 // applied uniformly by the server layer. JSON body reading is bounded by MAX_STORE_BODY_BYTES.
 
 import type { IncomingMessage } from "node:http";
+import { resolveEffectiveCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { randomUUID } from "node:crypto";
 import { realpathSync, statSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
@@ -647,12 +648,27 @@ export function handleListChats(ctx: RouteContext, deps: UiHandlerDeps): RouteRe
     );
     if (ctx.url.searchParams.has("id")) {
       const selected = findChatById(deps, requireQuery(ctx, "id"));
-      const chats = selected?.projectPath === projectPath ? [selected] : [];
+      const chats =
+        selected?.projectPath === projectPath ? [chatWithToolModePolicy(selected, deps)] : [];
       return { status: 200, body: { chats } };
     }
-    const chats = deps.store.listChats(projectPath, limit);
+    const chats = deps.store
+      .listChats(projectPath, limit)
+      .map((chat) => chatWithToolModePolicy(chat, deps));
     return { status: 200, body: { chats } };
   });
+}
+
+function chatWithToolModePolicy(chat: Chat, deps: UiHandlerDeps): Chat {
+  const toolModeCeiling = resolveEffectiveCodingWorkbenchMode(
+    "autonomous-delivery",
+    deps.autonomousDeliveryDeploymentCeiling,
+  );
+  return {
+    ...chat,
+    toolModeCeiling,
+    effectiveToolMode: resolveEffectiveCodingWorkbenchMode(chat.toolMode, toolModeCeiling),
+  };
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -673,7 +689,7 @@ export async function handleCreateChat(
       ...(branchLabel === undefined ? {} : { branchLabel }),
       correlationId: ctx.correlationId,
     });
-    return { status: 201, body: { chat } };
+    return { status: 201, body: { chat: chatWithToolModePolicy(chat, deps) } };
   });
 }
 
@@ -1370,7 +1386,7 @@ function applyChatUpdate(
     clearGroundedContextIndexesForConversation(id);
     clearGroundedTurnsForConversation(id);
   }
-  return { status: 200, body: { chat } };
+  return { status: 200, body: { chat: chatWithToolModePolicy(chat, deps) } };
 }
 
 function recordAppliedChatUpdate(

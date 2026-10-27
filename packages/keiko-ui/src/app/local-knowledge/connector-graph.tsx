@@ -60,10 +60,11 @@ import { AtlassianConnectorsPanel } from "@/app/components/desktop/widgets/conne
 import { HtmlManualPodCreate } from "./html-manual-pod-create";
 import { CapsuleDetail } from "./[capsuleId]/capsule-detail";
 import {
-  LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT,
+  getWorkspaceCenter,
+  isWorkspaceDropTarget,
+  dispatchConnectorDrop,
   LOCAL_KNOWLEDGE_CONNECTOR_DRAG_TYPE,
   type LocalKnowledgeConnectorDragPayload,
-  type LocalKnowledgeConnectorDropDetail,
   serializeLocalKnowledgeConnectorDrag,
 } from "./connector-drag";
 import manualRefreshStyles from "./manual-refresh-panel.module.css";
@@ -1069,35 +1070,6 @@ function CapsuleRowActions({
 function isRowActionDragTarget(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false;
   return target.closest(".lk-capsule-actions,a,input,select,textarea") !== null;
-}
-
-function getWorkspaceCenter(): { readonly clientX: number; readonly clientY: number } | null {
-  const ws = document.querySelector("main.workspace");
-  if (!(ws instanceof HTMLElement)) return null;
-  const rect = ws.getBoundingClientRect();
-  if (rect.width === 0 || rect.height === 0) return null;
-  return {
-    clientX: Math.round(rect.left + rect.width / 2),
-    clientY: Math.round(rect.top + rect.height / 2),
-  };
-}
-
-function isWorkspaceDropTarget(clientX: number, clientY: number): boolean {
-  const target = document.elementFromPoint(clientX, clientY);
-  if (!(target instanceof Element)) return false;
-  return target.closest("main.workspace") !== null && target.closest(".window") === null;
-}
-
-function dispatchConnectorDrop(
-  payload: LocalKnowledgeConnectorDragPayload,
-  event: { readonly clientX: number; readonly clientY: number },
-): void {
-  const detail: LocalKnowledgeConnectorDropDetail = {
-    payload,
-    clientX: event.clientX,
-    clientY: event.clientY,
-  };
-  window.dispatchEvent(new CustomEvent(LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT, { detail }));
 }
 
 interface CapsuleDragGhost {

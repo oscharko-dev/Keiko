@@ -1,3 +1,4 @@
+import { hasMixedJiraGroundingScope } from "./chat-grounding.js";
 import {
   createJiraChatToolTurn,
   scopeJiraChatToolTurn,
@@ -650,6 +651,8 @@ async function prepareDesktopChatStream(
 ): Promise<DesktopChatStreamPreparation> {
   const parsed = await parseDesktopChatSend(ctx, deps, signal);
   if ("status" in parsed) return { kind: "outcome", outcome: parsed };
+  if (hasMixedJiraGroundingScope(parsed.chat))
+    return { kind: "outcome", outcome: streamingUnsupportedOutcome(ctx.correlationId) };
   const prepared = validateDesktopChatSend(parsed, deps);
   if ("status" in prepared) return { kind: "outcome", outcome: prepared };
   // Same fast-fail gate as the buffered /api/desktop/chat path (handleSendDesktopChat): a

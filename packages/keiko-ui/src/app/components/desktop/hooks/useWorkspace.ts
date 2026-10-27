@@ -1,4 +1,5 @@
-"use client";
+import type { ConnectArgs } from "./workspaceActions";
+("use client");
 
 import {
   useCallback,
@@ -59,7 +60,7 @@ import {
   toggleWorkspaceSelection,
   type GitChangeBindSelection,
 } from "./workspaceActions";
-import type { ChatConnectedScope, ChatGitChangeScope, ChatLocalKnowledgeScope } from "@/lib/types";
+import type { ChatConnectedScope, ChatGitChangeScope, ChatConnectorSelection } from "@/lib/types";
 import type { WorkspaceUiSelectionState } from "@oscharko-dev/keiko-contracts";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import {
@@ -1894,52 +1895,17 @@ function useConnectionPrune(
 // (AppShell) wires these to the active chat's localKnowledgeScopes.
 // Release 0.2.0 — bind callbacks return whether the bind was ACCEPTED; `false` (source limit
 // reached or persistence failed) vetoes the edge so no dangling ungrounded edge is drawn.
-export interface UseWorkspaceOptions {
+export interface UseWorkspaceOptions extends Pick<
+  ConnectArgs,
+  | "onScopeBind"
+  | "onScopeUnbind"
+  | "onConnectorBind"
+  | "onConnectorUnbind"
+  | "onGitChangeBind"
+  | "onGitChangeUnbind"
+> {
   readonly cameraSmoothness?: number | undefined;
   readonly onWindowLimitReached?: ((limit: number) => void) | undefined;
-  readonly onScopeBind?:
-    | ((
-        chatWindowId: string,
-        scope: ChatConnectedScope,
-        target?: ChatBindingTarget,
-      ) => FilesScopeBindReply | Promise<FilesScopeBindReply>)
-    | undefined;
-  readonly onScopeUnbind?:
-    | ((
-        chatWindowId: string,
-        scope: ChatConnectedScope,
-        target?: ChatUnbindTarget,
-        connectionId?: string,
-      ) => boolean | Promise<boolean>)
-    | undefined;
-  readonly onConnectorBind?:
-    | ((
-        chatWindowId: string,
-        scope: ChatLocalKnowledgeScope,
-        target?: ChatBindingTarget,
-      ) => boolean | Promise<boolean>)
-    | undefined;
-  readonly onConnectorUnbind?:
-    | ((
-        chatWindowId: string,
-        scope: ChatLocalKnowledgeScope,
-        target?: ChatUnbindTarget,
-      ) => boolean | Promise<boolean>)
-    | undefined;
-  readonly onGitChangeBind?:
-    | ((
-        chatWindowId: string,
-        selection: GitChangeBindSelection,
-        target?: ChatBindingTarget,
-      ) => ChatGitChangeScope | false | null | Promise<ChatGitChangeScope | false | null>)
-    | undefined;
-  readonly onGitChangeUnbind?:
-    | ((
-        chatWindowId: string,
-        relationshipId: string,
-        target?: ChatUnbindTarget,
-      ) => boolean | Promise<boolean>)
-    | undefined;
 }
 
 // S3776 — closeWithTeardown's per-connection unbind logic (below) used to run inside a
@@ -2074,7 +2040,7 @@ async function unbindClosedWindowConnection(
   unbindScope: NonNullable<UseWorkspaceOptions["onScopeUnbind"]>,
   unbindConnectorScope: (
     chatWindowId: string,
-    scope: ChatLocalKnowledgeScope,
+    scope: ChatConnectorSelection,
     target?: ChatUnbindTarget,
   ) => boolean | Promise<boolean>,
   unbindGitChangeScope: (
@@ -2213,19 +2179,19 @@ export function useWorkspace(
   const stableConnectorBind = useCallback(
     (
       chatWindowId: string,
-      scope: ChatLocalKnowledgeScope,
+      scope: ChatConnectorSelection,
       target?: ChatBindingTarget,
     ): boolean | Promise<boolean> =>
-      onConnectorBindRef.current?.(chatWindowId, scope, target) ?? true,
+      onConnectorBindRef.current?.(chatWindowId, scope, target) ?? scope.kind !== "jira-live",
     [],
   );
   const stableConnectorUnbind = useCallback(
     (
       chatWindowId: string,
-      scope: ChatLocalKnowledgeScope,
+      scope: ChatConnectorSelection,
       target?: ChatUnbindTarget,
     ): boolean | Promise<boolean> =>
-      onConnectorUnbindRef.current?.(chatWindowId, scope, target) ?? true,
+      onConnectorUnbindRef.current?.(chatWindowId, scope, target) ?? scope.kind !== "jira-live",
     [],
   );
   const stableGitChangeBind = useCallback(

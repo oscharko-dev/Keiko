@@ -1,3 +1,6 @@
+import { DatabaseSync } from "node:sqlite";
+import { findMessageById as readStoredMessage } from "../store/messages.js";
+import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { handleDecideChatWriteApproval } from "./chatWriteApprovalRoutes.js";
 import { handleSendDesktopChatStream } from "../chat-stream-handlers.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -153,7 +156,10 @@ async function* syntheticStream(
   if (resolved.content.length > 0) yield { type: "delta", token: resolved.content };
   yield { type: "done", response: resolved };
 }
-function fixture(mutation = false): {
+function fixture(
+  mutation = false,
+  writeResponse?: Promise<void>,
+): {
   deps: UiHandlerDeps;
   chatId: string;
   root: string;
@@ -190,12 +196,15 @@ function fixture(mutation = false): {
   let writes = 0;
   vi.spyOn(credentials, "httpBodyPortFactory").mockImplementation(
     (_metadata, _correlationId, lifecycle) =>
-      (request): ReturnType<AtlassianHttpBodyPort> => {
+      async (request): ReturnType<AtlassianHttpBodyPort> => {
         if (lifecycle?.beforeDispatch?.(request) !== true)
           throw new Error("Expected dispatch admission");
         requests++;
         const write = request.method !== "GET";
-        if (write) writes++;
+        if (write) {
+          writes++;
+          await writeResponse;
+        }
         const status = write ? 201 : 200;
         lifecycle.onResponse?.(request, status);
         const bodyText = mutation
@@ -449,4 +458,51 @@ it("keeps a rejected normal Chat write free of remote effects", async () => {
   const exchange = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges[0];
   expect(exchange?.approval?.state).toBe("rejected");
   expect(exchange?.result?.status).toBe("denied");
+});
+
+it("retains late acknowledged Jira effects after the Chat has already been cancelled", async () => {
+  let release = (): void => {
+    throw new Error("Missing response gate");
+  };
+  const delayed = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const f = fixture(true, delayed);
+  const response = mockResponse({ captureBody: true });
+  const pending = handleSendDesktopChatStream(
+    { ...sendContext(f, "late-response-write"), res: response.res },
+    f.deps,
+  );
+  void pending.catch(() => undefined);
+  await approveReadForWrite(f);
+  await decidePendingWrite(f, "approve");
+  await vi.waitFor(() => {
+    expect(f.writes()).toBe(1);
+  });
+  response.res.destroy();
+  await pending;
+  await vi.waitFor(() => {
+    expect(f.deps.store.listMessages(f.chatId)[0]?.turnState).toBe("cancelled");
+  });
+  const message = f.deps.store.listMessages(f.chatId)[0];
+  const exchange = message?.toolTranscript?.exchanges[0];
+  if (message === undefined || exchange === undefined) throw new Error("Missing cancelled turn");
+  expect(exchange.result?.data).toBeNull();
+  const identity = sha256Hex(canonicalise({ messageId: message?.id, callId: exchange?.call.id }));
+  release();
+  await vi.waitFor(() => {
+    expect(f.deps.store.chatToolMutations?.find(identity)?.outcome).toBe("succeeded-unconfirmed");
+  });
+  expect(
+    f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges[0]?.mutationOutcome,
+  ).toBe("succeeded-unconfirmed");
+  const reader = new DatabaseSync(join(f.root, "ui.db"), { readOnly: true });
+  try {
+    expect(
+      readStoredMessage(reader, message.id)?.toolTranscript?.exchanges[0]?.mutationOutcome,
+    ).toBe("succeeded-unconfirmed");
+  } finally {
+    reader.close();
+  }
+  expect(f.writes()).toBe(1);
 });

@@ -9,10 +9,10 @@ import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widge
 // client is injectable (`client` prop) so tests substitute a mock; production binds the real
 // same-origin BFF client.
 
-import { useEffect, useId, useState, type ReactNode } from "react";
-import { ApiError } from "@/lib/api";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import {
+  ATLASSIAN_CONNECTORS_CHANGED_EVENT,
   defaultAtlassianConnectorsClient,
   type AtlassianConnectorMetadata,
   type AtlassianConnectorsClient,
@@ -37,49 +37,92 @@ interface ConnectorsController {
   readonly onDeleted: (authRef: string) => void;
 }
 
+interface ConnectorListState {
+  readonly connectors: readonly AtlassianConnectorMetadata[];
+  readonly loading: boolean;
+  readonly error?: string;
+}
+function useCredentialChanges(reload: () => void): void {
+  useEffect(() => {
+    window.addEventListener(ATLASSIAN_CONNECTORS_CHANGED_EVENT, reload);
+    window.addEventListener("focus", reload);
+    return (): void => {
+      window.removeEventListener(ATLASSIAN_CONNECTORS_CHANGED_EVENT, reload);
+      window.removeEventListener("focus", reload);
+    };
+  }, [reload]);
+}
 function useConnectors(client: AtlassianConnectorsClient): ConnectorsController {
   const t = useTranslate();
-  const [connectors, setConnectors] = useState<readonly AtlassianConnectorMetadata[]>([]);
-  const [loading, setLoading] = useState(true);
+  const fallback = t("atlassianConnectors.retry");
+  const requestRevision = useRef(0);
+  const [view, setView] = useState<ConnectorListState>({ connectors: [], loading: true });
   const [revision, setRevision] = useState(0);
-  const [error, setError] = useState<string | undefined>();
   useEffect(() => {
     let active = true;
+    const request = ++requestRevision.current;
+    const current = (): boolean => active && request === requestRevision.current;
+    setView((old) => ({ connectors: old.connectors, loading: true }));
     client
       .listConnectors()
-      .then((list) => {
-        if (active) setConnectors(list);
+      .then((connectors) => {
+        if (current()) setView({ connectors, loading: false });
       })
-      .catch((error_: unknown) => {
-        if (active) {
-          setError(error_ instanceof ApiError ? error_.message : t("atlassianConnectors.retry"));
-        }
-      })
-      .finally(() => {
-        if (active) setLoading(false);
+      .catch(() => {
+        if (current()) setView((old) => ({ ...old, loading: false, error: fallback }));
       });
-    return () => {
+    return (): void => {
       active = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- explicit lifecycle refresh only; translation changes do not refetch.
-  }, [client, revision]);
-  const onCreated = (metadata: AtlassianConnectorMetadata): void => {
-    setConnectors((current) => [
-      metadata,
-      ...current.filter((c) => c.authRef !== metadata.authRef),
-    ]);
-  };
-  const onDeleted = (authRef: string): void => {
-    setConnectors((current) => current.filter((connector) => connector.authRef !== authRef));
-  };
+  }, [client, revision, fallback]);
   return {
-    connectors,
-    loading,
-    error,
-    onCreated,
-    onDeleted,
-    reload: () => setRevision((value) => value + 1),
+    ...view,
+    error: view.error,
+    onCreated: (metadata): void => {
+      requestRevision.current += 1;
+      setView((old) => ({
+        connectors: [metadata, ...old.connectors.filter((c) => c.authRef !== metadata.authRef)],
+        loading: false,
+      }));
+    },
+    onDeleted: (authRef): void => {
+      requestRevision.current += 1;
+      setView((old) => ({
+        connectors: old.connectors.filter((c) => c.authRef !== authRef),
+        loading: false,
+      }));
+    },
+    reload: (): void => {
+      requestRevision.current += 1;
+      setRevision((value) => value + 1);
+    },
   };
+}
+function ConnectorList({
+  connectors,
+  client,
+  ctrl,
+  pollIntervalMs,
+}: {
+  readonly connectors: readonly AtlassianConnectorMetadata[];
+  readonly client: AtlassianConnectorsClient;
+  readonly ctrl: ConnectorsController;
+  readonly pollIntervalMs: number | undefined;
+}): ReactNode {
+  return (
+    <ul className="acx-list">
+      {connectors.map((connector) => (
+        <ConnectorCard
+          key={connector.authRef}
+          connector={connector}
+          client={client}
+          onDeleted={ctrl.onDeleted}
+          onUpdated={ctrl.onCreated}
+          {...(pollIntervalMs === undefined ? {} : { pollIntervalMs })}
+        />
+      ))}
+    </ul>
+  );
 }
 
 function ConnectorsSection({
@@ -93,6 +136,7 @@ function ConnectorsSection({
 }): ReactNode {
   const t = useTranslate();
   const ctrl = useConnectors(client);
+  useCredentialChanges(ctrl.reload);
   const headingId = useId();
   const Heading = jiraLive ? "h4" : "h2";
   const connectors = ctrl.connectors.filter(
@@ -115,18 +159,12 @@ function ConnectorsSection({
           {t(jiraLive ? "atlassianConnectors.live.empty" : "atlassianConnectors.empty")}
         </p>
       ) : null}
-      <ul className="acx-list">
-        {connectors.map((connector) => (
-          <ConnectorCard
-            key={`${connector.authRef}:${connector.generation ?? 1}`}
-            connector={connector}
-            client={client}
-            onDeleted={ctrl.onDeleted}
-            onChanged={ctrl.reload}
-            {...(pollIntervalMs === undefined ? {} : { pollIntervalMs })}
-          />
-        ))}
-      </ul>
+      <ConnectorList
+        connectors={connectors}
+        client={client}
+        ctrl={ctrl}
+        pollIntervalMs={pollIntervalMs}
+      />
       {adding ? (
         <AddConnectorForm
           client={client}

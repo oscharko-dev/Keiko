@@ -144,6 +144,12 @@ export type AtlassianCredentialCreateRequest = AtlassianCredentialCreateBase &
       }
   );
 
+/** Owner-scoped Live-Pod updates retain identity; token replacement advances the generation. */
+export type AtlassianLivePodUpdateRequest = { readonly expectedGeneration: number } & (
+  | { readonly displayName: string; readonly apiToken?: string }
+  | { readonly displayName?: string; readonly apiToken: string }
+);
+
 export const ATLASSIAN_CONNECTOR_AUTH_SCHEMES: readonly AtlassianConnectorAuthScheme[] =
   Object.freeze([
     "basic-api-token",

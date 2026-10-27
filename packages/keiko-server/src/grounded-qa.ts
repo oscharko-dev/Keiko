@@ -1,3 +1,6 @@
+import type { ParsedDesktopChatSend } from "./chat-handlers.js";
+import { createJiraChatToolTurn, scopeJiraChatToolTurn } from "./atlassian/jiraChatToolTurn.js";
+import { callGroundedSynthesisModel } from "./grounded-plural-synthesis.js";
 import { withMarkdownSkillRequestAuthority } from "./markdown-skill-authority.js";
 import { promptFitRedactor } from "./grounded-prompt-redactor.js";
 import {
@@ -1860,7 +1863,8 @@ async function dispatchGroundedSynthesis(
   });
   const promptTokens = countGatewayPromptTokens({ messages: sent.messages }, ctx.tokenAccounting);
   try {
-    const response = await ctx.model.call(
+    const response = await callGroundedSynthesisModel(
+      ctx.model,
       {
         modelId: ctx.modelId,
         messages: sent.messages,
@@ -1870,6 +1874,8 @@ async function dispatchGroundedSynthesis(
         attemptAdmission: tracker.admission,
       },
       ctx.signal,
+      tracker,
+      ctx.deps.jiraChatToolTurn,
     );
     ctx.synthesis.recordCompleted();
     tracker.settleFallback(promptTokens, response.usage);
@@ -3383,7 +3389,29 @@ async function executeGroundedAskInTurn(
     surface: "grounded-chat",
   });
   try {
-    return await runAdmittedGroundedAsk(admitted, deps, runner, multiSource, hybrid);
+    const toolTurn = await createJiraChatToolTurn(
+      deps,
+      groundedModelId(admitted),
+      admittedGroundedUser(admitted),
+      admitted.signal,
+      admitted.correlationId,
+    );
+    const scoped = scopeJiraChatToolTurn(deps, toolTurn);
+    return await runAdmittedGroundedAsk(
+      toolTurn === undefined
+        ? admitted
+        : {
+            ...admitted,
+            signal: AbortSignal.any([
+              toolTurn.signal,
+              AbortSignal.timeout(Math.max(0, toolTurn.deadlineAtMs - Date.now())),
+            ]),
+          },
+      scoped,
+      runner,
+      multiSource,
+      hybrid,
+    );
   } finally {
     releaseSession();
   }
@@ -3516,6 +3544,7 @@ export async function runGroundedAskInput(
   deps: UiHandlerDeps,
   options: {
     readonly signal?: AbortSignal | undefined;
+    readonly correlationId?: string | undefined;
     readonly runner?: GroundedRunner | undefined;
     readonly multiSource?: MultiSourceSeam | undefined;
     readonly hybrid?: HybridSeam | undefined;
@@ -3524,12 +3553,55 @@ export async function runGroundedAskInput(
   const chat = findChatById(deps, input.chatId);
   if (chat === undefined) return notFound("Chat not found.");
   return executeGroundedAsk(
-    { chat, input, signal: options.signal ?? new AbortController().signal },
+    {
+      chat,
+      input,
+      signal: options.signal ?? new AbortController().signal,
+      correlationId: options.correlationId,
+    },
     deps,
     options.runner,
     options.multiSource,
     options.hybrid,
   );
+}
+
+/** Adapt the ordinary buffered API to the same accepted grounded turn and canonical rows. */
+export async function runMixedGroundedChat(
+  parsed: ParsedDesktopChatSend,
+  deps: UiHandlerDeps,
+  signal: AbortSignal,
+  correlationId: string | undefined,
+): Promise<RouteResult> {
+  const { request, chat } = parsed;
+  if (request.attachments.length > 0 || request.documentContext.length > 0)
+    return badRequest("Mixed grounded turns do not support supplemental attachments.");
+  const result = await runGroundedAskInput(
+    {
+      chatId: chat.id,
+      content: request.content,
+      modelId: request.modelId,
+      clientTurnId: request.clientTurnId,
+      memory: request.memory,
+      expectedGroundingScopeIdentity: request.expectedGroundingScopeIdentity,
+      expectedSkillSelectionRevision: request.expectedSkillSelectionRevision,
+    },
+    deps,
+    { signal, correlationId },
+  );
+  if (result.status !== 200 || !groundedAnswerBody(result.body)) return result;
+  const user = deps.store.findMessageById(result.body.userMessageId);
+  const assistant = deps.store.findMessageById(result.body.assistantMessageId);
+  if (user === undefined || assistant === undefined)
+    throw new Error("Grounded canonical rows unavailable");
+  return {
+    status: 200,
+    body: {
+      chat: deps.store.findChatById(chat.id) ?? chat,
+      messages: [user, assistant],
+      memory: result.body.memory,
+    },
+  };
 }
 
 function groundedAnswerBody(value: unknown): value is GroundedAnswer {

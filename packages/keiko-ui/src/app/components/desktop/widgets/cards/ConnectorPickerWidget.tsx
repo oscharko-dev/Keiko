@@ -14,6 +14,12 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
+import {
+  listAtlassianConnectors,
+  type AtlassianConnectorMetadata,
+} from "@/lib/atlassian-connectors-api";
+import { useConnectorRefresh } from "../../useConnectorRefresh";
+import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
 import styles from "./ConnectorPickerWidget.module.css";
 import {
   capsulesForKnowledgePodUi,
@@ -323,10 +329,14 @@ function KnowledgeConnectorNode({
   selectedLabel,
   selectedState,
   onManageConnectors,
+  stateLabel,
+  meta,
 }: {
   readonly selectedLabel: string | undefined;
   readonly selectedState: string | undefined;
   readonly onManageConnectors: () => void;
+  readonly stateLabel?: string;
+  readonly meta?: string;
 }): ReactNode {
   const t = useLocalKnowledgeTranslate();
   const label =
@@ -339,13 +349,15 @@ function KnowledgeConnectorNode({
         <ServerIcon size={42} />
       </div>
       <div className="connector-node-copy">
-        <p className="connector-node-kicker">{connectorNodeStateLabel(t, selectedState)}</p>
+        <p className="connector-node-kicker">
+          {stateLabel ?? connectorNodeStateLabel(t, selectedState)}
+        </p>
         {/* Non-heading element: this compact Knowledge Pod node is a leaf card with no
             sectioning context, so a real <h2> was an orphan heading (GEN-UI-A11Y-018). */}
         <p className="connector-node-title" title={label}>
           {label}
         </p>
-        <p className="connector-node-meta">{t("localKnowledge.node.meta")}</p>
+        <p className="connector-node-meta">{meta ?? t("localKnowledge.node.meta")}</p>
       </div>
       <button type="button" className="connector-node-manage" onClick={onManageConnectors}>
         {t("localKnowledge.node.manage")}
@@ -397,6 +409,53 @@ function BoundKnowledgeConnectorNode({
   );
 }
 
+function BoundJiraConnectorNode({
+  podId,
+  selectedLabel,
+  onManageConnectors,
+}: {
+  readonly podId: string;
+  readonly selectedLabel: string | undefined;
+  readonly onManageConnectors: () => void;
+}): ReactNode {
+  const t = useOptionalWidgetTranslate();
+  const [connector, setConnector] = useState<AtlassianConnectorMetadata>();
+  const [revision, refresh] = useState(0);
+  useConnectorRefresh(() => refresh((value) => value + 1));
+  useEffect(() => {
+    let active = true;
+    setConnector(undefined);
+    void listAtlassianConnectors()
+      .then((items) => {
+        if (active)
+          setConnector(
+            items.find(
+              (item) => item.deployment === "data-center" && item.livePod?.podId === podId,
+            ),
+          );
+      })
+      .catch(() => {
+        if (active) setConnector(undefined);
+      });
+    return (): void => {
+      active = false;
+    };
+  }, [podId, revision]);
+  const ready =
+    connector?.deployment === "data-center" &&
+    connector.livePod?.verificationStatus === "ok" &&
+    !connector.livePod.verificationInProgress;
+  return (
+    <KnowledgeConnectorNode
+      selectedLabel={connector?.displayName ?? selectedLabel}
+      selectedState={undefined}
+      stateLabel={t(ready ? "chat.jira.liveReady" : "chat.jira.liveUnavailable")}
+      meta={t("chat.jira.liveTools")}
+      onManageConnectors={onManageConnectors}
+    />
+  );
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export function ConnectorPickerWidget({
@@ -429,6 +488,11 @@ export function ConnectorPickerWidget({
   const [setsFailed, setSetsFailed] = useState(false);
   // C263 — bumping this token re-runs the load effect ("Try again" in ErrorState).
   const [reloadToken, setReloadToken] = useState(0);
+  const isJiraNode =
+    presentation === "node" &&
+    selectedKind === "jira-live" &&
+    selectedId !== undefined &&
+    selectedId.length > 0;
   const isConnectorNode =
     presentation === "node" &&
     selectedKind === "capsule" &&
@@ -436,7 +500,7 @@ export function ConnectorPickerWidget({
     selectedId.length > 0;
 
   useEffect(() => {
-    if (isConnectorNode) return undefined;
+    if (isConnectorNode || isJiraNode) return undefined;
     let cancelled = false;
     async function load(): Promise<void> {
       setLoading(true);
@@ -471,7 +535,16 @@ export function ConnectorPickerWidget({
     return () => {
       cancelled = true;
     };
-  }, [isConnectorNode, reloadToken]);
+  }, [isConnectorNode, isJiraNode, reloadToken]);
+
+  if (isJiraNode)
+    return (
+      <BoundJiraConnectorNode
+        podId={selectedId}
+        selectedLabel={selectedLabel}
+        onManageConnectors={onManageConnectors}
+      />
+    );
 
   if (isConnectorNode) {
     return (

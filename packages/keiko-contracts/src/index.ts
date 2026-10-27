@@ -1248,6 +1248,7 @@ export type {
   AtlassianCredentialPublicMetadata,
   JiraLivePodView,
   AtlassianCredentialCreateRequest,
+  AtlassianLivePodUpdateRequest,
   AtlassianConnectorAuthorityFailureReason,
   AtlassianConnectorDescriptor,
   AtlassianConnectorHumanInitiationReason,

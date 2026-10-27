@@ -1,5 +1,35 @@
+import { DE_AUTONOMY_MODE_LABELS } from "@/lib/autonomy-mode-labels";
 import type { OptionalWidgetMessageCatalog } from "./i18n-messages.optional.en";
 export const OPTIONAL_WIDGET_DE_MESSAGES = {
+  ...DE_AUTONOMY_MODE_LABELS,
+  "atlassianConnectors.live.rename": "Pod umbenennen",
+  "atlassianConnectors.live.renameTitle": "Jira-Pod umbenennen",
+  "atlassianConnectors.live.rotateTitle": "Jira-Token ersetzen",
+  "atlassianConnectors.live.replaceToken": "Token ersetzen",
+  "atlassianConnectors.live.newToken": "Neues API-Token",
+  "atlassianConnectors.live.saveName": "Namen speichern",
+  "atlassianConnectors.live.saveToken": "Token speichern",
+  "atlassianConnectors.live.saving": "Änderungen werden gespeichert…",
+  "atlassianConnectors.live.rotateHint":
+    "Der Pod und seine Chat-Verbindungen bleiben erhalten. Der Tokenwechsel stoppt den aktuellen Zugriff und ausstehende Aktionen. Prüfe die Verbindung erneut und erteile eine neue Lesefreigabe im Chat.",
+  "atlassianConnectors.live.operationFailed":
+    "Die Aktion konnte nicht bestätigt werden. Aktualisiere den Pod-Status, bevor du weitere Änderungen vornimmst.",
+  "atlassianConnectors.live.refresh": "Status aktualisieren",
+  "atlassianConnectors.live.refreshRequired":
+    "Der aktuelle Verbindungsstatus ist unbekannt. Aktualisiere ihn, bevor du diesen Pod verwendest.",
+  "atlassianConnectors.live.verifyRequired":
+    "Prüfe diese Verbindung, bevor du sie im Chat verwendest.",
+  "atlassianConnectors.live.remove": "Pod entfernen",
+  "atlassianConnectors.live.keep": "Pod behalten",
+  "atlassianConnectors.live.removeConfirm":
+    "Diesen Jira-Pod und sein gespeichertes Token entfernen? Alle verbundenen Chats werden getrennt und ihre ausstehenden Freigaben aufgehoben.",
+  "atlassianConnectors.live.capabilities":
+    "Im Chat kannst du Jira-Vorgänge und Metadaten suchen und lesen sowie Vorgänge erstellen, bearbeiten, zuweisen, kommentieren oder ihren Status ändern. Jira-Berechtigungen und Chat-Freigaben gelten für jede Aktion.",
+  "atlassianConnectors.live.readCapabilities":
+    "Nach deiner Lesefreigabe kann der Chat Jira-Vorgänge und Metadaten suchen und lesen. Der Zugriff hängt weiterhin von den Jira-Berechtigungen ab.",
+  "atlassianConnectors.live.patHint":
+    "Erstelle ein persönliches Zugriffstoken in deinem Jira-Profil. Keiko speichert es für den Jira-Zugriff. Gespeicherte Tokens werden nicht erneut angezeigt.",
+
   "chat.jira.writeApproval.unavailable": "Aktionsfreigabe derzeit nicht verfügbar",
   "chat.jira.writeApproval.title": "Jira-Aktion prüfen",
   "chat.jira.writeApproval.pending": "Deine Entscheidung steht aus",
@@ -39,6 +69,14 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.noPod": "Kein Jira-Pod",
   "chat.jira.podUnavailable": "Aktueller Pod nicht verfügbar",
   "chat.jira.verifyRequired": "Verifikation erforderlich",
+  "chat.jira.addToWorkspace": "Zum Workspace hinzufügen",
+  "chat.jira.workspaceHint":
+    "Ziehe diesen Jira-Pod auf den Workspace oder füge ihn mit dieser Schaltfläche hinzu. Verbinde seinen Port mit einem Chat.",
+  "chat.jira.liveTools": "Live-Jira-Werkzeuge",
+  "chat.jira.liveReady": "Verifizierter Jira-Pod",
+  "chat.jira.liveUnavailable":
+    "Jira-Pod nicht verfügbar; öffne Knowledge Pods, um ihn zu prüfen oder neu zu verbinden.",
+  "chat.jira.effectiveMode": "Wirksamer Modus: {mode}",
   "chat.jira.modeLabel": "Autonomiemodus des Chats",
   "chat.jira.modeHelp":
     "Der erste Jira-Lesezugriff benötigt immer eine Freigabe. Installationsgrenzen und die aktuellen Chat-Berechtigungen gelten weiterhin.",

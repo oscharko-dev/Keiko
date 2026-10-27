@@ -21,6 +21,7 @@ import type {
   ChatToolWriteApprovalView,
   AtlassianCredentialPublicMetadata,
   AtlassianCredentialCreateRequest,
+  AtlassianLivePodUpdateRequest,
   AtlassianConnectorActionExecutionResult,
   AtlassianConnectorActivityRecord,
   AtlassianConnectorActivityReasonCode,
@@ -122,6 +123,17 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   return bffFetchJson<T>(path, init, { parseFailureMessage: friendlyParseFailureMessage });
 }
 
+/** Body-free invalidation hint; subscribers must GET current server-owned metadata. */
+export const ATLASSIAN_CONNECTORS_CHANGED_EVENT = "keiko:atlassian-connectors-changed";
+async function credentialMutation<T>(path: string, init: RequestInit): Promise<T> {
+  try {
+    return await fetchJson<T>(path, init);
+  } finally {
+    if (typeof window !== "undefined")
+      window.dispatchEvent(new Event(ATLASSIAN_CONNECTORS_CHANGED_EVENT));
+  }
+}
+
 const CREDENTIALS_PATH = "/api/atlassian-connectors/credentials";
 
 function credentialPath(authRef: string, suffix = ""): string {
@@ -142,7 +154,7 @@ export async function listAtlassianConnectors(): Promise<readonly AtlassianConne
 export async function createAtlassianConnector(
   input: CreateAtlassianConnectorInput,
 ): Promise<AtlassianConnectorMetadata> {
-  return fetchJson<AtlassianConnectorMetadata>(CREDENTIALS_PATH, {
+  return credentialMutation<AtlassianConnectorMetadata>(CREDENTIALS_PATH, {
     method: "POST",
     body: JSON.stringify({
       ...input,
@@ -151,14 +163,24 @@ export async function createAtlassianConnector(
   });
 }
 
+export async function updateAtlassianConnector(
+  authRef: string,
+  input: AtlassianLivePodUpdateRequest,
+): Promise<AtlassianConnectorMetadata> {
+  return credentialMutation<AtlassianConnectorMetadata>(credentialPath(authRef), {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
 export async function deleteAtlassianConnector(authRef: string): Promise<{ ok: true }> {
-  return fetchJson<{ ok: true }>(credentialPath(authRef), { method: "DELETE" });
+  return credentialMutation<{ ok: true }>(credentialPath(authRef), { method: "DELETE" });
 }
 
 export async function verifyAtlassianConnector(
   authRef: string,
 ): Promise<VerifyAtlassianConnectorResult> {
-  return fetchJson<VerifyAtlassianConnectorResult>(credentialPath(authRef, "/verify"), {
+  return credentialMutation<VerifyAtlassianConnectorResult>(credentialPath(authRef, "/verify"), {
     method: "POST",
     body: "{}",
   });
@@ -258,6 +280,7 @@ export interface AtlassianConnectorsClient {
   readonly createConnector: (
     input: CreateAtlassianConnectorInput,
   ) => Promise<AtlassianConnectorMetadata>;
+  readonly updateConnector: typeof updateAtlassianConnector;
   readonly deleteConnector: (authRef: string) => Promise<{ ok: true }>;
   readonly verifyConnector: (authRef: string) => Promise<VerifyAtlassianConnectorResult>;
   readonly startSync: (
@@ -276,6 +299,7 @@ export interface AtlassianConnectorsClient {
 export const defaultAtlassianConnectorsClient: AtlassianConnectorsClient = {
   listConnectors: listAtlassianConnectors,
   createConnector: createAtlassianConnector,
+  updateConnector: updateAtlassianConnector,
   deleteConnector: deleteAtlassianConnector,
   verifyConnector: verifyAtlassianConnector,
   startSync: startAtlassianConnectorSync,

@@ -86,3 +86,40 @@ export function validateMutationSettlement(
   }
   if (!allowedOutcomes(record).has(outcome)) throw journalConflict();
 }
+
+function settledOutcome(record: ChatToolMutationRecord): JiraMutationOutcome | undefined {
+  switch (record.outcome) {
+    case "succeeded":
+    case "succeeded-unconfirmed":
+      return acknowledgedStatus(record.httpStatus) ? record.outcome : undefined;
+    case "not-dispatched":
+    case "rejected":
+      return record.httpStatus === null ? record.outcome : undefined;
+    case "unknown":
+      return acknowledgedStatus(record.httpStatus) ? undefined : record.outcome;
+    default:
+      return undefined;
+  }
+}
+
+function validHttpStatus(status: number | null): boolean {
+  return status === null || (Number.isInteger(status) && status >= 100 && status <= 599);
+}
+
+export function observedChatToolMutationOutcome(
+  record: ChatToolMutationRecord,
+): JiraMutationOutcome | undefined {
+  if (!validHttpStatus(record.httpStatus)) return undefined;
+  if (record.phase === "settled") return settledOutcome(record);
+  if (record.outcome !== null) return undefined;
+  switch (record.phase) {
+    case "prepared":
+      return record.httpStatus === null ? "not-dispatched" : undefined;
+    case "dispatched":
+      return acknowledgedStatus(record.httpStatus) ? undefined : "unknown";
+    case "acknowledged":
+      return acknowledgedStatus(record.httpStatus) ? "succeeded-unconfirmed" : undefined;
+    default:
+      return undefined;
+  }
+}

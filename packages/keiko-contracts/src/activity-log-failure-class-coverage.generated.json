@@ -2927,21 +2927,55 @@
       "lifecycleTransitions": ["state"],
       "lifecycleOperations": {
         "start": [],
-        "state": ["chat.tool-transcript.updated"],
+        "state": ["chat.tool-mutation.projected", "chat.tool-transcript.updated"],
         "end": [],
         "failure": [],
         "loss": []
       },
       "causalEdges": [
         {
+          "op": "chat.tool-mutation.projected",
+          "mode": "correlation"
+        },
+        {
           "op": "chat.tool-transcript.updated",
           "mode": "correlation"
         }
       ],
       "lossSignals": [],
-      "resourceSignals": ["chat.tool-transcript.updated"],
+      "resourceSignals": ["chat.tool-mutation.projected", "chat.tool-transcript.updated"],
       "replayReferences": [],
       "operations": [
+        {
+          "op": "chat.tool-mutation.projected",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "messageDigest",
+              "type": "string",
+              "dataClass": "digest",
+              "required": true
+            },
+            {
+              "name": "observationCount",
+              "type": "number",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["completeness-state", "count", "digest", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["chat.tool-mutation.projected.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
         {
           "op": "chat.tool-transcript.updated",
           "owner": "keiko-server",
@@ -2989,7 +3023,11 @@
       "lifecycleTransitions": ["start", "state"],
       "lifecycleOperations": {
         "start": ["chat.turn.started"],
-        "state": ["chat.context.selected", "chat.response.message"],
+        "state": [
+          "chat.context.selected",
+          "chat.grounded-tool-round.completed",
+          "chat.response.message"
+        ],
         "end": [],
         "failure": [],
         "loss": []
@@ -2997,6 +3035,10 @@
       "causalEdges": [
         {
           "op": "chat.context.selected",
+          "mode": "correlation"
+        },
+        {
+          "op": "chat.grounded-tool-round.completed",
           "mode": "correlation"
         },
         {
@@ -3009,7 +3051,12 @@
         }
       ],
       "lossSignals": [],
-      "resourceSignals": ["chat.context.selected", "chat.response.message", "chat.turn.started"],
+      "resourceSignals": [
+        "chat.context.selected",
+        "chat.grounded-tool-round.completed",
+        "chat.response.message",
+        "chat.turn.started"
+      ],
       "replayReferences": [],
       "operations": [
         {
@@ -3130,6 +3177,42 @@
             "causeChain": false
           },
           "proofIds": ["chat.context.selected.budget"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "chat.grounded-tool-round.completed",
+          "owner": "keiko-server",
+          "category": "gateway",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "phase",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "remainingSynthesisCalls",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "toolCallCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["chat.grounded-tool-round.completed.schedule"],
           "replayReferences": [],
           "missingObligations": []
         },

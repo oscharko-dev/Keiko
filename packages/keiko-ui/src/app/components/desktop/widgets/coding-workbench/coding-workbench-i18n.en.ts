@@ -1,4 +1,6 @@
+import { EN_AUTONOMY_MODE_LABELS } from "@/lib/autonomy-mode-labels";
 export const EN_CODING_WORKBENCH_MESSAGES = {
+  ...EN_AUTONOMY_MODE_LABELS,
   "codingWorkbench.progress.working": "Working",
   "codingWorkbench.progress.approval": "Waiting for your approval",
   "codingWorkbench.progress.question": "Your answer is needed",
@@ -298,17 +300,14 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.info.none": "None",
   "codingWorkbench.mode.eyebrow": "Autonomy",
   "codingWorkbench.mode.unconfirmed": "Awaiting server confirmation",
-  "codingWorkbench.mode.governed-assist.label": "Ask for approval",
   "codingWorkbench.mode.governed-assist.short":
     "Reads freely; asks before every file change and command",
   "codingWorkbench.mode.governed-assist.description":
     "Reads and searches run freely; every file change and every command asks for approval, and there is no internet access. Git commit, push, and pull request are done by Keiko after separate approval, never by the agent's shell. Files outside the workspace and secret files such as .env and keys are never accessible.",
-  "codingWorkbench.mode.supervised-coding.label": "Supervised workspace",
   "codingWorkbench.mode.supervised-coding.short":
     "Routine edits and vetted project commands run; other commands ask",
   "codingWorkbench.mode.supervised-coding.description":
     "Routine workspace edits and vetted project commands run; other commands ask for approval, and there is no internet access. Git commit, push, and pull request are done by Keiko after separate approval, never by the agent's shell. Files outside the workspace and secret files such as .env and keys are never accessible.",
-  "codingWorkbench.mode.autonomous-delivery.label": "Full access",
   "codingWorkbench.mode.autonomous-delivery.short":
     "Works without asking within the task's authority; internet only here",
   "codingWorkbench.mode.autonomous-delivery.description":

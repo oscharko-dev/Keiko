@@ -7,7 +7,7 @@ import { basicAuth, labRequest, loadSession, requireLicense } from "./lab-client
 import { jsonRequest, prepareChat, request, withLiveChat } from "./chat-read.mjs";
 
 const MODES = new Set(["governed-assist", "supervised-coding", "autonomous-delivery"]);
-const TRANSPORTS = new Set(["buffered", "stream"]);
+const TRANSPORTS = new Set(["buffered", "stream", "browser"]);
 const WRITE_TOOLS = new Set([
   "jira_create",
   "jira_edit",
@@ -249,8 +249,16 @@ async function writeTurn(context, chat, intent) {
   }
 }
 
-async function qualifyChatWrite(context, intent, pending) {
+async function prepareWriteChat(context, intent) {
   const { session, modelId } = context;
+  if (intent.transport === "browser") {
+    const created = await jsonRequest(context.origin, context.cookie, "chat-create", "/api/chats", {
+      projectPath: context.projectPath,
+      title: "Synthetic Jira browser Chat",
+      selectedModel: modelId,
+    });
+    return created.chat;
+  }
   const created = await prepareChat(
     context.origin,
     context.cookie,
@@ -267,13 +275,43 @@ async function qualifyChatWrite(context, intent, pending) {
     "PATCH",
   );
   assert.equal(chat.toolMode, intent.mode);
+  return chat;
+}
+
+async function dispatchWrite(context, chat, intent, pending) {
+  if (intent.transport !== "browser") return writeTurn(context, chat, intent);
+  const { runBrowserWrite } = await import("./browser-write.mjs");
+  const { completed, decisions } = await runBrowserWrite({
+    context,
+    chat,
+    intent,
+    prompt: payload(context, chat, intent).content,
+    beforeDecision: async () => {
+      assert.deepEqual(
+        await commentState(context.session, intent.key, intent.marker),
+        intent.before,
+      );
+    },
+    onIntent: (clientTurnId) => {
+      intent.clientTurnId = clientTurnId;
+      privateJson(pending, intent);
+    },
+    observe: () => observeMessages(context, chat),
+  });
+  verifyTurn(completed, decisions, intent, new Set());
+  return decisions;
+}
+
+async function qualifyChatWrite(context, intent, pending) {
+  const { session } = context;
+  const chat = await prepareWriteChat(context, intent);
   intent.chatId = chat.id;
   intent.before = await commentState(session, intent.key, intent.marker);
   assert.equal(intent.before.matches, 0);
   intent.phase = "dispatch-may-have-started";
   privateJson(pending, intent);
   stage("dispatch", { mode: intent.mode, transport: intent.transport });
-  intent.decisions = await writeTurn(context, chat, intent);
+  intent.decisions = await dispatchWrite(context, chat, intent, pending);
   intent.after = await commentState(session, intent.key, intent.marker);
   assert.deepEqual(intent.after, { total: intent.before.total + 1, matches: 1 });
   const reloaded = await observeMessages(context, chat);
@@ -294,7 +332,9 @@ async function main() {
   const mode = process.argv[4];
   const transport = process.argv[5];
   if (!modelId || !MODES.has(mode) || !TRANSPORTS.has(transport))
-    throw new TypeError("Usage: chat-write.mjs <private-session> <model> <mode> <buffered|stream>");
+    throw new TypeError(
+      "Usage: chat-write.mjs <private-session> <model> <mode> <buffered|stream|browser>",
+    );
   await requireLicense(session);
   const fixture = JSON.parse(readFileSync(join(session.directory, "fixture.json"), "utf8"));
   const key = fixture.issueKeys[1];
@@ -313,6 +353,7 @@ async function main() {
   await withLiveChat({
     session,
     modelId,
+    browser: transport === "browser",
     retainState: true,
     stateReady: (root) => {
       intent.productState = root;

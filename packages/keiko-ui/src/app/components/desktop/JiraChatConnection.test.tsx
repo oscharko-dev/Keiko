@@ -1,10 +1,11 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
 import type { Chat } from "@/lib/types";
 import type { AtlassianConnectorMetadata } from "@/lib/atlassian-connectors-api";
 import { updateGroundingScopes } from "@/lib/chat-grounding-mutation";
+import { requestJiraChatConnection } from "./jira-chat-connection-request";
 import { JiraChatConnection } from "./JiraChatConnection";
 
 const CHAT: Chat = {
@@ -19,6 +20,8 @@ const CHAT: Chat = {
   createdAt: 1,
   updatedAt: 2,
   groundingScopeIdentity: "scope-one",
+  toolModeCeiling: "autonomous-delivery",
+  effectiveToolMode: "governed-assist",
 };
 const POD: AtlassianConnectorMetadata = {
   schemaVersion: "1",
@@ -65,7 +68,7 @@ describe("Jira Chat connection", () => {
     );
     await open(user);
     await screen.findByRole("option", { name: "Lab Jira" });
-    expect(screen.getByLabelText("Chat autonomy mode")).toHaveValue("governed-assist");
+    expect(screen.getByLabelText("Chat autonomy mode")).toHaveTextContent("Ask for approval");
     await user.selectOptions(screen.getByLabelText("Jira Pod"), "pod-one");
     await user.click(screen.getByRole("button", { name: "Apply Jira settings" }));
     expect(changed).not.toHaveBeenCalled();
@@ -127,6 +130,27 @@ describe("Jira Chat connection", () => {
   });
 });
 
+it("shows the server-clamped effective mode and prevents selecting modes above its ceiling", async () => {
+  const user = userEvent.setup();
+  render(
+    <JiraChatConnection
+      chat={{
+        ...CHAT,
+        toolMode: "autonomous-delivery",
+        toolModeCeiling: "supervised-coding",
+        effectiveToolMode: "supervised-coding",
+      }}
+      onChatChanged={vi.fn()}
+      list={async () => [POD]}
+    />,
+  );
+  await open(user);
+  expect(await screen.findByText("Effective mode: Supervised workspace")).toBeVisible();
+  await user.click(screen.getByRole("combobox", { name: "Chat autonomy mode" }));
+  expect(screen.getByRole("option", { name: "Full access" })).toBeDisabled();
+  expect(screen.getByRole("option", { name: "Supervised workspace" })).not.toBeDisabled();
+});
+
 it("persists the selected mode through the same owner and never treats failure as confirmation", async () => {
   const user = userEvent.setup();
   const persist = vi.fn<typeof updateGroundingScopes>().mockRejectedValue(new Error("conflict"));
@@ -141,7 +165,8 @@ it("persists the selected mode through the same owner and never treats failure a
   );
   await open(user);
   await screen.findByRole("option", { name: "Lab Jira" });
-  await user.selectOptions(screen.getByLabelText("Chat autonomy mode"), "autonomous-delivery");
+  await user.click(screen.getByRole("combobox", { name: "Chat autonomy mode" }));
+  await user.click(screen.getByRole("option", { name: "Full access" }));
   await user.click(screen.getByRole("button", { name: "Apply Jira settings" }));
   await screen.findByRole("alert");
   expect(persist).toHaveBeenCalledWith(
@@ -172,4 +197,176 @@ it("disables unverified Pods and closes with Escape while restoring focus", asyn
     expect(screen.getByTestId("jira-chat-connection")).not.toHaveAttribute("open"),
   );
   expect(screen.getByText("Jira connection")).toHaveFocus();
+});
+
+describe("Jira workspace connection requests", () => {
+  it("settles the requested edge only after the exact Chat and Pod are acknowledged", async () => {
+    const user = userEvent.setup();
+    let finish!: (chat: Chat) => void;
+    const persist = vi.fn<typeof updateGroundingScopes>(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    render(
+      <div data-window-id="chat-window">
+        <JiraChatConnection
+          chat={CHAT}
+          list={async () => [POD]}
+          persist={persist}
+          onChatChanged={vi.fn()}
+        />
+      </div>,
+    );
+    let pending!: Promise<boolean>;
+    act(() => {
+      pending = requestJiraChatConnection("chat-window", CHAT.id, "pod-one");
+    });
+    const settled = vi.fn();
+    void pending.then(settled);
+    await screen.findByRole("option", { name: "Lab Jira" });
+    await user.click(screen.getByRole("button", { name: "Apply Jira settings" }));
+    expect(settled).not.toHaveBeenCalled();
+    await act(async () => {
+      finish({
+        ...CHAT,
+        jiraPodBinding: {
+          podId: "pod-one",
+          bindingGeneration: 1,
+          authenticationGeneration: 1,
+          connectedAtMs: 1,
+        },
+      });
+    });
+    expect(await pending).toBe(true);
+  });
+
+  it("re-acknowledges an already-bound Pod through the server when a new workspace edge requests it", async () => {
+    const user = userEvent.setup();
+    const bound: Chat = {
+      ...CHAT,
+      jiraPodBinding: {
+        podId: "pod-one",
+        bindingGeneration: 2,
+        authenticationGeneration: 1,
+        connectedAtMs: 1,
+      },
+    };
+    const persist = vi.fn<typeof updateGroundingScopes>().mockResolvedValue(bound);
+    render(
+      <div data-window-id="chat-window">
+        <JiraChatConnection
+          chat={bound}
+          list={async () => [POD]}
+          persist={persist}
+          onChatChanged={vi.fn()}
+        />
+      </div>,
+    );
+    let pending!: Promise<boolean>;
+    act(() => {
+      pending = requestJiraChatConnection("chat-window", CHAT.id, "pod-one");
+    });
+    await screen.findByRole("option", { name: "Lab Jira" });
+    expect(screen.getByRole("button", { name: "Apply Jira settings" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Apply Jira settings" }));
+    expect(await pending).toBe(true);
+    expect(persist).toHaveBeenCalledWith(
+      bound,
+      { jiraPodId: "pod-one", toolMode: "governed-assist" },
+      expect.any(Function),
+    );
+  });
+
+  it("keeps explicit replacement confirmation and cancels pending requests with Escape", async () => {
+    const user = userEvent.setup();
+    const persist = vi.fn<typeof updateGroundingScopes>();
+    const chat = {
+      ...CHAT,
+      jiraPodBinding: {
+        podId: "old-pod",
+        bindingGeneration: 1,
+        authenticationGeneration: 1,
+        connectedAtMs: 1,
+      },
+    };
+    render(
+      <div data-window-id="chat-window">
+        <JiraChatConnection
+          chat={chat}
+          list={async () => [POD]}
+          persist={persist}
+          onChatChanged={vi.fn()}
+        />
+      </div>,
+    );
+    let pending!: Promise<boolean>;
+    act(() => {
+      pending = requestJiraChatConnection("chat-window", CHAT.id, "pod-one");
+    });
+    await screen.findByRole("option", { name: "Lab Jira" });
+    expect(screen.getByRole("button", { name: "Apply Jira settings" })).toBeDisabled();
+    expect(screen.getByRole("checkbox")).not.toBeChecked();
+    await user.keyboard("{Escape}");
+    await waitFor(async () => expect(await pending).toBe(false));
+    expect(persist).not.toHaveBeenCalled();
+  });
+
+  it("rejects superseded requests and late responses after the requested form is gone", async () => {
+    const user = userEvent.setup();
+    const changed = vi.fn();
+    let finish!: (chat: Chat) => void;
+    const persist = vi.fn<typeof updateGroundingScopes>(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const view = render(
+      <div data-window-id="chat-window">
+        <JiraChatConnection
+          chat={CHAT}
+          list={async () => [POD]}
+          persist={persist}
+          onChatChanged={changed}
+        />
+      </div>,
+    );
+    let first!: Promise<boolean>;
+    let second!: Promise<boolean>;
+    act(() => {
+      first = requestJiraChatConnection("chat-window", CHAT.id, "pod-one");
+    });
+    act(() => {
+      second = requestJiraChatConnection("chat-window", CHAT.id, "pod-one");
+    });
+    expect(await first).toBe(false);
+    await screen.findByRole("option", { name: "Lab Jira" });
+    await user.click(screen.getByRole("button", { name: "Apply Jira settings" }));
+    view.unmount();
+    expect(await second).toBe(false);
+    await act(async () => {
+      finish({
+        ...CHAT,
+        jiraPodBinding: {
+          podId: "pod-one",
+          bindingGeneration: 1,
+          authenticationGeneration: 1,
+          connectedAtMs: 1,
+        },
+      });
+    });
+    expect(changed).not.toHaveBeenCalled();
+  });
+
+  it("rejects an absent or differently targeted form without changing any source", async () => {
+    render(
+      <div data-window-id="other-window">
+        <JiraChatConnection chat={CHAT} list={async () => [POD]} onChatChanged={vi.fn()} />
+      </div>,
+    );
+    expect(await requestJiraChatConnection("chat-window", CHAT.id, "pod-one")).toBe(false);
+    expect(await requestJiraChatConnection("other-window", "another-chat", "pod-one")).toBe(false);
+  });
 });

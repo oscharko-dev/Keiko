@@ -1,3 +1,4 @@
+import type { JiraChatToolTurn } from "./atlassian/jiraChatToolTurn.js";
 import { EditorAgentAuthorityRegistry } from "./editor/agentAuthorityRegistry.js";
 import {
   installJiraChatCatalogRuntime,
@@ -951,6 +952,8 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   readonly atlassianSyncJobRegistry?: AtlassianSyncJobRegistry | undefined;
   /** Lazy application-owned managed host; shared by ordinary Chat turns and bound Pods. */
   readonly jiraChatCatalog?: JiraChatCatalogRuntime;
+  /** Accepted Chat turn scope reused by grounded preparation, tools and answer repair. */
+  readonly jiraChatToolTurn?: JiraChatToolTurn;
   // Shared resolved Coding/connector ceiling. Production always sets it; incomplete injected deps
   // fail closed instead of accepting any request-supplied ceiling.
   readonly autonomousDeliveryDeploymentCeiling?: CodingWorkbenchMode | undefined;

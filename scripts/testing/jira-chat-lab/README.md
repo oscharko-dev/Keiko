@@ -188,7 +188,7 @@ node scripts/testing/jira-chat-lab/chat-write.mjs "$HOME/.local/share/keiko-jira
 ```
 
 Supported modes are `governed-assist`, `supervised-coding` and `autonomous-delivery`;
-the transport argument is `buffered` or `stream`. Run groups sequentially with no other
+the transport argument is `buffered`, `stream` or `browser`. Run groups sequentially with no other
 stateful laboratory consumer. Each group uses the existing real model probe, authenticated
 normal Chat API, verified HTTPS Live Pod and shared gateway/binder/MCP execution path.
 It requests one unique synthetic comment and independently checks Jira before and after:
@@ -206,8 +206,17 @@ inside the laboratory directory. Inspect the recorded canonical turn/journal and
 using read-only requests before deciding how to reconcile the marker; never rerun a
 possibly executed comment. A successful group writes a private receipt and removes its
 pending marker. Output contains closed stages, counts and mode names only. These groups
-qualify normal Chat comment execution; other mutation operations, browser approvals and
-the complete acceptance matrix require their own evidence.
+qualify normal Chat comment execution; other mutation operations and the complete
+acceptance matrix require their own evidence.
+
+For `browser`, first build the current UI with `npm run build --workspace @oscharko-dev/keiko-ui`.
+The harness reuses the real browser setup below, creates and verifies the Pod through the
+Knowledge Hub, chooses the requested mode and connects the Chat through visible controls.
+It captures and persists the browser's actual canonical turn identity before approving
+the first read disclosure, checks the exact action textarea, and approves through the
+visible button. The rendered terminal state and independent Jira count must both confirm
+the write. Full access must display no write-approval card. Screenshots remain private in
+the session directory; an interrupted browser run retains the same reconciliation marker.
 
 ## Read through the actual browser
 

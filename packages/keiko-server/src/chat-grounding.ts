@@ -9,3 +9,8 @@ export function hasGroundingScope(chat: Chat): boolean {
     (chat.localKnowledgeScopes?.length ?? 0) > 0
   );
 }
+
+/** The buffered grounded owner also runs Jira tools when both source kinds are bound. */
+export function hasMixedJiraGroundingScope(chat: Chat): boolean {
+  return chat.jiraPodBinding !== undefined && hasGroundingScope(chat);
+}

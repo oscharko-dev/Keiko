@@ -20,6 +20,8 @@ import {
   rejectAtlassianConnectorAction,
   startAtlassianConnectorSync,
   verifyAtlassianConnector,
+  updateAtlassianConnector,
+  ATLASSIAN_CONNECTORS_CHANGED_EVENT,
 } from "./atlassian-connectors-api";
 
 interface RecordedCall {
@@ -65,6 +67,57 @@ const METADATA = {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+it("updates the existing credential with its expected generation and publishes only a body-free refresh hint", async () => {
+  const changed = vi.fn();
+  window.addEventListener(ATLASSIAN_CONNECTORS_CHANGED_EVENT, changed);
+  try {
+    const calls = stubFetch(200, METADATA);
+    await updateAtlassianConnector(METADATA.authRef, {
+      expectedGeneration: 7,
+      apiToken: "synthetic-replacement-pat",
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      url: `/api/atlassian-connectors/credentials/${encodeURIComponent(METADATA.authRef)}`,
+      method: "PATCH",
+      headers: { "X-Keiko-CSRF": "1" },
+    });
+    expect(JSON.parse(calls[0]?.body ?? "null")).toEqual({
+      expectedGeneration: 7,
+      apiToken: "synthetic-replacement-pat",
+    });
+    expect(changed).toHaveBeenCalledOnce();
+    expect(changed.mock.calls[0]?.[0]).toBeInstanceOf(Event);
+    expect(changed.mock.calls[0]?.[0]).not.toHaveProperty("detail");
+    stubFetch(200, { credentials: [] });
+    await listAtlassianConnectors();
+    expect(changed).toHaveBeenCalledOnce();
+  } finally {
+    window.removeEventListener(ATLASSIAN_CONNECTORS_CHANGED_EVENT, changed);
+  }
+});
+
+it("publishes a refresh hint after a lost mutation response and never repeats the mutation", async () => {
+  const changed = vi.fn();
+  window.addEventListener(ATLASSIAN_CONNECTORS_CHANGED_EVENT, changed);
+  const fetch = vi.fn(async (): Promise<Response> => {
+    throw new TypeError("Connection lost");
+  });
+  vi.stubGlobal("fetch", fetch);
+  try {
+    await expect(
+      updateAtlassianConnector(METADATA.authRef, {
+        expectedGeneration: 1,
+        displayName: "Renamed Pod",
+      }),
+    ).rejects.toThrow();
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(changed).toHaveBeenCalledOnce();
+  } finally {
+    window.removeEventListener(ATLASSIAN_CONNECTORS_CHANGED_EVENT, changed);
+  }
 });
 
 describe("atlassian-connectors-api — routes and methods", () => {

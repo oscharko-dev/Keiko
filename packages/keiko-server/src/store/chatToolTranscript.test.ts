@@ -1,3 +1,4 @@
+import type { ChatToolMutationIntent } from "./chatToolMutationTypes.js";
 import { validateToolResultEnvelope } from "@oscharko-dev/keiko-tool-catalog";
 import type { ChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
@@ -401,5 +402,95 @@ describe("durable Chat mutation projections", () => {
       result: { status: "cancelled", data: null },
       mutationOutcome: "succeeded-unconfirmed",
     });
+  });
+});
+
+function observedMutationFixture(): ReturnType<typeof fixture> & {
+  intent: ChatToolMutationIntent;
+} {
+  const base = fixture();
+  const turn = base.store.admitChatTurn("journal-projection-turn", {
+    chatId: base.chatId,
+    role: "user",
+    content: "Synthetic mutation history",
+    timestamp: 1001,
+    runId: undefined,
+    workflowId: undefined,
+    workflowStatus: undefined,
+    shortResult: undefined,
+    taskType: undefined,
+  });
+  if (turn.kind !== "admitted" || turn.userMessage.canonicalTurnRef === undefined)
+    throw new Error("Expected canonical turn");
+  const f = { ...base, id: turn.userMessage.id };
+  const view = startWrite(f);
+  const intent: ChatToolMutationIntent = {
+    invocationId: view.invocationId,
+    chatId: f.chatId,
+    userMessageId: f.id,
+    turnRef: turn.userMessage.canonicalTurnRef,
+    actorId: "private-actor",
+    podId: view.podId,
+    bindingGeneration: 1,
+    credentialGeneration: 1,
+    authorityDigest: "a".repeat(64),
+    actionDigest: view.actionDigest,
+    operation: view.operation,
+    correlationId: "mutation-projection-proof",
+  };
+  const journal = f.store.chatToolMutations;
+  if (journal === undefined) throw new Error("Missing mutation owner");
+  journal.prepare(intent);
+  return { ...f, intent };
+}
+function acknowledgeMutation(f: ReturnType<typeof observedMutationFixture>): void {
+  const journal = f.store.chatToolMutations;
+  if (journal === undefined) throw new Error("Missing mutation owner");
+  expect(journal.beginDispatch(f.intent.invocationId, () => true)).toBe(true);
+  journal.acknowledge(f.intent.invocationId, 201);
+  journal.settle(f.intent.invocationId, "succeeded-unconfirmed");
+}
+
+describe("authoritative late mutation history", () => {
+  it("keeps an active prepared mutation pending instead of claiming no effect", () => {
+    const f = observedMutationFixture();
+    expect(
+      f.store.findMessageById(f.id)?.toolTranscript?.exchanges[0]?.mutationOutcome,
+    ).toBeUndefined();
+  });
+  it("recovers a known acknowledgement even if the process never persisted a catalog result", () => {
+    const f = observedMutationFixture();
+    acknowledgeMutation(f);
+    const exchange = f.store.findMessageById(f.id)?.toolTranscript?.exchanges[0];
+    expect(exchange?.mutationOutcome).toBe("succeeded-unconfirmed");
+    expect(exchange?.result).toBeUndefined();
+    const event = f.logs.events.find((entry) => entry.op === "chat.tool-mutation.projected");
+    const line = formatActivityLogProofLine(event ?? {});
+    expectActivityLogProof("chat.tool-mutation.projected.line", line);
+    expect(line).not.toMatch(/SYN-1|private-actor|comment/);
+    expect(line).not.toContain(f.id);
+    expect(analyzeLogText(line).timelines).toMatchObject([
+      {
+        correlationId: "mutation-projection-proof",
+        lines: [{ op: "chat.tool-mutation.projected" }],
+      },
+    ]);
+  });
+  it.each([
+    ["action_digest", "d".repeat(64)],
+    ["invocation_id", "other-invocation"],
+    ["user_message_id", null],
+    ["authority_digest", "g".repeat(64)],
+    ["actor_id", "/"],
+    ["operation", "jira.edit"],
+  ])("does not attach a mismatched or corrupt journal %s to history", (column, value) => {
+    const f = observedMutationFixture();
+    acknowledgeMutation(f);
+    f.db
+      .prepare(`UPDATE chat_tool_mutations SET ${column} = ? WHERE invocation_id = ?`)
+      .run(value, f.intent.invocationId);
+    expect(
+      f.store.findMessageById(f.id)?.toolTranscript?.exchanges[0]?.mutationOutcome,
+    ).toBeUndefined();
   });
 });

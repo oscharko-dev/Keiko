@@ -6,7 +6,7 @@ import { readPrivateFile } from "./lab-client.mjs";
 function stage(value) {
   console.log(JSON.stringify({ operation: "jira-chat-live-browser", stage: value }));
 }
-async function openBrowser(chat) {
+export async function openBrowser(chat) {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
     viewport: { width: 1440, height: 1100 },
@@ -38,7 +38,7 @@ async function openBrowser(chat) {
   );
   return { browser, page };
 }
-async function createPod(page, session) {
+export async function createPod(page, session) {
   await page.getByRole("button", { name: "Local Knowledge", exact: true }).click();
   const hub = page.getByRole("region", { name: /Local Knowledge/ });
   await hub.getByRole("button", { name: "Create Jira Pod", exact: true }).click();
@@ -50,10 +50,9 @@ async function createPod(page, session) {
     .getByLabel("API token", { exact: true })
     .fill(readPrivateFile(join(session.directory, "secrets", "api-token")).trim());
   await form.getByRole("button", { name: "Save connector", exact: true }).click();
-  const verify = hub.getByTestId("acx-add-verify");
+  const verify = hub.getByTestId("acx-connector").filter({ hasText: "Browser Jira" });
   await verify.getByRole("button", { name: "Verify connection", exact: true }).click();
   await verify.locator('[data-status="ok"]').waitFor();
-  await verify.getByRole("button", { name: "Cancel", exact: true }).click();
   stage("pod-verified");
   await page.getByRole("button", { name: "Local Knowledge", exact: true }).click();
 }

@@ -5394,6 +5394,66 @@ describe("useChatSession canonical Voice FIFO", () => {
     }
   });
 
+  it("shows the accepted turn's Jira consent while a mixed grounded response is pending", async () => {
+    const podId = "11111111-1111-4111-8111-111111111111";
+    const bound = chat({
+      id: "mixed-chat",
+      connectedScopes: [{ kind: "files", relativePaths: ["README.md"], connectedAtMs: 1 }],
+      jiraPodBinding: {
+        podId,
+        bindingGeneration: 1,
+        authenticationGeneration: 1,
+        connectedAtMs: 1,
+      },
+    });
+    const rendered = await setupVoiceQueueSession([bound]);
+    const response = deferred<Awaited<ReturnType<typeof askGrounded>>>();
+    vi.mocked(askGrounded).mockReturnValue(response.promise);
+    const accepted = await canonicalMessage("mixed-consent", {
+      id: "mixed-user",
+      chatId: bound.id,
+      role: "user",
+      content: "Read connected sources and Jira",
+      turnState: "pending",
+      toolTranscript: {
+        schemaVersion: 1,
+        exchanges: [],
+        readGrant: {
+          kind: "jira-chat-read",
+          grantId: "mixed-grant",
+          chatId: bound.id,
+          podId,
+          bindingGeneration: 1,
+          authenticationGeneration: 1,
+          state: "pending",
+          disclosureVersion: "jira-chat-read-v1",
+          requestedAt: 1,
+          expiresAt: 10000,
+        },
+      },
+    });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [accepted] });
+    let delivery: Promise<SendMessageOutcome> | undefined;
+    act(() => {
+      delivery = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn(accepted.content, "mixed-consent", bound),
+      );
+    });
+    await waitFor(() => expect(askGrounded).toHaveBeenCalledOnce());
+    await waitFor(() =>
+      expect(
+        rendered.result.current.messages.find((entry) => entry.id === accepted.id)?.toolTranscript
+          ?.readGrant?.state,
+      ).toBe("pending"),
+    );
+    expect(sendDesktopChat).not.toHaveBeenCalled();
+    response.reject(new DOMException("Cancelled", "AbortError"));
+    await act(async () => {
+      await delivery;
+    });
+    rendered.unmount();
+  });
+
   it("does not surface a late grounded Voice failure in a different chat", async () => {
     const chatA = chat({
       id: "chat-a",

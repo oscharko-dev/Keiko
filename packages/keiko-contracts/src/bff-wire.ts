@@ -234,6 +234,15 @@ export type ChatLocalKnowledgeScope =
       readonly connectedAtMs: number;
     };
 
+/** A workspace connector selection is a request, never persisted Chat authority. */
+export type ChatConnectorSelection =
+  | ChatLocalKnowledgeScope
+  | {
+      readonly kind: "jira-live";
+      readonly podId: string;
+      readonly connectedAtMs: number;
+    };
+
 // Issue #3400 (epic #3384) — the FROZEN description-status vocabulary (contract correction 3).
 // `current`: the artifact is complete/partial/fallback AND the snapshot re-check found no drift.
 // `stale`: the re-check found the repository has moved (a different base, head, merge base or
@@ -348,6 +357,10 @@ export interface Chat {
   readonly jiraBindingGeneration?: number;
   /** Absent legacy selections mean Ask for approval. */
   readonly toolMode?: CodingWorkbenchMode;
+  /** Server projection of the current deployment ceiling; never persisted as a selection. */
+  readonly toolModeCeiling?: CodingWorkbenchMode;
+  /** Current selected mode clamped by the server deployment ceiling. */
+  readonly effectiveToolMode?: CodingWorkbenchMode;
   // Path-free server-issued concurrency token for the canonical retrieval-semantic grounding
   // scope. Voice queues echo it back so a final captured under one source set cannot later
   // retrieve under another; lifecycle metadata does not alter the token.

@@ -10,13 +10,19 @@ import {
 } from "react";
 import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
 import type { Chat } from "@/lib/types";
-import type { UpdateChatInput } from "@/lib/api";
+import { fetchChats, type UpdateChatInput } from "@/lib/api";
 import {
   listAtlassianConnectors,
   type AtlassianConnectorMetadata,
 } from "@/lib/atlassian-connectors-api";
+import {
+  connectionRequest,
+  JIRA_CHAT_CONNECTION_REQUEST_EVENT,
+  type JiraChatConnectionRequest,
+} from "./jira-chat-connection-request";
 import { updateGroundingScopes } from "@/lib/chat-grounding-mutation";
 import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
+import { useConnectorRefresh } from "./useConnectorRefresh";
 import { AutonomyModeSelect } from "./AutonomyModeSelect";
 import styles from "./JiraChatConnection.module.css";
 
@@ -91,6 +97,11 @@ function usePodChoices(list: typeof listAtlassianConnectors): {
       active = false;
     };
   }, [list, version]);
+  useConnectorRefresh(() => {
+    setLoading(true);
+    setFailed(false);
+    setVersion((value) => value + 1);
+  });
   return {
     pods,
     loading,
@@ -106,6 +117,7 @@ function useChatPatch(
   chat: Chat,
   onChanged: ConnectionProps["onChatChanged"],
   persist: typeof updateGroundingScopes,
+  requestGeneration: JiraChatConnectionRequest | undefined,
 ): {
   busy: boolean;
   failed: boolean;
@@ -121,8 +133,12 @@ function useChatPatch(
     return (): void => {
       view.current = undefined;
     };
-  }, [currentRevision]);
+  }, [currentRevision, requestGeneration]);
   const submit = async (patch: UpdateChatInput): Promise<void> => {
+    if (requestGeneration !== undefined && !requestGeneration.isCurrent()) {
+      requestGeneration.settle(false);
+      return;
+    }
     const admitted = view.current;
     if (locked.current || admitted === undefined) return;
     locked.current = true;
@@ -226,13 +242,39 @@ interface ConnectionFormProps {
   readonly setDraft: (draft: Draft) => void;
   readonly catalog: ReturnType<typeof usePodChoices>;
   readonly mutation: ReturnType<typeof useChatPatch>;
+  readonly acknowledgementRequested: boolean;
 }
+function ConnectionMode({
+  chat,
+  draft,
+  setDraft,
+}: Pick<ConnectionFormProps, "chat" | "draft" | "setDraft">): ReactNode {
+  const t = useTranslate();
+  return (
+    <>
+      <AutonomyModeSelect
+        label={t("chat.jira.modeLabel")}
+        value={draft.mode}
+        ceiling={chat.toolModeCeiling ?? "governed-assist"}
+        onChange={(mode) => setDraft({ ...draft, mode })}
+      />
+      <p>{t("chat.jira.modeHelp")}</p>
+      <p role="status">
+        {t("chat.jira.effectiveMode", {
+          mode: t(`codingWorkbench.mode.${chat.effectiveToolMode ?? "governed-assist"}.label`),
+        })}
+      </p>
+    </>
+  );
+}
+
 function ConnectionForm({
   chat,
   draft,
   setDraft,
   catalog,
   mutation,
+  acknowledgementRequested,
 }: ConnectionFormProps): ReactNode {
   const t = useTranslate();
   const plan = selectionPlan(chat, draft, catalog.failed ? [] : catalog.pods);
@@ -240,7 +282,7 @@ function ConnectionForm({
     mutation.busy ||
     catalog.loading ||
     plan.unavailable ||
-    plan.unchanged ||
+    (plan.unchanged && !acknowledgementRequested) ||
     (plan.replacement && !draft.confirmed);
   return (
     <form
@@ -250,19 +292,14 @@ function ConnectionForm({
           void mutation.submit({ jiraPodId: draft.podId || null, toolMode: draft.mode });
       }}
     >
-      <fieldset className={styles.fields} disabled={mutation.busy}>
+      <fieldset className={styles.cmpFields} disabled={mutation.busy}>
         <PodSelect
           pods={catalog.pods}
           value={draft.podId}
           current={plan.current}
           onChange={(podId) => setDraft({ ...draft, podId, confirmed: false })}
         />
-        <AutonomyModeSelect
-          label={t("chat.jira.modeLabel")}
-          value={draft.mode}
-          onChange={(mode) => setDraft({ ...draft, mode })}
-        />
-        <p>{t("chat.jira.modeHelp")}</p>
+        <ConnectionMode chat={chat} draft={draft} setDraft={setDraft} />
         <ReplacementConfirmation required={plan.replacement} draft={draft} setDraft={setDraft} />
         <button className="lk-btn" type="submit" disabled={blocked}>
           {t("chat.jira.apply")}
@@ -280,6 +317,7 @@ function useDisclosureEscape(ref: RefObject<HTMLDetailsElement | null>, open: bo
     const close = (event: KeyboardEvent): void => {
       const node = ref.current;
       if (event.key !== "Escape" || node === null || !node.contains(document.activeElement)) return;
+      if (node.querySelector('[role="combobox"][aria-expanded="true"]') !== null) return;
       event.stopPropagation();
       event.preventDefault();
       node.open = false;
@@ -290,42 +328,184 @@ function useDisclosureEscape(ref: RefObject<HTMLDetailsElement | null>, open: bo
   }, [ref, open]);
 }
 
-export function JiraChatConnection({
+interface WorkspaceConnectionRequestState {
+  pending: RefObject<JiraChatConnectionRequest | undefined>;
+  generation: JiraChatConnectionRequest | undefined;
+  settle: (accepted: boolean) => void;
+}
+
+function useJiraWorkspaceRequest(
+  chat: Chat,
+  detailsRef: RefObject<HTMLDetailsElement | null>,
+  reveal: (request: JiraChatConnectionRequest) => void,
+): WorkspaceConnectionRequestState {
+  const pending = useRef<JiraChatConnectionRequest | undefined>(undefined);
+  const [accepted, setAccepted] = useState<{
+    revision: string;
+    request: JiraChatConnectionRequest;
+  }>();
+  const currentRevision = revision(chat);
+  const latestReveal = useRef(reveal);
+  latestReveal.current = reveal;
+  const settle = (result: boolean): void => {
+    pending.current?.settle(result);
+    pending.current = undefined;
+    setAccepted(undefined);
+  };
+  useLayoutEffect(() => {
+    const receive = (event: Event): void => {
+      const request = connectionRequest(event);
+      if (
+        request === undefined ||
+        request.chatId !== chat.id ||
+        detailsRef.current?.closest("[data-window-id]")?.getAttribute("data-window-id") !==
+          request.chatWindowId ||
+        !request.accept()
+      )
+        return;
+      pending.current?.settle(false);
+      pending.current = request;
+      setAccepted({ revision: currentRevision, request });
+      latestReveal.current(request);
+    };
+    window.addEventListener(JIRA_CHAT_CONNECTION_REQUEST_EVENT, receive);
+    return (): void => {
+      window.removeEventListener(JIRA_CHAT_CONNECTION_REQUEST_EVENT, receive);
+      pending.current?.settle(false);
+      pending.current = undefined;
+    };
+  }, [chat.id, currentRevision, detailsRef]);
+  return {
+    pending,
+    generation: accepted?.revision === currentRevision ? accepted.request : undefined,
+    settle,
+  };
+}
+
+function useCanonicalChatRefresh(
+  chat: Chat,
+  onChanged: (chat: Chat) => void,
+  cancelRequest: () => void,
+): boolean {
+  const [failed, setFailed] = useState(false);
+  const current = useRef<object | undefined>(undefined);
+  const currentRevision = revision(chat);
+  useLayoutEffect(() => {
+    current.current = {};
+    return (): void => {
+      current.current = undefined;
+    };
+  }, [currentRevision, chat.updatedAt]);
+  useConnectorRefresh(() => {
+    cancelRequest();
+    const expected = {};
+    current.current = expected;
+    void fetchChats(chat.projectPath, undefined, chat.id)
+      .then((response) => {
+        if (current.current !== expected) return;
+        const updated = response.chats.find((item) => item.id === chat.id);
+        if (updated !== undefined && updated.updatedAt >= chat.updatedAt) onChanged(updated);
+        setFailed(updated === undefined);
+      })
+      .catch(() => {
+        if (current.current === expected) setFailed(true);
+      });
+  });
+  return failed;
+}
+
+interface ConnectionState {
+  open: boolean;
+  toggle: (open: boolean) => void;
+  detailsRef: RefObject<HTMLDetailsElement | null>;
+  draft: Draft;
+  setDraft: (draft: Draft) => void;
+  catalog: ReturnType<typeof usePodChoices>;
+  mutation: ReturnType<typeof useChatPatch>;
+  refreshFailed: boolean;
+  acknowledgementRequested: boolean;
+}
+
+function acknowledgesRequest(request: JiraChatConnectionRequest, chat: Chat): boolean {
+  return (
+    request.isCurrent() &&
+    chat.id === request.chatId &&
+    chat.jiraPodBinding?.podId === request.podId
+  );
+}
+
+function useConnectionState({
   chat,
   onChatChanged,
   list = listAtlassianConnectors,
   persist = updateGroundingScopes,
-}: ConnectionProps): ReactNode {
-  const t = useTranslate();
+}: ConnectionProps): ConnectionState {
   const [storedDraft, setDraft] = useState(() => initialDraft(chat));
   const [open, setOpen] = useState(false);
   const detailsRef = useRef<HTMLDetailsElement>(null);
   useDisclosureEscape(detailsRef, open);
   const draft = storedDraft.revision === revision(chat) ? storedDraft : initialDraft(chat);
   const catalog = usePodChoices(list);
-  const mutation = useChatPatch(chat, onChatChanged, persist);
+  const request = useJiraWorkspaceRequest(chat, detailsRef, (pending) => {
+    setDraft({ ...initialDraft(chat), podId: pending.podId });
+    if (detailsRef.current !== null) detailsRef.current.open = true;
+    setOpen(true);
+    catalog.reload();
+    detailsRef.current?.querySelector<HTMLElement>("summary")?.focus();
+  });
+  const refreshFailed = useCanonicalChatRefresh(chat, onChatChanged, () => request.settle(false));
+  const mutation = useChatPatch(
+    chat,
+    (updated) => {
+      const pending = request.pending.current;
+      if (pending !== undefined) request.settle(acknowledgesRequest(pending, updated));
+      onChatChanged(updated);
+    },
+    persist,
+    request.generation,
+  );
+  const toggle = (next: boolean): void => {
+    setOpen(next);
+    if (next) catalog.reload();
+    else request.settle(false);
+  };
+  return {
+    open,
+    toggle,
+    detailsRef,
+    draft,
+    setDraft,
+    catalog,
+    mutation,
+    refreshFailed,
+    acknowledgementRequested: request.generation !== undefined,
+  };
+}
+
+export function JiraChatConnection(props: ConnectionProps): ReactNode {
+  const t = useTranslate();
+  const state = useConnectionState(props);
   return (
     <details
-      className={styles.root}
+      className={styles.cmpRoot}
       data-testid="jira-chat-connection"
-      ref={detailsRef}
-      onToggle={(event) => {
-        setOpen(event.currentTarget.open);
-        if (event.currentTarget.open) catalog.reload();
-      }}
+      ref={state.detailsRef}
+      onToggle={(event) => state.toggle(event.currentTarget.open)}
     >
       <summary className="lk-btn">{t("chat.jira.connection")}</summary>
-      {open ? (
-        <div className={styles.panel}>
+      {state.open ? (
+        <div className={styles.cmpPanel}>
           <output>
-            {t(chat.jiraPodBinding === undefined ? "chat.jira.unbound" : "chat.jira.bound")}
+            {t(props.chat.jiraPodBinding === undefined ? "chat.jira.unbound" : "chat.jira.bound")}
           </output>
+          {state.refreshFailed ? <p role="alert">{t("chat.jira.connectionFailed")}</p> : null}
           <ConnectionForm
-            chat={chat}
-            draft={draft}
-            setDraft={setDraft}
-            catalog={catalog}
-            mutation={mutation}
+            chat={props.chat}
+            draft={state.draft}
+            setDraft={state.setDraft}
+            catalog={state.catalog}
+            mutation={state.mutation}
+            acknowledgementRequested={state.acknowledgementRequested}
           />
         </div>
       ) : null}

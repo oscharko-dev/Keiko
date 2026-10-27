@@ -38,6 +38,7 @@ import type {
 import {
   LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT,
   parseLocalKnowledgeConnectorDrag,
+  isLocalKnowledgeConnectorDragPayload,
   type LocalKnowledgeConnectorDragPayload,
   type LocalKnowledgeConnectorDropDetail,
 } from "../../local-knowledge/connector-drag";
@@ -130,64 +131,50 @@ export function workspaceDropPointToWindowOrigin({
   };
 }
 
+function workspaceDropPayload(detail: unknown): Record<string, unknown> | undefined {
+  if (typeof detail !== "object" || detail === null) return undefined;
+  const record = detail as Record<string, unknown>;
+  if (typeof record["clientX"] !== "number" || typeof record["clientY"] !== "number")
+    return undefined;
+  const payload = record["payload"];
+  return typeof payload === "object" && payload !== null
+    ? (payload as Record<string, unknown>)
+    : undefined;
+}
+
 function isLocalKnowledgeConnectorDropDetail(
   detail: unknown,
 ): detail is LocalKnowledgeConnectorDropDetail {
-  if (typeof detail !== "object" || detail === null) return false;
-  const record = detail as Record<string, unknown>;
-  const payload = record["payload"];
-  if (typeof record["clientX"] !== "number" || typeof record["clientY"] !== "number") return false;
-  if (typeof payload !== "object" || payload === null) return false;
-  const payloadRecord = payload as Record<string, unknown>;
-  const kind = payloadRecord["kind"];
-  return (kind === "capsule" || kind === "capsule-set") && typeof payloadRecord["id"] === "string";
+  return isLocalKnowledgeConnectorDragPayload(workspaceDropPayload(detail));
+}
+
+function isFigmaViewPayload(payload: Record<string, unknown> | undefined): boolean {
+  return (
+    payload !== undefined &&
+    typeof payload["snapshotRunId"] === "string" &&
+    typeof payload["screenId"] === "string" &&
+    typeof payload["name"] === "string"
+  );
 }
 
 function isFigmaViewDropDetail(detail: unknown): detail is FigmaViewDropDetail {
-  if (typeof detail !== "object" || detail === null) return false;
-  const record = detail as Record<string, unknown>;
-  const payload = record["payload"];
-  if (typeof record["clientX"] !== "number" || typeof record["clientY"] !== "number") return false;
-  if (typeof payload !== "object" || payload === null) return false;
-  const payloadRecord = payload as Record<string, unknown>;
+  return isFigmaViewPayload(workspaceDropPayload(detail));
+}
+
+function isFigmaJsonPayload(payload: Record<string, unknown> | undefined): boolean {
   return (
-    typeof payloadRecord["snapshotRunId"] === "string" &&
-    typeof payloadRecord["screenId"] === "string" &&
-    typeof payloadRecord["name"] === "string"
+    isFigmaViewPayload(payload) &&
+    (payload?.["sourceWindowId"] === undefined || typeof payload["sourceWindowId"] === "string")
   );
 }
 
 function isFigmaJsonDropDetail(detail: unknown): detail is FigmaJsonDropDetail {
-  if (typeof detail !== "object" || detail === null) return false;
-  const record = detail as Record<string, unknown>;
-  const payload = record["payload"];
-  if (typeof record["clientX"] !== "number" || typeof record["clientY"] !== "number") return false;
-  if (typeof payload !== "object" || payload === null) return false;
-  const payloadRecord = payload as Record<string, unknown>;
-  return (
-    typeof payloadRecord["snapshotRunId"] === "string" &&
-    typeof payloadRecord["screenId"] === "string" &&
-    typeof payloadRecord["name"] === "string" &&
-    (payloadRecord["sourceWindowId"] === undefined ||
-      typeof payloadRecord["sourceWindowId"] === "string")
-  );
+  return isFigmaJsonPayload(workspaceDropPayload(detail));
 }
 
 function isFigmaImageDropDetail(detail: unknown): detail is FigmaImageDropDetail {
-  if (typeof detail !== "object" || detail === null) return false;
-  const record = detail as Record<string, unknown>;
-  const payload = record["payload"];
-  if (typeof record["clientX"] !== "number" || typeof record["clientY"] !== "number") return false;
-  if (typeof payload !== "object" || payload === null) return false;
-  const payloadRecord = payload as Record<string, unknown>;
-  return (
-    typeof payloadRecord["snapshotRunId"] === "string" &&
-    typeof payloadRecord["screenId"] === "string" &&
-    typeof payloadRecord["name"] === "string" &&
-    typeof payloadRecord["imageSrc"] === "string" &&
-    (payloadRecord["sourceWindowId"] === undefined ||
-      typeof payloadRecord["sourceWindowId"] === "string")
-  );
+  const payload = workspaceDropPayload(detail);
+  return isFigmaJsonPayload(payload) && typeof payload?.["imageSrc"] === "string";
 }
 
 // Step the view zoom by ±0.2, snapping onto 100% when a step would jump across

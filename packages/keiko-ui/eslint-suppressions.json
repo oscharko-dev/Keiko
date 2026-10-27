@@ -174,7 +174,7 @@
       "count": 6
     },
     "complexity": {
-      "count": 3
+      "count": 1
     },
     "max-lines-per-function": {
       "count": 2
@@ -1201,9 +1201,6 @@
     }
   },
   "src/app/components/desktop/widgets/connectors/AtlassianConnectorsPanel.tsx": {
-    "@typescript-eslint/explicit-function-return-type": {
-      "count": 1
-    },
     "max-lines-per-function": {
       "count": 1
     }

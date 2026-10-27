@@ -284,8 +284,8 @@ function createLiveDeps(root, session, secret, retainState) {
     activityLog,
   });
 }
-function uiSurface(root) {
-  if (process.argv[4] !== "--browser") return { staticRoot: root, csp: "default-src 'self'" };
+function uiSurface(root, browser) {
+  if (!browser) return { staticRoot: root, csp: "default-src 'self'" };
   const staticRoot = fileURLToPath(new URL("../../../packages/keiko-ui/out/", import.meta.url));
   const hashes = extractInlineScriptHashes([readFileSync(join(staticRoot, "index.html"), "utf8")]);
   return { staticRoot, csp: buildCspHeader(hashes) };
@@ -319,8 +319,36 @@ async function runSelectedJourney(origin, cookie, session, projectPath, modelId,
       ),
   });
 }
+async function pairedCookie(origin, secret) {
+  const attestation = mintLauncherPairingAttestation({
+    secret,
+    requestId: randomUUID(),
+    issuedAtMs: Date.now(),
+  });
+  const paired = await request(
+    origin,
+    undefined,
+    "pair",
+    "/api/coding-workbench/app-session/pair",
+    attestation,
+  );
+  const cookie = paired.headers
+    .getSetCookie()
+    .map((value) => value.split(";")[0])
+    .join("; ");
+  assert.ok(cookie.length > 0);
+  return cookie;
+}
+
 /** Reuse the paired production server, vault, real model probe and ordinary Chat routes. */
-export async function withLiveChat({ session, modelId, run, retainState = false, stateReady }) {
+export async function withLiveChat({
+  session,
+  modelId,
+  run,
+  retainState = false,
+  stateReady,
+  browser = false,
+}) {
   if (!modelId) throw new TypeError("A locally installed model is required");
   await requireLicense(session);
   const root = mkdtempSync(
@@ -340,26 +368,10 @@ export async function withLiveChat({ session, modelId, run, retainState = false,
     server = createUiServer({
       port,
       handlerDeps: deps,
-      ...uiSurface(root),
+      ...uiSurface(root, browser),
     });
     await new Promise((resolve) => server.listen(port, "127.0.0.1", resolve));
-    const attestation = mintLauncherPairingAttestation({
-      secret,
-      requestId: randomUUID(),
-      issuedAtMs: Date.now(),
-    });
-    const paired = await request(
-      origin,
-      undefined,
-      "pair",
-      "/api/coding-workbench/app-session/pair",
-      attestation,
-    );
-    const cookie = paired.headers
-      .getSetCookie()
-      .map((value) => value.split(";")[0])
-      .join("; ");
-    assert.ok(cookie.length > 0);
+    const cookie = await pairedCookie(origin, secret);
     await run({ origin, cookie, session, projectPath, modelId, secret, root });
     await requireLicense(session);
     assert.notEqual(process.exitCode, 1);
@@ -374,6 +386,7 @@ async function main() {
   await withLiveChat({
     session: loadSession(process.argv[2]),
     modelId: process.argv[3],
+    browser: process.argv[4] === "--browser",
     run: ({ origin, cookie, session, projectPath, modelId, secret }) =>
       runSelectedJourney(origin, cookie, session, projectPath, modelId, secret),
   });

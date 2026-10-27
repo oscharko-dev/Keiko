@@ -13,7 +13,7 @@ import {
 // (`isSafeAtlassianConnectorBaseUrl`) with immediate inline feedback. After save, an inline
 // verify-connection step renders the closed status union as actionable copy.
 
-import { useId, useRef, useState, type ReactNode, type SubmitEvent } from "react";
+import { useId, useState, type ReactNode, type SubmitEvent } from "react";
 import type { AtlassianConnectorProvider } from "@oscharko-dev/keiko-contracts";
 import { isSafeAtlassianConnectorBaseUrl } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { ApiError } from "@/lib/api";
@@ -27,6 +27,7 @@ import type {
 import { providerLabelKey } from "./connector-labels";
 import { TextField } from "./TextField";
 import { VerifyConnectionStatus } from "./VerifyConnectionStatus";
+import { useConnectorOperation } from "./useConnectorOperation";
 
 export type AddConnectorClient = Pick<
   AtlassianConnectorsClient,
@@ -162,49 +163,56 @@ function useAddConnectorEntry(
 ): EntryController {
   const t = useTranslate();
   const [fields, setFields] = useState<EntryFields>(DEFAULT_FIELDS);
-  const locked = useRef(false);
   const [creationId] = useState(() => crypto.randomUUID());
+  const operation = useConnectorOperation(creationId);
   const [errors, setErrors] = useState<FieldErrors>({});
-  const [submitError, setSubmitError] = useState<string | undefined>();
-  const [busy, setBusy] = useState(false);
   const setText = (name: TextFieldName, value: string): void => {
     setFields((current) => ({ ...current, [name]: value }));
   };
   const setProvider = (provider: AtlassianConnectorProvider): void => {
     setFields((current) => ({ ...current, provider }));
   };
-  const run = async (): Promise<void> => {
-    if (locked.current) return;
-    locked.current = true;
-    setBusy(true);
-    setSubmitError(undefined);
-    try {
-      const metadata = await client.createConnector(connectorInput(fields, jiraLive, creationId));
-      // Token is dropped from state and unmounted here — the create request was its only hop.
-      setFields(DEFAULT_FIELDS);
-      onCreated(metadata);
-      onVerifyPhase(metadata.authRef);
-    } catch (error_) {
-      setSubmitError(error_ instanceof ApiError ? error_.message : t("atlassianConnectors.retry"));
-    } finally {
-      locked.current = false;
-      setBusy(false);
-    }
+  const run = (): void => {
+    const input = connectorInput(fields, jiraLive, creationId);
+    setFields((current) => ({ ...current, token: "" }));
+    operation.run(
+      "create",
+      () => client.createConnector(input),
+      (metadata) => {
+        setFields(DEFAULT_FIELDS);
+        onCreated(metadata);
+        onVerifyPhase(metadata.authRef);
+      },
+      (error: unknown) =>
+        !jiraLive && error instanceof ApiError ? error.message : t("atlassianConnectors.retry"),
+    );
   };
   const submit = (event: SubmitEvent): void => {
     event.preventDefault();
+    if (operation.busy) return;
     const nextErrors = validateEntry(fields, jiraLive);
     setErrors(nextErrors);
-    if (Object.keys(nextErrors).length === 0) void run();
+    if (Object.keys(nextErrors).length === 0) run();
   };
-  return { fields, errors, submitError, busy, setText, setProvider, submit, jiraLive };
+  return {
+    fields,
+    errors,
+    submitError: operation.error,
+    busy: operation.busy,
+    setText,
+    setProvider,
+    submit,
+    jiraLive,
+  };
 }
 
 function ProviderSelect({
   id,
   value,
   onChange,
+  disabled,
 }: {
+  readonly disabled: boolean;
   readonly id: string;
   readonly value: AtlassianConnectorProvider;
   readonly onChange: (provider: AtlassianConnectorProvider) => void;
@@ -218,6 +226,7 @@ function ProviderSelect({
       <select
         id={id}
         className="acx-select"
+        disabled={disabled}
         value={value}
         onChange={(event) => {
           onChange(event.target.value as AtlassianConnectorProvider);
@@ -230,24 +239,27 @@ function ProviderSelect({
   );
 }
 
-function EntryForm({
+function EntryFieldsView({
   controller,
-  onClose,
+  prefix,
 }: {
   readonly controller: EntryController;
-  readonly onClose: () => void;
+  readonly prefix: string;
 }): ReactNode {
   const t = useTranslate();
-  const prefix = useId();
-  const { fields, errors, submitError, busy } = controller;
+  const { fields, errors, busy } = controller;
   return (
-    <form className="acx-form" data-testid="acx-add-form" onSubmit={controller.submit}>
+    <>
       {!controller.jiraLive ? (
         <ProviderSelect
           id={`${prefix}-provider`}
           value={fields.provider}
+          disabled={busy}
           onChange={controller.setProvider}
         />
+      ) : null}
+      {controller.jiraLive ? (
+        <p className="acx-hint">{t("atlassianConnectors.live.patHint")}</p>
       ) : null}
       {TEXT_FIELDS.filter((cfg) => !controller.jiraLive || cfg.name !== "email").map((cfg) => (
         <TextField
@@ -259,10 +271,28 @@ function EntryForm({
           onChange={(value) => controller.setText(cfg.name, value)}
           errorKey={errors[cfg.name]}
           autoComplete="off"
+          disabled={busy}
           {...(cfg.type === undefined ? {} : { type: cfg.type })}
           {...(cfg.hintKey === undefined ? {} : { hintKey: cfg.hintKey })}
         />
       ))}
+    </>
+  );
+}
+
+function EntryForm({
+  controller,
+  onClose,
+}: {
+  readonly controller: EntryController;
+  readonly onClose: () => void;
+}): ReactNode {
+  const t = useTranslate();
+  const prefix = useId();
+  const { submitError, busy } = controller;
+  return (
+    <form className="acx-form" data-testid="acx-add-form" onSubmit={controller.submit}>
+      <EntryFieldsView controller={controller} prefix={prefix} />
       {submitError !== undefined ? (
         <p className="acx-error" role="alert">
           {submitError}
@@ -290,20 +320,15 @@ function VerifyPhase({
   readonly onClose: () => void;
 }): ReactNode {
   const t = useTranslate();
-  const [busy, setBusy] = useState(false);
+  const operation = useConnectorOperation(authRef);
+  const { busy, error } = operation;
   const [status, setStatus] = useState<AtlassianConnectorVerifyStatus | undefined>();
-  const [error, setError] = useState<string | undefined>();
-  const runVerify = async (): Promise<void> => {
-    setBusy(true);
-    setError(undefined);
-    try {
-      setStatus((await client.verifyConnector(authRef)).status);
-    } catch (error_) {
-      setError(error_ instanceof ApiError ? error_.message : t("atlassianConnectors.retry"));
-    } finally {
-      setBusy(false);
-    }
-  };
+  const runVerify = (): void =>
+    operation.run(
+      "verify",
+      () => client.verifyConnector(authRef),
+      (result) => setStatus(result.status),
+    );
   return (
     <div className="acx-form" data-testid="acx-add-verify">
       <div className="acx-actions">
@@ -342,12 +367,17 @@ export function AddConnectorForm({
     client,
     onCreated,
     (authRef) => {
-      setPhase({ kind: "verify", authRef });
+      if (jiraLive) onClose();
+      else setPhase({ kind: "verify", authRef });
     },
     jiraLive,
   );
+  const close = (): void => {
+    controller.setText("token", "");
+    onClose();
+  };
   if (phase.kind === "verify") {
-    return <VerifyPhase client={client} authRef={phase.authRef} onClose={onClose} />;
+    return <VerifyPhase client={client} authRef={phase.authRef} onClose={close} />;
   }
-  return <EntryForm controller={controller} onClose={onClose} />;
+  return <EntryForm controller={controller} onClose={close} />;
 }

@@ -85,12 +85,12 @@ export function JiraWriteApproval({
     ? APPROVAL_KEYS[state.view.state]
     : "chat.jira.writeApproval.unavailable";
   return (
-    <section className={styles.card} aria-label={t("chat.jira.writeApproval.title")}>
+    <section className={styles.cmpCard} aria-label={t("chat.jira.writeApproval.title")}>
       <strong>{t("chat.jira.writeApproval.title")}</strong>
       <p>{t(actionTypeLabelKey(JIRA_MANAGED_ACTION_TYPES[approval.operation]))}</p>
       <p>{t("chat.jira.writeApproval.disclosure")}</p>
       <textarea
-        className={`${styles.result} ${styles.preview}`}
+        className={`${styles.cmpResult} ${styles.cmpPreview}`}
         readOnly
         rows={8}
         aria-label={t("chat.jira.writeApproval.preview")}
