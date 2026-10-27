@@ -1,11 +1,13 @@
+import type { ChatToolAuthoritySubject, ChatToolReadGrant } from "@oscharko-dev/keiko-contracts";
+import {
+  AtlassianActionApprovalRegistry,
+  ATLASSIAN_ACTION_APPROVAL_TTL_MS,
+} from "./actionApprovals.js";
 import {
   EditorAgentAuthorityRegistry,
   type ChatToolAuthorityResolution,
 } from "../editor/agentAuthorityRegistry.js";
-import {
-  chatAuthorityFixture,
-  CHAT_AUTHORITY_TEST_NOW,
-} from "../editor/chatAuthority.test-support.js";
+import { chatAuthorityFixture } from "../editor/chatAuthority.test-support.js";
 // Issue #2241 — /api/atlassian-connectors/credentials/* route integration tests. The createUiServer
 // fixture mirrors command-runner-routes.test.ts so the CSRF guard, JSON content-type gate,
 // host-check, correlation-id plumbing, and top-level catch all run live. Custody is REAL (the
@@ -115,6 +117,7 @@ function baseDeps(atlassian: AtlassianConnectorCredentialDeps | undefined): UiHa
   return {
     serverPrincipal: () => activePrincipal,
     agentAuthorityRegistry: fixtureAuthorityRegistry,
+    atlassianActionApprovalRegistry: fixtureApprovalRegistry,
     config: undefined,
     configPresent: false,
     evidenceStore: {
@@ -139,6 +142,7 @@ function baseDeps(atlassian: AtlassianConnectorCredentialDeps | undefined): UiHa
 
 let activePrincipal = "synthetic-operator";
 let fixtureAuthorityRegistry: EditorAgentAuthorityRegistry;
+let fixtureApprovalRegistry: AtlassianActionApprovalRegistry;
 
 function livePodCreateInput(): Record<string, unknown> {
   return {
@@ -278,6 +282,7 @@ function expectNoSecretBytes(text: string): void {
 beforeEach(async () => {
   fixtureStore = createInMemoryUiStore();
   fixtureAuthorityRegistry = new EditorAgentAuthorityRegistry();
+  fixtureApprovalRegistry = new AtlassianActionApprovalRegistry();
   activePrincipal = "synthetic-operator";
   // realpath: on macOS tmpdir() lives under the /var -> /private/var symlink, which the vault and
   // private-JSON writers' symlink-refusing path checks correctly reject.
@@ -290,13 +295,10 @@ beforeEach(async () => {
   fakePortResult = { kind: "response", status: 200 };
   const built = buildAtlassianConnectorCredentialDeps({
     onLivePodInvalidated: (podId, generation, correlationId) => {
-      invalidateJiraPodChats(
-        fixtureStore,
-        podId,
-        generation,
-        correlationId,
-        fixtureAuthorityRegistry,
-      );
+      invalidateJiraPodChats(fixtureStore, podId, generation, correlationId, {
+        agentAuthorityRegistry: fixtureAuthorityRegistry,
+        atlassianActionApprovalRegistry: fixtureApprovalRegistry,
+      });
     },
     configPath,
     env: vaultEnv(),
@@ -1069,35 +1071,91 @@ async function updatedJiraChat(chat: Chat, patch: Record<string, unknown>): Prom
   return ((await response.json()) as { chat: Chat }).chat;
 }
 
-function retainedChatAuthority(chat: Chat): () => ChatToolAuthorityResolution {
+function jiraChatSubject(chat: Chat): ChatToolAuthoritySubject {
   const binding = chat.jiraPodBinding;
   const actorDigest = jiraChatActorDigest(baseDeps(wiring));
   if (binding === undefined || actorDigest === undefined)
     throw new Error("Expected an owned Chat binding");
+  return {
+    actorDigest,
+    chatId: chat.id,
+    podId: binding.podId,
+    bindingGeneration: binding.bindingGeneration,
+    authenticationGeneration: binding.authenticationGeneration,
+  };
+}
+
+function retainedChatAuthority(chat: Chat): () => ChatToolAuthorityResolution {
+  const ceiling = baseDeps(wiring).autonomousDeliveryDeploymentCeiling ?? "governed-assist";
   const value = chatAuthorityFixture({
+    deploymentCeiling: ceiling,
+    expiresAt: new Date(Date.now() + ATLASSIAN_ACTION_APPROVAL_TTL_MS).toISOString(),
     runId: `authority-${chat.id}`,
     requestedMode: chat.toolMode ?? "governed-assist",
-    subject: {
-      actorDigest,
-      chatId: chat.id,
-      podId: binding.podId,
-      bindingGeneration: binding.bindingGeneration,
-      authenticationGeneration: binding.authenticationGeneration,
-    },
+    subject: jiraChatSubject(chat),
   });
   const registered = fixtureAuthorityRegistry.registerChat(
     value,
-    "autonomous-delivery",
-    CHAT_AUTHORITY_TEST_NOW,
+    ceiling,
+    new Date().toISOString(),
   );
   if (!registered.ok) throw new Error("Expected retained Chat authority");
   return () =>
     fixtureAuthorityRegistry.resolveChat(
       registered.authorityRef,
       value.subject,
-      "autonomous-delivery",
-      CHAT_AUTHORITY_TEST_NOW,
+      ceiling,
+      new Date().toISOString(),
     );
+}
+
+function retainedChatReadGrant(
+  chat: Chat,
+  granted = true,
+): () => ChatToolReadGrant["state"] | undefined {
+  const now = Date.now();
+  const grantId = randomUUID();
+  const ceiling = baseDeps(wiring).autonomousDeliveryDeploymentCeiling ?? "governed-assist";
+  const subject = jiraChatSubject(chat);
+  const value = chatAuthorityFixture({
+    runId: `read-${grantId}`,
+    subject,
+    requestedMode: chat.toolMode ?? "governed-assist",
+    deploymentCeiling: ceiling,
+    expiresAt: new Date(now + ATLASSIAN_ACTION_APPROVAL_TTL_MS).toISOString(),
+  });
+  const authority = fixtureAuthorityRegistry.registerChat(
+    value,
+    ceiling,
+    new Date(now).toISOString(),
+  );
+  if (!authority.ok) throw new Error("Expected current read authority");
+  expect(
+    fixtureApprovalRegistry.createChatReadGrant({
+      grant: {
+        schemaVersion: "1",
+        kind: "jira-chat-read-grant",
+        grantId,
+        subject,
+        disclosureVersion: "jira-chat-read-v1",
+        requestedAt: now,
+        expiresAt: now + ATLASSIAN_ACTION_APPROVAL_TTL_MS,
+        state: "pending",
+        consentProofDigest: null,
+      },
+      authority: authority.authorityRef,
+    }).ok,
+  ).toBe(true);
+  if (granted)
+    expect(
+      fixtureApprovalRegistry.acceptChatReadGrant(
+        grantId,
+        subject,
+        authority.authorityRef,
+        "b".repeat(64),
+      ).ok,
+    ).toBe(true);
+  return () => fixtureApprovalRegistry.getChatReadGrant(grantId)?.grant.state;
 }
 
 describe("normal Chat Jira binding through authenticated PATCH", () => {
@@ -1128,19 +1186,27 @@ describe("normal Chat Jira binding through authenticated PATCH", () => {
     const podId = await readyJiraPod();
     const bound = await updatedJiraChat(jiraChat(), { jiraPodId: podId });
     const firstAuthority = retainedChatAuthority(bound);
+    const firstGrant = retainedChatReadGrant(bound);
     const noOp = await updatedJiraChat(bound, { toolMode: "governed-assist" });
     expect(firstAuthority().ok).toBe(true);
+    expect(firstGrant()).toBe("granted");
     const changed = await updatedJiraChat(noOp, { toolMode: "autonomous-delivery" });
     expect(firstAuthority()).toEqual({ ok: false, reason: "revoked" });
+    expect(firstGrant()).toBe("revoked");
     const changedAuthority = retainedChatAuthority(changed);
+    const pendingGrant = retainedChatReadGrant(changed, false);
     expect((await patchJiraChat(bound, { jiraPodId: null })).status).toBe(409);
     expect(changedAuthority().ok).toBe(true);
+    expect(pendingGrant()).toBe("pending");
     const disconnected = await updatedJiraChat(changed, { jiraPodId: null });
     expect(changedAuthority()).toEqual({ ok: false, reason: "revoked" });
+    expect(pendingGrant()).toBe("revoked");
     const reconnected = await updatedJiraChat(disconnected, { jiraPodId: podId });
     const reconnectedAuthority = retainedChatAuthority(reconnected);
+    const reconnectedGrant = retainedChatReadGrant(reconnected);
     await updatedJiraChat(reconnected, { status: "closed" });
     expect(reconnectedAuthority()).toEqual({ ok: false, reason: "revoked" });
+    expect(reconnectedGrant()).toBe("revoked");
   });
 
   it("direct credential deletion revokes both shared-Pod Chats but leaves another Pod authority live", async () => {
@@ -1152,6 +1218,7 @@ describe("normal Chat Jira binding through authenticated PATCH", () => {
       ),
     );
     const authorities = chats.map(retainedChatAuthority);
+    const grants = chats.map((chat) => retainedChatReadGrant(chat));
     const credential = wiring.custody
       .list()
       .find((row) => row.deployment === "data-center" && row.livePod?.podId === podId);
@@ -1162,6 +1229,7 @@ describe("normal Chat Jira binding through authenticated PATCH", () => {
     );
     expect(response.status).toBe(200);
     expect(authorities.map((resolve) => resolve().ok)).toEqual([false, false, true]);
+    expect(grants.map((state) => state())).toEqual(["revoked", "revoked", "granted"]);
   });
 
   it("direct credential deletion disconnects matching Chats and cancels only their active turns", async () => {
@@ -1256,8 +1324,10 @@ describe("normal Chat Jira binding through authenticated PATCH", () => {
     if (credential === undefined) throw new Error("Expected synthetic credential");
     fakePortResult = { kind: "response", status: 401 };
     await rebuild({ ...wiring, httpBodyPortFactory: fakeHttpBodyPortFactory() });
+    const grant = retainedChatReadGrant(bound);
     const failed = await verifyCredentialRequest(credential.authRef);
     expect(failed.status).toBe(200);
+    expect(grant()).toBe("revoked");
     expect(await failed.json()).toMatchObject({ status: "auth-failed" });
     expect(fixtureStore.findChatById(bound.id)?.jiraPodBinding).toEqual({
       ...bound.jiraPodBinding,
@@ -1455,6 +1525,7 @@ describe("authenticated Live Pod credential updates", () => {
     const second = await updatedJiraChat(jiraChat(), { jiraPodId: podId });
     const otherId = await readyJiraPod();
     const other = await updatedJiraChat(jiraChat(), { jiraPodId: otherId });
+    const grants = [first, second, other].map((chat) => retainedChatReadGrant(chat));
     const sink = createFileServerLogSink(configDir, { level: "debug" });
     await rebuild({ ...wiring, activityLog: sink });
     setServerLogger(createServerLogger({ sink, level: "debug" }));
@@ -1499,6 +1570,7 @@ describe("authenticated Live Pod credential updates", () => {
           bindingGeneration: 3,
         });
       expect(fixtureStore.findChatById(other.id)).toEqual(other);
+      expect(grants.map((state) => state())).toEqual(["revoked", "revoked", "granted"]);
       expect(wiring.custody.getMetadata(credential.authRef)).toMatchObject({
         generation: 3,
         livePod: { verificationStatus: "unverified" },
@@ -1556,4 +1628,72 @@ describe("authenticated Live Pod credential updates", () => {
       expect((await updateJiraCredential(credential.authRef, patch)).status).toBe(400);
     expect(wiring.custody.getMetadata(credential.authRef)).toEqual(credential);
   });
+});
+
+it("deleting a Chat through the real route revokes its retained read grant", async () => {
+  const podId = await readyJiraPod();
+  const bound = await updatedJiraChat(jiraChat(), { jiraPodId: podId });
+  const grant = retainedChatReadGrant(bound);
+  const response = await fetch(`${baseUrl()}/api/chats?id=${encodeURIComponent(bound.id)}`, {
+    method: "DELETE",
+    headers: csrfHeaders(),
+    body: JSON.stringify({
+      projectPath: configDir,
+      confirmation: { chatId: bound.id, irreversible: true },
+    }),
+  });
+  expect(response.status).toBe(204);
+  expect(fixtureStore.findChatById(bound.id)).toBeUndefined();
+  expect(grant()).toBe("revoked");
+});
+
+it("deleting a project revokes grants of its removed Chats", async () => {
+  const podId = await readyJiraPod();
+  const bound = await updatedJiraChat(jiraChat(), { jiraPodId: podId });
+  const grant = retainedChatReadGrant(bound);
+  const response = await fetch(`${baseUrl()}/api/projects?path=${encodeURIComponent(configDir)}`, {
+    method: "DELETE",
+    headers: csrfHeaders(),
+  });
+  expect(response.status).toBe(204);
+  expect(fixtureStore.findChatById(bound.id)).toBeUndefined();
+  expect(grant()).toBe("revoked");
+});
+
+it("correlates real credential deletion with read-grant revocation evidence", async () => {
+  const podId = await readyJiraPod();
+  const bound = await updatedJiraChat(jiraChat(), { jiraPodId: podId });
+  const grant = retainedChatReadGrant(bound);
+  const credential = wiring.custody
+    .list()
+    .find((row) => row.deployment === "data-center" && row.livePod?.podId === podId);
+  if (credential === undefined) throw new Error("Expected credential");
+  const sink = createFileServerLogSink(configDir, { level: "debug" });
+  setServerLogger(createServerLogger({ sink, level: "debug" }));
+  try {
+    const response = await fetch(
+      `${baseUrl()}/api/atlassian-connectors/credentials/${encodeURIComponent(credential.authRef)}`,
+      { method: "DELETE", headers: csrfHeaders() },
+    );
+    expect(response.status).toBe(200);
+    expect(grant()).toBe("revoked");
+    const lines = persistedActivityLogLines(
+      readPersistedActivityLog(configDir),
+      "chat.tool-authority.operation",
+    );
+    const records = lines.map((line) =>
+      expectActivityLogProof("chat.tool-authority.operation.read-grant-lifecycle", line),
+    );
+    const revoked = records.filter((line) => line.grantState === "revoked");
+    expect(revoked).toHaveLength(1);
+    expect(revoked[0]).toMatchObject({
+      correlationId: response.headers.get("x-keiko-correlation-id"),
+      affectedCount: 1,
+    });
+    for (const value of [bound.id, podId, credential.authRef, SYNTHETIC_TOKEN])
+      expect(lines.join("\n")).not.toContain(value);
+  } finally {
+    sink.close?.();
+    resetServerLogger();
+  }
 });

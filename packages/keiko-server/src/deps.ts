@@ -510,7 +510,7 @@ import type { JiraCodeContextHttpPort } from "./coding-context/jiraCodeContextCo
 import { createGovernedJiraCodeContextHttpPort } from "./coding-context/jiraCodeContextPort.js";
 import type { AtlassianConnectorCredentialDeps } from "./atlassian/credentialRoutes.js";
 import { buildAtlassianConnectorCredentialDeps } from "./atlassian/wiring.js";
-import { invalidateJiraPodChats } from "./atlassian/jiraPodLifecycle.js";
+import { invalidateJiraPodChats, type JiraChatAccessOwners } from "./atlassian/jiraPodLifecycle.js";
 // KEIKO-0565: DI-scoped Atlassian connector registries. The classes are imported (not just their
 // types) so buildUiHandlerDeps can construct one instance per BFF process without depending on
 // the module-level singleton.
@@ -4555,18 +4555,12 @@ function atlassianConnectorRegistryFields(options: BuildHandlerDepsOptions): Pic
 // outbound request from the live runtime config (first-run onboarding updates are honored).
 function atlassianConnectorCredentialFields(
   args: UiHandlerDepsAssemblyArgs,
-  agentAuthorityRegistry: EditorAgentAuthorityRegistry,
+  accessOwners: JiraChatAccessOwners,
 ): Pick<UiHandlerDeps, "atlassianConnectorCredentials"> {
   return {
     atlassianConnectorCredentials: buildAtlassianConnectorCredentialDeps({
       onLivePodInvalidated: (podId, generation, correlationId) => {
-        invalidateJiraPodChats(
-          args.bundle.uiStore,
-          podId,
-          generation,
-          correlationId,
-          agentAuthorityRegistry,
-        );
+        invalidateJiraPodChats(args.bundle.uiStore, podId, generation, correlationId, accessOwners);
       },
       networkConfig: () => args.runtimeConfig.current()?.atlassian,
       configPath: args.runtimeConfig.storagePath,
@@ -4918,7 +4912,7 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   const deps: UiHandlerDeps = {
     ...buildBaseUiHandlerDeps(args),
     ...buildRuntimeUiHandlerDeps(args, services),
-    ...buildIntegrationUiHandlerDeps(args, atlassianRegistries.agentAuthorityRegistry),
+    ...buildIntegrationUiHandlerDeps(args, atlassianRegistries),
     ...buildOptionalUiHandlerDeps(args, services),
     ...atlassianRegistries,
     serverPrincipal: serverOperatorPrincipal(args.options),
@@ -5564,9 +5558,9 @@ type IntegrationUiHandlerDeps = ReturnType<typeof autonomousDeliveryFields> &
 
 function buildIntegrationUiHandlerDeps(
   args: UiHandlerDepsAssemblyArgs,
-  agentAuthorityRegistry: EditorAgentAuthorityRegistry,
+  accessOwners: JiraChatAccessOwners,
 ): IntegrationUiHandlerDeps {
-  const atlassian = atlassianConnectorCredentialFields(args, agentAuthorityRegistry);
+  const atlassian = atlassianConnectorCredentialFields(args, accessOwners);
   return {
     ...autonomousDeliveryFields(args.options),
     ...atlassian,
@@ -5766,7 +5760,7 @@ async function disposeRuntimeServices(
     // active job's controller and drops pending approvals/activity before the bundle itself goes
     // away, so nothing on this graph outlives it as observable state on the NEXT graph.
     (): void => {
-      atlassianRegistries.atlassianActionApprovalRegistry?.reset();
+      atlassianRegistries.atlassianActionApprovalRegistry?.reset(correlationId);
       atlassianRegistries.agentAuthorityRegistry.reset(correlationId);
     },
     (): void => {

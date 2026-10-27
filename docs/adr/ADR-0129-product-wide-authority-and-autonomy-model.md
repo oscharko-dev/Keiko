@@ -220,6 +220,13 @@ snapshots private facts, handles expiry and supports per-Chat revocation and iso
 These retention APIs do not themselves establish a human decision or replace lifecycle and
 execution admission at their callers.
 
+Production lifecycle composition now supplies that same approval owner together with the
+existing authority owner to credential invalidation. Committed Chat binding/mode changes,
+closure/deletion, project removal and credential invalidation revoke retained read grants;
+optimistic previews, stale conflicts and unchanged selections do not. Graph disposal resets
+only its own owner with the disposal correlation. Human acceptance and observed tool-call auth
+failures still require their execution-entrypoint integration.
+
 ### D6 — Forward rule for decision records
 
 New ADRs and epics for autonomy-capable surfaces must cite this record and document their

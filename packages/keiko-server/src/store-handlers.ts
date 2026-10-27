@@ -1,4 +1,7 @@
-import { revokeChangedJiraChatAuthority } from "./atlassian/jiraPodLifecycle.js";
+import {
+  revokeChangedJiraChatAuthority,
+  revokeJiraChatAccess,
+} from "./atlassian/jiraPodLifecycle.js";
 import { readChatContextStatus, compactChatContext } from "./chat-context-status.js";
 import { logChatContextManagement } from "./chat-context-log.js";
 import {
@@ -609,6 +612,7 @@ export function handleDeleteProject(ctx: RouteContext, deps: UiHandlerDeps): Rou
     const deletedChats = deps.store.listChats(normalizedPath);
     deps.store.deleteProject(normalizedPath);
     for (const chat of deletedChats) {
+      revokeJiraChatAccess(deps, chat.id, ctx.correlationId);
       clearGroundedContextIndexesForConversation(chat.id);
       clearGroundedTurnsForConversation(chat.id);
     }
@@ -1414,7 +1418,7 @@ export async function handleDeleteChat(
         // leaves the chat intact, so the UI can retry rather than orphaning content-bearing blobs.
         deps.conversationAttachmentStore?.deleteForChat(projectPath, id);
         deps.store.deleteChat(id);
-        deps.agentAuthorityRegistry?.revokeChatAuthorities(id, ctx.correlationId);
+        revokeJiraChatAccess(deps, id, ctx.correlationId);
         clearGroundedContextIndexesForConversation(id);
         clearGroundedTurnsForConversation(id);
         return { status: 204, body: null };

@@ -145,7 +145,7 @@ Status: **Partial — not accepted**. All three mode selections persist through 
 
 - [ ] **AC3:** Disconnect, replacement, Pod deletion and Keiko-managed token rotation/revocation revoke read grants and invalidate pending approvals and queued calls. Jira-side token revocation is enforced on the next Jira call; observed auth failure invalidates local readiness and pending work without introducing polling or webhooks. Tests cover these changes during approval and before effect; no stale request uses the old or newly substituted credential.
 
-Status: **Partial — not accepted**. HTTP generation capture, verification ticket settlement and atomic binding generations prevent the implemented stale credential/probe/update paths. Retained real-route proofs are recorded below. Credential deletion and failed/aborted re-verification now atomically invalidate dependent Chat bindings and cancel their active/queued turns through the existing serializer, including direct credential routes. Generation-checked replacement now exists in custody with durable failure states; management UI, observed tool-call failures and grant/approval invalidation remain pending.
+Status: **Partial — not accepted**. HTTP generation capture, verification ticket settlement and atomic binding generations prevent the implemented stale credential/probe/update paths. Retained real-route proofs are recorded below. Credential deletion and failed/aborted re-verification now atomically invalidate dependent Chat bindings and cancel their active/queued turns through the existing serializer, including direct credential routes. Generation-checked replacement now exists in custody with durable failure states; Read grants now follow committed Chat mode/binding changes, closure/deletion, project removal, direct credential deletion, failed re-verification and token replacement. Management UI, observed tool-call auth failures and pending write-approval invalidation remain pending.
 
 - [ ] **AC4:** Two chats using different Pods are isolated; two chats deliberately using the same Pod share neither grants nor approval state; a new or copied Chat identity cannot inherit grants or approvals. Data-Pod-only grounding is byte-for-byte unchanged in behaviour and existing Workbench MCP works unchanged.
 
@@ -153,7 +153,7 @@ Status: **Partial — not accepted**. Actual competing binding PATCH tests prese
 
 - [ ] **AC5:** Production-path lifecycle logging for binding, mode, grant and approval is registered and body-free. Restart and authority/mode changes cannot revive expired grants, approvals or queued effects. All applicable gates pass.
 
-Status: **Partial — not accepted**. Existing registered Chat scope evidence reconstructs one application, denials and conflicts without private facts; credential lifecycle evidence is recorded below. Private read-grant evidence now reconstructs creation, acceptance, reuse, revocation and expiry through the real Activity Log writer/reader. Complete production route/lifecycle/restart composition and final gates remain pending.
+Status: **Partial — not accepted**. Existing registered Chat scope evidence reconstructs one application, denials and conflicts without private facts; credential lifecycle evidence is recorded below. Private read-grant evidence now reconstructs creation, acceptance, reuse, revocation and expiry through the real Activity Log writer/reader. Actual credential-deletion evidence additionally correlates read-grant revocation with the HTTP response correlation. Human consent/action-approval entrypoints, the complete restart matrix and final gates remain pending.
 
 - [ ] **AC6:** Through the trusted non-Coding test consumer against local Jira 10.3.26, an admitted read-class call reaches the real provider only with a valid grant, and a write-class call only under the mode matrix or a redeemed approval that re-ran the complete pipeline; a denied, expired or revoked call performs no HTTP request.
 
@@ -1545,3 +1545,31 @@ This is a private retention API: current authority/readiness must still be check
 acceptance and use. Authenticated consent routes, once-per-binding request orchestration,
 credential/Chat lifecycle wiring and actual tool admission remain pending. No complete AC is
 accepted here. Logs: `/tmp/keiko-4081-read-grant-registry-*.log`.
+
+### Read-grant lifecycle composition checkpoint — #4084 AC3–AC5, #4085 AC4
+
+Existing invalidation paths now receive both existing authority/approval owners from the same
+server dependency graph. Only committed binding/mode changes revoke access; no-op mode changes
+and stale PATCH conflicts preserve valid grants. Chat closure/deletion and project removal
+revoke the affected grants. The credential-owner callback applies the same revocation to token
+replacement, failed direct re-verification and direct credential deletion. Two shared-Pod Chats
+are revoked while an unrelated Pod's Chat remains granted. Disposal carries its correlation
+through the existing approval reset.
+
+Six actual HTTP regression cases fail on the previous implementation because grants remain
+granted. The fixtures use one current clock for authority and grant records; the earlier mixed
+historical/current fixture timestamps are not acceptance evidence. After implementation, all
+395 composition, credential/Chat-route, store-handler and approval-owner tests pass, along with
+97 operation-catalog tests. A real writer/reader proof joins credential deletion to the single
+read-grant revocation using the response correlation, without raw Chat/Pod/credential identifiers.
+Build, root typecheck, changed lint/format, staged semantic and ADR checks pass. Generation
+resolves 615 proofs and 30 scenarios without violations. Logs:
+`/tmp/keiko-4081-read-grant-lifecycle-*.log`.
+
+At 13:45 Europe/Berlin on 2026-10-27, the production Node connection verifier was rerun against
+the existing Docker Jira lab: trusted HTTPS/PAT succeeded, an untrusted certificate produced
+TLS failure and revoked target admission produced unreachable. This is connection-only evidence
+(`/tmp/keiko-4081-jira-verifier-latest.log`); the lab license remains expired, so licensed live
+mutation/model/browser qualification is still pending. Human grant acceptance, action approvals,
+observed tool-call auth failure and the ordinary Chat execution path remain open. No complete
+AC is accepted here.

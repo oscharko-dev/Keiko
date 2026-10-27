@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "fa621e1bf1f2edd7c43ed5b3e3890bd27c5cc921f812df246c5a4bde9bc583c3",
+    "catalogDigest": "c37ed5ba972e83a1f3e962280ef22217955b95d9bc1fa2ce751c5b975623511f",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -2542,11 +2542,12 @@
           "chat.tool-authority.operation.action-policy",
           "chat.tool-authority.operation.current-state",
           "chat.tool-authority.operation.lifecycle",
-          "chat.tool-authority.operation.read-grant"
+          "chat.tool-authority.operation.read-grant",
+          "chat.tool-authority.operation.read-grant-lifecycle"
         ],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/editor/chatAuthorityActivity.ts:38",
-        "emitterSites": ["packages/keiko-server/src/editor/chatAuthorityActivity.ts:200"]
+        "emitterSites": ["packages/keiko-server/src/editor/chatAuthorityActivity.ts:201"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -32297,8 +32298,8 @@
         "failureClasses": ["workspace-reconnect"],
         "proofIds": ["project.workspace.reconnect.outcome"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/store-handlers.ts:107",
-        "emitterSites": ["packages/keiko-server/src/store-handlers.ts:550"]
+        "registrationSite": "packages/keiko-server/src/store-handlers.ts:110",
+        "emitterSites": ["packages/keiko-server/src/store-handlers.ts:553"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -55597,7 +55598,8 @@
                 "chat.tool-authority.operation.action-policy",
                 "chat.tool-authority.operation.current-state",
                 "chat.tool-authority.operation.lifecycle",
-                "chat.tool-authority.operation.read-grant"
+                "chat.tool-authority.operation.read-grant",
+                "chat.tool-authority.operation.read-grant-lifecycle"
               ],
               "replayReferences": [],
               "missingObligations": []
@@ -101642,7 +101644,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/store-handlers.ts:1324",
+      "site": "packages/keiko-server/src/store-handlers.ts:1328",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -104603,20 +104605,20 @@
     {
       "op": "project.create.trust.grant",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/store-handlers.ts:423",
+      "site": "packages/keiko-server/src/store-handlers.ts:426",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "project.workspace.reconnect",
       "category": "setup",
-      "site": "packages/keiko-server/src/store-handlers.ts:110",
+      "site": "packages/keiko-server/src/store-handlers.ts:113",
       "package": "keiko-server"
     },
     {
       "op": "project.workspace.reconnect",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/store-handlers.ts:566",
+      "site": "packages/keiko-server/src/store-handlers.ts:569",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -104831,7 +104833,7 @@
     {
       "op": "server.composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:4687",
+      "site": "packages/keiko-server/src/deps.ts:4681",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

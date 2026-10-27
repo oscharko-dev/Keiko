@@ -143,6 +143,7 @@ const CHAT_AUTHORITY_OPERATION = defineActivityLogOperation({
     "chat.tool-authority.operation.current-state",
     "chat.tool-authority.operation.lifecycle",
     "chat.tool-authority.operation.read-grant",
+    "chat.tool-authority.operation.read-grant-lifecycle",
   ],
   releaseImpact: "minor",
 });

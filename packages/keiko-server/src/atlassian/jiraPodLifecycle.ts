@@ -3,7 +3,19 @@ import type { UiStore } from "../store/index.js";
 import { interruptChangedChatGenerations } from "../chat-turn-serializer.js";
 import type { Chat } from "../store/index.js";
 import type { UiHandlerDeps } from "../deps.js";
-import type { EditorAgentAuthorityRegistry } from "../editor/agentAuthorityRegistry.js";
+export type JiraChatAccessOwners = Pick<
+  UiHandlerDeps,
+  "agentAuthorityRegistry" | "atlassianActionApprovalRegistry"
+>;
+
+export function revokeJiraChatAccess(
+  owners: JiraChatAccessOwners,
+  chatId: string,
+  correlationId?: string,
+): void {
+  owners.agentAuthorityRegistry?.revokeChatAuthorities(chatId, correlationId);
+  owners.atlassianActionApprovalRegistry?.revokeChatReadGrants(chatId, correlationId);
+}
 
 /** Shared by credential management and Live Pod management through the custody owner. */
 export function invalidateJiraPodChats(
@@ -11,17 +23,17 @@ export function invalidateJiraPodChats(
   podId: string,
   authenticationGeneration: number | null,
   correlationId: string = randomUUID(),
-  authorityRegistry?: EditorAgentAuthorityRegistry,
+  owners: JiraChatAccessOwners = {},
 ): void {
   for (const change of store.invalidateJiraPod(podId, authenticationGeneration, correlationId)) {
-    authorityRegistry?.revokeChatAuthorities(change.current.id, correlationId);
+    revokeJiraChatAccess(owners, change.current.id, correlationId);
     interruptChangedChatGenerations({ store }, change.previous, change.current, correlationId);
   }
 }
 
 /** Called after the committed update, never for an optimistic preview or rejected CAS. */
 export function revokeChangedJiraChatAuthority(
-  deps: Pick<UiHandlerDeps, "agentAuthorityRegistry">,
+  deps: JiraChatAccessOwners,
   previous: Chat,
   current: Chat,
   correlationId: string | undefined,
@@ -30,6 +42,6 @@ export function revokeChangedJiraChatAuthority(
     previous.jiraBindingGeneration !== current.jiraBindingGeneration ||
     (previous.status !== "closed" && current.status === "closed")
   ) {
-    deps.agentAuthorityRegistry?.revokeChatAuthorities(current.id, correlationId);
+    revokeJiraChatAccess(deps, current.id, correlationId);
   }
 }

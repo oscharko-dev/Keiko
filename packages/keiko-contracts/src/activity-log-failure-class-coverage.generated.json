@@ -2804,7 +2804,8 @@
             "chat.tool-authority.operation.action-policy",
             "chat.tool-authority.operation.current-state",
             "chat.tool-authority.operation.lifecycle",
-            "chat.tool-authority.operation.read-grant"
+            "chat.tool-authority.operation.read-grant",
+            "chat.tool-authority.operation.read-grant-lifecycle"
           ],
           "replayReferences": [],
           "missingObligations": []
