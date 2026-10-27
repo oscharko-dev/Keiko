@@ -13,7 +13,6 @@ import {
   ATLASSIAN_JQL_MAX_CHARS,
   isSafeAtlassianIdentifier,
   JIRA_MANAGED_READ_TOOLS,
-  type AtlassianConnectorDeployment,
   type JiraManagedReadToolName,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
@@ -32,7 +31,8 @@ import type {
   ManagedMcpToolResult,
   ManagedMcpToolDeclaration,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
-import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
+import type { JiraManagedConnection } from "./jira-managed-connection.js";
+export type { JiraManagedConnection } from "./jira-managed-connection.js";
 import { asRecord, atlassianApiEndpointsFor, atlassianApiUrl } from "./atlassian-sync-classify.js";
 import { executeAtlassianWriteRequest } from "./atlassian-write-http.js";
 
@@ -43,11 +43,6 @@ const ISSUE_READ_NAMES: ReadonlySet<string> = new Set([
   "jira.comments",
 ]);
 
-export interface JiraManagedConnection {
-  readonly deployment: AtlassianConnectorDeployment;
-  readonly baseUrl: string;
-  readonly http: AtlassianHttpBodyPort;
-}
 export interface JiraManagedProviderDeps<Context extends ManagedMcpInvocationContext> {
   readonly connection: (context: Context) => JiraManagedConnection | Promise<JiraManagedConnection>;
   readonly declarations: readonly ManagedMcpToolDeclaration[];

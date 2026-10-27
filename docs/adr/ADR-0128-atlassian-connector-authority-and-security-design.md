@@ -335,7 +335,7 @@ owners of per-request and terminal evidence.
 for its managed Jira provider. It admits standard text, finite numbers, calendar dates,
 millisecond datetime values, user/option references and explicit bounded list types. Core Jira
 custom-field types are named explicitly; an unknown plugin type is unsupported even if its base
-schema looks familiar. A choice list above 500 entries makes only that field unsupported; other
+schema looks familiar. A choice list above 100 entries makes only that field unsupported; other
 fields remain usable, and a required unsupported field without a server default still blocks
 creation. Unsupported plugin choice structures are not interpreted. Known-field structural errors
 remain malformed metadata. Offered verbs are intersected with the implemented field/verb matrix;
@@ -356,6 +356,18 @@ self links are omitted. Datetimes accept both ISO offsets and Jira's compact off
 The expanded `jira.issue` input/result contract is version 2; its ordinary unexpanded read remains
 compatible. The transport's overall byte bound still applies to the selected result.
 
+
+The Data Center mutation executor refreshes create metadata through the post-9.0 paginated
+endpoint (at most ten pages and 500 fields), edit metadata through `editmeta`, and transition fields
+through `transitions.fields`. Duplicate or inconsistent pages fail closed. A selected transition and
+its validated fields are sent together. Creation binds numeric project/issue-type identities;
+editing those routing fields or adding undeclared compound effects is unsupported. Assignment of a
+named active user checks the current issue-scoped assignable-user endpoint without requiring edit
+permission; unassignment additionally requires metadata that permits clearing. Comments remain
+Data Center plain text. The executor snapshots inputs before metadata I/O, shares one aggregate
+deadline across phases, and rechecks admission for every request. Only the documented 201/204
+mutation responses with required identities confirm an attempt. Current managed-provider defaults
+still expose reads; the private executor does not confer journal, Chat or approval authority.
 
 ### D4 — Action-class mapping table
 

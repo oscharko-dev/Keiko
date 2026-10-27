@@ -111,11 +111,11 @@ Status: **Partial — not accepted**. Implementation: `jira-managed-tools.ts`, `
 
 - [ ] **AC2:** Against local Jira 10.3.26, a non-admin PAT searches/reads and performs create/edit/assign/comment/transition where Jira permits them, and the restricted identity is refused truthfully without escalation. The recorded supported-operation matrix names each tested operation, endpoint family and unsupported capability; it never claims full Jira REST coverage.
 
-Status: **Pending**. Implementation: pending. Verification: pending. Evidence: pending.
+Status: **Partial — not accepted**. Implementation: private Data Center mutation executor in `jira-managed-mutations.ts`. Verification: 45 synthetic executor tests and retained Cloud/catalog regressions. Evidence: Data Center mutation checkpoint below. Actual managed SDK/journal/Chat composition and the licensed non-admin/restricted-identity matrix remain pending.
 
 - [ ] **AC3:** Required supported custom fields, constrained fields and workflow-specific transitions are discovered/validated from real metadata through the post-9.0 endpoints. A real transition-screen fixture requires a supported field; omitting it fails, and the approved field value and transition succeed in one request. Undeclared mutation verbs, worklogs and unsupported compound effects are refused before HTTP. Unknown plugin-specific field types are reported as unsupported with no fabricated values. Missing/invalid values and unauthorized issues/actions produce honest safe errors without escalating to an admin identity.
 
-Status: **Partial — not accepted**. Implementation: `jira-field-metadata.ts` bounded field/verb validation. Verification: 26 field tests plus synthetic-lab required-field/transition baseline. Evidence: metadata-field checkpoint below. Production fresh-metadata write composition and live matrix remain pending.
+Status: **Partial — not accepted**. Implementation: `jira-field-metadata.ts` bounded field/verb validation and the fresh-metadata mutation executor. Verification: 26 field tests plus synthetic-lab required-field/transition baseline. Evidence: metadata-field checkpoint below. Production catalog/journal/Chat composition and the live matrix remain pending.
 
 - [ ] **AC4:** Pagination, empty results, partial results, bounds, timeout and cancellation behave deterministically. Jira content and tool metadata cannot modify the tool allowlist, credential, chat binding, read grant or approval state.
 
@@ -1081,3 +1081,28 @@ changed lint, ADR index and error observability pass. Registry generation still 
 and 30 scenarios without violations; all 97 registry tests and the unchanged 938-entry semantic
 baseline check pass. Actual Chat admission and managed writes remain outstanding;
 this repair does not constitute complete acceptance of an epic criterion.
+
+## Data Center mutation executor — #4083 AC2/AC3/AC5
+
+The connector's private executor now implements create/edit/assign/comment/transition against REST
+v2. Eight initial behavior tests failed before implementation. Fresh create metadata is collected
+through bounded post-9.0 pages, then the existing field validator checks the complete field set;
+edit and transition metadata are refreshed for their corresponding actions. Transition fields and
+transition are one POST. Named assignment checks current active assignable users without depending
+on edit permission; clearing requires metadata permission. Input snapshots cannot change during
+metadata I/O. Unknown fields/verbs, routing overrides and compound actions are refused. Cloud's
+existing v3/ADF executor remains separate. An unexpected 2xx status or missing returned identity
+is not confirmation, and POST/PUT are never automatically retried.
+
+The **355-test selection** passes: new executor scenarios, field validation, existing Cloud writes
+and the current catalog suites. It covers required fields on later metadata pages, duplicate and
+never-ending pages, unsupported required plugin fields, changed edit capabilities, inactive users,
+unassignment refusal, contradictory duplicate identities, pending-input mutation, cancellation, rechecking admission between metadata
+and dispatch, unexpected statuses and POST/PUT error responses. Package build, root typecheck and
+changed lint pass. This private executor is not yet advertised by the managed provider or connected
+to normal Chat. The next integration joins it to the durable server composer and actual SDK binder;
+real Jira/Chat/browser acceptance remains outstanding. Existing host, HTTP and action-log owners
+remain responsible for correlated runtime evidence; no additional logging subsystem is introduced.
+
+The 45 executor tests were rerun successfully after extracting the unique-active-assignee check.
+Changed formatting, ADR index and the staged-diff semantic gate also pass.

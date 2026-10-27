@@ -5,7 +5,11 @@ import type {
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
-import { parseJiraFieldMetadata } from "./jira-field-metadata.js";
+import {
+  JIRA_METADATA_MAX_FIELDS,
+  parseJiraFieldMetadata,
+  type JiraMetadataResult,
+} from "./jira-field-metadata.js";
 
 export function jiraReadFailure(reason: string): ManagedMcpToolResult {
   return { data: { outcome: "failed", reason }, isError: true };
@@ -36,13 +40,20 @@ export function metadataItems(value: unknown): readonly CatalogJsonObject[] | un
   const parsed = parseJiraFieldMetadata(value);
   return parsed.ok ? parsed.fields.map(fieldProjection) : undefined;
 }
-export function editMetadataItems(value: unknown): readonly CatalogJsonObject[] | undefined {
+export function parseJiraFieldMap(value: unknown): JiraMetadataResult {
   const fields = asRecord(value);
-  if (fields === undefined || Object.keys(fields).length > 500) return undefined;
-  return metadataItems(
+  if (fields === undefined) return { ok: false, reason: "malformed-metadata" };
+  if (Object.keys(fields).length > JIRA_METADATA_MAX_FIELDS)
+    return { ok: false, reason: "bounds-exceeded" };
+  return parseJiraFieldMetadata(
     Object.entries(fields).map(([id, value]) => ({ ...asRecord(value), fieldId: id })),
   );
 }
+export function editMetadataItems(value: unknown): readonly CatalogJsonObject[] | undefined {
+  const parsed = parseJiraFieldMap(value);
+  return parsed.ok ? parsed.fields.map(fieldProjection) : undefined;
+}
+
 function issueType(value: unknown): CatalogJsonObject | undefined {
   const raw = asRecord(value);
   if (
@@ -87,7 +98,7 @@ function totalMatches(total: unknown, start: number, count: number, last: boolea
   const end = start + count;
   return last === end >= total && (count === 0 || end <= total);
 }
-function metadataPageMatches(
+export function metadataPageMatches(
   body: Record<string, unknown>,
   count: number,
   start: number,
