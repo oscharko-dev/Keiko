@@ -1913,7 +1913,7 @@ and restores summary focus. The new cases and existing Chat/API/scope suites pas
 drag/drop, effective-ceiling presentation, rename/token controls and the complete
 write/mixed-source workflows remain pending. No full AC acceptance is claimed.
 
-# 2026-10-27 browser checkpoint (19:48 Europe/Berlin)
+## 2026-10-27 browser checkpoint (19:48 Europe/Berlin)
 
 The actual production UI build and Chromium now reach launcher pairing, Hub Pod
 creation, real Jira HTTPS verification and server-confirmed Chat binding. This
@@ -1934,3 +1934,36 @@ No full acceptance criterion is newly claimed. Chat write/approval composition,
 mixed grounding, drag/drop, remaining Pod lifecycle UI, complete scenario lanes,
 and final quality/Sonar/current-head qualification remain open. PR #4093 remains
 the only PR, against `dev`, with auto-merge off.
+
+## 2026-10-27 licensed browser read (20:00 Europe/Berlin)
+
+An independent synthetic Jira session completed normal first-run setup with the
+published test license. The basic identity/permission seed, required create field
+and real transition-screen group, pagination/hostile/isolation fixtures, and the
+actual product HTTPS/read/write preflight all passed in that session. Setup now
+waits for `FIRST_RUN` before opening its mutation marker. Re-entry on the running
+instance was refused before a new marker or setup mutation; the cold-start wait
+itself remains to be qualified on a subsequent fresh instance.
+
+The complete Chromium group passed twice with the actual production UI and a
+freshly verified local Qwen model. The second run explicitly waited for visible
+"Reading allowed", "Completed" and the final project-key answer, in addition to
+checking the canonical completed turn and persisted real `jira_projects` result.
+The journey covers launcher pairing, Hub creation/HTTPS verification, confirmed
+Chat binding, the normal composer, explicit read consent and streamed model/tool
+execution. License checks bracket both groups; the second closed with 10,194
+seconds remaining. Private synthetic screenshots were inspected.
+
+The first completed run's existing Activity Log reconstructs one credential
+creation, one verification and scope update, two started/completed gateway
+streams, one started/settled tool invocation, four transcript updates and one
+final response message. No log-sink warning was observed. Diagnostics and this
+checkpoint retain counts, not bodies or credentials.
+
+Harness lint/format and semantic duplication checks pass without changing the
+938-group baseline. The preceding UI build/typecheck, UI lint and 11 focused
+Hub/connection tests remain applicable; this increment changes only the lab
+harness and documentation. This proves a concrete read journey, not all 55 AC.
+Chat mutations/concrete approvals, mixed grounding, remaining lifecycle and
+drag/drop UI, the broader failure/isolation matrix and final quality/Sonar/CI
+qualification remain open. No merge or auto-merge authorization is inferred.

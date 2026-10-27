@@ -115,6 +115,9 @@ export async function runBrowserRead({ origin, fragment, chat, session, observe 
     await createPod(page, session);
     const region = await connectAndRead(page);
     await confirmCompleted(observe);
+    await region.getByText("Reading allowed", { exact: true }).waitFor();
+    await region.getByText("Completed", { exact: true }).waitFor();
+    await region.getByText("KEIKO", { exact: true }).waitFor();
     await region.screenshot({ path: join(session.directory, "browser-read.png") });
     stage("completed");
   } catch (error) {
