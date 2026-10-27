@@ -19,7 +19,6 @@ import {
   defineActivityLogOperation,
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { apiKeyHeaderValue } from "./config.js";
 import { speechProviderUrl } from "./speech-provider-url.js";
 import {
@@ -32,7 +31,9 @@ import {
 import {
   activityLogErrorKind,
   logCorrelationId,
-  logEndpointHost,
+  logEndpointDigest,
+  speechCompletionLogEnvelope,
+  speechCompletionLogFields,
   logModelId,
   resolveLogSink,
   withCorrelationId,
@@ -149,7 +150,7 @@ function logDispatch(request: TextToSpeechRequest, timeoutMs: number): void {
       SPEECH_TTS_REQUEST_DISPATCH_OPERATION,
       { level: "info", ...(correlationId === undefined ? {} : { correlationId }) },
       {
-        endpointDigest: sha256Hex(logEndpointHost(request.endpoint) ?? "invalid-endpoint"),
+        endpointDigest: logEndpointDigest(request.endpoint),
         modelId: logModelId(request.modelId),
         timeoutMs,
       },
@@ -254,20 +255,13 @@ function logCompleted(
   log.write(
     activityLogEvent(
       SPEECH_TTS_REQUEST_COMPLETED_OPERATION,
-      {
-        level: outcome.ok ? "info" : "warn",
-        ...(correlationId === undefined ? {} : { correlationId }),
-        ...(failureKind === undefined
-          ? {}
-          : { errorKind: SPEECH_TTS_FAILURE_ERROR_KIND[failureKind] }),
-      },
-      {
-        endpointDigest: sha256Hex(logEndpointHost(request.endpoint) ?? "invalid-endpoint"),
-        modelId: logModelId(request.modelId),
-        outcome: outcome.ok ? "succeeded" : "failed",
-        ...(failureKind === undefined ? {} : { failureKind }),
-        timeoutMs,
-      },
+      speechCompletionLogEnvelope(
+        outcome,
+        correlationId,
+        failureKind,
+        SPEECH_TTS_FAILURE_ERROR_KIND,
+      ),
+      speechCompletionLogFields(request, outcome, failureKind, timeoutMs),
     ),
   );
 }

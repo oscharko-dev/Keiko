@@ -403,3 +403,32 @@ export function speechCompletionLogEnvelope<FailureKind extends string>(
     ...(failureKind === undefined ? {} : { errorKind: errorKinds[failureKind] }),
   };
 }
+
+interface SpeechCompletionRequestFields {
+  readonly endpoint: string;
+  readonly modelId: string;
+}
+
+interface SpeechCompletionLogFields<FailureKind extends string> {
+  readonly endpointDigest: string;
+  readonly modelId: string;
+  readonly outcome: "succeeded" | "failed";
+  readonly failureKind?: FailureKind;
+  readonly timeoutMs: number;
+}
+
+/** Project the common Speech completion fields in their original request-observation order. */
+export function speechCompletionLogFields<FailureKind extends string>(
+  request: SpeechCompletionRequestFields,
+  outcome: SpeechCompletionStatus,
+  failureKind: FailureKind | undefined,
+  timeoutMs: number,
+): SpeechCompletionLogFields<FailureKind> {
+  return {
+    endpointDigest: logEndpointDigest(request.endpoint),
+    modelId: logModelId(request.modelId),
+    outcome: outcome.ok ? "succeeded" : "failed",
+    ...(failureKind === undefined ? {} : { failureKind }),
+    timeoutMs,
+  };
+}

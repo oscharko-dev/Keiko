@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "625712bdaf127ef9a2021603667551c6a5075d165ec7f85ae46a27f273d6bcd3",
+    "catalogDigest": "0c7c2f0dfe5a87a96688c06ea9c2a475eba01376c656ed5cabd2fb8b874b91e5",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -32899,8 +32899,8 @@
         "failureClasses": ["speech-language-normalization"],
         "proofIds": ["speech.stt.language.normalized.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/speech-to-text-adapter.ts:40",
-        "emitterSites": ["packages/keiko-model-gateway/src/speech-to-text-adapter.ts:332"]
+        "registrationSite": "packages/keiko-model-gateway/src/speech-to-text-adapter.ts:41",
+        "emitterSites": ["packages/keiko-model-gateway/src/speech-to-text-adapter.ts:329"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -32975,8 +32975,8 @@
         "failureClasses": ["speech-stt-request"],
         "proofIds": ["speech.stt.request.completed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/speech-to-text-adapter.ts:122",
-        "emitterSites": ["packages/keiko-model-gateway/src/speech-to-text-adapter.ts:206"]
+        "registrationSite": "packages/keiko-model-gateway/src/speech-to-text-adapter.ts:123",
+        "emitterSites": ["packages/keiko-model-gateway/src/speech-to-text-adapter.ts:207"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -33031,8 +33031,8 @@
         "failureClasses": ["speech-stt-request"],
         "proofIds": ["speech.stt.request.dispatch.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/speech-to-text-adapter.ts:68",
-        "emitterSites": ["packages/keiko-model-gateway/src/speech-to-text-adapter.ts:101"]
+        "registrationSite": "packages/keiko-model-gateway/src/speech-to-text-adapter.ts:69",
+        "emitterSites": ["packages/keiko-model-gateway/src/speech-to-text-adapter.ts:102"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -33071,8 +33071,8 @@
         "failureClasses": ["speech-mime-correction"],
         "proofIds": ["speech.tts.mime.corrected.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/text-to-speech-adapter.ts:44",
-        "emitterSites": ["packages/keiko-model-gateway/src/text-to-speech-adapter.ts:589"]
+        "registrationSite": "packages/keiko-model-gateway/src/text-to-speech-adapter.ts:45",
+        "emitterSites": ["packages/keiko-model-gateway/src/text-to-speech-adapter.ts:583"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -33143,8 +33143,8 @@
         "failureClasses": ["speech-tts-request"],
         "proofIds": ["speech.tts.request.completed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/text-to-speech-adapter.ts:166",
-        "emitterSites": ["packages/keiko-model-gateway/src/text-to-speech-adapter.ts:255"]
+        "registrationSite": "packages/keiko-model-gateway/src/text-to-speech-adapter.ts:167",
+        "emitterSites": ["packages/keiko-model-gateway/src/text-to-speech-adapter.ts:256"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -33188,8 +33188,8 @@
         "failureClasses": ["speech-tts-request"],
         "proofIds": ["speech.tts.request.dispatch.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/text-to-speech-adapter.ts:122",
-        "emitterSites": ["packages/keiko-model-gateway/src/text-to-speech-adapter.ts:148"]
+        "registrationSite": "packages/keiko-model-gateway/src/text-to-speech-adapter.ts:123",
+        "emitterSites": ["packages/keiko-model-gateway/src/text-to-speech-adapter.ts:149"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -33243,8 +33243,8 @@
         "failureClasses": ["speech-stream-response"],
         "proofIds": ["speech.tts.stream.peek.failed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/text-to-speech-adapter.ts:73",
-        "emitterSites": ["packages/keiko-model-gateway/src/text-to-speech-adapter.ts:824"]
+        "registrationSite": "packages/keiko-model-gateway/src/text-to-speech-adapter.ts:74",
+        "emitterSites": ["packages/keiko-model-gateway/src/text-to-speech-adapter.ts:818"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -90923,13 +90923,13 @@
     {
       "op": "<dynamic>",
       "category": "embedding",
-      "site": "packages/keiko-model-gateway/src/speech-to-text-adapter.ts:469",
+      "site": "packages/keiko-model-gateway/src/speech-to-text-adapter.ts:466",
       "package": "keiko-model-gateway"
     },
     {
       "op": "<dynamic>",
       "category": "embedding",
-      "site": "packages/keiko-model-gateway/src/text-to-speech-adapter.ts:431",
+      "site": "packages/keiko-model-gateway/src/text-to-speech-adapter.ts:425",
       "package": "keiko-model-gateway"
     },
     {
@@ -91343,43 +91343,43 @@
     {
       "op": "speech.stt.language.normalized",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/speech-to-text-adapter.ts:43",
+      "site": "packages/keiko-model-gateway/src/speech-to-text-adapter.ts:44",
       "package": "keiko-model-gateway"
     },
     {
       "op": "speech.stt.request.completed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/speech-to-text-adapter.ts:125",
+      "site": "packages/keiko-model-gateway/src/speech-to-text-adapter.ts:126",
       "package": "keiko-model-gateway"
     },
     {
       "op": "speech.stt.request.dispatch",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/speech-to-text-adapter.ts:71",
+      "site": "packages/keiko-model-gateway/src/speech-to-text-adapter.ts:72",
       "package": "keiko-model-gateway"
     },
     {
       "op": "speech.tts.mime.corrected",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/text-to-speech-adapter.ts:47",
+      "site": "packages/keiko-model-gateway/src/text-to-speech-adapter.ts:48",
       "package": "keiko-model-gateway"
     },
     {
       "op": "speech.tts.request.completed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/text-to-speech-adapter.ts:169",
+      "site": "packages/keiko-model-gateway/src/text-to-speech-adapter.ts:170",
       "package": "keiko-model-gateway"
     },
     {
       "op": "speech.tts.request.dispatch",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/text-to-speech-adapter.ts:125",
+      "site": "packages/keiko-model-gateway/src/text-to-speech-adapter.ts:126",
       "package": "keiko-model-gateway"
     },
     {
       "op": "speech.tts.stream.peek.failed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/text-to-speech-adapter.ts:76",
+      "site": "packages/keiko-model-gateway/src/text-to-speech-adapter.ts:77",
       "package": "keiko-model-gateway"
     },
     {

@@ -1,12 +1,28 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  requestTextToSpeech as publicTextToSpeech,
+  requestTextToSpeechStream as publicTextToSpeechStream,
+} from "@oscharko-dev/keiko-model-gateway";
+import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
+import {
+  ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+  resetActivityLogLossCountersForTests,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
   MAX_SPEECH_AUDIO_BYTES,
   requestTextToSpeech,
   requestTextToSpeechStream,
+  type TextToSpeechRequest,
+  type TextToSpeechOutcome,
+  type TextToSpeechStreamOutcome,
 } from "./text-to-speech-adapter.js";
 import { OutboundHttpEgressError } from "./http.js";
 import { GATEWAY_VOICE_TIMEOUT_FLOOR_MS } from "./resilience.js";
-import type { ModelGatewayLogTransport, ModelGatewayLogEvent } from "./observability.js";
+import type {
+  ModelGatewayLogTransport,
+  ModelGatewayLogEvent,
+  ModelGatewayLogSink,
+} from "./observability.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -1095,3 +1111,391 @@ function normalFixtureEvent(
   if (event?.category === "diagnostic") throw new TypeError("Expected normal fixture evidence");
   return event;
 }
+
+type TtsObservedOutcome = TextToSpeechOutcome | TextToSpeechStreamOutcome;
+
+interface TtsCompletionObservation {
+  active: boolean;
+  readonly mode: "healthy" | "rate-limited" | "empty-audio";
+  readonly refusedField: "none" | "endpoint" | "modelId";
+  readonly failure: Error;
+  readonly trace: string[];
+  readonly requestReceivers: unknown[];
+  readonly sinkReceivers: unknown[];
+  readonly events: ModelGatewayLogTransport[];
+}
+
+function ttsCompletionObservation(
+  mode: TtsCompletionObservation["mode"],
+  refusedField: TtsCompletionObservation["refusedField"],
+): TtsCompletionObservation {
+  const failure: Error = Object.freeze(new TypeError("synthetic TTS completion field refusal"));
+  return {
+    active: false,
+    mode,
+    refusedField,
+    failure,
+    trace: [],
+    requestReceivers: [],
+    sinkReceivers: [],
+    events: [],
+  };
+}
+
+function ttsCompletionSink(state: TtsCompletionObservation): ModelGatewayLogSink {
+  return {
+    get correlationId(): string | undefined {
+      if (state.active) {
+        state.trace.push("sink.correlationId");
+        state.sinkReceivers.push(this);
+      }
+      return state.mode === "rate-limited" ? undefined : "corr-tts-owning-sink";
+    },
+    get write(): (event: ModelGatewayLogTransport) => void {
+      if (state.active) {
+        state.trace.push("sink.write.get");
+        state.sinkReceivers.push(this);
+      }
+      return function (this: ModelGatewayLogSink, event: ModelGatewayLogTransport): void {
+        if (state.active) {
+          state.trace.push("sink.write.call");
+          state.sinkReceivers.push(this);
+        }
+        state.events.push(event);
+      };
+    },
+  };
+}
+
+function ttsCompletionResponse(state: TtsCompletionObservation): Response {
+  if (state.mode === "rate-limited") {
+    return new Response(JSON.stringify({ error: "private provider body" }), { status: 429 });
+  }
+  return audioResponse(state.mode === "empty-audio" ? new Uint8Array() : AUDIO_BYTES);
+}
+
+function ttsCompletionRequest(
+  state: TtsCompletionObservation,
+  sink: ModelGatewayLogSink,
+  voice: string | undefined,
+): TextToSpeechRequest {
+  return {
+    endpoint: ENDPOINT,
+    apiKey: SECRET_API_KEY,
+    modelId: "keiko-tts",
+    input: ANSWER,
+    ...(voice === undefined ? {} : { voice }),
+    log: sink,
+    correlationId: state.mode === "rate-limited" ? undefined : "corr-tts-completion-request",
+    fetchImpl: mockFetch(() => {
+      if (state.active) state.trace.push("fetch");
+      state.active = true;
+      return ttsCompletionResponse(state);
+    }),
+  };
+}
+
+function observeTtsCompletionFields(
+  request: TextToSpeechRequest,
+  sink: ModelGatewayLogSink,
+  state: TtsCompletionObservation,
+): () => void {
+  const fields = [
+    ["endpoint", ENDPOINT],
+    ["modelId", "keiko-tts"],
+    ["log", sink],
+    ["correlationId", request.correlationId],
+  ] as const;
+  const originals = fields.map(([key]) => ({
+    key,
+    descriptor: Object.getOwnPropertyDescriptor(request, key),
+  }));
+  for (const [key, value] of fields) {
+    Object.defineProperty(request, key, {
+      configurable: true,
+      get(this: TextToSpeechRequest): string | ModelGatewayLogSink | undefined {
+        if (!state.active) return value;
+        state.trace.push(key);
+        state.requestReceivers.push(this);
+        if (state.refusedField === key) throw state.failure;
+        return key === "endpoint" && state.mode === "rate-limited"
+          ? "not a provider endpoint"
+          : value;
+      },
+    });
+  }
+  return (): void => {
+    for (const { key, descriptor } of originals) {
+      if (descriptor === undefined) Reflect.deleteProperty(request, key);
+      else Object.defineProperty(request, key, descriptor);
+    }
+  };
+}
+
+async function settleTtsCompletionObservation(
+  outcome: TtsObservedOutcome | undefined,
+  restore: () => void,
+): Promise<void> {
+  try {
+    if (outcome?.ok === true && "body" in outcome.value) await outcome.value.body.cancel();
+  } finally {
+    try {
+      restore();
+    } finally {
+      resetActivityLogLossCountersForTests();
+    }
+  }
+}
+
+function expectTtsCompletionOrder(
+  state: TtsCompletionObservation,
+  request: TextToSpeechRequest,
+  sink: ModelGatewayLogSink,
+): void {
+  expect(state.trace).toEqual([
+    "log",
+    "sink.correlationId",
+    ...(state.mode === "rate-limited" ? [] : ["sink.correlationId"]),
+    "correlationId",
+    "endpoint",
+    "modelId",
+    "sink.write.get",
+    "sink.write.call",
+  ]);
+  expect(state.requestReceivers).toHaveLength(4);
+  for (const receiver of state.requestReceivers) expect(receiver).toBe(request);
+  expect(state.sinkReceivers).toHaveLength(state.mode === "rate-limited" ? 3 : 4);
+  for (const receiver of state.sinkReceivers) expect(receiver).toBe(sink);
+}
+
+function expectTtsObservedOutcome(
+  outcome: TtsObservedOutcome | undefined,
+  mode: TtsCompletionObservation["mode"],
+): void {
+  if (mode === "healthy") {
+    if (outcome?.ok !== true) throw new TypeError("Expected opened or buffered speech audio");
+    expect(outcome.value.mimeType).toBe("audio/mpeg");
+    if ("audio" in outcome.value) expect(outcome.value.audio).toEqual(AUDIO_BYTES);
+    else expect(outcome.value.body).toBeInstanceOf(ReadableStream);
+  } else {
+    expect(outcome).toEqual({ ok: false, kind: mode });
+  }
+}
+
+function expectTtsCompletionMetadata(
+  state: TtsCompletionObservation,
+  completed: ModelGatewayLogEvent | undefined,
+): void {
+  expect(completed).toMatchObject({
+    op: "speech.tts.request.completed",
+    level: state.mode === "healthy" ? "info" : "warn",
+    extra: { modelId: "keiko-tts", outcome: state.mode === "healthy" ? "succeeded" : "failed" },
+  });
+  expect(completed?.extra).not.toHaveProperty("httpStatus");
+}
+
+function expectHealthyTtsCompletion(
+  dispatch: ModelGatewayLogEvent | undefined,
+  completed: ModelGatewayLogEvent | undefined,
+): void {
+  expect(completed?.extra?.endpointDigest).toBe(dispatch?.extra?.endpointDigest);
+  expect(completed?.correlationId).toBe("corr-tts-completion-request");
+  expect(completed).not.toHaveProperty("errorKind");
+  expect(completed?.extra).not.toHaveProperty("failureKind");
+}
+
+function expectRateLimitedTtsCompletion(completed: ModelGatewayLogEvent | undefined): void {
+  expect(completed?.extra?.endpointDigest).toBe(sha256Hex("invalid-endpoint"));
+  expect(completed?.extra?.failureKind).toBe("rate-limited");
+  expect(completed?.errorKind).toBe("rate-limited");
+  expect(completed?.correlationId).toBe(ACTIVITY_LOG_UNKNOWN_CORRELATION_ID);
+}
+
+function expectEmptyTtsCompletion(
+  dispatch: ModelGatewayLogEvent | undefined,
+  completed: ModelGatewayLogEvent | undefined,
+): void {
+  expect(completed?.extra?.endpointDigest).toBe(dispatch?.extra?.endpointDigest);
+  expect(completed?.extra?.failureKind).toBe("empty-audio");
+  expect(completed?.errorKind).toBe("validation-failed");
+  expect(completed?.correlationId).toBe("corr-tts-completion-request");
+}
+
+function expectTtsCompletionEvent(state: TtsCompletionObservation): void {
+  const dispatch = normalFixtureEvent(state.events[0]);
+  const completed = normalFixtureEvent(state.events.at(-1));
+  expectTtsCompletionMetadata(state, completed);
+  if (state.mode === "healthy") expectHealthyTtsCompletion(dispatch, completed);
+  else if (state.mode === "rate-limited") expectRateLimitedTtsCompletion(completed);
+  else expectEmptyTtsCompletion(dispatch, completed);
+  for (const secret of [
+    ENDPOINT,
+    SECRET_API_KEY,
+    ANSWER,
+    AUDIO_MARKER,
+    "configured-voice",
+    "private provider body",
+  ]) {
+    expect(JSON.stringify(state.events)).not.toContain(secret);
+  }
+}
+
+const TTS_COMPLETION_SURFACES = [
+  { name: "source buffered", origin: "source", run: requestTextToSpeech },
+  { name: "source streaming", origin: "source", run: requestTextToSpeechStream },
+  { name: "public buffered", origin: "public", run: publicTextToSpeech },
+  { name: "public streaming", origin: "public", run: publicTextToSpeechStream },
+] as const;
+
+// The real fetch seam activates completion observations only after both build-time sink captures.
+describe("TTS completion evidence observations (#3918)", (): void => {
+  for (const surface of TTS_COMPLETION_SURFACES) {
+    for (const mode of ["healthy", "rate-limited"] as const) {
+      it(`${surface.name} retains completion field order and ${mode} metadata`, async (): Promise<void> => {
+        const state = ttsCompletionObservation(mode, "none");
+        const sink = ttsCompletionSink(state);
+        const request = ttsCompletionRequest(state, sink, "configured-voice");
+        const restore = observeTtsCompletionFields(request, sink, state);
+        let outcome: TtsObservedOutcome | undefined;
+        resetActivityLogLossCountersForTests();
+        try {
+          outcome = await surface.run(request);
+        } finally {
+          await settleTtsCompletionObservation(outcome, restore);
+        }
+        expectTtsObservedOutcome(outcome, mode);
+        expectTtsCompletionOrder(state, request, sink);
+        expectTtsCompletionEvent(state);
+      });
+    }
+    for (const refusedField of ["endpoint", "modelId"] as const) {
+      it(`${surface.name} preserves the exact completion ${refusedField} exception`, async (): Promise<void> => {
+        const state = ttsCompletionObservation("healthy", refusedField);
+        const sink = ttsCompletionSink(state);
+        const request = ttsCompletionRequest(state, sink, "configured-voice");
+        const restore = observeTtsCompletionFields(request, sink, state);
+        let outcome: TtsObservedOutcome | undefined;
+        let caught: unknown;
+        resetActivityLogLossCountersForTests();
+        try {
+          outcome = await surface.run(request);
+        } catch (error) {
+          caught = error;
+        } finally {
+          await settleTtsCompletionObservation(outcome, restore);
+        }
+        expect(caught).toBe(state.failure);
+        expect(state.trace).toEqual([
+          "log",
+          "sink.correlationId",
+          "sink.correlationId",
+          "correlationId",
+          "endpoint",
+          ...(refusedField === "modelId" ? ["modelId"] : []),
+        ]);
+        expect(state.events).toHaveLength(1);
+        expect(normalFixtureEvent(state.events[0])?.op).toBe("speech.tts.request.dispatch");
+        expect(state.requestReceivers).toHaveLength(refusedField === "endpoint" ? 3 : 4);
+        for (const receiver of state.requestReceivers) expect(receiver).toBe(request);
+        expect(state.sinkReceivers).toHaveLength(2);
+        for (const receiver of state.sinkReceivers) expect(receiver).toBe(sink);
+      });
+    }
+    if (surface.name !== "source buffered") {
+      it(`${surface.name} retains the distinct empty-audio completion map`, async (): Promise<void> => {
+        const state = ttsCompletionObservation("empty-audio", "none");
+        const sink = ttsCompletionSink(state);
+        const request = ttsCompletionRequest(state, sink, "configured-voice");
+        const restore = observeTtsCompletionFields(request, sink, state);
+        let outcome: TtsObservedOutcome | undefined;
+        resetActivityLogLossCountersForTests();
+        try {
+          outcome = await surface.run(request);
+        } finally {
+          await settleTtsCompletionObservation(outcome, restore);
+        }
+        expectTtsObservedOutcome(outcome, "empty-audio");
+        expectTtsCompletionOrder(state, request, sink);
+        expectTtsCompletionEvent(state);
+      });
+    }
+    if (surface.origin === "public") {
+      it(`${surface.name} refuses missing or blank voice before completion observations`, async (): Promise<void> => {
+        for (const voice of [undefined, "", "   "]) {
+          const state = ttsCompletionObservation("healthy", "none");
+          const sink = ttsCompletionSink(state);
+          const request = ttsCompletionRequest(state, sink, voice);
+          const restore = observeTtsCompletionFields(request, sink, state);
+          let outcome: TtsObservedOutcome | undefined;
+          state.active = true;
+          resetActivityLogLossCountersForTests();
+          try {
+            outcome = await surface.run(request);
+          } finally {
+            await settleTtsCompletionObservation(outcome, restore);
+          }
+          expect(outcome).toEqual({ ok: false, kind: "unsupported-model" });
+          expect(state.trace).toEqual([]);
+          expect(state.events).toEqual([]);
+        }
+      });
+    }
+  }
+});
+
+async function openCappedPublicTtsStream(
+  events: ModelGatewayLogTransport[],
+): Promise<TextToSpeechStreamOutcome> {
+  return publicTextToSpeechStream({
+    endpoint: ENDPOINT,
+    apiKey: SECRET_API_KEY,
+    modelId: "keiko-tts",
+    input: ANSWER,
+    voice: "configured-voice",
+    responseFormat: "pcm",
+    maxAudioBytes: 10,
+    log: {
+      write(event): void {
+        events.push(event);
+      },
+    },
+    fetchImpl: mockFetch(() => audioResponse(new Uint8Array(100), "audio/pcm")),
+  });
+}
+
+function expectOpenedTtsCompletion(events: readonly ModelGatewayLogTransport[]): void {
+  const completed = normalFixtureEvent(events.at(-1));
+  expect(completed).toMatchObject({
+    op: "speech.tts.request.completed",
+    level: "info",
+    extra: { outcome: "succeeded" },
+  });
+  expect(completed).not.toHaveProperty("errorKind");
+  expect(completed?.extra).not.toHaveProperty("failureKind");
+}
+
+describe("TTS opened-stream completion boundary (#3918)", (): void => {
+  it("public streaming completion records opening before a later capped read refuses audio", async (): Promise<void> => {
+    const events: ModelGatewayLogTransport[] = [];
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    resetActivityLogLossCountersForTests();
+    try {
+      const outcome = await openCappedPublicTtsStream(events);
+      if (!outcome.ok) throw new TypeError("Expected an opened bounded stream");
+      reader = outcome.value.body.getReader();
+      expectOpenedTtsCompletion(events);
+      await expect(reader.read()).rejects.toThrow("synthesized audio exceeded the size limit");
+      expectOpenedTtsCompletion(events);
+      expect(events.map((event) => event.op)).toEqual([
+        "speech.tts.request.dispatch",
+        "speech.tts.request.completed",
+      ]);
+    } finally {
+      try {
+        reader?.releaseLock();
+      } finally {
+        resetActivityLogLossCountersForTests();
+      }
+    }
+  });
+});
