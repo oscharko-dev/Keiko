@@ -1037,3 +1037,27 @@ byte boundaries, placeholder reservation and invalid budgets. The existing lifec
 bounded result metrics without Jira content. All **261 catalog/consumer tests** and **76 field/Cloud
 write regressions** pass, as do package build, root typecheck, changed lint/format and the unchanged
 semantic gate. Full epic and live qualification remain pending.
+
+## Mutation journal/transport composition — #4083 AC5 / #4084 AC3 / #4091 AC2
+
+The server now composes the existing durable journal with the existing Atlassian HTTP port. A new
+intent alone owns execution; duplicate deliveries only report retained state, including while the
+first invocation is still preparing. Final transport admission repeats the injected current-authority
+guard inside the journal transaction. Owner-supplied transport admission/response callbacks remain
+composed. Metadata GETs do not acknowledge a mutation, and one invocation can send at most one
+POST/PUT. The operation's validated receipt identities distinguish confirmed success from 2xx without
+usable confirmation. Lost/error responses remain unknown; failed terminal persistence retains the
+barrier and returns uncertainty. This composes an injected authority owner; real Chat admission is
+still the next integration layer.
+
+An integration regression exposed a missing barrier after `succeeded-unconfirmed`: it failed before
+the store repair. Both new and previously prepared mutations in that turn are now blocked, while an
+explicit new turn remains separate. The **791 store/port/composition tests** pass, including actual
+gateway/port dispatch with synthetic transport, concurrent duplicate delivery, committed-then-error,
+malformed and broken response bodies, metadata reads, final guard revocation, missing capabilities,
+second dispatch refusal and terminal storage failure. This is not a licensed Jira/normal Chat proof.
+No managed mutation is advertised until provider and Chat-authority composition is complete.
+Package build, root typecheck, changed lint/format, ADR index, unchanged semantic checks and error
+observability pass. The diagnostic emitter is explicit at each caught failure; no legacy failure-path
+exemption was added. Registry generation resolves 608 proofs/30 scenarios without violations and its
+97 drift tests pass. The narrower 18-test composition suite also passed after the diagnostic repair.

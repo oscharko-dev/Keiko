@@ -1,3 +1,5 @@
+import type { AtlassianConnectorWriteFailureReason } from "./atlassian-connectors.js";
+
 /** Remote effects remain separate from the enclosing MCP/catalog terminal status. */
 export const JIRA_MUTATION_OPERATIONS = [
   "jira.create",
@@ -16,3 +18,14 @@ export const JIRA_MUTATION_OUTCOMES = [
   "unknown",
 ] as const;
 export type JiraMutationOutcome = (typeof JIRA_MUTATION_OUTCOMES)[number];
+
+/** Validated Jira identities only; remote bodies and headers never become a mutation receipt. */
+export interface JiraMutationReceipt {
+  readonly issueKey?: string;
+  readonly issueId?: string;
+  readonly commentId?: string;
+  readonly transitionId?: string;
+}
+export type JiraMutationAttempt =
+  | { readonly ok: true; readonly receipt: JiraMutationReceipt }
+  | { readonly ok: false; readonly reason: AtlassianConnectorWriteFailureReason };

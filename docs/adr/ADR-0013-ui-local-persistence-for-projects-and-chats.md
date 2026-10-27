@@ -339,8 +339,9 @@ possible dispatch before the caller may send HTTP. Nested transactions are refus
 released savepoint is not a durable commit. A synchronous final guard may redeem existing approval
 state in the same transaction; a denied guard rolls its changes back. One action digest per canonical
 turn prevents a new model call ID from repeating that action. Writes within a turn are serialized,
-with at most 32 retained intents. Unknown effects block further writes in that turn, including
-already prepared actions. A new explicitly admitted user turn has its own scope.
+with at most 32 retained intents. Unknown effects and acknowledged-but-unconfirmed outcomes block
+further writes in that turn, including already prepared actions. A new explicitly admitted user turn
+has its own scope.
 
 Response acknowledgement is stored separately from body parsing and later confirmation. Known
 local rejection before dispatch, success, success without confirmation, unknown effect and no
@@ -350,6 +351,13 @@ The transport's diagnostic reason (such as permission denied or rate limited) re
 from this effect classification. Schema 48 repairs the earlier journal's retained post-dispatch
 rejections to unknown before work resumes. An observed 2xx cannot be downgraded to unknown/rejected;
 normal terminal settlement is immutable.
+The server mutation composer connects this journal to the final Atlassian HTTP admission and
+response-observation callbacks. Only the creator of a new intent executes provider code; replaying
+prepared, in-flight or completed records never takes over execution. Metadata GET responses do not
+acknowledge a mutation. Final dispatch repeats the composing owner's synchronous admission inside
+the durable transaction, and a provider invocation may dispatch at most one mutation request.
+Confirmed results require the operation's validated receipt identities. Failed terminal persistence
+retains the journal barrier and returns an uncertain result rather than inventing completion.
 Removing a message preserves its mutation tombstone; deleting its owning Chat removes the journal.
 Registered body-free state events follow committed state. A pre-effect log failure prevents the
 caller from proceeding, preserving the durable tombstone; terminal log failure cannot overwrite

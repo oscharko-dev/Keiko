@@ -98987,7 +98987,7 @@
     "violations": []
   },
   "legacyDiscovery": {
-    "dynamicCount": 82,
+    "dynamicCount": 86,
     "unknownCategoryCount": 75,
     "authoritative": false
   },
@@ -100839,6 +100839,34 @@
       "category": "diagnostic",
       "site": "packages/keiko-security/src/fs-hardening.ts:94",
       "package": "keiko-security"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:139",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:155",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:193",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:199",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
@@ -103699,6 +103727,13 @@
       "package": "keiko-server"
     },
     {
+      "op": "jira.mutation-execution-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:58",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
       "op": "local-knowledge.indexing",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/local-knowledge-handlers.ts:3147",
@@ -105315,6 +105350,7 @@
     "indexing.start.accepted",
     "indexing.start.refused",
     "invalidation-failed",
+    "jira.mutation-execution-failed",
     "knowledge.log.sink-failed",
     "knowledge.store.encryption-rejected",
     "knowledge.store.quarantined",

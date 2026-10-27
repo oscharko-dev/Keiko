@@ -1457,4 +1457,6 @@ export {
   JIRA_MUTATION_OUTCOMES,
   type JiraMutationOperation,
   type JiraMutationOutcome,
+  type JiraMutationReceipt,
+  type JiraMutationAttempt,
 } from "./jira-tool-execution.js";

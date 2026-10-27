@@ -288,26 +288,30 @@ describe("remote observation and terminal outcomes", () => {
       expect(f.journal.settle(f.intent.invocationId, "unknown").outcome).toBe("unknown");
     },
   );
-  it("blocks new and previously prepared mutations after an unknown effect in the same turn", () => {
-    const f = fixture();
-    f.journal.prepare(f.intent);
-    const second = { ...f.intent, invocationId: "second", actionDigest: "c".repeat(64) };
-    f.journal.prepare(second);
-    expect(f.journal.beginDispatch(f.intent.invocationId, () => true)).toBe(true);
-    expect(f.journal.beginDispatch(second.invocationId, () => true)).toBe(false);
-    f.journal.settle(f.intent.invocationId, "unknown");
-    expect(f.journal.beginDispatch(second.invocationId, () => true)).toBe(false);
-    expect(
-      f.journal.prepare({ ...second, invocationId: "third", actionDigest: "d".repeat(64) }),
-    ).toEqual({ kind: "blocked", reason: "unknown-effect" });
-    f.store.failChatTurn(f.intent.chatId, "synthetic-turn", "failed");
-    const newTurn = {
-      ...intentFor(f.store, f.intent.chatId, "explicit-new-turn"),
-      invocationId: "new-turn-action",
-    };
-    expect(f.journal.prepare(newTurn).kind).toBe("prepared");
-    expect(f.journal.beginDispatch(newTurn.invocationId, () => true)).toBe(true);
-  });
+  it.each(["unknown", "succeeded-unconfirmed"] as const)(
+    "blocks new and previously prepared mutations after %s in the same turn",
+    (outcome) => {
+      const f = fixture();
+      f.journal.prepare(f.intent);
+      const second = { ...f.intent, invocationId: "second", actionDigest: "c".repeat(64) };
+      f.journal.prepare(second);
+      expect(f.journal.beginDispatch(f.intent.invocationId, () => true)).toBe(true);
+      expect(f.journal.beginDispatch(second.invocationId, () => true)).toBe(false);
+      if (outcome === "succeeded-unconfirmed") f.journal.acknowledge(f.intent.invocationId, 201);
+      f.journal.settle(f.intent.invocationId, outcome);
+      expect(f.journal.beginDispatch(second.invocationId, () => true)).toBe(false);
+      expect(
+        f.journal.prepare({ ...second, invocationId: "third", actionDigest: "d".repeat(64) }),
+      ).toEqual({ kind: "blocked", reason: "unknown-effect" });
+      f.store.failChatTurn(f.intent.chatId, "synthetic-turn", "failed");
+      const newTurn = {
+        ...intentFor(f.store, f.intent.chatId, "explicit-new-turn"),
+        invocationId: "new-turn-action",
+      };
+      expect(f.journal.prepare(newTurn).kind).toBe("prepared");
+      expect(f.journal.beginDispatch(newTurn.invocationId, () => true)).toBe(true);
+    },
+  );
   it("emits reconstructible body-free state evidence from the actual store", () => {
     const f = fixture();
     dispatch(f);

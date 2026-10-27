@@ -65,7 +65,7 @@ function blockedTurn(
   const rows = db
     .prepare("SELECT phase, outcome FROM chat_tool_mutations WHERE chat_id = ? AND turn_ref = ?")
     .all(intent.chatId, intent.turnRef);
-  if (rows.some((row) => row.outcome === "unknown"))
+  if (rows.some((row) => row.outcome === "unknown" || row.outcome === "succeeded-unconfirmed"))
     return { kind: "blocked", reason: "unknown-effect" };
   if (rows.some((row) => row.phase === "dispatched" || row.phase === "acknowledged"))
     return { kind: "blocked", reason: "in-flight" };
@@ -143,7 +143,7 @@ class MutationStore implements ChatToolMutationStore {
         assertCurrentTurn(this.db, current);
         const barrier = this.db
           .prepare(
-            "SELECT 1 FROM chat_tool_mutations WHERE chat_id = ? AND turn_ref = ? AND (phase IN ('dispatched','acknowledged') OR outcome = 'unknown') LIMIT 1",
+            "SELECT 1 FROM chat_tool_mutations WHERE chat_id = ? AND turn_ref = ? AND (phase IN ('dispatched','acknowledged') OR outcome IN ('unknown','succeeded-unconfirmed')) LIMIT 1",
           )
           .get(current.chatId, current.turnRef);
         if (barrier !== undefined) return undefined;
