@@ -241,6 +241,28 @@ function feedWithPresentedTools(): AvailableCodingSafeActivityFeed {
   return { ...feed, turns: [{ turnId: "turn-tools", messages: [], tools, truncated: false }] };
 }
 
+// The two failed calls of a real run (#3897): a command that exited non-zero and a Code Mode
+// program that reported an error to the model. Neither carries any other presentation fact.
+function feedWithFailedNativeCalls(): AvailableCodingSafeActivityFeed {
+  const feed = feedWithRepeatedTools();
+  const tools = [
+    {
+      callId: "execute-1",
+      tool: "execute",
+      state: "failed" as const,
+      occurredAt: AT,
+    },
+    {
+      callId: "shell-1",
+      tool: "shell",
+      state: "failed" as const,
+      occurredAt: AT,
+      presentation: { exitCode: 1 },
+    },
+  ];
+  return { ...feed, turns: [{ turnId: "turn-failed", messages: [], tools, truncated: false }] };
+}
+
 const IDLE_QUESTIONS: UseCodingWorkbenchQuestionsResult = {
   status: "empty",
   questions: [],
@@ -284,6 +306,26 @@ function paintRowHeights(container: HTMLElement, heightFor: (li: HTMLLIElement) 
 }
 
 describe("CodingWorkbenchTimeline", () => {
+  it("says why a failed call failed instead of opening to its tool name alone", () => {
+    const { container } = render(
+      <Timeline
+        active={false}
+        events={[]}
+        activity={activityLike(feedWithFailedNativeCalls())}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    const cards = [...container.querySelectorAll<HTMLDetailsElement>('[data-tool-state="failed"]')];
+    expect(cards).toHaveLength(2);
+    const [execute, shell] = cards;
+    expect(execute?.open).toBe(true);
+    expect(execute).toHaveTextContent("The tool reported an error to the model.");
+    expect(execute).not.toHaveTextContent("exited with code");
+    expect(shell?.open).toBe(true);
+    expect(shell).toHaveTextContent("The command exited with code 1.");
+    expect(shell).not.toHaveTextContent("reported an error");
+  });
+
   it("keeps each presented call visible with precise canonical facts", () => {
     const { container } = render(
       <Timeline
@@ -963,8 +1005,9 @@ describe("CodingWorkbenchTimeline model reasoning", () => {
       />,
     );
     const block = reasoningBlock(container);
-    expect(block.querySelector("summary")).toHaveTextContent("Model reasoning");
-    expect(block.querySelector("summary")).toHaveTextContent("Unverified");
+    // The summary sits among tool rows whose badges are statuses; a warning-coloured "Unverified"
+    // there read as a failed check on every step (#3897, owner). The label lives in the block.
+    expect(block.querySelector("summary")?.textContent).toBe("Model reasoning");
     expect(block).toHaveTextContent("Unverified model reasoning");
     expect(block).toHaveTextContent(THOUGHT.text);
     const answer = container.querySelector(

@@ -840,7 +840,9 @@ function MessageRow({
   );
 }
 
-// #3878: the model's own reasoning, apart from the answer and labelled as unverified. It is
+// #3878: the model's own reasoning, apart from the answer and labelled as unverified inside the
+// block: its summary sits among tool rows whose badges are statuses, where a warning-coloured
+// "Unverified" read as a failed check on every step (#3897, owner). It is
 // collapsed until the reader opens it, also while its turn streams, and its text is excluded from
 // the log's live announcements: the session stream is a `role="log"`, whose additions a screen
 // reader reads out, and up to 8 KiB of unverified reasoning per message would crowd out the answer
@@ -861,9 +863,6 @@ function ModelReasoning({
         onClick={(event) => reportCodingWorkbenchSummaryActivated("model-reasoning", event)}
       >
         <span>{t("codingWorkbench.activity.reasoning.title")}</span>
-        <span className={styles.cmpReasoningBadge}>
-          {t("codingWorkbench.activity.reasoning.badge")}
-        </span>
       </summary>
       <p className={styles.cmpReasoningNote}>{t("codingWorkbench.activity.reasoning.note")}</p>
       <p className={styles.cmpReasoningText}>
@@ -967,11 +966,28 @@ function ToolRow({
             {t(`codingWorkbench.activity.toolState.${item.tool.state}`)}
           </span>
         </summary>
+        <ToolOutcome tool={item.tool} t={t} />
         <code className={styles.toolName}>{item.tool.tool}</code>
         <ToolPresentationDetails tool={item.tool} t={t} />
       </details>
     </li>
   );
+}
+
+// Why a call ended as it did, in words: a command's exit status, or that the tool reported an
+// error to the model. Without it a failed call opened to nothing but its tool name (#3897).
+function ToolOutcome({
+  tool,
+  t,
+}: {
+  readonly tool: CodingSafeActivityTool;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  const exitCode = tool.presentation?.exitCode;
+  if (exitCode !== undefined) {
+    return <p>{t("codingWorkbench.activity.exitCode", { code: exitCode })}</p>;
+  }
+  return tool.state === "failed" ? <p>{t("codingWorkbench.activity.toolError")}</p> : null;
 }
 
 function ToolPresentationDetails({

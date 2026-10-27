@@ -1340,14 +1340,6 @@
   color: var(--text-secondary);
 }
 
-.cmpReasoningBadge {
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-pill);
-  padding: 0 var(--space-2);
-  color: var(--feedback-warning);
-  font-size: var(--text-caption);
-}
-
 .cmpReasoningNote {
   margin: var(--space-1) 0 0;
   color: var(--text-tertiary);
