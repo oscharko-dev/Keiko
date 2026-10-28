@@ -1,4 +1,6 @@
-export function acceptedClassifierCause(trace: string[], receivers: unknown[]): unknown {
+import { expect, it } from "vitest";
+
+function acceptedClassifierCause(trace: string[], receivers: unknown[]): unknown {
   const prototype = {
     get code(): string {
       trace.push("code");
@@ -14,7 +16,7 @@ export function acceptedClassifierCause(trace: string[], receivers: unknown[]): 
   return cause;
 }
 
-export function foreignClassifierCause(trace: string[], receivers: unknown[]): unknown {
+function foreignClassifierCause(trace: string[], receivers: unknown[]): unknown {
   const foreignCode = {
     [Symbol.toPrimitive](): string {
       trace.push("coerce");
@@ -48,7 +50,7 @@ interface RefusedClassifierInputs {
   readonly callableReads: number;
 }
 
-export function refusedClassifierInputs(trace: string[]): RefusedClassifierInputs {
+function refusedClassifierInputs(trace: string[]): RefusedClassifierInputs {
   let callableReads = 0;
   const callable = (): string => "unused callable";
   Object.defineProperty(callable, "code", {
@@ -76,4 +78,38 @@ export function refusedClassifierInputs(trace: string[]): RefusedClassifierInput
       return callableReads;
     },
   };
+}
+
+export function defineClassifierObservationContract(classify: (input: unknown) => string): void {
+  it("accepts inherited code once with its original receiver and skips name", (): void => {
+    const trace: string[] = [];
+    const receivers: unknown[] = [];
+    const cause: unknown = acceptedClassifierCause(trace, receivers);
+    expect(classify(cause)).toBe("ENOSPC");
+    expect(trace).toEqual(["code"]);
+    expect(receivers).toHaveLength(1);
+    expect(receivers[0]).toBe(cause);
+  });
+
+  it("falls back in inherited read order without coercing a foreign code", (): void => {
+    const trace: string[] = [];
+    const receivers: unknown[] = [];
+    const cause: unknown = foreignClassifierCause(trace, receivers);
+    expect(classify(cause)).toBe("TypeError");
+    expect(trace).toEqual(["code", "name"]);
+    expect(receivers).toHaveLength(2);
+    expect(receivers[0]).toBe(cause);
+    expect(receivers[1]).toBe(cause);
+  });
+
+  it("refuses callable properties and contains both throwing and revoked proxies", (): void => {
+    const trace: string[] = [];
+    const refused = refusedClassifierInputs(trace);
+    const { callable, hostile, revoked } = refused;
+    expect(classify(callable)).toBe("unknown");
+    expect(refused.callableReads).toBe(0);
+    expect(classify(hostile)).toBe("unknown");
+    expect(trace).toEqual(["code", "name"]);
+    expect(classify(revoked.proxy)).toBe("unknown");
+  });
 }

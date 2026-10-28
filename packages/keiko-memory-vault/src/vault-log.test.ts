@@ -9,11 +9,7 @@
 //   * the timer is monotonic and never reports a negative duration.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  acceptedClassifierCause,
-  foreignClassifierCause,
-  refusedClassifierInputs,
-} from "../../../tests/support/log-classifier-observations.js";
+import { defineClassifierObservationContract } from "../../../tests/support/log-classifier-observations.js";
 import * as vaultLog from "./vault-log.js";
 import {
   activityLogLossCounters,
@@ -692,37 +688,7 @@ describe("#3918 synchronous port delivery observations", () => {
 });
 
 describe("#3918 classifier foreign observation contract", (): void => {
-  it("accepts inherited code once with its original receiver and skips name", (): void => {
-    const trace: string[] = [];
-    const receivers: unknown[] = [];
-    const cause: unknown = acceptedClassifierCause(trace, receivers);
-    expect(memoryVaultErrorKind(cause)).toBe("ENOSPC");
-    expect(trace).toEqual(["code"]);
-    expect(receivers).toHaveLength(1);
-    expect(receivers[0]).toBe(cause);
-  });
-
-  it("falls back in inherited read order without coercing a foreign code", (): void => {
-    const trace: string[] = [];
-    const receivers: unknown[] = [];
-    const cause: unknown = foreignClassifierCause(trace, receivers);
-    expect(memoryVaultErrorKind(cause)).toBe("TypeError");
-    expect(trace).toEqual(["code", "name"]);
-    expect(receivers).toHaveLength(2);
-    expect(receivers[0]).toBe(cause);
-    expect(receivers[1]).toBe(cause);
-  });
-
-  it("refuses callable properties and contains both throwing and revoked proxies", (): void => {
-    const trace: string[] = [];
-    const refused = refusedClassifierInputs(trace);
-    const { callable, hostile, revoked } = refused;
-    expect(memoryVaultErrorKind(callable)).toBe("unknown");
-    expect(refused.callableReads).toBe(0);
-    expect(memoryVaultErrorKind(hostile)).toBe("unknown");
-    expect(trace).toEqual(["code", "name"]);
-    expect(memoryVaultErrorKind(revoked.proxy)).toBe("unknown");
-  });
+  defineClassifierObservationContract(memoryVaultErrorKind);
 });
 
 it("#3918 preserves inherited fallback observations through the registered failure port", (): void => {
