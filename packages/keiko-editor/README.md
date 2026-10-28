@@ -94,10 +94,17 @@ of truth (ADR-0042 D4).
 ```ts
 import { loader } from "@monaco-editor/react";
 import * as monaco from "monaco-editor/editor/editor.api.js";
+import "monaco-editor/features/codeAction/register.js";
+import "monaco-editor/features/gotoLine/register.js";
+import "monaco-editor/features/gotoSymbol/register.js";
 import "monaco-editor/features/hover/register.js";
+import "monaco-editor/features/inlayHints/register.js";
 import "monaco-editor/features/inlineCompletions/register.js";
+import "monaco-editor/features/parameterHints/register.js";
 import "monaco-editor/features/quickCommand/register.js";
 import "monaco-editor/features/quickHelp/register.js";
+import "monaco-editor/features/referenceSearch/register.js";
+import "monaco-editor/features/rename/register.js";
 import "monaco-editor/features/suggest/register.js";
 import "monaco-editor/languages/definitions/javascript/register.js";
 import "monaco-editor/languages/definitions/typescript/register.js";
@@ -126,6 +133,9 @@ export function installKeikoMonacoRuntime(): boolean {
   // Do not import `monaco-editor`'s package root, `features/register.all`, or rich language-service
   // contributions. Keiko registers only standalone UX features and grammar/tokenisation definitions;
   // completion, hover, diagnostics, symbols, and formatting stay host/server-owned.
+  // A governed provider only supplies data: every surface it feeds (code actions, go-to-line,
+  // definitions, inlay hints, signature help, peek references, rename) needs its own
+  // `features/*/register.js` import above, or Monaco shows nothing for it.
   // Re-call resolveEditorThemeTokensFromDom + registerKeikoEditorTheme on theme/contrast switch.
   registerKeikoEditorTheme(
     monaco.editor,

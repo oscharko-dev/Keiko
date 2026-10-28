@@ -108,6 +108,12 @@ export interface IsolatedRunPlan {
   readonly cwd: string;
   readonly network: IsolatedRunNetworkPolicy;
   readonly filesystem?: FilesystemPolicy | undefined;
+  /**
+   * Strict bubblewrap execution-root runs only: an existing direct child of `cwd`, owned by the
+   * caller for exactly this run, that the child sees as its /tmp, HOME and TMPDIR. Absent, the
+   * shared `.keiko-sandbox-tmp` directory of the execution root is used.
+   */
+  readonly executionTmp?: string | undefined;
   /** Exact trusted child executable admitted by the long-lived gateway profile. */
   readonly gatewayChildExecutable?: string | undefined;
   readonly gatewayFilesystem?: RuntimeGatewayFilesystem | undefined;

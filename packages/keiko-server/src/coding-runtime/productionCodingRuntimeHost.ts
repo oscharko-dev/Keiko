@@ -242,6 +242,7 @@ const OPTIONAL_RUNTIME_CAPABILITY_KEYS = [
   "runEffort",
   "promptAllowanceExhausted",
   "envelopeDurationExhausted",
+  "sweepOrphanedRunState",
 ] as const;
 
 type OptionalRuntimeCapabilities = Pick<

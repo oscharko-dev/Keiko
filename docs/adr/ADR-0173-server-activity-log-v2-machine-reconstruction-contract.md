@@ -1368,8 +1368,17 @@ request":
   `bytesStreamed`, `durationMs`, `reason`) is emitted once per response on its `close` event by the
   shared frame recorder every SSE writer already funnels through; `reason` is the closed
   vocabulary `completed | client-disconnected | backpressure-killed | server-error`, and a write path
-  that destroys the socket because a write was rejected marks the stream first so a backpressure
-  kill is never reported as a client disconnect. `http.request.body.received` records the media
+  that destroys the socket for a stalled reader marks the stream first so that kill is never
+  reported as a client disconnect. Amended 2026-10-28: a write that returns `false` is flow control,
+  never a kill — Node answers `false` for any single frame of 64 KiB or more, even to an idle local
+  reader, and the old writer destroyed healthy streams carrying a large tool call or answer. Every
+  SSE writer (`writeSseFrame` in `sse-write.ts`, which the framing helpers in `sse.ts` call) queues
+  the frame and waits for `drain`; only a reader that drains nothing within
+  `SSE_STALLED_READER_TIMEOUT_MS` (30 s) is `backpressure-killed`, including an ended stream whose
+  queued tail the reader never takes. Frame size never ends a stream. Producers that pull from a
+  model (the coding sidecar) await `whenSseWritable` before the next chunk, so a slow reader slows
+  the provider instead of growing an in-memory backlog. The optional `drainWaitCount` counts the
+  writes that waited for `drain`. `http.request.body.received` records the media
   type and byte count of an accepted request body; the six ad hoc body readers that predated
   `readBoundedRequestBody` were consolidated onto it so the line — and the 413 path — have one
   owner.

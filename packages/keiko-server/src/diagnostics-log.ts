@@ -58,7 +58,12 @@ export const PACK_VALIDATION_REASONS = [
 ] as const;
 export type PackValidationReason = (typeof PACK_VALIDATION_REASONS)[number];
 const PACK_VALIDATION_REASON_SET: ReadonlySet<string> = new Set(PACK_VALIDATION_REASONS);
-const DIAGNOSTIC_OUTCOMES = ["request-failed", "source-skipped", "request-refused"] as const;
+const DIAGNOSTIC_OUTCOMES = [
+  "request-failed",
+  "source-skipped",
+  "request-refused",
+  "provider-busy",
+] as const;
 
 const SERVER_DIAGNOSTIC_FAILURE_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -526,7 +531,8 @@ function diagnosticActivityLogEvent(record: ServerDiagnosticRecord): ServerLogEv
     {
       level:
         record.diagnosticOutcome === "source-skipped" ||
-        record.diagnosticOutcome === "request-refused"
+        record.diagnosticOutcome === "request-refused" ||
+        record.diagnosticOutcome === "provider-busy"
           ? "warn"
           : "error",
       correlationId: record.correlationId,
@@ -741,10 +747,6 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "The gateway context-window probe could not be completed.",
   "A Knowledge Pod question did not fit the model's context window with a single reference.",
   "Model discovery exceeded the discovery cap; setup continued with the retained models.",
-  // KEIKO-0884 (#3333): loopback was the only egress class Gateway Setup accepted with no
-  // configuration signal, no log line, and no opt-in trail. Not a failure — a deliberate, silent
-  // acceptance made operator-visible.
-  "Gateway Setup accepted a loopback candidate target.",
   "Stored gateway egress configuration was invalid; setup omitted it from the rewritten file.",
   "Setup skipped models the gateway declared as unsupported modes or that failed the embedding probe.",
   // #3591: chat counterpart — a candidate the smoke probe never got an answer from is kept

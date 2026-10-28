@@ -9,7 +9,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { validateCodingWorkbenchPermissionRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 import type { ServerLogEvent, ServerLogSink } from "@oscharko-dev/keiko-activity-log";
@@ -22,6 +22,7 @@ import {
   workspaceRelative,
   type OpenCodeNativePolicyDecision,
   type OpenCodeNativePolicyRequest,
+  openCodeNativeCreditedKinds,
   openCodeNativeVerificationKind,
 } from "./opencodeNativePolicy.js";
 import { openCodeNativeMcpAdmission } from "./opencodeNativeMcp.js";
@@ -430,6 +431,7 @@ describe("native authority evidence (#3897 review)", () => {
       "authority-resolution-failed",
       "action-not-authorized",
       "unavailable",
+      "patch-too-large",
     ])
       expect(nativeAuthorityReasonLogValue(reason)).toBe(reason);
     for (const drift of ["workspace-drift", "task-drift", "branch-drift", "budget-drift"])
@@ -921,6 +923,104 @@ describe("native verification commands (#3901, #3897 review)", () => {
     [["npm test -- --coverage"], "test"],
   ] as const)("still counts the executing check %j", (resources, kind) => {
     expect(openCodeNativeVerificationKind(resources)).toBe(kind);
+  });
+});
+
+// Keiko 1.3.1 qualification (T4, Ask for approval): the lab repository's AGENTS.md says "run `npm
+// run check`", the model did, and it passed; the run still failed as unverified, because the line
+// counted as a test alone and the type check and lint it ran stayed unproven.
+describe("checks a passing line also proves (Keiko 1.3.1 qualification)", () => {
+  const LAB_SCRIPTS = new Map([
+    ["test", "node --test"],
+    ["typecheck", "tsc --noEmit"],
+    ["lint", "eslint ."],
+    ["check", "npm run typecheck && npm run lint && npm test"],
+    ["start", "node src/cli.ts"],
+  ]);
+  const scripts =
+    (map: ReadonlyMap<string, string> = LAB_SCRIPTS) =>
+    (): ReadonlyMap<string, string> =>
+      map;
+
+  it("credits every check the lab repository's `npm run check` chains", () => {
+    expect(openCodeNativeVerificationKind(["npm run check"])).toBe("test");
+    expect(openCodeNativeCreditedKinds(["npm run check"], scripts())).toEqual([
+      "typecheck",
+      "lint",
+    ]);
+  });
+
+  it("credits each check of an && line the model typed itself, without reading any script", () => {
+    const read = vi.fn(scripts());
+    expect(openCodeNativeCreditedKinds(["npm run typecheck", "npm run lint", "npm test"])).toEqual([
+      "lint",
+      "test",
+    ]);
+    expect(openCodeNativeCreditedKinds(["npx tsc --noEmit", "npx eslint ."], read)).toEqual([
+      "lint",
+    ]);
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it("reads the package scripts at most once per line", () => {
+    const read = vi.fn(scripts());
+    openCodeNativeCreditedKinds(["npm run check", "npm run typecheck"], read);
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    // Not a check line at all: nothing is credited, and no script is read.
+    [["ls -la"]],
+    [["npm run check", "true"]],
+    [["npm run start"]],
+    // A line that changes directory runs another package's scripts.
+    [["cd packages/app", "npm run check"]],
+    // Options that can point the manager at another package, or a non-executing check.
+    [["npm run check --workspace=web"]],
+    [["npm --prefix web run check"]],
+    [["npm run --silent check"]],
+    [["npm run check -- --help"]],
+    // Bun's own test runner is no script.
+    [["bun test"]],
+  ] as const)("credits nothing more for %j", (resources) => {
+    expect(openCodeNativeCreditedKinds(resources, scripts())).toEqual([]);
+  });
+
+  it("credits nothing from a script body another operator could hand its status to", () => {
+    const masked = new Map([
+      ["check", "npm run typecheck; npm run lint || true"],
+      ["typecheck", "tsc --noEmit"],
+      ["lint", "eslint ."],
+    ]);
+    expect(openCodeNativeCreditedKinds(["npm run check"], scripts(masked))).toEqual([]);
+  });
+
+  it("credits the checks of a body beside other commands, and only by name after a cd", () => {
+    const mixed = new Map([
+      ["check", "npm run format && tsc --noEmit && cd web && npm run lint"],
+      ["format", "prettier --check ."],
+      ["lint", "vitest run"],
+    ]);
+    // `npm run lint` after `cd web` runs web's own lint script, which this package.json does not
+    // describe: it is credited as the lint its name says, not as this package's `vitest run`.
+    expect(openCodeNativeCreditedKinds(["npm run check"], scripts(mixed))).toEqual([
+      "typecheck",
+      "lint",
+    ]);
+  });
+
+  it("stops at a bounded depth, so scripts that run each other terminate", () => {
+    const cyclic = new Map([
+      ["check", "npm run verify && npm run lint"],
+      ["verify", "npm run check"],
+      ["lint", "eslint ."],
+    ]);
+    expect(openCodeNativeCreditedKinds(["npm run check"], scripts(cyclic))).toEqual(["lint"]);
+  });
+
+  it("credits a line whose script table is unreadable by its own checks alone", () => {
+    expect(openCodeNativeCreditedKinds(["npm run check"], () => undefined)).toEqual([]);
+    expect(openCodeNativeCreditedKinds(["npm run check"])).toEqual([]);
   });
 });
 

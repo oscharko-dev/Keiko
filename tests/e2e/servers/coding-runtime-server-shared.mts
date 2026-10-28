@@ -45,6 +45,7 @@ import type { ProductionCodingRuntimeResolverInput } from "../../../packages/kei
 import {
   createFunctionalRuntimeResolver,
   functionalGatewayConfig,
+  functionalReadinessFetch,
   productionDiscoveryBffDeps,
   scriptedResponse,
   scriptedTranscript,
@@ -202,6 +203,13 @@ export interface CodingRuntimeJourneyServerConfig {
   /** Test-only lower provider response; all BFF admission, authority, and persistence stay real. */
   readonly chatResponse?: ((request: GatewayRequest) => NormalizedResponse) | undefined;
   readonly gatewayConfig?: GatewayConfig | undefined;
+  /**
+   * The provider transport of the gateway's readiness probes for a journey that brings its own
+   * `gatewayConfig`. Without it such a provider is probed over the real transport, which suits a
+   * local model mock that answers a plain chat call; a mock that only accepts its own requests
+   * supplies the answer a working endpoint would give instead, so no probe ever reaches it.
+   */
+  readonly gatewayReadinessFetch?: typeof functionalReadinessFetch | undefined;
 }
 
 interface JourneyComposition {
@@ -445,10 +453,10 @@ function scriptedModelDeps(
   // The PR-description application cache is scoped to that graph, so returning a spread clone
   // would retain the generated artifact in one cache and make the mounted HTTP review route read
   // an empty cache even though both resolve the same authority binding.
+  // The configuration and its runtime holder stay the composed server's own: the holder carries
+  // the readiness probe's fresh basic-chat evidence that admits a new run (ADR-0171). Replacing
+  // either with a copy leaves that evidence unreadable and the Workbench never enables Start.
   return Object.assign(deps, {
-    config: scriptedGatewayConfig(),
-    configPresent: true,
-    gatewayConfig: undefined,
     codingSidecarGatewayChatFactory: () => chat,
     codingSidecarGatewayChatStreamFactory: () =>
       async function* (request: GatewayRequest): AsyncIterable<GatewayStreamChunk> {
@@ -457,7 +465,7 @@ function scriptedModelDeps(
   });
 }
 
-function scriptedGatewayConfig(): GatewayConfig {
+export function scriptedGatewayConfig(): GatewayConfig {
   const config = functionalGatewayConfig();
   return {
     ...config,
@@ -477,11 +485,16 @@ function researchResolverSeams(research: CodingRuntimeResearchJourneyConfig): {
     ProductionCodingRuntimeResolverInput["childModelPortFactory"]
   >;
   readonly childModelId: string;
+  readonly gatewayEgress: NonNullable<ProductionCodingRuntimeResolverInput["gatewayEgress"]>;
 } {
   const fetchImpl = research.hermeticFetch();
   return {
     researchEgressEnabled: true,
     researchFetchImpl: fetchImpl,
+    // Production offers the research tool only while the gateway resolves an outbound transport
+    // (#3414-AC9), so the journey models a deployment that configured one. The hermetic fetch above
+    // still answers every request; no socket is opened.
+    gatewayEgress: () => ({ noProxy: [] }),
     childModelPortFactory: () => ({
       call: (): Promise<NormalizedResponse> => {
         const response = research.childModelResponse();
@@ -555,6 +568,13 @@ function scriptedResolver(
       });
 }
 
+function journeyReadinessFetch(
+  config: CodingRuntimeJourneyServerConfig,
+): typeof functionalReadinessFetch | undefined {
+  if (config.gatewayReadinessFetch !== undefined) return config.gatewayReadinessFetch;
+  return config.gatewayConfig === undefined ? functionalReadinessFetch : undefined;
+}
+
 function scriptedUiHandlerDepsOptions(
   config: CodingRuntimeJourneyServerConfig,
   services: JourneyWorkspaceServices,
@@ -563,6 +583,7 @@ function scriptedUiHandlerDepsOptions(
   resolver: ReturnType<typeof scriptedResolver>,
 ): Parameters<typeof buildUiHandlerDeps>[0] {
   const chatResponse = config.chatResponse;
+  const readinessFetch = journeyReadinessFetch(config);
   return {
     configPath: undefined,
     evidenceDir: join(bffStateRoot, "evidence"),
@@ -583,6 +604,10 @@ function scriptedUiHandlerDepsOptions(
     codingRuntimeDeploymentCeiling: "autonomous-delivery",
     codingRuntimeServerPrincipal: () => `${config.fixtureId}-operator`,
     autonomousDeliveryDeploymentCeiling: "autonomous-delivery",
+    // The fixture provider answers the readiness probes for the default journey configuration; a
+    // journey with its own provider (a local model mock) is probed over the real transport unless
+    // it names the transport that answers for that provider.
+    ...(readinessFetch === undefined ? {} : { gatewayReadinessFetch: readinessFetch }),
     ...(chatResponse === undefined
       ? {}
       : {
@@ -632,14 +657,17 @@ function scriptedJourneyModelDeps(
   );
 }
 
-function writeChatGatewayConfig(
+/**
+ * The journey's provider profile as the composed server's own gateway configuration file, which
+ * `buildUiHandlerDeps` loads like any other, so its runtime holder owns the readiness evidence.
+ */
+function writeJourneyGatewayConfig(
   config: CodingRuntimeJourneyServerConfig,
   bffStateRoot: string,
 ): void {
-  if (config.chatResponse === undefined) return;
   writeFileSync(
     join(bffStateRoot, "ui-db", "keiko.config.json"),
-    `${JSON.stringify(config.gatewayConfig ?? functionalGatewayConfig(), null, 2)}\n`,
+    `${JSON.stringify(config.gatewayConfig ?? scriptedGatewayConfig(), null, 2)}\n`,
     { encoding: "utf8", mode: 0o600 },
   );
 }
@@ -667,7 +695,7 @@ function scriptedComposition(
   for (const dir of ["state", "ui-db", "evidence"]) {
     mkdirSync(join(bffStateRoot, dir), { recursive: true, mode: 0o700 });
   }
-  writeChatGatewayConfig(config, bffStateRoot);
+  writeJourneyGatewayConfig(config, bffStateRoot);
   const script = journeyScript(config, stateDir);
   const holder: { deps?: UiHandlerDeps } = {};
   const commit = commitFixtureFor(config, stateDir, services, holder);

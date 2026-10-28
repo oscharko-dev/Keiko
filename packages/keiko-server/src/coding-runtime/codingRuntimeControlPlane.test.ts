@@ -152,6 +152,55 @@ describe("coding runtime control plane", () => {
     expect(control.runtimeHostQualified).toBe(true);
   });
 
+  // Audit finding 8: the per-run runtime state of a crashed run was never removed. The control plane
+  // answers which runs still own theirs: an unsettled snapshot does, a settled or unknown one does not.
+  it("asks the runtime host to sweep orphaned run state, keeping only unsettled runs", () => {
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    const snapshots = createCodingRuntimeSnapshotStore(db);
+    const digest = "a".repeat(64);
+    const row = (runId: string, state: "running" | "succeeded") => ({
+      schemaVersion: "1" as const,
+      runId,
+      state,
+      revision: 1,
+      requestedMode: "supervised-coding" as const,
+      runtimeSource: "keiko-sidecar" as const,
+      modelSource: "keiko-model-gateway" as const,
+      createdAt: "2026-07-13T00:00:00.000Z",
+      updatedAt: "2026-07-13T00:01:00.000Z",
+      ...(state === "succeeded" ? { terminalAt: "2026-07-13T00:01:00.000Z" } : {}),
+      taskDigest: digest,
+      workspaceDigest: digest,
+      operatorDigest: digest,
+      authorityDigest: digest,
+      bindingDigest: digest,
+      provenanceDigest: digest,
+      toolCallCount: 0,
+      patchByteCount: 0,
+      modelRequestCount: 0,
+    });
+    snapshots.create(row("run-settled", "succeeded"));
+    snapshots.create(row("run-recoverable", "running"));
+    const sweep = vi.fn<(isRetained: (runId: string) => boolean) => void>();
+    const runtimeHost = { ...minimalRuntimeHost(), sweepOrphanedRunState: sweep };
+
+    createCodingRuntimeControlPlane({
+      snapshots,
+      evidence: { observe: vi.fn(), settle: vi.fn(), deletePruned: vi.fn() },
+      workspaceLifecycle: { getActive: () => undefined } as never,
+      serverPrincipal: () => "local-operator",
+      runtimeHost,
+    });
+
+    expect(sweep).toHaveBeenCalledOnce();
+    const isRetained = sweep.mock.calls[0]?.[0];
+    expect(isRetained?.("run-recoverable")).toBe(true);
+    expect(isRetained?.("run-settled")).toBe(false);
+    expect(isRetained?.("run-unknown")).toBe(false);
+    db.close();
+  });
+
   it("reconciles a durable active row to one content-free recovery manifest at bootstrap", () => {
     const db = new DatabaseSync(":memory:");
     runMigrations(db);
@@ -400,6 +449,17 @@ function minimalControlPlaneSnapshots(): {
       deletePruned: vi.fn(),
     },
     evidence: { observe: vi.fn(), settle: vi.fn(), deletePruned: vi.fn() },
+  };
+}
+
+function minimalRuntimeHost(): CodingRuntimeHost {
+  return {
+    createManager: unqualifiedManager,
+    launchResolver: { resolve: qualifiedLaunch },
+    approvalAuthority: {
+      issue: () => ({ ok: false, failureCode: "runtime-stopped", retryable: false }),
+    },
+    cancellationRegistry: { signalFor: () => undefined },
   };
 }
 

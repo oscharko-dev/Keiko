@@ -633,6 +633,7 @@ export interface ClientDiagnosticIngestRequest {
   readonly filesScopeDecision?: ClientFilesScopeDecision | undefined;
   readonly updateNotice?: ClientUpdateNotice | undefined;
   readonly codingRunRestore?: ClientDiagnosticCodingRunRestore | undefined;
+  readonly codingWorkbenchInteraction?: ClientDiagnosticCodingWorkbenchInteraction | undefined;
   readonly composerActivity?: ClientComposerActivity | undefined;
   readonly composerSubmission?: ClientComposerSubmission | undefined;
   readonly composerFocusIndicator?: "keyboard" | undefined;
@@ -836,6 +837,7 @@ const CLOSED_CLIENT_REPORT_KEYS = [
   "filesScopeDecision",
   "updateNotice",
   "codingRunRestore",
+  "codingWorkbenchInteraction",
 ] as const;
 const CLOSED_CLIENT_REPORT_ENVELOPE_KEYS = new Set([
   "message",
@@ -870,6 +872,14 @@ function hasExclusiveClosedReportContext(value: Record<string, unknown>): boolea
   );
 }
 
+// The Coding Workbench's closed reports: a restored run's counts and the human's interactions.
+function hasValidCodingReportContext(value: Record<string, unknown>): boolean {
+  return (
+    isOptional(value.codingRunRestore, isClientDiagnosticCodingRunRestore) &&
+    isOptional(value.codingWorkbenchInteraction, isClientDiagnosticCodingWorkbenchInteraction)
+  );
+}
+
 // The closed, routine report shapes that may ride a message report (select dismissal, catalog).
 function hasValidClosedReportContext(value: Record<string, unknown>): boolean {
   return (
@@ -881,7 +891,7 @@ function hasValidClosedReportContext(value: Record<string, unknown>): boolean {
     hasValidRetrievalEvidenceContext(value) &&
     isOptional(value.supportReportDelivery, isClientSupportReportDelivery) &&
     isOptional(value.supportReportPreparation, isClientSupportReportPreparation) &&
-    isOptional(value.codingRunRestore, isClientDiagnosticCodingRunRestore) &&
+    hasValidCodingReportContext(value) &&
     hasValidFilesScopeDecisionContext(value)
   );
 }
@@ -2061,6 +2071,146 @@ function isClientDiagnosticCodingRunRestore(
   }
   const restore = codingRunRestoreOf(value);
   return restore !== undefined && coherentCodingRunRestore(restore);
+}
+
+// ─── Coding Workbench interaction (#3897) ──────────────────────────────────────
+//
+// What the human did on the Coding Workbench page — opened a detail, saw the progress state change,
+// picked an agent, jumped to a pending decision, bound a repository for trust, received a changeset
+// for review. Each is ordinary evidence and travels as its own closed report, so it reaches the
+// activity log at info as `client.coding-workbench.interaction` instead of a warn/unknown
+// `client.diagnostic` (Keiko 1.3.0 test: 174 of 180 browser diagnostics were these notes). Closed
+// values, two body-free ids and one count only — never a path, a tool name or a custom agent name.
+
+export const CLIENT_CODING_WORKBENCH_INTERACTIONS = [
+  "details-toggled",
+  "progress-state",
+  "agent-selected",
+  "pending-decision-focused",
+  "repository-trust-bound",
+  "changeset-review-prepared",
+  // A history task from another repository than the active one was returned and not activated: the
+  // operator switched repositories, an ordinary transition and not a failure.
+  "history-repository-switched",
+  // The first interruption of a shared event stream whose browser source was closed; the stream is
+  // reopened by its own reconnect and any session repair is reported on the same streak.
+  "event-stream-reconnecting",
+] as const;
+export type ClientCodingWorkbenchInteractionName =
+  (typeof CLIENT_CODING_WORKBENCH_INTERACTIONS)[number];
+
+/** The disclosure the human opened or closed. */
+export const CLIENT_CODING_WORKBENCH_DETAIL_SECTIONS = [
+  "run",
+  "model-reasoning",
+  "tool",
+  "activity-group",
+  "plan",
+  "event",
+  "workspace-location",
+  "information",
+] as const;
+export type ClientCodingWorkbenchDetailSection =
+  (typeof CLIENT_CODING_WORKBENCH_DETAIL_SECTIONS)[number];
+
+/** The progress bar's own states. */
+export const CLIENT_CODING_WORKBENCH_PROGRESS_STATES = [
+  "working",
+  "approval",
+  "question",
+  "paused",
+  "ready",
+] as const;
+export type ClientCodingWorkbenchProgressState =
+  (typeof CLIENT_CODING_WORKBENCH_PROGRESS_STATES)[number];
+
+/** A built-in agent by name; every custom primary agent is `custom`, never its name. */
+export const CLIENT_CODING_WORKBENCH_AGENT_KINDS = ["build", "plan", "custom"] as const;
+export type ClientCodingWorkbenchAgentKind = (typeof CLIENT_CODING_WORKBENCH_AGENT_KINDS)[number];
+
+/** Bounds a changeset's file count, like the restored-run counts above. */
+export const CLIENT_CODING_WORKBENCH_FILE_COUNT_MAX = 100_000;
+
+export type ClientDiagnosticCodingWorkbenchInteraction =
+  | {
+      readonly interaction: "details-toggled";
+      readonly section: ClientCodingWorkbenchDetailSection;
+      readonly expanded: boolean;
+    }
+  | {
+      readonly interaction: "progress-state";
+      readonly progressState: ClientCodingWorkbenchProgressState;
+    }
+  | { readonly interaction: "agent-selected"; readonly agent: ClientCodingWorkbenchAgentKind }
+  | { readonly interaction: "pending-decision-focused" }
+  | {
+      readonly interaction: "repository-trust-bound";
+      readonly repositoryId: string;
+      readonly workspaceId: string;
+    }
+  | { readonly interaction: "changeset-review-prepared"; readonly fileCount: number }
+  | { readonly interaction: "history-repository-switched" }
+  | { readonly interaction: "event-stream-reconnecting" };
+
+const CODING_WORKBENCH_INTERACTION_SET: ReadonlySet<string> = new Set(
+  CLIENT_CODING_WORKBENCH_INTERACTIONS,
+);
+const CODING_WORKBENCH_DETAIL_SECTION_SET: ReadonlySet<string> = new Set(
+  CLIENT_CODING_WORKBENCH_DETAIL_SECTIONS,
+);
+const CODING_WORKBENCH_PROGRESS_STATE_SET: ReadonlySet<string> = new Set(
+  CLIENT_CODING_WORKBENCH_PROGRESS_STATES,
+);
+const CODING_WORKBENCH_AGENT_KIND_SET: ReadonlySet<string> = new Set(
+  CLIENT_CODING_WORKBENCH_AGENT_KINDS,
+);
+
+function isCodingWorkbenchInteractionName(
+  value: unknown,
+): value is ClientCodingWorkbenchInteractionName {
+  return isSetMember(value, CODING_WORKBENCH_INTERACTION_SET);
+}
+
+// Each interaction carries exactly its own fields: a progress state never rides a toggle.
+const CODING_WORKBENCH_INTERACTION_FIELDS: Readonly<
+  Record<
+    ClientCodingWorkbenchInteractionName,
+    Readonly<Record<string, (value: unknown) => boolean>>
+  >
+> = {
+  "details-toggled": {
+    section: (value) => isSetMember(value, CODING_WORKBENCH_DETAIL_SECTION_SET),
+    expanded: (value) => typeof value === "boolean",
+  },
+  "progress-state": {
+    progressState: (value) => isSetMember(value, CODING_WORKBENCH_PROGRESS_STATE_SET),
+  },
+  "agent-selected": { agent: (value) => isSetMember(value, CODING_WORKBENCH_AGENT_KIND_SET) },
+  "pending-decision-focused": {},
+  "history-repository-switched": {},
+  "event-stream-reconnecting": {},
+  "repository-trust-bound": {
+    repositoryId: (value) => typeof value === "string" && BODY_FREE_ID_PATTERN.test(value),
+    workspaceId: (value) =>
+      typeof value === "string" && WORKSPACE_DIAGNOSTIC_ID_PATTERN.test(value),
+  },
+  "changeset-review-prepared": {
+    fileCount: (value) =>
+      isBoundedNonNegativeInteger(value, CLIENT_CODING_WORKBENCH_FILE_COUNT_MAX),
+  },
+};
+
+/** True for one closed interaction with exactly its own valid fields. */
+function isClientDiagnosticCodingWorkbenchInteraction(
+  value: unknown,
+): value is ClientDiagnosticCodingWorkbenchInteraction {
+  if (!isRecord(value) || !isCodingWorkbenchInteractionName(value.interaction)) return false;
+  const fields = CODING_WORKBENCH_INTERACTION_FIELDS[value.interaction];
+  const keys = Object.keys(value).filter((key) => key !== "interaction");
+  return (
+    keys.length === Object.keys(fields).length &&
+    keys.every((key) => fields[key]?.(value[key]) === true)
+  );
 }
 
 // ─── Activity Log diagnostic readiness (#3532) ──────────────────────────────────

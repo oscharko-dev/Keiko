@@ -3705,6 +3705,163 @@
         "verifiedCarryForward": true,
         "carryForwardPath": "Verified managed-install bootstrap with existing state and keys outside the application bundle, then authenticated native handoff using the corrected production composition. Isolated synthetic data/key retention is qualified; the real published-release SSD acceptance is still required after deployment."
       }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "supportedFrom": ["0.2.0", "1.2.5", "1.2.6", "1.2.7"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "id": "2026-10-26-keiko-1.3.0-native-opencode-workbench",
+      "packageVersion": "1.3.0",
+      "releaseTag": "v1.3.0",
+      "releaseNoteCategory": "new-additions",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "On macOS the Coding Workbench runs the original OpenCode 2.1.4 engine under Keiko's three modes, and Coding History can continue, export and import tasks.",
+      "affectedStateStores": ["coding-runtime", "workbench-task-history"],
+      "stateImpact": [
+        {
+          "store": "coding-runtime",
+          "description": "The approved coding runtime moves to OpenCode 2.1.4. A settled native run may keep one audited, version-bound copy of its session for the next run of the same task; a copy written by another runtime version is refused and removed, and the task continues in a fresh session. No customer database schema migration is introduced.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        },
+        {
+          "store": "workbench-task-history",
+          "description": "Existing tasks and Coding History are kept unchanged. Imported tasks are added as new entries after their text is redacted again; nothing existing is rewritten.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        }
+      ],
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "oneClickEligible": true,
+      "releaseNoteBullets": [
+        "On macOS the Coding Workbench runs the original OpenCode 2.1.4 engine with its own tools, agents and project configuration. Keiko's three modes, the Authority Envelope and the Model Gateway still decide what a run may do and which model it reaches.",
+        "The Workbench offers plan or build mode, undo of the latest turn, queued follow-up messages, image input, file references, and formulas and diagrams in the task timeline.",
+        "A finished task can be continued or forked, exported locally as JSON or Markdown, and a saved task or OpenCode transcript can be imported into Coding History. Imported text is redacted again before it is stored.",
+        "Without a network, web lookups, remote skills, research fetches and package installs end with a bounded, clear failure instead of waiting.",
+        "The Workbench shows the installed coding runtime version and the latest Keiko release.",
+        "macOS npm installations install the coding runtime packages 1.1.4, which carry OpenCode 2.1.4. Linux keeps Keiko's mapped coding tools, and Windows Coding execution remains unavailable.",
+        "Tasks and Coding History carry over unchanged. The first run of an earlier task after the update starts a fresh engine session with that task's history as context.",
+        "Published 1.2.6 and earlier installations still need the verified updater bootstrap before automatic updates. The installed upgrade demonstration from 1.2.x and the fresh npm and Yarn installation qualification are recorded separately and are not claimed by this release."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-10-26",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#3897#6423086344",
+        "rationale": "The owner explicitly authorized preparing release 1.3.0, merging its pull request after green required checks and triggering the release; the authorization is recorded on epic #3897. This entry covers the native OpenCode 2.1.4 integration (#4064) and its follow-ups (#4076). Publication remains conditional on exact-head required checks, settled review findings and the protected release workflow. The installed upgrade demonstration from 1.2.x (#3908) and the fresh npm and Yarn installation qualification (#3898) remain post-release acceptance."
+      },
+      "breakingException": {
+        "rationale": "Immutable published 1.2.6 and earlier source updaters still look for the handoff plan outside the canonical update-state root. A newer target cannot repair that source before handoff; the verified managed-install bootstrap introduced with 1.2.7 remains the carry-forward path.",
+        "warningText": "Published 1.2.6 and earlier installations require the verified managed-install updater bootstrap before using automatic updates. Keep a backup of local state and preserve private keys when replacing the application bundle.",
+        "verifiedCarryForward": true,
+        "carryForwardPath": "Verified managed-install bootstrap with existing state and keys outside the application bundle, then authenticated native handoff using the canonical update-state root introduced in 1.2.7."
+      }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "supportedFrom": ["0.2.0", "1.2.5", "1.2.6", "1.2.7", "1.3.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "id": "2026-10-27-keiko-1.3.1-coding-workbench-reliability",
+      "packageVersion": "1.3.1",
+      "releaseTag": "v1.3.1",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Long coding runs keep their live activity and browser pairing, the task timeline says why a call failed, the editor, Git-change Chat and Linux verification work again, and a trusted deployment can let Chat keep authorized document details.",
+      "affectedStateStores": ["ui-store-schema", "workspace-search-index"],
+      "stateImpact": [
+        {
+          "store": "ui-store-schema",
+          "description": "No schema migration. Without the opt-out nothing changes. With KEIKO_CONTENT_REDACTION=off, new Chat answers are stored with the authorized document details they contain; credentials stay removed. Text stored earlier is not rewritten in either direction, and history recall and compaction redact it again after the opt-out is removed.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        },
+        {
+          "store": "workspace-search-index",
+          "description": "A Chat that preserves content builds its own workspace-index snapshot on first use, so preserved and default snapshots never serve each other. Default snapshots are untouched.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        }
+      ],
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "oneClickEligible": true,
+      "releaseNoteBullets": [
+        "A long coding run keeps its live activity feed and its browser pairing. A busy feed waits for the browser instead of closing, a dropped feed reconnects on its own, and a quiet model turn no longer signs the window out.",
+        "In Full access on macOS, when the isolated verifier cannot install a project's dependencies, the model is told to run the project's own checks in its shell, and the Activity Log names the reason.",
+        "The task timeline says why a call failed, such as the command's exit code, and model reasoning no longer carries a warning-coloured badge.",
+        "Routine Coding Workbench actions are recorded as interaction events instead of browser diagnostics, so real browser failures stand out in the Activity Log.",
+        "The editor answers go to definition, find references, rename, code actions, signature help and go to line again.",
+        "Chats that use a Git change can connect, send, and review, approve and apply proposals again, and pull request description review finds its proposal.",
+        "Applying a pull request description no longer reports a failure when Keiko runs in GitHub Codespaces or on a hosted runner.",
+        "On Linux, strict sandbox runs keep temporary files outside the worktree, so verified commits are no longer reported as failed. Below Full access, governed research can ask for its network approval again.",
+        "A restored Coding Workbench window picks up the project's repository, a signed-out window shows the pairing guidance, and an open Changes section stays open while it refreshes.",
+        "`keiko start` in a project installation no longer warns about a stale binary when it runs the installed package through npm's bin link.",
+        "A Coding Workbench run that passed the repository's own combined check in its shell, such as `npm run check` running the type check, lint and tests, now counts every check that line ran. Before, such a run could be reported as not verified because only its tests counted.",
+        "Operators of trusted model deployments can start Keiko with `KEIKO_CONTENT_REDACTION=off` so Chat keeps authorized document details such as phone numbers, account numbers, configuration values and code. Credentials, private keys, URL credentials and `Authorization` values are still removed, memory proposals keep their redaction, and the default is unchanged. The setting applies to every configured model provider, and the Activity Log records it at startup.",
+        "The Coding Workbench hands its agent the model's answers as written, so a quoted change in a closing summary no longer appears as `[REDACTED]`. Only credentials, private keys, URL credentials and `Authorization` values are removed, in every installation.",
+        "A command that ran and returned a non-zero exit code, such as a test run that reproduces a defect, shows its exit code in the task timeline instead of a red Failed, as OpenCode reports it. A tool that reported an error still shows Failed with its reason.",
+        "Updating from 1.2.7 or 1.3.0 needs no action. An installation on 1.2.6 or earlier still runs the verified updater bootstrap once before automatic updates."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-10-27",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#3897#6443332275",
+        "rationale": "The owner explicitly authorized preparing release 1.3.1 with the fixes from #4096; the authorization is recorded on epic #3897. The entry accounts for every change integrated since v1.3.0: the Coding Workbench defects from the 1.3.0 test (#4096), the product defects found by the nightly journeys (#4095), contributor guidance only (#4080) and the deployment-owned Chat content opt-out (#4098), which the owner asked in chat on 2026-10-27 to include in this release; its default behaviour is unchanged. This records release-impact preparation under the signed-version-bump policy, not permission to integrate or publish. Integration remains subject to the owner's authorization, exact-head required checks and settled review findings, and publication requires the protected release workflow. The installed upgrade demonstration from 1.2.x (#3908) and the fresh npm and Yarn installation qualification (#3898) remain post-release acceptance."
+      },
+      "breakingException": {
+        "rationale": "Immutable published 1.2.6 and earlier source updaters still look for the handoff plan outside the canonical update-state root. A newer target cannot repair that source before handoff; the verified managed-install bootstrap introduced with 1.2.7 remains the carry-forward path.",
+        "warningText": "Published 1.2.6 and earlier installations require the verified managed-install updater bootstrap before using automatic updates. Keep a backup of local state and preserve private keys when replacing the application bundle.",
+        "verifiedCarryForward": true,
+        "carryForwardPath": "Verified managed-install bootstrap with existing state and keys outside the application bundle, then authenticated native handoff using the canonical update-state root introduced in 1.2.7."
+      }
     }
   ]
 }

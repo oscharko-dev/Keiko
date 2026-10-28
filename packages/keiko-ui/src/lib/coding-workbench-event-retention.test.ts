@@ -196,6 +196,90 @@ describe("Coding Workbench event retention", () => {
     session.close();
   });
 
+  // Stability audit item 12: the browser reconnects an interrupted EventSource by itself, so an
+  // error event while it is still CONNECTING is a status, not a failure. Only a CLOSED source (the
+  // browser gave up) or a watchdog that keeps finding the stream silent is a failure.
+  describe("reconnect escalation", () => {
+    function open(
+      handlers: Partial<Parameters<typeof createCodingWorkbenchRuntimeStreamSession>[1]>,
+    ): {
+      readonly sources: FakeEventSource[];
+      readonly session: ReturnType<typeof createCodingWorkbenchRuntimeStreamSession>;
+    } {
+      const sources: FakeEventSource[] = [];
+      const createEventSource = vi.fn((): EventSource => {
+        const source = new FakeEventSource();
+        sources.push(source);
+        return source as unknown as EventSource;
+      });
+      const session = createCodingWorkbenchRuntimeStreamSession(
+        "run-1",
+        {
+          onOpen: vi.fn(),
+          onEvents: vi.fn(),
+          onError: vi.fn(),
+          onReconnecting: vi.fn(),
+          onReset: vi.fn(() => Promise.resolve()),
+          ...handlers,
+        },
+        { staleAfterMs: 100, createEventSource },
+      );
+      return { sources, session };
+    }
+
+    it("reports a browser auto-reconnect as a reconnecting status, not an error", () => {
+      const onError = vi.fn();
+      const onReconnecting = vi.fn();
+      const { sources, session } = open({ onError, onReconnecting });
+      sources[0]!.readyState = 0;
+
+      sources[0]!.onerror?.(new Event("error"));
+
+      expect(onReconnecting).toHaveBeenCalledOnce();
+      expect(onError).not.toHaveBeenCalled();
+      session.close();
+    });
+
+    it("escalates to an error when the browser closed the source for good", () => {
+      const onError = vi.fn();
+      const onReconnecting = vi.fn();
+      const { sources, session } = open({ onError, onReconnecting });
+      sources[0]!.readyState = 2;
+
+      sources[0]!.onerror?.(new Event("error"));
+
+      expect(onError).toHaveBeenCalledOnce();
+      expect(onReconnecting).not.toHaveBeenCalled();
+      session.close();
+    });
+
+    it("escalates once the watchdog keeps finding the stream silent, and resets on activity", async () => {
+      vi.useFakeTimers();
+      try {
+        const onError = vi.fn();
+        const reported: string[] = [];
+        setClientDiagnosticWriter((message) => reported.push(message));
+        const { sources, session } = open({ onError });
+        await vi.advanceTimersByTimeAsync(100);
+        await vi.advanceTimersByTimeAsync(100);
+        expect(onError).not.toHaveBeenCalled();
+        sources[2]!.emit("heartbeat");
+        await vi.advanceTimersByTimeAsync(100);
+        await vi.advanceTimersByTimeAsync(100);
+        expect(onError).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(100);
+        await vi.advanceTimersByTimeAsync(100);
+        await vi.advanceTimersByTimeAsync(100);
+        expect(onError).toHaveBeenCalled();
+        expect(reported).toHaveLength(1);
+        expect(reported[0]).toContain("coding-workbench-runtime sse stream error");
+        session.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   it("delivers observations before a later state event without bypassing the batch", () => {
     vi.useFakeTimers();
     try {

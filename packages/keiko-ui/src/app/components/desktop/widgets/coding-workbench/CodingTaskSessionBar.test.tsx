@@ -1,6 +1,10 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { CodingTaskSessionBar, CodingTaskTranscript } from "./CodingTaskSessionBar";
+import {
+  CodingTaskSessionBar,
+  CodingTaskTranscript,
+  TRANSCRIPT_WINDOW_MESSAGES,
+} from "./CodingTaskSessionBar";
 import { CodingWorkbenchProgress } from "./CodingWorkbenchProgress";
 import type { ShownRun } from "./codingWorkbenchRestoredRun";
 import type { CodingTaskSession } from "./useCodingTaskSession";
@@ -103,6 +107,36 @@ describe("CodingTaskTranscript", () => {
     const transcript = screen.getByRole("region", { name: "Previous conversation" });
     expect(transcript).toHaveTextContent("Earlier request");
     expect(transcript).not.toHaveTextContent("First prompt of the run");
+  });
+
+  // Stability audit item 9: a task of up to 200 long messages mounted all of them at once.
+  describe("with a long task", () => {
+    const many = Array.from({ length: 130 }, (_, index) =>
+      historyMessage(`m-${String(index + 1)}`, undefined, `Message number ${String(index + 1)}`),
+    );
+
+    it("mounts only the newest window and reveals earlier messages on request", () => {
+      render(<CodingTaskTranscript session={sessionWith(many)} shownRun={undefined} />);
+      const transcript = screen.getByRole("region", { name: "Previous conversation" });
+
+      expect(transcript.querySelectorAll("article")).toHaveLength(TRANSCRIPT_WINDOW_MESSAGES);
+      expect(transcript).toHaveTextContent("Message number 130");
+      expect(transcript).not.toHaveTextContent("Message number 1 ");
+      const more = screen.getByRole("button", { name: "Show earlier messages (90 hidden)" });
+
+      fireEvent.click(more);
+
+      expect(transcript.querySelectorAll("article")).toHaveLength(2 * TRANSCRIPT_WINDOW_MESSAGES);
+      fireEvent.click(screen.getByRole("button", { name: "Show earlier messages (50 hidden)" }));
+      fireEvent.click(screen.getByRole("button", { name: "Show earlier messages (10 hidden)" }));
+      expect(transcript.querySelectorAll("article")).toHaveLength(130);
+      expect(screen.queryByRole("button", { name: /Show earlier messages/u })).toBeNull();
+    });
+
+    it("offers nothing to reveal for a task that fits one window", () => {
+      render(<CodingTaskTranscript session={sessionWith(many.slice(0, 5))} shownRun={undefined} />);
+      expect(screen.queryByRole("button", { name: /Show earlier messages/u })).toBeNull();
+    });
   });
 
   it("renders no region when the timeline carries every message, and says history was cut", () => {

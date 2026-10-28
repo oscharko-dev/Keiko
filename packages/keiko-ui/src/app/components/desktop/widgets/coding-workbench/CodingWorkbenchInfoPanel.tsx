@@ -17,7 +17,10 @@ import type {
 import { TaskWorkspaceManager } from "../../TaskWorkspaceManager";
 import { useOptionalActiveWorkspace } from "../../context/ActiveWorkspaceContext";
 import { Icons } from "../../Icons";
-import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import {
+  reportCodingWorkbenchSummaryActivated,
+  reportCodingWorkbenchInteraction,
+} from "@/lib/coding-workbench-interaction";
 import { useCodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import { useCodingWorkbenchVersionFacts } from "./useCodingWorkbenchVersionFacts";
 import styles from "./CodingWorkbenchWindow.module.css";
@@ -107,7 +110,11 @@ function TaskWorkspaceLocation(): ReactNode {
         aria-controls={visible ? id : undefined}
         onClick={() => {
           setVisible(!visible);
-          reportClientDiagnostic("[keiko] coding workbench workspace location toggled");
+          reportCodingWorkbenchInteraction({
+            interaction: "details-toggled",
+            section: "workspace-location",
+            expanded: !visible,
+          });
         }}
       >
         {t("codingWorkbench.history.location")}
@@ -340,13 +347,13 @@ function InformationDetails(props: InfoPanelProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const versions = useCodingWorkbenchVersionFacts(props.runtimeVersion);
   return (
-    <details
-      className={styles.cmpInfoDetails}
-      onToggle={() =>
-        reportClientDiagnostic("[keiko] coding workbench information details toggled")
-      }
-    >
-      <summary className={styles.cmpActivitySummary}>{t("codingWorkbench.info.details")}</summary>
+    <details className={styles.cmpInfoDetails}>
+      <summary
+        className={styles.cmpActivitySummary}
+        onClick={(event) => reportCodingWorkbenchSummaryActivated("information", event)}
+      >
+        {t("codingWorkbench.info.details")}
+      </summary>
       <InformationFacts facts={[...props.facts.filter((fact) => !fact.primary), ...versions]} />
       <p className={styles.helpText}>{t("codingWorkbench.controls.help")}</p>
       <TaskWorkspaceLocation />

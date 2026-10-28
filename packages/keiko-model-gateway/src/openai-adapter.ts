@@ -1,4 +1,5 @@
 import type { GatewayCallRequest } from "./gateway.js";
+import type { ContentRedactionPolicy } from "@oscharko-dev/keiko-contracts";
 import {
   callerAdmittedRequest,
   onceCallerReservation,
@@ -43,6 +44,7 @@ import {
 } from "./config.js";
 import {
   gatewayFetch,
+  GatewayResponseBodyValidationError,
   OutboundHttpEgressError,
   readJsonCapped,
   readSseStream,
@@ -62,7 +64,7 @@ import {
   reasoningText,
   textFromContent,
 } from "./normalize.js";
-import { redact, redactSecretLiterals } from "@oscharko-dev/keiko-security";
+import { redact, redactContent, redactSecretLiterals } from "@oscharko-dev/keiko-security";
 import {
   CODE_REDACTION_REVISION,
   createStreamingRedactor,
@@ -139,6 +141,7 @@ const CHAT_REQUEST_DISPATCH_OPERATION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: false,
     },
+    contentRedactionEnabled: { type: "boolean", dataClass: "closed-enum", required: false },
     // Historical chat.request.dispatch lines predate this diagnostic; old bundles remain readable.
     toolCount: { type: "integer", dataClass: "count", required: false },
     readBudgetMs: { type: "number", dataClass: "duration", required: false },
@@ -320,6 +323,10 @@ const CHAT_RESPONSE_STREAMED_OPERATION = defineActivityLogOperation({
     // log. `required: false`: records written before this field existed lack both.
     reasoningEvents: { type: "integer", dataClass: "count", required: false },
     reasoningBytes: { type: "integer", dataClass: "count", required: false },
+    // Streamed tool-call fragments placed by array position because they carried no numeric
+    // `index`, and fragments dropped as unplaceable. Counts only; absent on records written before.
+    toolCallFragmentsPositional: { type: "integer", dataClass: "count", required: false },
+    toolCallFragmentsDropped: { type: "integer", dataClass: "count", required: false },
     codeRedactionRevision: { type: "integer", dataClass: "count", required: false },
     streamCodeRegions: { type: "integer", dataClass: "count", required: false },
     streamCodeDepthRefusals: { type: "integer", dataClass: "count", required: false },
@@ -332,6 +339,7 @@ const CHAT_RESPONSE_STREAMED_OPERATION = defineActivityLogOperation({
   diagnosticWhen: [
     { field: "outcome", values: ["stalled", "failed"] },
     { field: "outputExhausted", values: [true] },
+    { field: "toolCallFragmentsDropped", positive: true },
   ],
   causal: "correlation",
   lifecycle: "end",
@@ -411,6 +419,7 @@ interface ChatDispatchFields {
   // a streamed read, the budget of a buffered one), `readBudgetMs` its budget.
   readonly timeoutMs: number;
   readonly stream: boolean;
+  readonly contentRedactionEnabled: boolean;
   readonly streamUsageRequested?: boolean;
   readonly toolCount: number;
   readonly readBudgetMs?: number;
@@ -472,6 +481,7 @@ function chatDispatchFields(
     bodyBytes: Buffer.byteLength(body, "utf8"),
     timeoutMs: bounds?.silenceMs ?? config.timeoutMs,
     stream,
+    contentRedactionEnabled: contentPolicy(request) === "redact",
     ...(stream ? { streamUsageRequested: includeUsage } : {}),
     toolCount: request.tools?.length ?? 0,
     ...(bounds === undefined ? {} : { readBudgetMs: bounds.budgetMs }),
@@ -826,13 +836,57 @@ function mergedToolCallDelta(
   };
 }
 
-function applyToolCallDelta(accumulator: ToolCallAccumulator, chunk: unknown): void {
+// Counts of the fragments a read could not place by their own `index`: the ones placed by array
+// position instead, and the ones that carried nothing placeable at all. Counts only (never a fragment).
+interface ToolCallFragmentCounters {
+  toolCallFragmentsPositional: number;
+  toolCallFragmentsDropped: number;
+}
+
+// A fragment without a numeric `index` (some OpenAI-compatible backends omit it) is placed by its
+// position within the delta's `tool_calls` array, like every conforming single-call stream; a
+// fragment that announces a different non-empty `id` than the call already at that position starts
+// the next call instead of corrupting it.
+function positionalToolCallIndex(
+  accumulator: ToolCallAccumulator,
+  raw: Record<string, unknown>,
+  position: number,
+): number {
+  const announced = stringOrUndefined(raw.id);
+  const existing = accumulator.get(position);
+  if (
+    announced === undefined ||
+    announced.length === 0 ||
+    existing === undefined ||
+    existing.id.length === 0 ||
+    existing.id === announced
+  ) {
+    return position;
+  }
+  return Math.max(...accumulator.keys()) + 1;
+}
+
+function applyToolCallDelta(
+  accumulator: ToolCallAccumulator,
+  chunk: unknown,
+  counters?: ToolCallFragmentCounters,
+): void {
   const deltas = toolCallDeltasFromChunk(chunk);
   if (deltas === undefined) return;
-  for (const raw of deltas) {
-    if (!isRecord(raw) || typeof raw.index !== "number") continue;
-    accumulator.set(raw.index, mergedToolCallDelta(accumulator.get(raw.index), raw));
-  }
+  deltas.forEach((raw, position) => {
+    if (!isRecord(raw)) {
+      if (counters !== undefined) counters.toolCallFragmentsDropped += 1;
+      return;
+    }
+    let index: number;
+    if (typeof raw.index === "number") {
+      index = raw.index;
+    } else {
+      index = positionalToolCallIndex(accumulator, raw, position);
+      if (counters !== undefined) counters.toolCallFragmentsPositional += 1;
+    }
+    accumulator.set(index, mergedToolCallDelta(accumulator.get(index), raw));
+  });
 }
 
 // The accumulated tool-call fragments in the wire shape of a whole answer, ordered by index, so the
@@ -898,6 +952,26 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 // retrying the identical response can never succeed.
 export class ResponseRedactionError extends MalformedToolCallError {}
 
+// A provider answer the gateway cannot use and that no retry can change: the response exceeded the
+// body size limit, or a complete SSE frame was not JSON. The provider answered (HTTP 200), so this is
+// neither a transport cut (TransportError, retried for the whole outage window) nor an outage; the
+// identical request produces the identical oversized or unparseable answer. Not retried by the
+// gateway, and the coding sidecar answers it as a final rejection instead of a stream interruption.
+// `reason` is the closed validation class, never provider text.
+export class ProviderResponseInvalidError extends ProviderError {
+  override readonly retryable = false;
+  readonly reason: GatewayResponseBodyValidationError["validation"];
+
+  constructor(
+    modelId: string,
+    reason: GatewayResponseBodyValidationError["validation"],
+    secrets: readonly string[] = [],
+  ) {
+    super(`provider response for '${modelId}' was unusable (${reason})`, 200, secrets);
+    this.reason = reason;
+  }
+}
+
 // KEIKO-0778 sibling (see qualityIntelligence/redaction.ts and promptEnhancement/redaction.ts,
 // which already fix the identical defect for their own deepRedact): without a ceiling, a
 // pathologically deep tool-call-arguments or JSON-mode structured-output payload drives this
@@ -954,10 +1028,22 @@ function redactUnknown(value: unknown, scrub: ValueScrub, depth = 0): unknown {
 function redactRecord(
   value: Record<string, unknown> | null,
   secrets: readonly string[],
+  policy: ContentRedactionPolicy,
 ): Record<string, unknown> | null {
   return value === null
     ? null
-    : (redactUnknown(value, heuristicScrub(secrets)) as Record<string, unknown>);
+    : (redactUnknown(value, {
+        secrets,
+        text: (text) => redactContent(text, policy, secrets),
+        changed: 0,
+      }) as Record<string, unknown>);
+}
+
+// #4098: a call keeps the default content projection unless its caller asked to preserve
+// authorized content (`GatewayCallRequest.contentRedaction`, set by Chat under the deployment
+// opt-out alone). Tool-call arguments never follow it.
+function contentPolicy(request: GatewayCallRequest): ContentRedactionPolicy {
+  return request.contentRedaction === "preserve" ? "preserve" : "redact";
 }
 
 // A tool call's name is matched against the offered catalog. The governed changeset edit executes
@@ -989,16 +1075,19 @@ function redactResponse(
   response: NormalizedResponse,
   secrets: readonly string[],
   isExactContentTool: (alias: string) => boolean,
+  policy: ContentRedactionPolicy,
 ): RedactedResponse {
   const exactContent = literalScrub(secrets);
   const redacted: NormalizedResponse = {
     ...response,
-    content: redact(response.content, secrets),
+    content: redactContent(response.content, policy, secrets),
     toolCalls: response.toolCalls.map((call) =>
       redactToolCall(call, secrets, exactContent, isExactContentTool),
     ),
-    structuredOutput: redactRecord(response.structuredOutput, secrets),
-    ...(response.reasoning === undefined ? {} : { reasoning: redact(response.reasoning, secrets) }),
+    structuredOutput: redactRecord(response.structuredOutput, secrets, policy),
+    ...(response.reasoning === undefined
+      ? {}
+      : { reasoning: redactContent(response.reasoning, policy, secrets) }),
   };
   return { response: redacted, toolArgumentsRedacted: exactContent.changed };
 }
@@ -1014,12 +1103,13 @@ function bindCatalogResponse(
   response: NormalizedResponse,
   secrets: readonly string[],
   catalog: GatewayToolCatalogBridge,
-  usageReported: boolean,
+  options: { readonly usageReported: boolean; readonly policy: ContentRedactionPolicy },
   onToolArgumentsRedacted: (redactedStringCount: number, toolCallCount: number) => void,
 ): NormalizedResponse {
+  const { usageReported, policy } = options;
   try {
     catalog.assertNativeTransport(response);
-    const redacted = redactResponse(response, secrets, catalog.isExactContentTool);
+    const redacted = redactResponse(response, secrets, catalog.isExactContentTool, policy);
     if (redacted.toolArgumentsRedacted > 0) {
       onToolArgumentsRedacted(redacted.toolArgumentsRedacted, response.toolCalls.length);
     }
@@ -1525,6 +1615,9 @@ interface StreamReport {
   // #3878: the provider events that carried reasoning and its UTF-8 size; counts, never the text.
   reasoningEvents: number;
   reasoningBytes: number;
+  // Tool-call fragments placed by array position (no numeric `index`) or dropped as unplaceable.
+  toolCallFragmentsPositional: number;
+  toolCallFragmentsDropped: number;
   readonly redaction: StreamRedactionReport;
 }
 
@@ -1547,6 +1640,8 @@ function newStreamReport(): StreamReport {
     lastDataMs: 0,
     reasoningEvents: 0,
     reasoningBytes: 0,
+    toolCallFragmentsPositional: 0,
+    toolCallFragmentsDropped: 0,
     redaction: {
       streamCodeRegions: 0,
       streamCodeDepthRefusals: 0,
@@ -1588,7 +1683,7 @@ function streamReadOutcome(error: unknown): StreamReadOutcome {
 
 // What one streamed read needs from its call.
 interface StreamRead {
-  readonly request: GatewayRequest;
+  readonly request: GatewayCallRequest;
   readonly config: ModelProviderConfig;
   readonly secrets: readonly string[];
   readonly signal: AbortSignal;
@@ -1611,6 +1706,8 @@ function streamReadFields(
   readonly readBudgetMs?: number;
   readonly reasoningEvents: number;
   readonly reasoningBytes: number;
+  readonly toolCallFragmentsPositional: number;
+  readonly toolCallFragmentsDropped: number;
   readonly codeRedactionRevision: number;
 } & StreamRedactionReport {
   return {
@@ -1623,6 +1720,8 @@ function streamReadFields(
     ...(read.bounds === undefined ? {} : { readBudgetMs: read.bounds.budgetMs }),
     reasoningEvents: report.reasoningEvents,
     reasoningBytes: report.reasoningBytes,
+    toolCallFragmentsPositional: report.toolCallFragmentsPositional,
+    toolCallFragmentsDropped: report.toolCallFragmentsDropped,
     codeRedactionRevision: CODE_REDACTION_REVISION,
     ...report.redaction,
   };
@@ -1630,7 +1729,11 @@ function streamReadFields(
 
 // Records the finish-reason/usage/refusal/tool-call deltas carried on a streaming chunk onto the
 // in-flight response accumulator, when present.
-function applyChunkMetadata(chunk: unknown, acc: StreamAccumulator): void {
+function applyChunkMetadata(
+  chunk: unknown,
+  acc: StreamAccumulator,
+  counters?: ToolCallFragmentCounters,
+): void {
   const finish = finishReasonFromChunk(chunk);
   if (finish !== undefined) {
     acc.finishReason = finish;
@@ -1643,7 +1746,7 @@ function applyChunkMetadata(chunk: unknown, acc: StreamAccumulator): void {
     acc.usage = chunk.usage;
   }
   acc.refusal += refusalFromChunk(chunk);
-  applyToolCallDelta(acc.toolCalls, chunk);
+  applyToolCallDelta(acc.toolCalls, chunk, counters);
 }
 
 function observeStreamRedaction(report: StreamRedactionReport, lanes: StreamTextLanes): void {
@@ -1798,7 +1901,7 @@ export class OpenAiAdapter implements ProviderAdapter {
     report: StreamReport,
   ): AsyncGenerator<StreamTextChunk> {
     const project = (text: string): string =>
-      redact(text, read.secrets, {
+      redactContent(text, contentPolicy(read.request), read.secrets, {
         onCodeProjection: (projection): void => {
           report.redaction.streamCodeRegions += projection.regions;
           report.redaction.streamCodeDepthRefusals += projection.depthRefusals;
@@ -1819,7 +1922,7 @@ export class OpenAiAdapter implements ProviderAdapter {
         recordDataEvent(report);
         throwOnStreamedFailure(chunk, read.config.modelId, read.secrets);
         yield* textChunksOf(chunk, lanes, acc, report);
-        applyChunkMetadata(chunk, acc);
+        applyChunkMetadata(chunk, acc, report);
       }
       // An explicit provider refusal must retain its refusal class even if the stream then closes.
       if (!completion.sawDone && !acc.sawFinishReason && acc.refusal.length === 0) {
@@ -1906,7 +2009,7 @@ export class OpenAiAdapter implements ProviderAdapter {
   // content filter, structured output, the usable-answer check, redaction and catalog binding.
   private finishedResponse(
     payload: unknown,
-    request: GatewayRequest,
+    request: GatewayCallRequest,
     config: ModelProviderConfig,
     secrets: readonly string[],
     catalog: GatewayToolCatalogBridge,
@@ -1921,13 +2024,14 @@ export class OpenAiAdapter implements ProviderAdapter {
         costClass: this.deps.costClass,
       },
       request.responseFormat?.type === "json_schema",
+      secrets,
     );
     assertUsableAssistantResponse(normalized, config.modelId, secrets);
     return bindCatalogResponse(
       normalized,
       secrets,
       catalog,
-      providerReportedUsage(payload),
+      { usageReported: providerReportedUsage(payload), policy: contentPolicy(request) },
       (redactedStringCount, toolCallCount) => {
         this.logToolArgumentsRedacted(config.modelId, redactedStringCount, toolCallCount);
       },
@@ -2022,6 +2126,9 @@ export class OpenAiAdapter implements ProviderAdapter {
         )}ms`,
         secrets,
       );
+    }
+    if (error instanceof GatewayResponseBodyValidationError) {
+      return new ProviderResponseInvalidError(config.modelId, error.validation, secrets);
     }
     const egressError = mapOutboundEgressError(error, secrets);
     if (egressError !== undefined) {
@@ -2347,9 +2454,15 @@ export class OpenAiAdapter implements ProviderAdapter {
   ): Promise<unknown> {
     try {
       return await readJsonCapped(response);
-    } catch {
+    } catch (error) {
       if (signal.aborted) {
         throw requestAbortError(signal, config.modelId, secrets, "while reading body");
+      }
+      if (
+        error instanceof GatewayResponseBodyValidationError &&
+        error.validation === "size-exceeded"
+      ) {
+        throw new ProviderResponseInvalidError(config.modelId, error.validation, secrets);
       }
       throw new TransportError(`provider sent an unreadable body for '${config.modelId}'`, secrets);
     }

@@ -550,6 +550,12 @@ measurement and the freshness check. No ceiling widened; one tightened.
 The three follow-up branches (task import and offline network tools, the 1.1.4 runtime pin and this
 journey repair) were combined into one delivery at `6bfb9e129` and measured again against this
 calibration: p95 1547.2, 1.92, 2.51 and 138.9 ms, each below its committed ceiling.
+After the 1.3.0 version bump at `ae84d3a73` (the lockfile and package versions are part of the
+subject) it was measured again: p95 1508.3, 2.15, 2.28 and 141.2 ms, each below its committed
+ceiling.
+After the 1.3.1 version bump at `a6f1f5238`, which also carries the coding-runtime fixes of #4095
+and #4096, it was measured again: p95 1527.1, 1.79, 2.40 and 129.5 ms, each below its committed
+ceiling.
 
 The PR lane runs `check:perf-evidence:coding-runtime` and the hermetic ruler tests
 (`test:perf:coding-runtime`). It checks integrity and budgets unconditionally. Set

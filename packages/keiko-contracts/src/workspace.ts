@@ -52,7 +52,26 @@ export interface WorkspaceInfo {
   readonly testDirs: readonly string[];
   readonly languages: readonly WorkspaceLanguage[];
   readonly ignoreLines: readonly string[];
+  /**
+   * How evidence-lane reads project this workspace's content (#4098). Absent means `redact`. Only
+   * Chat sets `preserve`, and only under the deployment opt-out; every other consumer keeps the
+   * default projection.
+   */
+  readonly contentRedaction?: ContentRedactionPolicy | undefined;
+  /**
+   * The configured secret literals a `preserve` read still removes (#4098). A function, so the
+   * literals never travel with a serialized or logged workspace description.
+   */
+  readonly contentSecrets?: (() => readonly string[]) | undefined;
 }
+
+/**
+ * The projection of authorized content before a model, a person or the private Chat history sees
+ * it (#4098). `redact` is the default heuristic projection. `preserve` keeps personal data,
+ * configuration values and code and removes only configured secrets and credential shapes. Logs,
+ * diagnostics, audit and support artifacts never use it.
+ */
+export type ContentRedactionPolicy = "redact" | "preserve";
 
 // ─── Discovery ──────────────────────────────────────────────────────────────────
 

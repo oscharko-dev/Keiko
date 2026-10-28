@@ -27,6 +27,39 @@ const MEMORY_AUDIT_STATE_CACHE_SEEDED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+// #4098: the Chat content policy resolved once at startup from `KEIKO_CONTENT_REDACTION`. A
+// misspelled value fails closed to `redact` and is reported as `invalid`, so the operator can see
+// why the opt-out did not take effect.
+const CHAT_CONTENT_POLICY_RESOLVED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "chat.content-policy.resolved",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "deps-activity.logChatContentPolicyResolved",
+  fields: {
+    policy: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["redact", "preserve"],
+    },
+    setting: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["default", "on", "off", "invalid"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  diagnosticWhen: [{ field: "setting", values: ["invalid"] }],
+  failureClasses: ["chat-content-policy"],
+  proofIds: ["chat.content-policy.resolved.setting"],
+  releaseImpact: "patch",
+});
+
 const TASK_WORKSPACE_REPOSITORY_REGISTRATION_REFUSED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -257,6 +290,26 @@ export function logMemoryAuditStateCacheSeeded(
       MEMORY_AUDIT_STATE_CACHE_SEEDED_OPERATION,
       { correlationId: correlationIdOrUnknown(correlationId) },
       { recordCount, completeness: "complete", loss: "none" },
+    ),
+  );
+}
+
+export function logChatContentPolicyResolved(
+  sink: ServerLogSink,
+  correlationId: string | undefined,
+  resolved: {
+    readonly policy: "redact" | "preserve";
+    readonly setting: "default" | "on" | "off" | "invalid";
+  },
+): void {
+  sink.write(
+    activityLogEvent(
+      CHAT_CONTENT_POLICY_RESOLVED_OPERATION,
+      {
+        level: resolved.setting === "invalid" ? "warn" : "info",
+        correlationId: correlationIdOrUnknown(correlationId),
+      },
+      { policy: resolved.policy, setting: resolved.setting },
     ),
   );
 }

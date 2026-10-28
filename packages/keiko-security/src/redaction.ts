@@ -17,6 +17,7 @@ import {
 import {
   projectCodeRedaction,
   type CodeRedactionReport,
+  type ProjectionPorts,
   type RedactionSpan,
   type SourceRedactionLanguage,
 } from "./redaction-code.js";
@@ -43,6 +44,13 @@ const AWS_ACCESS_KEY_PATTERN = /\bAKIA[0-9A-Z]{16}\b/g;
 const SLACK_TOKEN_PATTERN = /\bxox[baprs]-[A-Za-z0-9-]{10,}/g;
 const GOOGLE_API_KEY_PATTERN = /\bAIza[0-9A-Za-z_-]{20,}/g;
 const STRIPE_KEY_PATTERN = /\b[rs]k_(?:live|test)_[A-Za-z0-9]{16,}/g;
+// A JSON Web Token is a bearer credential: three base64url segments whose header and payload are
+// base64url JSON objects, so both start with `eyJ` (`{"`). The signature may be empty (`alg: none`).
+// Requiring both `eyJ` segments and a realistic minimum length keeps dotted identifiers, version
+// strings, hashes, UUIDs and base64 blobs out of reach. Linear classes around literal dots, no
+// nesting: ReDoS-safe.
+const JWT_PATTERN =
+  /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*(?![A-Za-z0-9_-])/g;
 const PEM_PRIVATE_KEY_HEADER_PATTERN = /-----BEGIN [A-Z ]*PRIVATE KEY-----/g;
 const GERMAN_IBAN_PATTERN = /\bDE\d{2}(?: ?\d{4}){4} ?\d{2}\b/gi;
 const INTERNATIONAL_GERMAN_PHONE_PATTERN =
@@ -129,6 +137,7 @@ const BUILTIN_PATTERNS: readonly RegExp[] = [
   SLACK_TOKEN_PATTERN,
   GOOGLE_API_KEY_PATTERN,
   STRIPE_KEY_PATTERN,
+  JWT_PATTERN,
 ];
 
 function escapeRegExp(value: string): string {
@@ -200,6 +209,7 @@ const CREDENTIAL_SHAPE_PATTERNS: readonly RegExp[] = Object.freeze([
   ...[
     GOOGLE_API_KEY_PATTERN,
     STRIPE_KEY_PATTERN,
+    JWT_PATTERN,
     PEM_PRIVATE_KEY_HEADER_PATTERN,
     API_KEY_PATTERN,
     URL_CREDENTIALS_PATTERN,
@@ -208,7 +218,7 @@ const CREDENTIAL_SHAPE_PATTERNS: readonly RegExp[] = Object.freeze([
 
 /**
  * True when `value` contains something shaped like an actual credential: an issuer-prefixed token,
- * a private-key header, URL userinfo credentials, or an auth/api-key/cookie/secret-key context
+ * a JWT-shaped bearer token, a private-key header, URL userinfo credentials, or an auth/api-key/cookie/secret-key context
  * followed by a credential-length value. Pure, no IO. Intended for scanning free text a human wrote;
  * structured payloads that may not carry headers at all keep their stricter substring guard.
  */
@@ -240,6 +250,24 @@ export function objectContainsCredentialKey(value: unknown, seen = new WeakSet()
 // so even non-standard key formats are scrubbed.
 // Source projections may preserve each masked span's LF/CRLF delimiters so cited line numbers
 // remain physical file coordinates. The default diagnostic/provider projection is unchanged.
+/** #4114: the credential floor a diff view applies to hunks that do not parse on their own. */
+function unparsedDiffHunkFloorPorts(
+  options: {
+    readonly unparsedDiffHunks?: "mask" | "credential-floor";
+    readonly onUnparsedDiffHunkFloor?: () => void;
+  },
+  additionalSecrets: readonly string[],
+): Pick<ProjectionPorts, "unparsedDiffHunkFloor" | "onUnparsedDiffHunkFloor"> {
+  if (options.unparsedDiffHunks !== "credential-floor") return {};
+  return {
+    unparsedDiffHunkFloor: (value: string): string =>
+      redactCredentialShapes(value, additionalSecrets, true),
+    ...(options.onUnparsedDiffHunkFloor === undefined
+      ? {}
+      : { onUnparsedDiffHunkFloor: options.onUnparsedDiffHunkFloor }),
+  };
+}
+
 export function redact(
   input: string,
   additionalSecrets: readonly string[] = [],
@@ -248,9 +276,16 @@ export function redact(
     readonly sourceLanguage?: SourceRedactionLanguage;
     readonly inferSourceLanguage?: boolean;
     readonly onCodeProjection?: (report: CodeRedactionReport) => void;
+    /**
+     * Diff views of the local user's own repository (#4114): a file whose hunks do not parse on
+     * their own keeps them readable under the credential floor instead of being masked whole.
+     */
+    readonly unparsedDiffHunks?: "mask" | "credential-floor";
+    readonly onUnparsedDiffHunkFloor?: () => void;
   } = {},
 ): string {
   const preserve = options.preserveSourceLineBreaks === true;
+  const floor = unparsedDiffHunkFloorPorts(options, additionalSecrets);
   const projection = projectCodeRedaction(
     input,
     options.sourceLanguage,
@@ -259,6 +294,7 @@ export function redact(
       mayContainSensitiveName,
       redactPlain: (value): string => redactPlain(value, additionalSecrets, true),
       publicPrefix: (value): boolean => /^(?:Bearer|Basic)[ \t]+$/iu.test(value),
+      ...floor,
     },
     options.inferSourceLanguage,
   );
@@ -388,22 +424,72 @@ function redactIdentifiedPatterns(
   additionalSecrets: readonly string[],
   preserveSourceLineBreaks: boolean,
 ): string {
-  let output = redactPrivateKeyBlocks(
-    redactLiteralSpans(input, additionalSecrets, preserveSourceLineBreaks),
-    preserveSourceLineBreaks,
+  const output = redactUrlCredentials(
+    redactPrivateKeyBlocks(
+      redactLiteralSpans(input, additionalSecrets, preserveSourceLineBreaks),
+      preserveSourceLineBreaks,
+    ),
   )
+    .replace(GERMAN_IBAN_PATTERN, REDACTED)
+    .replace(INTERNATIONAL_GERMAN_PHONE_PATTERN, REDACTED)
+    .replace(DOMESTIC_GERMAN_PHONE_PATTERN, REDACTED);
+  return redactLiteralSpans(
+    redactIssuerTokens(output),
+    additionalSecrets,
+    preserveSourceLineBreaks,
+  );
+}
+
+function redactUrlCredentials(input: string): string {
+  return input
     .replace(URL_CREDENTIALS_PATTERN, `$1${REDACTED}@`)
     .replace(URL_USERINFO_PATTERN, (match, scheme: string) =>
       SSH_USERINFO_SCHEME.test(scheme.slice(scheme.search(/[a-z]/i)))
         ? match
         : `${scheme}${REDACTED}@`,
-    )
-    .replace(GERMAN_IBAN_PATTERN, REDACTED)
-    .replace(INTERNATIONAL_GERMAN_PHONE_PATTERN, REDACTED)
-    .replace(DOMESTIC_GERMAN_PHONE_PATTERN, REDACTED)
-    .replace(API_KEY_PATTERN, REDACTED);
+    );
+}
+
+function redactIssuerTokens(input: string): string {
+  let output = input.replace(API_KEY_PATTERN, REDACTED);
   for (const pattern of BUILTIN_PATTERNS) output = output.replace(pattern, REDACTED);
-  return redactLiteralSpans(output, additionalSecrets, preserveSourceLineBreaks);
+  return output;
+}
+
+// The value of an `Authorization` header is always a credential. Elsewhere a Bearer or Basic value
+// counts as one when it looks encoded (a digit, `+`, `/` or `=`), so prose such as "Bearer
+// authentication" or "Basic configuration" stays readable under the content opt-out.
+const AUTHORIZATION_HEADER_PATTERN =
+  /\b((?:proxy-)?authorization["']?[ \t]*[:=][ \t]*["']?(?:(?:Bearer|Basic|Token)[ \t]+)?)([^\s"',;]{4,})/gi;
+const AUTHORIZATION_VALUE_PATTERN = /\b(Bearer|Basic)([ \t]+)([\w.\-+/=~]{8,})/gi;
+
+function redactAuthorizationValues(input: string): string {
+  return input
+    .replace(AUTHORIZATION_HEADER_PATTERN, (_match, prefix: string) => `${prefix}${REDACTED}`)
+    .replace(AUTHORIZATION_VALUE_PATTERN, (match, scheme: string, gap: string, value: string) =>
+      /[\d+/=]/u.test(value) ? `${scheme}${gap}${REDACTED}` : match,
+    );
+}
+
+/**
+ * The credential floor of authorized content (#4098, `KEIKO_CONTENT_REDACTION=off`): configured
+ * secret literals, private key blocks, URL credentials, credential-shaped authorization values and
+ * issuer-format tokens (`sk-`, `ghp_`, `AKIA`, Slack, Google, Stripe) and JWT-shaped bearer
+ * tokens (three base64url segments, header and payload starting `eyJ`). It never masks personal
+ * data, account numbers, configuration values or code, and it is not a diagnostic redactor:
+ * logs, evidence and support artifacts keep `redact()`.
+ */
+export function redactCredentialShapes(
+  input: string,
+  secrets: readonly string[] = [],
+  preserveSourceLineBreaks = false,
+): string {
+  const literals = keepLongEnough(secrets);
+  const lines = preserveSourceLineBreaks;
+  const output = redactAuthorizationValues(
+    redactUrlCredentials(redactPrivateKeyBlocks(redactLiteralSpans(input, literals, lines), lines)),
+  );
+  return redactLiteralSpans(redactIssuerTokens(output), literals, lines);
 }
 
 /**
@@ -483,17 +569,22 @@ function keepLongEnough(literals: readonly string[]): readonly string[] {
 
 // Returns a function string -> string applying redact() with the union of all literal secrets
 // (additionalSecrets ∪ resolved env values ∪ sensitiveLiterals). Idempotent: redact() over already-
-// redacted text is a no-op on the redacted tokens (ADR-0010 D3 audit-redaction layer).
+// redacted text is a no-op on the redacted tokens (ADR-0010 D3 audit-redaction layer). Only a diff
+// view of the local user's own repository passes `diffView` (#4114); every other caller keeps the
+// default whole-file masking of an unparsed diff hunk.
 export function createAuditRedactor(
   config: AuditRedactionConfig,
   env: Readonly<Record<string, string | undefined>>,
+  diffView?: { readonly onUnparsedDiffHunkFloor?: () => void },
 ): (input: string) => string {
   const literals = [
     ...keepLongEnough(config.additionalSecrets ?? []),
     ...resolveEnvValues(config.redactEnvValues ?? [], env),
     ...keepLongEnough(config.sensitiveLiterals ?? []),
   ];
-  return (input: string): string => redact(input, literals);
+  if (diffView === undefined) return (input: string): string => redact(input, literals);
+  const options = { ...diffView, unparsedDiffHunks: "credential-floor" as const };
+  return (input: string): string => redact(input, literals, options);
 }
 
 // Recursively re-applies a redactor to EVERY STRING LEAF of a plain-JSON value, rebuilding

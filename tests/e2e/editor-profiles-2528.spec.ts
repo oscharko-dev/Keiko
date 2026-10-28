@@ -152,9 +152,12 @@ test("named profile settings and shortcuts switch live and persist", async ({ pa
   await expect(window.getByText("Current profile: Focus")).toBeVisible();
   await expect(window.getByRole("spinbutton", { name: "Font size" })).toHaveValue("18");
   await expect(window.getByText("Source: profile").first()).toBeVisible();
+  // The overridden command is `workspace.commands`. Header Quick Access, its file picker and the
+  // "Quick Access: files" row were retired on 2026-09-29 (#3676, ADR-0028 and ADR-0133 D5
+  // amendments); the retained command palette is listed as "Workspace commands".
   await window
     .getByRole("textbox", { name: "Search keyboard shortcuts" })
-    .fill("Quick Access: files");
+    .fill("Workspace commands");
   // #2618 gates Remove on the EDITED scope owning the override, not on one being merely in effect:
   // `removable` reads the keybindingOverrides layer for the selected scope. The override this
   // journey created lives on the profile layer, so asserting Remove at the panel's default "user"

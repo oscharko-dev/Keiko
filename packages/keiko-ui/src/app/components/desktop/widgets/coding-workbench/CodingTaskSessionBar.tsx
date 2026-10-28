@@ -1,5 +1,5 @@
 "use client";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { CodingTaskSession } from "./useCodingTaskSession";
 import { transcriptShows, type ShownRun } from "./codingWorkbenchRestoredRun";
 import { useCodingWorkbenchTranslate } from "./coding-workbench-i18n";
@@ -9,6 +9,11 @@ import { Icons } from "../../Icons";
 import styles from "./CodingHistory.module.css";
 
 const BranchIcon = Icons.branch;
+
+// A task can hold up to 200 messages of 64 KiB each (Coding History's bound). Mounting every one of
+// them at once costs a long markdown parse for text nobody scrolled to, so only the newest are
+// mounted; the earlier ones open on request, a window at a time.
+export const TRANSCRIPT_WINDOW_MESSAGES = 40;
 
 interface SessionBarProps {
   readonly session: CodingTaskSession;
@@ -126,41 +131,88 @@ export function CodingTaskTranscript({
   /** Forks the task just before a user message; absent while a run is active. */
   readonly onFork?: ((messageId: string) => void) | undefined;
 }): ReactNode {
-  const t = useCodingWorkbenchTranslate();
   const messages =
     session.detail?.messages.filter((message) => transcriptShows(shownRun, message)) ?? [];
   if (messages.length === 0) return null;
+  // Keyed by task: another task starts again from its newest window.
+  return (
+    <TranscriptMessages
+      key={session.detail?.task.id}
+      messages={messages}
+      truncated={session.detail?.truncated === true}
+      onFork={onFork}
+    />
+  );
+}
+
+type TranscriptMessage = NonNullable<CodingTaskSession["detail"]>["messages"][number];
+
+function TranscriptMessages({
+  messages,
+  truncated,
+  onFork,
+}: {
+  readonly messages: readonly TranscriptMessage[];
+  readonly truncated: boolean;
+  readonly onFork?: ((messageId: string) => void) | undefined;
+}): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  const [windowSize, setWindowSize] = useState(TRANSCRIPT_WINDOW_MESSAGES);
+  const hidden = Math.max(0, messages.length - windowSize);
+  const shown = hidden === 0 ? messages : messages.slice(hidden);
   return (
     <section className={styles.cmpTranscript} aria-label={t("codingWorkbench.history.transcript")}>
-      {session.detail?.truncated ? <output>{t("codingWorkbench.history.truncated")}</output> : null}
-      {messages.map((message) => (
-        <article className={styles.cmpMessage} key={message.id} data-role={message.role}>
-          <strong>
-            {t(
-              message.role === "user"
-                ? "codingWorkbench.history.you"
-                : "codingWorkbench.history.agent",
-            )}
-          </strong>
-          <SafeMarkdownBoundary
-            source={message.content}
-            diagnosticMessageId={message.id}
-            richContent={message.role === "user" ? undefined : CODING_WORKBENCH_RICH_CONTENT}
-          />
-          {message.role === "user" && onFork !== undefined ? (
-            <button
-              type="button"
-              className={styles.cmpMessageFork}
-              onClick={(): void => {
-                onFork(message.id);
-              }}
-            >
-              <BranchIcon />
-              {t("codingWorkbench.history.forkFrom")}
-            </button>
-          ) : null}
-        </article>
+      {truncated ? <output>{t("codingWorkbench.history.truncated")}</output> : null}
+      {hidden > 0 ? (
+        <button
+          type="button"
+          className={styles.cmpMessageFork}
+          onClick={(): void => {
+            setWindowSize((size) => size + TRANSCRIPT_WINDOW_MESSAGES);
+          }}
+        >
+          {t("codingWorkbench.history.showEarlier", { count: hidden })}
+        </button>
+      ) : null}
+      {shown.map((message) => (
+        <TranscriptMessageCard key={message.id} message={message} onFork={onFork} />
       ))}
     </section>
+  );
+}
+
+function TranscriptMessageCard({
+  message,
+  onFork,
+}: {
+  readonly message: TranscriptMessage;
+  readonly onFork?: ((messageId: string) => void) | undefined;
+}): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  return (
+    <article className={styles.cmpMessage} data-role={message.role}>
+      <strong>
+        {t(
+          message.role === "user" ? "codingWorkbench.history.you" : "codingWorkbench.history.agent",
+        )}
+      </strong>
+      <SafeMarkdownBoundary
+        source={message.content}
+        diagnosticMessageId={message.id}
+        richContent={message.role === "user" ? undefined : CODING_WORKBENCH_RICH_CONTENT}
+      />
+      {message.role === "user" && onFork !== undefined ? (
+        <button
+          type="button"
+          className={styles.cmpMessageFork}
+          onClick={(): void => {
+            onFork(message.id);
+          }}
+        >
+          <BranchIcon />
+          {t("codingWorkbench.history.forkFrom")}
+        </button>
+      ) : null}
+    </article>
   );
 }

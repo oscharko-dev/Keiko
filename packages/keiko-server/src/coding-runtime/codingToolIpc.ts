@@ -43,9 +43,18 @@ import {
   isContainedAgentPath,
   isEditorAgentChangeset,
 } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import { CHANGESET_EDIT_ARGUMENT_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
 
+/** The bound of a tool RESPONSE and of the runtime's `tool_output` (a different direction). */
 export const CODING_TOOL_MAX_BODY_BYTES = 262_144;
+/**
+ * The bound of a tool REQUEST. The largest request is a governed changeset edit, so this is that
+ * tool's argument ceiling (owner decision, 2026-10-28: file content is not refused at 64 KiB);
+ * every other action's parser is exact-key and path-bounded, so the larger body admits nothing
+ * more than the single edit shape.
+ */
+export const CODING_TOOL_MAX_REQUEST_BODY_BYTES = CHANGESET_EDIT_ARGUMENT_LIMITS.maxArgumentBytes;
 export const CODING_TOOL_MAX_IN_FLIGHT = 8;
 export const CODING_TOOL_MAX_READ_BYTES = 65_536;
 /** Highest 1-based line a read window may start at; bounds the model-visible schema too. */
@@ -148,7 +157,12 @@ export interface CodingToolVerificationFailure {
 
 /** Why a verification step did not run (F74): a closed reason the model can act on. */
 export type VerificationNotRunReason =
-  "script-missing" | "dependencies-unavailable" | "denied" | "cancelled" | "skipped";
+  | "script-missing"
+  | "dependencies-unavailable"
+  | "native-shell-required"
+  | "denied"
+  | "cancelled"
+  | "skipped";
 
 /** One step of a verification that never executed, and why (F74). Model-facing and body-free. */
 export interface VerificationNotRunStep {
@@ -643,7 +657,6 @@ function editRequest(value: Record<string, unknown>): CodingToolActionRequest | 
 }
 
 const REPLACEMENT_EDIT_MAX_COUNT = 50;
-const REPLACEMENT_TEXT_MAX_LENGTH = 65_536;
 const CONTENT_HASH = /^[a-f0-9]{64}$/u;
 
 /** The exact-text replacement form of a governed edit (#3873); see codingToolReplacementEdits.ts. */
@@ -720,8 +733,14 @@ function exactReplacementFile(value: unknown): boolean {
   );
 }
 
+// One replacement string carries up to the changeset cap in UTF-8 bytes. A string longer than the
+// cap in characters is longer in bytes too, so the length check is an exact, cheap first cut.
 function boundedText(value: unknown): value is string {
-  return typeof value === "string" && value.length <= REPLACEMENT_TEXT_MAX_LENGTH;
+  return (
+    typeof value === "string" &&
+    value.length <= CHANGESET_EDIT_ARGUMENT_LIMITS.maxStringBytes &&
+    Buffer.byteLength(value, "utf8") <= CHANGESET_EDIT_ARGUMENT_LIMITS.maxStringBytes
+  );
 }
 
 export function isExactEditorAgentChangeset(value: unknown): value is EditorAgentChangeset {

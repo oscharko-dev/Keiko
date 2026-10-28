@@ -237,6 +237,7 @@ describe("production OpenCode backend functional pipeline", () => {
       await runAuthorityScenarios(fixture, pipeline);
       await runRejectedQuestionScenario(fixture, pipeline, scripted);
       await runStopPendingQuestionScenario(fixture, pipeline);
+      await runFollowUpReplacementScenario(fixture, pipeline, scripted);
       await runOutOfScopeScenario(fixture, pipeline, scripted);
       assertRedactedEvidence(fixture, pipeline);
       assertCanariesAbsentFromRequestTargets(scripted);
@@ -709,6 +710,65 @@ async function runStopPendingQuestionScenario(
   await waitForQuestion(pipeline.orchestrator, run.runId, "stop-question");
   await stopRun(pipeline.baseUrl, run.runId);
   expect(readFile(fixture.target)).toBe(NEW);
+}
+
+// A follow-up into a pause resumes the run and replaces its turn (#3452): the native interrupt reads
+// the session's background shell jobs and its inbox before the successor prompt is submitted
+// (#4064). A read the runtime cannot answer rejects the interrupt and refuses the follow-up.
+async function runFollowUpReplacementScenario(
+  fixture: FunctionalWorkspaceFixture,
+  pipeline: FunctionalPipeline,
+  scripted: ScriptedOpenCodeHarness,
+): Promise<void> {
+  fixture.script.mode = "productive";
+  fixture.script.calls = 0;
+  const started = await post(
+    pipeline.baseUrl,
+    "/api/coding-workbench/runtime/runs",
+    startBody("follow-up-replacement"),
+  );
+  expect(started.status).toBe(200);
+  const run = (await started.json()) as { runId: string; state: string };
+  await waitForQuestion(pipeline.orchestrator, run.runId, "follow-up-question");
+  const paused = await post(
+    pipeline.baseUrl,
+    `/api/coding-workbench/runtime/runs/${run.runId}/pause`,
+    {
+      requestId: run.runId,
+    },
+  );
+  expect(paused.status).toBe(200);
+  await expect(paused.json()).resolves.toMatchObject({ runId: run.runId, state: "paused" });
+  const child = scripted.children.at(-1);
+  const promptsBefore = promptRequestCount(child);
+  const followed = await post(
+    pipeline.baseUrl,
+    `/api/coding-workbench/runtime/runs/${run.runId}/follow-up`,
+    {
+      requestId: "follow-up-replacement-turn",
+      expectedRevision: pipeline.orchestrator.getSnapshot(run.runId)?.revision ?? -1,
+      taskIntent: "Follow up on the accepted task",
+    },
+  );
+  expect(followed.status).toBe(200);
+  await expect(followed.json()).resolves.toMatchObject({ runId: run.runId, state: "running" });
+  await vi.waitFor(
+    () => {
+      expect(promptRequestCount(child)).toBe(promptsBefore + 1);
+    },
+    { timeout: 30_000, interval: 50 },
+  );
+  expect(pipeline.orchestrator.getSnapshot(run.runId)?.state).not.toBe("failed");
+  expect(pipeline.diagnostics.map((record) => record.code)).not.toContain(
+    "stage=dispatch:reason=interrupt-rejected",
+  );
+  await stopRun(pipeline.baseUrl, run.runId);
+}
+
+function promptRequestCount(
+  child: ScriptedOpenCodeHarness["children"][number] | undefined,
+): number {
+  return (child?.requestedTargets() ?? []).filter((target) => target.endsWith("/prompt")).length;
 }
 
 async function runOutOfScopeScenario(

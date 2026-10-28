@@ -9,7 +9,11 @@ import { WORKSPACE_PORTABLE_PATH_MAX_BYTES } from "@oscharko-dev/keiko-contracts
 // Managed source schemas still belong to opencodeToolSchemas.ts; the catalog dialect losslessly
 // projects their canonical descriptors and does not control the native engine or its tool loop.
 import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
-import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import {
+  CHANGESET_EDIT_ARGUMENT_LIMITS,
+  TOOL_CATALOG_LIMITS,
+  toolArgumentLimits,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import {
   DEFAULT_SANDBOX_POLICY,
   GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
@@ -207,7 +211,7 @@ function entryFor(
       policyReferences: spec.effects,
       handlerRequirement: { id: spec.handlerId, contractVersion: 1 },
       bounds: {
-        maxArgumentBytes: TOOL_CATALOG_LIMITS.maxArgumentBytes,
+        maxArgumentBytes: toolArgumentLimits(spec.canonicalId).maxArgumentBytes,
         maxResultBytes: TOOL_CATALOG_LIMITS.maxResultBytes,
         maxResultCount: 1,
         maxDurationMs: spec.maxDurationMs ?? DEFAULT_SANDBOX_POLICY.defaultTimeoutMs,
@@ -361,8 +365,10 @@ const CHANGESET_FILE_ENTRY_SCHEMA = managedObjectSchema(
 const REPLACEMENT_EDIT_SCHEMA = managedObjectSchema(
   {
     file: CHANGESET_PATH_SCHEMA,
-    oldString: { type: "string", maxLength: 65_536 },
-    newString: { type: "string", maxLength: 65_536 },
+    // One edit string may carry the changeset cap (owner decision 2026-10-28); characters never
+    // exceed bytes, and the byte bound is enforced when the call is captured.
+    oldString: { type: "string", maxLength: CHANGESET_EDIT_ARGUMENT_LIMITS.maxStringBytes },
+    newString: { type: "string", maxLength: CHANGESET_EDIT_ARGUMENT_LIMITS.maxStringBytes },
     replaceAll: { type: "boolean" },
   },
   ["file", "newString", "oldString", "replaceAll"],

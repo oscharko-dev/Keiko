@@ -104,7 +104,9 @@ import {
   createCodingRepositorySearchHandler,
   type CodingRepositorySearchHandler,
 } from "./codingRepositorySearchHandler.js";
-import { detectWorkspaceAt } from "@oscharko-dev/keiko-workspace";
+import { detectWorkspaceAt, readWorkspaceFile } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { openCodeNativeCreditedKinds } from "./opencodeNativePolicy.js";
 import type {
   RepositorySemanticSearchLease,
   RepositorySemanticSearchResolver,
@@ -156,26 +158,31 @@ const CODING_VERIFICATION_STEP_NAMES = [
   "test:denied",
   "test:cancelled",
   "test:dependencies-unavailable",
+  "test:native-shell-required",
   "test:script-missing",
   "test:skipped",
   "targeted-test:denied",
   "targeted-test:cancelled",
   "targeted-test:dependencies-unavailable",
+  "targeted-test:native-shell-required",
   "targeted-test:script-missing",
   "targeted-test:skipped",
   "typecheck:denied",
   "typecheck:cancelled",
   "typecheck:dependencies-unavailable",
+  "typecheck:native-shell-required",
   "typecheck:script-missing",
   "typecheck:skipped",
   "lint:denied",
   "lint:cancelled",
   "lint:dependencies-unavailable",
+  "lint:native-shell-required",
   "lint:script-missing",
   "lint:skipped",
   "build:denied",
   "build:cancelled",
   "build:dependencies-unavailable",
+  "build:native-shell-required",
   "build:script-missing",
   "build:skipped",
 ] as const;
@@ -342,7 +349,14 @@ const CODING_RUNTIME_VERIFICATION_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["not-run", "target-bound", "passed", "proof-unavailable"],
+      values: [
+        "not-run",
+        "target-bound",
+        "passed",
+        "proof-unavailable",
+        "credited",
+        "credit-unavailable",
+      ],
     },
     stepCount: { type: "integer", dataClass: "count", required: false },
     steps: {
@@ -353,6 +367,12 @@ const CODING_RUNTIME_VERIFICATION_OPERATION = defineActivityLogOperation({
       values: CODING_VERIFICATION_STEP_NAMES,
     },
     verifierId: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["test", "targeted-test", "typecheck", "lint", "build"],
+    },
+    creditedBy: {
       type: "string",
       dataClass: "closed-enum",
       required: false,
@@ -2001,6 +2021,7 @@ const EXECUTED_RED_STATUSES = ["failed", "timed-out", "resource-exceeded"] as co
 // (PR #3452 review). The not-run path is left to runs in which no step went red.
 function modelFacingStatus(report: VerificationReport): Exclude<VerificationStatus, "passed"> {
   const overall = report.overallStatus as Exclude<VerificationStatus, "passed">;
+  if (refusedOnlyForThisHost(report)) return "skipped";
   if (VERIFICATION_OUTCOME_REASON_CODES[overall] !== "VERIFICATION_NOT_RUN") return overall;
   const executedRed = EXECUTED_RED_STATUSES.find((status) =>
     report.results.some((result) => result.status === status),
@@ -2026,6 +2047,18 @@ function failedVerificationOutcome(
   };
 }
 
+// A refused bootstrap fails the report (ADR-0043 D17), but `install-target-foreign` refuses only
+// because this host's runtime holds the dependencies: when no step ran, the model is told to run
+// the check in its own shell (native-shell-required), not a failure it cannot repair (PR #4096).
+function refusedOnlyForThisHost(report: VerificationReport): boolean {
+  return (
+    report.overallStatus === "failed" &&
+    report.dependencies?.refusalReason === "install-target-foreign" &&
+    report.results.length > 0 &&
+    report.results.every((result) => result.status === "skipped")
+  );
+}
+
 // A run that never executed used to reach the model as a bare VERIFICATION_NOT_RUN, and the model
 // picked another verifier at once without knowing why (F74, Coding Workbench run 24). Each step it
 // did not run now carries the closed reason: a verifier the repository defines no script for, a
@@ -2042,17 +2075,33 @@ const NOT_RUN_STATUSES: ReadonlySet<VerificationStatus> = new Set([
 ]);
 
 function notRunSteps(report: VerificationReport): readonly VerificationNotRunStep[] {
+  const dependencies = dependenciesNotRunReason(report);
   return report.results
     .filter((result) => NOT_RUN_STATUSES.has(result.status))
     .slice(0, NOT_RUN_STEP_LIMIT)
-    .map((result) => ({ kind: result.kind, reason: notRunReason(result) }));
+    .map((result) => ({ kind: result.kind, reason: notRunReason(result, dependencies) }));
 }
 
-function notRunReason(result: VerificationResult): VerificationNotRunReason {
+// The governed verifier's container cannot install for this host without replacing the native
+// runtime's dependencies (`install-target-foreign`, Keiko 1.3.0 test on macOS): the same check run
+// in the runtime's own shell is the verification that can run, and it is recorded as one for the
+// same target. Every other bootstrap that did not complete remains a blocker to report.
+function dependenciesNotRunReason(
+  report: VerificationReport,
+): Extract<VerificationNotRunReason, "dependencies-unavailable" | "native-shell-required"> {
+  return report.dependencies?.refusalReason === "install-target-foreign"
+    ? "native-shell-required"
+    : "dependencies-unavailable";
+}
+
+function notRunReason(
+  result: VerificationResult,
+  dependencies: ReturnType<typeof dependenciesNotRunReason>,
+): VerificationNotRunReason {
   if (result.status === "denied") return "denied";
   if (result.status === "cancelled") return "cancelled";
   const detail = result.detail ?? "";
-  if (detail.startsWith("dependencies unavailable: bootstrap ")) return "dependencies-unavailable";
+  if (detail.startsWith("dependencies unavailable: bootstrap ")) return dependencies;
   return /^no [a-z-]+ script detected in package\.json$/u.test(detail)
     ? "script-missing"
     : "skipped";
@@ -2527,7 +2576,103 @@ function nativeVerificationHooks(
       sequence += 1;
       publishNativeVerification(input, sequence, result);
     },
+    credited: (resources, readScripts): readonly VerificationKind[] =>
+      openCodeNativeCreditedKinds(
+        resources,
+        readScripts
+          ? (): ReadonlyMap<string, string> | undefined => packageScripts(input)
+          : undefined,
+      ),
   };
+}
+
+const PACKAGE_SCRIPTS_READ_BYTES = 262_144;
+const PACKAGE_SCRIPTS_MAX = 512;
+const PACKAGE_SCRIPT_CHARS_MAX = 4_096;
+
+/**
+ * The task workspace's package scripts, by name, as a native check line admitted now would run
+ * them. An unreadable or malformed package.json credits nothing beyond the line's own checks, and
+ * the log says why.
+ */
+function packageScripts(
+  input: ProductionManagedWorktreeToolInput,
+): ReadonlyMap<string, string> | undefined {
+  try {
+    const workspace = {
+      root: input.workspaceRoot,
+      selectedRoot: input.workspaceRoot,
+      name: undefined,
+      version: undefined,
+      testFramework: "unknown",
+      sourceDirs: [],
+      testDirs: [],
+      languages: [],
+      ignoreLines: [],
+    } as const;
+    const read = readWorkspaceFile(
+      workspace,
+      "package.json",
+      { maxBytes: PACKAGE_SCRIPTS_READ_BYTES },
+      nodeWorkspaceFs,
+    );
+    return scriptTable(JSON.parse(read.text));
+  } catch (error) {
+    recordVerificationCreditUnavailable(input, error);
+    return undefined;
+  }
+}
+
+function scriptTable(manifest: unknown): ReadonlyMap<string, string> {
+  const scripts =
+    typeof manifest === "object" && manifest !== null && !Array.isArray(manifest)
+      ? (manifest as { readonly scripts?: unknown }).scripts
+      : undefined;
+  if (typeof scripts !== "object" || scripts === null || Array.isArray(scripts)) return new Map();
+  return new Map(
+    Object.entries(scripts)
+      .filter(
+        (entry): entry is [string, string] =>
+          typeof entry[1] === "string" && entry[1].length <= PACKAGE_SCRIPT_CHARS_MAX,
+      )
+      .slice(0, PACKAGE_SCRIPTS_MAX),
+  );
+}
+
+function recordVerificationCreditUnavailable(
+  input: ProductionManagedWorktreeToolInput,
+  error: unknown,
+): void {
+  (input.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      CODING_RUNTIME_VERIFICATION_OPERATION,
+      {
+        correlationId: verificationCorrelationId(input) ?? UNKNOWN_CORRELATION_ID,
+        level: "warn",
+        errorKind: "unavailable",
+      },
+      {
+        state: "credit-unavailable",
+        frames: keikoStackFrames(error),
+        causeChain: causeChain(error),
+      },
+    ),
+  );
+}
+
+/** A check a passing line also proved, beside the one its exit status is named for. */
+function recordVerificationCredited(
+  input: ProductionManagedWorktreeToolInput,
+  verifierId: VerificationKind,
+  creditedBy: VerificationKind,
+): void {
+  (input.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      CODING_RUNTIME_VERIFICATION_OPERATION,
+      { correlationId: verificationCorrelationId(input) ?? UNKNOWN_CORRELATION_ID },
+      { state: "credited", verifierId, creditedBy },
+    ),
+  );
 }
 
 function publishNativeVerification(
@@ -2568,6 +2713,8 @@ function publishNativeVerification(
     throw new Error("runtime-native-verification-event-invalid");
   }
   input.onRuntimeEvent(event);
+  if (result.creditedBy !== undefined)
+    recordVerificationCredited(input, result.kind, result.creditedBy);
 }
 
 export function codingVerificationTargetDigest(verifierId: string, targetPath?: string): string {

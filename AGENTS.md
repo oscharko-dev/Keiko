@@ -103,10 +103,27 @@ This shapes the product _and_ how you work on it:
   Optional Apple signing evidence must remain truthful and cannot become a hidden update gate.
 - Secrets stay out of code, logs, evidence, config, and tests. Evidence and diagnostics are
   body-free: counts, hashes, redacted summaries — never raw content, keys, endpoints, or PII.
+- **Authorized content preservation (owner decision, 2026-10-27, #4098):** the deployment operator
+  may set `KEIKO_CONTENT_REDACTION=off` before starting Keiko so Chat keeps authorized document
+  context, answers and private chat history. The server resolves it once at startup into the deps
+  graph (`chat.content-policy.resolved`; an unrecognized value warns and keeps redaction); no
+  package reads it per request. Only Chat model ports and the Chat connected-context workspace
+  carry the preserving policy from this switch. Independently of it, the OpenCode runtime is its own
+  producer and uses the gateway as infrastructure only: the Coding Workbench sidecar route always
+  hands it the model's answer, reasoning and structured output under the preserving policy (owner
+  decision, 2026-10-27). Coding repository search and semantic refresh, Coding History exports and
+  imports, evidence, audit, logs, support exports and tool arguments keep their default or
+  unconditional redaction.
+  Preserved content still loses the credential floor: configured secret literals, private keys,
+  URL credentials, `Authorization` header values, encoded-looking Bearer/Basic values, JWT-shaped bearer tokens and known
+  token shapes; memory proposals keep the default projection. Workspace
+  authority, containment, deny-lists and budgets are unchanged. See ADR-0003 D7 and ADR-0022 D4.
 - Source redaction preserves TypeScript/JavaScript and Java syntax at the shared security boundary;
   syntax metadata never exempts credential literal data or configured secrets. JSON/JSONC and YAML
   use parsed value boundaries. Ordinary unified diffs reuse the canonical parser at the contracts
-  leaf and separate native old/new images; unsupported fragments fail closed. Streaming retains unresolved credential/source context until it can
+  leaf and separate native old/new images; unsupported fragments fail closed. Only the raw Git
+  diff view of the user's own repository keeps syntax-refused hunks readable under the credential
+  floor (owner decision 2026-10-28, #4114; ADR-0022). Streaming retains unresolved credential/source context until it can
   publish safely; cancellation discards pending text. Failed source projection is unavailable evidence,
   not a complete source. Keep diagnostics body-free and regenerate the existing operation registry.
 - Every change to product runtime behaviour — feature, fix, refactor, anything — ships its own
@@ -922,6 +939,14 @@ system that exists, never beside it:
   flags on `git.commit.draft.completed`. The same event carries body-free normalization version/rule and bullet, trailer, continuation and marker counts for generated and reused drafts. Each attempted generation also records its own result and normalization on `git.commit.draft.attempt.completed`, so a later repair cannot erase earlier evidence; stream startup retries use the existing `gateway.retry.*`
   events. Refused prompts retain measured bounds, and generated/reused drafts share a body-free key digest. Browser delivery-loss counts are recorded once after rate admission and before routine diversion. Refused loss-bearing reports return 429 so the browser retains the counts for later delivery; the server alone counts that dropped report, avoiding a second client-post-failed count. Final pagehide loss reports use an independent bounded admission budget, so ordinary report storms cannot discard the closing tab's counters. Stream resources, circuit admissions, spend reservations and completion evidence settle before the terminal done packet reaches a consumer. Neither path records customer diffs or generated text.
 
+- **SSE streams are flow-controlled, never size-limited (2026-10-28).** Every server SSE write goes
+  through `writeSseFrame` (`sse-write.ts`). A `false` from `res.write()` is Node's buffer accounting
+  (Node 24 answers it for any single write of 64 KiB or more, even to an idle reader): the frame
+  stays queued and the stream waits for `drain`. Only a reader that drains nothing within
+  `SSE_STALLED_READER_TIMEOUT_MS` (30 s) is torn down as `backpressure-killed`; producers that pull
+  from a model await `whenSseWritable` so a slow reader slows the provider instead of growing a
+  backlog. `sse.stream.closed` records the `drainWaitCount`. Never reintroduce a destroy-on-false
+  write or a frame-size limit on a stream.
 - **Errors and loss take the structured path.** §7's no-silent-failures rule, made concrete for the
   log line: `errorKind`, completeness, loss, compatibility, and writer capability come from their
   closed versioned vocabularies; the dist-anchored Keiko-code stack (`extra.frames` /
@@ -1038,6 +1063,15 @@ cause chain), a completion the source, message, omitted, skipped and redacted-me
 byte size. The file's text is untrusted, so it is redacted again before it is stored; no text,
 title or path ever enters the line (ADR-0137 D4).
 
+`client.coding-workbench.interaction` records, at info and on the routine budget, what the human
+did on the Coding Workbench page (#3897): a disclosure opened or closed (`section`, `expanded`), the
+progress state (`progressState`), the agent picked (`build`, `plan` or `custom`, never a custom
+agent's name), a jump to a pending decision, a repository bound for trust (its two body-free ids)
+and a changeset received for review (`fileCount`). These were warn/unknown `client.diagnostic`
+notes before and buried the rare real browser failures. `gateway.setup.target.accepted` records,
+at info, that Gateway Setup accepted a loopback target (KEIKO-0884), with the request correlation
+and the closed `targetClass`; it is no longer an error-level `server.diagnostic.failure`.
+
 `gateway.conversation.admission` records the closed decision before a conversation model call,
 with admitted and current configuration generations and the request correlation. A fresh probe
 and a turn-local successful-call continuation remain distinct; failed, cancelled or filtered terminal
@@ -1045,7 +1079,10 @@ responses cannot establish that continuation. Refusals distinguish model or
 generation replacement, absent observations, failed probes, invalid timestamps and expiry without
 recording model names, requests or answers. An uninvoked model port consumes no physical synthesis
 attempt or uncertain output reservation; actual interrupted provider calls retain conservative
-accounting. See [ADR-0171](docs/adr/ADR-0171-gateway-readiness-capability-reconciliation.md).
+accounting. A chat probe that only times out or meets a transient overload status keeps and renews
+a same-generation positive observation (`gateway.readiness.busy-retained`, a `provider-busy` warning
+diagnostic), so a busy single-slot model stays selectable (#4115). See
+[ADR-0171](docs/adr/ADR-0171-gateway-readiness-capability-reconciliation.md).
 
 `chat.scope.update` records a serialized source update as `applied` or `conflict` under the
 request correlation, with optional `expectedScopeDigest`, required `actualScopeDigest` and
@@ -1153,9 +1190,9 @@ previous line, the deltas that grew a live part (`liveDeltaCount`), the ones tha
 (`liveDroppedCount`), the parts whose complete text did not extend what was shown
 (`liveDivergedCount`) and the events folded into earlier history reads (`mergedEventCount`). The
 reasoning text never enters the Activity Log, a support export, run evidence or Coding History.
-Changeset-edit arguments reach the governed edit tool byte for byte (#4009): the gateway removes
-only the configured provider literals from them, never a heuristic secret shape; every other
-tool's arguments keep the full redaction. When a literal was removed,
+Arguments of the governed exact-content tools (`edit`, `write`, `patch`, `execute`, `shell`;
+#4009) reach the tool byte for byte: the gateway removes only the configured provider literals
+from them, never a heuristic secret shape; every other tool's arguments keep the full redaction. When a literal was removed,
 `gateway.tool-arguments.redacted` records the tool-call and changed-string counts at `warn`.
 A model answer that exhausted its output budget, or ended after reasoning, without a tool call or a
 final answer gets one steered repair from the gateway on a call that asks for it with the explicit
@@ -1230,7 +1267,7 @@ missing evidence under Rule 1, then fix the behaviour.
 
 ## 9. Traps specific to this repo (learn these once)
 
-Repository lessons now live in [Experience.md](Experience.md). Before changing UI styling,
+Repository lessons now live in [EXPERIENCE.md](EXPERIENCE.md). Before changing UI styling,
 performance evidence, package exports, workflow branch lists or coverage gates, read the matching
 entry there. In particular, the assembled package-surface check prunes the live dependency tree:
 read its ordering warning before running it. The applicable constraints are unchanged.

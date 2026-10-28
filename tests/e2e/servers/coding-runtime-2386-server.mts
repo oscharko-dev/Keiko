@@ -18,6 +18,11 @@ await runCodingRuntimeJourneyServer({
   fixtureLabel: "Authority 2386",
   runtime: "scripted",
   includeQuestion: true,
+  // Under the causal-terminal contract the child's first `stop` completion settles the run, so a
+  // turn that ends after verification would leave nothing to pause. The journey drives pause,
+  // follow-up, resume and stop on the live run, which the scripted model holds open with a
+  // blocking question once verification completed.
+  holdAfterVerification: true,
   defaultPort: AUTHORITY_DEFAULT_UI_PORT,
   originalContent: AUTHORITY_ORIGINAL_CONTENT,
   editedContent: AUTHORITY_EDITED_CONTENT,

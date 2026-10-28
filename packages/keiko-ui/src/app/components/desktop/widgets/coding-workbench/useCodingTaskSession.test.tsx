@@ -129,15 +129,18 @@ describe("coding task selection", () => {
     );
     await waitFor(() => expect(result.current.pending).toBe(false));
     expect(result.current.detail).toBeNull();
-    expect(reportClientDiagnostic).toHaveBeenCalledWith(
-      "[keiko] coding task history scope outcome",
-      expect.objectContaining({
+    // The operator switched repository and the scope did not change meanwhile: an ordinary
+    // transition on the routine info line, under the history read's own correlation, and no
+    // warn/unknown diagnostic (Keiko 1.3.1 stress test, F3).
+    expect(reportClientDiagnostic).toHaveBeenCalledExactlyOnceWith(
+      "[keiko] coding workbench interaction: history-repository-switched",
+      {
         correlationId: read.mock.calls[0]?.[1],
-        codingHistoryScope: expect.objectContaining({
-          reason: "repository-mismatch",
-          taskId: "chat-one",
-        }),
-      }),
+        codingWorkbenchInteraction: { interaction: "history-repository-switched" },
+      },
+    );
+    expect(vi.mocked(reportClientDiagnostic).mock.calls[0]?.[1]).not.toHaveProperty(
+      "codingHistoryScope",
     );
     expect(JSON.stringify(vi.mocked(reportClientDiagnostic).mock.calls)).not.toContain("/other");
   });

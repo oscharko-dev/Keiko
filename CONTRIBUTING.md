@@ -15,7 +15,7 @@ on one independently reviewable result; split unrelated changes so a failed expe
 reverted without undoing unrelated work. Use the existing gates to verify the actual changed
 behavior and report command, result, environment and limitations in the PR.
 
-Consult [Experience.md](Experience.md) for relevant repository traps and maintain a lesson only
+Consult [EXPERIENCE.md](EXPERIENCE.md) for relevant repository traps and maintain a lesson only
 when evidence changes it. Review follows the existing
 [review standards](docs/qa/review-standards.md) and
 [settlement rules](docs/qa/review-settlement.md). Risk determines investigation depth, never
@@ -49,9 +49,26 @@ remain truthful and cannot become a hidden prerequisite for an unsigned update.
 
 ### Activity Log runtime changes
 
+The deployment operator can set `KEIKO_CONTENT_REDACTION=off` before startup so Chat preserves
+authorized document context, answers and private chat history (#4098). The server resolves the
+setting once at startup and records `chat.content-policy.resolved` (`policy`, `setting`; `warn` for
+an unrecognized value, which keeps redaction). Only Chat model ports and the Chat connected-context
+workspace receive the preserving policy from it; the gateway, workspace and store never read the
+environment. Independently of the setting, the Coding Workbench sidecar route always gives the
+OpenCode runtime the model's answer under the preserving policy (credential floor only), because
+OpenCode is its own producer and uses the gateway as infrastructure; Coding repository search and
+Coding History exports and imports keep the default projection. Preserved content still loses
+configured infrastructure-secret literals, private keys, URL credentials, `Authorization` header
+values, encoded-looking Bearer/Basic values, JWT-shaped bearer tokens and known token shapes, and memory proposals keep the
+default projection. Diagnostics, audit evidence, support exports and
+tool-argument protections remain unconditional. The setting applies to every configured provider;
+it does not infer trust from a provider hostname. `chat.request.dispatch` records the per-call
+`contentRedactionEnabled` without source text. See
+[the operator procedure](docs/troubleshooting/chat-content-redaction.md).
+
 Source redaction uses the shared security owner to preserve language syntax while masking credential
-values, including escaped JSON/JSONC and YAML scalars. An unsafe or ambiguous projection, or an
-existing source-size limit, produces a body-free refusal; connected retrieval treats that source as
+values under the default content policy, including escaped JSON/JSONC and YAML scalars. An unsafe or
+ambiguous projection, or an existing source-size limit, produces a body-free refusal; connected retrieval treats that source as
 unavailable. EOF-only JSON prefixes and public, unquoted Java fragments retain their safe text
 projection under the documented guards (ADR-0022). Gateway
 and BFF streaming retain incomplete source/credential context and discard pending text on cancellation.
@@ -114,6 +131,15 @@ older is named for the transcript by position and never examined. `cutCount` cou
 messages cut to the per-message bound and `historyTruncated` says Coding History itself cut the
 task's messages: only those two leave text shown nowhere, so only they make the page say "Activity
 truncated.". Counts only — never a message, path or run name.
+
+`client.coding-workbench.interaction` records, at info and on the routine budget, what the human
+did on the Coding Workbench page (#3897): a disclosure opened or closed (`section`, `expanded`), the
+progress state (`progressState`), the agent picked (`build`, `plan` or `custom`, never a custom
+agent's name), a jump to a pending decision, a repository bound for trust (its two body-free ids)
+and a changeset received for review (`fileCount`). These were warn/unknown `client.diagnostic`
+notes before and buried the rare real browser failures. `gateway.setup.target.accepted` records,
+at info, that Gateway Setup accepted a loopback target (KEIKO-0884), with the request correlation
+and the closed `targetClass`; it is no longer an error-level `server.diagnostic.failure`.
 
 `gateway.conversation.admission` records the closed decision before a conversation model call,
 with admitted and current configuration generations and the request correlation. A fresh probe
@@ -578,9 +604,9 @@ previous line, the deltas that grew a live part (`liveDeltaCount`), the ones tha
 (`liveDroppedCount`), the parts whose complete text did not extend what was shown
 (`liveDivergedCount`) and the events folded into earlier history reads (`mergedEventCount`). The
 reasoning text never enters the Activity Log, a support export, run evidence or Coding History.
-Changeset-edit arguments reach the governed edit tool byte for byte (#4009): the gateway removes
-only the configured provider literals from them, never a heuristic secret shape; every other
-tool's arguments keep the full redaction. When a literal was removed,
+Arguments of the governed exact-content tools (`edit`, `write`, `patch`, `execute`, `shell`;
+#4009) reach the tool byte for byte: the gateway removes only the configured provider literals
+from them, never a heuristic secret shape; every other tool's arguments keep the full redaction. When a literal was removed,
 `gateway.tool-arguments.redacted` records the tool-call and changed-string counts at `warn`.
 A model answer that exhausted its output budget, or ended after reasoning, without a tool call or a
 final answer gets one steered repair from the gateway on a call that asks for it with the explicit

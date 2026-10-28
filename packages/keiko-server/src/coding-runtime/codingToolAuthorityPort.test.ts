@@ -646,6 +646,79 @@ describe("CodingToolAuthorityPort", () => {
       expect(resolveCapabilityForDelegation).not.toHaveBeenCalled();
     },
   );
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "hands %s research egress to the grant-gated research port under governed egress",
+    async (effectiveMode) => {
+      // #2387: below Full access a deployment opens research only through the `governed-egress`
+      // policy, whose single delegate asks the human for a request-line-bound grant and fails the
+      // call closed until that grant exists. Refusing it here left the ask unreachable, so research
+      // could never be approved in these modes. The envelope comes from the production mints.
+      const envelope = restrictedEnvelope({
+        effectiveMode,
+        actionClasses: codingRuntimeActionClassesForMode(effectiveMode, true),
+        connectorScopes: codingRuntimeConnectorScopesForMode(effectiveMode),
+        networkPolicy: codingRuntimeNetworkPolicyForMode(effectiveMode, true),
+      });
+      const authority = {
+        revalidateCapabilityForMutation: vi.fn(() => ({ ok: true as const, envelope })),
+        resolveCapabilityForDelegation: vi.fn(() => ({ ok: true as const, envelope })),
+      };
+      const log = createBufferedServerLogSink();
+      const egress = vi.fn(() => Promise.resolve({ status: "failed" as const }));
+      const runtime = createRuntimeCodingToolFacade(
+        authority,
+        () => ({ ...runtimeContext(), correlationId: "research-ask" }),
+        { ...governedPorts(), egressAuthority: { execute: egress } },
+        { catalogActivityLog: log, disableCatalogBridge: true },
+      );
+
+      await expect(
+        runtime.execute({
+          capability: "capability",
+          body: JSON.stringify({
+            action: "egress",
+            actionId: "research-ask",
+            idempotencyKey: "research-ask",
+            target: "https://docs.example.org/guide",
+          }),
+        }),
+      ).resolves.toMatchObject({ status: "failed" });
+
+      expect(egress).toHaveBeenCalledTimes(1);
+      expect(log.events.map((event) => event.op)).not.toContain(
+        "coding-runtime.tool-authority.denied",
+      );
+    },
+  );
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "keeps %s egress denied when the deployment did not open governed research",
+    (effectiveMode) => {
+      const envelope = restrictedEnvelope({
+        effectiveMode,
+        actionClasses: [...codingRuntimeActionClassesForMode(effectiveMode, true)],
+        connectorScopes: codingRuntimeConnectorScopesForMode(effectiveMode),
+        networkPolicy: codingRuntimeNetworkPolicyForMode(effectiveMode, false),
+      });
+      const resolveCapabilityForDelegation = vi.fn(() => ({ ok: true as const, envelope }));
+      const port = createCodingToolAuthorityPort(
+        {
+          resolveCapabilityForDelegation,
+          revalidateCapabilityForMutation: vi.fn(() => ({ ok: true as const, envelope })),
+        },
+        runtimeContext,
+      );
+
+      expect(
+        port.admit("capability", {
+          action: "egress",
+          actionId: "research-without-policy",
+          idempotencyKey: "research-without-policy",
+          target: "https://docs.example.org/guide",
+        }),
+      ).toEqual({ ok: false, reason: "action-not-authorized" });
+      expect(resolveCapabilityForDelegation).not.toHaveBeenCalled();
+    },
+  );
   it("emits body-free denial evidence when narrowed internet effects reach the facade", async () => {
     const envelope = restrictedEnvelope({ effectiveMode: "governed-assist" });
     const authority = {

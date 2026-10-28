@@ -15,9 +15,10 @@ import type {
   GatewayNativeToolAdvertisement,
   GatewayToolCatalogAdvertisement,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
-import type {
-  CatalogDigest,
-  CompiledCatalogTool,
+import {
+  CHANGESET_EDIT_ARGUMENT_LIMITS,
+  type CatalogDigest,
+  type CompiledCatalogTool,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ToolHandlerReadiness } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-lifecycle";
 import { CODING_RUNTIME_GIT_MAX_PATHS } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
@@ -193,11 +194,15 @@ const CHANGESET_EDIT_SCHEMA = {
               file: CHANGESET_PATH_SCHEMA,
               oldString: {
                 type: "string",
-                maxLength: 65_536,
+                maxLength: CHANGESET_EDIT_ARGUMENT_LIMITS.maxStringBytes,
                 description:
                   "Exact current text to replace, copied byte for byte from the latest keiko_workspace_read. Empty only to create a new file.",
               },
-              newString: { type: "string", maxLength: 65_536, description: "Replacement text." },
+              newString: {
+                type: "string",
+                maxLength: CHANGESET_EDIT_ARGUMENT_LIMITS.maxStringBytes,
+                description: "Replacement text.",
+              },
               replaceAll: {
                 type: "boolean",
                 description: "Replace every occurrence instead of exactly one.",

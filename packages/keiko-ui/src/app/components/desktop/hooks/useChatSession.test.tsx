@@ -2271,6 +2271,31 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
     expect(askGrounded).not.toHaveBeenCalled();
   });
 
+  // The grounded route answers from a connected folder or a Knowledge Pod and refuses a chat whose
+  // only scope is a Git change (`grounding-mode-changed`); a Git-change turn is admitted and
+  // answered by the ordinary Chat route. Selecting the grounded route for it failed every send.
+  it("sends a Git-change-only chat through the ordinary Chat route with its scope identity", async () => {
+    const { result } = await setupGroundedSession([], {
+      connectedScopes: [],
+      gitChangeScopes: [gitChangeScope()],
+      groundingScopeIdentity: `gsi-v1:${"c".repeat(64)}`,
+    });
+    vi.mocked(sendDesktopChatStream).mockRejectedValueOnce(
+      new ApiError("GROUNDING_SCOPE_CHANGED", "Scope changed.", 409),
+    );
+
+    await act(async () => {
+      await result.current.sendMessage({ text: "Refine the pull request description." });
+    });
+
+    expect(askGrounded).not.toHaveBeenCalled();
+    expect(sendDesktopChatStream).toHaveBeenCalledOnce();
+    expect(vi.mocked(sendDesktopChatStream).mock.calls[0]?.[0]).toMatchObject({
+      chatId: "chat-grounded",
+      expectedGroundingScopeIdentity: `gsi-v1:${"c".repeat(64)}`,
+    });
+  });
+
   it.each([
     { live: false, code: "GROUNDING_SCOPE_CHANGED" },
     { live: true, code: "GROUNDING_SCOPE_CHANGED" },

@@ -25,6 +25,7 @@ import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { GitDeliveryExecutionResult } from "@oscharko-dev/keiko-contracts";
 import { GIT_DELIVERY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import type { GitPullRequestIdentity } from "@oscharko-dev/keiko-contracts/runtime/git-pull-request";
+import { PR_DESCRIPTION_ATTRIBUTION } from "@oscharko-dev/keiko-contracts/runtime/pr-description-region";
 import {
   buildPrConvertDraftGraphqlArgv,
   buildPrCreateArgv,
@@ -637,10 +638,39 @@ async function inspectRemote<T>(
 }
 
 /** Whether the default output scrub -- the very set `runCommand` applies -- would alter this
- * content-bearing text. */
+ * content-bearing text. A parent env value discloses nothing where every occurrence lies inside
+ * Keiko's own compiled-in attribution, which is public source: a GitHub-hosted runner's repository
+ * slug and server URL made every description Keiko had written an altered read (PR #4095). Any
+ * other occurrence, including one that straddles the attribution, keeps the fail-closed default. */
 function contentScrubAlters(ctx: RunContext, text: string): boolean {
   const { processEnv, policy } = ctx.runDeps;
-  return redact(text, defaultOutputScrubSecrets(processEnv, policy)) !== text;
+  const attributions = occurrenceStarts(text, PR_DESCRIPTION_ATTRIBUTION);
+  const secrets = defaultOutputScrubSecrets(processEnv, policy).filter(
+    (value) => !onlyInsideAttribution(text, value, attributions),
+  );
+  return redact(text, secrets) !== text;
+}
+
+function occurrenceStarts(text: string, value: string): readonly number[] {
+  const starts: number[] = [];
+  if (value.length === 0) return starts;
+  for (let at = text.indexOf(value); at !== -1; at = text.indexOf(value, at + 1)) starts.push(at);
+  return starts;
+}
+
+// Overlapping occurrences count too: one outside the attribution is enough to keep the value.
+function onlyInsideAttribution(
+  text: string,
+  value: string,
+  attributions: readonly number[],
+): boolean {
+  const length = PR_DESCRIPTION_ATTRIBUTION.length;
+  return (
+    value.length > 0 &&
+    occurrenceStarts(text, value).every((at) =>
+      attributions.some((start) => start <= at && at + value.length <= start + length),
+    )
+  );
 }
 
 function bodyAdapter(ctx: RunContext): GitPullRequestBodyAdapter {

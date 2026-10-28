@@ -889,6 +889,8 @@ function readEventChunk(
     typeof idleTimeoutMs === "number" && Number.isSafeInteger(idleTimeoutMs) && idleTimeoutMs > 0
       ? idleTimeoutMs
       : DEFAULT_EVENT_IDLE_TIMEOUT_MS;
+  // An abort that fired between two pulls has no listener to hear it: wait for nothing more.
+  if (signal?.aborted === true) return Promise.reject(new Error("opencode-event-aborted"));
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       reject(new Error("opencode-event-idle"));

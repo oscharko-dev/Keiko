@@ -12,12 +12,13 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { IncomingMessage } from "node:http";
-import { PassThrough } from "node:stream";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { PassThrough, Writable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   Gateway,
   ProviderError,
+  ProviderResponseInvalidError,
   ResponseRedactionError,
   resolveCodingSafeSidecarGatewayProfile,
   type GatewayCallRequest,
@@ -74,7 +75,14 @@ import {
   admissiblePromptTokens,
   admittedOutputTokens,
 } from "./coding-sidecar-gateway.js";
-import { mockRequest, mockResponse, probeVerifiedGatewayConfig } from "./_support.js";
+import {
+  mockRequest,
+  mockResponse,
+  probeVerifiedGatewayConfig,
+  type MockResponse,
+  type MockResponseOptions,
+} from "./_support.js";
+import { SSE_STALLED_READER_TIMEOUT_MS } from "./sse-write.js";
 import {
   createOpenCodeGatewayToolCatalogAdvertisement,
   OPENCODE_MODEL_VISIBLE_TOOL_NAMES,
@@ -295,6 +303,44 @@ function runtimeGatewayDeps(
   } as unknown as UiHandlerDeps;
 }
 
+// A response whose reader takes the first `acceptedWrites` frames and then falls behind: every later
+// `write` returns false and `writableNeedDrain` holds (the frames are still queued, as Node queues
+// them) until `drain()` — the reader catching up — and the response cannot finish before then.
+function stalledReaderResponse(
+  options: MockResponseOptions & { readonly acceptedWrites?: number } = {},
+): MockResponse & { readonly drain: () => void } {
+  const response = mockResponse(options);
+  const res = response.res;
+  const stream = res as unknown as PassThrough;
+  const write = (chunk: string): boolean => PassThrough.prototype.write.call(stream, chunk, "utf8");
+  const finished = (): boolean => Reflect.get(Writable.prototype, "writableFinished", stream);
+  let accepted = 0;
+  let needDrain = false;
+  let drained = false;
+  res.write = ((chunk: string): boolean => {
+    write(chunk);
+    if (drained || accepted < (options.acceptedWrites ?? 0)) {
+      accepted += 1;
+      return true;
+    }
+    needDrain = true;
+    return false;
+  }) as ServerResponse["write"];
+  Object.defineProperty(res, "writableNeedDrain", { configurable: true, get: () => needDrain });
+  Object.defineProperty(res, "writableFinished", {
+    configurable: true,
+    get: () => !needDrain && finished(),
+  });
+  return {
+    ...response,
+    drain: (): void => {
+      drained = true;
+      needDrain = false;
+      res.emit("drain");
+    },
+  };
+}
+
 function authenticatedContext(body: unknown, origin?: string): RouteContext {
   const rawBody = typeof body === "string" ? body : JSON.stringify(body);
   const response = mockResponse({ captureBody: true });
@@ -490,6 +536,46 @@ describe("coding-sidecar gateway", () => {
       // #3873 review: the call also carries the observer through which the route surfaces the
       // gateway's retries to the run status; the default factories keep it.
       expect(captured[0]?.retryObserver).toBeTypeOf("function");
+    } finally {
+      chat.mockRestore();
+      chatStream.mockRestore();
+      resetGatewayInstanceCacheForTests();
+    }
+  });
+
+  // #4098 (owner decision): OpenCode receives the model's answer as written, credential floor only,
+  // whatever the deployment's Chat content policy, so a quoted diff no longer becomes `[REDACTED]`.
+  it.each([
+    { label: "buffered, Chat opted out", stream: false, policy: "preserve" as const },
+    { label: "streamed, Chat opted out", stream: true, policy: "preserve" as const },
+    { label: "buffered, default", stream: false, policy: undefined },
+    { label: "streamed, default", stream: true, policy: undefined },
+  ])("preserves the answer of a $label coding turn", async ({ stream, policy }) => {
+    resetGatewayInstanceCacheForTests();
+    const captured: GatewayCallRequest[] = [];
+    const chat = vi.spyOn(Gateway.prototype, "chat").mockImplementation((request) => {
+      captured.push(request);
+      return Promise.resolve(assistantResponse("azure-coding-model"));
+    });
+    const chatStream = vi.spyOn(Gateway.prototype, "chatStream").mockImplementation((request) => {
+      captured.push(request);
+      return streamedResponse(assistantResponse("azure-coding-model"));
+    });
+    try {
+      const deps = depsValue(configValue(provider(), capability()));
+      await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "azure-coding-model",
+          stream,
+          messages: [{ role: "user", content: "continue" }],
+          tools: [],
+        }),
+        policy === undefined ? deps : { ...deps, contentRedaction: policy },
+      );
+
+      expect(captured).toHaveLength(1);
+      expect(captured[0]?.contentRedaction).toBe("preserve");
+      expect(captured[0]).toMatchObject({ latencyProfile: "coding-workbench" });
     } finally {
       chat.mockRestore();
       chatStream.mockRestore();
@@ -1072,7 +1158,8 @@ describe("coding-sidecar gateway", () => {
       // the producer with projectedGatewaySchema; a schema change here is deliberate, never typed).
       // Discovery now requires explicit mode/directory; its pin comes from the actual captured
       // OpenCode request fixture, with the canonical trust check below still exercised.
-      ["keiko_changeset_edit", "a88e907c1c4f7f955dccfa4d960e10f315a59a1f94b16cedc223f2a47bf4abf6"],
+      // 2026-10-28: the edit strings' maxLength follows the 8 MiB changeset cap (owner decision).
+      ["keiko_changeset_edit", "e22472d477c4bafd0e04282d09baee185286dad3d984394740c681c7f8477a4e"],
       ["keiko_child_agent", "370bb0f282b4b848f08ce4a780ceb45d4959c150839d71025c32b54de4c87773"],
       ["keiko_ci_status", "0c55bc6340d0d7f1622c529153d24ccae35be81da319b5369c49385aa3aba58e"],
       ["keiko_git_commit", "21f595f8c387e9f705c4146ee99d3d0acbb5d69b460834ae114b400c0372a6bf"],
@@ -2189,17 +2276,16 @@ describe("coding-sidecar gateway", () => {
     ).toMatchObject({ source: "output-byte-estimate" });
   });
 
-  // #3602 review: a buffered stream whose opening frame the client will not take (the shared SSE
-  // path kills the stream) must not start a provider call for an answer nobody can receive — the
-  // same early exit `beginGatewayStream` gives the streamed path.
-  it("starts no provider call when the buffered stream's opening frame cannot be delivered", async () => {
+  // #3602 review: a buffered stream whose client is already gone must not start a provider call for
+  // an answer nobody can receive — the same early exit `beginGatewayStream` gives the streamed path.
+  // A merely slow reader is not "gone": `res.write()` returning false is flow control (see below).
+  it("starts no provider call when the client left before the buffered stream's opening frame", async () => {
     const sink = captureServerLog("info");
-    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
     const chat = vi.fn((): Promise<NormalizedResponse> =>
       Promise.resolve(assistantResponse("azure-coding-model")),
     );
     const response = mockResponse({ captureBody: true });
-    response.res.write = vi.fn(() => false);
+    response.res.destroy();
     const context: RouteContext = {
       ...authenticatedContext({
         model: "coding",
@@ -2209,16 +2295,15 @@ describe("coding-sidecar gateway", () => {
       }),
       res: response.res,
     };
-
     const settlePromptTokens = vi.fn(
       (_capability: string, _reserved: number, _actual: number): unknown => ({ ok: true }),
     );
+
     const result = await handleCodingSidecarGatewayChatCompletions(context, {
       ...runtimeGatewayDeps(
         () => ({ ok: true, binding: { runId: "run-undeliverable" } }),
         () => chat,
       ),
-      diagnostics,
       runtimeCapabilityAuthenticator: {
         authenticate: () => ({ ok: true, binding: { runId: "run-undeliverable" } }),
         reservePromptTokens: () => ({ ok: true, runId: "run-undeliverable" }),
@@ -2228,18 +2313,8 @@ describe("coding-sidecar gateway", () => {
 
     expect(result).toBe(STREAMING);
     expect(chat).not.toHaveBeenCalled();
-    expect(response.res.destroyed).toBe(true);
-    const outcome = sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome");
-    expect(outcome?.extra).toMatchObject({
-      runId: "run-undeliverable",
-      outcome: "cancelled",
-      cancellationCause: "backpressure-killed",
-      completionTokens: 0,
-      outputBytes: 0,
-    });
     // No provider call ran, so the reservation goes back to the run's budget in full (actual usage
-    // 0, never the conservative estimate a dispatched-but-unobserved call keeps), and the usage
-    // line records the release.
+    // 0, never the conservative estimate a dispatched-but-unobserved call keeps).
     expect(settlePromptTokens).toHaveBeenCalledOnce();
     const [, reserved, actual] = settlePromptTokens.mock.calls[0] ?? [];
     expect(reserved).toBeGreaterThan(0);
@@ -2254,20 +2329,67 @@ describe("coding-sidecar gateway", () => {
       completionTokens: 0,
       outputBytes: 0,
     });
-    // One id joins the outcome line, the backpressure diagnostic and the stream's terminal line —
-    // for a context without a correlation id the sanctioned fallback on all three, never a fresh
-    // mint on one of them.
-    expect(outcome?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
-    expect(diagnostics.record).toHaveBeenCalledWith(
-      expect.objectContaining({
-        errorClass: "SseBackpressureKill",
-        correlationId: UNKNOWN_CORRELATION_ID,
-      }),
-    );
-    // The terminal line arrives on the response's `close`, a tick after destroy; the sink may also
-    // hold a late close from an earlier test's response, so the join is asserted on this stream's
-    // own reason and id rather than on whichever terminal line comes first.
-    await vi.waitFor(() => {
+  });
+
+  // 2026-10-28 stability blocker: Node answers `false` for every write of 64 KiB or more, even to an
+  // idle loopback reader, so a false write is flow control. The buffered turn keeps running; only a
+  // reader that drains nothing within the shared stalled-reader bound is torn down, and that teardown
+  // still cancels the provider call, names the kill and joins its evidence under one id.
+  it("cancels the buffered provider call only when the reader stalls past the shared bound", async () => {
+    vi.useFakeTimers();
+    try {
+      const sink = captureServerLog("info");
+      const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+      const chat = vi.fn(
+        (request: GatewayRequest): Promise<NormalizedResponse> =>
+          new Promise((_resolve, reject) => {
+            request.cancellationSignal?.addEventListener("abort", () => {
+              reject(new DOMException("aborted", "AbortError"));
+            });
+          }),
+      );
+      const response = stalledReaderResponse();
+      const context: RouteContext = {
+        ...authenticatedContext({
+          model: "coding",
+          stream: true,
+          messages: [{ role: "user", content: "slow reader" }],
+          tools: modelVisibleTools(),
+        }),
+        res: response.res,
+      };
+
+      const pending = handleCodingSidecarGatewayChatCompletions(context, {
+        ...runtimeGatewayDeps(
+          () => ({ ok: true, binding: { runId: "run-stalled" } }),
+          () => chat,
+        ),
+        diagnostics,
+      });
+      await vi.advanceTimersByTimeAsync(SSE_STALLED_READER_TIMEOUT_MS - 1);
+      expect(chat).toHaveBeenCalledOnce();
+      expect(response.res.destroyed).toBe(false);
+      expect(diagnostics.record).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await pending).toBe(STREAMING);
+      expect(response.res.destroyed).toBe(true);
+      const outcome = sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome");
+      expect(outcome?.extra).toMatchObject({
+        runId: "run-stalled",
+        outcome: "cancelled",
+        cancellationCause: "backpressure-killed",
+      });
+      // One id joins the outcome line, the backpressure diagnostic and the stream's terminal line —
+      // for a context without a correlation id the sanctioned fallback on all three.
+      expect(outcome?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+      expect(diagnostics.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          errorClass: "SseBackpressureKill",
+          correlationId: UNKNOWN_CORRELATION_ID,
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
       const closed = sink.events
         .filter((event) => event.op === "sse.stream.closed")
         .map((event) => ({ correlationId: event.correlationId, ...event.extra }));
@@ -2277,12 +2399,46 @@ describe("coding-sidecar gateway", () => {
           reason: "backpressure-killed",
         }),
       );
-    });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("delivers the buffered answer to a reader that drains after a false write", async () => {
+    const chat = vi.fn((): Promise<NormalizedResponse> =>
+      Promise.resolve(assistantResponse("azure-coding-model")),
+    );
+    const response = stalledReaderResponse({ captureBody: true });
+    const context: RouteContext = {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "late drain" }],
+        tools: modelVisibleTools(),
+      }),
+      res: response.res,
+    };
+
+    const pending = handleCodingSidecarGatewayChatCompletions(
+      context,
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-late-drain" } }),
+        () => chat,
+      ),
+    );
+    response.drain();
+
+    expect(await pending).toBe(STREAMING);
+    expect(chat).toHaveBeenCalledOnce();
+    expect(response.res.destroyed).toBe(false);
+    expect(response.body()).toContain('"finish_reason":"stop"');
+    expect(response.body()).toContain("data: [DONE]");
   });
 
   // The streamed counterpart: the gateway's stream is an async generator that dispatches on its
-  // first pull, and a failed handshake comes before that pull, so the reservation is released too.
-  it("releases the prompt reservation when the streamed handshake cannot be delivered", async () => {
+  // first pull, and a handshake to a client that is already gone comes before that pull, so the
+  // reservation is released too.
+  it("releases the prompt reservation when the client left before the streamed handshake", async () => {
     const sink = captureServerLog("info");
     let pulls = 0;
     const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
@@ -2291,7 +2447,7 @@ describe("coding-sidecar gateway", () => {
       yield { type: "delta", token: "never" };
     };
     const response = mockResponse({ captureBody: true });
-    response.res.write = vi.fn(() => false);
+    response.res.destroy();
     const context: RouteContext = {
       ...authenticatedContext({
         model: "coding",
@@ -2323,18 +2479,13 @@ describe("coding-sidecar gateway", () => {
 
     expect(result).toBe(STREAMING);
     expect(pulls).toBe(0);
-    expect(response.res.destroyed).toBe(true);
     expect(settlePromptTokens).toHaveBeenCalledOnce();
     const [, reserved, actual] = settlePromptTokens.mock.calls[0] ?? [];
     expect(reserved).toBeGreaterThan(0);
     expect(actual).toBe(0);
     expect(
       sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome")?.extra,
-    ).toMatchObject({
-      runId: "run-stream-undeliverable",
-      outcome: "cancelled",
-      cancellationCause: "backpressure-killed",
-    });
+    ).toMatchObject({ runId: "run-stream-undeliverable", outcome: "cancelled" });
     expect(
       sink.events.find((event) => event.op === "coding-sidecar.gateway.usage-settled")?.extra,
     ).toMatchObject({
@@ -2787,6 +2938,92 @@ describe("coding-sidecar gateway", () => {
     }
   });
 
+  // The output guard judges bytes only as a runaway backstop (8 bytes per allowed token): an answer
+  // inside its token budget is never cut for being denser than a 4-bytes-per-token estimate.
+  describe("output budget guard", () => {
+    const MAX_TOKENS = 10;
+
+    async function bufferedStatus(content: string, completionTokens: number): Promise<number> {
+      const base = assistantResponse("azure-coding-model");
+      const response: NormalizedResponse = {
+        ...base,
+        content,
+        usage: { ...base.usage, completionTokens },
+      };
+      const deps = {
+        ...runtimeGatewayDeps(
+          () => ({ ok: true, binding: { runId: "run-budget" } }),
+          (): (() => Promise<NormalizedResponse>) => (): Promise<NormalizedResponse> =>
+            Promise.resolve(response),
+        ),
+        config: configValue(provider(), capability({ maxOutputTokens: MAX_TOKENS })),
+      } as UiHandlerDeps;
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "coding",
+          messages: [{ role: "user", content: "budget" }],
+          tools: modelVisibleTools(),
+        }),
+        deps,
+      );
+      return (result as { readonly status: number }).status;
+    }
+
+    it("keeps a buffered answer within its provider-reported token budget at 6 bytes per token", async () => {
+      await expect(bufferedStatus("x".repeat(60), MAX_TOKENS)).resolves.toBe(200);
+    });
+
+    it("still rejects a buffered answer whose provider-reported tokens exceed the budget", async () => {
+      await expect(bufferedStatus("x".repeat(20), MAX_TOKENS + 1)).resolves.toBe(503);
+    });
+
+    it("still rejects a buffered answer past the runaway backstop, whatever the provider reports", async () => {
+      await expect(bufferedStatus("x".repeat(200), 5)).resolves.toBe(503);
+    });
+
+    it("does not cut a streamed answer that stays within its token budget", async () => {
+      const base = assistantResponse("azure-coding-model");
+      const text = "x".repeat(30);
+      const final: NormalizedResponse = {
+        ...base,
+        content: text + text,
+        usage: { ...base.usage, completionTokens: MAX_TOKENS },
+      };
+      const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
+        await Promise.resolve();
+        yield { type: "delta", token: text };
+        yield { type: "delta", token: text };
+        yield { type: "done", response: final };
+      };
+      const response = mockResponse({ captureBody: true });
+      const context: RouteContext = {
+        ...authenticatedContext({
+          model: "coding",
+          stream: true,
+          messages: [{ role: "user", content: "dense stream" }],
+          tools: modelVisibleTools(),
+        }),
+        res: response.res,
+      };
+      const deps = {
+        ...runtimeGatewayDeps(
+          () => ({ ok: true, binding: { runId: "run-budget-stream" } }),
+          undefined,
+          createOpenCodeGatewayReadinessRegistry(),
+          (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+            stream(),
+        ),
+        config: configValue(provider(), capability({ maxOutputTokens: MAX_TOKENS })),
+      } as UiHandlerDeps;
+      await expect(handleCodingSidecarGatewayChatCompletions(context, deps)).resolves.toBe(
+        STREAMING,
+      );
+      expect(response.body().split(text).length - 1).toBe(2);
+      expect(response.body()).toContain('"finish_reason":"stop"');
+      expect(response.body()).not.toContain('"finish_reason":"length"');
+    });
+  });
+
   it("uses the injected gateway stream, bounds cumulative output, and returns it on overflow", async () => {
     let returned = false;
     const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
@@ -3191,66 +3428,267 @@ describe("coding-sidecar gateway", () => {
         cancellationCause: "route-deadline",
         deadlineMs: routeDeadlineMs,
       });
+      // The runtime is still connected after the backstop fires: the response must end with the
+      // error finish the buffered path writes, not linger open until the runtime's own timeout.
+      expect(response.res.writableEnded).toBe(true);
+      expect(response.body()).toContain('"finish_reason":"error"');
+      expect(response.body()).toContain("data: [DONE]");
     } finally {
       timeoutSpy.mockRestore();
     }
   });
 
-  it("cancels the provider iterator when the streaming response applies backpressure", async () => {
+  it("ends a streamed response with an error finish when the run is stopped mid-stream", async () => {
     const sink = captureServerLog("info");
-    let pulls = 0;
-    let returned = false;
-    const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
-      try {
-        await Promise.resolve();
-        pulls += 1;
-        yield { type: "delta", token: "first" };
-        pulls += 1;
-        yield { type: "delta", token: "must-not-be-pulled" };
-      } finally {
-        returned = true;
-      }
+    const run = new AbortController();
+    const stalled = async function* (request: GatewayRequest): AsyncGenerator<GatewayStreamChunk> {
+      await new Promise<void>((resolve) => {
+        request.cancellationSignal?.addEventListener(
+          "abort",
+          () => {
+            resolve();
+          },
+          { once: true },
+        );
+      });
+      yield* [] as GatewayStreamChunk[];
     };
     const response = mockResponse({ captureBody: true });
-    let writes = 0;
-    response.res.write = vi.fn(() => {
-      writes += 1;
-      return writes === 1;
-    });
     const context: RouteContext = {
       ...authenticatedContext({
         model: "coding",
         stream: true,
-        messages: [{ role: "user", content: "stream slowly" }],
+        messages: [{ role: "user", content: "stop me" }],
+        tools: modelVisibleTools(),
+      }),
+      res: response.res,
+    };
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-stream-stop" } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): ((request: GatewayRequest) => AsyncIterable<GatewayStreamChunk>) =>
+          (request: GatewayRequest): AsyncIterable<GatewayStreamChunk> =>
+            stalled(request),
+      ),
+      codingSidecarGatewayCancellationRegistry: { signalFor: () => run.signal },
+    } as unknown as UiHandlerDeps;
+
+    const pending = handleCodingSidecarGatewayChatCompletions(context, deps);
+    await vi.waitFor((): void => {
+      expect(response.body()).toContain('"role":"assistant"');
+    });
+    run.abort();
+    await expect(pending).resolves.toBe(STREAMING);
+    await vi.waitFor((): void => {
+      expect(response.res.writableEnded).toBe(true);
+    });
+    expect(response.body()).toContain('"finish_reason":"error"');
+    expect(response.body()).toContain("data: [DONE]");
+    const outcome = sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome");
+    expect(outcome?.extra).toMatchObject({
+      outcome: "cancelled",
+      cancellationCause: "run-stopped",
+    });
+  });
+
+  it("writes no failure diagnostic for a user stop or a client abort, but keeps real failures", async () => {
+    for (const cancellation of ["response-close", "run-stop"] as const) {
+      for (const streamed of [false, true]) {
+        const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+        const run = new AbortController();
+        const abortable = (request: GatewayRequest): Promise<never> =>
+          new Promise((_resolve, reject) => {
+            request.cancellationSignal?.addEventListener(
+              "abort",
+              () => {
+                reject(new CancelledError("request cancelled"));
+              },
+              { once: true },
+            );
+          });
+        const abortableStream = (request: GatewayRequest): AsyncIterable<GatewayStreamChunk> => ({
+          [Symbol.asyncIterator]: (): AsyncIterator<GatewayStreamChunk> => ({
+            next: (): Promise<IteratorResult<GatewayStreamChunk>> => abortable(request),
+            return: (): Promise<IteratorResult<GatewayStreamChunk>> =>
+              Promise.resolve({ done: true, value: undefined }),
+          }),
+        });
+        const response = mockResponse({ captureBody: true });
+        const context: RouteContext = {
+          ...authenticatedContext({
+            model: "coding",
+            ...(streamed ? { stream: true } : {}),
+            messages: [{ role: "user", content: "cancel" }],
+            tools: modelVisibleTools(),
+          }),
+          res: response.res,
+        };
+        const deps = {
+          ...runtimeGatewayDeps(
+            () => ({ ok: true, binding: { runId: "run-cancel-diagnostic" } }),
+            () => abortable,
+            createOpenCodeGatewayReadinessRegistry(),
+            (): ((request: GatewayRequest) => AsyncIterable<GatewayStreamChunk>) => abortableStream,
+          ),
+          diagnostics,
+          codingSidecarGatewayCancellationRegistry: { signalFor: () => run.signal },
+        } as unknown as UiHandlerDeps;
+
+        const pending = handleCodingSidecarGatewayChatCompletions(context, deps);
+        await new Promise<void>((resolve) => setTimeout(resolve, 20));
+        if (cancellation === "response-close") context.res.emit("close");
+        else run.abort();
+        await pending;
+        await new Promise<void>((resolve) => setTimeout(resolve, 20));
+        const failures = diagnostics.record.mock.calls
+          .map(([record]) => record)
+          .filter((record) => record.source.startsWith("coding-sidecar-gateway."));
+        expect(failures, `${cancellation} streamed=${String(streamed)}`).toEqual([]);
+      }
+    }
+  });
+
+  it("keeps a genuine mid-stream provider failure as a failure diagnostic", async () => {
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+    const failing = (): AsyncIterable<GatewayStreamChunk> => ({
+      [Symbol.asyncIterator]: (): AsyncIterator<GatewayStreamChunk> => ({
+        next: (): Promise<IteratorResult<GatewayStreamChunk>> =>
+          Promise.reject(new TransportError("connection reset")),
+      }),
+    });
+    const response = mockResponse({ captureBody: true });
+    const context: RouteContext = {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "fail" }],
+        tools: modelVisibleTools(),
+      }),
+      res: response.res,
+    };
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-real-failure" } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) => failing,
+      ),
+      diagnostics,
+    } as unknown as UiHandlerDeps;
+    await handleCodingSidecarGatewayChatCompletions(context, deps);
+    await vi.waitFor((): void => {
+      expect(
+        diagnostics.record.mock.calls.some(
+          ([record]) => record.source === "coding-sidecar-gateway.stream",
+        ),
+      ).toBe(true);
+    });
+  });
+
+  // 2026-10-28 stability blocker: the producer pulls the provider no faster than the runtime reads.
+  // A reader that is behind pauses the iterator instead of being killed; only a reader that drains
+  // nothing within the shared stalled-reader bound loses the stream, and that teardown cancels the
+  // provider iterator and names the kill rather than a disconnect the client never made.
+  it("pauses the provider iterator for a reader that is behind and cancels it once the reader stalls", async () => {
+    vi.useFakeTimers();
+    try {
+      const sink = captureServerLog("info");
+      let pulls = 0;
+      let returned = false;
+      const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
+        try {
+          await Promise.resolve();
+          pulls += 1;
+          yield { type: "delta", token: "first" };
+          pulls += 1;
+          yield { type: "delta", token: "must-not-be-pulled" };
+        } finally {
+          returned = true;
+        }
+      };
+      const response = stalledReaderResponse({ captureBody: true, acceptedWrites: 1 });
+      const context: RouteContext = {
+        ...authenticatedContext({
+          model: "coding",
+          stream: true,
+          messages: [{ role: "user", content: "stream slowly" }],
+          tools: modelVisibleTools(),
+        }),
+        res: response.res,
+      };
+
+      const pending = handleCodingSidecarGatewayChatCompletions(
+        context,
+        runtimeGatewayDeps(
+          () => ({ ok: true, binding: { runId: "run-backpressure" } }),
+          undefined,
+          createOpenCodeGatewayReadinessRegistry(),
+          (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+            stream(),
+        ),
+      );
+      await vi.advanceTimersByTimeAsync(SSE_STALLED_READER_TIMEOUT_MS - 1);
+      expect(pulls).toBe(1);
+      expect(returned).toBe(false);
+      expect(response.res.destroyed).toBe(false);
+      expect(response.body()).toContain('"content":"first"');
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await pending).toBe(STREAMING);
+      expect(returned).toBe(true);
+      expect(pulls).toBe(1);
+      expect(response.res.destroyed).toBe(true);
+      const outcome = sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome");
+      expect(outcome?.extra).toMatchObject({
+        runId: "run-backpressure",
+        outcome: "cancelled",
+        cancellationCause: "backpressure-killed",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resumes the provider iterator when the reader drains", async () => {
+    const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
+      await Promise.resolve();
+      yield { type: "delta", token: "first" };
+      yield { type: "delta", token: "second" };
+      yield { type: "done", response: assistantResponse("azure-coding-model") };
+    };
+    const response = stalledReaderResponse({ captureBody: true, acceptedWrites: 1 });
+    const context: RouteContext = {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "drain later" }],
         tools: modelVisibleTools(),
       }),
       res: response.res,
     };
 
-    const result = await handleCodingSidecarGatewayChatCompletions(
+    const pending = handleCodingSidecarGatewayChatCompletions(
       context,
       runtimeGatewayDeps(
-        () => ({ ok: true, binding: { runId: "run-backpressure" } }),
+        () => ({ ok: true, binding: { runId: "run-drained" } }),
         undefined,
         createOpenCodeGatewayReadinessRegistry(),
         (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
           stream(),
       ),
     );
-
-    expect(result).toBe(STREAMING);
-    expect(returned).toBe(true);
-    expect(pulls).toBe(1);
-    expect(response.res.destroyed).toBe(true);
-    // #3602 review: the frames go through the shared protective SSE path, so a client that stops
-    // draining is killed the way every other SSE route kills it, and the outcome line names the
-    // kill rather than a disconnect the client never made.
-    const outcome = sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome");
-    expect(outcome?.extra).toMatchObject({
-      runId: "run-backpressure",
-      outcome: "cancelled",
-      cancellationCause: "backpressure-killed",
+    await vi.waitFor(() => {
+      expect(response.body()).toContain('"content":"first"');
     });
+    expect(response.body()).not.toContain('"content":"second"');
+    response.drain();
+
+    expect(await pending).toBe(STREAMING);
+    expect(response.res.destroyed).toBe(false);
+    expect(response.body()).toContain('"content":"second"');
+    expect(response.body()).toContain("data: [DONE]");
   });
 
   it.each(["empty", "partial"] as const)(
@@ -3317,7 +3755,10 @@ describe("coding-sidecar gateway", () => {
     },
   );
 
-  it("destroys the response when the terminal tool-call frame hits backpressure", async () => {
+  // 2026-10-28 stability blocker: a terminal tool call larger than Node's high-water mark used to be
+  // destroyed mid-frame. It is queued whole for a reader that is behind, the response ends, and the
+  // finished provider stream is released at once.
+  it("queues the whole terminal tool call for a reader that is behind and ends the response", async () => {
     let returned = false;
     const toolResponse: NormalizedResponse = {
       ...assistantResponse("azure-coding-model"),
@@ -3332,12 +3773,8 @@ describe("coding-sidecar gateway", () => {
         returned = true;
       }
     };
-    const response = mockResponse({ captureBody: true });
-    let writes = 0;
-    response.res.write = vi.fn(() => {
-      writes += 1;
-      return writes === 1;
-    });
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+    const response = stalledReaderResponse({ captureBody: true, acceptedWrites: 1 });
     const context: RouteContext = {
       ...authenticatedContext({
         model: "coding",
@@ -3348,20 +3785,25 @@ describe("coding-sidecar gateway", () => {
       res: response.res,
     };
 
-    const result = await handleCodingSidecarGatewayChatCompletions(
-      context,
-      runtimeGatewayDeps(
+    const result = await handleCodingSidecarGatewayChatCompletions(context, {
+      ...runtimeGatewayDeps(
         () => ({ ok: true, binding: { runId: "run-tool-backpressure" } }),
         undefined,
         createOpenCodeGatewayReadinessRegistry(),
         (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
           stream(),
       ),
-    );
+      diagnostics,
+    });
 
     expect(result).toBe(STREAMING);
     expect(returned).toBe(true);
-    expect(response.res.destroyed).toBe(true);
+    expect(response.res.writableEnded).toBe(true);
+    expect(response.body()).toContain('"tool_calls"');
+    expect(response.body()).toContain("data: [DONE]");
+    expect(diagnostics.record).not.toHaveBeenCalledWith(
+      expect.objectContaining({ errorClass: "SseBackpressureKill" }),
+    );
   });
 
   it("returns an opaque 503 when stream construction fails before committing SSE headers", async () => {
@@ -6390,7 +6832,7 @@ describe("coding-sidecar gateway runtime prompt-token settlement", () => {
     const settlePromptTokens =
       vi.fn<(capability: string, reserved: number, actual: number, modelCallId?: number) => void>();
     const response = mockResponse({ captureBody: true });
-    response.res.write = vi.fn(() => false);
+    response.res.destroy();
     const context: RouteContext = {
       ...authenticatedContext({
         model: "coding",
@@ -7193,6 +7635,39 @@ describe("coding sidecar gateway model reasoning (#3878)", () => {
     expect(
       sink.events.find((event) => event.op === "coding-sidecar.gateway.turn-failed")?.extra,
     ).toMatchObject({ runId: "run-after-text", runtimeRetry: "allowed" });
+  });
+
+  // An oversized or unparseable provider answer is the same answer on every attempt: the runtime
+  // must not retry it as a dropped connection.
+  it("ends a live turn whose provider answer was unusable as a final rejection, not a stream interruption", async () => {
+    const sink = captureServerLog("info");
+    const response = mockResponse({ captureBody: true });
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-invalid-answer" } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) =>
+          async function* (): AsyncGenerator<GatewayStreamChunk> {
+            await Promise.resolve();
+            yield { type: "delta", token: "partial" };
+            throw new ProviderResponseInvalidError("azure-coding-model", "size-exceeded");
+          },
+      ),
+      codingRuntimeOrchestrator: {
+        getSnapshot: () => ({ state: "running", revision: 3 }),
+      } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"],
+    } as UiHandlerDeps;
+
+    await handleCodingSidecarGatewayChatCompletions(liveTurnContext(response), deps);
+
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.turn-failed")?.extra,
+    ).toMatchObject({
+      runId: "run-invalid-answer",
+      failureCode: "provider-failed",
+      runtimeRetry: "refused",
+    });
   });
 });
 

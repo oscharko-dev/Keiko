@@ -29,6 +29,7 @@ import type {
   VerificationReport,
   VerificationStatus,
 } from "@oscharko-dev/keiko-contracts";
+import { matchesOverallStatus } from "@oscharko-dev/keiko-contracts/runtime/verification";
 import type { GatewayFetchOptions } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import { GitWorktreeReadError } from "@oscharko-dev/keiko-tools/internal/git-worktree-snapshot-node";
 import { GitRawWorktreeReadError } from "@oscharko-dev/keiko-tools/internal/git-mutation";
@@ -2106,6 +2107,97 @@ describe("production managed worktree tools", () => {
     },
   );
 
+  // Keiko 1.3.0 test on macOS (#3897): the governed verifier's container refused to install
+  // dependencies for a host whose runtime holds them (`install-target-foreign`). A refused bootstrap
+  // fails the report (ADR-0043 D17), so the fixture carries the status the contract demands of it;
+  // the model is still told to run the repository's own check in its shell, which counts for the
+  // same target, instead of a failure it cannot repair (PR #4096 review).
+  function refusedBootstrapReport(
+    refusalReason: "install-target-foreign" | "project-npm-config" | undefined,
+  ): VerificationReport {
+    const [template] = failedVerificationReport().results;
+    if (template === undefined) throw new TypeError("fixture result missing");
+    const report: VerificationReport = {
+      ...verificationReport("failed"),
+      dependencies: {
+        state: "refused",
+        lockfile: "present",
+        exitCode: null,
+        durationMs: 0,
+        detail: "dependency installation refused",
+        ...(refusalReason === undefined ? {} : { refusalReason }),
+      },
+      results: [
+        {
+          ...template,
+          kind: "typecheck",
+          scriptName: undefined,
+          status: "skipped",
+          exitCode: null,
+          durationMs: 0,
+          outputSummary: "",
+          locations: undefined,
+          detail: "dependencies unavailable: bootstrap refused",
+        },
+      ],
+    };
+    expect(matchesOverallStatus(report.overallStatus, report.results, report.dependencies)).toBe(
+      true,
+    );
+    return report;
+  }
+
+  it("tells the model to run a step behind a foreign install target in its own shell", async () => {
+    const log: ServerLogEvent[] = [];
+    const facade = verificationFacade({
+      runToReport: () => Promise.resolve(refusedBootstrapReport("install-target-foreign")),
+      records: [],
+      log,
+    });
+
+    await expect(
+      executeVerification(facade, "verification-bootstrap-native-shell-required"),
+    ).resolves.toMatchObject({
+      status: "failed",
+      reasonCode: "VERIFICATION_NOT_RUN",
+      detail:
+        "These verification steps did not run: typecheck (the isolated verifier cannot install dependencies for this host; run this check in your own shell).",
+    });
+    expect(log).toContainEqual(
+      expect.objectContaining({
+        op: "coding-runtime.verification",
+        errorKind: "unavailable",
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          state: "not-run",
+          stepCount: 1,
+          steps: ["typecheck:native-shell-required"],
+        },
+      }),
+    );
+  });
+
+  // Every other refused bootstrap is a blocker the report already names as a failure.
+  it.each(["project-npm-config", undefined] as const)(
+    "keeps a bootstrap refused for %s a failed verification",
+    async (refusalReason) => {
+      const log: ServerLogEvent[] = [];
+      const facade = verificationFacade({
+        runToReport: () => Promise.resolve(refusedBootstrapReport(refusalReason)),
+        records: [],
+        log,
+      });
+
+      const result = await executeVerification(facade, "verification-bootstrap-refused");
+      expect(result).toMatchObject({ status: "failed", reasonCode: "VERIFICATION_FAILED" });
+      const states = log
+        .filter((event) => event.op === "coding-runtime.verification")
+        .map((event) => event.extra?.state);
+      expect(states).not.toContain("not-run");
+    },
+  );
+
   it("refuses an empty passed report rather than claiming a check ran", async () => {
     const log: ServerLogEvent[] = [];
     const facade = verificationFacade({
@@ -4025,6 +4117,132 @@ describe("native verification publication through the production facade", () => 
     });
     expect(settlement.settled(outcome)).toBe("duplicate");
     expect(events).toHaveLength(1);
+  });
+
+  // Keiko 1.3.1 qualification, T4: the lab repository documents `npm run check`; a pass of that line
+  // proves the type check and lint its script chains, read from the task workspace's package.json.
+  describe("checks a passing line also proved (Keiko 1.3.1 qualification)", () => {
+    function admitCheck(
+      workspaceRoot: string,
+      exitCode: number,
+    ): {
+      readonly events: CodingWorkbenchRuntimeEvent[];
+      readonly executed: ReturnType<typeof vi.fn>;
+      readonly verificationLines: ServerLogEvent[];
+    } {
+      const events: CodingWorkbenchRuntimeEvent[] = [];
+      const log: ServerLogEvent[] = [];
+      const executed = vi.fn();
+      const facade = verificationFacade({
+        toolProfile: "native",
+        workspaceRoot,
+        verificationRevision: () => 3,
+        verificationAdmitted: () => executed,
+        records: [],
+        events,
+        log,
+        runToReport: () => Promise.resolve(verificationReport("passed")),
+      });
+      const settlement = facade.nativeSettlement;
+      if (settlement?.verificationAdmitted === undefined)
+        throw new TypeError("native verification admission unavailable");
+      const call = { messageId: "message-check-1", callId: "tool-check-1" };
+      settlement.verificationAdmitted(call, "test", ["npm run check"]);
+      settlement.settled({
+        ...call,
+        tool: "shell",
+        state: exitCode === 0 ? "succeeded" : "failed",
+        exitCode,
+        exitStatusCheck: "test",
+      });
+      const verificationLines = log.filter((event) => event.op === "coding-runtime.verification");
+      return { events, executed, verificationLines };
+    }
+    function labWorkspace(manifest: string | undefined): string {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-native-credit-")));
+      if (manifest !== undefined) writeFileSync(join(root, "package.json"), manifest);
+      return root;
+    }
+    const LAB_MANIFEST = JSON.stringify({
+      scripts: {
+        test: "node --test",
+        typecheck: "tsc --noEmit",
+        lint: "eslint .",
+        check: "npm run typecheck && npm run lint && npm test",
+      },
+    });
+
+    it("publishes the line's own check and every check its script chains, and logs each credit", () => {
+      const root = labWorkspace(LAB_MANIFEST);
+      try {
+        const { events, executed, verificationLines } = admitCheck(root, 0);
+        expect(events.map((event) => event.verificationSummary?.verifierId)).toEqual([
+          "test",
+          "typecheck",
+          "lint",
+        ]);
+        expect(events.every((event) => event.verificationStatus === "passed")).toBe(true);
+        expect(events.every((event) => event.verificationEditRevision === 3)).toBe(true);
+        expect(executed.mock.calls).toEqual([
+          [codingVerificationTargetDigest("test")],
+          [codingVerificationTargetDigest("typecheck")],
+          [codingVerificationTargetDigest("lint")],
+        ]);
+        expect(
+          verificationLines.map((event) =>
+            expectActivityLogProof(
+              "coding-runtime.verification.emitted-line",
+              formatActivityLogProofLine(event),
+            ),
+          ),
+        ).toEqual([
+          expect.objectContaining({
+            state: "credited",
+            verifierId: "typecheck",
+            creditedBy: "test",
+          }),
+          expect.objectContaining({ state: "credited", verifierId: "lint", creditedBy: "test" }),
+        ]);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it("publishes only the named check's failure and credits nothing when the line failed", () => {
+      const root = labWorkspace(LAB_MANIFEST);
+      try {
+        const { events, verificationLines } = admitCheck(root, 1);
+        expect(events.map((event) => event.verificationSummary?.verifierId)).toEqual(["test"]);
+        expect(events[0]?.verificationStatus).toBe("failed");
+        expect(verificationLines).toEqual([]);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it.each([
+      ["no package.json", undefined],
+      ["a malformed package.json", "{ not json"],
+    ] as const)("credits the line's own check alone and logs why with %s", (_label, manifest) => {
+      const root = labWorkspace(manifest);
+      try {
+        const { events, verificationLines } = admitCheck(root, 0);
+        expect(events.map((event) => event.verificationSummary?.verifierId)).toEqual(["test"]);
+        expect(verificationLines).toHaveLength(1);
+        const line = expectActivityLogProof(
+          "coding-runtime.verification.emitted-line",
+          formatActivityLogProofLine(verificationLines[0] ?? {}),
+        );
+        expect(line).toMatchObject({
+          level: "warn",
+          state: "credit-unavailable",
+          errorKind: "unavailable",
+        });
+        expect(JSON.stringify(verificationLines)).not.toContain(root);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
   });
 });
 

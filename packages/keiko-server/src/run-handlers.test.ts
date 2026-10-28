@@ -57,6 +57,7 @@ import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import type { ConnectedContextPack, WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
 import { CONNECTED_CONTEXT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
+import { EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import {
   deriveManagedWorktreePath,
   deriveRepositoryId,
@@ -188,6 +189,7 @@ function testAppSessionChannel(paired: boolean): CodingAppSessionChannel {
       live: false,
       stop: () => undefined,
       detach: () => undefined,
+      reportBackpressure: () => undefined,
     }),
   };
 }
@@ -994,7 +996,11 @@ maybeApply("POST /api/runs/:runId/apply — applies through the gated workflow",
       reserveAgentRunBudget({
         binding: record.governance,
         workspaceRoot: workspace,
-        usage: { toolCalls: 0, patchBytes: 65_536, promptTokens: 0 },
+        usage: {
+          toolCalls: 0,
+          patchBytes: EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES,
+          promptTokens: 0,
+        },
         nowIso: new Date().toISOString(),
       }),
     ).toEqual({ ok: true });

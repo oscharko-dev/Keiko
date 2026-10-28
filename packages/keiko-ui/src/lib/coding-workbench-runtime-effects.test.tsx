@@ -2,6 +2,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import {
   codingWorkbenchStreamRunId,
+  useCodingWorkbenchRuntimeStream,
   useCodingWorkbenchPairingEffect,
   useCodingWorkbenchWorkspaceEffect,
   useCodingWorkbenchRuntimeRefreshEffects,
@@ -405,4 +406,62 @@ it("forwards only the actual validated catalog parent into the profile refresh",
   );
   expect(refreshSource).toHaveBeenCalledWith(true, "actual-catalog-123");
   unmount();
+});
+
+// Stability audit item 12: an interrupted EventSource that the browser is already reconnecting must
+// not raise the assertive "event stream could not be refreshed" failure.
+describe("useCodingWorkbenchRuntimeStream reconnect reporting", () => {
+  class StubEventSource {
+    public static instances: StubEventSource[] = [];
+    public onopen: ((event: Event) => void) | null = null;
+    public onerror: ((event: Event) => void) | null = null;
+    public readyState = 0;
+    public readonly close = vi.fn();
+    public constructor(public readonly url: string) {
+      StubEventSource.instances.push(this);
+    }
+    public addEventListener = vi.fn();
+    public removeEventListener = vi.fn();
+  }
+
+  function mountStream(): { readonly dispatch: ReturnType<typeof vi.fn> } {
+    const dispatch = vi.fn();
+    const stateRef = { current: createInitialCodingWorkbenchRuntimeState() };
+    renderHook(() => {
+      useCodingWorkbenchRuntimeStream({
+        runId: "run-1",
+        streamEpoch: 0,
+        stateRef,
+        refreshRun: () => Promise.resolve(),
+        dispatch,
+        setStreamEpoch: vi.fn(),
+      });
+    });
+    return { dispatch };
+  }
+
+  it("projects a browser auto-reconnect as a status and a closed source as a failure", () => {
+    StubEventSource.instances = [];
+    vi.stubGlobal("EventSource", StubEventSource);
+    try {
+      const { dispatch } = mountStream();
+      const source = StubEventSource.instances[0];
+      expect(source).toBeDefined();
+
+      source!.readyState = 0;
+      source!.onerror?.(new Event("error"));
+      expect(dispatch).toHaveBeenCalledWith({ kind: "stream-reconnecting" });
+      expect(dispatch).not.toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "resource-failed", resource: "stream" }),
+      );
+
+      source!.readyState = 2;
+      source!.onerror?.(new Event("error"));
+      expect(dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "resource-failed", resource: "stream" }),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

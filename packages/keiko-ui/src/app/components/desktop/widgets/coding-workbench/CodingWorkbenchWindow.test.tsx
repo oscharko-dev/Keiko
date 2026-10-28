@@ -4182,13 +4182,17 @@ describe("CodingWorkbenchWindow #3390 verification trust affordance", () => {
 
     expect(trustStatusMock).toHaveBeenCalledExactlyOnceWith("/repos/keiko");
     expect(trustMutateMock).toHaveBeenCalledExactlyOnceWith("/repos/keiko", "grant");
-    expect(diagnostic).toHaveBeenCalledWith("[keiko] coding workbench repository trust bound", {
-      correlationId: "run-script-trust",
-      workspaceTrustBinding: {
-        repositoryId: "repository-1",
-        workspaceId: "workspace-1",
+    expect(diagnostic).toHaveBeenCalledWith(
+      "[keiko] coding workbench interaction: repository-trust-bound",
+      {
+        correlationId: "run-script-trust",
+        codingWorkbenchInteraction: {
+          interaction: "repository-trust-bound",
+          repositoryId: "repository-1",
+          workspaceId: "workspace-1",
+        },
       },
-    });
+    );
   });
 
   it.each<Partial<ActiveWorkspaceApi>>([
@@ -4457,14 +4461,16 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
     // The run's trust binding is judged on its own diagnostics: the LAST binding line names A and no
     // binding line ever names B. Diagnostics about other surfaces (a worktree catalog read this
     // fixture leaves unanswered) are not this pin's subject and may follow it.
+    // #3897: the binding travels as a closed interaction report; the pin's subject is unchanged.
     const bindingLines = diagnostic.mock.calls.filter(
-      ([note]) => note === "[keiko] coding workbench repository trust bound",
+      ([note]) => note === "[keiko] coding workbench interaction: repository-trust-bound",
     );
     expect(bindingLines.at(-1)).toEqual([
-      "[keiko] coding workbench repository trust bound",
+      "[keiko] coding workbench interaction: repository-trust-bound",
       {
         correlationId: "run-correlation-0001",
-        workspaceTrustBinding: {
+        codingWorkbenchInteraction: {
+          interaction: "repository-trust-bound",
           repositoryId: WORKSPACE_A.repositoryId,
           workspaceId: WORKSPACE_A.id,
         },
@@ -4520,7 +4526,7 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
 // activity" and stay disconnected even once a different run started, until the operator clicked
 // Reconnect (or reloaded the page). `useCodingWorkbenchSafeActivity` is fully mocked in this file
 // (its own reconnect/resync behaviour is pinned at the hook level), so these tests prove the ONE
-// thing this window itself owns: calling `activity.retry()` exactly when a new run id appears.
+// thing this window itself owns: it must not call `activity.retry()` when a new run id appears.
 // ADR-0137 D10: while a turn runs the window offers Send now and Queue where the server says the
 // runtime takes messages, wires them to the follow-up mutation as a delivery, and says what came of it.
 describe("CodingWorkbenchWindow prompt inputs while a turn runs (ADR-0137 D10)", () => {
@@ -4636,7 +4642,10 @@ describe("CodingWorkbenchWindow reconnects activity on a newly observed run (#33
     });
   }
 
-  it("reconnects the activity stream once a new run id appears, without a manual click", async () => {
+  // Audit item 14: the activity hook reconnects for a new run id by itself (pinned at the hook
+  // level, `useCodingWorkbenchSafeActivity.test.tsx`); the window calling `retry` as well opened
+  // the channel twice per run. The window must leave the connection to the hook.
+  it("leaves the reconnect for a new run id to the activity hook instead of retrying again", async () => {
     const retry = vi.fn();
     activityHookMock.mockReturnValue({
       status: "disconnected",
@@ -4646,42 +4655,14 @@ describe("CodingWorkbenchWindow reconnects activity on a newly observed run (#33
     });
     runtimeHookMock.mockReturnValue({ state: liveState(), actions: actions() });
     const view = render(<CodingWorkbenchWindow selectedRoot={undefined} />);
-    expect(retry).not.toHaveBeenCalled();
 
     runtimeHookMock.mockReturnValue({ state: runningState("run-1"), actions: actions() });
     view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
-
-    await waitFor(() => {
-      expect(retry).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  it("does not reconnect again while the same run id stays current", () => {
-    const retry = vi.fn();
-    activityHookMock.mockReturnValue({ status: "live", feed: null, errorCode: null, retry });
-    runtimeHookMock.mockReturnValue({ state: runningState("run-1"), actions: actions() });
-    const view = render(<CodingWorkbenchWindow selectedRoot={undefined} />);
-    expect(retry).not.toHaveBeenCalled();
-
-    // An unrelated re-render (e.g. a runtime event) that keeps the SAME run id must not retry.
-    runtimeHookMock.mockReturnValue({ state: runningState("run-1"), actions: actions() });
-    view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
-
-    expect(retry).not.toHaveBeenCalled();
-  });
-
-  it("reconnects again for a second new run id after a run stops", async () => {
-    const retry = vi.fn();
-    activityHookMock.mockReturnValue({ status: "ended", feed: null, errorCode: null, retry });
-    runtimeHookMock.mockReturnValue({ state: runningState("run-1"), actions: actions() });
-    const view = render(<CodingWorkbenchWindow selectedRoot={undefined} />);
-
     runtimeHookMock.mockReturnValue({ state: runningState("run-2"), actions: actions() });
     view.rerender(<CodingWorkbenchWindow selectedRoot={undefined} />);
 
-    await waitFor(() => {
-      expect(retry).toHaveBeenCalledTimes(1);
-    });
+    await act(async () => Promise.resolve());
+    expect(retry).not.toHaveBeenCalled();
   });
 });
 
@@ -5776,9 +5757,11 @@ describe("CodingWorkbenchWindow primary agent switch (#3897)", () => {
 
   it("selects the plan agent through the runtime and reports only the closed agent id", async () => {
     const user = userEvent.setup();
-    const reports: string[] = [];
-    setClientDiagnosticWriter((message) => {
-      reports.push(message);
+    const reports: unknown[] = [];
+    setClientDiagnosticWriter((_message, meta) => {
+      if (meta?.codingWorkbenchInteraction !== undefined) {
+        reports.push(meta.codingWorkbenchInteraction);
+      }
     });
     const liveActions = renderWorkbench(planOffered(), actions());
     expect(screen.getByRole("button", { name: "Build" })).toHaveAttribute("aria-pressed", "true");
@@ -5786,7 +5769,7 @@ describe("CodingWorkbenchWindow primary agent switch (#3897)", () => {
     await user.click(screen.getByRole("button", { name: "Plan" }));
 
     expect(liveActions.setAgent).toHaveBeenCalledExactlyOnceWith("plan");
-    expect(reports).toContain("[keiko] coding workbench agent selected: plan");
+    expect(reports).toContainEqual({ interaction: "agent-selected", agent: "plan" });
   });
 
   it("names the plan agent in the status line and the information panel while it is selected", () => {
@@ -6614,5 +6597,89 @@ describe("newTaskReferenceRoot", () => {
   it("is nothing without a selected repository, whatever workspace is active", () => {
     const workspace = activeWorkspaceWithBinding(REPOSITORY, "/worktrees/task-1");
     expect(newTaskReferenceRoot(workspace, null)).toBeNull();
+  });
+});
+
+// Stability audit items 11 and 12.
+describe("CodingWorkbenchWindow live-region and stream-status semantics", () => {
+  const runningRun: CodingWorkbenchRuntimeState["run"] = {
+    status: "ready",
+    error: null,
+    value: snapshot({ state: "running", runId: "run-1", revision: 3 }),
+  };
+
+  it("announces a stream the browser is reconnecting as a polite status, not an alert", () => {
+    renderWorkbench(
+      liveState({
+        run: runningRun,
+        stream: {
+          status: "loading",
+          value: { runId: "run-1", cursor: "cursor-1", connected: false },
+          error: null,
+        },
+      }),
+    );
+
+    const status = screen.getByText(/Reconnecting to the event stream/u);
+    expect(status.tagName).toBe("OUTPUT");
+    expect(status.closest("[role='alert']")).toBeNull();
+    expect(screen.queryByText("Event stream could not be refreshed.")).not.toBeInTheDocument();
+  });
+
+  it("escalates to an assertive alert once the stream is reported failed", () => {
+    renderWorkbench(
+      liveState({
+        run: runningRun,
+        stream: {
+          status: "error",
+          value: null,
+          error: { code: "CODING_RUNTIME_CLIENT_ERROR", message: "closed", retryable: true },
+        },
+      }),
+    );
+
+    expect(
+      screen.getByText(/Event stream could not be refreshed\./u).closest("[role='alert']"),
+    ).not.toBeNull();
+    expect(screen.queryByText(/Reconnecting to the event stream/u)).not.toBeInTheDocument();
+  });
+
+  it("marks only the busy control, never the whole workbench shell, while a decision is pending", () => {
+    approvalReviewHookMock.mockReturnValue({
+      status: "ready",
+      review: draftDeliveryReview("push"),
+      retry: vi.fn(),
+    });
+    const state = {
+      ...liveState({
+        run: {
+          status: "ready",
+          error: null,
+          value: {
+            ...draftDeliverySnapshot(),
+            state: "awaiting-approval",
+            pendingPermission: {
+              requestId: draftDeliveryReview("push").requestId,
+              kind: "delivery-substrate",
+              actionClass: "delivery-substrate",
+              actionKind: "push",
+              reasonCode: "approval-required",
+              policyReason: "approval-required",
+              risk: "high",
+              expiresAt: "2026-09-05T00:05:00.000Z",
+            },
+          },
+        },
+      }),
+      mutation: { status: "pending", kind: "approval", requestId: "req-a", error: null },
+    } as CodingWorkbenchRuntimeState;
+    renderWorkbench(state);
+
+    expect(document.querySelector("section[aria-busy]")).toBeNull();
+    expect(screen.getByRole("button", { name: "Approve once" })).toHaveAttribute(
+      "aria-busy",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Deny" })).toHaveAttribute("aria-busy", "true");
   });
 });

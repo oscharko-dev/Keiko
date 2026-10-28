@@ -23,12 +23,12 @@
                   },
                   "oldString": {
                     "type": "string",
-                    "maxLength": 65536,
+                    "maxLength": 8388608,
                     "description": "Exact current text to replace, copied byte for byte from the latest keiko_workspace_read. Empty only to create a new file."
                   },
                   "newString": {
                     "type": "string",
-                    "maxLength": 65536,
+                    "maxLength": 8388608,
                     "description": "Replacement text."
                   },
                   "replaceAll": {

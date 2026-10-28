@@ -442,14 +442,69 @@ describe("the child environment", () => {
     });
   });
 
-  it("changes nothing for an unverified ripgrep, so the run starts and search degrades", () => {
-    const processEnv = { PATH: "/usr/bin" };
-    expect(ripgrepLaunchEnvironment(processEnv, unverified, true)).toBe(processEnv);
-    expect(ripgrepLaunchEnvironment(processEnv, unverified, false)).toBe(processEnv);
-    expect(ripgrepLaunchEnvironment(undefined, unverified, true)).toBeUndefined();
+  it("starts the run with search degraded and no mapped PATH for an unverified ripgrep", () => {
     expect(ripgrepMappedInheritedEnvNames(unverified)).toEqual([]);
-    expect(ripgrepNativePath("/usr/bin", unverified)).toBeUndefined();
+    expect(ripgrepLaunchEnvironment({ PATH: "/usr/bin" }, unverified, false)).toEqual({
+      PATH: "/usr/bin",
+    });
+    expect(ripgrepLaunchEnvironment(undefined, unverified, true)).toBeUndefined();
+    expect(ripgrepLaunchEnvironment(undefined, unverified, false)).toBeUndefined();
   });
+
+  describe.runIf(POSIX)(
+    "an unverified ripgrep never leaves a foreign rg on the native PATH",
+    () => {
+      const roots: string[] = [];
+      afterEach(() => {
+        for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+      });
+      function pathDirectory(...executables: readonly string[]): string {
+        const root = mkdtempSync(join(tmpdir(), "keiko-path-entry-"));
+        roots.push(root);
+        for (const name of executables)
+          writeFileSync(join(root, name), "#!/bin/sh\n", { mode: 0o755 });
+        return root;
+      }
+
+      it("drops the PATH entries that provide rg and keeps every other entry in order", () => {
+        const brew = pathDirectory("git", "rg");
+        const tools = pathDirectory("node");
+        const empty = pathDirectory();
+        const launcher = [tools, brew, empty].join(delimiter);
+        const derived = ripgrepLaunchEnvironment({ PATH: launcher, LANG: "C" }, unverified, true);
+        expect(derived?.PATH).toBe([tools, empty].join(delimiter));
+        expect(derived?.LANG).toBe("C");
+        expect(derived?.PATH?.split(delimiter)).not.toContain(brew);
+        // The child and the kernel read allowlist derive the same PATH.
+        expect(ripgrepNativePath(launcher, unverified)).toBe(derived?.PATH);
+      });
+
+      it("also drops empty and relative entries, which it cannot prove free of rg", () => {
+        const tools = pathDirectory("node");
+        const launcher = ["", "relative/bin", tools].join(delimiter);
+        expect(ripgrepNativePath(launcher, unverified)).toBe(tools);
+      });
+
+      it("keeps a missing entry (it cannot provide rg) and leaves a mapped child untouched", () => {
+        const missing = join(tmpdir(), "keiko-path-entry-does-not-exist");
+        expect(ripgrepNativePath(missing, unverified)).toBe(missing);
+        const notADirectory = join(pathDirectory("node"), "node");
+        expect(ripgrepNativePath(notADirectory, unverified)).toBe(notADirectory);
+        const mapped = { PATH: pathDirectory("rg") };
+        // A mapped child inherits no name, so its PATH never reaches it.
+        expect(ripgrepLaunchEnvironment(mapped, unverified, false)).toBe(mapped);
+        expect(buildSandboxEnv(mapped, ripgrepMappedInheritedEnvNames(unverified))).toEqual({});
+      });
+
+      it("does not mutate the launcher environment and tolerates no PATH at all", () => {
+        const brew = pathDirectory("rg");
+        const processEnv = { PATH: brew };
+        expect(ripgrepLaunchEnvironment(processEnv, unverified, true)?.PATH).toBe("");
+        expect(processEnv.PATH).toBe(brew);
+        expect(ripgrepNativePath(undefined, unverified)).toBeUndefined();
+      });
+    },
+  );
 
   it("shares one PATH between the child and the kernel read allowlist", () => {
     expect(ripgrepNativePath("/usr/bin", verified(directory))).toBe(

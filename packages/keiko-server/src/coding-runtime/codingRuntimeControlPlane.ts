@@ -84,6 +84,11 @@ export interface CodingRuntimeHost {
   readonly cancellationRegistry: {
     readonly signalFor: (runId: string) => AbortSignal | undefined;
   };
+  /**
+   * Startup sweep of the per-run runtime state no live or recoverable run owns (audit 2026-10,
+   * finding 8). The control plane answers which runs those are; the host owns the directory.
+   */
+  readonly sweepOrphanedRunState?: ((isRetained: (runId: string) => boolean) => void) | undefined;
   // The one secure workspace read the governed `keiko_workspace_read` tool answers through, exposed
   // so `deps.ts` can compose the repository-instructions loader (ADR-0137 D1) over the SAME helper
   // instead of a second filesystem path. Present once a qualified runtime host is composed.
@@ -275,6 +280,9 @@ export function createCodingRuntimeControlPlane(
   attachVerifiedHeadNotifier(input.runtimeHost, orchestrator);
   attachEditOutcomeObserver(input.runtimeHost, orchestrator);
   orchestrator.startupReconcileNow();
+  // A run keeps its state while its snapshot is unsettled: live, or recovery-required and not yet
+  // acknowledged. Everything else belongs to no run that could still use it.
+  sweepOrphanedRunState(input);
   return {
     orchestrator,
     eventHub,
@@ -284,6 +292,13 @@ export function createCodingRuntimeControlPlane(
       : {}),
     ...runtimeHostCapabilities(input.runtimeHost),
   };
+}
+
+function sweepOrphanedRunState(input: CodingRuntimeControlPlaneInput): void {
+  input.runtimeHost?.sweepOrphanedRunState?.((runId) => {
+    const snapshot = input.snapshots.get(runId);
+    return snapshot !== undefined && snapshot.terminalAt === undefined;
+  });
 }
 
 function controlPlaneHistory(

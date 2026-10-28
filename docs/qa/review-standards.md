@@ -93,7 +93,7 @@ mandatory. No new round-count automation or merge condition is introduced here.
 ## Learning from a confirmed defect
 
 Fix the failure class at its owning layer and add executable regression protection where practical.
-If a durable repository-specific trap remains, update the matching [Experience.md](../../Experience.md)
+If a durable repository-specific trap remains, update the matching [EXPERIENCE.md](../../EXPERIENCE.md)
 entry with evidence and a retirement trigger. Do not write an entry for every successful PR.
 Assess changes to these instructions using confirmed historical defects and clean changes as
 negative controls; measure false positives as well as caught regressions. A shorter prompt or more

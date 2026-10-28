@@ -112,9 +112,12 @@ Every OpenCode launch resolves one verified ripgrep before the child starts
   admits exactly that directory and nothing wider. The mapped macOS profile cannot execute `rg` at
   all (its exec allowlist is the runtime and Git), so mapped search stays degraded there.
 - An unverified ripgrep never blocks the run. The directory is not added, the runtime keeps starting
-  with search degraded, and the closed reason is recorded. Keiko cannot stop OpenCode's own download
-  attempt at Full access, where egress is inherited; below Full access the loopback-only lane refuses
-  it.
+  with search degraded, and the closed reason is recorded. A degraded native launch also drops every
+  inherited `PATH` entry that provides an `rg` (and every empty or relative entry), so a host
+  ripgrep is never executed unverified. Every degraded launch also places a refusing `rg`
+  placeholder in the run's private OpenCode `bin` directory, which OpenCode checks before it would
+  download one, so no profile (Full access included) fetches ripgrep at run time; search then fails
+  with a fixed message.
 - `coding-runtime.ripgrep.resolved` records once per launch the outcome (`verified`/`unverified`),
   the closed `reason`, the `layout` (`portable`/`provisioned`/`npm-package`/`override`/`none`), the
   digest source, the version and the target class. It never records a path, a digest or a command

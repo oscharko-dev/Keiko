@@ -852,6 +852,46 @@ describe("OpenCode HTTP client", () => {
     expect(cancelled).toBe(true);
   });
 
+  it("stops the event stream at once when the caller's signal aborted between two pulls", async () => {
+    const frame = (id: string): Uint8Array =>
+      encoder.encode(
+        `event: message\ndata: {"payload":{"id":"${id}","type":"session.updated","properties":{"sessionID":"ses_1"}}}\n\n`,
+      );
+    let cancelled = false;
+    const controller = new AbortController();
+    const client = createOpenCodeHttpClient({
+      endpoint: "http://127.0.0.1:43123",
+      password: "p".repeat(43),
+      eventIdleTimeoutMs: 1_000,
+      fetch: () =>
+        Promise.resolve(
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(stream): void {
+                // More data is already waiting: only an abort check can stop the next pull.
+                stream.enqueue(frame("evt_1"));
+                stream.enqueue(frame("evt_2"));
+              },
+              cancel(): void {
+                cancelled = true;
+              },
+            }),
+            { headers: { "content-type": "text/event-stream" } },
+          ),
+        ),
+    }) as unknown as {
+      readonly events: (options: {
+        readonly signal: AbortSignal;
+      }) => AsyncIterable<{ readonly data?: { readonly id?: string } }>;
+    };
+
+    const iterator = client.events({ signal: controller.signal })[Symbol.asyncIterator]();
+    await expect(iterator.next()).resolves.toMatchObject({ value: { data: { id: "evt_1" } } });
+    controller.abort();
+    await expect(iterator.next()).rejects.toThrow("opencode-event-aborted");
+    expect(cancelled).toBe(true);
+  });
+
   it("honours caller abort, request deadline, and the response byte cap before retaining a body", async () => {
     const controller = new AbortController();
     controller.abort();

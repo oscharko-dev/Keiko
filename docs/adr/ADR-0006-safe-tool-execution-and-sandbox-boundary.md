@@ -145,7 +145,13 @@ allowlist entirely, because the credential is read off disk, not off the environ
 `runCommand` redirects `HOME` and `USERPROFILE` to a per-run **ephemeral, empty directory** created
 under the OS temp dir (`mkdtempSync(join(tmpdir(), "keiko-home-"))`) and removed after the command
 in every settle path — success, denial-before-spawn (no dir is created), timeout, cancellation, and
-spawn error (`src/tools/exec.ts`, `HomeProvider`/`nodeHomeProvider`). The child still receives a
+spawn error (`src/tools/exec.ts`, `HomeProvider`/`nodeHomeProvider`). A filesystem-confined run
+(macOS Seatbelt, or a strict bubblewrap execution-root run) may write only inside its execution
+root, so its per-run home is a `.keiko-home-*` directory created directly inside that root instead;
+bubblewrap mounts it as the child's `/tmp`, `HOME` and `TMPDIR`, and it is removed in the same settle
+paths (ADR-0043). Removal is the point: anything the child writes there (npm logs, Node's compile
+cache) would otherwise stay behind as untracked files in the workspace the run verified
+(PR #4095). The child still receives a
 valid, writable `HOME` (so `npm` works), but it is empty: a home-directory credential lookup
 resolves to nothing. The provider is injected as a `RunCommandDeps.home` dependency with a Node
 default, so tests use a recording/fake provider and assert the child `HOME` is a real, existing,
@@ -381,7 +387,11 @@ Tool `output` strings are redacted at two points:
    Content-bearing blob, patch and CI failure-log readers retain the default all-environment-value
    scrub; the pull-request body reader applies that same scrub to the body text it returns (text the
    scrub would alter is an altered read, never a fact) while the identity envelope around it is a
-   typed fact. An explicitly stricter caller policy remains authoritative; typed
+   typed fact. The one exception is an environment value whose every occurrence, overlapping ones
+   included, lies inside Keiko's own compiled-in PR-description attribution: that text is public
+   source, so the occurrence discloses nothing, and a GitHub-hosted runner's repository slug and
+   server URL otherwise made every body Keiko had written an altered read (PR #4095). An occurrence
+   outside the attribution, or one that straddles its boundary, keeps the read altered. An explicitly stricter caller policy remains authoritative; typed
    GitHub reads share their original invocation, byte, deadline and authority budgets.
 
 2. **ToolCallResult.output** — the `WorkspaceToolHost.execute` method returns `output` that is

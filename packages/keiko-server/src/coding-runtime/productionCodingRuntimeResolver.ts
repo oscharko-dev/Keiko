@@ -210,6 +210,11 @@ export interface ProductionRuntimeBackendResolver {
   readonly toolProfile?: OpenCodeToolProfile | undefined;
   readonly createRun: (input: ProductionRuntimeBackendInput) => QualifiedProductionRuntimeRun;
   readonly safeActivityProjection?: CodingSafeActivityProjection | undefined;
+  /**
+   * Removes the per-run state directories of runs that are neither live nor recoverable, given the
+   * server's own answer to which runs are. Called once at startup (audit 2026-10, finding 8).
+   */
+  readonly sweepOrphanedRunState?: ((isRetained: (runId: string) => boolean) => void) | undefined;
 }
 
 export interface ProductionCodingRuntimeResolverInput {
@@ -488,8 +493,19 @@ function composeRuntime(
     runtimeCapabilityAuthenticator: runtimeCapabilityAuthenticatorFor(authority, runs, shared),
     ...deliveryAuthorityPorts(authority, input),
     ...lateBoundAttachers(verifiedHeadNotifier, shared),
-    ...(input.backend.safeActivityProjection
-      ? { safeActivityProjection: input.backend.safeActivityProjection }
+    ...backendOptionalPorts(input.backend),
+  };
+}
+
+function backendOptionalPorts(
+  backend: ProductionRuntimeBackendResolver,
+): Pick<QualifiedProductionCodingRuntime, "safeActivityProjection" | "sweepOrphanedRunState"> {
+  return {
+    ...(backend.safeActivityProjection
+      ? { safeActivityProjection: backend.safeActivityProjection }
+      : {}),
+    ...(backend.sweepOrphanedRunState
+      ? { sweepOrphanedRunState: backend.sweepOrphanedRunState }
       : {}),
   };
 }
