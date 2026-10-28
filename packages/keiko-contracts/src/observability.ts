@@ -20,10 +20,17 @@
 // bypasses the `extra` redaction path entirely: this shape gate is the only thing standing
 // between a provider's rejected-input message and a log line an operator will grep in the clear.
 
+import {
+  activityLogCompletenessField,
+  activityLogLossField,
+} from "./activity-log-field-contracts.js";
+
 import { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 import { containsAbsolutePath } from "./text-safety.js";
 
 export {
+  type ActivityLogCompletenessFieldContract,
+  type ActivityLogLossFieldContract,
   activityLogAutomaticCatalogFields,
   activityLogBooleanField,
   activityLogCountField,
@@ -416,8 +423,8 @@ export type ActivityLogFieldContract = ActivityLogFieldContractBase &
 // Centralizing them keeps loss/completeness evidence structurally present while still allowing an
 // emitter to override the safe defaults when an operation is partial or a known loss occurred.
 export const ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS = {
-  completeness: { type: "string", dataClass: "completeness-state", required: true },
-  loss: { type: "string", dataClass: "loss-state", required: true },
+  completeness: activityLogCompletenessField(),
+  loss: activityLogLossField(),
 } as const satisfies Readonly<Record<string, ActivityLogFieldContract>>;
 
 type ActivityLogGlobalFieldContracts = typeof ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS;

@@ -165,10 +165,33 @@ function makeRoot(): string {
   return root;
 }
 
+function makePlantedLogTarget(
+  root: string,
+  targetFilename: string,
+  plantFn: typeof symlinkSync | typeof linkSync,
+): { readonly stateDir: string; readonly targetPath: string; readonly original: string } {
+  const stateDir = join(root, ".keiko");
+  mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  const targetPath = join(root, targetFilename);
+  const original = "unchanged\n";
+  writeFileSync(targetPath, original, "utf8");
+  plantFn(targetPath, join(stateDir, "ui.log"));
+  return { stateDir, targetPath, original };
+}
+
 // #3532: the detached UI child inherits no descriptor at all. Its raw stdout/stderr is never
 // persisted (`ui.log` is retired); every diagnostic it produces is an Activity Log line.
 function expectNoPersistedChildOutput(opts: SpawnOptions): void {
   expect(opts.stdio).toBe("ignore");
+}
+
+function expectHealthyStartWithoutPersistedOutput(
+  code: Awaited<ReturnType<typeof runLifecycle>>,
+  spawned: ReturnType<typeof healthyDetachedChild>["spawned"],
+): void {
+  expect(code).toBe(0);
+  expect(spawned).toHaveLength(1);
+  expectNoPersistedChildOutput((spawned[0] as { readonly opts: SpawnOptions }).opts);
 }
 
 async function withHealthServer<T>(
@@ -1843,13 +1866,12 @@ describe("keiko start — refuses symlinked ui.log and ui.pid (KEIKO-0886)", () 
   it("never opens or follows a pre-planted symlinked ui.log and never corrupts its target", async (ctx) => {
     if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
-    const stateDir = join(root, ".keiko");
-    mkdirSync(stateDir, { recursive: true, mode: 0o700 });
-    const decoy = join(root, "victim-file.txt");
-    const original = "unchanged\n";
-    writeFileSync(decoy, original, "utf8");
     // Plant ui.log as a symlink pointing at the decoy.
-    symlinkSync(decoy, join(stateDir, "ui.log"));
+    const {
+      stateDir,
+      targetPath: decoy,
+      original,
+    } = makePlantedLogTarget(root, "victim-file.txt", symlinkSync);
 
     const c = makeIo();
     const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
@@ -1857,9 +1879,7 @@ describe("keiko start — refuses symlinked ui.log and ui.pid (KEIKO-0886)", () 
 
     // The start never touches ui.log: the child inherits no descriptor, the decoy is
     // byte-identical, and the planted symlink is left exactly as it was.
-    expect(code).toBe(0);
-    expect(spawned).toHaveLength(1);
-    expectNoPersistedChildOutput((spawned[0] as { readonly opts: SpawnOptions }).opts);
+    expectHealthyStartWithoutPersistedOutput(code, spawned);
     expect(readFileSync(decoy, "utf8")).toBe(original);
     expect(lstatSync(join(stateDir, "ui.log")).isSymbolicLink()).toBe(true);
   });
@@ -1978,15 +1998,14 @@ describe("keiko start — never opens a planted hard-linked/FIFO/non-regular ui.
   it("never writes through a hard-linked ui.log's target file", async (ctx) => {
     if (process.platform === "win32") ctx.skip();
     const root = makeRoot();
-    const stateDir = join(root, ".keiko");
-    mkdirSync(stateDir, { recursive: true, mode: 0o700 });
-    const victim = join(root, "victim-log.txt");
-    const original = "unchanged\n";
-    writeFileSync(victim, original, "utf8");
     // Pre-plant the hard link BEFORE start runs: unlike ui.pid (written after spawn succeeds),
     // ui.log is opened by openUiLogStdio BEFORE spawnFn is ever invoked, so there is no
     // "inside spawnFn" window to plant it in — it must already be there.
-    linkSync(victim, join(stateDir, "ui.log"));
+    const {
+      stateDir,
+      targetPath: victim,
+      original,
+    } = makePlantedLogTarget(root, "victim-log.txt", linkSync);
 
     const c = makeIo();
     const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
@@ -1994,9 +2013,7 @@ describe("keiko start — never opens a planted hard-linked/FIFO/non-regular ui.
 
     // The child inherits no descriptor, the victim file's content is byte-identical before and
     // after, and the hard link itself is left exactly as planted.
-    expect(code).toBe(0);
-    expect(spawned).toHaveLength(1);
-    expectNoPersistedChildOutput((spawned[0] as { readonly opts: SpawnOptions }).opts);
+    expectHealthyStartWithoutPersistedOutput(code, spawned);
     expect(readFileSync(victim, "utf8")).toBe(original);
     expect(lstatSync(join(stateDir, "ui.log")).nlink).toBeGreaterThan(1);
   });
@@ -2014,9 +2031,7 @@ describe("keiko start — never opens a planted hard-linked/FIFO/non-regular ui.
 
     // A blocking open() with no reader present would hang this test forever; reaching this
     // assertion at all proves the FIFO was never opened.
-    expect(code).toBe(0);
-    expect(spawned).toHaveLength(1);
-    expectNoPersistedChildOutput((spawned[0] as { readonly opts: SpawnOptions }).opts);
+    expectHealthyStartWithoutPersistedOutput(code, spawned);
     expect(lstatSync(join(stateDir, "ui.log")).isFIFO()).toBe(true);
   }, 10_000);
 

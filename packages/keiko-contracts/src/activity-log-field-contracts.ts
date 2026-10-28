@@ -133,3 +133,23 @@ export function activityLogAutomaticCatalogFields(): Readonly<AutomaticCatalogFi
     retryable: activityLogBooleanField(true),
   };
 }
+
+export interface ActivityLogCompletenessFieldContract {
+  readonly type: "string";
+  readonly dataClass: "completeness-state";
+  readonly required: true;
+}
+
+export interface ActivityLogLossFieldContract {
+  readonly type: "string";
+  readonly dataClass: "loss-state";
+  readonly required: true;
+}
+
+export function activityLogCompletenessField(): Readonly<ActivityLogCompletenessFieldContract> {
+  return { type: "string", dataClass: "completeness-state", required: true };
+}
+
+export function activityLogLossField(): Readonly<ActivityLogLossFieldContract> {
+  return { type: "string", dataClass: "loss-state", required: true };
+}

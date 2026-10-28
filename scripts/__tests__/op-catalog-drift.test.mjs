@@ -2273,3 +2273,51 @@ it("admits a true reexport of the canonical automatic catalog policy", () => {
     },
   );
 });
+
+describe("canonical universal field constructor admission", () => {
+  it("admits both actual zero-argument descriptor aliases without changing global values", () => {
+    inspectAutomaticCatalogFields(
+      "{ completeness: complete(), loss: lost() }",
+      (registry) => {
+        expect(registry.operations).toHaveLength(1);
+        expect(registry.operations[0].fields).toEqual({
+          completeness: { type: "string", dataClass: "completeness-state", required: true },
+          loss: { type: "string", dataClass: "loss-state", required: true },
+        });
+      },
+      'import { activityLogCompletenessField as complete, activityLogLossField as lost } from "../../keiko-contracts/src/activity-log-field-contracts.js";',
+    );
+  });
+
+  it.each(["activityLogCompletenessField", "activityLogLossField"])(
+    "refuses noncanonical, dynamic or argument-bearing universal construction for %s",
+    (name) => {
+      for (const [call, prelude] of [
+        [name + "()", "function " + name + "() { return {}; }"],
+        ["foreign()", "import { " + name + ' as foreign } from "./universal-lookalike.js";'],
+        ["canonical(true)", ""],
+        ["canonical(...args)", "const args = [] as const;"],
+        ["selected()", "let selected = canonical;"],
+        ["holder.canonical()", "const holder = { canonical };"],
+      ]) {
+        inspectAutomaticCatalogFields(
+          "{ extra: " + call + " }",
+          (registry) => {
+            expect(registry.operations).toEqual([]);
+            expect(registry.violations).toContainEqual(
+              expect.objectContaining({ code: "registration-not-literal" }),
+            );
+          },
+          "import { " +
+            name +
+            ' as canonical } from "../../keiko-contracts/src/activity-log-field-contracts.js";\n' +
+            prelude,
+          {
+            "packages/zzz-fixture-diagnostic/src/universal-lookalike.ts":
+              "export function " + name + "() { return {}; }",
+          },
+        );
+      }
+    },
+  );
+});

@@ -297,7 +297,7 @@ describe("automatic catalog runtime field policy rendering", () => {
     const registry = { ...catalog.typedRegistry, operations: [pilot] };
     const source = runtimeOperationsModule(registry);
     expect(source).toContain(
-      '"completeness": {"type":"string","dataClass":"completeness-state","required":true},"loss": {"type":"string","dataClass":"loss-state","required":true}, ...activityLogAutomaticCatalogFields()',
+      '"completeness": activityLogCompletenessField(),"loss": activityLogLossField(), ...activityLogAutomaticCatalogFields()',
     );
     withGeneratedRuntime(({ identity }) => {
       expect(identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields).toEqual(pilot.fields);
@@ -359,4 +359,65 @@ it("does not fold a descriptor with an extra own undefined property into the fac
   expect(Object.hasOwn(fields.retryable, "extra")).toBe(true);
   const registry = { ...catalog.typedRegistry, operations: [{ ...pilot, fields }] };
   expect(runtimeOperationsModule(registry)).not.toContain("...activityLogAutomaticCatalogFields()");
+});
+
+describe("universal runtime descriptor rendering", () => {
+  it.each([
+    ["complete", "completeness-state", "activityLogCompletenessField"],
+    ["lost", "loss-state", "activityLogLossField"],
+  ])("uses only the exact ordered %s descriptor", (field, dataClass, constructor) => {
+    const descriptor = { type: "string", dataClass, required: true };
+    const registry = {
+      ...catalog.typedRegistry,
+      operations: [{ ...catalog.typedRegistry.operations[0], fields: { [field]: descriptor } }],
+    };
+    expect(runtimeOperationsModule(registry)).toContain('"' + field + '": ' + constructor + "()");
+    withGeneratedRuntime(({ identity }) => {
+      expect(identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields[field]).toEqual(descriptor);
+      expect(Object.keys(identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields[field])).toEqual([
+        "type",
+        "dataClass",
+        "required",
+      ]);
+    }, registry);
+  });
+
+  it.each(["completeness-state", "loss-state"])("keeps nonexact %s shapes literal", (dataClass) => {
+    for (const descriptor of [
+      { required: true, dataClass, type: "string" },
+      { type: "string", dataClass, required: true, maxLength: 4 },
+      { type: "string", dataClass, required: false },
+    ]) {
+      const registry = {
+        ...catalog.typedRegistry,
+        operations: [{ ...catalog.typedRegistry.operations[0], fields: { tested: descriptor } }],
+      };
+      expect(runtimeOperationsModule(registry)).not.toContain(
+        '"tested": activityLogCompletenessField()',
+      );
+      expect(runtimeOperationsModule(registry)).not.toContain('"tested": activityLogLossField()');
+      withGeneratedRuntime(({ identity }) => {
+        expect(identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields.tested).toEqual(descriptor);
+        expect(Object.keys(identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields.tested)).toEqual(
+          Object.keys(descriptor),
+        );
+      }, registry);
+    }
+  });
+
+  it.each(["completeness-state", "loss-state"])(
+    "does not fold an extra own undefined property for %s",
+    (dataClass) => {
+      const descriptor = { type: "string", dataClass, required: true, extra: undefined };
+      const registry = {
+        ...catalog.typedRegistry,
+        operations: [{ ...catalog.typedRegistry.operations[0], fields: { tested: descriptor } }],
+      };
+      expect(Object.hasOwn(descriptor, "extra")).toBe(true);
+      expect(runtimeOperationsModule(registry)).not.toContain(
+        '"tested": activityLogCompletenessField()',
+      );
+      expect(runtimeOperationsModule(registry)).not.toContain('"tested": activityLogLossField()');
+    },
+  );
 });

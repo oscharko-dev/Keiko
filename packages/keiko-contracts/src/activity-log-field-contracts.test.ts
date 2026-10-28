@@ -1,11 +1,17 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   activityLogAutomaticCatalogFields,
+  activityLogCompletenessField,
+  activityLogLossField,
   activityLogBooleanField,
   activityLogCountField,
   activityLogDurationField,
   activityLogStringEnumField,
 } from "./activity-log-field-contracts.js";
+import {
+  ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS,
+  defineActivityLogOperation,
+} from "./observability.js";
 import { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 
 function expectOrdinaryDescriptor(value: object, keys: readonly string[]): void {
@@ -220,5 +226,65 @@ describe("named scalar field declaration compatibility", () => {
     descriptor.values.push("later");
     expect(values).toEqual(["ready", "failed", "later"]);
     expectOrdinaryDescriptor(descriptor, ["type", "dataClass", "required", "values"]);
+  });
+});
+
+describe("universal Activity Log field construction", () => {
+  it("keeps completeness and loss as separate exact readonly zero-argument contracts", () => {
+    const completeness = activityLogCompletenessField();
+    const loss = activityLogLossField();
+    expectTypeOf<typeof activityLogCompletenessField>().parameters.toEqualTypeOf<[]>();
+    expectTypeOf<typeof activityLogLossField>().parameters.toEqualTypeOf<[]>();
+    expectTypeOf(completeness).toEqualTypeOf<{
+      readonly type: "string";
+      readonly dataClass: "completeness-state";
+      readonly required: true;
+    }>();
+    expectTypeOf(loss).toEqualTypeOf<{
+      readonly type: "string";
+      readonly dataClass: "loss-state";
+      readonly required: true;
+    }>();
+    expectTypeOf<keyof typeof completeness>().toEqualTypeOf<"type" | "dataClass" | "required">();
+    expectTypeOf<keyof typeof loss>().toEqualTypeOf<"type" | "dataClass" | "required">();
+    expectTypeOf(completeness).toExtend<Record<string, unknown>>();
+    expectTypeOf(loss).toExtend<Record<string, unknown>>();
+    expect(completeness).toEqual({
+      type: "string",
+      dataClass: "completeness-state",
+      required: true,
+    });
+    expect(loss).toEqual({ type: "string", dataClass: "loss-state", required: true });
+    expectOrdinaryDescriptor(completeness, ["type", "dataClass", "required"]);
+    expectOrdinaryDescriptor(loss, ["type", "dataClass", "required"]);
+  });
+
+  it("allocates fresh plain descriptors without changing the shared registration defaults", () => {
+    const first = activityLogCompletenessField();
+    const second = activityLogCompletenessField();
+    const loss = activityLogLossField();
+    expect(first).not.toBe(second);
+    expect(loss).not.toBe(activityLogLossField());
+    expect(first).not.toBe(loss);
+    expect(Reflect.set(first, "required", false)).toBe(true);
+    expect(second.required).toBe(true);
+    expect(activityLogCompletenessField()).toEqual(second);
+    expect(ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS.completeness).not.toBe(first);
+    expect(ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS.completeness.required).toBe(true);
+    expect(ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS.loss).not.toBe(loss);
+    const operation = ACTIVITY_LOG_OPERATION_REGISTRY[0];
+    const { completeness, loss: priorLoss, ...fields } = operation.fields;
+    expect(completeness).toEqual(ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS.completeness);
+    expect(priorLoss).toEqual(ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS.loss);
+    const defaults = defineActivityLogOperation({ ...operation, fields });
+    expect(defaults.fields.completeness).toBe(ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS.completeness);
+    expect(defaults.fields.loss).toBe(ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS.loss);
+    const explicit = activityLogCompletenessField();
+    const overridden = defineActivityLogOperation({
+      ...operation,
+      fields: { ...fields, completeness: explicit },
+    });
+    expect(overridden.fields.completeness).toBe(explicit);
+    expect(overridden.fields.loss).toBe(ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS.loss);
   });
 });
