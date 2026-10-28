@@ -85,6 +85,11 @@ export interface OpenCodeV2LiveText {
   observe(sessionId: string, event: Readonly<Record<string, unknown>>): void;
   /** What the part has shown so far, never ending in half a surrogate pair; `undefined` when untracked. */
   textOf(messageId: string, kind: LiveTextKind, ordinal: number): string | undefined;
+  /**
+   * Whether any text or reasoning part of the message is being fed by the event stream right now.
+   * A message that is not has its projected text decided by the history alone.
+   */
+  tracks(messageId: string): boolean;
   /** The history shows the part complete: its live text is spent, and a late delta for it is ignored. */
   retire(messageId: string, kind: LiveTextKind, ordinal: number): void;
   /**
@@ -180,6 +185,12 @@ class LiveTextOverlay implements OpenCodeV2LiveText {
   textOf(messageId: string, kind: LiveTextKind, ordinal: number): string | undefined {
     const part = this.parts.get(partKey(messageId, kind, ordinal));
     return part === undefined ? undefined : withoutDanglingSurrogate(part.text);
+  }
+
+  tracks(messageId: string): boolean {
+    const needle = `\u0000${messageId}\u0000`;
+    for (const key of this.parts.keys()) if (key.includes(needle)) return true;
+    return false;
   }
 
   retire(messageId: string, kind: LiveTextKind, ordinal: number): void {

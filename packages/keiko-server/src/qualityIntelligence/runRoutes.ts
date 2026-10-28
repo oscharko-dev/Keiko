@@ -32,7 +32,7 @@ import {
 import { resolveQualityIntelligenceRetentionPolicyId } from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import { QualityIntelligenceHardening } from "@oscharko-dev/keiko-quality-intelligence";
 import { SSE_HEADERS } from "../sse.js";
-import { writeOrDestroy } from "../sse-write.js";
+import { writeSseFrame } from "../sse-write.js";
 import {
   STREAMING,
   type HandlerOutcome,
@@ -482,7 +482,7 @@ export function startQiRunSseHeartbeat(
 ): () => void {
   const interval = setInterval(() => {
     if (!controller.signal.aborted) {
-      writeOrDestroy(res, ": ping\n\n", controller);
+      writeSseFrame(res, ": ping\n\n", controller);
     }
   }, intervalMs);
   (interval as { unref?: () => void }).unref?.();
@@ -698,7 +698,7 @@ export async function handleStartQiRun(
 
   ctx.res.writeHead(200, { ...SSE_HEADERS, "X-Accel-Buffering": "no" });
   const write: WriteFn = (message) => {
-    writeOrDestroy(ctx.res, `data: ${JSON.stringify(message)}\n\n`, controller);
+    writeSseFrame(ctx.res, `data: ${JSON.stringify(message)}\n\n`, controller);
   };
 
   const stopHeartbeat = startQiRunSseHeartbeat(ctx.res, controller);

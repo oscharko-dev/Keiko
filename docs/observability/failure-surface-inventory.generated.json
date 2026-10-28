@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "b4dabf27524e8ea88e4d321e86ca32ce014bbdccc35cd03014028410b84a5fed"
+    "catalogDigest": "45be13e24c008a060e96e2e6884ef6148e47e699655b375ec10e73c525c85e37"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -59,10 +59,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 593,
-    "proofCount": 606,
-    "resolvedProofCount": 606,
-    "failureClassCount": 373,
+    "operationCount": 595,
+    "proofCount": 608,
+    "resolvedProofCount": 608,
+    "failureClassCount": 374,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -233,6 +233,7 @@
         "gateway.readiness.automatic.completed",
         "gateway.readiness.automatic.joined",
         "gateway.readiness.automatic.started",
+        "gateway.readiness.busy-retained",
         "gateway.readiness.compatibility-retry",
         "gateway.readiness.compatibility-retry.failed",
         "gateway.readiness.compatibility-retry.skipped",
@@ -599,6 +600,7 @@
         "git.delivery.readiness.observed",
         "git.delivery.repository.mismatch",
         "git.delivery.sync.approval.minted",
+        "git.diff.view-bounded",
         "git.draft-checks",
         "git.draft-delivery",
         "git.draft-delivery.repository-drift",
@@ -980,6 +982,7 @@
     "git-delivery-repository-binding": ["editor-delivery.rejection"],
     "git-denied-path-exclusion": ["editor-delivery.rejection"],
     "git-diff-search-bounded": ["editor-delivery.loss"],
+    "git-diff-view-bounded": ["editor-delivery.dependency-failure"],
     "git-draft-checks": ["editor-delivery.dependency-failure"],
     "git-draft-delivery": ["editor-delivery.dependency-failure"],
     "git-draft-push-preparation": ["editor-delivery.dependency-failure"],
@@ -1997,6 +2000,9 @@
     "gateway.readiness.automatic.started.line": [
       "packages/keiko-server/src/gateway-readiness.test.ts"
     ],
+    "gateway.readiness.busy-retained.line": [
+      "packages/keiko-server/src/gateway-readiness.busy.test.ts"
+    ],
     "gateway.readiness.compatibility-retry.line": [
       "packages/keiko-model-gateway/src/readiness-probe.test.ts"
     ],
@@ -2171,6 +2177,7 @@
     "git.delivery.sync.approval.minted.emitted-line": [
       "packages/keiko-server/src/gitDelivery/approvalEvents.test.ts"
     ],
+    "git.diff.view-bounded.emitted-line": ["packages/keiko-server/src/gitRoutes.test.ts"],
     "git.draft-checks.emitted-line": [
       "packages/keiko-server/src/gitDelivery/draftDeliveryChecks.test.ts"
     ],

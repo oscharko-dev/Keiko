@@ -1162,7 +1162,20 @@ type RuntimeStartFailureReason =
   | "manager-exception"
   | "run-mismatch";
 
-type RuntimeLifecycleFailureReason = "failure-redacted" | "runtime-stopped-live";
+type RuntimeLifecycleFailureReason =
+  | "failure-redacted"
+  | "runtime-stopped-live"
+  // A mutation that awaited found the run's row already moved on by a concurrent stop, takeover or
+  // settlement; it abandons its stale write instead of letting the store throw (audit 2026-10).
+  | "stale-transition"
+  // The manager stop of a failing run threw; the run is moved to recovery-required.
+  | "stop-failed"
+  // The manager still held a settled run's runtime (a failed stop at an undo window's close); the
+  // slot was reconciled before the next start, or could not be (audit 2026-10, finding 6).
+  | "stale-slot-reaped"
+  | "stale-slot-reap-failed"
+  // A queued task settlement threw; the run is moved to recovery-required (audit 2026-10).
+  | "settlement-failed";
 
 function runtimeDiagnosticCorrelationId(runId: string): string {
   return isValidCorrelationId(runId) ? runId : UNKNOWN_CORRELATION_ID;
@@ -1220,13 +1233,16 @@ function recordRuntimeLifecycleFailure(
   diagnostics: ServerDiagnosticSink | undefined,
   runId: string,
   reason: RuntimeLifecycleFailureReason,
+  error?: unknown,
 ): void {
   emitServerDiagnostic(diagnostics, {
     correlationId: runtimeDiagnosticCorrelationId(runId),
     timestamp: new Date().toISOString(),
     operation: "coding-runtime.lifecycle",
     source: "coding-runtime-orchestrator.ingest",
-    errorClass: "CodingRuntimeLifecycleFailure",
+    ...(error === undefined
+      ? { errorClass: "CodingRuntimeLifecycleFailure" }
+      : describeError(error)),
     message: "runtime-lifecycle-failed",
     code: `stage=lifecycle:reason=${reason}`,
   });
@@ -1982,7 +1998,7 @@ export class CodingRuntimeOrchestrator {
   start(input: unknown, correlationId?: string): Promise<CodingRuntimeOrchestratorResult> {
     return this.serial(async () => {
       // The next run ends the previous run's undo window: its runtime holds the slot until then.
-      await this.undoWindow.close("next-run");
+      await this.closeUndoWindow("next-run");
       return this.startFreshAgainstPredecessor(
         input,
         this.acknowledgedRecoveryPredecessorId(),
@@ -2051,7 +2067,7 @@ export class CodingRuntimeOrchestrator {
         return this.fail("invalid-intent");
       if (this.activeRunId !== undefined && this.activeRunId !== runId)
         return this.fail("active-run-conflict");
-      await this.undoWindow.close("next-run");
+      await this.closeUndoWindow("next-run");
       return this.startFreshAgainstPredecessor(input, runId, correlationId);
     });
   }
@@ -2097,9 +2113,41 @@ export class CodingRuntimeOrchestrator {
    */
   admitWorkspaceSelection(): Promise<boolean> {
     return this.serial(async () => {
-      await this.undoWindow.close("workspace-selected");
+      await this.closeUndoWindow("workspace-selected");
       return !this.blocksWorkspaceSelection();
     });
+  }
+
+  /**
+   * Ends the settled run's undo window, then frees the runtime slot it may have left taken: a stop
+   * that failed at the close leaves the manager in recovery-required with the slot held, and every
+   * later start would be refused as already running until the server restarted (audit 2026-10,
+   * finding 6). The run itself is settled, so a reconcile is the sanctioned second chance.
+   */
+  private async closeUndoWindow(
+    reason: Parameters<CodingRuntimeUndoWindow["close"]>[0],
+  ): Promise<void> {
+    await this.undoWindow.close(reason);
+    await this.reapSettledRuntimeSlot();
+  }
+
+  private async reapSettledRuntimeSlot(): Promise<void> {
+    const health = this.deps.manager.health();
+    if (health.status === "stopped") return;
+    const runId = health.activeRunId;
+    if (this.undoWindow.heldRunId() === runId) return;
+    const settled = this.deps.snapshots.get(runId);
+    if (settled === undefined || !TERMINAL_STATES.has(settled.state)) return;
+    try {
+      const reaped = await this.deps.manager.reconcile(runId);
+      recordRuntimeLifecycleFailure(
+        this.deps.diagnostics,
+        runId,
+        reaped.ok ? "stale-slot-reaped" : "stale-slot-reap-failed",
+      );
+    } catch (error) {
+      recordRuntimeLifecycleFailure(this.deps.diagnostics, runId, "stale-slot-reap-failed", error);
+    }
   }
 
   blocksWorkspaceSelection(): boolean {
@@ -2481,27 +2529,49 @@ export class CodingRuntimeOrchestrator {
         challenge.permission.requestId,
         decision,
       );
-      if (!permissionSettled) return this.stopAfterApprovalFailure(current);
-      if (decision === "denied" && actionKind === "verification-command") {
-        this.effort.verificationBlocked(current.runId, "verification-command-denied");
-      }
-      // A denial rejects this one step: the runtime already told the model, and the run goes on
-      // with its next queued ask, or running (owner decision 2026-09-26, ADR-0124 D6).
-      this.dropActiveApproval(current.runId);
-      const running = this.transition(current, "running");
-      if (!running.ok) return running;
-      const live = this.current();
-      if (live === undefined) return running;
-      recordRuntimeApprovalDecided(
-        this.deps.activityLog,
-        live.runId,
-        live.revision,
-        challenge.permission.requestId,
-        decision,
-      );
-      this.effort.decision(live.runId);
-      return this.promoteQueuedApproval(live);
+      // The permission port awaited: an operator stop, takeover or settlement may have moved the run
+      // on meanwhile. The decision then no longer applies, and it is never written from the
+      // snapshot read before the await (audit 2026-10, finding 2).
+      const awaiting = this.stillAwaitingApproval(current);
+      if (awaiting === undefined) return this.fail("invalid-intent");
+      if (!permissionSettled) return this.stopAfterApprovalFailure(awaiting);
+      return this.finishApprovalDecision(awaiting, challenge, decision, actionKind);
     });
+  }
+
+  /** The run's current row when it is still the one that awaited the approval, else undefined. */
+  private stillAwaitingApproval(awaited: CodingRuntimeSnapshot): CodingRuntimeSnapshot | undefined {
+    const live = this.current();
+    if (live?.runId === awaited.runId && live.state === "awaiting-approval") return live;
+    recordRuntimeLifecycleFailure(this.deps.diagnostics, awaited.runId, "stale-transition");
+    return undefined;
+  }
+
+  private finishApprovalDecision(
+    current: CodingRuntimeSnapshot,
+    challenge: ApprovalChallenge,
+    decision: CodingWorkbenchRuntimeApprovalDecisionRequest["decision"],
+    actionKind: CodingWorkbenchRuntimePendingPermission["actionKind"],
+  ): CodingRuntimeOrchestratorResult {
+    if (decision === "denied" && actionKind === "verification-command") {
+      this.effort.verificationBlocked(current.runId, "verification-command-denied");
+    }
+    // A denial rejects this one step: the runtime already told the model, and the run goes on
+    // with its next queued ask, or running (owner decision 2026-09-26, ADR-0124 D6).
+    this.dropActiveApproval(current.runId);
+    const running = this.transition(current, "running");
+    if (!running.ok) return running;
+    const live = this.current();
+    if (live === undefined) return running;
+    recordRuntimeApprovalDecided(
+      this.deps.activityLog,
+      live.runId,
+      live.revision,
+      challenge.permission.requestId,
+      decision,
+    );
+    this.effort.decision(live.runId);
+    return this.promoteQueuedApproval(live);
   }
 
   // A denied Git stage, commit, push or pull-request proposal was raised by the server itself, so no
@@ -2623,14 +2693,29 @@ export class CodingRuntimeOrchestrator {
     current: CodingRuntimeSnapshot,
     failureCode: CodingWorkbenchRuntimeFailureCode = "authority-resolution-failed",
   ): Promise<CodingRuntimeOrchestratorResult> {
+    let stopped = false;
     try {
-      const stopped = await this.deps.manager.stop(current.runId, "failed");
-      return stopped.ok
-        ? this.transition(current, "failed", failureCode)
-        : this.transition(current, "recovery-required", "recovery-required");
-    } catch {
-      return this.transition(current, "recovery-required", "recovery-required");
+      stopped = (await this.deps.manager.stop(current.runId, "failed")).ok;
+    } catch (error) {
+      recordRuntimeLifecycleFailure(this.deps.diagnostics, current.runId, "stop-failed", error);
     }
+    // The stop awaited: an operator stop may have settled the run meanwhile, so the outcome is
+    // written onto the run's CURRENT row, never the snapshot read before the await (audit 2026-10,
+    // findings 1 and 2).
+    const live = this.current();
+    if (live?.runId !== current.runId) return this.settledResult(current.runId);
+    return stopped
+      ? this.transition(live, "failed", failureCode)
+      : this.transition(live, "recovery-required", "recovery-required");
+  }
+
+  /** The clean answer for a run another mutation already settled while this one awaited. */
+  private settledResult(runId: string): CodingRuntimeOrchestratorResult {
+    const settled = this.deps.snapshots.get(runId);
+    recordRuntimeLifecycleFailure(this.deps.diagnostics, runId, "stale-transition");
+    return settled === undefined
+      ? this.fail("runtime-failed")
+      : { ok: true, snapshot: this.publicSnapshotWithDescription(settled) };
   }
 
   private stopAfterApprovalFailure(
@@ -3079,8 +3164,28 @@ export class CodingRuntimeOrchestrator {
     const settlement = this.serial(() => this.settleTask(runId, outcome));
     void settlement.then(
       (): void => undefined,
-      (): void => this.deps.safeActivityProjection?.markUnavailable(runId),
+      (error: unknown): void => {
+        this.deps.safeActivityProjection?.markUnavailable(runId);
+        recordRuntimeLifecycleFailure(this.deps.diagnostics, runId, "settlement-failed", error);
+        void this.serial(() => this.recoverFailedSettlement(runId));
+      },
     );
+  }
+
+  /**
+   * A settlement that threw leaves the run neither settled nor stopped by Keiko, so the only safe
+   * projection is recovery-required (audit 2026-10, finding 11). The run may have settled through
+   * another path meanwhile; then nothing is left to recover.
+   */
+  private recoverFailedSettlement(runId: string): Promise<void> {
+    const live = this.current();
+    if (live?.runId !== runId || live.state === "recovery-required") return Promise.resolve();
+    try {
+      this.transition(live, "recovery-required", "recovery-required");
+    } catch (error) {
+      recordRuntimeLifecycleFailure(this.deps.diagnostics, runId, "settlement-failed", error);
+    }
+    return Promise.resolve();
   }
 
   /**
@@ -4326,10 +4431,23 @@ export class CodingRuntimeOrchestrator {
     }
   }
 
+  /**
+   * True, and logged, when the run's row has already moved past `current`: the write would be
+   * rejected by the store's monotonic revision, which the caller of a lost race must not see as an
+   * opaque error (audit 2026-10, findings 1 and 2).
+   */
+  private isSuperseded(current: CodingRuntimeSnapshot): boolean {
+    const latest = this.deps.snapshots.get(current.runId);
+    if (latest === undefined || latest.revision <= current.revision) return false;
+    recordRuntimeLifecycleFailure(this.deps.diagnostics, current.runId, "stale-transition");
+    return true;
+  }
+
   private advanceRevision(
     current: CodingRuntimeSnapshot,
     eventKind?: CodingWorkbenchRuntimeEvent["kind"],
   ): CodingRuntimeOrchestratorResult {
+    if (this.isSuperseded(current)) return this.fail("invalid-intent");
     const next = this.deps.snapshots.transition(current.runId, {
       state: current.state,
       revision: current.revision + 1,
@@ -4480,6 +4598,7 @@ export class CodingRuntimeOrchestrator {
     if (!isLegalCodingWorkbenchRuntimeTransition(current.state, state)) {
       return this.fail("invalid-intent");
     }
+    if (this.isSuperseded(current)) return this.fail("invalid-intent");
     const next = this.createTransitionSnapshot(current, state, failureCode, pauseReason);
     const published = this.publishTransition(next);
     this.recordTransitionEvidence(next, state, failureCode);

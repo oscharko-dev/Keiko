@@ -14,6 +14,7 @@ import {
   reportClientDiagnostic,
   sseStreamErrorDiagnostic,
 } from "../../../../../lib/client-diagnostics";
+import { reportCodingWorkbenchInteraction } from "../../../../../lib/coding-workbench-interaction";
 import { newClientCorrelationId } from "../../../../../lib/bff-correlation";
 import {
   repairLocalCodingAppSessionForStream,
@@ -237,6 +238,24 @@ function openEntrySource(entry: SharedEventSourceEntry): void {
   );
 }
 
+// The first interruption of a stream whose browser source was closed (readyState 2) is reopened by
+// the stream's own reconnect, with any session repair reported on the same streak: routine evidence
+// on the info line. A reconnect that fails again, or any other readyState, is a genuine client
+// diagnostic (Keiko 1.3.1 stress test, F3).
+function reportStreamInterruption(
+  entry: SharedEventSourceEntry,
+  source: EventSource,
+  streak: string,
+): void {
+  if (source.readyState === 2 && entry.reconnectAttempts === 0) {
+    reportCodingWorkbenchInteraction({ interaction: "event-stream-reconnecting" }, streak);
+    return;
+  }
+  reportClientDiagnostic(sseStreamErrorDiagnostic("shared-event-source", source.readyState), {
+    correlationId: streak,
+  });
+}
+
 function connectEntrySource(entry: SharedEventSourceEntry): void {
   const source = createSameOriginApiEventSource(resumeUrl(entry));
   if (source === null) return;
@@ -248,9 +267,7 @@ function connectEntrySource(entry: SharedEventSourceEntry): void {
   };
   source.onerror = () => {
     const streak = (entry.failureStreakCorrelationId ??= newClientCorrelationId());
-    reportClientDiagnostic(sseStreamErrorDiagnostic("shared-event-source", source.readyState), {
-      correlationId: streak,
-    });
+    reportStreamInterruption(entry, source, streak);
     closeEntrySource(entry);
     repairSessionOnce(entry, streak);
     scheduleReconnect(entry);

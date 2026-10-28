@@ -8,6 +8,7 @@ import { realpathSync } from "node:fs";
 import { isAbsolute, relative, sep } from "node:path";
 
 import { resolveEffectiveCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { CODING_RUNTIME_PATCH_BUDGET_BYTES } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { validateCodingWorkbenchIssueBinding } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 
 import type {
@@ -239,7 +240,8 @@ function contextFromActive(
       maxPromptTokens: checkedRuntimePromptTokenBudget(
         input.promptTokenBudget ?? DEFAULT_RUNTIME_PROMPT_TOKENS,
       ),
-      maxPatchBytes: 262_144,
+      // Owner decision 2026-10-28: 64 MiB per run, defined once next to the per-changeset cap.
+      maxPatchBytes: CODING_RUNTIME_PATCH_BUDGET_BYTES,
     },
     expiresAt: new Date(now.getTime() + maxRuntimeMs).toISOString(),
   };

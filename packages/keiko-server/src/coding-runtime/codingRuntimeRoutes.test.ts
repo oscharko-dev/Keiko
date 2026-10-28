@@ -2,6 +2,7 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
+import { SSE_STALLED_READER_TIMEOUT_MS } from "../sse-write.js";
 import type {
   CodingWorkbenchRuntimeSnapshot,
   CodingWorkbenchRuntimeSseEvent,
@@ -1891,9 +1892,11 @@ describe("coding runtime routes", () => {
     }
   });
 
-  it("destroys a slow SSE connection when the transport applies backpressure", () => {
-    const response = new FakeResponse();
-    response.write = (): boolean => false;
+  function openBufferedRuntimeSse(response: FakeResponse): void {
+    response.write = (chunk: string): boolean => {
+      response.chunks.push(chunk);
+      return false;
+    };
     const req = new EventEmitter() as unknown as RouteContext["req"];
     const hub = {
       subscribe: (
@@ -1923,7 +1926,42 @@ describe("coding runtime routes", () => {
       "run-1",
       undefined,
     );
-    expect(response.destroyed).toBe(true);
+  }
+
+  // A false write is flow control (Node answers false for any frame of 64 KiB or more): the frame is
+  // queued and the stream waits for drain. Only a reader that drains nothing within the shared
+  // stalled-reader bound is destroyed (relocated from the former immediate kill, not relaxed).
+  it("destroys a stalled SSE reader only after the shared stalled-reader bound", () => {
+    vi.useFakeTimers();
+    try {
+      const response = new FakeResponse();
+      openBufferedRuntimeSse(response);
+      vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
+      expect(response.destroyed).toBe(false);
+      vi.advanceTimersByTime(1);
+      expect(response.destroyed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a buffered SSE connection open when the reader drains", () => {
+    vi.useFakeTimers();
+    try {
+      const response = new FakeResponse();
+      openBufferedRuntimeSse(response);
+      // The reader takes the buffered frame; later writes (heartbeats) are accepted again.
+      response.write = (chunk: string): boolean => {
+        response.chunks.push(chunk);
+        return true;
+      };
+      response.emit("drain");
+      vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS * 2);
+      expect(response.destroyed).toBe(false);
+      expect(response.chunks.join("")).toContain('"cursor":"run-1:0"');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("opens the event handler as streaming and includes replay data", () => {

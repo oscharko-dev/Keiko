@@ -674,6 +674,67 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
     expect(session.result.current).toBe(before);
   });
 
+  // Stability audit item 7: a 409 means the server holds a state this window has not seen yet, so
+  // the failed action's alert is followed by a re-read that lets the newer snapshot supersede it.
+  it("re-reads the run after a conflict-class refusal, once the failure is recorded", async () => {
+    vi.mocked(stopCodingWorkbenchRuntime).mockRejectedValueOnce(
+      new ApiError("CODING_RUNTIME_REVISION_CONFLICT", "Runtime revision is stale.", 409),
+    );
+    const { mutations, dispatch, refreshRun } = renderMutations(
+      readyRunState(snapshot({ state: "running" })),
+    );
+
+    await act(() => mutations.stop());
+
+    expect(refreshRun).toHaveBeenCalledTimes(1);
+    const failedAt = dispatch.mock.calls.findIndex(([a]) => a.kind === "mutation-failed");
+    expect(failedAt).toBeGreaterThanOrEqual(0);
+    expect(refreshRun.mock.invocationCallOrder[0]).toBeGreaterThan(
+      dispatch.mock.invocationCallOrder[failedAt] ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it("does not re-read the run for a transport failure or a client-side gate refusal", async () => {
+    vi.mocked(stopCodingWorkbenchRuntime).mockRejectedValueOnce(
+      new ApiError("CODING_RUNTIME_UNAVAILABLE", "runtime offline", 503),
+    );
+    const { mutations, refreshRun } = renderMutations(
+      readyRunState(snapshot({ state: "running" })),
+    );
+    await act(() => mutations.stop());
+    await act(() => mutations.start("blocked", { projectMemoryEnabled: true }));
+    expect(refreshRun).not.toHaveBeenCalled();
+  });
+
+  // Stability audit item 1: a control the BFF never answered fails on the client's own deadline,
+  // which fails its queue item (re-enabling Stop/Approve/Deny) and lets the next one run.
+  it("fails a control that hit its deadline, records it, and lets the next queued control run", async () => {
+    vi.mocked(stopCodingWorkbenchRuntime)
+      .mockRejectedValueOnce(new DOMException("The operation timed out.", "TimeoutError"))
+      .mockResolvedValueOnce(snapshot({ state: "stopping" }));
+    const { mutations, dispatch } = renderMutations(readyRunState(snapshot({ state: "running" })));
+
+    await act(async () => {
+      await Promise.all([mutations.stop(), mutations.stop()]);
+    });
+
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "mutation-failed",
+        error: expect.objectContaining({
+          code: "CODING_RUNTIME_REQUEST_TIMEOUT",
+          retryable: true,
+        }),
+      }),
+    );
+    expect(reportClientDiagnostic).toHaveBeenCalledWith(
+      "[keiko] coding workbench run control timed out",
+      { kind: "other", errorKind: "timeout" },
+    );
+    expect(stopCodingWorkbenchRuntime).toHaveBeenCalledTimes(2);
+    expect(dispatch).toHaveBeenLastCalledWith({ kind: "mutation-complete" });
+  });
+
   it("routes a waiting-message action through the queue, bound to the observed revision", async () => {
     vi.mocked(submitCodingWorkbenchRuntimeInboxAction).mockResolvedValue(snapshot({ revision: 5 }));
     const { mutations, dispatch } = renderMutations(

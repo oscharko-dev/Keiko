@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { EventEmitter } from "node:events";
 import type { AddressInfo } from "node:net";
 import type { Server, ServerResponse } from "node:http";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ContainerCapabilityResponse,
   ContainerRunnerEvent,
@@ -21,7 +21,7 @@ import { createRunRegistry } from "../runs.js";
 import { createUiServer, UI_HOST } from "../server.js";
 import { ContainerRunnerError } from "./containerRunner-errors.js";
 import { openContainerSseStream } from "./containerRoutes.js";
-import type { SseBackpressureSignal } from "../sse-write.js";
+import { SSE_STALLED_READER_TIMEOUT_MS, type SseBackpressureSignal } from "../sse-write.js";
 import type {
   ContainerRunInput,
   ContainerRunnerEventEmitter,
@@ -432,7 +432,7 @@ describe("GET /api/containers/events", () => {
   });
 });
 
-// Backpressure path (GEN-DUP-NEAR-005): the SSE writer now flows through the shared writeOrDestroy
+// Backpressure path (GEN-DUP-NEAR-005): the SSE writer now flows through the shared writeSseFrame
 // helper. When res.write() returns false the per-connection AbortController is aborted (which
 // unsubscribes from the manager) and the socket is destroyed exactly once, and the optional
 // onBackpressure observer is fired exactly once before the destroy.
@@ -440,9 +440,11 @@ interface FakeSseRes {
   res: ServerResponse;
   readonly writes: string[];
   destroyCount: number;
+  destroyed: boolean;
   ended: boolean;
   writeReturns: boolean;
   readonly emitClose: () => void;
+  readonly emitDrain: () => void;
 }
 
 function makeFakeSseRes(): FakeSseRes {
@@ -452,13 +454,23 @@ function makeFakeSseRes(): FakeSseRes {
     res: undefined as unknown as ServerResponse,
     writes,
     destroyCount: 0,
+    destroyed: false,
     ended: false,
     writeReturns: true,
     emitClose: (): void => {
       emitter.emit("close");
     },
+    emitDrain: (): void => {
+      emitter.emit("drain");
+    },
   };
   const res = {
+    get destroyed(): boolean {
+      return state.destroyed;
+    },
+    get writableEnded(): boolean {
+      return state.ended;
+    },
     writeHead(): ServerResponse {
       return res as unknown as ServerResponse;
     },
@@ -470,11 +482,23 @@ function makeFakeSseRes(): FakeSseRes {
       state.ended = true;
       return res as unknown as ServerResponse;
     },
+    // Like a real response: destroying marks it destroyed and fires `close`, which is what the
+    // route's own close handler unsubscribes on.
     destroy(): void {
       state.destroyCount += 1;
+      state.destroyed = true;
+      emitter.emit("close");
     },
     on(event: string, listener: (...args: unknown[]) => void): ServerResponse {
       emitter.on(event, listener);
+      return res as unknown as ServerResponse;
+    },
+    once(event: string, listener: (...args: unknown[]) => void): ServerResponse {
+      emitter.once(event, listener);
+      return res as unknown as ServerResponse;
+    },
+    off(event: string, listener: (...args: unknown[]) => void): ServerResponse {
+      emitter.off(event, listener);
       return res as unknown as ServerResponse;
     },
     emit(event: string): boolean {
@@ -486,7 +510,12 @@ function makeFakeSseRes(): FakeSseRes {
 }
 
 describe("openContainerSseStream backpressure", () => {
-  it("destroys once and signals when the ready frame itself is refused", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("destroys once and signals when the reader stalls on the ready frame itself", () => {
+    vi.useFakeTimers();
     const fake = makeFakeSseRes();
     const manager = new FakeContainerRunnerManager();
     const signals: SseBackpressureSignal[] = [];
@@ -501,16 +530,26 @@ describe("openContainerSseStream backpressure", () => {
     );
 
     expect(fake.writes).toHaveLength(1);
+    expect(fake.destroyCount).toBe(0);
+    expect(signals).toHaveLength(0);
+
+    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
+    expect(fake.destroyCount).toBe(0);
+    expect(signals).toHaveLength(0);
+
+    vi.advanceTimersByTime(1);
     expect(fake.destroyCount).toBe(1);
     expect(signals).toHaveLength(1);
     expect(signals[0]?.accepted).toBe(false);
-    // The refusal aborted the stream before any event: nothing further is written or destroyed.
+    // The stall bound aborted the stream before any event: nothing further is written or destroyed.
+    const writesAfterKill = fake.writes.length;
     manager.emitExternal({ kind: "run-completed", runId: "run-bp", payload: { note: "x" } });
-    expect(fake.writes).toHaveLength(1);
+    expect(fake.writes).toHaveLength(writesAfterKill);
     expect(fake.destroyCount).toBe(1);
   });
 
-  it("aborts, unsubscribes, destroys once, and signals when res.write returns false", () => {
+  it("aborts, unsubscribes, destroys once, and signals when the reader stalls after res.write returns false", () => {
+    vi.useFakeTimers();
     const fake = makeFakeSseRes();
     const manager = new FakeContainerRunnerManager();
     const signals: SseBackpressureSignal[] = [];
@@ -523,19 +562,28 @@ describe("openContainerSseStream backpressure", () => {
       },
     );
     // The client took the ready frame and goes slow only once events flow, so the first EVENT frame
-    // is the refused one. A refused ready frame has its own case.
+    // is the queued one. A stalled ready frame has its own case.
     expect(fake.writes).toHaveLength(1);
     fake.writeReturns = false;
 
     manager.emitExternal({ kind: "run-completed", runId: "run-bp", payload: { note: "x" } });
 
-    // The frame was written once, the socket destroyed once, and the observer fired exactly once.
+    // The frame is queued, not dropped, and nothing is torn down yet.
+    expect(fake.writes).toHaveLength(2);
+    expect(fake.writes[1]).toContain("run-completed");
+    expect(fake.destroyCount).toBe(0);
+    expect(signals).toHaveLength(0);
+
+    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
+    expect(fake.destroyCount).toBe(0);
+    expect(signals).toHaveLength(0);
+
+    // The socket is destroyed once and the observer fired exactly once.
+    vi.advanceTimersByTime(1);
     expect(fake.destroyCount).toBe(1);
     expect(signals).toHaveLength(1);
     expect(signals[0]?.accepted).toBe(false);
     expect(signals[0]?.frameBytes).toBeGreaterThan(0);
-    expect(fake.writes).toHaveLength(2);
-    expect(fake.writes[1]).toContain("run-completed");
 
     // The abort unsubscribed from the manager, so a second event produces no further work.
     const writesAfterKill = fake.writes.length;
@@ -548,6 +596,34 @@ describe("openContainerSseStream backpressure", () => {
     expect(() => {
       fake.emitClose();
     }).not.toThrow();
+  });
+
+  it("keeps the stream open and subscribed when a false write is followed by drain", () => {
+    vi.useFakeTimers();
+    const fake = makeFakeSseRes();
+    const manager = new FakeContainerRunnerManager();
+    const signals: SseBackpressureSignal[] = [];
+    openContainerSseStream(
+      fake.res,
+      manager,
+      (value) => value,
+      (signal) => {
+        signals.push(signal);
+      },
+    );
+    fake.writeReturns = false;
+    manager.emitExternal({ kind: "run-completed", runId: "run-drain", payload: { note: "x" } });
+
+    fake.emitDrain();
+    fake.writeReturns = true;
+    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS * 2);
+
+    expect(fake.destroyCount).toBe(0);
+    expect(signals).toHaveLength(0);
+    const writesBefore = fake.writes.length;
+    manager.emitExternal({ kind: "run-started", runId: "run-drain", payload: { taskId: "t" } });
+    expect(fake.writes).toHaveLength(writesBefore + 1);
+    expect(fake.destroyCount).toBe(0);
   });
 
   it("keeps the normal write path intact when res.write returns true", () => {

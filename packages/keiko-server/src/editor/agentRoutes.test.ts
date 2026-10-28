@@ -56,6 +56,8 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { DEFAULT_LANGUAGE_SERVICE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/language-service";
 import {
+  CODING_RUNTIME_PATCH_BUDGET_BYTES,
+  EDITOR_AGENT_ACTION_MAX_BODY_BYTES,
   EDITOR_AGENT_DIAGNOSTIC_MESSAGE_MAX_CHARS,
   EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS,
   EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_ENCODED_CHARS,
@@ -75,6 +77,8 @@ import { forwardWorkspaceFs, nodeWorkspaceFs } from "@oscharko-dev/keiko-workspa
 import { PathDeniedError } from "@oscharko-dev/keiko-workspace";
 import { EDITOR_AGENT_NAVIGATION_DOCUMENT_MAX_BYTES as NAVIGATION_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { STREAMING, type RouteContext } from "../routes.js";
+import { SSE_HEARTBEAT_INTERVAL_MS } from "../sse.js";
+import { SSE_STALLED_READER_TIMEOUT_MS } from "../sse-write.js";
 import type { UiHandlerDeps } from "../deps.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import * as workspaceSearchRoutes from "./workspaceSearchRoutes.js";
@@ -140,7 +144,9 @@ function branded<T>(value: string, guard: (candidate: unknown) => candidate is T
   if (!guard(value)) throw new Error(`fixture value does not satisfy the contract guard: ${value}`);
   return value;
 }
-const PREPARED_CHANGESET_WIRE_LIMIT_BYTES = 65_536;
+// The prepared preview carries the whole new text of a file, bounded by the changeset cap (8 MiB,
+// owner decision 2026-10-28). The figure is written out here, not derived from the producer.
+const PREPARED_CHANGESET_WIRE_LIMIT_BYTES = 8 * 1_048_576;
 const PATCH_SOURCE_LIMIT_BYTES = 1_000_000;
 let bridgeDecisionCapability: string | undefined;
 let agentAuthorityRef: EditorAgentGovernedAuthorityReference | undefined;
@@ -237,7 +243,9 @@ function authorityEnvelope(
       maxRuntimeMs: 60_000,
       maxToolCalls: 20,
       maxPromptTokens: 10_000,
-      maxPatchBytes: 65_536,
+      // The figure a Coding Workbench run is minted with; the human-reviewed bridge path charges
+      // the same envelope, so a full-size changeset must fit it.
+      maxPatchBytes: CODING_RUNTIME_PATCH_BUDGET_BYTES,
     },
     expiresAt: "2099-01-01T00:00:00.000Z",
     approvalProofDigest: HASH,
@@ -347,6 +355,7 @@ function connectBridge(
   readonly frames: () => string;
   readonly destroyed: () => boolean;
   readonly close: () => void;
+  readonly drain: () => void;
   readonly outcome: ReturnType<typeof handleEditorAgentEvents>;
   readonly requestUrl: () => string | undefined;
   readonly contextUrl: () => string;
@@ -354,6 +363,9 @@ function connectBridge(
   const writes: string[] = [];
   const closeHandlers: (() => void)[] = [];
   const destroy = vi.fn();
+  // `once`/`off` carry the shared SSE writer's drain wait (`drain`, `close`); `on` keeps recording
+  // the route's own close handlers.
+  const flow = new EventEmitter();
   const res = {
     writeHead: vi.fn(),
     write: vi.fn((chunk: string) => {
@@ -363,6 +375,12 @@ function connectBridge(
     on: vi.fn((event: string, cb: () => void) => {
       if (event === "close") closeHandlers.push(cb);
     }),
+    once: (event: string, cb: () => void): void => {
+      flow.once(event, cb);
+    },
+    off: (event: string, cb: () => void): void => {
+      flow.off(event, cb);
+    },
     end: vi.fn(),
     destroy,
   } as unknown as ServerResponse;
@@ -399,6 +417,10 @@ function connectBridge(
     contextUrl: (): string => url.toString(),
     close: (): void => {
       for (const cb of closeHandlers) cb();
+      flow.emit("close");
+    },
+    drain: (): void => {
+      flow.emit("drain");
     },
   };
 }
@@ -3710,33 +3732,62 @@ describe("editor agent routes — Issue #1392 liveness and queue lifecycle", () 
     });
 
     // CodeRabbit review, PR #3452: a refused ready frame used to be ignored, leaving the controller
-    // and the session subscription alive until some other close path ran. It now takes the same
-    // abort-and-destroy path as every event frame.
-    it("destroys a bridge stream whose ready frame is refused and closes it as backpressure-killed", async () => {
-      const sink = createBufferedServerLogSink();
-      setServerLogger(createServerLogger({ sink, level: "info" }));
-      await registerSnapshotOnly();
-      const bridge = connectBridge(
-        "session-1",
-        undefined,
-        undefined,
-        "corr-agent-bridge-2",
-        () => false,
-      );
+    // and the session subscription alive until some other close path ran. 2026-10-28: a `false`
+    // write is flow control, so the bridge stream now waits for `drain`; a reader that drains
+    // nothing within the shared stalled-reader bound takes the same abort-and-destroy path as every
+    // event frame and still closes as backpressure-killed.
+    it("destroys a bridge stream whose reader stalls on the ready frame and closes it as backpressure-killed", async () => {
+      vi.useFakeTimers();
+      try {
+        const sink = createBufferedServerLogSink();
+        setServerLogger(createServerLogger({ sink, level: "info" }));
+        await registerSnapshotOnly();
+        const bridge = connectBridge(
+          "session-1",
+          undefined,
+          undefined,
+          "corr-agent-bridge-2",
+          () => false,
+        );
 
-      expect(bridge.destroyed()).toBe(true);
-      bridge.close();
+        vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
+        expect(bridge.destroyed()).toBe(false);
+        vi.advanceTimersByTime(1);
+        expect(bridge.destroyed()).toBe(true);
+        bridge.close();
 
-      expect(closedLines(sink)).toEqual([
-        expect.objectContaining({
-          op: "sse.stream.closed",
-          correlationId: "corr-agent-bridge-2",
-          extra: expect.objectContaining({
-            frameCount: 1,
-            reason: "backpressure-killed",
-          }) as unknown,
-        }),
-      ]);
+        expect(closedLines(sink)).toEqual([
+          expect.objectContaining({
+            op: "sse.stream.closed",
+            correlationId: "corr-agent-bridge-2",
+            extra: expect.objectContaining({
+              // The ready frame plus the keep-alives queued behind it during the stall bound.
+              frameCount: 1 + Math.floor(SSE_STALLED_READER_TIMEOUT_MS / SSE_HEARTBEAT_INTERVAL_MS),
+              reason: "backpressure-killed",
+            }) as unknown,
+          }),
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("keeps a bridge stream whose reader drains the ready frame late", async () => {
+      vi.useFakeTimers();
+      try {
+        await registerSnapshotOnly();
+        let drained = false;
+        const bridge = connectBridge("session-1", undefined, undefined, undefined, () => drained);
+
+        drained = true;
+        bridge.drain();
+        vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS * 2);
+
+        expect(bridge.destroyed()).toBe(false);
+        bridge.close();
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 
@@ -4049,14 +4100,39 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
     expect(auditRecords().map((record) => record.origin)).toEqual(["chat", "chat"]);
   });
 
+  // A file of PREPARED_SOURCE_BYTES whose first line is rewritten and which then grows by appended
+  // lines to exactly `newTextBytes`. The patch carries only the two hunks (no context), so it stays
+  // far below the patch cap while the prepared preview, the whole new text, reaches the wire limit.
+  const PREPARED_SOURCE_TAIL_BYTES = 900_000;
+  function arrangeGrowingFile(file: string, newTextBytes: number): { readonly patch: string } {
+    const tail = "t".repeat(PREPARED_SOURCE_TAIL_BYTES);
+    writeWorkspaceFile(workspaceRoot, file, `A0\n${tail}\n`);
+    const kept = Buffer.byteLength(`A1\n${tail}\n`, "utf8");
+    const needed = newTextBytes - kept;
+    const lineBytes = 1_024;
+    const fullLines = Math.floor(needed / lineBytes);
+    const remainder = needed - fullLines * lineBytes;
+    const added = [
+      ...Array.from({ length: fullLines }, () => `+${"x".repeat(lineBytes - 1)}`),
+      ...(remainder > 0 ? [`+${"x".repeat(remainder - 1)}`] : []),
+    ];
+    const patch = [
+      `--- a/${file}`,
+      `+++ b/${file}`,
+      "@@ -1 +1 @@",
+      "-A0",
+      "+A1",
+      `@@ -2,0 +3,${String(added.length)} @@`,
+      ...added,
+    ].join("\n");
+    return { patch: `${patch}\n` };
+  }
+
   it("queues a prepared changeset exactly at the wire text limit", async () => {
-    const tail = "x".repeat(PREPARED_CHANGESET_WIRE_LIMIT_BYTES - 4);
-    writeWorkspaceFile(workspaceRoot, "src/large.txt", `A0\n${tail}\n`);
-    const patch = oneLineModifyPatch([{ file: "src/large.txt", before: "A0", after: "A1" }]);
-    const proposed = changesetActionFor(workspaceRoot, patch, ["src/large.txt"]);
-    const bridge = await registerChangesetSnapshot(workspaceRoot, "src/large.txt", [
-      "src/large.txt",
-    ]);
+    const file = "src/large.txt";
+    const { patch } = arrangeGrowingFile(file, PREPARED_CHANGESET_WIRE_LIMIT_BYTES);
+    const proposed = changesetActionFor(workspaceRoot, patch, [file]);
+    const bridge = await registerChangesetSnapshot(workspaceRoot, file, [file]);
 
     const queued = await handleEditorAgentActions(context(proposed));
 
@@ -4067,13 +4143,10 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
   });
 
   it("fails closed before emitting a prepared changeset above the wire text limit", async () => {
-    const tail = "x".repeat(PREPARED_CHANGESET_WIRE_LIMIT_BYTES - 3);
-    writeWorkspaceFile(workspaceRoot, "src/large.txt", `A0\n${tail}\n`);
-    const patch = oneLineModifyPatch([{ file: "src/large.txt", before: "A0", after: "A1" }]);
-    const proposed = changesetActionFor(workspaceRoot, patch, ["src/large.txt"]);
-    const bridge = await registerChangesetSnapshot(workspaceRoot, "src/large.txt", [
-      "src/large.txt",
-    ]);
+    const file = "src/large.txt";
+    const { patch } = arrangeGrowingFile(file, PREPARED_CHANGESET_WIRE_LIMIT_BYTES + 1);
+    const proposed = changesetActionFor(workspaceRoot, patch, [file]);
+    const bridge = await registerChangesetSnapshot(workspaceRoot, file, [file]);
 
     const rejected = await handleEditorAgentActions(context(proposed));
 
@@ -6063,5 +6136,122 @@ describe("ordinary Editor passive safety route", () => {
       snapshot: null,
     });
     expect(editorAgentRegistry.bufferSnapshotFor("session-safety")).toBeUndefined();
+  });
+});
+
+// Owner decision 2026-10-28: a governed changeset may carry 8 MiB, so normal work (a 66 KB data
+// file, a generated fixture) is never refused on its way from the model to the file. Every figure
+// here is policy this block owns, written out rather than derived from the producer's constant.
+describe("applyChangeset size bounds (owner decision 2026-10-28)", () => {
+  const MIB = 1_048_576;
+  let workspaceRoot: string;
+
+  beforeEach(() => {
+    workspaceRoot = mkdtempSync(join(tmpdir(), "keiko-agent-changeset-size-"));
+  });
+
+  afterEach(() => {
+    rmSync(workspaceRoot, { recursive: true, force: true });
+  });
+
+  // A rewrite of a one-line file into `lines` lines, sized so the patch is exactly `patchBytes`:
+  // all lines but the last are 1,024 bytes of patch, the last takes the remainder.
+  function rewritePatch(file: string, patchBytes: number, width = 1_022): string {
+    const lineBytes = width + 2;
+    const header = (count: number): string =>
+      `--- a/${file}\n+++ b/${file}\n@@ -1 +1,${String(count)} @@\n-A0\n`;
+    let count = Math.floor((patchBytes - header(1).length) / lineBytes);
+    count = Math.floor((patchBytes - header(count).length) / lineBytes);
+    const remainder = patchBytes - header(count).length - count * lineBytes;
+    const lines = Array.from(
+      { length: count },
+      (_, index) => `+${"d".repeat(index === count - 1 ? width + remainder : width)}\n`,
+    );
+    const patch = header(count) + lines.join("");
+    expect(Buffer.byteLength(patch, "utf8")).toBe(patchBytes);
+    return patch;
+  }
+
+  function expectedContent(patch: string): string {
+    return patch
+      .split("\n")
+      .filter((line) => line.startsWith("+") && !line.startsWith("+++"))
+      .map((line) => `${line.slice(1)}\n`)
+      .join("");
+  }
+
+  async function propose(
+    patchBytes: number,
+    width?: number,
+  ): Promise<{
+    readonly proposed: EditorAgentAction;
+    readonly patch: string;
+    readonly bridge: ReturnType<typeof connectBridge>;
+  }> {
+    const file = "data/big.csv";
+    writeWorkspaceFile(workspaceRoot, file, "A0\n");
+    const patch = rewritePatch(file, patchBytes, width);
+    const proposed = changesetActionFor(workspaceRoot, patch, [file]);
+    const bridge = await registerChangesetSnapshot(workspaceRoot, file, [file]);
+    return { proposed, patch, bridge };
+  }
+
+  it.each([66 * 1_024, MIB, 8 * MIB])(
+    "queues, reviews and applies a %i-byte single-file changeset",
+    async (patchBytes) => {
+      const { proposed, patch, bridge } = await propose(patchBytes);
+
+      const queued = await handleEditorAgentActions(context(proposed));
+
+      expect(queued.status).toBe(202);
+      expect(actionResultStatus(queued.body)).toBe("queued");
+      expect(readWorkspaceFile(workspaceRoot, "data/big.csv")).toBe("A0\n");
+      const emitted = lastEmittedAction(bridge.frames());
+      expect(emitted.changeset?.prepared?.files).toHaveLength(1);
+      // The review shows the whole changeset: the UI parser's default 512 KB cut would hide most of it.
+      expect(Buffer.byteLength(emitted.changeset?.patch ?? "", "utf8")).toBe(patchBytes);
+
+      expect((await postActionResult(proposed, "succeeded")).status).toBe(200);
+
+      expect(readWorkspaceFile(workspaceRoot, "data/big.csv")).toBe(expectedContent(patch));
+    },
+  );
+
+  it("admits a 66 KB data file of short lines, over the old 2,000 changed-line limit", async () => {
+    // 4,000 lines of 14 patch bytes each: 56 KB, and twice the old changed-line limit.
+    const { proposed, patch } = await propose(4_000 * 16, 14);
+
+    expect((await handleEditorAgentActions(context(proposed))).status).toBe(202);
+    expect((await postActionResult(proposed, "succeeded")).status).toBe(200);
+    expect(readWorkspaceFile(workspaceRoot, "data/big.csv")).toBe(expectedContent(patch));
+  });
+
+  it("refuses a patch one byte over 8 MiB before it is queued or written", async () => {
+    const file = "data/big.csv";
+    writeWorkspaceFile(workspaceRoot, file, "A0\n");
+    const patch = rewritePatch(file, 8 * MIB + 1);
+    const proposed = changesetActionFor(workspaceRoot, patch, [file]);
+    const bridge = await registerChangesetSnapshot(workspaceRoot, file, [file]);
+
+    const rejected = await handleEditorAgentActions(context(proposed));
+
+    expect(rejected.status).toBeGreaterThanOrEqual(400);
+    expect(rejected.status).toBeLessThan(500);
+    expect(bridge.frames()).not.toContain("event: editor-agent:action");
+    expect(readWorkspaceFile(workspaceRoot, file)).toBe("A0\n");
+  });
+
+  it("reads an action body up to its bound and answers 413 beyond it", async () => {
+    // The body bound carries a patch and its prepared preview at the cap with room to spare.
+    expect(EDITOR_AGENT_ACTION_MAX_BODY_BYTES).toBeGreaterThanOrEqual(3 * 8 * MIB);
+    const oversized = context({}, "/api/editor/agent/actions");
+    (oversized as { req: unknown }).req = Object.assign(
+      Readable.from([Buffer.alloc(EDITOR_AGENT_ACTION_MAX_BODY_BYTES + 1, 0x20)]),
+      { method: "POST" },
+    );
+
+    const rejected = await handleEditorAgentActions(oversized);
+
+    expect(rejected.status).toBe(413);
   });
 });

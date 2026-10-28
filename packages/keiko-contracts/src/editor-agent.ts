@@ -26,6 +26,7 @@ import {
 } from "./git-editor.js";
 import { GIT_STATUS_CODES } from "./git-repository.js";
 import type { GitRepositoryState, GitStatusCode } from "./git-repository.js";
+import type { PatchLimits } from "./tools.js";
 import {
   isWorkspaceRootIdentityDigest,
   isWorkspaceRootRef,
@@ -40,7 +41,62 @@ export { EDITOR_AGENT_TARGET_PATH_MAX_BYTES, isContainedAgentPath };
 
 export const EDITOR_AGENT_SCHEMA_VERSION = "1" as const;
 export const EDITOR_AGENT_CHANGESET_MAX_FILES = 50;
-export const EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES = 65_536;
+/**
+ * The size of one governed file change: the UTF-8 bytes of one changeset's unified diff, of one
+ * `applyPatch` diff, and of the new text one prepared preview carries. 8 MiB (owner decision,
+ * 2026-10-28), so normal work such as writing a 66 KB data file is never refused. It stays as the
+ * runaway-model safeguard of the editor trust boundary and the single place the number is defined:
+ * the validators below, the editor action route's patch inspection (`EDITOR_AGENT_CHANGESET_PATCH_LIMITS`)
+ * and its request body bound (`EDITOR_AGENT_ACTION_MAX_BODY_BYTES`), the replacement materializer and
+ * the review parser all read it from here.
+ */
+export const EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES = 8 * 1_048_576;
+/**
+ * Added plus removed lines one changeset may carry. A byte cap alone would let a diff of
+ * single-character lines through the parser as millions of records; this keeps the line walk
+ * proportional while staying out of the way of any real file under the byte cap (the approval
+ * review contract counts lines to the same bound).
+ */
+export const EDITOR_AGENT_CHANGESET_MAX_CHANGED_LINES = 1_000_000;
+/**
+ * The patch inspection limits of the governed editor path (`inspectPatch`, `validatePatch`,
+ * `applyPatch`). `DEFAULT_PATCH_LIMITS` stays sized for small assistant-generated patches of the
+ * other workflows; the editor changeset path is sized by the constants above.
+ */
+export const EDITOR_AGENT_CHANGESET_PATCH_LIMITS: PatchLimits = Object.freeze({
+  maxPatchBytes: EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES,
+  maxChangedLines: EDITOR_AGENT_CHANGESET_MAX_CHANGED_LINES,
+  maxFilesChanged: EDITOR_AGENT_CHANGESET_MAX_FILES,
+});
+/**
+ * The limits the projected changeset is validated and applied under. Projection re-renders the
+ * validated diff with every hunk count spelled out (`@@ -1 +1 @@` becomes `@@ -1,1 +1,1 @@`), which
+ * adds at most 4 bytes to a header of at least 12 bytes that heads at least 2 bytes of content, so
+ * the re-rendered text can exceed what was sent by well under half. The size of what the model sent
+ * is already bounded by `EDITOR_AGENT_CHANGESET_PATCH_LIMITS`; this bound only keeps a patch sent at
+ * the cap from being refused when it is applied.
+ */
+export const EDITOR_AGENT_CHANGESET_PROJECTION_PATCH_LIMITS: PatchLimits = Object.freeze({
+  ...EDITOR_AGENT_CHANGESET_PATCH_LIMITS,
+  maxPatchBytes:
+    EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES + EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES / 2,
+});
+/**
+ * The request body one editor action may carry (`POST /api/editor/agent/actions`). A changeset
+ * travels as its patch plus the prepared whole-file preview, each at most the cap above once
+ * decoded; JSON escaping of quotes and line breaks adds to both, so the body is bounded by three
+ * caps and a mebibyte of envelope. Memory stays proportional: the body is read once, never
+ * duplicated by the transport.
+ */
+export const EDITOR_AGENT_ACTION_MAX_BODY_BYTES =
+  3 * EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES + 1_048_576;
+/**
+ * The cumulative patch budget of one Coding Workbench run (`budget.maxPatchBytes` of its authority
+ * envelope): what the run may apply across all of its edits, charged by the size of the diff each
+ * one renders. 64 MiB (owner decision, 2026-10-28) is eight full-size changesets; the budget is the
+ * runaway-model safeguard of the run, the changeset cap above is the one of a single call.
+ */
+export const CODING_RUNTIME_PATCH_BUDGET_BYTES = 64 * 1_048_576;
 export const EDITOR_AGENT_PREPARED_CHANGESET_MAX_EDITS = 2_000;
 export const EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS = 128;
 export const EDITOR_AGENT_DIAGNOSTIC_MESSAGE_MAX_CHARS = 1_024;
@@ -700,7 +756,33 @@ function isBoundedUtf8String(value: unknown, maxBytes: number): value is string 
 }
 
 function isUtf8StringWithin(value: unknown, maxBytes: number): value is string {
-  return typeof value === "string" && EDITOR_AGENT_TEXT_ENCODER.encode(value).length <= maxBytes;
+  return typeof value === "string" && utf8LengthUpTo(value, maxBytes) <= maxBytes;
+}
+
+function utf8UnitBytes(value: string, index: number): 1 | 2 | 3 | 4 {
+  const codePoint = value.codePointAt(index) ?? 0;
+  if (codePoint < 0x80) return 1;
+  if (codePoint < 0x800) return 2;
+  // `codePointAt` joins a surrogate pair into one supplementary code point, which UTF-8 encodes in
+  // four bytes; a lone surrogate stays below U+10000 and encodes as U+FFFD (three bytes), exactly
+  // what `TextEncoder` produces.
+  return codePoint > 0xffff ? 4 : 3;
+}
+
+/**
+ * The UTF-8 size of `value`, counted without encoding it, and abandoned as soon as it passes
+ * `limit` (the result is then any number above `limit`). A changeset is validated several times on
+ * its way from the model to the file and may carry megabytes: encoding each copy would allocate
+ * the whole payload again for every check, where a count needs no copy at all.
+ */
+function utf8LengthUpTo(value: string, limit: number): number {
+  let bytes = 0;
+  for (let index = 0; index < value.length && bytes <= limit; index += 1) {
+    const width = utf8UnitBytes(value, index);
+    bytes += width;
+    if (width === 4) index += 1;
+  }
+  return bytes;
 }
 
 function isBoundedTargetPath(value: unknown): value is string {
@@ -935,7 +1017,7 @@ function preparedTextBytes(files: readonly EditorAgentPreparedChangesetFile[]): 
     (total, file) =>
       total +
       file.textEdits.reduce(
-        (fileTotal, edit) => fileTotal + EDITOR_AGENT_TEXT_ENCODER.encode(edit.newText).length,
+        (fileTotal, edit) => fileTotal + utf8LengthUpTo(edit.newText, Number.POSITIVE_INFINITY),
         0,
       ),
     0,
@@ -988,8 +1070,7 @@ export function isEditorAgentChangeset(value: unknown): value is EditorAgentChan
   if (!normalizedPathsAreUnique(files.map((file) => file.file))) return false;
   return (
     isNonEmptyString(value.patch) &&
-    EDITOR_AGENT_TEXT_ENCODER.encode(value.patch).length <=
-      EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES &&
+    isUtf8StringWithin(value.patch, EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES) &&
     selectedFilesBelongToChangeset(value.selectedFiles, files) &&
     isUndefinedOr(value.prepared, isEditorAgentPreparedChangeset)
   );
@@ -1557,7 +1638,7 @@ function isTextEditArray(
   if (!value.every(isTextEdit)) return false;
   const edits = value as readonly { readonly range: LanguageRange; readonly newText: string }[];
   const bytes = edits.reduce(
-    (total, edit) => total + EDITOR_AGENT_TEXT_ENCODER.encode(edit.newText).length,
+    (total, edit) => total + utf8LengthUpTo(edit.newText, EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES),
     0,
   );
   return bytes <= EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES;

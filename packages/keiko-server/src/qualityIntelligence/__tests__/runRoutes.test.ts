@@ -28,6 +28,16 @@ import {
   toStreamEvent,
 } from "../runRoutes.js";
 import { qiRunRegistry } from "../runRegistry.js";
+import { executeQiRun, type ExecuteQiRunInput } from "../runExecution.js";
+import { SSE_STALLED_READER_TIMEOUT_MS } from "../../sse-write.js";
+
+// Delegates to the real run by default; the SSE backpressure tests substitute a run that stays in
+// flight (`mockImplementationOnce`), because the real one finishes — and ends the response — before
+// a stalled reader's bound could ever be reached.
+vi.mock("../runExecution.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../runExecution.js")>();
+  return { ...actual, executeQiRun: vi.fn(actual.executeQiRun) };
+});
 
 // ─── Fixture helpers ───────────────────────────────────────────────────────────
 
@@ -78,8 +88,15 @@ class MockResponse extends EventEmitter {
     return this;
   }
 
+  get writableEnded(): boolean {
+    return this.ended;
+  }
+
+  // Like a real response: destroying marks it destroyed and fires `close`, which is what the
+  // route's own close handler aborts the run on.
   destroy(): void {
     this.destroyed = true;
+    this.emit("close");
   }
 }
 
@@ -1229,7 +1246,7 @@ describe("handleStartQiRun — ADF requirements source (KEIKO-0891 follow-on)", 
 //
 // RED reason: before this fix the `write` closure in handleStartQiRun called ctx.res.write()
 // directly and discarded the return value, so a slow client's backpressure signal was silently
-// ignored. GREEN reason: writeOrDestroy checks the return value and calls
+// ignored. GREEN reason: writeSseFrame checks the return value and calls
 // controller.abort() + res.destroy().
 
 describe("handleStartQiRun — SSE backpressure: slow client triggers socket destroy", () => {
@@ -1239,25 +1256,103 @@ describe("handleStartQiRun — SSE backpressure: slow client triggers socket des
     for (const dir of tmpDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
   });
 
-  it("calls res.destroy() when res.write() returns false during SSE streaming", async () => {
-    // Use a real file so ingestion succeeds and at least one SSE frame (error or accepted) is
-    // written — that first write with writeReturns=false must trigger destroy.
+  function specSource(): { sources: { kind: "file"; label: string; path: string }[] } {
     const dir = mkdtempSync(join(tmpdir(), "qi-bp-"));
     tmpDirs.push(dir);
     const path = join(dir, "spec.md");
     writeFileSync(path, "# Spec\nThe system shall log all events.\n", "utf8");
+    return { sources: [{ kind: "file", label: "Spec", path }] };
+  }
+
+  interface HeldRun {
+    // Resolves once the run has streamed its first event frame.
+    readonly eventStreamed: Promise<void>;
+    readonly release: () => void;
+    readonly signal: () => AbortSignal | undefined;
+  }
+
+  // A run that streams one event frame and then stays in flight until its signal aborts or it is
+  // released, like a long generation whose reader has stopped reading.
+  function holdNextRun(): HeldRun {
+    let streamSignal: AbortSignal | undefined;
+    let release = (): void => undefined;
+    let streamed = (): void => undefined;
+    const eventStreamed = new Promise<void>((resolve) => {
+      streamed = resolve;
+    });
+    vi.mocked(executeQiRun).mockImplementationOnce(async (input: ExecuteQiRunInput) => {
+      streamSignal = input.signal;
+      input.onEvent({
+        sequence: 1,
+        payload: { kind: "stage:started", stageName: "ingest" },
+      } as unknown as QI.QualityIntelligenceRunEvent);
+      streamed();
+      await new Promise<void>((resolve) => {
+        release = resolve;
+        input.signal.addEventListener("abort", () => {
+          resolve();
+        });
+      });
+      throw new Error("held run finished");
+    });
+    return {
+      eventStreamed,
+      release: (): void => {
+        release();
+      },
+      signal: () => streamSignal,
+    };
+  }
+
+  // RED reason: before this fix the `write` closure in handleStartQiRun called ctx.res.write()
+  // directly and discarded the return value, so a slow client's backpressure signal was silently
+  // ignored. GREEN reason: writeSseFrame queues the frame, waits for drain, and once the reader has
+  // drained nothing for SSE_STALLED_READER_TIMEOUT_MS calls controller.abort() + res.destroy().
+  it("calls res.destroy() when the reader stalls after res.write() returns false during SSE streaming", async () => {
+    vi.useFakeTimers();
+    const held = holdNextRun();
     const res = new MockResponse();
     res.writeReturns = false; // simulate TCP send-buffer full
 
-    const outcome = await handleStartQiRun(
-      ctx(makeReq({ sources: [{ kind: "file", label: "Spec", path }] }), res),
-      deps(),
-    );
+    const outcome = handleStartQiRun(ctx(makeReq(specSource()), res), deps());
+    await held.eventStreamed;
 
-    // Handler committed to SSE regardless of backpressure.
-    expect(outcome).toBe(STREAMING);
+    // The frame is queued, not dropped, and a false write alone tears nothing down.
     expect(res.statusCode).toBe(200);
-    // The socket must have been destroyed after the first backpressured write.
+    expect(res.chunks.join("")).toContain('"type":"event"');
+    expect(res.destroyed).toBe(false);
+    expect(held.signal()?.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(SSE_STALLED_READER_TIMEOUT_MS - 1);
+    expect(res.destroyed).toBe(false);
+    expect(held.signal()?.aborted).toBe(false);
+
+    // The reader drained nothing for the whole bound: the socket is destroyed and the run aborted.
+    await vi.advanceTimersByTimeAsync(1);
     expect(res.destroyed).toBe(true);
+    expect(held.signal()?.aborted).toBe(true);
+    // Handler committed to SSE regardless of backpressure.
+    await expect(outcome).resolves.toBe(STREAMING);
+  });
+
+  it("keeps the run streaming when a false write is followed by drain", async () => {
+    vi.useFakeTimers();
+    const held = holdNextRun();
+    const res = new MockResponse();
+    res.writeReturns = false;
+
+    const outcome = handleStartQiRun(ctx(makeReq(specSource()), res), deps());
+    await held.eventStreamed;
+
+    res.emit("drain");
+    res.writeReturns = true;
+    await vi.advanceTimersByTimeAsync(SSE_STALLED_READER_TIMEOUT_MS * 2);
+    expect(res.destroyed).toBe(false);
+    expect(held.signal()?.aborted).toBe(false);
+
+    held.release();
+    await expect(outcome).resolves.toBe(STREAMING);
+    expect(res.destroyed).toBe(false);
+    expect(res.ended).toBe(true);
   });
 });

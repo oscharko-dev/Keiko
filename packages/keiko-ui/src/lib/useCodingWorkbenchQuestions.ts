@@ -258,11 +258,19 @@ function useQuestionListing(input: ListingInput): void {
   const redemptions = useCodingAppSessionRedemptions();
   const coordinatorRef = useRef<ListingCoordinator | null>(null);
   const resyncRef = useRef({ epoch, redemptions, runId });
+  const listedRunRef = useRef<string | undefined>(undefined);
   useEffect(() => {
     if (!active || runId === undefined) {
       coordinatorRef.current = null;
+      listedRunRef.current = undefined;
       setState(terminal ? { ...EMPTY_STATE, status: "terminal" } : EMPTY_STATE);
       return;
+    }
+    // Questions belong to one run: another run starts from nothing, so a failed first listing can
+    // never show (or let the operator answer) a question the previous run asked.
+    if (listedRunRef.current !== runId) {
+      listedRunRef.current = runId;
+      setState(EMPTY_STATE);
     }
     const coordinator: ListingCoordinator = {
       controller: new AbortController(),
@@ -370,7 +378,7 @@ async function runQuestionListing(input: ActiveListingInput): Promise<void> {
       await waitForQuestionVisibility(retryDelay, controller.signal);
     }
   } catch (error) {
-    if (!controller.signal.aborted) setState(failureState(error));
+    if (!controller.signal.aborted) setState((current) => failureState(error, current));
   }
 }
 
@@ -431,10 +439,17 @@ function failureCode(error: unknown): string {
   return error instanceof ApiError ? error.code : "CODING_RUNTIME_QUESTION_FAILED";
 }
 
-function failureState(error: unknown): CodingWorkbenchQuestionsState {
+/**
+ * A failed listing is a statement about the connection, not about the questions: the ones already
+ * known stay, so the answer form and the draft typed into it survive until a listing succeeds.
+ */
+function failureState(
+  error: unknown,
+  current: CodingWorkbenchQuestionsState,
+): CodingWorkbenchQuestionsState {
   return {
     status: failureStatus(error),
-    questions: [],
+    questions: current.questions,
     errorCode: failureCode(error),
     mutationFailure: null,
   };

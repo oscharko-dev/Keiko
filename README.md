@@ -34,7 +34,7 @@
   ·
   <a href="#install-with-npm">npm</a>
   ·
-  <a href="#whats-new-in-130">What's new in 1.3</a>
+  <a href="#whats-new-in-131">What's new in 1.3</a>
   ·
   <a href="https://github.com/oscharko-dev/Keiko/blob/dev/CONTRIBUTING.md">Contributing</a>
   ·
@@ -71,24 +71,46 @@ Keiko is an open-source project and does not yet buy Apple and Microsoft code-si
 
 ## Install with npm
 
+Install Keiko into a folder of its own and start it from there:
+
 ```bash
-npm install -g @oscharko-dev/keiko
+mkdir keiko && cd keiko && npm init -y
 ```
 
 ```bash
-keiko start
+npm install @oscharko-dev/keiko
 ```
 
-Connected folders do not need Git metadata or a `package.json`. Run `keiko init` only if you want to add optional commands to an existing Node.js project. `keiko start` and `keiko restart`, including the generated `keiko:start` project script, open an authenticated browser session at `http://127.0.0.1:1983` by default. Use `--no-open` for a headless start. `keiko stop` shuts it down, and `keiko start --port <n>` picks another port. Requires Node.js `>=24.18.0 <25 || >=26.3.0 <27`; the desktop packages bring their own runtime. On macOS, npm selects the optional coding-runtime package for Apple Silicon or Intel, and Keiko verifies its contents before use. A missing or unsupported runtime is reported as unavailable; installing Keiko does not bypass platform checks.
+```bash
+npx keiko start
+```
+
+A global installation (`npm install -g`) is not supported yet: npm leaves Keiko's runtime
+dependencies out of it, so `keiko start` fails (see Honest limits).
+
+Connected folders do not need Git metadata or a `package.json`. Run `npx keiko init` only if you want to add optional commands to an existing Node.js project. `npx keiko start` and `npx keiko restart`, including the generated `keiko:start` project script, open an authenticated browser session at `http://127.0.0.1:1983` by default. Use `--no-open` for a headless start. `npx keiko stop` shuts it down, and `npx keiko start --port <n>` picks another port. Requires Node.js `>=24.18.0 <25 || >=26.3.0 <27`; the desktop packages bring their own runtime. On macOS, npm selects the optional coding-runtime package for Apple Silicon or Intel, and Keiko verifies its contents before use. A missing or unsupported runtime is reported as unavailable; installing Keiko does not bypass platform checks.
 
 ## Honest limits
 
+- `npm install -g @oscharko-dev/keiko` installs Keiko without its third-party runtime dependencies, and `keiko start` then fails at startup. Install it into a project folder instead, as shown above, or use the desktop packages ([#3582](https://github.com/oscharko-dev/Keiko/issues/3582)).
 - Updating from before 1.2.0 requires manual review of custom support scripts: legacy inclusion flags, filename-based `--out` arguments and sidecar bundles are replaced by the canonical private report workflow. See the [support guide](https://github.com/oscharko-dev/Keiko/blob/dev/docs/observability/support-workspace.md).
 - Windows Chat, Files and manual Editor use are separate from Coding execution. The Windows gateway-filter work remains a development implementation and does not enable the Coding runtime; see the [qualification status](https://github.com/oscharko-dev/Keiko/blob/dev/docs/qa/windows-gateway-runtime-progress.md).
 - Model weights and inference servers are not bundled. Connect a compatible local model server, including a separately installed Gemma server, through Keiko's gateway configuration, directly or through a proxy such as LiteLLM. This release does not install MLX or certify every model and context-window configuration.
 - The CLI, the UI and the SDK share one product. Surface coverage is intentionally not identical. `keiko gen-tests` and `keiko investigate` print a reviewable report but do not persist an evidence manifest.
 - The UI can create a local runtime config during first-run setup. To list models, Keiko calls the gateway model list endpoint you configured — credentials stay in your local config.
-- Keiko serves loopback only: `keiko start` and the UI validate a loopback host value, and the server always binds `127.0.0.1`. `keiko start --port <n>` sets the Port to bind (default: 1983).
+- Keiko serves loopback only: `npx keiko start` and the UI validate a loopback host value, and the server always binds `127.0.0.1`. `npx keiko start --port <n>` sets the Port to bind (default: 1983).
+
+## What's new in 1.3.1
+
+- **Long coding runs stay connected.** The task timeline keeps updating during a long run, reconnects on its own after a brief drop, and a quiet stretch while the model thinks no longer signs your browser window out.
+- **Clear reasons instead of bare failures.** A failed step in the timeline says why, for example which exit code a command returned. In Full access on macOS, when Keiko cannot prepare a project's dependencies for its isolated check, the model is pointed to the project's own checks and the Activity Log names the reason.
+- **Editor and Git-change Chat work again.** Go to definition, find references, rename and the other code navigation commands answer again, and a Chat about a Git change can connect, send and apply proposals.
+- **Coding answers arrive as the model wrote them.** The Coding Workbench no longer replaces parts of the agent's answer, such as a quoted change, with `[REDACTED]`. Credentials and private keys are still removed. A command that returned a non-zero exit code, such as a test run that reproduces a defect, now shows its exit code instead of a red Failed.
+- **Keep authorized document details in Chat.** When every configured model is one you trust with your documents, start Keiko with `KEIKO_CONTENT_REDACTION=off` and Chat keeps details such as phone numbers, account numbers and configuration values instead of masking them. Credentials and private keys are still removed, and without the setting nothing changes. See [the operator guide](https://github.com/oscharko-dev/Keiko/blob/dev/docs/troubleshooting/chat-content-redaction.md).
+
+Updating from 1.2.7 or 1.3.0 needs no action, and your tasks and Coding History carry over unchanged.
+
+An installation on 1.2.6 or earlier must run the verified updater bootstrap once before automatic updates. Back up local state and preserve private keys during that step; the [repair evidence](https://github.com/oscharko-dev/Keiko/blob/dev/docs/qa/portable-updater-repair-4055.md) describes it.
 
 ## What's new in 1.3.0
 

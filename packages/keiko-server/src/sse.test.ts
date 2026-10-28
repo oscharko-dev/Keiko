@@ -4,7 +4,9 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { EventEmitter } from "node:events";
 import { SSE_HEADERS, startSseHeartbeat, writeReadyMessage } from "./sse.js";
+import { SSE_STALLED_READER_TIMEOUT_MS } from "./sse-write.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 
 describe("SSE_HEADERS", () => {
@@ -51,22 +53,22 @@ describe("startSseHeartbeat process-liveness", () => {
     }
   });
 
-  it("destroys a slow client when heartbeat backpressure is reported", async () => {
+  it("keeps a buffered heartbeat stream open and destroys it only when the reader stalls", async () => {
     vi.useFakeTimers();
     try {
       const destroy = vi.fn();
       const write = vi.fn(() => false);
-      const res = {
+      const res = Object.assign(new EventEmitter(), {
         destroyed: false,
         writableEnded: false,
         write,
         destroy,
-        on: vi.fn(),
-      } as unknown as import("node:http").ServerResponse;
+      }) as unknown as import("node:http").ServerResponse;
       const stop = startSseHeartbeat(res, 10);
       await vi.advanceTimersByTimeAsync(10);
       expect(write).toHaveBeenCalledWith(": keep-alive\n\n");
-      expect(write).not.toHaveBeenCalledWith("event: heartbeat\ndata: {}\n\n");
+      expect(destroy).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(SSE_STALLED_READER_TIMEOUT_MS);
       expect(destroy).toHaveBeenCalledOnce();
       stop();
     } finally {

@@ -77,7 +77,7 @@ import type {
 } from "./store/relationship-audit.js";
 import { UiStoreError } from "./store/errors.js";
 import { SSE_HEADERS } from "./sse.js";
-import { writeOrDestroy } from "./sse-write.js";
+import { writeSseFrame } from "./sse-write.js";
 import { readBoundedRequestBody, RequestBodyTooLargeError } from "./bounded-request-body.js";
 import {
   subscribeActivityBroadcast,
@@ -1979,7 +1979,7 @@ function handleEventsImpl(ctx: RouteContext, deps: UiHandlerDeps): RouteResult |
 
 // GEN-PERF-RELACT-001 — refresh/ping timers, snapshot sweeps, and frame serialization are shared
 // per workspace via the broadcaster instead of duplicated per connection, and every write reacts
-// to backpressure (writeOrDestroy) so a non-draining client is destroyed instead of growing the
+// to backpressure (writeSseFrame) so a non-draining client is destroyed instead of growing the
 // response buffer without bound. `ctx.correlationId` (#2902 w5-sse-counters) is attached to the
 // "connected" frame below — the actual first write on the stream, ahead of
 // subscribeActivityBroadcast's own fanned-out writes — so sse-write.ts's set-once-wins per-stream
@@ -1993,7 +1993,7 @@ function openRelationshipEventsStream(
   workspaceId: string,
 ): () => void {
   const controller = new AbortController();
-  writeOrDestroy(
+  writeSseFrame(
     res,
     `retry: ${String(ACTIVITY_SSE_RETRY_MS)}\n: connected\n\n`,
     controller,

@@ -1970,6 +1970,17 @@ function parseSseLine(rawLine: string): SseLineResult {
   return { kind: "value", value: JSON.parse(payload) as unknown };
 }
 
+function parseSseLineOf(line: string, complete: boolean): SseLineResult {
+  try {
+    return parseSseLine(line);
+  } catch (error) {
+    if (complete && error instanceof SyntaxError) {
+      throw new GatewayResponseBodyValidationError("json-invalid");
+    }
+    throw error;
+  }
+}
+
 // Raised when an SSE stream produces no data event within its silence bound. Deliberately a plain
 // transport-layer error: the provider adapter maps it onto the typed, secret-redacting TimeoutError
 // of the gateway error taxonomy.
@@ -2060,13 +2071,19 @@ async function nextRead(
 }
 
 // The data payloads of complete SSE lines, up to `data: [DONE]`, which sets `ended.done`.
+//
+// `complete` marks lines the provider terminated with a newline. A complete line that is not JSON is
+// a deterministic fault of the provider's frame (GatewayResponseBodyValidationError, not retried as a
+// transport cut). The unterminated remainder at the end of the body can be a connection cut mid-frame,
+// so its SyntaxError stays a plain transport-class fault.
 function* dataPayloads(
   lines: readonly string[],
   ended: { done: boolean },
   onDone?: () => void,
+  complete = true,
 ): Generator {
   for (const line of lines) {
-    const result = parseSseLine(line);
+    const result = parseSseLineOf(line, complete);
     if (result.kind === "done") {
       ended.done = true;
       onDone?.();
@@ -2105,7 +2122,7 @@ async function* ssePayloads(
     total += value.byteLength;
     if (total > maxBytes) {
       await reader.cancel();
-      throw new Error("response body exceeded the size limit");
+      throw new GatewayResponseBodyValidationError("size-exceeded");
     }
     buffer += decoder.decode(value, { stream: true });
     const { lines, rest } = splitSseBuffer(buffer);
@@ -2116,7 +2133,7 @@ async function* ssePayloads(
     }
     if (ended.done) return;
   }
-  yield* dataPayloads([buffer + decoder.decode()], ended, onDone);
+  yield* dataPayloads([buffer + decoder.decode()], ended, onDone, false);
 }
 
 // Reads a Server-Sent-Events response as a stream of parsed JSON `data:` payloads. Incomplete lines

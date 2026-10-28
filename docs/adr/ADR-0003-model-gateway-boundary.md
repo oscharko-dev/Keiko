@@ -181,7 +181,8 @@ commit-message draft, conversation-history compaction summaries and evaluation, 
 heuristic redaction. A preserved
 answer still loses its credential floor: configured provider and Keiko credential literals of at
 least four characters and their encoded spellings, PEM private-key blocks, URL credentials,
-`Authorization` header values, encoded-looking Bearer/Basic values and the known issuer token
+`Authorization` header values, encoded-looking Bearer/Basic values, JWT-shaped bearer tokens
+(three base64url segments whose header and payload start `eyJ`) and the known issuer token
 shapes. Memory proposals project a preserved answer with the default redactor again. Streaming keeps the
 configured-secret buffering, and cancellation discards pending text. Tool arguments, error
 constructors, logs, support reports and audit artifacts retain their unconditional redactors.
@@ -721,7 +722,9 @@ following error types are never retried: `AuthenticationError`, `ModelRefusalErr
 
 **Steered repair of an exhausted or empty answer (#3873, F17, F23).** A `ProviderOutputExhaustedError` — an HTTP
 200 answer whose `finish_reason` is `length` with neither a tool call nor content, the model having
-spent its whole output budget on reasoning — is never retried as is. On a call that asks for it, it
+spent its whole output budget on reasoning, or whose tool call the budget cut off mid-arguments
+(normalization checks `length` before it parses tool-call JSON, buffered and streamed alike; the same
+cut call with any other finish reason stays a `MalformedToolCallError`) — is never retried as is. On a call that asks for it, it
 is not surfaced at once either: the explicit `GatewayCallRequest.answerRepair: "steered"` (local,
 never serialized) is set by the coding sidecar route alone, so every other call — the commit draft
 and interactive chat included — still surfaces such an answer at once and never makes a hidden second

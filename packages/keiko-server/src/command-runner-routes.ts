@@ -14,7 +14,7 @@ import type { CommandRunInput, CommandRunnerManager } from "./command-runner.js"
 import type { CommandRunnerEvent } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "./deps.js";
 import { SSE_HEADERS, startSseHeartbeat, readyMessage } from "./sse.js";
-import { writeOrDestroy, type SseBackpressureSignal } from "./sse-write.js";
+import { writeSseFrame, type SseBackpressureSignal } from "./sse-write.js";
 import { redactedEventJson } from "./sse-frame-cache.js";
 import {
   errorBody,
@@ -191,7 +191,7 @@ export function openCommandSseStream(
 ): void {
   res.writeHead(200, SSE_HEADERS);
   startSseHeartbeat(res);
-  // Per-connection abort: a slow-client backpressure kill (writeOrDestroy) aborts this controller,
+  // Per-connection abort: a slow-client backpressure kill (writeSseFrame) aborts this controller,
   // which unsubscribes from the manager so no further frames are produced for a dead socket. The
   // res.on("close") listener also unsubscribes; `unsubscribed` guards against the double call.
   // subscribe() returns synchronously and events fire only asynchronously afterward, so no event
@@ -211,7 +211,7 @@ export function openCommandSseStream(
   controller.signal.addEventListener("abort", stop, { once: true });
   // The ready frame takes the same abort-and-destroy path as every event frame: refused, it aborts
   // this controller at once, which unsubscribes the stream, so the socket is destroyed exactly once.
-  writeOrDestroy(res, readyMessage(), controller, onBackpressure, correlationId);
+  writeSseFrame(res, readyMessage(), controller, onBackpressure, correlationId);
   res.on("close", () => {
     stop();
   });
@@ -229,5 +229,5 @@ function writeCommandEvent(
   // the per-connection `id:` cursor differs between them.
   const data = redactedEventJson(redactor, event);
   const frame = `id: ${String(seq)}\nevent: command:${event.kind}\ndata: ${data}\n\n`;
-  writeOrDestroy(res, frame, controller, onBackpressure);
+  writeSseFrame(res, frame, controller, onBackpressure);
 }

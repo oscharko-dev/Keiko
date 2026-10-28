@@ -55,6 +55,10 @@ export function changesRefreshSignal(
 ): string | null {
   const cursor = latestEventCursor(events);
   const settled = settledWorkspaceToolCount(feed);
-  if (cursor === null && settled === 0) return null;
-  return `${cursor ?? "-"}|${String(settled)}`;
+  // A turn at its tool bound keeps a constant settled count while the server displaces its oldest
+  // call for each new one; the feed's monotonic loss counter is what keeps advancing then.
+  const displaced = feed?.droppedEventCount ?? 0;
+  if (cursor === null && settled === 0 && displaced === 0) return null;
+  const displacedSuffix = displaced === 0 ? "" : `|d${String(displaced)}`;
+  return `${cursor ?? "-"}|${String(settled)}${displacedSuffix}`;
 }

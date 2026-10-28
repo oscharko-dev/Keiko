@@ -149,7 +149,13 @@ function useActivityConnection(input: ActivityConnectionInput): void {
       return undefined;
     }
     const controller = new AbortController();
-    setState({ status: "loading", feed: null, errorCode: null });
+    // The conversation already held for this run stays on screen, captioned by the non-live
+    // status, until a new snapshot replaces it; only another run's feed is dropped.
+    setState((current) => ({
+      status: "loading",
+      feed: current.feed?.runId === runId ? current.feed : null,
+      errorCode: null,
+    }));
     const publish = (snapshot: CodingAppSessionChannelSnapshot): void => {
       if (!controller.signal.aborted) enqueue(snapshot);
     };
@@ -262,7 +268,8 @@ function stateForLifecycle(
       ? { ...current, status: "ended" }
       : current;
   }
-  if (failureStatus(current.status)) return current;
+  // A held feed that is still being re-read is not confirmed live (or paused, or ended) yet.
+  if (failureStatus(current.status) || current.status === "loading") return current;
   return { ...current, status: lifecycleStatus(runState) };
 }
 

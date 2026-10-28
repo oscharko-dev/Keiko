@@ -18,6 +18,8 @@ import {
   createCodingRuntimeRunEffortRegistry,
 } from "./codingRuntimeRunEffort.js";
 import { OPENCODE_NATIVE_DELIVERY_TOOL_NAMES } from "./opencodeNativeDeliveryTools.js";
+import { openCodeNativeCreditedKinds } from "./opencodeNativePolicy.js";
+import type { VerificationKind } from "@oscharko-dev/keiko-contracts";
 import {
   governedPorts,
   NATIVE_EFFECT_FIXTURE_RUN_ID as RUN_ID,
@@ -696,6 +698,117 @@ describe("native edits and checks reach the run's verification ledger (#3901)", 
     facet.settled({ ...call("call_edit"), tool: "edit", state: "succeeded" });
     facet.verificationDenied?.();
     expect(ledger.verificationBlockedReason(RUN_ID)).toBe("verification-command-denied");
+  });
+
+  // Keiko 1.3.1 qualification, T4 (Ask for approval, macOS): the governed verifier could not run its
+  // type check, lint and test on this host (native-shell-required), so the model ran the
+  // repository's documented `npm run check` in its shell, and it passed. Only its test was counted,
+  // the type check and lint stayed selected and unproven, and the run failed as unverified.
+  describe("a passing line proves every check it ran (Keiko 1.3.1 qualification)", () => {
+    const LAB_CHECK = ["npm run check"];
+    function labRun(): ReturnType<typeof verifiedRun> & {
+      readonly credited: ReturnType<typeof vi.fn>;
+    } {
+      const ledger = new CodingRuntimeRunEffortLedger();
+      ledger.begin(RUN_ID);
+      const credited = vi.fn(
+        (resources: readonly string[], readScripts: boolean): readonly VerificationKind[] =>
+          openCodeNativeCreditedKinds(
+            resources,
+            readScripts
+              ? (): ReadonlyMap<string, string> =>
+                  new Map([
+                    ["typecheck", "tsc --noEmit"],
+                    ["lint", "eslint ."],
+                    ["test", "node --test"],
+                    ["check", "npm run typecheck && npm run lint && npm test"],
+                  ])
+              : undefined,
+          ),
+      );
+      const facet = createCodingToolNativeSettlementFacet(undefined, {
+        observeEditOutcome: (outcome): void => {
+          if (outcome.kind === "applied") ledger.edit(RUN_ID);
+        },
+        verification: {
+          revision: () => ledger.verificationRevision(RUN_ID),
+          admitted: () => ledger.verificationAdmitted(RUN_ID),
+          blocked: (reason, digest): void => {
+            ledger.verificationBlocked(RUN_ID, reason, digest);
+          },
+          publish: (result): void => {
+            result.executed?.(result.kind);
+            ledger.verification(RUN_ID, result.passed, result.kind, result.editRevision);
+          },
+          credited,
+        },
+      });
+      return { ledger, facet, edits: { count: 0 }, credited };
+    }
+    /** The governed verifier's three not-run checks, as the T4 run's Activity Log recorded them. */
+    function governedChecksNotRun(ledger: CodingRuntimeRunEffortLedger): void {
+      for (const kind of ["typecheck", "lint", "test"] as const) {
+        ledger.verification(RUN_ID, false, kind, ledger.verificationRevision(RUN_ID));
+        ledger.verificationBlocked(RUN_ID, "VERIFICATION_NOT_RUN", kind);
+      }
+    }
+
+    it("settles the T4 sequence verified once `npm run check` passed", () => {
+      const { ledger, facet } = labRun();
+      facet.settled({ ...call("call_edit"), tool: "edit", state: "succeeded" });
+      governedChecksNotRun(ledger);
+      expect(ledger.needsVerification(RUN_ID)).toBe(true);
+      facet.verificationAdmitted?.(call("call_check"), "test", LAB_CHECK);
+      facet.settled({ ...call("call_check"), ...passedCheck });
+      expect(ledger.needsVerification(RUN_ID)).toBe(false);
+      expect(ledger.verificationBlockedReason(RUN_ID)).toBeUndefined();
+    });
+
+    it("credits nothing beyond the named check when the line failed", () => {
+      const { ledger, facet } = labRun();
+      facet.settled({ ...call("call_edit"), tool: "edit", state: "succeeded" });
+      governedChecksNotRun(ledger);
+      facet.verificationAdmitted?.(call("call_check"), "test", LAB_CHECK);
+      facet.settled({ ...call("call_check"), ...passedCheck, state: "failed", exitCode: 1 });
+      expect(ledger.needsVerification(RUN_ID)).toBe(true);
+    });
+
+    it("reads the package scripts at admission, not again at settlement", () => {
+      const { facet, credited } = labRun();
+      facet.verificationAdmitted?.(call("call_check"), "test", LAB_CHECK);
+      facet.settled({ ...call("call_check"), ...passedCheck });
+      expect(credited.mock.calls).toEqual([[LAB_CHECK, true]]);
+    });
+
+    it("credits a call that named its own working directory by its line alone", () => {
+      const { ledger, facet, credited } = labRun();
+      facet.settled({ ...call("call_edit"), tool: "edit", state: "succeeded" });
+      governedChecksNotRun(ledger);
+      facet.verificationAdmitted?.(call("call_check"), "test", LAB_CHECK);
+      facet.settled({ ...call("call_check"), ...passedCheck, ownWorkdir: true });
+      expect(credited.mock.calls.at(-1)).toEqual([LAB_CHECK, false]);
+      expect(ledger.needsVerification(RUN_ID)).toBe(true);
+    });
+
+    it("credits each check of a typed && line without any script", () => {
+      const { ledger, facet } = labRun();
+      facet.settled({ ...call("call_edit"), tool: "edit", state: "succeeded" });
+      governedChecksNotRun(ledger);
+      const line = ["npm run typecheck", "npm run lint", "npm test"];
+      facet.verificationAdmitted?.(call("call_chain"), "typecheck", line);
+      facet.settled({ ...call("call_chain"), ...passedCheck, exitStatusCheck: "typecheck" });
+      expect(ledger.needsVerification(RUN_ID)).toBe(false);
+    });
+
+    it("lets no credit prove an edit made after the line was admitted", () => {
+      const { ledger, facet } = labRun();
+      facet.settled({ ...call("call_edit_1"), tool: "edit", state: "succeeded" });
+      governedChecksNotRun(ledger);
+      facet.verificationAdmitted?.(call("call_check"), "test", LAB_CHECK);
+      facet.settled({ ...call("call_edit_2"), tool: "edit", state: "succeeded" });
+      facet.settled({ ...call("call_check"), ...passedCheck });
+      expect(ledger.needsVerification(RUN_ID)).toBe(true);
+    });
   });
 
   it("counts an applied native edit once and a failed one never", () => {

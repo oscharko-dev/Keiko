@@ -8,8 +8,8 @@
 
 **Symptom**
 
-Keiko was installed with `npm install -g @oscharko-dev/keiko`. The Coding Workbench lists its coding
-models, and every attempt to start a run shows:
+Keiko was installed with npm (`npm install @oscharko-dev/keiko` in a project folder). The Coding
+Workbench lists its coding models, and every attempt to start a run shows:
 
 > Starting a coding run stays unavailable until this installation's coding runtime is confirmed
 > active.
@@ -25,7 +25,7 @@ npm package carries neither, so until 1.1.2 an npm installation could never star
 
 **Diagnostic Steps**
 
-1. `keiko support export`, then `keiko support analyze <report.json>` on the report path it prints.
+1. `npx keiko support export`, then `npx keiko support analyze <report.json>` on the report path it prints.
 2. Look for `coding-runtime.dev-lane.activated` with `lane: "npm-runtime-package"`. When it is
    absent, no runtime package is installed.
 3. `coding-runtime.dev-lane.refused` with `lane: "npm-runtime-package"` means a runtime package is
@@ -38,25 +38,27 @@ npm package carries neither, so until 1.1.2 an npm installation could never star
 
 **Resolution**
 
-Update to 1.1.2 or later. On a Mac, `npm install -g @oscharko-dev/keiko` then installs the coding
+Update to 1.1.2 or later. On a Mac, `npm install @oscharko-dev/keiko` then installs the coding
 runtime for the Mac's processor by itself: the runtime packages are optional dependencies of Keiko,
 and npm selects the one that matches the host.
 
 The runtime is absent after an install with `--omit=optional` (or `optional=false` in the npm
 configuration), or when a registry mirror does not carry the runtime package. Install the ONE
 package that matches the Mac's processor (`uname -m` prints `arm64` or `x86_64`; npm refuses the
-other one with `EBADPLATFORM`), then restart Keiko.
+other one with `EBADPLATFORM`) in the folder where Keiko is installed, then restart Keiko. A global
+installation (`npm install -g`) is not supported yet
+([#3582](https://github.com/oscharko-dev/Keiko/issues/3582)).
 
 Apple silicon (`arm64`):
 
 ```bash
-npm install -g @oscharko-dev/keiko-coding-runtime-darwin-arm64 && keiko restart
+npm install @oscharko-dev/keiko-coding-runtime-darwin-arm64 && npx keiko restart
 ```
 
 Intel Mac (`x86_64`):
 
 ```bash
-npm install -g @oscharko-dev/keiko-coding-runtime-darwin-x64 && keiko restart
+npm install @oscharko-dev/keiko-coding-runtime-darwin-x64 && npx keiko restart
 ```
 
 Keiko finds the package by name and, at every start, verifies the OpenCode executable, its license

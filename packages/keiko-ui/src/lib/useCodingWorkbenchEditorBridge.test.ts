@@ -191,6 +191,38 @@ describe("useCodingWorkbenchEditorBridge — applyChangeset", () => {
     expect(postResultSpy).not.toHaveBeenCalled();
   });
 
+  // Owner decision 2026-10-28: a governed changeset may carry 8 MiB. The operator is deciding about
+  // the whole of it, so the review parses all of it: the shared parser's 512 KB display cut would
+  // silently hide most of a large changeset the operator is about to approve.
+  it("reviews a changeset larger than the 512 KB display cut in full, never truncated", async () => {
+    const added = 20_000;
+    const patch = [
+      "--- /dev/null",
+      "+++ b/data/rows.csv",
+      `@@ -0,0 +1,${String(added)} @@`,
+      ...Array.from(
+        { length: added },
+        (_, index) => `+${String(index).padStart(8, "0")},${"x".repeat(60)}`,
+      ),
+    ].join("\n");
+    expect(patch.length).toBeGreaterThan(1_000_000);
+    const { result } = renderHook(() =>
+      useCodingWorkbenchEditorBridge({ root: "/repo/task-1", runId: "run-1", active: true }),
+    );
+    await flushMicrotasks();
+    const source = latestSource();
+    const sessionId = new URL(source.url, "https://example.test").searchParams.get("sessionId");
+    act(() => {
+      emitApplyChangeset(source, sessionId ?? "", { patch });
+    });
+    await flushMicrotasks();
+    const diff = result.current.pendingReview?.diff;
+    expect(diff?.truncated).toBe(false);
+    expect(diff?.files).toHaveLength(1);
+    expect(diff?.files[0]?.addedLines).toBe(added);
+    expect(diff?.files[0]?.truncated).toBe(false);
+  });
+
   it("approve() posts a succeeded result and clears pendingReview", async () => {
     const { result } = renderHook(() =>
       useCodingWorkbenchEditorBridge({ root: "/repo/task-1", runId: "run-1", active: true }),

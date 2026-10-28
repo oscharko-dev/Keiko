@@ -163,4 +163,27 @@ describe("changesRefreshSignal", () => {
     expect(changesRefreshSignal(events, settled)).not.toBe(changesRefreshSignal(events, null));
     expect(changesRefreshSignal(events, settled)).not.toBe(changesRefreshSignal([], settled));
   });
+
+  // Stability audit item 4: a turn at its tool bound still holds the same number of settled tools
+  // while the server displaces the oldest for each new call; only the feed's monotonic loss counter
+  // moves, so the signal must follow it or the Changes list stops refreshing mid-run.
+  it("keeps changing after the turn's tool list is saturated", () => {
+    const saturated = Array.from({ length: 64 }, () => ({
+      tool: "edit",
+      state: "succeeded" as const,
+    }));
+    const before = changesRefreshSignal([], feed(saturated));
+    const after = changesRefreshSignal([], { ...feed(saturated), droppedEventCount: 1 });
+    const later = changesRefreshSignal([], { ...feed(saturated), droppedEventCount: 2 });
+
+    expect(before).not.toBeNull();
+    expect(after).not.toBe(before);
+    expect(later).not.toBe(after);
+  });
+
+  it("is unchanged by a feed that has dropped nothing", () => {
+    expect(
+      changesRefreshSignal([statusEvent("c1")], feed([{ tool: "edit", state: "succeeded" }])),
+    ).toBe("c1|1");
+  });
 });

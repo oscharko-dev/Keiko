@@ -17,6 +17,7 @@ import {
   updateCodingTask,
 } from "@/lib/coding-history-api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { reportCodingWorkbenchInteraction } from "@/lib/coding-workbench-interaction";
 import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
 import { secureRandomId } from "@/lib/secure-random";
 import { newClientCorrelationId } from "@/lib/bff-correlation";
@@ -416,6 +417,16 @@ function reportScopeChange(
   reason: ClientDiagnosticCodingHistoryScope["reason"],
   targetWorkspaceId?: string,
 ): void {
+  // A task of another repository returned while the scope never changed is the operator switching
+  // repositories: routine evidence on the info line, not a warn/unknown browser diagnostic. Any
+  // scope that moved meanwhile, and every other reason, keeps the diagnostic with its ids.
+  if (reason === "repository-mismatch" && operation.scope.id === current.id) {
+    reportCodingWorkbenchInteraction(
+      { interaction: "history-repository-switched" },
+      operation.correlationId,
+    );
+    return;
+  }
   reportClientDiagnostic("[keiko] coding task history scope outcome", {
     correlationId: operation.correlationId,
     codingHistoryScope: {
