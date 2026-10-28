@@ -2532,3 +2532,64 @@ It does not reinterpret 401 as permission403. Sixty-five scoped helper cases and
 The independent Linux full-gate run on `55ba6ff64` has passed root/UI typechecking, lint and
 formatting and is running the full unit matrix. Complete final-head coverage, evidence, Sonar,
 required checks and review closeout remain outstanding; no criterion is marked fully accepted.
+
+### Cumulative budgets, current metadata and measured MCP coverage
+
+Seven additional tests in the existing normal/mixed Chat fixtures close the finite budget gaps:
+original input/output exhaustion after a successful Jira read; thirty cumulative tool calls;
+physical retrieval and the exhausted excerpt allowance carried into later phases; the original
+deadline after consent/tool time; and the actual ten-round Jira loop in buffered and streamed
+Chat. The complete suites pass 90 cases (41 mixed, 49 ordinary), including all earlier isolation,
+approval, custody, replay and Gateway schema-correction cases. No runtime budget changed.
+
+The aggregate exposed a stale non-Coding SDK expectation: a complete current
+`startAt/maxResults/isLast` metadata page was still listed as invalid after the licensed
+Jira10.3.26 parser repair. Both current and legacy positive page shapes now run through the real
+binder/SDK; the negative remains a genuinely contradictory terminal page. All 49 consumer cases
+pass. No payload validation was loosened.
+
+The new MCP package was absent from the coverage baseline, and five existing source inventories
+were stale. Ten additional public-host cases exercise unsafe schema/name/risk declarations,
+registry bounds, duplicate provider/tool identities and actual two-provider SDK discovery with
+zero handler execution. All 28 host cases pass. A scoped V8 measurement over the complete MCP
+source surface records lines98.73%, statements93.75%, branches86.46%, functions100%; every metric
+exceeds the existing85% new-package floor. The canonical coverage collector creates only this
+new entry; the existing source-inventory refresh updates counts. All existing measurements,
+policy, tolerances and governed file floors are byte-for-byte unchanged. The 70 baseline reality
+tests now pass. Full three-producer coverage remains a separate pending gate.
+
+Canonical UI producers were rerun on `71d84996c` after the verification-copy repair: Jira5/5 with
+83 full-document accessibility checks, Updater9/9, all 93 screenshot digests and source
+fingerprints,23 evidence contracts and both unchanged Linux Editor gates pass. Four changed
+screenshots were visually inspected; evidence is retained in the existing4081/3405 directories.
+
+The complete restricted buffered catalog now passes14/14, including native401 cancellation for
+assignable-user lookup and approved assignment, with zero mutation dispatch in both cases.
+All14 cases together produce zero remote effects. Before/after6829-file inventory digest:
+`1029de48bd8f1637abd0a21d673d2fe1691fbe61e64f41539e444b9df89e9de6`.
+The earlier exact-null and missing-CSRF harness defects were proven red/green and corrected;
+66 scoped helper tests pass. Incomplete groups remain reconciled and retained. One later SSE
+group stopped after a successful search because the model returned an empty final answer;
+zero journals/effects and an unchanged inventory were independently confirmed. It remains an
+unsuccessful diagnostic group; a fresh complete group and the consent lifecycle are pending.
+
+The first aggregate Linux run exposed unsupported-host assumptions in native Linux-x64 tests
+when run on ARM64. A separate x64 container now uses the committed gate image and its documented
+namespace settings, with separate native dependencies. No product platform boundary or test
+assertion is bypassed. A separate macOS reproduction of the failed customer-shape CI job passed;
+targeted investigation then reproduced a report-validator error involving optional non-causal
+context. The existing report validator now follows its validated operation registry: optional
+`causal:none` probe context does not invent mandatory ancestors. True causal-parent, mandatory
+member, integrity and budget checks remain unchanged. A staggered startup/probe fixture fails
+before the correction;628 support/query/registry/analyzer/CLI cases pass afterward. The unchanged
+canonical macOS customer-shape producer passes after its isolated package/root/UI rebuild
+(90,165ms). ADR0173 now agrees with its existing registered-closure rule. The failed CI run did
+not retain its private report, so its exact opaque ancestor is not claimed as recovered.
+
+The remaining native verification helper has18 focused guard/recovery cases. It persists owned
+PAT creation intent before dispatch, refuses blind replay, and can restart only its inspected
+synthetic Jira service even if recording recovery fails. Native execution remains pending.
+Natural read questions now precede the exact operation payload in the catalog/lifecycle fixtures;
+14 wire regressions preserve arguments, identities and all five mutation requests. The80-case
+helper run passes. No shared API helper, model budget, expected effect or runtime policy changes.
+Final qualified aggregates, full coverage/Sonar and required current-head checks remain open.

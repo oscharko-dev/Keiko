@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { jiraReadQuestion } from "./catalog-questions.mjs";
 import { URLSearchParams } from "node:url";
 import { actorDetails, basicAuth, labRequest } from "./lab-client.mjs";
 import { adminRead, RESTRICTED_REFUSAL_DIAGNOSTICS } from "./restricted-cases.mjs";
@@ -116,6 +117,7 @@ async function restrictedReads(session, fixture) {
       id: `restricted-${operation}`,
       actor: "restricted",
       operation,
+      question: jiraReadQuestion(operation),
       arguments: args,
       dispatches: 0,
       ...restrictedReadExpectation(operation, field, response),

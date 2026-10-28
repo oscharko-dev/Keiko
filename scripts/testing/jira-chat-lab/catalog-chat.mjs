@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { jiraReadQuestion } from "./catalog-questions.mjs";
 import { randomUUID } from "node:crypto";
 import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -17,6 +18,7 @@ async function runCase(context, group, operation, args, before) {
   await requireLicense(context.session);
   const intent = {
     operation,
+    question: jiraReadQuestion(operation),
     arguments: args,
     clientTurnId: randomUUID(),
     mode: "governed-assist",

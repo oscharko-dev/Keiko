@@ -148,11 +148,16 @@ async function cancelledHistory(context, chat, intent) {
   throw new TypeError("Expected the native authentication refusal to cancel the persisted turn");
 }
 
-async function verifyCancelledReplay(context, chat, intent, receipt, authentication) {
+export async function verifyCancelledReplay(context, chat, intent, receipt, authentication) {
   const before = authentication.snapshot();
   const response = await globalThis.fetch(`${context.origin}/api/desktop/chat`, {
     method: "POST",
-    headers: { Origin: context.origin, Cookie: context.cookie, "Content-Type": "application/json" },
+    headers: {
+      Origin: context.origin,
+      Cookie: context.cookie,
+      "Content-Type": "application/json",
+      "X-Keiko-CSRF": "1",
+    },
     body: JSON.stringify(intent.request),
   });
   assert.equal(response.status, 409);

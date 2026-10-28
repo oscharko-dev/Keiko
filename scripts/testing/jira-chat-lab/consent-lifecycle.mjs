@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { jiraReadQuestion } from "./catalog-questions.mjs";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync, rmSync } from "node:fs";
@@ -135,6 +136,7 @@ function turnIntent(group, id, expectedReadGrants, write, before) {
     id,
     clientTurnId: randomUUID(),
     operation: write ? "jira.comment" : "jira.issue",
+    question: write ? undefined : jiraReadQuestion("jira.issue"),
     arguments: { issueKey: group.key, ...(write ? { body: group.marker } : {}) },
     mode: "governed-assist",
     transport: id === "initial-read" || id === "restart-read" ? "buffered" : "stream",

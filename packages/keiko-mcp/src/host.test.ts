@@ -131,6 +131,107 @@ function fixture(
   };
 }
 
+it.each([
+  { name: "untrusted/tool" },
+  { risk: "write" as const },
+  { descriptor: { ...descriptor, inputSchema: { type: "array" } } },
+  {
+    descriptor: {
+      ...descriptor,
+      inputSchema: { ...descriptor.inputSchema, additionalProperties: true },
+    },
+  },
+  { descriptor: { ...descriptor, resultSchema: { type: "array" } } },
+])("rejects unsafe provider declarations before discovery or execution: %j", (overrides) => {
+  const execute = vi.fn<ManagedMcpTool<Context>["execute"]>();
+  expect(() =>
+    createManagedMcpHost<Context>({
+      providers: [
+        {
+          id: "fixture",
+          tools: (): readonly ManagedMcpTool<Context>[] => [
+            { name: "fixture.echo", risk: "read", descriptor, execute, ...overrides },
+          ],
+        },
+      ],
+      log: { write: () => undefined },
+    }),
+  ).toThrow(new ManagedMcpError("invalid-arguments"));
+  expect(execute).not.toHaveBeenCalled();
+  expect(exchanges).toEqual([]);
+});
+
+it.each([0, 321])("refuses a provider registry of %i tools before protocol work", (count) => {
+  const execute = vi.fn<ManagedMcpTool<Context>["execute"]>();
+  expect(() =>
+    createManagedMcpHost<Context>({
+      providers: [
+        {
+          id: "fixture",
+          tools: (): readonly ManagedMcpTool<Context>[] =>
+            Array.from({ length: count }, (_, index) => ({
+              name: `fixture.tool-${String(index)}`,
+              risk: "read",
+              descriptor,
+              execute,
+            })),
+        },
+      ],
+      log: { write: () => undefined },
+    }),
+  ).toThrow(new ManagedMcpError("descriptor-drift"));
+  expect(execute).not.toHaveBeenCalled();
+  expect(exchanges).toEqual([]);
+});
+
+it.each(["provider", "tool"] as const)(
+  "refuses duplicate %s identity before discovery",
+  (duplicate) => {
+    const execute = vi.fn<ManagedMcpTool<Context>["execute"]>();
+    expect(() =>
+      createManagedMcpHost<Context>({
+        providers: ["first", "second"].map((id) => ({
+          id: duplicate === "provider" ? "same-provider" : id,
+          tools: (): readonly ManagedMcpTool<Context>[] => [
+            {
+              name: duplicate === "tool" ? "same-tool" : `fixture.${id}`,
+              risk: "read",
+              descriptor,
+              execute,
+            },
+          ],
+        })),
+        log: { write: () => undefined },
+      }),
+    ).toThrow(new ManagedMcpError("descriptor-drift"));
+    expect(execute).not.toHaveBeenCalled();
+    expect(exchanges).toEqual([]);
+  },
+);
+
+it("admits two distinct providers through SDK discovery without executing either", async () => {
+  const execute = vi.fn<ManagedMcpTool<Context>["execute"]>();
+  const host = createManagedMcpHost<Context>({
+    providers: ["second", "first"].map((id) => ({
+      id,
+      tools: (): readonly ManagedMcpTool<Context>[] => [
+        {
+          name: `fixture.${id}`,
+          risk: "read",
+          descriptor,
+          execute,
+        },
+      ],
+    })),
+    log: { write: () => undefined },
+  });
+  hosts.push(host);
+  await host.admit("multiple-providers");
+  expect(host.catalog().map((tool) => tool.name)).toEqual(["fixture.second", "fixture.first"]);
+  expect(host.protocolEra()).toBe("modern");
+  expect(execute).not.toHaveBeenCalled();
+});
+
 it("refuses a replacement effect handler even when all admitted metadata is identical", async () => {
   const f = fixture();
   const replacement = vi.fn<ManagedMcpTool<Context>["execute"]>(() =>

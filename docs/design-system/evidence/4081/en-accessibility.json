@@ -12,7 +12,7 @@
   "architecture": "arm64",
   "node": "v24.18.0",
   "browser": "156.0.8078.4",
-  "gitHead": "6c63f33a0f7aa37335ac48a6a02ea59b2d1565d2",
+  "gitHead": "71d84996cf6308e714e17c7bfe1b44031c5f7604",
   "sourceHashes": {
     "tests/e2e/jira-chat-4081.spec.ts": "b2827c40f40f39c35d0ad8e28cf52bb9c656d85b3f68b670cadb33834dde7102",
     "tests/e2e/support/jira-chat-4081.ts": "9bf8f2a4cc7f4f0bfc0d3df8c0ecfdc335cc4a82232a68dd9118cfe81bf83965",
@@ -26,10 +26,10 @@
     "packages/keiko-ui/src/app/components/desktop/JiraChatConnection.tsx": "4a3683b4598a14ce9637107f7fbd9ff0b3ec1c76447126e64f1d27d677714b7e",
     "packages/keiko-ui/src/app/components/desktop/JiraChatConnection.module.css": "af91f55ab4a1d0dbc20dab5aec8ac2793d9fc4c4ffc6d5d892b2708939e7b4ae",
     "packages/keiko-ui/src/app/globals.css": "83c8add9e6649d843ea177a7279b1014bb046881af7afb781d3365f0d25248e2",
-    "packages/keiko-ui/src/lib/i18n-messages.optional.en.ts": "63aa8f01450d2e7c1e9e988bd9ccbbf2479e73507379e519b3dee64407e8f0c5",
-    "packages/keiko-ui/src/lib/i18n-messages.optional.de.ts": "8d3f2c79bdc769420226e87d920f8c685e620d0af93a7048caf0a6f0a95ee845"
+    "packages/keiko-ui/src/lib/i18n-messages.optional.en.ts": "b3bd40a6dc83a918886562e47fa9f229f94e6b22dedf8fb8230658a254eb698e",
+    "packages/keiko-ui/src/lib/i18n-messages.optional.de.ts": "5fb29c2e05f70f12180f95c13dd2c0e9814baf603da7ad1afc51b66fe9283b7c"
   },
-  "capturedAt": "2026-10-27T23:48:34.708Z",
+  "capturedAt": "2026-10-28T00:26:14.459Z",
   "captures": [
     {
       "stage": "hub-create-context",
@@ -143,7 +143,7 @@
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-hub-create-form-light.png",
-      "screenshotSha256": "c694255e601faa6dc38d3b2f06d4cfaffa6069a109e4c878c08b951f55834626"
+      "screenshotSha256": "65723d350b79bf7a5f301bb0b5f52b65d7ce52ee8abf0d5cf4ff7eb6c0528b56"
     },
     {
       "stage": "hub-create-form",
@@ -697,7 +697,7 @@
       "zoomKeyboardControlCount": 3,
       "zoomLastControlVisible": true,
       "zoomControlsScreenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-confirmed-chat-binding-viewport-device-scale-200-percent-emulation-keyboard-controls.png",
-      "zoomControlsScreenshotSha256": "b2ee80f83a801d8243dc0de85410564a41c43c45925b7e6aec7b9964fb3a1bd0",
+      "zoomControlsScreenshotSha256": "bb5b0f5888cdf72eb175c25bb06082255cb9e7bfa28578a11d55a3157e0af990",
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-confirmed-chat-binding-viewport-device-scale-200-percent-emulation.png",
@@ -949,7 +949,7 @@
       "zoomKeyboardControlCount": 2,
       "zoomLastControlVisible": true,
       "zoomControlsScreenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-pending-read-consent-viewport-device-scale-200-percent-emulation-keyboard-controls.png",
-      "zoomControlsScreenshotSha256": "80fa6a183c81e004aba926bd42647a9fbb44271be6d4aac59cf067940cd33724",
+      "zoomControlsScreenshotSha256": "04483cb4da68040cdb5380054c94afcc8c8c920b02b10ac2beddc8427aa436ca",
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-pending-read-consent-viewport-device-scale-200-percent-emulation.png",
@@ -1305,7 +1305,7 @@
       "zoomKeyboardControlCount": 3,
       "zoomLastControlVisible": true,
       "zoomControlsScreenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-pending-exact-write-approval-viewport-device-scale-200-percent-emulation-keyboard-controls.png",
-      "zoomControlsScreenshotSha256": "7d624da2d9a65ee61c699f2875d8c5b856cb70ca607a19644518b8edf266d2a5",
+      "zoomControlsScreenshotSha256": "8a9893738df908434bd2a31c8ee79fe06e7ed31f593c6c1aa9c2cefcf2c6d37d",
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-pending-exact-write-approval-viewport-device-scale-200-percent-emulation.png",
@@ -1661,11 +1661,11 @@
       "zoomKeyboardControlCount": 1,
       "zoomLastControlVisible": true,
       "zoomControlsScreenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-settled-jira-result-viewport-device-scale-200-percent-emulation-keyboard-controls.png",
-      "zoomControlsScreenshotSha256": "ef66e410389ab45291df2d8fc4a8895cb91fcb4776dde97ae39e28d72a95742d",
+      "zoomControlsScreenshotSha256": "ad552f1aac2dc65b2337e8a5b7f98b9c12fca138ab8559d1b132738e7581d3d7",
       "axeScope": "document",
       "axeViolations": [],
       "screenshot": "test-results/e2e-evidence/design-system/evidence/4081/en-settled-jira-result-viewport-device-scale-200-percent-emulation.png",
-      "screenshotSha256": "a05a82c7c3faa147c8b0632afef432ac02abb09968432cbad2c48f0007f43ec2"
+      "screenshotSha256": "37e927aed17712382a3477ce5e379e91cee4b879b006f812c3bd949dec28e4fa"
     },
     {
       "stage": "bounded-keyboard-question-navigation",

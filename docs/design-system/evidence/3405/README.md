@@ -69,6 +69,15 @@ contract tests and both Linux Editor bundle gates pass. No numerical ceiling cha
 Editor fingerprint remains unchanged. This qualifies the updater fixtures and BFF recovery,
 not native update installation, real Jira/model behavior or final integrated-head acceptance.
 
+The connector-verification guidance repair regenerated this original producer on 2026-10-28 (UTC)
+from signed head `71d84996cf6308e714e17c7bfe1b44031c5f7604` in the same isolated Linux arm64
+runtime. The unchanged freshness gate first rejected the previous message-catalog hashes. All nine
+canonical Chromium cases then passed in 1.0 minute, including real BFF stop/restart. Twelve PNGs
+remain byte-identical to the previously inspected set; the changed progress and reconnect captures
+were inspected again. All 25 source hashes and four harness hashes match the reviewed checkout.
+The unchanged freshness gate, 23 updater/editor evidence contract tests and both Linux Editor
+bundle gates pass; no baseline or numerical ceiling changed. This remains updater fixture evidence.
+
 ## Reproduce
 
 Use the supported Node 24 runtime and the checkout's own dependencies:

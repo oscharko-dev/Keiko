@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   restrictedAuthenticationObserver,
   verifyAuthenticationInvalidation,
+  verifyCancelledReplay,
 } from "../testing/jira-chat-lab/restricted-auth.mjs";
 import { restrictedReadExpectation } from "../testing/jira-chat-lab/restricted-catalog-cases.mjs";
 
@@ -218,4 +219,35 @@ describe("native restricted Jira authentication refusal", () => {
       approvals: 0,
     });
   });
+});
+
+it("replays the exact canonical request with the required CSRF header before proving stale-scope refusal", async () => {
+  const observed = fixture();
+  const request = { chatId: "chat", clientTurnId: "turn", content: "synthetic" };
+  let responses = [499];
+  const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+    if (init.method === "POST") {
+      expect(init.headers["X-Keiko-CSRF"]).toBe("1");
+      expect(init.headers.Cookie).toBe("session=synthetic");
+      expect(JSON.parse(init.body)).toEqual(request);
+      responses = [...responses, 409];
+      return new globalThis.Response(
+        JSON.stringify({ error: { code: "GROUNDING_SCOPE_CHANGED" } }),
+        { status: 409 },
+      );
+    }
+    return new globalThis.Response(JSON.stringify({ messages: observed.messages }));
+  });
+  try {
+    await verifyCancelledReplay(
+      { origin: "http://127.0.0.1:1983", cookie: "session=synthetic", projectPath: "/synthetic" },
+      { id: "chat" },
+      { request },
+      { userId: "user", invocationId: "invocation", callId: "call" },
+      { snapshot: () => ({ ...observed.witness, responses }) },
+    );
+    expect(fetch).toHaveBeenCalledTimes(2);
+  } finally {
+    fetch.mockRestore();
+  }
 });

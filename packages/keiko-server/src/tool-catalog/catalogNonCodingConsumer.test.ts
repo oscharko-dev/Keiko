@@ -500,9 +500,32 @@ it.each([
     expected: { items: [{ id: "10002", name: "Task", subtask: false }], nextStartAt: 1 },
   },
   {
+    tool: "jira.issue-types",
+    args: { projectKey: "KEIKO", maxResults: 1 },
+    body: {
+      startAt: 0,
+      maxResults: 1,
+      total: 2,
+      isLast: false,
+      values: [{ id: "10002", name: "Task", subtask: false, self: "private-url" }],
+    },
+    endpoint: "issue/createmeta/KEIKO/issuetypes?startAt=0&maxResults=1",
+    expected: { items: [{ id: "10002", name: "Task", subtask: false }], nextStartAt: 1 },
+  },
+  {
     tool: "jira.create-fields",
     args: { projectKey: "KEIKO", issueTypeId: "10002" },
     body: { start: 0, size: 1, total: 1, last: true, values: [metadataField] },
+    endpoint: "issue/createmeta/KEIKO/issuetypes/10002?startAt=0&maxResults=25",
+    expected: {
+      items: [{ id: "summary", required: true, kind: "text", operations: ["set"] }],
+      total: 1,
+    },
+  },
+  {
+    tool: "jira.create-fields",
+    args: { projectKey: "KEIKO", issueTypeId: "10002" },
+    body: { startAt: 0, maxResults: 1, total: 1, isLast: true, values: [metadataField] },
     endpoint: "issue/createmeta/KEIKO/issuetypes/10002?startAt=0&maxResults=25",
     expected: {
       items: [{ id: "summary", required: true, kind: "text", operations: ["set"] }],
@@ -554,7 +577,7 @@ it.each([
   { start: 0, size: 1, total: 1, last: false, values: [metadataField] },
   { start: 0, size: 0, total: 2, last: false, values: [] },
   { start: 1, size: 1, total: 2, last: true, values: [metadataField] },
-  { startAt: 0, maxResults: 1, total: 1, isLast: true, values: [metadataField] },
+  { startAt: 0, maxResults: 1, total: 2, isLast: true, values: [metadataField] },
   { start: 0, size: 1, total: 1, last: true, values: [{ ...metadataField, operations: "set" }] },
 ])("refuses inconsistent or malformed DC metadata pages", async (body) => {
   const m = await jiraFixture(body, 200, undefined, "jira.create-fields");

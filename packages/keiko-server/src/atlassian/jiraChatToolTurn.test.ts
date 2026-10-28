@@ -121,7 +121,11 @@ function metadata(deps: UiHandlerDeps): AtlassianCredentialMetadata {
     },
   };
 }
-function syntheticModel(calls: GatewayCallRequest[], mutation: boolean): ModelPort {
+function syntheticModel(
+  calls: GatewayCallRequest[],
+  mutation: boolean,
+  repeatTools: boolean,
+): ModelPort {
   const respond = (request: GatewayCallRequest): NormalizedResponse => {
     calls.push(request);
     const reservation = request.attemptAdmission?.({ promptTokens: 100, maxOutputTokens: 500 });
@@ -140,7 +144,8 @@ function syntheticModel(calls: GatewayCallRequest[], mutation: boolean): ModelPo
       },
     };
     reservation?.settle(base.usage, true, "observed");
-    if (request.toolCatalog?.kind !== "bound" || calls.length % 2 === 0) return base;
+    if (request.toolCatalog?.kind !== "bound" || (!repeatTools && calls.length % 2 === 0))
+      return base;
     expect(reservation).toBeDefined();
     const bridge = createGatewayToolCatalogBridge({ ...request, stream: false }, Date.now);
     const tool = request.toolCatalog.projection.tools.find(
@@ -176,6 +181,7 @@ function fixture(
   mutation = false,
   writeResponse?: Promise<void>,
   acknowledgeWrite = true,
+  repeatTools = false,
 ): {
   deps: UiHandlerDeps;
   chatId: string;
@@ -186,7 +192,7 @@ function fixture(
 } {
   const root = mkdtempSync(join(tmpdir(), "keiko-jira-chat-turn-"));
   const calls: GatewayCallRequest[] = [];
-  const model = syntheticModel(calls, mutation);
+  const model = syntheticModel(calls, mutation, repeatTools);
   const deps = buildUiHandlerDeps({
     configPath: undefined,
     evidenceDir: join(root, "evidence"),
@@ -438,6 +444,38 @@ async function approveReadForWrite(f: ReturnType<typeof fixture>): Promise<void>
     f.deps,
   );
 }
+
+it.each([false, true])(
+  "stops the actual Jira Chat loop after ten productive rounds (stream=%s)",
+  async (stream) => {
+    const f = fixture(false, undefined, true, true);
+    const response = mockResponse({ captureBody: true });
+    const ctx = { ...sendContext(f, "ten-jira-rounds"), res: response.res };
+    const pending = stream
+      ? handleSendDesktopChatStream(ctx, f.deps)
+      : handleSendDesktopChat(ctx, f.deps);
+    void pending.catch(() => undefined);
+    await approveReadForWrite(f);
+    const result = await pending;
+    expect(f.calls).toHaveLength(10);
+    expect(f.requests()).toBe(10);
+    expect(f.writes()).toBe(0);
+    const message = f.deps.store.listMessages(f.chatId)[0];
+    expect(message?.turnState).toBe("failed");
+    expect(message?.toolTranscript?.exchanges).toHaveLength(10);
+    expect(
+      message?.toolTranscript?.exchanges.every(
+        (exchange) => exchange.result?.status === "completed",
+      ),
+    ).toBe(true);
+    expect(f.calls.at(-1)?.messages.filter((message) => message.role === "tool")).toHaveLength(9);
+    if (stream) {
+      expect(response.body()).toContain("event: error");
+      expect(response.body()).not.toContain("event: done");
+    } else expect(result).toMatchObject({ status: 403, body: { error: { code: "FORBIDDEN" } } });
+  },
+);
+
 async function decidePendingWrite(
   f: ReturnType<typeof fixture>,
   decision: "approve" | "reject",

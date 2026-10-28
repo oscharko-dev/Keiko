@@ -1,22 +1,22 @@
 # Jira Chat accessibility and visual evidence — #4081 / #4086
 
-The existing `test:e2e:jira-chat` lane passed all five Chromium cases on 2026-10-27 (UTC):
+The existing `test:e2e:jira-chat` lane passed all five Chromium cases on 2026-10-28 (UTC):
 the original three connected journeys and two English/German accessibility journeys. It uses
 the actual UI, BFF, gateway, catalog binder, MCP host and HTTPS transport with deterministic
 model/Jira fixtures. No browser route substitutes the product's consent or approval behavior.
 
 The isolated Linux arm64 run used Node 24.18.0, npm 11.16.0, Playwright 1.64.1 and
 Chromium 156.0.8078.4. Its source was signed head
-`6c63f33a0f7aa37335ac48a6a02ea59b2d1565d2` plus the question-map CSS repair and the five
-UI/test files in this increment. Both unmodified producer receipts bind 14 inspected source
+`71d84996cf6308e714e17c7bfe1b44031c5f7604`, including the corrected English/German
+connector-verification guidance. Both unmodified producer receipts bind 14 inspected source
 and harness hashes, verified against the reviewed worktree:
 
 - [English receipt](en-accessibility.json), SHA-256
-  `91e2b1466f8548ffc3763b366aca932a0a1a499312a150ac3146225fb05b47a3`.
+  `05633e759ed3831eccf65991f36fe4cb2bcf7c1b4c839cbbcbc7882772987bb9`.
 - [German receipt](de-accessibility.json), SHA-256
-  `bf20f800841b99dd688203f8041866fa846899ec1c79b4baccf969abf750ca0b`.
+  `ec0d88250c7b9970792567191dd090e7d36e7cdbd6d08b342f1583a8021de63d`.
 
-The final canonical run passed in 1.3 minutes. Its 83 document-wide axe checks found zero
+The final canonical run passed in 1.2 minutes. Its 83 document-wide axe checks found zero
 violations; no rule or surface was excluded. The checks cover the Hub form, confirmed binding,
 pending read consent, exact write approval and settled result across dark/light themes,
 increased contrast, forced colors, reduced motion, 390-pixel narrow and maximized windows,
@@ -31,7 +31,10 @@ The emulation uses a 720×550 CSS viewport and device scale 2; it does not claim
 zoom or assistive-technology qualification. Native screen-reader testing remains separate.
 
 The run produced 93 screenshots. Eight representative, visually inspected images are retained
-below, copied byte-for-byte from the producer. The receipts retain the original test-output
+below, copied byte-for-byte from the producer. Six remained byte-identical to the previous
+inspected set; the changed German form and zoomed keyboard-control capture were inspected again.
+The complete generated set was preserved before another Playwright producer could clear its output.
+The receipts retain the original test-output
 paths and hashes for the complete set; Playwright attaches all captures and receipts to its
 test output. Screenshot-only content redaction runs **after** axe, preserves layout and native
 scroll clipping, and remains effective under forced colors. It is removed after each capture.

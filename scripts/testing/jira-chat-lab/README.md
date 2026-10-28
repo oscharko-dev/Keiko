@@ -462,6 +462,17 @@ command with `--reconcile` only reads the remote comment state and saves a priva
 resumes a write. A complete group writes a private `browser-disconnect-<id>.json` receipt, checks
 the license again, and removes its pending marker. Helper tests alone are not live qualification.
 
+On 2026-10-28, the two Jira-acknowledgement browser cases and this separate physical-disconnect
+case passed against the licensed laboratory and verified `keiko-qwen36-35b-8bit` model. Each recorded
+exactly one independent comment effect, preserved its distinct `unknown` or `succeeded` outcome,
+and passed duplicate delivery, reload and visible Regenerate. The physical case recorded a real
+Chromium request failure and zero automatic buffered fallbacks. Both groups retained identical
+before/after inventories of 6,832 runtime/helper files and 381 served UI files, passed separate
+licensed preflights and closing license checks, and left no pending marker. Private receipt digests
+are `e76c288a6309cff4c8a6c6c2a2076f1d7f5ea49d16c4bcbadc70d3b84228b868` (Jira observation loss)
+and `6d4ccbea70223517c0c6737dddb092df0ef0a7d53ee8b976a93797fa21ac2dd5` (physical browser loss).
+These are scoped live proofs; they do not substitute for the remaining final quality gates.
+
 ## Mixed Data Pod and Jira Chat qualification
 
 ```bash
@@ -471,5 +482,58 @@ node scripts/testing/jira-chat-lab/mixed-chat.mjs <private-session> keiko-qwen36
 This separate live group creates and indexes a real synthetic Data Pod with the named embedding
 model, then performs a buffered mixed read and an approved Jira comment through the ordinary Chat
 path. It requires the licensed Jira preflight and exclusive access to the laboratory and model
-runtimes. The driver is prepared; complete live qualification is still pending until its full
-scenario and independent remote-state checks pass on the frozen runtime.
+runtimes. It explicitly configures one bounded model schema-repair retry; Jira writes are never
+repeated automatically. A completed private receipt requires both turns, Data-only citation lineage,
+the correct sourced answer, and exactly one independently observed approved comment.
+
+The complete group passed on 2026-10-28 with the real named chat and embedding models: one Data
+citation in each answer, separate Jira attribution, one first-read grant per Chat and one concrete
+write approval. All 6,825 runtime/helper files matched before and after; both license checks passed,
+and no pending marker remained. The private receipt digest is
+`9da82b396b2421c2b81439f74513aa2918238ccc81d4afa17ea384cd9ba186f7`.
+An earlier attempt answered only the knowledge question and made no Jira tool call. That attempt
+remains an incomplete diagnostic with independently confirmed unchanged Jira state and its retained
+database. The accepted fresh group used a clear natural Jira question before the knowledge question;
+no forced tool choice, synthetic vectors, substituted model response or relaxed assertion was used.
+
+## Native PAT revocation and stopped Jira verification
+
+```bash
+node scripts/testing/jira-chat-lab/verification.mjs /absolute/private/session actual-model-id pat
+node scripts/testing/jira-chat-lab/verification.mjs /absolute/private/session actual-model-id availability
+```
+
+These are separate finite groups. Run a fresh licensed HTTPS/read/write preflight before each;
+retain matching runtime/helper inventories and a closing license check. The availability group
+requires exclusive ownership after every other live group, because it intentionally stops Jira.
+Both groups require at least fifteen minutes of remaining licence time at admission.
+
+The PAT group follows [Atlassian's native PAT creation flow](https://confluence.atlassian.com/enterprise/using-personal-access-tokens-1026032365.html)
+as the non-admin synthetic API user. It records the existing token IDs and a unique private intent
+before issuing exactly one creation POST. The returned ID and token stay in a private 0600 file.
+Only this newly created, uniquely named token can be revoked; the shared API/editor/restricted
+credentials are protected. The real authenticated BFF creates and verifies its credential, then
+verifies a fresh authentication failure after native revocation and checks generation invalidation.
+A separately invalid token must also produce `auth-failed` through the same production path.
+
+The stale-response case delays one actual successful Jira `myself` response using the existing
+qualification transport decorator. It releases that response only after the new verification has
+observed revocation. The old response must receive `409 CREDENTIAL_CHANGED` and cannot overwrite
+the failed current metadata. This is an observation-order test, not a claim that Keiko knows about
+an external revocation before receiving evidence of it.
+
+The availability group validates the exact synthetic Compose project, pinned Jira image,
+loopback port and existing service identities. It stops only that Jira container; TLS, PostgreSQL
+and persistent volumes remain present. The real BFF verification must become `unreachable` and
+invalidate the old verified generation. The same Jira container is restarted in `finally`, even
+if the verification or recovery-intent journal fails. Recovery requires Docker's configured Jira
+health check, the original service and volume identities, a valid license and the ordinary
+HTTPS/read/write preflight, followed by successful BFF reverification. No volumes are removed and
+no license state is edited.
+
+Incomplete runs retain `verification-pat.pending.json` or `verification-availability.pending.json`,
+the private token record and the product database. Never repeat an uncertain PAT creation POST.
+Reconcile the retained identity before any cleanup. If the process itself is killed during the
+outage, the retained intent identifies the one container that must be restored before another
+laboratory group. Completed receipts contain only the closed scenario outcomes; preparation and
+unit tests do not establish native live acceptance.

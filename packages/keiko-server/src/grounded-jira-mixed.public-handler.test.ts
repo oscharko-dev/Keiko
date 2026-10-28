@@ -14,6 +14,7 @@ import { EditorAgentAuthorityRegistry } from "./editor/agentAuthorityRegistry.js
 import { createJiraChatCatalogRuntime } from "./atlassian/jiraChatCatalogRuntime.js";
 import { projectChatReadGrant } from "./atlassian/chatReadGrantState.js";
 import { processServerLogSink } from "./process-log-sink.js";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { defaultServerDiagnosticSink } from "./diagnostics-log.js";
 import {
   openKnowledgeStore,
@@ -39,7 +40,7 @@ import type {
 } from "@oscharko-dev/keiko-connectors";
 import type { ChatToolExchange, GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
-import { handleGroundedAsk } from "./grounded-qa.js";
+import { handleGroundedAsk, modelWindowAwareBudget } from "./grounded-qa.js";
 import { mockRequest, mockResponse } from "./_support.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { jiraChatActorDigest } from "./atlassian/jiraPodAccess.js";
@@ -63,6 +64,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
+  vi.useRealTimers();
 });
 
 it.each(["new-turn", "fresh-registries"] as const)(
@@ -662,7 +664,7 @@ it("retains acknowledged mutation uncertainty after deletion through the real cu
   expect(realCustodyOwner(f).custody.getMetadata(credential.authRef)).toBeUndefined();
 });
 
-function configure(deps: UiHandlerDeps, modelRetries = 0): void {
+function configure(deps: UiHandlerDeps, modelRetries = 0, contextWindow = 32768): void {
   const provider = {
     modelId: MODEL,
     baseUrl: "https://mixed.example.invalid/v1",
@@ -680,7 +682,7 @@ function configure(deps: UiHandlerDeps, modelRetries = 0): void {
       capabilities: [
         {
           ...createDefaultChatCapability(MODEL),
-          contextWindow: 32768,
+          contextWindow,
           maxOutputTokens: 1024,
           pricing: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 1 },
           toolCalling: true,
@@ -743,10 +745,21 @@ function finalContent(step: ProviderStep, steps: readonly ProviderStep[]): strin
   return steps.includes("uncited") ? "Feature returns true [src/Feature.ts:1]." : CITED;
 }
 type ProviderStep = "tool" | "write" | "malformed" | "answer" | "uncited" | "overflow";
+interface ProviderOptions {
+  readonly toolCount?: number;
+  readonly usage?: { readonly prompt_tokens: number; readonly completion_tokens: number };
+  readonly onRequest?: (body: string, index: number) => void;
+}
+function reportedProviderUsage(
+  usage = { prompt_tokens: 1, completion_tokens: 1 },
+): Readonly<Record<string, number>> {
+  return { ...usage, total_tokens: usage.prompt_tokens + usage.completion_tokens };
+}
 function provider(
   steps: readonly ProviderStep[] = ["tool", "answer"],
   answerContent?: string,
   commentBody = "Synthetic approved comment",
+  options: ProviderOptions = {},
 ): string[] {
   const requests: string[] = [];
   vi.stubGlobal(
@@ -755,7 +768,10 @@ function provider(
       const body = providerBody(init);
       const productive = isProductiveRequest(body);
       const step = productive ? (steps[requests.length] ?? "answer") : "answer";
-      if (productive) requests.push(body);
+      if (productive) {
+        requests.push(body);
+        options.onRequest?.(body, requests.length);
+      }
       if (step === "overflow")
         return Promise.resolve(
           Response.json(
@@ -780,16 +796,14 @@ function provider(
                 ? {
                     role: "assistant",
                     content: null,
-                    tool_calls: [
-                      {
-                        id: `mixed-call-${String(requests.length)}`,
-                        type: "function",
-                        function: {
-                          name: step === "write" ? "jira_comment" : "jira_projects",
-                          arguments: toolArguments(step, commentBody),
-                        },
+                    tool_calls: Array.from({ length: options.toolCount ?? 1 }, (_, index) => ({
+                      id: `mixed-call-${String(requests.length)}${index === 0 ? "" : `-${String(index)}`}`,
+                      type: "function",
+                      function: {
+                        name: step === "write" ? "jira_comment" : "jira_projects",
+                        arguments: toolArguments(step, commentBody),
                       },
-                    ],
+                    })),
                   }
                 : {
                     role: "assistant",
@@ -798,13 +812,206 @@ function provider(
               finish_reason: tools ? "tool_calls" : "stop",
             },
           ],
-          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+          usage: reportedProviderUsage(productive ? options.usage : undefined),
         }),
       );
     }),
   );
   return requests;
 }
+
+it.each(["input", "output"] as const)(
+  "does not replenish the original mixed %s token allowance after a successful Jira observation",
+  async (dimension) => {
+    const f = runtime();
+    const budget = modelWindowAwareBudget(f.deps, MODEL);
+    const requests = provider(["tool", "answer"], undefined, undefined, {
+      usage: {
+        prompt_tokens: dimension === "input" ? budget.modelInputTokensMax : 1,
+        completion_tokens: dimension === "output" ? budget.modelOutputTokensMax : 1,
+      },
+    });
+    const result = await handleGroundedAsk(
+      context({
+        chatId: f.chatId,
+        modelId: MODEL,
+        content: "Explain src/Feature.ts and list the Jira projects.",
+      }),
+      f.deps,
+    );
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toContain("File: src/Feature.ts");
+    expect(f.jiraRequests).toEqual(["GET"]);
+    expect(result).toMatchObject({
+      status: 403,
+      body: { error: { code: "GATEWAY_ATTEMPT_ADMISSION_DENIED" } },
+    });
+    expect(result.body).not.toMatchObject({ content: CITED });
+    expect(f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges).toMatchObject([
+      { result: { status: "completed" } },
+    ]);
+  },
+);
+
+it("retains the thirty-call Jira allowance across mixed model rounds and rejects the next batch", async () => {
+  const f = runtime();
+  configure(f.deps, 0, 131072);
+  const requests = provider(
+    Array.from({ length: 8 }, () => "tool"),
+    undefined,
+    undefined,
+    {
+      toolCount: 5,
+    },
+  );
+  const result = await handleGroundedAsk(
+    context({
+      chatId: f.chatId,
+      modelId: MODEL,
+      content: "Explain src/Feature.ts and list the Jira projects.",
+    }),
+    f.deps,
+  );
+  expect(requests).toHaveLength(7);
+  expect(f.jiraRequests).toHaveLength(30);
+  expect(f.jiraRequests.every((method) => method === "GET")).toBe(true);
+  expect(result.status).toBe(200);
+  const exchanges = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges;
+  expect(exchanges).toHaveLength(30);
+  expect(exchanges?.every((exchange) => exchange.result?.status === "completed")).toBe(true);
+});
+
+it("keeps physical retrieval and its exhausted excerpt allowance through mixed tool and answer phases", async () => {
+  const f = runtime();
+  configure(f.deps, 0, 262144);
+  mkdirSync(join(f.root, "facts"));
+  for (let index = 0; index < 40; index++) {
+    writeFileSync(
+      join(f.root, "facts", `feature-${String(index).padStart(2, "0")}.ts`),
+      `export const Feature = "${"x".repeat(5000)}";\n`,
+    );
+  }
+  const readBytes = nodeWorkspaceFs.readFileBytes;
+  if (readBytes === undefined) throw new Error("Missing descriptor byte reader");
+  let reads = 0;
+  vi.spyOn(nodeWorkspaceFs, "readFileBytes").mockImplementation(async (...args) => {
+    if (args[0].startsWith(f.root)) reads++;
+    return readBytes(...args);
+  });
+  const readsBeforeModels: number[] = [];
+  const requests = provider(
+    ["tool", "answer"],
+    "Feature is defined [facts/feature-00.ts:1]. Jira tool result: project SYN is visible.",
+    undefined,
+    { onRequest: () => readsBeforeModels.push(reads) },
+  );
+  const result = await handleGroundedAsk(
+    context({
+      chatId: f.chatId,
+      modelId: MODEL,
+      content: "List all Feature definitions and Jira projects.",
+    }),
+    f.deps,
+  );
+  expect(result.status).toBe(200);
+  expect(requests).toHaveLength(2);
+  expect(f.jiraRequests).toEqual(["GET"]);
+  expect(reads).toBeGreaterThan(0);
+  expect(readsBeforeModels).toEqual([reads, reads]);
+  const answer = result.body as GroundedAnswer;
+  expect(answer.groundingKind).toBe("connected-context");
+  if (answer.groundingKind !== "connected-context") throw new Error("Missing connected pack");
+  expect(answer.contextPack.budget.excerptBytesMax).toBe(131072);
+  expect(answer.contextPack.usage.excerptBytes).toBeLessThanOrEqual(131072);
+  expect(answer.contextPack.omittedCounts["budget-exhausted"]).toBeGreaterThan(0);
+  expect(answer.contextPack.usage.filesRead).toBeGreaterThan(0);
+  expect(answer.contextPack.usage.searchCalls).toBeGreaterThan(0);
+  for (const request of requests) {
+    expect(request).toContain(
+      `excerpt bytes ${String(answer.contextPack.usage.excerptBytes)}/131072`,
+    );
+    expect(request).toContain(`files read ${String(answer.contextPack.usage.filesRead)}`);
+  }
+  expect(answer.contextPack.usage.searchCalls).toBeLessThanOrEqual(
+    answer.contextPack.budget.searchCallsMax,
+  );
+});
+
+it("cancels mixed synthesis at the accepted turn deadline after time spent awaiting read consent", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  vi.spyOn(AbortSignal, "timeout").mockImplementation((milliseconds) => {
+    const controller = new AbortController();
+    setTimeout(() => {
+      controller.abort(new DOMException("Deadline reached", "TimeoutError"));
+    }, milliseconds);
+    return controller.signal;
+  });
+  const f = runtime();
+  const startedAt = Date.now();
+  const registry = approvalOwner(f.deps);
+  const waitForRead = vi.spyOn(registry, "waitForChatReadGrant");
+  const decide = waitForRead.getMockImplementation();
+  if (decide === undefined) throw new Error("Missing consent fixture");
+  waitForRead.mockImplementation(async (...args) => {
+    await vi.advanceTimersByTimeAsync(299000);
+    return decide(...args);
+  });
+  const requests = provider();
+  const nativeFetch = vi.mocked(fetch).getMockImplementation();
+  if (nativeFetch === undefined) throw new Error("Missing provider fixture");
+  vi.mocked(fetch).mockImplementation(async (...args) => {
+    const response = await nativeFetch(...args);
+    if (!isProductiveRequest(providerBody(args[1])) || requests.length !== 2) return response;
+    const signal = args[1]?.signal;
+    if (signal === undefined || signal === null) throw new Error("Missing synthesis cancellation");
+    return new Promise<Response>((_resolve, reject) => {
+      signal.addEventListener(
+        "abort",
+        () => {
+          reject(
+            signal.reason instanceof Error
+              ? signal.reason
+              : new DOMException("Cancelled", "AbortError"),
+          );
+        },
+        { once: true },
+      );
+    });
+  });
+  const pending = handleGroundedAsk(
+    context({
+      chatId: f.chatId,
+      modelId: MODEL,
+      content: "Explain src/Feature.ts and list the Jira projects.",
+    }),
+    f.deps,
+  );
+  void pending.catch(() => undefined);
+  try {
+    await vi.waitFor(
+      () => {
+        expect(requests).toHaveLength(2);
+      },
+      { interval: 1 },
+    );
+    expect(Date.now() - startedAt).toBeLessThan(300000);
+    // The narrower per-tool timeout has already expired; Data synthesis may still run in
+    // the original turn's last milliseconds. That phase must not receive a fresh deadline.
+    expect(f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges).toMatchObject([
+      { result: { status: "timeout" } },
+    ]);
+    await vi.advanceTimersByTimeAsync(1001);
+    const result = await pending;
+    expect(result).toMatchObject({ status: 499, body: { error: { code: "CANCELLED" } } });
+    expect(requests).toHaveLength(2);
+    expect(f.jiraRequests).toEqual([]);
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(300000);
+    expect(f.deps.store.listMessages(f.chatId)[0]?.turnState).toBe("cancelled");
+  } finally {
+    interruptChatGenerations(f.deps, f.chatId);
+    await pending;
+  }
+});
 
 it("repairs one invalid native model call before normal Chat dispatches any Jira effect", async () => {
   const f = runtime();
