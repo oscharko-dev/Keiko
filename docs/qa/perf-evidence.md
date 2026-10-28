@@ -556,6 +556,11 @@ ceiling.
 After the 1.3.1 version bump at `a6f1f5238`, which also carries the coding-runtime fixes of #4095
 and #4096, it was measured again: p95 1527.1, 1.79, 2.40 and 129.5 ms, each below its committed
 ceiling.
+After the 1.3.2 version bump at `434b407e7`, which also carries the stream flow-control and
+parity fixes of #4102 and #4116, it was measured again: p95 1570.2, 2.18, 2.39 and 149.7 ms, each
+below its committed ceiling. The host was shared with other work, and five earlier complete runs
+of the producer on the same tree exceeded the cold-start or throughput ceiling; the committed run
+is the first in a quieter window, with no sample deleted or retried within it.
 
 The PR lane runs `check:perf-evidence:coding-runtime` and the hermetic ruler tests
 (`test:perf:coding-runtime`). It checks integrity and budgets unconditionally. Set
