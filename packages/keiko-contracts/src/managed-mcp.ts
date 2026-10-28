@@ -65,3 +65,20 @@ export interface ManagedMcpHost<Context extends ManagedMcpInvocationContext> {
   ) => Promise<CatalogJsonObject>;
   readonly close: () => Promise<void>;
 }
+/** External protocol metadata is untrusted; catalog admission supplies execution authority. */
+export interface ExternalMcpTool {
+  readonly name: string;
+  readonly description?: string;
+  readonly inputSchema: CatalogJsonObject;
+  readonly outputSchema?: CatalogJsonObject;
+  readonly annotations?: CatalogJsonObject;
+}
+export interface ExternalMcpConnection {
+  readonly tools: readonly ExternalMcpTool[];
+  readonly call: (
+    name: string,
+    argumentsValue: CatalogJsonObject,
+    context: ManagedMcpInvocationContext,
+  ) => Promise<CatalogJsonObject>;
+  readonly close: () => Promise<void>;
+}

@@ -2650,3 +2650,25 @@ still refuses inactive references. Reads and subsequent updates reconcile orphan
 against the durable registry, including after a fresh store/process; malformed registry state
 never authorizes cleanup. The fault tests simulate registry-write failure and an unavailable
 vault key and verify successful retry/restart and actual eventual credential removal.
+
+### External MCP protocol client checkpoint
+
+`keiko-mcp` now owns an external SDK client alongside its in-process host. It negotiates
+modern and legacy protocol versions, supports local stdio, Streamable HTTP and explicit
+legacy HTTP+SSE, and exposes SDK-free tool metadata/results to consumers. Server composition
+must still supply admitted process parameters or policy-controlled HTTP transport.
+
+Discovery has bounded pagination, tool counts and payloads. Input schemas are validated
+before tool dispatch; the current invocation authority is rechecked at the transport boundary.
+Invocation context is process-local, and remote fetch composition receives it separately from
+MCP arguments. Local launches explicitly override SDK ambient environment inheritance and
+discard process stderr. Lifetime cancellation closes the connection; tool requests do not
+reconnect/replay after an uncertain response. Registered lifecycle evidence carries no payloads.
+
+The existing host plus new client suites pass 41 tests, including a real child-process legacy
+server, real SDK Streamable HTTP and HTTP+SSE exchanges, revoked authority during validation,
+unsafe targets, bounded discovery, cancellation, body-free lifecycle proof and exactly one
+remote effect after a lost successful response. Typecheck/scoped lint/format, architecture and
+negative architecture checks are run independently. This qualifies the protocol adapter;
+Settings discovery, Chat/OpenCode composition, complete runtime invalidation and product UI
+remain required before external MCP tools are usable end to end.

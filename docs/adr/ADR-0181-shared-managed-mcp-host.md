@@ -162,6 +162,14 @@ is unavailable, never an empty editable configuration. Protocol negotiation and 
 remain in `keiko-mcp`; consumer authority, discovery admission and lifecycle invalidation
 remain server responsibilities.
 
+External servers use the same package's SDK client adapter with automatic protocol-version
+negotiation. Streamable HTTP is the modern remote transport; explicit legacy HTTP+SSE and
+local stdio preserve compatibility with existing servers. Process launch parameters and HTTP
+egress are admitted by server composition. The adapter bounds discovery/payloads, validates
+arguments, keeps invocation context out of MCP arguments, rechecks authority at dispatch and
+never replays a tool call after a transport failure. Local stdio explicitly overrides the
+SDK's inherited environment defaults; credentials remain in memory at the launch boundary.
+
 Mixed Chat turns create that same accepted-turn authority before continuity, memory and
 retrieval preparation. Existing grounding owners assemble their evidence packs before
 productive Jira orchestration. Every gateway attempt retains its cumulative token and

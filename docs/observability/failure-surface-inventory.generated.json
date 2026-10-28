@@ -2464,7 +2464,10 @@
     "lsp.spawn.failed.emitted-line": [
       "packages/keiko-server/src/editor/lsp/lspNodeAdapter.test.ts"
     ],
-    "mcp.managed.lifecycle.line": ["packages/keiko-mcp/src/host.test.ts"],
+    "mcp.managed.lifecycle.line": [
+      "packages/keiko-mcp/src/external-client.test.ts",
+      "packages/keiko-mcp/src/host.test.ts"
+    ],
     "mcp.oauth.issuer.checked.emitted-line": [
       "packages/keiko-server/src/mcp/mcpOAuthIssuer.test.ts"
     ],

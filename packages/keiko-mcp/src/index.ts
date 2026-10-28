@@ -1,5 +1,7 @@
 export { createManagedMcpHost } from "./host.js";
 export { ManagedMcpError } from "./definitions.js";
+export { connectExternalMcp } from "./external-client.js";
+export type { ExternalMcpClientOptions, ExternalMcpTransportOptions } from "./external-client.js";
 export type {
   ManagedMcpHost,
   ManagedMcpInvocationContext,
