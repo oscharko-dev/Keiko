@@ -200,6 +200,51 @@ These are deterministic entry/file-link and component proofs, not atomic filesys
 Windows ACL, native-service or full Workbench qualification. The production gateway and source
 approval blockers remain open; no W1–W15 acceptance group is closed.
 
+### Windows npm tooling and archive-list parsing
+
+Native Windows execution reproduced the remaining direct-`npm.cmd` start failure in the audit
+runner and runtime-candidate packing owner. Both regression cases fail before the repair; the
+actual local npm pack fails with `EINVAL`. The audit, OSV waiver-scope, root/workspace SBOM,
+release-alignment, runtime-candidate pack and non-managed tool-consumer qualification scripts
+now reuse `hostNpmInvocation`, the same trusted shell-free owner as the Activity Log gate.
+Arguments, environment/retry limits, advisory verdicts, byte checks and approval gates remain
+unchanged. The POSIX release-publishing and canonical performance lanes are outside this Windows
+tooling qualification; no package is published and no runtime approval is changed.
+
+The audit regression runs a real local child with synthetic output: literal arguments survive,
+exit zero succeeds and an advisory exit remains nonzero. The pack regression uses real npm
+11.16.0 with an isolated synthetic package, paths containing spaces/Unicode/shell metacharacters,
+and a deliberately failing prepack script. Packing succeeds with `--ignore-scripts`, contains
+exactly the intended files, and its reported SHA-512 integrity matches the actual archive bytes.
+This is a pack-launch proof, not a Windows OpenCode runtime package qualification or a live audit
+against current advisory feeds.
+
+The complete tooling suites also exposed a host-path fixture error and a productive archive-list
+parser defect: native Windows tar emits CRLF, but the qualifier split only LF and consequently
+misclassified directory/file names. The parser now recognizes CRLF and LF line boundaries without
+trimming archive paths. The real staged-package fixture passes; added-file inventory drift and
+changed file bytes still fail the existing exact-content checks. The builder's output-path fixture
+now supplies a host-absolute path. Its existing macOS candidate `0755` executable-mode assertion
+remains unchanged and fails on this Windows filesystem; this is not a passing macOS build proof.
+
+The final seven-suite tooling selection reports **197 passed, one failed, 13 existing platform
+skips**. The sole failure is that unchanged macOS executable-mode assertion (`0755` expected,
+Windows reports `0666`). Scoped ESLint/Prettier, package build/typecheck/package graph, semantic
+duplication (932 baseline groups), shell-spawn guardrails and `git diff --check` pass.
+The regular Activity Log command again runs every step: six pass, the scenario step reports
+126 passed, 17 failed and five skipped; aggregate exit 1, zero omitted steps. The unchanged
+support-report permission/symlink observations remain open. Architecture, negative architecture,
+failure-path and release-impact checks pass; this is not a green aggregate qualification.
+
+The required local Sonar scan passes with no unresolved finding on the changed files (task
+`0629cfa1-499f-4ee7-902c-7e90147c227c`, 2026-10-28 19:33 UTC). Its final source scope includes
+all six tooling owners and all three changed regression suites.
+
+On preceding head `acc954287`, Dependency Review, Workflow hygiene, CodeQL and customer-shape
+qualification have completed successfully. Both CI workflow runs are still queued at revalidation.
+Draft gateway PR #4090 remains unchanged since 2026-10-26. Neither observation qualifies this new
+tooling increment or closes the gateway/source-approval blockers.
+
 ## Revalidation on 2026-10-27
 
 The continuation starts from PR #4088 head `475e91a3f9745a70a3371400c9fe265adf363bae` and

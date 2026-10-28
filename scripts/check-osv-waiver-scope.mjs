@@ -20,7 +20,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
-import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import { hostNpmInvocation, resolveHostExecutable } from "./lib/host-executable.mjs";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -232,8 +232,9 @@ export function evaluateWaiverScope(suppressedIds, shippedIds) {
 }
 
 function runAudit() {
+  const npm = hostNpmInvocation(resolveHostExecutable("npm"));
   try {
-    return execFileSync(resolveHostExecutable("npm"), ["audit", "--json", "--omit=dev"], {
+    return execFileSync(npm.command, [...npm.args, "audit", "--json", "--omit=dev"], {
       cwd: repoRoot,
       encoding: "utf8",
       maxBuffer: 64 * 1024 * 1024,
