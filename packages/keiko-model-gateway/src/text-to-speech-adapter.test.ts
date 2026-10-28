@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { observeSpeechCompletionFields } from "./__fixtures__/speech-completion-observation.js";
 import {
   requestTextToSpeech as publicTextToSpeech,
   requestTextToSpeechStream as publicTextToSpeechStream,
@@ -1206,30 +1207,13 @@ function observeTtsCompletionFields(
     ["log", sink],
     ["correlationId", request.correlationId],
   ] as const;
-  const originals = fields.map(([key]) => ({
-    key,
-    descriptor: Object.getOwnPropertyDescriptor(request, key),
-  }));
-  for (const [key, value] of fields) {
-    Object.defineProperty(request, key, {
-      configurable: true,
-      get(this: TextToSpeechRequest): string | ModelGatewayLogSink | undefined {
-        if (!state.active) return value;
-        state.trace.push(key);
-        state.requestReceivers.push(this);
-        if (state.refusedField === key) throw state.failure;
-        return key === "endpoint" && state.mode === "rate-limited"
-          ? "not a provider endpoint"
-          : value;
-      },
-    });
-  }
-  return (): void => {
-    for (const { key, descriptor } of originals) {
-      if (descriptor === undefined) Reflect.deleteProperty(request, key);
-      else Object.defineProperty(request, key, descriptor);
-    }
-  };
+  return observeSpeechCompletionFields(
+    request,
+    fields,
+    state,
+    () => state.mode === "rate-limited",
+    "not a provider endpoint",
+  );
 }
 
 async function settleTtsCompletionObservation(
