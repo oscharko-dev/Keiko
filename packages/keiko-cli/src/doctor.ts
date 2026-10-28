@@ -64,8 +64,10 @@ function resolveRunningEntry(argv: readonly string[] | undefined): string | unde
 // project install runs the very file it reports, under another name. Compare which file both
 // entries are, not how they are spelled: the file identity also holds on a case-insensitive
 // filesystem, where realpath keeps the casing it was given. Without an identity (an entry that
-// does not exist, or a filesystem without inode numbers) compare where the entries lead.
+// does not exist or cannot be looked up, or a filesystem without inode numbers) compare where
+// the entries lead. `existsSync` reports a lookup the user may not make (EACCES) as absent.
 function entryIdentity(entry: string): string | undefined {
+  if (!existsSync(entry)) return undefined;
   const stat = statSync(entry, { bigint: true, throwIfNoEntry: false });
   if (stat === undefined || stat.ino === 0n) return undefined;
   return `${String(stat.dev)}:${String(stat.ino)}`;

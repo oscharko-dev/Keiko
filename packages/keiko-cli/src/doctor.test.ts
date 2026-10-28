@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -9,6 +17,8 @@ const tempRoots: string[] = [];
 
 // Creating a file symlink on Windows needs elevated rights or Developer Mode.
 const fileSymlinksUnavailable = process.platform === "win32";
+// Directory permissions do not stop Windows or a root user from looking inside.
+const directoryPermissionsUnenforced = process.platform === "win32" || process.getuid?.() === 0;
 
 function tempDirIsCaseInsensitive(): boolean {
   const probe = mkdtempSync(join(tmpdir(), "keiko-doctor-case-"));
@@ -91,6 +101,29 @@ describe("doctor", () => {
         argv: [process.execPath, join(packageRoot, "dist", "cli", "INDEX.js")],
       });
       expect(report.warning).toBeUndefined();
+    },
+  );
+
+  // A running entry inside a directory the user cannot search must not make doctor throw; it
+  // is reported like any other entry that cannot be confirmed as the installed package.
+  it.skipIf(directoryPermissionsUnenforced)(
+    "reports instead of failing when the running entry cannot be looked up",
+    () => {
+      const root = makeRoot();
+      writeInstalledPackage(root);
+      const lockedDir = join(root, "locked");
+      mkdirSync(lockedDir);
+      writeFileSync(join(lockedDir, "keiko.js"), "#!/usr/bin/env node\n", "utf8");
+      chmodSync(lockedDir, 0o000);
+      try {
+        const report = collectDoctorReport({
+          cwd: root,
+          argv: [process.execPath, join(lockedDir, "keiko.js")],
+        });
+        expect(report.warning).toContain("different");
+      } finally {
+        chmodSync(lockedDir, 0o700);
+      }
     },
   );
 
