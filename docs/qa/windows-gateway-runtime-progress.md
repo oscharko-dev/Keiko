@@ -17,6 +17,27 @@ qualification or a substitute for an actual socket test.
 
 ## Verification performed
 
+### CI quality inventory repair, 2026-10-28
+
+PR #4090 was synchronized with `dev` at `246efd4638066b26cfb50ee329e6d3c099599f66`.
+The two Sonar scope tests failing in CI run `40387447971` shared one cause: the new
+`gateway_journal`, `gateway_peer` and `gateway_request` C sources and headers were missing from
+`scripts/native-quality-scope.json`. All six now name the existing compiler, static-analysis and
+gateway behavior gates that already compile and exercise them. No exclusion or gate was weakened.
+
+The scope CLI also uses the existing trusted host executable resolver on Windows, so a protected
+Git installation outside `C:\Program Files` is supported. A missing trusted executable still fails
+closed. The real CLI and repository-backed tests reproduced the inventory refusal before the fix;
+the resolver regression also failed before the implementation change.
+
+On Windows with Node 24.18.0, the scope, host executable and Windows native quality wiring suites
+passed together (65 passed, 9 platform-specific skips). The default native gateway runner passed
+with MSVC warnings as errors and static analysis, including journal, peer, profile and request
+tests. This run installed no WFP filters or firewall rules. It does not qualify successful
+AppContainer socket admission or the unimplemented production service.
+
+### Native component checks
+
 On Windows with Node 24.18.0 and the installed MSVC toolchain:
 
 ```text
