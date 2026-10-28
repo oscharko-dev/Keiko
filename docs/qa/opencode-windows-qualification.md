@@ -245,6 +245,49 @@ qualification have completed successfully. Both CI workflow runs are still queue
 Draft gateway PR #4090 remains unchanged since 2026-10-26. Neither observation qualifies this new
 tooling increment or closes the gateway/source-approval blockers.
 
+### Windows Activity Log scenario fixtures
+
+The next continuation reproduces all 17 support-report CLI failures on head `f94dc59d3`:
+85 passed, 17 failed and five skipped. Inspection confirms the production filesystem owner already
+reports Windows permissions as `platform-inherited`; Node's Unix mode bits do not attest an NTFS
+DACL. No production permission, publication, report-sufficiency or link-refusal rule is changed.
+
+The existing scenarios now additionally plant real Windows directory junctions (including dangling
+junctions) and retain hardlink and original file-symlink cases on both platforms. Only native
+Windows `EPERM` while creating a file-symlink fixture is reported as an explicit privilege skip;
+other errors fail, and privileged Windows CI can still execute the original pins. Reachable
+canaries prove live redirects resolve
+before the operation is refused. The checks retain target contents, modes, no-overwrite behavior,
+missing dangling targets, absence of success events and the failure lifecycle. Default-directory
+and Activity Log alias controls also run with native Windows junctions. Replay creation asserts
+the existing Windows pre-open `unsafe-target` refusal; POSIX file symlinks and existing regular or
+hardlinked files retain the exclusive-create `target-exists` assertion.
+
+Published files must remain regular and single-link. POSIX retains exact `0600`/`0700` assertions;
+Windows export completion must state `platform-inherited`, never verified privacy. Two POSIX-only
+mode-refusal cases are explicitly skipped on Windows because `chmod(0644/0444)` cannot express the
+ACL condition they test. Two new Windows cases verify readable read-only report/segment files,
+unchanged read-only attributes and the existing inherited-assurance contract. The formerly skipped
+default-directory redirection case now executes on Windows. These are component and fixture
+repairs, not NTFS ACL isolation or Windows file-symlink privilege qualification.
+
+The final eleven-file scenario selection reports **144 passed, zero failed, 15 skipped**. Nine
+skips are the preserved file-symlink cases, which cannot create their fixtures without Windows
+symlink privileges on this host. Six are explicit platform cases: the two POSIX mode-refusal pins,
+the existing browser-download mode pin, two POSIX write-permission cases and a macOS firmlink
+control. Native junction/hardlink and Windows inherited-assurance cases execute normally. The
+operation-catalog checks pass 97/97; regenerating the inventory produces no content change
+(608/608 proofs and 30/30 scenarios resolved). Scoped ESLint, strict typecheck, Prettier, semantic
+duplication (932 baseline groups) and `git diff --check` pass. POSIX execution remains for the
+corresponding CI hosts; native Windows results do not substitute for it.
+
+The regular `npm run check:activity-log` command now **passes all seven checks**, with zero failed
+or omitted steps (202.5 seconds). Its build, registry, scenarios, failure-path, architecture,
+negative-architecture and release-impact checks all pass on the final expanded fixture matrix.
+The required local Sonar scan also passes with no unresolved finding on the changed files (task
+`8ae7c84f-b215-4dcf-afca-bd6da65294db`, 2026-10-28 19:56 UTC). The earlier scan was stopped after
+the file-symlink matrix was retained; only this final frozen-source scan is the delivery verdict.
+
 ## Revalidation on 2026-10-27
 
 The continuation starts from PR #4088 head `475e91a3f9745a70a3371400c9fe265adf363bae` and
