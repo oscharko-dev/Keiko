@@ -14,6 +14,8 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import {
   nativeHttpToolCall,
+  nativeHttpLastRole,
+  writeNativeHttpScriptedTurn,
   writeNativeHttpStreamedTurn,
   closeNativeHttpStub,
   startNativeHttpStub,
@@ -458,4 +460,321 @@ describe("native scripted tool-call packets (hermetic fixture mechanics, not nat
     }
     expect(stub.server.listening).toBe(false);
   });
+});
+
+interface ObservedScriptedGateway {
+  readonly gateway: {
+    toolTurns: number;
+    readonly call: {
+      readonly name: string;
+      readonly arguments: Readonly<Record<string, unknown>>;
+    };
+  };
+  readonly state: { turns: number };
+}
+
+function observedScriptedGateway(reads: string[]): ObservedScriptedGateway {
+  const args = {
+    toJSON(): { readonly path: string } {
+      reads.push("serialize");
+      return { path: "README.md" };
+    },
+  };
+  const call = {
+    get name(): string {
+      reads.push("name");
+      return "read";
+    },
+    get arguments(): Readonly<Record<string, unknown>> {
+      reads.push("arguments");
+      return args;
+    },
+  };
+  const state = { turns: 1 };
+  const gateway = {
+    get toolTurns(): number {
+      reads.push("turns");
+      return state.turns;
+    },
+    set toolTurns(value: number) {
+      reads.push(`set:${String(value)}`);
+      state.turns = value;
+    },
+    get call(): typeof call {
+      reads.push("call");
+      return call;
+    },
+  };
+  return { gateway, state };
+}
+
+function scriptedFailureCall(
+  phase: string,
+  sentinel: TypeError,
+): ObservedScriptedGateway["gateway"]["call"] {
+  const argumentsValue = {
+    toJSON(): Readonly<Record<string, unknown>> {
+      if (phase === "serialization") throw sentinel;
+      return {};
+    },
+  };
+  return {
+    get name(): string {
+      if (phase === "name") throw sentinel;
+      return "read";
+    },
+    get arguments(): Readonly<Record<string, unknown>> {
+      if (phase === "arguments") throw sentinel;
+      return argumentsValue;
+    },
+  };
+}
+
+describe("native scripted gateway wire policy (hermetic mechanics, not native qualification)", () => {
+  it("serves one tool turn then the exact closing completion through a real listener", async (): Promise<void> => {
+    const gateway = { toolTurns: 1, call: { name: "read", arguments: { path: "README.md" } } };
+    const ids: number[] = [];
+    const stub = await startNativeHttpStub((self, recorded, response) => {
+      writeNativeHttpScriptedTurn(
+        gateway,
+        recorded,
+        response,
+        () => {
+          ids.push(self.requests.length);
+          return `call_fixture_${String(self.requests.length)}`;
+        },
+        "fixture-scripted",
+      );
+    });
+    try {
+      const first = await fetch(url(stub, "/turn"), {
+        method: "POST",
+        body: '{"messages":[{"role":"user"}]}',
+      });
+      const firstText = await first.text();
+      const second = await fetch(url(stub, "/turn"), {
+        method: "POST",
+        body: '{"messages":[{"role":"user"}]}',
+      });
+      const secondText = await second.text();
+      expect(first.status).toBe(200);
+      expect(firstText).toContain('"id":"fixture-scripted"');
+      expect(firstText).toContain(
+        '"tool_calls":[{"index":0,"id":"call_fixture_1","type":"function"',
+      );
+      expect(firstText).toContain('"name":"read"');
+      expect(firstText).toContain('"finish_reason":"tool_calls"');
+      expect(secondText).toContain('"delta":{"content":"Fixture turn completed."}');
+      expect(secondText).toContain('"finish_reason":"stop"');
+      expect(secondText.endsWith("data: [DONE]\n\n")).toBe(true);
+      expect(gateway.toolTurns).toBe(0);
+      expect(ids).toEqual([1]);
+    } finally {
+      await closeNativeHttpStub(stub);
+    }
+  });
+
+  it("defers body and call observations when no tool turn remains", async (): Promise<void> => {
+    const reads: string[] = [];
+    const gateway = {
+      toolTurns: 0,
+      get call(): never {
+        reads.push("call");
+        throw new TypeError("unexpected-call");
+      },
+    };
+    const recorded = {
+      get body(): never {
+        reads.push("body");
+        throw new TypeError("unexpected-body");
+      },
+    };
+    const stub = await startNativeHttpStub((_self, _recorded, response) => {
+      writeNativeHttpScriptedTurn(
+        gateway,
+        recorded,
+        response,
+        () => {
+          reads.push("id");
+          return "unused";
+        },
+        "fixture-idle",
+      );
+    });
+    try {
+      const response = await fetch(url(stub, "/idle"));
+      expect(await response.text()).toContain('"content":"Fixture turn completed."');
+      expect(reads).toEqual([]);
+    } finally {
+      await closeNativeHttpStub(stub);
+    }
+  });
+
+  it("preserves default receivers and the direct at call while projecting an unknown role", (): void => {
+    const reads: string[] = [];
+    const receivers: unknown[] = [];
+    const last = {
+      get role(): string {
+        reads.push("role");
+        receivers.push(this);
+        return "user";
+      },
+    };
+    const messages = [last];
+    Object.defineProperty(messages, "at", {
+      value(index: number): unknown {
+        reads.push(`at:${String(index)}`);
+        receivers.push(this);
+        return last;
+      },
+    });
+    const body = {
+      get messages(): unknown {
+        reads.push("messages");
+        receivers.push(this);
+        return messages;
+      },
+    };
+    expect(nativeHttpLastRole(body)).toBe("user");
+    expect(reads).toEqual(["messages", "at:-1", "role"]);
+    expect(receivers).toHaveLength(3);
+    expect(receivers[0]).toBe(body);
+    expect(receivers[1]).toBe(messages);
+    expect(receivers[2]).toBe(last);
+    for (const refused of [
+      null,
+      [],
+      "body",
+      {},
+      { messages: {} },
+      { messages: [null] },
+      { messages: [[]] },
+    ]) {
+      expect(nativeHttpLastRole(refused)).toBeUndefined();
+    }
+  });
+});
+
+describe("native scripted gateway observation boundaries", () => {
+  it("retains counter second-read/set then lazy ID and two distinct call reads before serialization", async (): Promise<void> => {
+    const reads: string[] = [];
+    const { gateway, state } = observedScriptedGateway(reads);
+    const recorded = {
+      get body(): unknown {
+        reads.push("body");
+        return { messages: [{ role: "user" }] };
+      },
+    };
+    const stub = await startNativeHttpStub((_self, _recorded, response) => {
+      writeNativeHttpScriptedTurn(
+        gateway,
+        recorded,
+        response,
+        () => {
+          reads.push("id");
+          return "call_order";
+        },
+        "fixture-order",
+      );
+    });
+    try {
+      const response = await fetch(url(stub, "/ordered"));
+      const text = await response.text();
+      expect(response.status).toBe(200);
+      expect(text).toContain('"name":"read"');
+      expect(reads).toEqual([
+        "turns",
+        "body",
+        "turns",
+        "set:0",
+        "id",
+        "call",
+        "name",
+        "call",
+        "arguments",
+        "serialize",
+      ]);
+      expect(state.turns).toBe(0);
+    } finally {
+      await closeNativeHttpStub(stub);
+    }
+  });
+
+  it.each(["tool", undefined])(
+    "does not consume a turn or read ID/call for last role %s",
+    async (role): Promise<void> => {
+      let ids = 0;
+      const gateway = {
+        toolTurns: 1,
+        get call(): never {
+          throw new TypeError("unexpected-call");
+        },
+      };
+      const stub = await startNativeHttpStub((_self, _recorded, response) => {
+        writeNativeHttpScriptedTurn(
+          gateway,
+          { body: { messages: [{ role }] } },
+          response,
+          () => {
+            ids += 1;
+            return "unused";
+          },
+          "fixture-non-user",
+        );
+      });
+      try {
+        const response = await fetch(url(stub, "/non-user"));
+        expect(await response.text()).toContain('"content":"Fixture turn completed."');
+        expect(response.status).toBe(200);
+        expect(gateway.toolTurns).toBe(1);
+        expect(ids).toBe(0);
+      } finally {
+        await closeNativeHttpStub(stub);
+      }
+    },
+  );
+
+  it.each(["role", "id", "name", "arguments", "serialization"] as const)(
+    "propagates the same %s sentinel in process before listener fallback can replace it",
+    async (phase): Promise<void> => {
+      const sentinel: TypeError = Object.freeze(new TypeError("fixture-scripted-sentinel"));
+      let caught: unknown;
+      const gateway = { toolTurns: 1, call: scriptedFailureCall(phase, sentinel) };
+      const body = {
+        messages: [
+          {
+            get role(): string {
+              if (phase === "role") throw sentinel;
+              return "user";
+            },
+          },
+        ],
+      };
+      const stub = await startNativeHttpStub((_self, _recorded, response) => {
+        try {
+          writeNativeHttpScriptedTurn(
+            gateway,
+            { body },
+            response,
+            () => {
+              if (phase === "id") throw sentinel;
+              return "call_sentinel";
+            },
+            "fixture-sentinel",
+          );
+        } catch (error) {
+          caught = error;
+          response.end("caught-in-process");
+        }
+      });
+      try {
+        const response = await fetch(url(stub, "/sentinel"));
+        expect(await response.text()).toBe("caught-in-process");
+        expect(caught).toBe(sentinel);
+        expect(gateway.toolTurns).toBe(phase === "role" ? 1 : 0);
+      } finally {
+        await closeNativeHttpStub(stub);
+      }
+    },
+  );
 });

@@ -8,7 +8,6 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import type { ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Readable } from "node:stream";
@@ -39,8 +38,8 @@ import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import { createOpenCodeV2HttpClient, type OpenCodeV2HttpClient } from "./opencodeV2HttpClient.js";
 
 import {
-  nativeHttpToolCall,
-  writeNativeHttpStreamedTurn,
+  writeNativeHttpScriptedTurn,
+  nativeHttpLastRole as lastRole,
   startNativeHttpStub as startStub,
   withNativeHttpStub,
   type NativeHttpStub as Stub,
@@ -90,21 +89,6 @@ interface Fixture {
   readonly state: string;
 }
 
-function object(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function lastRole(body: unknown): unknown {
-  const messages = object(body)?.messages;
-  return Array.isArray(messages) ? object(messages.at(-1))?.role : undefined;
-}
-
-function streamedTurn(response: ServerResponse, delta: unknown, finish: string): void {
-  writeNativeHttpStreamedTurn(response, delta, finish, "native-revert");
-}
-
 async function startGateway(): Promise<GatewayStub> {
   const stub = await startStub((self, recorded, response) => {
     const gateway = self as GatewayStub;
@@ -123,17 +107,13 @@ async function startGateway(): Promise<GatewayStub> {
       response.write(": held\n\n");
       return;
     }
-    if (gateway.toolTurns > 0 && lastRole(recorded.body) === "user") {
-      gateway.toolTurns -= 1;
-      const call = nativeHttpToolCall(
-        `call_revert_${String(self.requests.length)}`,
-        gateway.call.name,
-        gateway.call.arguments,
-      );
-      streamedTurn(response, { tool_calls: [call] }, "tool_calls");
-      return;
-    }
-    streamedTurn(response, { content: "Fixture turn completed." }, "stop");
+    writeNativeHttpScriptedTurn(
+      gateway,
+      recorded,
+      response,
+      () => `call_revert_${String(self.requests.length)}`,
+      "native-revert",
+    );
   });
   return Object.assign(stub, {
     hold: false,

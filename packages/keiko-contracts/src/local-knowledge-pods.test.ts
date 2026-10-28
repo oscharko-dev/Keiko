@@ -1,6 +1,7 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import { observeIndexedMembers } from "./__tests__/support/observed-indexed-members.js";
 import {
+  knowledgeRejectedTextMembers,
   knowledgeCapturedExtentMembers,
   knowledgeFinalExtentFailureMembers,
 } from "./__tests__/support/protocol-observation-mechanics.js";
@@ -1147,26 +1148,17 @@ it.each(["source", "public"] as const)(
   (surface) => {
     const validate = surface === "source" ? validateKnowledgePodSummary : publicValidateSummary;
     const trace: string[] = [];
-    let lengthReads = 0;
     const values: unknown[] = [7];
     Object.defineProperty(values, "1", {
       get: (): never => {
         throw new TypeError("Later text member must not be inspected");
       },
     });
-    const members = new Proxy(values, {
-      get(target, key, receiver): unknown {
-        trace.push(`get:${String(key)}`);
-        if (key === "length" && ++lengthReads === 2)
-          throw new TypeError("Rejected text array must not read final extent");
-        const value: unknown = Reflect.get(target, key, receiver);
-        return value;
-      },
-      has(target, key): boolean {
-        trace.push(`has:${String(key)}`);
-        return Reflect.has(target, key);
-      },
-    });
+    const members = knowledgeRejectedTextMembers(
+      values,
+      trace,
+      "Rejected text array must not read final extent",
+    );
     expect(validate({ ...happySummary(), tags: members })).toEqual({
       ok: false,
       errors: ["summary.tags entries must be evidence-safe strings"],
@@ -1180,20 +1172,11 @@ it.each(["source", "public"] as const)(
   (surface) => {
     const validate = surface === "source" ? validateKnowledgePodSummary : publicValidateSummary;
     const trace: string[] = [];
-    let lengthReads = 0;
-    const members = new Proxy(new Array<unknown>(1), {
-      get(target, key, receiver): unknown {
-        trace.push(`get:${String(key)}`);
-        if (key === "length" && ++lengthReads === 2)
-          throw new TypeError("Sparse text refusal must not read final extent");
-        const value: unknown = Reflect.get(target, key, receiver);
-        return value;
-      },
-      has(target, key): boolean {
-        trace.push(`has:${String(key)}`);
-        return Reflect.has(target, key);
-      },
-    });
+    const members = knowledgeRejectedTextMembers(
+      new Array<unknown>(1),
+      trace,
+      "Sparse text refusal must not read final extent",
+    );
     expect(validate({ ...happySummary(), tags: members })).toEqual({
       ok: false,
       errors: ["summary.tags entries must be evidence-safe strings"],

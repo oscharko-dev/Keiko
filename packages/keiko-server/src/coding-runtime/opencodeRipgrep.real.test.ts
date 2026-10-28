@@ -9,7 +9,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import type { Server, ServerResponse } from "node:http";
+import type { Server } from "node:http";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import type { Readable } from "node:stream";
@@ -34,8 +34,7 @@ import { createOpenCodeV2HttpClient, type OpenCodeV2HttpClient } from "./opencod
 import { RIPGREP_RUNTIME_MANIFEST } from "./ripgrepRuntime.js";
 
 import {
-  nativeHttpToolCall,
-  writeNativeHttpStreamedTurn,
+  writeNativeHttpScriptedTurn,
   startNativeHttpStub as startStub,
   withNativeHttpStub,
 } from "../../../../tests/support/opencode-native-http.js";
@@ -90,29 +89,16 @@ function object(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-function lastRole(body: unknown): unknown {
-  const messages = object(body)?.messages;
-  return Array.isArray(messages) ? object(messages.at(-1))?.role : undefined;
-}
-
-function streamedTurn(response: ServerResponse, delta: unknown, finish: string): void {
-  writeNativeHttpStreamedTurn(response, delta, finish, "ripgrep-real");
-}
-
 async function startGateway(): Promise<GatewayStub> {
   const stub = await startStub((self, recorded, response) => {
     const gateway = self as GatewayStub;
-    if (gateway.toolTurns > 0 && lastRole(recorded.body) === "user") {
-      gateway.toolTurns -= 1;
-      const call = nativeHttpToolCall(
-        `call_ripgrep_${String(self.requests.length)}`,
-        gateway.call.name,
-        gateway.call.arguments,
-      );
-      streamedTurn(response, { tool_calls: [call] }, "tool_calls");
-      return;
-    }
-    streamedTurn(response, { content: "Fixture turn completed." }, "stop");
+    writeNativeHttpScriptedTurn(
+      gateway,
+      recorded,
+      response,
+      () => `call_ripgrep_${String(self.requests.length)}`,
+      "ripgrep-real",
+    );
   });
   return Object.assign(stub, { toolTurns: 0, call: { name: "glob", arguments: {} } });
 }

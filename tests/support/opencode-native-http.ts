@@ -186,3 +186,38 @@ export function nativeHttpToolCall(
     function: { name, arguments: JSON.stringify(argumentsValue) },
   };
 }
+
+/** The same guarded last-message view used by scripted native gateway responses. */
+export function nativeHttpLastRole(body: unknown): unknown {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) return undefined;
+  const messages: unknown = Reflect.get(body, "messages");
+  if (!Array.isArray(messages)) return undefined;
+  const last: unknown = messages.at(-1);
+  if (typeof last !== "object" || last === null || Array.isArray(last)) return undefined;
+  return Reflect.get(last, "role");
+}
+
+interface NativeScriptedGateway {
+  toolTurns: number;
+  readonly call: {
+    readonly name: string;
+    readonly arguments: Readonly<Record<string, unknown>>;
+  };
+}
+
+/** Own only the common wire policy; resource and native launch ownership stay with callers. */
+export function writeNativeHttpScriptedTurn(
+  gateway: NativeScriptedGateway,
+  recorded: { readonly body: unknown },
+  response: ServerResponse,
+  toolId: () => string,
+  streamId: string,
+): void {
+  if (gateway.toolTurns > 0 && nativeHttpLastRole(recorded.body) === "user") {
+    gateway.toolTurns -= 1;
+    const call = nativeHttpToolCall(toolId(), gateway.call.name, gateway.call.arguments);
+    writeNativeHttpStreamedTurn(response, { tool_calls: [call] }, "tool_calls", streamId);
+    return;
+  }
+  writeNativeHttpStreamedTurn(response, { content: "Fixture turn completed." }, "stop", streamId);
+}

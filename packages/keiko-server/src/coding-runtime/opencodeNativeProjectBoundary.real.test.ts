@@ -8,7 +8,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import type { Server, ServerResponse } from "node:http";
+import type { Server } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Readable } from "node:stream";
@@ -38,8 +38,7 @@ import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import { createOpenCodeV2HttpClient, type OpenCodeV2HttpClient } from "./opencodeV2HttpClient.js";
 
 import {
-  nativeHttpToolCall,
-  writeNativeHttpStreamedTurn,
+  writeNativeHttpScriptedTurn,
   startNativeHttpStub as startStub,
   withNativeHttpStub,
 } from "../../../../tests/support/opencode-native-http.js";
@@ -110,29 +109,16 @@ function object(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-function lastRole(body: unknown): unknown {
-  const messages = object(body)?.messages;
-  return Array.isArray(messages) ? object(messages.at(-1))?.role : undefined;
-}
-
-function streamedTurn(response: ServerResponse, delta: unknown, finish: string): void {
-  writeNativeHttpStreamedTurn(response, delta, finish, "native-boundary");
-}
-
 async function startGateway(): Promise<GatewayStub> {
   const stub = await startStub((self, recorded, response) => {
     const gateway = self as GatewayStub;
-    if (gateway.toolTurns > 0 && lastRole(recorded.body) === "user") {
-      gateway.toolTurns -= 1;
-      const call = nativeHttpToolCall(
-        `call_boundary_${String(self.requests.length)}`,
-        gateway.call.name,
-        gateway.call.arguments,
-      );
-      streamedTurn(response, { tool_calls: [call] }, "tool_calls");
-      return;
-    }
-    streamedTurn(response, { content: "Fixture turn completed." }, "stop");
+    writeNativeHttpScriptedTurn(
+      gateway,
+      recorded,
+      response,
+      () => `call_boundary_${String(self.requests.length)}`,
+      "native-boundary",
+    );
   });
   return Object.assign(stub, { toolTurns: 0, call: READ_FIXTURE_CALL });
 }

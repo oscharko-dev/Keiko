@@ -115,3 +115,23 @@ export function knowledgeFinalExtentFailureMembers(
     },
   });
 }
+
+export function knowledgeRejectedTextMembers(
+  values: unknown[],
+  trace: string[],
+  finalExtentRefusal: string,
+): unknown[] {
+  let lengthReads = 0;
+  return new Proxy(values, {
+    get(target, key, receiver): unknown {
+      trace.push(`get:${String(key)}`);
+      if (key === "length" && ++lengthReads === 2) throw new TypeError(finalExtentRefusal);
+      const value: unknown = Reflect.get(target, key, receiver);
+      return value;
+    },
+    has(target, key): boolean {
+      trace.push(`has:${String(key)}`);
+      return Reflect.has(target, key);
+    },
+  });
+}
