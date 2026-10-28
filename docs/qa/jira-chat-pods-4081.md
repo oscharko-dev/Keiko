@@ -93,9 +93,9 @@ Status: **Partial — not accepted**. Registered body-free credential, verificat
 
 ### #4089 — Establish a shared MCP host for Keiko-managed providers and governed non-OpenCode consumers
 
-- [ ] **AC1:** A real SDK client and server execute MCP 2026-07-28 through the modern in-process request path without sockets or spawned processes. Tests exercise `server/discover`, `tools/list`, `tools/call`, required per-request metadata and unsupported-version rejection, and record the actual protocol revision. Malformed messages, unknown tools and schema-invalid arguments are refused before a handler runs. A legacy `initialize` handshake or linked in-memory transport alone does not satisfy this criterion; legacy compatibility is tested separately only if deliberately implemented.
+- [x] **AC1:** A real SDK client and server execute MCP 2026-07-28 through the modern in-process request path without sockets or spawned processes. Tests exercise `server/discover`, `tools/list`, `tools/call`, required per-request metadata and unsupported-version rejection, and record the actual protocol revision. Malformed messages, unknown tools and schema-invalid arguments are refused before a handler runs. A legacy `initialize` handshake or linked in-memory transport alone does not satisfy this criterion; legacy compatibility is tested separately only if deliberately implemented.
 
-Status: **Partial — not accepted**. The official SDK host explicitly enables MCP 2026-07-28 over injected in-process fetch; actual SDK discovery/list/call, metadata, malformed-input and unsupported-version tests are retained. Final host, package and architecture qualification remains open.
+Status: **Verified**. The current checkout passes all 42 production-host SDK tests, including 13 explicit wire-boundary cases. Actual discovery/list/call carry protocol 2026-07-28 in HTTP and request metadata while network/process creation is guarded. Unsupported discovery/call revisions, missing or malformed required metadata, malformed JSON/JSON-RPC/method, unknown tools and schema-invalid arguments are refused before the provider; each call refusal has successful before/after controls. Optional clientInfo remains optional. See [individual AC1 acceptance](#individual-acceptance--4089-ac1). Dependency, package and architecture gates remain obligations of AC5/6.
 
 - [ ] **AC2:** Every tool the model can see originates from a compiled `keiko-tool-catalog` projection through the bound gateway advertisement; a hand-written, unknown or post-admission-drifted tool cannot be advertised or dispatched. Existing `projection-mismatch` protection stays green.
 
@@ -117,9 +117,9 @@ Status: **Partial — not accepted**. The SDK import boundary, negative fixture 
 
 Status: **Partial — not accepted**. Registered host/catalog/Chat events reconstruct the retained scoped proofs; unchanged failure-path scanning reports no unregistered production catches. Existing scoped Workbench regressions are retained. Complete registry/relay/OAuth, regenerated Activity Log and final-head gates remain open.
 
-- [ ] **AC7:** A hermetic non-Coding consumer executes through the production catalog binder and admission pipeline without a synthetic Coding session or workspace authority. Existing Coding identity, mutation and approval guards retain their regression coverage.
+- [x] **AC7:** A hermetic non-Coding consumer executes through the production catalog binder and admission pipeline without a synthetic Coding session or workspace authority. Existing Coding identity, mutation and approval guards retain their regression coverage.
 
-Status: **Partial — not accepted**. The hermetic non-Coding consumer and ordinary product Chat use the production binder/shared host without a synthetic Coding session. Complete buffered/SSE 14-operation live groups prove that composition on a preceding artifact. Final Coding identity/approval/mutation compatibility remains open.
+Status: **Verified**. The hermetic conversation consumer executes through the actual production binder, compiled Gateway projection and managed SDK host without a Coding session, workspace root or Coding action. The current Native candidate passes the 99-test non-Coding/budget compatibility group and the 515-test native policy, identity, approval, journal, real-SDK loss and runtime-composition group. Scope changes, cancellation and descriptor drift refuse effects; existing Coding guards remain covered. See [the individual AC7 acceptance](#individual-acceptance--4089-ac7). This completes this criterion only; the other criteria retain their own outstanding obligations.
 
 ### #4083 — Expose Jira Data Center ticket operations as the first managed provider on the shared MCP host
 
@@ -3018,3 +3018,65 @@ per-physical-call budget identity, final licensed Jira/browser groups and the co
 final-head gates remain open. The pre-integration Linux fast run found stale catalog
 performance receipts and a wall-clock grounded-handler failure under concurrent load;
 both require final qualification with unchanged limits.
+
+## Individual acceptance — #4089 AC7
+
+Accepted against the integrated Native candidate following `97a6fe5a5`, with the
+unchanged frozen runtime manifest of 6,938 files, SHA-256
+`1e3e908cf8dddaddb6ce27d5536ed2138e4e1616e8ee8ba8ea212853874d13a8`.
+The subsequent signed Native increment carries this candidate and this acceptance.
+
+`catalogNonCodingConsumer.test.ts` executes a hermetic conversation consumer through
+the actual generic binder, canonical compiled Gateway offer and actual managed MCP SDK
+host. It proves the absence of Coding/workspace context, exactly one completed effect,
+current Chat/actor/generation checks, immutable captured scope, routing refusal,
+descriptor-drift refusal and cancellation with reversed completion.
+
+The current-checkout command selecting `catalogNonCodingConsumer.test.ts`,
+`codingToolNativeEffect.test.ts` and `codingToolNativeEffect.patchBudget.test.ts` passes
+99 tests in three suites. The separate current-checkout Native group passes 515 tests
+in nine suites covering composition, policy/plugin, store journal, configured-connection
+compatibility, relay and actual SDK response loss. Full root build/typecheck pass.
+These results meet AC7's non-Coding execution and retained Coding-regression obligations.
+They do not substitute for other ACs' live UI or complete final-head gate obligations.
+
+## Individual acceptance — #4089 AC1
+
+The current production host and real official SDK pass 42 tests in `host.test.ts` and
+`host-protocol.test.ts`. The latter adds the previously missing explicit wire-negative
+proofs; older summary wording overstated their completeness and is replaced by this
+concrete evidence. The adapter changes only synthetic outbound request bytes before
+production context binding. The real client, server, request handler, validators and
+responses execute unchanged.
+
+The positive control records `server/discover`, `tools/list`, `tools/list`, `tools/call`,
+with actual protocol `2026-07-28` in headers and required metadata. Socket/network and
+child-process guards are never called while the provider executes successfully.
+Negatives cover unsupported revision during discovery and invocation, a distinct
+header/body mismatch, missing protocol/capabilities metadata, malformed capabilities,
+JSON, JSON-RPC version and method shape, unknown tool and schema-invalid arguments.
+Every invocation-negative has successful provider controls before and after refusal.
+Optional clientInfo is positively proven optional. Unsupported discovery produces
+only bounded `server/discover` attempts and no legacy initialize or provider effect.
+
+Actual checkout: `npx vitest run packages/keiko-mcp/src/host-protocol.test.ts
+packages/keiko-mcp/src/host.test.ts` passes 42/42, with strict targeted TypeScript,
+ESLint and formatting. AC1 is complete; AC5/6 retain their separate gate requirements.
+
+## Incremental qualification — real native parent-error recovery
+
+The current native candidate was exercised through the In-App Browser, ordinary
+Coding Workbench, Docker LiteLLM and Gemma. After explicit script and exact MCP
+approvals, one HTTPS-fixture create operation succeeded and the same outer Code Mode
+program deliberately threw. Independent remote state moved from three to four total
+writes, with exactly one matching new record. The UI entered Recovery required at
+revision 9; reload preserved that state and the one-effect count. SQLite separately
+retained `succeeded-unconfirmed`, SDK protocol success and the private budget identity.
+The action was not replayed. After independently reconciling it and renewing the dev
+launcher session, the recovery acknowledgement completed at revision 10.
+
+The earlier incomplete attempt encountered a stopped owned HTTPS fixture after the
+pause and made zero matching writes; it is retained as a diagnostic attempt, not a
+successful recovery proof. Restarting the same unchanged fixture preserved all records,
+TLS and credentials, and authenticated preflight preceded the complete fresh UI run.
+A separate positive UI control performs one new approved write: the outer Execute succeeds, SQLite records `succeeded` with SDK protocol success, and independent remote state proves exactly one matching record. Its separate get_note Execute also succeeds against the returned record ID; the final model answer is checked separately.

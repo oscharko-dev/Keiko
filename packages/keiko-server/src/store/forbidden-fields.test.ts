@@ -749,6 +749,7 @@ describe("forbidden-fields — durable chat mutation metadata", () => {
           "native_message_id",
           "native_call_id",
           "native_arguments_digest",
+          "native_mcp_action_digest",
         ]),
       );
       // Authentication generation is an integer invalidation counter, never a credential value.

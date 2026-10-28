@@ -1,3 +1,4 @@
+import { createNativeMcpMutationJournal } from "./coding-runtime/opencodeNativeMcpMutationJournal.js";
 import type { ChatToolTurnPort } from "./chat-tool-turn.js";
 import {
   installMcpChatCatalogRuntime,
@@ -6176,6 +6177,21 @@ function nativeWebSearchFor(args: UiHandlerDepsAssemblyArgs): NativeWebSearch {
   });
 }
 
+function nativeMcpMutationJournalFor(
+  args: UiHandlerDepsAssemblyArgs,
+): ReturnType<typeof createNativeMcpMutationJournal> | undefined {
+  const store = args.bundle.uiStore;
+  const snapshots = args.bundle.codingRuntimeSnapshotStore;
+  if (
+    snapshots === undefined ||
+    store.chatToolMutations?.preparedNative === undefined ||
+    store.chatToolMutations.unsettledNative === undefined ||
+    store.codingHistory === undefined
+  )
+    return undefined;
+  return createNativeMcpMutationJournal({ store, snapshots, log: processServerLogSink() });
+}
+
 // The attested-portable activation path supplies Keiko's own confirmation plane; injected
 // ports never receive a fallback consumer, so external composition stays fail-closed (#2377).
 function resolveProductionRuntimePorts(
@@ -6201,6 +6217,7 @@ function resolveProductionRuntimePorts(
     sessionContinuity: args.codingSessionContinuity,
     ...(args.mcpCredentialRelay === undefined ? {} : { mcpRelay: args.mcpCredentialRelay }),
     ...(args.mcpConnections === undefined ? {} : { mcpConnections: args.mcpConnections }),
+    mcpMutations: nativeMcpMutationJournalFor(args),
     env: args.options.env,
     runtimeStateDir: dirname(args.resolvedUiDbPath),
     runtimeEvidence,

@@ -28,7 +28,7 @@ import type {
 } from "../catalogToolPorts.js";
 import type { ManagedProviderCatalog } from "../managedProviderCatalog.js";
 
-export interface ConversationContext extends ToolConsumerContext {
+interface ConversationContext extends ToolConsumerContext {
   chatId: string;
   actorId: string;
   readonly binding: { generation: number };

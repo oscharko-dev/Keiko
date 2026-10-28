@@ -4,11 +4,13 @@ import {
   fromJsonSchema,
   isCallToolResult,
   McpServer,
+  type CallToolResult,
 } from "@modelcontextprotocol/server";
 import {
   MANAGED_MCP_PROTOCOL_VERSION,
   type ExternalMcpConnection,
   type ManagedMcpInvocationContext,
+  type ManagedMcpMutationInvocation,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { ManagedMcpError } from "./definitions.js";
@@ -41,6 +43,56 @@ function assertCurrent(
     throw new ManagedMcpError("not-admitted");
 }
 
+interface RelayCall {
+  readonly connection: ExternalMcpConnection;
+  readonly context: ManagedMcpInvocationContext | undefined;
+  readonly active: () => boolean;
+  readonly name: string;
+  readonly argumentsValue: CatalogJsonObject;
+  readonly mutation: boolean;
+  readonly signal: AbortSignal;
+  readonly sessionId: unknown;
+}
+function beginMutation(
+  input: RelayCall,
+  context: ManagedMcpInvocationContext,
+): ManagedMcpMutationInvocation | undefined {
+  if (!input.mutation) return undefined;
+  if (context.onUncertainMutation === undefined) throw new ManagedMcpError("not-admitted");
+  const permit = context.beginMutation?.({
+    sessionId: typeof input.sessionId === "string" ? input.sessionId : undefined,
+    toolName: input.name,
+    argumentsValue: input.argumentsValue,
+  });
+  if (permit === undefined) throw new ManagedMcpError("not-admitted");
+  return permit;
+}
+async function invokeRelayTool(input: RelayCall): Promise<CallToolResult> {
+  const { context } = input;
+  assertCurrent(context, input.active, input.signal);
+  const permit = beginMutation(input, context);
+  try {
+    const signal = AbortSignal.any([context.signal, input.signal]);
+    const result = await input.connection.call(input.name, input.argumentsValue, {
+      ...context,
+      signal,
+      invocationId: permit?.invocationId ?? context.invocationId,
+    });
+    if (!isCallToolResult(result) || (input.mutation && result.isError === true))
+      throw new ManagedMcpError("protocol-error");
+    permit?.acknowledge();
+    assertCurrent(context, input.active, signal);
+    return result;
+  } catch {
+    try {
+      permit?.fail();
+    } finally {
+      if (input.mutation) await uncertainMutation(context);
+    }
+    throw new ManagedMcpError("tool-error");
+  }
+}
+
 function relayServer(
   connection: ExternalMcpConnection,
   allowed: ReadonlyMap<string, "read" | "write">,
@@ -65,23 +117,17 @@ function relayServer(
         ...(tool.description === undefined ? {} : { description: tool.description }),
         inputSchema: fromJsonSchema<CatalogJsonObject>(tool.inputSchema),
       },
-      async (args, sdkContext) => {
-        assertCurrent(context, active);
-        const mutation = allowed.get(tool.name) === "write";
-        if (mutation && context.onUncertainMutation === undefined)
-          throw new ManagedMcpError("not-admitted");
-        try {
-          const signal = AbortSignal.any([context.signal, sdkContext.mcpReq.signal]);
-          const result = await connection.call(tool.name, args, { ...context, signal });
-          assertCurrent(context, active, signal);
-          if (!isCallToolResult(result) || (mutation && result.isError === true))
-            throw new ManagedMcpError("protocol-error");
-          return result;
-        } catch {
-          if (mutation) await uncertainMutation(context);
-          throw new ManagedMcpError("tool-error");
-        }
-      },
+      (args, sdkContext) =>
+        invokeRelayTool({
+          connection,
+          context,
+          active,
+          name: tool.name,
+          argumentsValue: args,
+          mutation: allowed.get(tool.name) === "write",
+          signal: sdkContext.mcpReq.signal,
+          sessionId: sdkContext.mcpReq._meta?.["ai.opencode/sessionID"],
+        }),
     );
   }
   return server;

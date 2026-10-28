@@ -390,6 +390,8 @@ export interface CodingToolNativeInvocation {
   readonly sessionId: string;
   readonly messageId: string;
   readonly callId: string;
+  /** Server-minted identity of one inner MCP policy request; never a producer field. */
+  readonly mcpActionDigest?: string;
 }
 
 /**

@@ -1,10 +1,11 @@
 import type { McpServerDefinition } from "@oscharko-dev/keiko-contracts";
 import {
-  mcpToolActions,
+  mcpToolAction,
   type McpRemoteOAuth,
   type McpRemoteSecretHeader,
   type McpRemoteTransport,
 } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
+import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 
 import type { McpOAuthIssuerValidation } from "../mcp/mcpOAuthIssuer.js";
 
@@ -232,11 +233,34 @@ function nativeGrants(
   servers: readonly McpServerDefinition[],
   managedNames: ReadonlySet<string>,
 ): OpenCodeNativeMcpGrants {
-  const actions = new Map<string, { risk: "read" | "write"; remote: boolean; managed?: boolean }>();
+  const actions = new Map<
+    string,
+    OpenCodeNativeMcpGrants["actions"] extends ReadonlyMap<string, infer Grant> ? Grant : never
+  >();
   for (const server of servers) {
     const managed = managedNames.has(server.name);
-    for (const [action, grant] of mcpToolActions([server]))
-      actions.set(action, managed ? { ...grant, remote: true, managed: true } : grant);
+    for (const [toolName, risk] of Object.entries(server.tools)) {
+      const grant = { risk, remote: server.transport.kind === "remote" };
+      actions.set(
+        mcpToolAction(server.name, toolName),
+        managed
+          ? {
+              ...grant,
+              remote: true,
+              managed: true,
+              ...(risk === "write"
+                ? {
+                    mutation: {
+                      serverName: server.name,
+                      toolName,
+                      configurationDigest: sha256Hex(canonicalise(server)),
+                    },
+                  }
+                : {}),
+            }
+          : grant,
+      );
+    }
   }
   return {
     actions,

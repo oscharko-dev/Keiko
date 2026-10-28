@@ -296,10 +296,41 @@ and enter recovery. One run-local recovery promise prevents duplicate recovery a
 and shared connections remain available. The existing active-run snapshot reconciliation handles
 restart admission. The existing lifecycle event queues `recovery-required` before revocation;
 the orchestrator persists that state and retains it across late stop/failure events. Recovery
-requires the existing explicit human acknowledgement and fresh-retry boundary. This is a
-conservative run barrier, not a durable per-invocation journal: an
-unobserved loss after the relay has completely written a successful response still requires stable
-OpenCode invocation correlation and remains outside this guarantee.
+requires the existing explicit human acknowledgement and fresh-retry boundary.
+
+Native mutations use the existing durable mutation journal and real Coding History user-message
+and run bindings. The identity combines the producer's run, session, message and call identifiers
+with server, tool and canonical argument digest. The native permission request carries the
+configured MCP tool's exact arguments privately; the relay joins only one matching prepared call
+and rechecks the current native authority immediately before dispatch. The relay records an
+observed MCP success before forwarding it. A lost response, restart or new model call cannot
+create a second effect while that outcome remains unconfirmed.
+
+Confirmation comes from the existing committed producer-history tool settlement, after content
+normalization and the containing Code Mode program finish. The earlier `execute.after` hook is
+insufficient: OpenCode 2.1.4 normalizes content afterward, and inner calls share their enclosing
+program's call identity ([producer tool execution](https://github.com/anomalyco/opencode/blob/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/core/src/tool.ts),
+[Code Mode execution](https://github.com/anomalyco/opencode/blob/68bc26b7da1990ce10ffecfbc1e09eb13aa5d824/packages/core/src/codemode/tool.ts)).
+Different admitted inner actions may proceed sequentially within that exact parent call; identical
+inner actions remain once-only. The existing history parser recognizes an outer program error even
+when its tool part says `completed`. Such failure retains `succeeded-unconfirmed`; a missing provider reply
+retains `unknown`. A new model call cannot pass either barrier. Successful persisted completion
+settles every observed mutation of that parent, allowing new calls afterward.
+
+Schema 54 retains the single physical-dispatch index and unchanged Chat behavior while permitting
+multiple observed native results to await their shared parent completion. The transaction enforces
+the exact parent identity. Internal continuations retain their accepted human-turn binding and
+cannot reopen a closed one. Native slash-command writes remain unavailable until the actual
+producer user-message identity is bound; ordinary human prompts use their stable submitted ID.
+No synthetic Chat rows, secondary effect journal or public evidence fields are introduced.
+
+Because separate inner MCP actions reuse the producer's parent call ID, each received permission
+check receives a server-generated budget identity bound to its permission and bounded arguments.
+Even identical physical reads consume separate calls. Rechecking that same request consumes no
+second reservation. Schema 54 retains the first admitted budget identity with the existing native
+mutation receipt, so final relay admission uses the same reservation. This identity never changes
+the canonical mutation ID, and a repeated permission request cannot replace it. Legacy receipts
+remain readable; missing budget identities refuse new native dispatch. Only hashes are retained.
 
 A server-managed stdio provider runs outside the coding process's workspace sandbox. Its actions
 therefore use the external-effect policy, just like a managed HTTPS provider: Ask for approval and

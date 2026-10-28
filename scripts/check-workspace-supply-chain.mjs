@@ -199,30 +199,88 @@ function listWorkspacePackages() {
   return packages;
 }
 
-function generateSbom(workspaceName, outPath) {
-  const result = spawnSync(
-    resolveHostExecutable("npm"),
-    ["sbom", "--sbom-format", "cyclonedx", "--omit", "dev", "--workspace", workspaceName],
-    { encoding: "utf8" },
-  );
-  if (result.status !== 0) {
-    fail(`npm sbom --workspace ${workspaceName} exited ${String(result.status)}: ${result.stderr}`);
+function runtimeNodeReference(node) {
+  if (!isRecord(node)) throw new TypeError("Invalid npm production dependency node.");
+  // npm ls leaves empty nodes for optional platform packages that are not installed. A missing
+  // required dependency makes npm ls fail before this projection is called.
+  if (Object.keys(node).length === 0) return undefined;
+  if (typeof node.name !== "string" || typeof node.version !== "string") {
+    throw new TypeError("npm production dependency identity is incomplete.");
   }
-  writeFileSync(outPath, result.stdout);
+  return `${node.name}@${node.version}`;
+}
+
+function runtimeDependencyGraph(tree, graph = new Map()) {
+  const ref = runtimeNodeReference(tree);
+  if (ref === undefined) return graph;
+  const edges = graph.get(ref) ?? new Set();
+  graph.set(ref, edges);
+  for (const child of Object.values(tree.dependencies ?? {})) {
+    const childRef = runtimeNodeReference(child);
+    if (childRef !== undefined) edges.add(childRef);
+    runtimeDependencyGraph(child, graph);
+  }
+  return graph;
+}
+
+/** npm's .dev selector also matches shared prod/dev ancestry; npm ls supplies the actual closure. */
+export function projectProductionSbom(sbom, runtimeTree) {
+  const graph = runtimeDependencyGraph(runtimeTree);
+  const rootRef = sbom.metadata?.component?.["bom-ref"];
+  if (!graph.has(rootRef) || !Array.isArray(sbom.components)) {
+    throw new TypeError("SBOM and npm production root do not match.");
+  }
+  const components = sbom.components.filter((component) => graph.has(component["bom-ref"]));
+  const available = new Set([rootRef, ...components.map((component) => component["bom-ref"])]);
+  if ([...graph.keys()].some((ref) => !available.has(ref))) {
+    throw new Error("SBOM is missing a productive dependency component.");
+  }
+  const dependencies = [...graph.keys()].sort().map((ref) => ({
+    ref,
+    dependsOn: [...graph.get(ref)].sort(),
+  }));
+  return { ...sbom, components, dependencies };
+}
+
+function npmJson(arguments_, purpose) {
+  const result = spawnSync(resolveHostExecutable("npm"), arguments_, {
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (result.status !== 0) {
+    fail(`${purpose} exited ${String(result.status)}: ${result.stderr}`);
+  }
   return JSON.parse(result.stdout);
 }
 
+function productionSbom(workspaceName) {
+  const workspace = workspaceName === undefined ? [] : ["--workspace", workspaceName];
+  // The unfiltered official SBOM owns license/hash metadata. The actual productive npm tree owns
+  // inclusion and edges; filtering .dev would erase packages also reached by development tools.
+  const complete = npmJson(
+    ["sbom", "--sbom-format", "cyclonedx", "--include=dev", ...workspace],
+    "npm sbom",
+  );
+  const runtimeTree = npmJson(
+    ["ls", "--omit=dev", "--all", "--long", "--json", ...workspace],
+    "npm ls production closure",
+  );
+  return projectProductionSbom(complete, runtimeTree);
+}
+
+function generateSbom(workspaceName, outPath) {
+  const sbom = productionSbom(workspaceName);
+  writeFileSync(outPath, `${JSON.stringify(sbom, null, 2)}\n`);
+  return sbom;
+}
+
 function generateRootSbom(outPath) {
-  // Reuse the CI-generated `sbom.cdx.json` at the repo root when present (CI emits it in the
-  // step just before this gate runs, see ci.yml). Standalone local runs fall through to a fresh
-  // `npm sbom` so the script remains usable outside CI (Copilot review on #169).
+  // CI's initial npm --omit=dev document has the same shared-dependency omission. Replace it
+  // with this owner-validated productive graph before license checks and artifact upload.
   const ciRootSbomPath = join(repoRoot, "sbom.cdx.json");
-  const sbomJson = existsSync(ciRootSbomPath)
-    ? readFileSync(ciRootSbomPath, "utf8")
-    : runRootSbom();
   const lockfile = JSON.parse(readFileSync(join(repoRoot, "package-lock.json"), "utf8"));
   const sbom = addTypeScriptRuntimeToSbom(
-    JSON.parse(sbomJson),
+    productionSbom(),
     lockfile.packages?.["node_modules/typescript"],
   );
   const renderedSbom = `${JSON.stringify(sbom, null, 2)}\n`;
@@ -231,18 +289,6 @@ function generateRootSbom(outPath) {
     writeFileSync(ciRootSbomPath, renderedSbom);
   }
   return sbom;
-}
-
-function runRootSbom() {
-  const result = spawnSync(
-    resolveHostExecutable("npm"),
-    ["sbom", "--sbom-format", "cyclonedx", "--omit", "dev"],
-    { encoding: "utf8" },
-  );
-  if (result.status !== 0) {
-    fail(`npm sbom (root) exited ${String(result.status)}: ${result.stderr}`);
-  }
-  return result.stdout;
 }
 
 // Evaluate an SPDX license expression (CycloneDX `licenses[].expression`) against the allow-list

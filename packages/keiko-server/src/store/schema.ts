@@ -10,7 +10,7 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 53;
+export const SCHEMA_VERSION = 54;
 
 interface Migration {
   readonly version: number;
@@ -1837,6 +1837,16 @@ export const MIGRATIONS: readonly Migration[] = [
         CHECK ((consumer_kind = 'chat' AND native_arguments_digest IS NULL) OR (consumer_kind = 'coding' AND native_arguments_digest IS NOT NULL AND length(native_arguments_digest) = 64));
       CREATE INDEX chat_tool_mutations_native_dispatch ON chat_tool_mutations(coding_run_id, native_session_id, server_name, tool_name, native_arguments_digest)
         WHERE consumer_kind = 'coding' AND phase = 'prepared';`,
+  },
+  {
+    version: 54,
+    // Chat keeps its single active effect; native observed replies await one persisted parent call.
+    sql: `DROP INDEX chat_tool_mutations_active;
+      CREATE UNIQUE INDEX chat_tool_mutations_active ON chat_tool_mutations(chat_id, turn_ref)
+        WHERE phase = 'dispatched' OR (phase = 'acknowledged' AND consumer_kind = 'chat');
+      ALTER TABLE chat_tool_mutations ADD COLUMN native_mcp_action_digest TEXT
+      CHECK (native_mcp_action_digest IS NULL OR (consumer_kind = 'coding'
+        AND length(native_mcp_action_digest) = 64 AND native_mcp_action_digest NOT GLOB '*[^0-9a-f]*'));`,
   },
 ];
 

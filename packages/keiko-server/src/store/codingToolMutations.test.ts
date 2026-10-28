@@ -235,3 +235,62 @@ it("requires complete native identities at the database boundary", () => {
     f.journal.prepare({ ...f.intent, consumer: { ...f.intent.consumer, sessionId: "ses_other" } }),
   ).toThrow();
 });
+
+it("upgrades schema53 without changing retained effects and keeps physical dispatches serialized", () => {
+  const f = fixture();
+  f.journal.prepare(f.intent);
+  f.journal.beginDispatch(f.intent.invocationId, () => true);
+  f.journal.acknowledgeMcp(f.intent.invocationId, true);
+  const retained = f.journal.find(f.intent.invocationId);
+  rewindSchemaFixture(f.db, 53);
+  runMigrations(f.db);
+  expect(f.journal.find(f.intent.invocationId)).toEqual(retained);
+  const second = {
+    ...f.intent,
+    invocationId: "native-second",
+    actionDigest: "b".repeat(64),
+    consumer: { ...f.intent.consumer, argumentsDigest: "c".repeat(64) },
+  };
+  const third = {
+    ...f.intent,
+    invocationId: "native-third",
+    actionDigest: "e".repeat(64),
+    consumer: { ...f.intent.consumer, argumentsDigest: "f".repeat(64) },
+  };
+  expect(f.journal.prepare(second).kind).toBe("prepared");
+  expect(f.journal.prepare(third).kind).toBe("prepared");
+  expect(f.journal.beginDispatch(second.invocationId, () => true)).toBe(true);
+  expect(f.journal.beginDispatch(third.invocationId, () => true)).toBe(false);
+  f.journal.acknowledgeMcp(second.invocationId, true);
+  expect(f.journal.beginDispatch(third.invocationId, () => true)).toBe(true);
+});
+
+it("upgrades schema53 while keeping legacy mutation receipts readable and budget identities private", () => {
+  const f = fixture();
+  f.journal.prepare(f.intent);
+  const retained = f.journal.find(f.intent.invocationId);
+  rewindSchemaFixture(f.db, 53);
+  expect(
+    f.db
+      .prepare("PRAGMA table_info(chat_tool_mutations)")
+      .all()
+      .some((column) => column.name === "native_mcp_action_digest"),
+  ).toBe(false);
+  runMigrations(f.db);
+  expect(f.journal.find(f.intent.invocationId)).toEqual(retained);
+  expect(() =>
+    f.db
+      .prepare("UPDATE chat_tool_mutations SET native_mcp_action_digest=? WHERE invocation_id=?")
+      .run("invalid", f.intent.invocationId),
+  ).toThrow();
+  expect(() =>
+    f.journal.prepare({
+      ...f.intent,
+      consumer: { ...f.intent.consumer, mcpActionDigest: "invalid" },
+    }),
+  ).toThrow();
+  f.db
+    .prepare("UPDATE chat_tool_mutations SET native_mcp_action_digest=? WHERE invocation_id=?")
+    .run("d".repeat(64), f.intent.invocationId);
+  expect(f.journal.find(f.intent.invocationId)?.consumer?.mcpActionDigest).toBe("d".repeat(64));
+});

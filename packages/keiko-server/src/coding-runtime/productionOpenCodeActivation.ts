@@ -169,6 +169,7 @@ export interface ProductionOpenCodeActivationInput {
   readonly sessionContinuity?: ProductionOpenCodeBackendInput["sessionContinuity"];
   /** The server's MCP relay for credentialed remote servers (#3903 AC3); absent admits none. */
   readonly mcpRelay?: ProductionOpenCodeBackendInput["mcpRelay"];
+  readonly mcpMutations?: ProductionOpenCodeBackendInput["mcpMutations"];
   readonly mcpConnections?: ConfiguredMcpConnections | undefined;
   readonly env: NodeJS.ProcessEnv;
   /** Host identity injection for deterministic tests; production omits both. */
@@ -299,6 +300,16 @@ function mcpOAuthPorts(input: ProductionOpenCodeActivationInput): {
   };
 }
 
+function nativeMcpBackendInputs(
+  input: ProductionOpenCodeActivationInput,
+): Partial<Parameters<typeof createProductionOpenCodeBackend>[0]> {
+  return {
+    ...(input.mcpRelay ? { mcpRelay: input.mcpRelay } : {}),
+    ...(input.mcpMutations ? { mcpMutations: input.mcpMutations } : {}),
+    ...(input.mcpConnections ? { mcpConnections: input.mcpConnections } : {}),
+  };
+}
+
 /** The backend inputs a deployment may leave out; an absent one adds no key. */
 function optionalBackendInputs(
   input: ProductionOpenCodeActivationInput,
@@ -308,8 +319,7 @@ function optionalBackendInputs(
       ? {}
       : { gatewayCodingModelIds: input.gatewayCodingModelIds }),
     ...(input.activityLog ? { activityLog: input.activityLog } : {}),
-    ...(input.mcpRelay ? { mcpRelay: input.mcpRelay } : {}),
-    ...(input.mcpConnections ? { mcpConnections: input.mcpConnections } : {}),
+    ...nativeMcpBackendInputs(input),
     ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
     ...(input.nativeWorktrees ? { nativeWorktrees: input.nativeWorktrees } : {}),
     ...(input.nativeWebSearch ? { nativeWebSearch: input.nativeWebSearch } : {}),

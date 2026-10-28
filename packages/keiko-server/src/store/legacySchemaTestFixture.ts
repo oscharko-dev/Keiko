@@ -28,6 +28,13 @@ interface VersionRollback {
 // granularity.
 const ROLLBACKS: readonly VersionRollback[] = [
   {
+    version: 54,
+    sql: `ALTER TABLE chat_tool_mutations DROP COLUMN native_mcp_action_digest;
+    DROP INDEX chat_tool_mutations_active;
+    CREATE UNIQUE INDEX chat_tool_mutations_active ON chat_tool_mutations(chat_id, turn_ref)
+      WHERE phase IN ('dispatched','acknowledged');`,
+  },
+  {
     version: 53,
     sql: `DROP INDEX chat_tool_mutations_native_dispatch;
     ALTER TABLE chat_tool_mutations DROP COLUMN native_arguments_digest;

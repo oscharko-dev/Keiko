@@ -51,6 +51,12 @@ function context(): import("@oscharko-dev/keiko-contracts/runtime/managed-mcp").
     correlationId: "synthetic-correlation",
     signal: new AbortController().signal,
     beforeEffect: (): boolean => true,
+    onUncertainMutation: vi.fn(() => Promise.resolve()),
+    beginMutation: vi.fn(() => ({
+      invocationId: "synthetic-admitted-mutation",
+      acknowledge: (): void => undefined,
+      fail: (): void => undefined,
+    })),
   };
 }
 
@@ -105,7 +111,9 @@ describe("configured MCP connections", () => {
     const stale = manager.serve("notes", probeRequest(), context());
     const observed = Promise.allSettled([stale]);
     await replacement;
-    const response = await manager.serve("notes", probeRequest(), context());
+    const currentContext = context();
+    const response = await manager.serve("notes", probeRequest(), currentContext);
+    expect(currentContext.beginMutation).toHaveBeenCalledTimes(1);
     expect(await response.text()).toContain('"text":"fresh"');
     expect(await observed).toMatchObject([
       { status: "rejected", reason: { reason: "not-admitted" } },

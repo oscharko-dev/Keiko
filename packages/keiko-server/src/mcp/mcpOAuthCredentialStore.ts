@@ -107,13 +107,28 @@ function vaultExists(input: McpOAuthCredentialStoreInput): boolean {
   }
 }
 
+/** Keep legacy field order and omission while hashing only the public authorization metadata. */
+function publicAuthorizationBinding(
+  metadata: McpRemoteOAuth | undefined,
+): Readonly<Record<string, string>> | null {
+  if (metadata === undefined) return null;
+  const projected: Record<string, string> = {};
+  for (const field of Object.keys(metadata)) {
+    if (field === "issuer") projected.issuer = metadata.issuer;
+    else if (field === "clientId" && metadata.clientId !== undefined)
+      projected.clientId = metadata.clientId;
+    else if (field === "scope" && metadata.scope !== undefined) projected.scope = metadata.scope;
+  }
+  return projected;
+}
+
 function staticCredentialBinding(server: McpServerDefinition): string {
   return createHash("sha256")
     .update(
       JSON.stringify([
         server.name,
         server.transport.kind === "remote"
-          ? ["remote", server.transport.url, server.transport.oauth ?? null]
+          ? ["remote", server.transport.url, publicAuthorizationBinding(server.transport.oauth)]
           : ["local", server.transport.command, server.transport.environment],
       ]),
     )

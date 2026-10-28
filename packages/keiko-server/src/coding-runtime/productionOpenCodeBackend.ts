@@ -1,3 +1,4 @@
+import type { NativeMcpMutationJournal } from "./opencodeNativeMcpMutationJournal.js";
 import type { ConfiguredMcpConnections } from "../mcp/mcpConfiguredConnections.js";
 import type { NativeWebSearch } from "./nativeWebSearch.js";
 import type { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
@@ -224,6 +225,7 @@ export interface ProductionOpenCodeBackendInput {
   /** The operator's raw `KEIKO_CODING_EXTERNAL_READ_ROOTS` (#3900 AC5); absent admits none. */
   readonly externalReadRoots?: string | undefined;
   /** The operator's MCP server registry for one native run (`mcpServerRegistry.ts`). */
+  readonly mcpMutations?: NativeMcpMutationJournal | undefined;
   readonly mcpServers?: ((correlationId: string) => readonly McpServerDefinition[]) | undefined;
   /** Validates a remote MCP server's expected OAuth issuer before a native launch (#3903 AC3). */
   readonly mcpOAuthIssuer?: McpOAuthIssuerPort | undefined;
@@ -514,6 +516,7 @@ function nativeRunInputs(
   | "repositoryItems"
   | "operatorPlugins"
   | "repositoryInstructions"
+  | "mcpMutations"
   | "mcpServers"
   | "mcpOAuthIssuer"
   | "mcpCredentials"
@@ -534,6 +537,7 @@ function nativeRunInputs(
       ? {}
       : { operatorPlugins: operatorPluginsFor(input, run, input.operatorPluginRegistry) }),
     repositoryInstructions: repositoryInstructionsFor(input, run),
+    mcpMutations: input.mcpMutations,
     ...(input.mcpServers === undefined ? {} : { mcpServers: input.mcpServers }),
     ...(input.mcpOAuthIssuer === undefined ? {} : { mcpOAuthIssuer: input.mcpOAuthIssuer }),
     ...(input.mcpCredentials === undefined ? {} : { mcpCredentials: input.mcpCredentials }),

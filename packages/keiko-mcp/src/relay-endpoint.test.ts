@@ -34,6 +34,11 @@ function fixture(risk: "read" | "write" = "read"): Fixture {
     signal: new AbortController().signal,
     beforeEffect: () => allowed,
     onUncertainMutation: recover,
+    beginMutation: () => ({
+      invocationId: "durable-native-call",
+      acknowledge: () => undefined,
+      fail: () => undefined,
+    }),
   };
   const call = vi.fn<ExternalMcpConnection["call"]>((_name, args) =>
     Promise.resolve({
@@ -217,4 +222,34 @@ it("does not enter recovery for confirmed successful writes or failed reads", as
     reader.call("echo", { text: "synthetic read" }, read.context),
   ).resolves.toMatchObject({ isError: true });
   expect(read.recover).not.toHaveBeenCalled();
+});
+
+it("binds the real legacy MCP session metadata and preserves the durable invocation identity", async () => {
+  const f = fixture("write");
+  const begin = vi.fn(() => ({
+    invocationId: "durable-legacy-call",
+    acknowledge: (): void => undefined,
+    fail: (): void => undefined,
+  }));
+  const context = { ...f.context, beginMutation: begin };
+  await legacy(
+    f,
+    "tools/call",
+    {
+      name: "echo",
+      arguments: { text: "synthetic legacy mutation" },
+      _meta: { "ai.opencode/sessionID": "ses_legacy" },
+    },
+    context,
+  );
+  expect(begin).toHaveBeenCalledWith({
+    sessionId: "ses_legacy",
+    toolName: "echo",
+    argumentsValue: { text: "synthetic legacy mutation" },
+  });
+  expect(f.call).toHaveBeenCalledWith(
+    "echo",
+    { text: "synthetic legacy mutation" },
+    expect.objectContaining({ invocationId: "durable-legacy-call" }),
+  );
 });

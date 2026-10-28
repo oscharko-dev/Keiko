@@ -1,3 +1,4 @@
+import { parseNativeMcpAction } from "./opencodeNativeMcpActionIdentity.js";
 import { createHash, randomBytes } from "node:crypto";
 import { lstatSync, realpathSync, statSync, type Stats } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -47,6 +48,10 @@ import { projectOpenCodePermissionRequestId } from "./opencodeProtocol.js";
  * disposition the same action class already had.
  */
 export interface OpenCodeNativePolicyRequest {
+  /** Private MCP arguments, captured for exact approval/dispatch identity; never evidence. */
+  readonly mcpInput?: Readonly<Record<string, unknown>> | undefined;
+  /** Server-minted per-request budget identity, never accepted from transport. */
+  readonly mcpActionDigest?: string | undefined;
   readonly runId: string;
   readonly sessionID: string;
   readonly agent?: string | undefined;
@@ -737,6 +742,11 @@ export function parseOpenCodeNativePolicyRequest(
     ...identity,
     resources: bounded,
     ...optional,
+    ...parseNativeMcpAction(
+      identity.permission,
+      record.mcpInput ??
+        (MCP_RESOURCE_ACTIONS.has(identity.permission) ? { resources: bounded } : undefined),
+    ),
     ...(target === undefined ? {} : { targetSessionID: target }),
   };
 }
@@ -863,7 +873,12 @@ export interface OpenCodeNativePolicyInput {
 export interface OpenCodeNativeMcpGrants {
   readonly actions: ReadonlyMap<
     string,
-    { readonly risk: McpToolRisk; readonly remote: boolean; readonly managed?: boolean }
+    {
+      readonly risk: McpToolRisk;
+      readonly remote: boolean;
+      readonly managed?: boolean;
+      readonly mutation?: import("./opencodeNativeMcpMutationJournal.js").NativeMcpMutationSource;
+    }
   >;
   readonly servers: ReadonlyMap<string, { readonly remote: boolean; readonly managed?: boolean }>;
 }

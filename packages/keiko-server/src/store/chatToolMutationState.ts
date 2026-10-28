@@ -13,6 +13,9 @@ const OPERATIONS: ReadonlySet<string> = new Set(JIRA_MUTATION_OPERATIONS);
 const OUTCOMES: ReadonlySet<string> = new Set(JIRA_MUTATION_OUTCOMES);
 const DIGEST = /^[a-f0-9]{64}$/;
 const ID = /^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/;
+function optionalDigest(value: unknown): boolean {
+  return value === undefined || (typeof value === "string" && DIGEST.test(value));
+}
 function validConsumer(value: unknown): value is CodingToolMutationConsumer {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const v = value as Record<string, unknown>;
@@ -24,7 +27,8 @@ function validConsumer(value: unknown): value is CodingToolMutationConsumer {
       (id) => typeof id === "string" && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$/u.test(id),
     ) &&
     typeof v.argumentsDigest === "string" &&
-    DIGEST.test(v.argumentsDigest)
+    DIGEST.test(v.argumentsDigest) &&
+    optionalDigest(v.mcpActionDigest)
   );
 }
 export function journalConflict(): UiStoreError {

@@ -10,12 +10,28 @@ export const MANAGED_MCP_PROTOCOL_VERSION = "2026-07-28";
 
 /** Resolved by server composition; never serialized into MCP arguments or metadata. */
 export interface ManagedMcpInvocationContext {
+  /** Private durable mutation admission, supplied by the composing consumer. */
+  readonly beginMutation?:
+    | ((input: {
+        readonly sessionId: string | undefined;
+        readonly toolName: string;
+        readonly argumentsValue: CatalogJsonObject;
+      }) => ManagedMcpMutationInvocation | undefined)
+    | undefined;
   /** Server-private recovery fence; never supplied by model tool arguments. */
   readonly onUncertainMutation?: (() => void | Promise<void>) | undefined;
   readonly invocationId: string;
   readonly correlationId: string;
   readonly signal: AbortSignal;
   readonly beforeEffect: () => boolean;
+}
+
+export interface ManagedMcpMutationInvocation {
+  readonly invocationId: string;
+  /** The upstream replied successfully; the consumer has not acknowledged receipt yet. */
+  readonly acknowledge: () => void;
+  /** Conservatively retain the observed outcome if delivery cannot be confirmed. */
+  readonly fail: () => void;
 }
 
 export interface ManagedMcpToolResult {

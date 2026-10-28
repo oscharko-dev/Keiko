@@ -10,6 +10,8 @@ export interface CodingToolMutationConsumer {
   readonly messageId: string;
   readonly callId: string;
   readonly argumentsDigest: string;
+  /** Existing budget admission identity; never part of the canonical mutation identity. */
+  readonly mcpActionDigest?: string | undefined;
 }
 interface ChatToolMutationIdentity {
   readonly consumer?: CodingToolMutationConsumer;
@@ -69,9 +71,11 @@ export interface ChatToolMutationStore {
   /** Finds one admitted call; an ambiguous dispatch is refused, never guessed. */
   readonly preparedNative?: (input: {
     readonly runId: string;
+    readonly turnRef: string;
     readonly sessionId: string;
     readonly serverName: string;
     readonly toolName: string;
     readonly argumentsDigest: string;
   }) => ChatToolMutationRecord | undefined;
+  readonly unsettledNative?: (runId: string) => readonly ChatToolMutationRecord[];
 }

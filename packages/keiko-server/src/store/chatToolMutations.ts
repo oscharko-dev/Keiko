@@ -25,12 +25,13 @@ const COLUMNS = `invocation_id AS invocationId, chat_id AS chatId, user_message_
   source_kind AS sourceKind, configuration_digest AS configurationDigest, server_name AS serverName,
   tool_name AS toolName, protocol_outcome AS protocolOutcome,
   consumer_kind AS consumerKind, coding_run_id AS codingRunId, native_session_id AS nativeSessionId,
-  native_message_id AS nativeMessageId, native_call_id AS nativeCallId, native_arguments_digest AS nativeArgumentsDigest`;
+  native_message_id AS nativeMessageId, native_call_id AS nativeCallId, native_arguments_digest AS nativeArgumentsDigest,
+  native_mcp_action_digest AS nativeMcpActionDigest`;
 const MAX_MUTATIONS_PER_TURN = 32;
 function consumerColumns(intent: ChatToolMutationIntent): readonly (string | null)[] {
   const consumer = intent.consumer;
   return consumer === undefined
-    ? ["chat", null, null, null, null, null]
+    ? ["chat", null, null, null, null, null, null]
     : [
         consumer.kind,
         consumer.runId,
@@ -38,6 +39,7 @@ function consumerColumns(intent: ChatToolMutationIntent): readonly (string | nul
         consumer.messageId,
         consumer.callId,
         consumer.argumentsDigest,
+        consumer.mcpActionDigest ?? null,
       ];
 }
 class GuardDenied extends Error {}
@@ -70,6 +72,7 @@ function rowRecord(value: unknown): ChatToolMutationRecord | undefined {
     nativeMessageId,
     nativeCallId,
     nativeArgumentsDigest,
+    nativeMcpActionDigest,
     ...fields
   } = value as Record<string, unknown>;
   const row = {
@@ -83,6 +86,7 @@ function rowRecord(value: unknown): ChatToolMutationRecord | undefined {
             messageId: nativeMessageId,
             callId: nativeCallId,
             argumentsDigest: nativeArgumentsDigest,
+            ...(nativeMcpActionDigest === null ? {} : { mcpActionDigest: nativeMcpActionDigest }),
           },
         }
       : {}),
@@ -149,17 +153,50 @@ function assertCurrentTurn(
     .get(intent.userMessageId, intent.chatId, intent.turnRef);
   if (row === undefined) throw journalConflict();
 }
+function observedWithinNativeCall(
+  row: ChatToolMutationRecord,
+  intent: Pick<ChatToolMutationIntent, "consumer" | "invocationId">,
+): boolean {
+  const current = intent.consumer;
+  const prior = row.consumer;
+  if (current === undefined || prior === undefined || row.invocationId === intent.invocationId)
+    return false;
+  return (
+    row.phase === "acknowledged" &&
+    prior.runId === current.runId &&
+    prior.sessionId === current.sessionId &&
+    prior.messageId === current.messageId &&
+    prior.callId === current.callId
+  );
+}
+function turnRecords(
+  db: DatabaseSync,
+  intent: { readonly chatId: string; readonly turnRef: string },
+): readonly ChatToolMutationRecord[] {
+  return db
+    .prepare(`SELECT ${COLUMNS} FROM chat_tool_mutations WHERE chat_id = ? AND turn_ref = ?`)
+    .all(intent.chatId, intent.turnRef)
+    .map(rowRecord)
+    .filter((row): row is ChatToolMutationRecord => row !== undefined);
+}
+function hasInflightBarrier(
+  rows: readonly ChatToolMutationRecord[],
+  intent: Pick<ChatToolMutationIntent, "consumer" | "invocationId">,
+): boolean {
+  return rows.some(
+    (row) =>
+      row.phase === "dispatched" ||
+      (row.phase === "acknowledged" && !observedWithinNativeCall(row, intent)),
+  );
+}
 function blockedTurn(
   db: DatabaseSync,
   intent: ChatToolMutationIntent,
 ): ChatToolMutationPreparation | undefined {
-  const rows = db
-    .prepare("SELECT phase, outcome FROM chat_tool_mutations WHERE chat_id = ? AND turn_ref = ?")
-    .all(intent.chatId, intent.turnRef);
+  const rows = turnRecords(db, intent);
   if (rows.some((row) => row.outcome === "unknown" || row.outcome === "succeeded-unconfirmed"))
     return { kind: "blocked", reason: "unknown-effect" };
-  if (rows.some((row) => row.phase === "dispatched" || row.phase === "acknowledged"))
-    return { kind: "blocked", reason: "in-flight" };
+  if (hasInflightBarrier(rows, intent)) return { kind: "blocked", reason: "in-flight" };
   if (rows.length >= MAX_MUTATIONS_PER_TURN) return { kind: "blocked", reason: "capacity" };
   return undefined;
 }
@@ -183,10 +220,27 @@ class MutationStore implements ChatToolMutationStore {
     const rows = this.db
       .prepare(
         `SELECT ${COLUMNS} FROM chat_tool_mutations WHERE consumer_kind='coding'
-      AND coding_run_id=? AND native_session_id=? AND server_name=? AND tool_name=? AND native_arguments_digest=? AND phase='prepared' LIMIT 2`,
+      AND coding_run_id=? AND native_session_id=? AND server_name=? AND tool_name=? AND native_arguments_digest=? AND turn_ref=? AND phase='prepared' LIMIT 2`,
       )
-      .all(input.runId, input.sessionId, input.serverName, input.toolName, input.argumentsDigest);
+      .all(
+        input.runId,
+        input.sessionId,
+        input.serverName,
+        input.toolName,
+        input.argumentsDigest,
+        input.turnRef,
+      );
     return rows.length === 1 ? rowRecord(rows[0]) : undefined;
+  }
+  unsettledNative(runId: string): readonly ChatToolMutationRecord[] {
+    return this.db
+      .prepare(
+        `SELECT ${COLUMNS} FROM chat_tool_mutations WHERE consumer_kind='coding' AND coding_run_id=?
+      AND (phase IN ('dispatched','acknowledged') OR outcome IN ('unknown','succeeded-unconfirmed')) LIMIT 257`,
+      )
+      .all(runId)
+      .map((row) => rowRecord(row))
+      .filter((row): row is ChatToolMutationRecord => row !== undefined);
   }
   private requireRecord(invocationId: string): ChatToolMutationRecord {
     const record = this.find(invocationId);
@@ -221,7 +275,7 @@ class MutationStore implements ChatToolMutationStore {
   private insertPrepared(intent: ChatToolMutationIntent, createdAt: number): void {
     this.db
       .prepare(
-        `INSERT INTO chat_tool_mutations (invocation_id, chat_id, user_message_id, turn_ref, actor_id, pod_id, binding_generation, authentication_generation, authority_digest, action_digest, operation, correlation_id, phase, created_at, updated_at, source_kind, configuration_digest, server_name, tool_name, consumer_kind, coding_run_id, native_session_id, native_message_id, native_call_id, native_arguments_digest) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'prepared',?,?,?,?,?,?,?,?,?,?,?,?)`,
+        `INSERT INTO chat_tool_mutations (invocation_id, chat_id, user_message_id, turn_ref, actor_id, pod_id, binding_generation, authentication_generation, authority_digest, action_digest, operation, correlation_id, phase, created_at, updated_at, source_kind, configuration_digest, server_name, tool_name, consumer_kind, coding_run_id, native_session_id, native_message_id, native_call_id, native_arguments_digest, native_mcp_action_digest) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'prepared',?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       )
       .run(
         intent.invocationId,
@@ -251,12 +305,14 @@ class MutationStore implements ChatToolMutationStore {
         const current = this.requireRecord(invocationId);
         if (current.phase !== "prepared") return undefined;
         assertCurrentTurn(this.db, current);
-        const barrier = this.db
-          .prepare(
-            "SELECT 1 FROM chat_tool_mutations WHERE chat_id = ? AND turn_ref = ? AND (phase IN ('dispatched','acknowledged') OR outcome IN ('unknown','succeeded-unconfirmed')) LIMIT 1",
-          )
-          .get(current.chatId, current.turnRef);
-        if (barrier !== undefined) return undefined;
+        const rows = turnRecords(this.db, current);
+        if (
+          rows.some(
+            (row) => row.outcome === "unknown" || row.outcome === "succeeded-unconfirmed",
+          ) ||
+          hasInflightBarrier(rows, current)
+        )
+          return undefined;
         // A synchronous guard may atomically redeem an approval in this same transaction.
         if (!guardApproved(guard())) throw new GuardDenied();
         this.db

@@ -1,3 +1,9 @@
+import type { ManagedMcpInvocationContext } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
+import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
+import type {
+  NativeMcpMutationJournal,
+  NativeMcpCallIdentity,
+} from "./opencodeNativeMcpMutationJournal.js";
 import { isCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import type {
@@ -59,12 +65,41 @@ function bindOne(
   };
 }
 
+interface NativeMutationAdmission {
+  readonly journal: NativeMcpMutationJournal | undefined;
+  readonly readmit: ((identity: NativeMcpCallIdentity) => boolean) | undefined;
+}
+function managedInvocationContext(
+  runId: string,
+  server: McpServerDefinition,
+  signal: AbortSignal,
+  onUncertainMutation: (() => Promise<void>) | undefined,
+  mutation: NativeMutationAdmission,
+): ManagedMcpInvocationContext {
+  return {
+    invocationId: randomUUID(),
+    correlationId: runId,
+    signal,
+    beforeEffect: () => !signal.aborted,
+    onUncertainMutation,
+    beginMutation: (request) =>
+      mutation.journal?.begin({
+        ...request,
+        runId,
+        serverName: server.name,
+        configurationDigest: sha256Hex(canonicalise(server)),
+        beforeEffect: (identity) => !signal.aborted && mutation.readmit?.(identity) === true,
+      }),
+  };
+}
+
 function bindManaged(
   input: OpenCodeMcpRelayInput,
   runId: string,
   server: McpServerDefinition,
   log: ServerLogSink | undefined,
   onUncertainMutation: (() => Promise<void>) | undefined,
+  mutation: NativeMutationAdmission,
 ): OpenCodeNativeMcpRelayEndpoint | BindRefusal {
   const manager = input.managed;
   if (manager === undefined) return "relay-unavailable";
@@ -86,13 +121,7 @@ function bindManaged(
             ...(request.body === undefined ? {} : { body: request.body }),
             signal,
           }),
-          {
-            invocationId: randomUUID(),
-            correlationId: runId,
-            signal,
-            beforeEffect: () => !signal.aborted,
-            onUncertainMutation,
-          },
+          managedInvocationContext(runId, server, signal, onUncertainMutation, mutation),
         );
       },
     });
@@ -129,6 +158,8 @@ function recoverOnce(
  */
 export function bindNativeMcpRelays(input: {
   readonly servers: readonly McpServerDefinition[];
+  readonly mutations?: NativeMcpMutationJournal | undefined;
+  readonly readmitMutation?: ((identity: NativeMcpCallIdentity) => boolean) | undefined;
   readonly mode: string | undefined;
   readonly runId: string;
   readonly relay: OpenCodeMcpRelayInput | undefined;
@@ -155,7 +186,10 @@ export function bindNativeMcpRelays(input: {
         ? "relay-unavailable"
         : input.relay.managed === undefined
           ? bindOne(input.relay, input.runId, server)
-          : bindManaged(input.relay, input.runId, server, input.activityLog, onUncertainMutation);
+          : bindManaged(input.relay, input.runId, server, input.activityLog, onUncertainMutation, {
+              journal: input.mutations,
+              readmit: input.readmitMutation,
+            });
     if (typeof bound === "string") refusals.push(bound);
     else endpoints.set(server.name, bound);
   }
