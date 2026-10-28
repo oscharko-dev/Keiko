@@ -3923,8 +3923,8 @@
         "reviewer": "release-owner",
         "reviewedAt": "2026-10-28",
         "humanApproved": true,
-        "approvalReference": "owner-chat-instruction:2026-10-28:prepare-keiko-1.3.2-on-epic-3897",
-        "rationale": "The owner explicitly asked in chat on 2026-10-28 to prepare release 1.3.2 on epic #3897. The entry accounts for every change integrated since v1.3.1: the SSE flow-control fix with the 1.3.1 stress-qualification findings (#4102) and the OpenCode parity deviations in the Git diff view and model readiness (#4113, #4114, #4115, #4116). This records release-impact preparation under the signed-version-bump policy, not permission to integrate or publish. Integration remains subject to the owner's authorization, exact-head required checks and settled review findings, and publication requires the protected release workflow after the owner's live lab re-check."
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#3897#0",
+        "rationale": "The owner explicitly asked in chat on 2026-10-28 to prepare release 1.3.2 on epic #3897; the approval reference uses comment id 0 as a placeholder until the owner records the authorizing comment on #3897, and must be replaced with that comment id before merge. The entry accounts for every change integrated since v1.3.1: the SSE flow-control fix with the 1.3.1 stress-qualification findings (#4102) and the OpenCode parity deviations in the Git diff view and model readiness (#4113, #4114, #4115, #4116). This records release-impact preparation under the signed-version-bump policy, not permission to integrate or publish. Integration remains subject to the owner's authorization, exact-head required checks and settled review findings, and publication requires the protected release workflow after the owner's live lab re-check."
       },
       "breakingException": {
         "rationale": "Immutable published 1.2.6 and earlier source updaters still look for the handoff plan outside the canonical update-state root. A newer target cannot repair that source before handoff; the verified managed-install bootstrap introduced with 1.2.7 remains the carry-forward path.",
