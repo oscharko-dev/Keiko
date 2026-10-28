@@ -1234,5 +1234,113 @@
   "command.workspaceCommands.description": {
     "en": "Open the workspace and editor command palette.",
     "de": "Öffnet die Befehlsliste für Arbeitsbereich und Editor."
+  },
+  "settings.mcp.title": {
+    "en": "MCP servers",
+    "de": "MCP-Server"
+  },
+  "settings.mcp.description": {
+    "en": "Configure tool servers centrally. Each conversation and coding task applies its own permissions.",
+    "de": "Tool-Server zentral konfigurieren. Für jedes Gespräch und jede Coding-Aufgabe gelten die jeweiligen Berechtigungen."
+  },
+  "settings.mcp.error": {
+    "en": "The operation failed. Check the configuration, credentials and connection. Reload if settings changed elsewhere.",
+    "de": "Die Aktion ist fehlgeschlagen. Konfiguration, Zugangsdaten und Verbindung prüfen. Bei Änderungen an anderer Stelle neu laden."
+  },
+  "settings.mcp.reload": {
+    "en": "Reload",
+    "de": "Neu laden"
+  },
+  "settings.mcp.loading": {
+    "en": "Loading MCP servers…",
+    "de": "MCP-Server werden geladen…"
+  },
+  "settings.mcp.unverified": {
+    "en": "Not checked in this session",
+    "de": "In dieser Sitzung nicht geprüft"
+  },
+  "settings.mcp.disabled": {
+    "en": "Disabled",
+    "de": "Deaktiviert"
+  },
+  "settings.mcp.connected": {
+    "en": "Connected · {count} tools",
+    "de": "Verbunden · {count} Tools"
+  },
+  "settings.mcp.connect": {
+    "en": "Check connection",
+    "de": "Verbindung prüfen"
+  },
+  "settings.mcp.edit": {
+    "en": "Edit",
+    "de": "Bearbeiten"
+  },
+  "settings.mcp.disable": {
+    "en": "Disable",
+    "de": "Deaktivieren"
+  },
+  "settings.mcp.enable": {
+    "en": "Enable",
+    "de": "Aktivieren"
+  },
+  "settings.mcp.remove": {
+    "en": "Remove",
+    "de": "Entfernen"
+  },
+  "settings.mcp.add": {
+    "en": "Add MCP server",
+    "de": "MCP-Server hinzufügen"
+  },
+  "settings.mcp.name": {
+    "en": "Name (lowercase letters, numbers, - and _)",
+    "de": "Name (Kleinbuchstaben, Zahlen, - und _)"
+  },
+  "settings.mcp.transport": {
+    "en": "Connection type",
+    "de": "Verbindungsart"
+  },
+  "settings.mcp.url": {
+    "en": "MCP endpoint (HTTPS)",
+    "de": "MCP-Endpunkt (HTTPS)"
+  },
+  "settings.mcp.token": {
+    "en": "Bearer token / PAT (leave blank to keep the stored token)",
+    "de": "Bearer-Token / PAT (leer lassen, um den gespeicherten Token zu behalten)"
+  },
+  "settings.mcp.private": {
+    "en": "Server on a private network",
+    "de": "Server im privaten Netzwerk"
+  },
+  "settings.mcp.legacy": {
+    "en": "Legacy HTTP + SSE",
+    "de": "Älteres HTTP + SSE"
+  },
+  "settings.mcp.command": {
+    "en": "Executable (absolute path)",
+    "de": "Programm (absoluter Pfad)"
+  },
+  "settings.mcp.args": {
+    "en": "Arguments (one per line, without shell quoting)",
+    "de": "Argumente (eines pro Zeile, ohne Shell-Anführungszeichen)"
+  },
+  "settings.mcp.env": {
+    "en": "Import .env file",
+    "de": "Datei .env importieren"
+  },
+  "settings.mcp.envHelp": {
+    "en": "Imported values are encrypted and supplied only to this server. The file path is not stored.",
+    "de": "Importierte Werte werden verschlüsselt und nur diesem Server übergeben. Der Dateipfad wird nicht gespeichert."
+  },
+  "settings.mcp.saveConnect": {
+    "en": "Save and connect",
+    "de": "Speichern und verbinden"
+  },
+  "settings.mcp.cancel": {
+    "en": "Cancel",
+    "de": "Abbrechen"
+  },
+  "settings.tabs.mcp": {
+    "en": "MCP",
+    "de": "MCP"
   }
 }

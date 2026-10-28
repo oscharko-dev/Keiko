@@ -18,7 +18,7 @@ type SettingsDeps = Pick<
 >;
 const denied = (): RouteResult => ({
   status: 403,
-  body: errorBody("FORBIDDEN", "An active app session is required."),
+  body: errorBody("DENIED", "An active app session is required."),
 });
 const unavailable = (): RouteResult => ({
   status: 503,
