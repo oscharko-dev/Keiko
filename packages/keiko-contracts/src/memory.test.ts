@@ -4,6 +4,7 @@
 // local-knowledge.test.ts and connected-context.test.ts.
 
 import { describe, it, expect, expectTypeOf } from "vitest";
+import type { LibraryOutput } from "./__tests__/support/library-parser-type-facts.js";
 import { spawnSync } from "node:child_process";
 import * as publicMemory from "@oscharko-dev/keiko-contracts/memory";
 import {
@@ -2448,9 +2449,9 @@ describe("Memory public parsers (#3918)", () => {
     ).toBe(false);
     expectTypeOf<
       readonly [
-        ReturnType<typeof parsePublicMemoryRecord>,
-        ReturnType<typeof parsePublicMemoryScope>,
-        ReturnType<typeof parsePublicMemoryPayload>,
+        LibraryOutput<typeof parsePublicMemoryRecord>,
+        LibraryOutput<typeof parsePublicMemoryScope>,
+        LibraryOutput<typeof parsePublicMemoryPayload>,
       ]
     >().toEqualTypeOf<
       readonly [
@@ -2723,8 +2724,8 @@ function expectRemainingMemoryIdentity(own: RemainingMemoryCase): void {
 function assertRemainingInitialMemoryTypes(): void {
   expectTypeOf<
     readonly [
-      ReturnType<typeof validatePublicMemoryProposal>,
-      ReturnType<typeof parsePublicMemoryProposal>,
+      LibraryOutput<typeof validatePublicMemoryProposal>,
+      LibraryOutput<typeof parsePublicMemoryProposal>,
     ]
   >().toEqualTypeOf<
     readonly [
@@ -2734,8 +2735,8 @@ function assertRemainingInitialMemoryTypes(): void {
   >();
   expectTypeOf<
     readonly [
-      ReturnType<typeof validatePublicMemoryAcceptance>,
-      ReturnType<typeof parsePublicMemoryAcceptance>,
+      LibraryOutput<typeof validatePublicMemoryAcceptance>,
+      LibraryOutput<typeof parsePublicMemoryAcceptance>,
     ]
   >().toEqualTypeOf<
     readonly [
@@ -2745,8 +2746,8 @@ function assertRemainingInitialMemoryTypes(): void {
   >();
   expectTypeOf<
     readonly [
-      ReturnType<typeof validatePublicMemoryRejection>,
-      ReturnType<typeof parsePublicMemoryRejection>,
+      LibraryOutput<typeof validatePublicMemoryRejection>,
+      LibraryOutput<typeof parsePublicMemoryRejection>,
     ]
   >().toEqualTypeOf<
     readonly [
@@ -2756,8 +2757,8 @@ function assertRemainingInitialMemoryTypes(): void {
   >();
   expectTypeOf<
     readonly [
-      ReturnType<typeof validatePublicMemoryUpdate>,
-      ReturnType<typeof parsePublicMemoryUpdate>,
+      LibraryOutput<typeof validatePublicMemoryUpdate>,
+      LibraryOutput<typeof parsePublicMemoryUpdate>,
     ]
   >().toEqualTypeOf<
     readonly [
@@ -2770,8 +2771,8 @@ function assertRemainingInitialMemoryTypes(): void {
 function assertRemainingLifecycleMemoryTypes(): void {
   expectTypeOf<
     readonly [
-      ReturnType<typeof validatePublicMemorySupersession>,
-      ReturnType<typeof parsePublicMemorySupersession>,
+      LibraryOutput<typeof validatePublicMemorySupersession>,
+      LibraryOutput<typeof parsePublicMemorySupersession>,
     ]
   >().toEqualTypeOf<
     readonly [
@@ -2780,22 +2781,25 @@ function assertRemainingLifecycleMemoryTypes(): void {
     ]
   >();
   expectTypeOf<
-    readonly [ReturnType<typeof validatePublicMemoryPin>, ReturnType<typeof parsePublicMemoryPin>]
+    readonly [
+      LibraryOutput<typeof validatePublicMemoryPin>,
+      LibraryOutput<typeof parsePublicMemoryPin>,
+    ]
   >().toEqualTypeOf<
     readonly [PublicMemoryValidation<PublicMemoryPin>, PublicMemoryValidation<PublicMemoryPin>]
   >();
   expectTypeOf<
     readonly [
-      ReturnType<typeof validatePublicMemoryUnpin>,
-      ReturnType<typeof parsePublicMemoryUnpin>,
+      LibraryOutput<typeof validatePublicMemoryUnpin>,
+      LibraryOutput<typeof parsePublicMemoryUnpin>,
     ]
   >().toEqualTypeOf<
     readonly [PublicMemoryValidation<PublicMemoryUnpin>, PublicMemoryValidation<PublicMemoryUnpin>]
   >();
   expectTypeOf<
     readonly [
-      ReturnType<typeof validatePublicMemoryArchive>,
-      ReturnType<typeof parsePublicMemoryArchive>,
+      LibraryOutput<typeof validatePublicMemoryArchive>,
+      LibraryOutput<typeof parsePublicMemoryArchive>,
     ]
   >().toEqualTypeOf<
     readonly [
@@ -2808,8 +2812,8 @@ function assertRemainingLifecycleMemoryTypes(): void {
 function assertRemainingOtherMemoryTypes(): void {
   expectTypeOf<
     readonly [
-      ReturnType<typeof validatePublicMemoryForget>,
-      ReturnType<typeof parsePublicMemoryForget>,
+      LibraryOutput<typeof validatePublicMemoryForget>,
+      LibraryOutput<typeof parsePublicMemoryForget>,
     ]
   >().toEqualTypeOf<
     readonly [
@@ -2819,8 +2823,8 @@ function assertRemainingOtherMemoryTypes(): void {
   >();
   expectTypeOf<
     readonly [
-      ReturnType<typeof validatePublicMemoryAuditRecord>,
-      ReturnType<typeof parsePublicMemoryAuditRecord>,
+      LibraryOutput<typeof validatePublicMemoryAuditRecord>,
+      LibraryOutput<typeof parsePublicMemoryAuditRecord>,
     ]
   >().toEqualTypeOf<
     readonly [
@@ -2830,8 +2834,8 @@ function assertRemainingOtherMemoryTypes(): void {
   >();
   expectTypeOf<
     readonly [
-      ReturnType<typeof validatePublicMemoryRetrievalRequest>,
-      ReturnType<typeof parsePublicMemoryRetrievalRequest>,
+      LibraryOutput<typeof validatePublicMemoryRetrievalRequest>,
+      LibraryOutput<typeof parsePublicMemoryRetrievalRequest>,
     ]
   >().toEqualTypeOf<
     readonly [

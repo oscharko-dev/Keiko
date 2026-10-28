@@ -161,6 +161,7 @@ describe("native fixture child resources (hermetic Node children, not native qua
         (error: unknown): unknown => error,
       );
       assertNativeCleanupFailure(failure, primary, cleanup);
+      expect(child.signalCode).toBeNull();
     } finally {
       kill.mockRestore();
       await stopNativeChild(child);

@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { expectGitScalarIntegerPreservation } from "./__tests__/support/git-read-wire-contract.js";
+
 import {
   validateGitSyncExecuteResponse as validatePublicSyncExecute,
   parseGitSyncPreview as parsePublicPreview,
@@ -16,6 +18,8 @@ import {
   parseGitSyncPreview,
   parseGitSyncExecuteResponse,
   type GitSyncOutcome,
+  type GitSyncPreview,
+  type GitSyncExecuteResponse,
 } from "./git-sync.js";
 
 // Object.freeze throws on a mutation attempt in strict-mode ESM (which this file is), but the
@@ -523,23 +527,15 @@ describe("Git sync scalar integer preservation", () => {
     ["public", "execute", parsePublicExecute, validExecute],
   ] as const) {
     it(`${surface} ${phase}: retains negative zero and unsafe integers without coercion`, () => {
-      for (const count of [-0, 0, 1, 9_007_199_254_740_992]) {
-        const input = { ...fixture(), ahead: count };
-        const result = parse(input);
-        if (!result.ok) throw new TypeError("Expected the existing integer admission");
-        expect(result.value).toBe(input);
-        expect(result.value.ahead).toBe(count);
-      }
-      for (const count of [-1, 0.5, NaN, Infinity, "0", true, null]) {
-        expect(parse({ ...fixture(), ahead: count })).toEqual({
-          ok: false,
-          reasons: [
-            phase === "preview"
-              ? "ahead must be a non-negative integer"
-              : "ahead must be a non-negative integer when present",
-          ],
-        });
-      }
+      expectGitScalarIntegerPreservation<GitSyncPreview | GitSyncExecuteResponse>(
+        parse,
+        (count) => ({ ...fixture(), ahead: count }),
+        (value) => value.ahead,
+        () =>
+          phase === "preview"
+            ? "ahead must be a non-negative integer"
+            : "ahead must be a non-negative integer when present",
+      );
     });
   }
 });

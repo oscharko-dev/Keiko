@@ -1,4 +1,8 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
+import type {
+  LibraryParserTripleExpected,
+  LibraryParserTripleFacts,
+} from "./__tests__/support/library-parser-type-facts.js";
 
 import type {
   ChunkId,
@@ -359,28 +363,19 @@ export function parsePublicKnowledgeCheckpoint(
 
 describe("Knowledge checkpoint public responsibility (#3918)", () => {
   it("pins exact unknown inputs checked results and nested declarations", () => {
-    expectTypeOf(validateExtractionCheckpointRecord).parameter(0).toBeUnknown();
-    expectTypeOf(publicValidateCheckpoint).parameter(0).toBeUnknown();
-    expectTypeOf(parsePublicKnowledgeCheckpoint).parameter(0).toBeUnknown();
-    expectTypeOf(validateExtractionCheckpointRecord).parameter(0).not.toBeAny();
-    expectTypeOf(publicValidateCheckpoint).parameter(0).not.toBeAny();
-    expectTypeOf(parsePublicKnowledgeCheckpoint).parameter(0).not.toBeAny();
     expectTypeOf<
-      readonly [
-        ReturnType<typeof validateExtractionCheckpointRecord>,
-        ReturnType<typeof publicValidateCheckpoint>,
-        ReturnType<typeof parsePublicKnowledgeCheckpoint>,
-      ]
+      LibraryParserTripleFacts<
+        typeof validateExtractionCheckpointRecord,
+        typeof publicValidateCheckpoint,
+        typeof parsePublicKnowledgeCheckpoint
+      >
     >().toEqualTypeOf<
-      readonly [
+      LibraryParserTripleExpected<
         LocalKnowledgeValidation<ExtractionCheckpointRecord>,
         PublicKnowledgeValidation<PublicCheckpoint>,
-        PublicKnowledgeValidation<PublicCheckpoint>,
-      ]
+        PublicKnowledgeValidation<PublicCheckpoint>
+      >
     >();
-    expectTypeOf(validateExtractionCheckpointRecord).returns.not.toBeAny();
-    expectTypeOf(publicValidateCheckpoint).returns.not.toBeAny();
-    expectTypeOf(parsePublicKnowledgeCheckpoint).returns.not.toBeAny();
     const result = parsePublicKnowledgeCheckpoint(baseCheckpoint());
     expect(result.ok).toBe(true);
     if (result.ok) {

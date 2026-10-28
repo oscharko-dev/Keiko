@@ -166,12 +166,7 @@ function validatePendingApprovalReview(
     errors,
     CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS,
   );
-  const paths =
-    value.nativeAction !== undefined
-      ? validateNativeActionReview(value, errors)
-      : value.draftDelivery === undefined
-        ? validateReviewPaths(value.paths, errors)
-        : validateDraftReview(value, errors);
+  const paths = validatePendingReviewContent(value, errors);
   const truncated = typeof value.pathsTruncated === "boolean";
   if (!truncated) {
     errors.push("pendingApprovalReview.pathsTruncated must be a boolean");
@@ -182,6 +177,12 @@ function validatePendingApprovalReview(
   validateReviewFileCountConsistency(value, errors);
   const commit = value.verifiedCommit === undefined || validateCommitReview(value, errors);
   return [request, paths, truncated, fileCount, added, deleted, commit].every(Boolean);
+}
+
+function validatePendingReviewContent(value: Record<string, unknown>, errors: string[]): boolean {
+  if (value.nativeAction !== undefined) return validateNativeActionReview(value, errors);
+  if (value.draftDelivery === undefined) return validateReviewPaths(value.paths, errors);
+  return validateDraftReview(value, errors);
 }
 
 function validateNativeActionReview(pending: Record<string, unknown>, errors: string[]): boolean {

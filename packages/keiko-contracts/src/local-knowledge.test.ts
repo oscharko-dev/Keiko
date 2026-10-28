@@ -4,6 +4,10 @@
 // connected-context.test.ts and workflow-handoff.test.ts.
 
 import { describe, it, expect, expectTypeOf } from "vitest";
+import type {
+  LibraryParserTripleExpected,
+  LibraryParserTripleFacts,
+} from "./__tests__/support/library-parser-type-facts.js";
 import {
   CAPSULE_ANSWER_GROUNDING_POLICIES,
   CAPSULE_CONTEXTUAL_RETRIEVAL_DOCUMENT_CONTEXT_MAX_CHARS_MAX,
@@ -1223,28 +1227,19 @@ export function parsePublicKnowledgeSet(
 
 describe("Knowledge capsule set public responsibility (#3918)", () => {
   it("pins exact unknown inputs checked results and nested declarations", () => {
-    expectTypeOf(validateCapsuleSet).parameter(0).toBeUnknown();
-    expectTypeOf(publicValidateSet).parameter(0).toBeUnknown();
-    expectTypeOf(parsePublicKnowledgeSet).parameter(0).toBeUnknown();
-    expectTypeOf(validateCapsuleSet).parameter(0).not.toBeAny();
-    expectTypeOf(publicValidateSet).parameter(0).not.toBeAny();
-    expectTypeOf(parsePublicKnowledgeSet).parameter(0).not.toBeAny();
     expectTypeOf<
-      readonly [
-        ReturnType<typeof validateCapsuleSet>,
-        ReturnType<typeof publicValidateSet>,
-        ReturnType<typeof parsePublicKnowledgeSet>,
-      ]
+      LibraryParserTripleFacts<
+        typeof validateCapsuleSet,
+        typeof publicValidateSet,
+        typeof parsePublicKnowledgeSet
+      >
     >().toEqualTypeOf<
-      readonly [
+      LibraryParserTripleExpected<
         LocalKnowledgeValidation<CapsuleSet>,
         PublicKnowledgeValidation<PublicCapsuleSet>,
-        PublicKnowledgeValidation<PublicCapsuleSet>,
-      ]
+        PublicKnowledgeValidation<PublicCapsuleSet>
+      >
     >();
-    expectTypeOf(validateCapsuleSet).returns.not.toBeAny();
-    expectTypeOf(publicValidateSet).returns.not.toBeAny();
-    expectTypeOf(parsePublicKnowledgeSet).returns.not.toBeAny();
     const result = parsePublicKnowledgeSet(happyCapsuleSet());
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -1272,28 +1267,19 @@ export function parsePublicKnowledgeReindex(
 
 describe("Knowledge reindex public responsibility (#3918)", () => {
   it("pins exact unknown inputs checked results and nested declarations", () => {
-    expectTypeOf(validateCapsuleReindexRequest).parameter(0).toBeUnknown();
-    expectTypeOf(publicValidateReindex).parameter(0).toBeUnknown();
-    expectTypeOf(parsePublicKnowledgeReindex).parameter(0).toBeUnknown();
-    expectTypeOf(validateCapsuleReindexRequest).parameter(0).not.toBeAny();
-    expectTypeOf(publicValidateReindex).parameter(0).not.toBeAny();
-    expectTypeOf(parsePublicKnowledgeReindex).parameter(0).not.toBeAny();
     expectTypeOf<
-      readonly [
-        ReturnType<typeof validateCapsuleReindexRequest>,
-        ReturnType<typeof publicValidateReindex>,
-        ReturnType<typeof parsePublicKnowledgeReindex>,
-      ]
+      LibraryParserTripleFacts<
+        typeof validateCapsuleReindexRequest,
+        typeof publicValidateReindex,
+        typeof parsePublicKnowledgeReindex
+      >
     >().toEqualTypeOf<
-      readonly [
+      LibraryParserTripleExpected<
         LocalKnowledgeValidation<CapsuleReindexRequest>,
         PublicKnowledgeValidation<PublicReindexRequest>,
-        PublicKnowledgeValidation<PublicReindexRequest>,
-      ]
+        PublicKnowledgeValidation<PublicReindexRequest>
+      >
     >();
-    expectTypeOf(validateCapsuleReindexRequest).returns.not.toBeAny();
-    expectTypeOf(publicValidateReindex).returns.not.toBeAny();
-    expectTypeOf(parsePublicKnowledgeReindex).returns.not.toBeAny();
     const result = parsePublicKnowledgeReindex({
       capsuleId: "cap-1",
       mode: "resume",
@@ -1326,28 +1312,19 @@ export function parsePublicKnowledgeGraph(
 
 describe("Knowledge graph public responsibility (#3918)", () => {
   it("pins exact unknown inputs checked results and nested declarations", () => {
-    expectTypeOf(validateConnectorGraphState).parameter(0).toBeUnknown();
-    expectTypeOf(publicValidateGraph).parameter(0).toBeUnknown();
-    expectTypeOf(parsePublicKnowledgeGraph).parameter(0).toBeUnknown();
-    expectTypeOf(validateConnectorGraphState).parameter(0).not.toBeAny();
-    expectTypeOf(publicValidateGraph).parameter(0).not.toBeAny();
-    expectTypeOf(parsePublicKnowledgeGraph).parameter(0).not.toBeAny();
     expectTypeOf<
-      readonly [
-        ReturnType<typeof validateConnectorGraphState>,
-        ReturnType<typeof publicValidateGraph>,
-        ReturnType<typeof parsePublicKnowledgeGraph>,
-      ]
+      LibraryParserTripleFacts<
+        typeof validateConnectorGraphState,
+        typeof publicValidateGraph,
+        typeof parsePublicKnowledgeGraph
+      >
     >().toEqualTypeOf<
-      readonly [
+      LibraryParserTripleExpected<
         LocalKnowledgeValidation<ConnectorGraphState>,
         PublicKnowledgeValidation<PublicGraphState>,
-        PublicKnowledgeValidation<PublicGraphState>,
-      ]
+        PublicKnowledgeValidation<PublicGraphState>
+      >
     >();
-    expectTypeOf(validateConnectorGraphState).returns.not.toBeAny();
-    expectTypeOf(publicValidateGraph).returns.not.toBeAny();
-    expectTypeOf(parsePublicKnowledgeGraph).returns.not.toBeAny();
     const result = parsePublicKnowledgeGraph(happyGraph());
     expect(result.ok).toBe(true);
     if (result.ok) {

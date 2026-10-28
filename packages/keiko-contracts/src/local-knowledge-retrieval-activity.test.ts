@@ -1,4 +1,8 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
+import type {
+  LibraryParserTripleExpected,
+  LibraryParserTripleFacts,
+} from "./__tests__/support/library-parser-type-facts.js";
 
 import type { KnowledgeCapsuleId, KnowledgeSourceId } from "./local-knowledge.js";
 import {
@@ -423,28 +427,19 @@ export function parsePublicKnowledgeActivity(
 
 describe("Knowledge retrieval activity public responsibility (#3918)", () => {
   it("pins exact unknown inputs checked results and nested declarations", () => {
-    expectTypeOf(validateKnowledgePodRetrievalActivity).parameter(0).toBeUnknown();
-    expectTypeOf(publicValidateActivity).parameter(0).toBeUnknown();
-    expectTypeOf(parsePublicKnowledgeActivity).parameter(0).toBeUnknown();
-    expectTypeOf(validateKnowledgePodRetrievalActivity).parameter(0).not.toBeAny();
-    expectTypeOf(publicValidateActivity).parameter(0).not.toBeAny();
-    expectTypeOf(parsePublicKnowledgeActivity).parameter(0).not.toBeAny();
     expectTypeOf<
-      readonly [
-        ReturnType<typeof validateKnowledgePodRetrievalActivity>,
-        ReturnType<typeof publicValidateActivity>,
-        ReturnType<typeof parsePublicKnowledgeActivity>,
-      ]
+      LibraryParserTripleFacts<
+        typeof validateKnowledgePodRetrievalActivity,
+        typeof publicValidateActivity,
+        typeof parsePublicKnowledgeActivity
+      >
     >().toEqualTypeOf<
-      readonly [
+      LibraryParserTripleExpected<
         LocalKnowledgeValidation<KnowledgePodRetrievalActivity>,
         PublicKnowledgeValidation<PublicRetrievalActivity>,
-        PublicKnowledgeValidation<PublicRetrievalActivity>,
-      ]
+        PublicKnowledgeValidation<PublicRetrievalActivity>
+      >
     >();
-    expectTypeOf(validateKnowledgePodRetrievalActivity).returns.not.toBeAny();
-    expectTypeOf(publicValidateActivity).returns.not.toBeAny();
-    expectTypeOf(parsePublicKnowledgeActivity).returns.not.toBeAny();
     const result = parsePublicKnowledgeActivity(happyActivity());
     expect(result.ok).toBe(true);
     if (result.ok) {

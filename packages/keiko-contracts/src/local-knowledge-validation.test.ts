@@ -21,6 +21,10 @@
 // must still agree with the canonical implementation on the exact rejection message).
 
 import { describe, expect, expectTypeOf, it } from "vitest";
+import type {
+  LibraryParserTripleExpected,
+  LibraryParserTripleFacts,
+} from "./__tests__/support/library-parser-type-facts.js";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -381,28 +385,19 @@ export function parsePublicKnowledgeCapsule(
 
 describe("Knowledge capsule public responsibility (#3918)", () => {
   it("pins exact unknown inputs checked results and nested declarations", () => {
-    expectTypeOf(validateKnowledgeCapsule).parameter(0).toBeUnknown();
-    expectTypeOf(publicValidateKnowledgeCapsule).parameter(0).toBeUnknown();
-    expectTypeOf(parsePublicKnowledgeCapsule).parameter(0).toBeUnknown();
-    expectTypeOf(validateKnowledgeCapsule).parameter(0).not.toBeAny();
-    expectTypeOf(publicValidateKnowledgeCapsule).parameter(0).not.toBeAny();
-    expectTypeOf(parsePublicKnowledgeCapsule).parameter(0).not.toBeAny();
     expectTypeOf<
-      readonly [
-        ReturnType<typeof validateKnowledgeCapsule>,
-        ReturnType<typeof publicValidateKnowledgeCapsule>,
-        ReturnType<typeof parsePublicKnowledgeCapsule>,
-      ]
+      LibraryParserTripleFacts<
+        typeof validateKnowledgeCapsule,
+        typeof publicValidateKnowledgeCapsule,
+        typeof parsePublicKnowledgeCapsule
+      >
     >().toEqualTypeOf<
-      readonly [
+      LibraryParserTripleExpected<
         LocalKnowledgeValidation<SourceKnowledgeCapsule>,
         PublicKnowledgeValidation<PublicKnowledgeCapsule>,
-        PublicKnowledgeValidation<PublicKnowledgeCapsule>,
-      ]
+        PublicKnowledgeValidation<PublicKnowledgeCapsule>
+      >
     >();
-    expectTypeOf(validateKnowledgeCapsule).returns.not.toBeAny();
-    expectTypeOf(publicValidateKnowledgeCapsule).returns.not.toBeAny();
-    expectTypeOf(parsePublicKnowledgeCapsule).returns.not.toBeAny();
     const result = parsePublicKnowledgeCapsule(capsuleInput());
     expect(result.ok).toBe(true);
     if (result.ok) {

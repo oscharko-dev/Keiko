@@ -289,7 +289,7 @@ it.each([{ values: ["404"] }, { values: ["provider:model"] }])(
       operations: [{ ...catalog.typedRegistry.operations[0], fields: { outcome: descriptor } }],
     };
     expect(runtimeOperationsModule(registry)).toContain(
-      `fieldContracts.activityLogStringEnumField(true, ${JSON.stringify(values)})`,
+      `activityLogStringEnumField(true, ${JSON.stringify(values)})`,
     );
     withGeneratedRuntime(({ identity }) => {
       expect(identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields.outcome).toEqual(descriptor);
@@ -305,7 +305,7 @@ describe("automatic catalog runtime field policy rendering", () => {
     const registry = { ...catalog.typedRegistry, operations: [pilot] };
     const source = runtimeOperationsModule(registry);
     expect(source).toContain(
-      '"completeness": fieldContracts.activityLogCompletenessField(),"loss": fieldContracts.activityLogLossField(), ...fieldContracts.activityLogAutomaticCatalogFields()',
+      '"completeness": activityLogCompletenessField(),"loss": activityLogLossField(), ...activityLogAutomaticCatalogFields()',
     );
     withGeneratedRuntime(({ identity }) => {
       expect(identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields).toEqual(pilot.fields);
@@ -347,7 +347,7 @@ describe("automatic catalog runtime field policy rendering", () => {
     if (mode === "other-operation") operation.op = "fixture.other.completed";
     const registry = { ...catalog.typedRegistry, operations: [operation] };
     expect(runtimeOperationsModule(registry)).not.toContain(
-      "...fieldContracts.activityLogAutomaticCatalogFields()",
+      "...activityLogAutomaticCatalogFields()",
     );
     withGeneratedRuntime(({ identity }) => {
       expect(identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields).toEqual(fields);
@@ -366,15 +366,13 @@ it("does not fold a descriptor with an extra own undefined property into the fac
   fields.retryable.extra = undefined;
   expect(Object.hasOwn(fields.retryable, "extra")).toBe(true);
   const registry = { ...catalog.typedRegistry, operations: [{ ...pilot, fields }] };
-  expect(runtimeOperationsModule(registry)).not.toContain(
-    "...fieldContracts.activityLogAutomaticCatalogFields()",
-  );
+  expect(runtimeOperationsModule(registry)).not.toContain("...activityLogAutomaticCatalogFields()");
 });
 
 describe("universal runtime descriptor rendering", () => {
   it.each([
-    ["complete", "completeness-state", "fieldContracts.activityLogCompletenessField"],
-    ["lost", "loss-state", "fieldContracts.activityLogLossField"],
+    ["complete", "completeness-state", "activityLogCompletenessField"],
+    ["lost", "loss-state", "activityLogLossField"],
   ])("uses only the exact ordered %s descriptor", (field, dataClass, constructor) => {
     const descriptor = { type: "string", dataClass, required: true };
     const registry = {
@@ -403,11 +401,9 @@ describe("universal runtime descriptor rendering", () => {
         operations: [{ ...catalog.typedRegistry.operations[0], fields: { tested: descriptor } }],
       };
       expect(runtimeOperationsModule(registry)).not.toContain(
-        '"tested": fieldContracts.activityLogCompletenessField()',
+        '"tested": activityLogCompletenessField()',
       );
-      expect(runtimeOperationsModule(registry)).not.toContain(
-        '"tested": fieldContracts.activityLogLossField()',
-      );
+      expect(runtimeOperationsModule(registry)).not.toContain('"tested": activityLogLossField()');
       withGeneratedRuntime(({ identity }) => {
         expect(identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields.tested).toEqual(descriptor);
         expect(Object.keys(identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields.tested)).toEqual(
@@ -427,11 +423,9 @@ describe("universal runtime descriptor rendering", () => {
       };
       expect(Object.hasOwn(descriptor, "extra")).toBe(true);
       expect(runtimeOperationsModule(registry)).not.toContain(
-        '"tested": fieldContracts.activityLogCompletenessField()',
+        '"tested": activityLogCompletenessField()',
       );
-      expect(runtimeOperationsModule(registry)).not.toContain(
-        '"tested": fieldContracts.activityLogLossField()',
-      );
+      expect(runtimeOperationsModule(registry)).not.toContain('"tested": activityLogLossField()');
     },
   );
 });
@@ -443,7 +437,7 @@ describe("embedding retry runtime field policy rendering", () => {
       const operation = catalog.typedRegistry.operations.find((entry) => entry.op === op);
       const registry = { ...catalog.typedRegistry, operations: [operation] };
       expect(runtimeOperationsModule(registry)).toContain(
-        "...fieldContracts.activityLogEmbeddingBatchRetryFields()",
+        "...activityLogEmbeddingBatchRetryFields()",
       );
       withGeneratedRuntime(({ identity }) => {
         expect(identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields).toEqual(operation.fields);
@@ -484,7 +478,7 @@ describe("embedding retry runtime field policy rendering", () => {
     if (mode === "other-operation") operation.op = "embedding.chunk.retry";
     const registry = { ...catalog.typedRegistry, operations: [operation] };
     expect(runtimeOperationsModule(registry)).not.toContain(
-      "...fieldContracts.activityLogEmbeddingBatchRetryFields()",
+      "...activityLogEmbeddingBatchRetryFields()",
     );
     withGeneratedRuntime(({ identity }) => {
       expect(identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields).toEqual(fields);
@@ -503,7 +497,7 @@ describe("embedding retry runtime field policy rendering", () => {
     expect(Object.hasOwn(fields.delayMs, "extra")).toBe(true);
     const registry = { ...catalog.typedRegistry, operations: [{ ...prior, fields }] };
     expect(runtimeOperationsModule(registry)).not.toContain(
-      "...fieldContracts.activityLogEmbeddingBatchRetryFields()",
+      "...activityLogEmbeddingBatchRetryFields()",
     );
   });
 });
@@ -517,9 +511,7 @@ describe("Git draft runtime model field policy rendering", () => {
   it.each(GIT_DRAFT_MODEL_OPERATIONS)("renders the exact ordered model policy for %s", (op) => {
     const operation = catalog.typedRegistry.operations.find((entry) => entry.op === op);
     const registry = { ...catalog.typedRegistry, operations: [operation] };
-    expect(runtimeOperationsModule(registry)).toContain(
-      "...fieldContracts.activityLogCommitDraftModelFields()",
-    );
+    expect(runtimeOperationsModule(registry)).toContain("...activityLogCommitDraftModelFields()");
     withGeneratedRuntime(({ identity }) => {
       const actual = identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields;
       expect(actual).toEqual(operation.fields);
@@ -595,7 +587,7 @@ describe("Git draft runtime model field policy rendering", () => {
       mutate(fields);
       const registry = { ...catalog.typedRegistry, operations: [{ ...prior, fields }] };
       expect(runtimeOperationsModule(registry)).not.toContain(
-        "...fieldContracts.activityLogCommitDraftModelFields()",
+        "...activityLogCommitDraftModelFields()",
       );
       withGeneratedRuntime(({ identity }) => {
         const actual = identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields;
@@ -617,11 +609,11 @@ describe("Git draft runtime model field policy rendering", () => {
       expect(Object.hasOwn(fields.draftKeyDigest, "extra")).toBe(true);
       expect(
         runtimeOperationsModule({ ...catalog.typedRegistry, operations: [{ ...prior, fields }] }),
-      ).not.toContain("...fieldContracts.activityLogCommitDraftModelFields()");
+      ).not.toContain("...activityLogCommitDraftModelFields()");
       const other = { ...prior, op: "git.commit.preview.completed" };
       expect(
         runtimeOperationsModule({ ...catalog.typedRegistry, operations: [other] }),
-      ).not.toContain("...fieldContracts.activityLogCommitDraftModelFields()");
+      ).not.toContain("...activityLogCommitDraftModelFields()");
       withGeneratedRuntime(
         ({ identity }) => {
           expect(identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields).toEqual(prior.fields);
@@ -641,7 +633,7 @@ describe("Git draft runtime model field policy rendering", () => {
       fields[name].required = !fields[name].required;
       const registry = { ...catalog.typedRegistry, operations: [{ ...prior, fields }] };
       expect(runtimeOperationsModule(registry)).not.toContain(
-        "...fieldContracts.activityLogCommitDraftModelFields()",
+        "...activityLogCommitDraftModelFields()",
       );
       withGeneratedRuntime(({ identity }) => {
         expect(identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields).toEqual(fields);

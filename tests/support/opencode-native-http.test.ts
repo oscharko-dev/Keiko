@@ -315,6 +315,7 @@ describe("native fixture HTTP recorder resources", () => {
         (error: unknown): unknown => error,
       );
       assertNativeCleanupFailure(failure, primary, cleanup);
+      expect(stub.server.listening).toBe(true);
     } finally {
       close.mockRestore();
       await closeNativeHttpStub(stub);

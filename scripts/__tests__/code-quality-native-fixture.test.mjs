@@ -40,7 +40,7 @@ describe("historical native analyzer fixture loader", () => {
           ),
         );
         expect(bytes).toEqual(archived);
-        expect(bytes.length).toBe(source.bytes);
+        expect(bytes).toHaveLength(source.bytes);
         expect(hash("sha256", bytes, "hex")).toBe(source.sha256);
       }
     } finally {

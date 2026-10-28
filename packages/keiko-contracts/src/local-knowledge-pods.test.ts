@@ -1,4 +1,8 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
+import type {
+  LibraryParserTripleExpected,
+  LibraryParserTripleFacts,
+} from "./__tests__/support/library-parser-type-facts.js";
 
 import {
   LOCAL_KNOWLEDGE_SCHEMA_VERSION,
@@ -1031,28 +1035,19 @@ export function parsePublicKnowledgeSummary(
 
 describe("Knowledge pod summary public responsibility (#3918)", () => {
   it("pins exact unknown inputs checked results and nested declarations", () => {
-    expectTypeOf(validateKnowledgePodSummary).parameter(0).toBeUnknown();
-    expectTypeOf(publicValidateSummary).parameter(0).toBeUnknown();
-    expectTypeOf(parsePublicKnowledgeSummary).parameter(0).toBeUnknown();
-    expectTypeOf(validateKnowledgePodSummary).parameter(0).not.toBeAny();
-    expectTypeOf(publicValidateSummary).parameter(0).not.toBeAny();
-    expectTypeOf(parsePublicKnowledgeSummary).parameter(0).not.toBeAny();
     expectTypeOf<
-      readonly [
-        ReturnType<typeof validateKnowledgePodSummary>,
-        ReturnType<typeof publicValidateSummary>,
-        ReturnType<typeof parsePublicKnowledgeSummary>,
-      ]
+      LibraryParserTripleFacts<
+        typeof validateKnowledgePodSummary,
+        typeof publicValidateSummary,
+        typeof parsePublicKnowledgeSummary
+      >
     >().toEqualTypeOf<
-      readonly [
+      LibraryParserTripleExpected<
         LocalKnowledgeValidation<KnowledgePodSummary>,
         PublicKnowledgeValidation<PublicPodSummary>,
-        PublicKnowledgeValidation<PublicPodSummary>,
-      ]
+        PublicKnowledgeValidation<PublicPodSummary>
+      >
     >();
-    expectTypeOf(validateKnowledgePodSummary).returns.not.toBeAny();
-    expectTypeOf(publicValidateSummary).returns.not.toBeAny();
-    expectTypeOf(parsePublicKnowledgeSummary).returns.not.toBeAny();
     const result = parsePublicKnowledgeSummary(happySummary());
     expect(result.ok).toBe(true);
     if (result.ok) {
