@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "21c10d91ede46f2faa223f0ce88b3910388b0a11f63817942519574d2d66bec3",
+    "catalogDigest": "134b354aa96444f08418d78ea988a20fa6b5861f86290d32700c5062e0ed9d59",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -138,8 +138,8 @@
         "failureClasses": ["activity-log-loss"],
         "proofIds": ["activity-log.loss.heartbeat-summary", "activity-log.loss.exit-summary"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-activity-log/src/activity-log-loss-summary.ts:30",
-        "emitterSites": ["packages/keiko-activity-log/src/activity-log-loss-summary.ts:109"]
+        "registrationSite": "packages/keiko-activity-log/src/activity-log-loss-summary.ts:31",
+        "emitterSites": ["packages/keiko-activity-log/src/activity-log-loss-summary.ts:86"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -99755,13 +99755,13 @@
     {
       "op": "activity-log.loss",
       "category": "diagnostic",
-      "site": "packages/keiko-activity-log/src/activity-log-loss-summary.ts:157",
+      "site": "packages/keiko-activity-log/src/activity-log-loss-summary.ts:134",
       "package": "keiko-activity-log"
     },
     {
       "op": "activity-log.loss",
       "category": "diagnostic",
-      "site": "packages/keiko-activity-log/src/activity-log-loss-summary.ts:33",
+      "site": "packages/keiko-activity-log/src/activity-log-loss-summary.ts:34",
       "package": "keiko-activity-log"
     },
     {
@@ -100169,7 +100169,7 @@
     {
       "op": "server-log.write-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-contracts/src/observability.ts:1512",
+      "site": "packages/keiko-contracts/src/observability.ts:1514",
       "package": "keiko-contracts"
     },
     {

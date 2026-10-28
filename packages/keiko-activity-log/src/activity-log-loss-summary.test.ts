@@ -6,6 +6,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS,
+  activityLogEventRegistration,
+  activityLogLossSummaryFields,
   activityLogLossCounters,
   recordActivityLogLoss,
   resetActivityLogLossCountersForTests,
@@ -17,6 +20,7 @@ import {
   readPersistedActivityLog,
 } from "../../../tests/support/activity-log-proof.js";
 import {
+  activityLogLossSummaryEvent,
   persistActivityLogLossSummary,
   resetActivityLogLossSummaryForTests,
 } from "./activity-log-loss-summary.js";
@@ -93,5 +97,43 @@ describe("Activity Log loss summary", () => {
     const persist = vi.fn(() => true);
     expect(persistActivityLogLossSummary("exit", { persist })).toBe("no-writer");
     expect(persist).not.toHaveBeenCalled();
+  });
+
+  it("keeps the once-registered loss descriptor graph shared by heartbeat and exit", () => {
+    const counters = activityLogLossCounters();
+    const first = activityLogEventRegistration(activityLogLossSummaryEvent(counters, "heartbeat"));
+    const second = activityLogEventRegistration(activityLogLossSummaryEvent(counters, "exit"));
+    if (first === undefined || second === undefined)
+      throw new TypeError("Expected registered loss events");
+    expect(first).toBe(second);
+    expect(first.fields.trigger).toBe(second.fields.trigger);
+    expect(first.fields.totalLost).toBe(second.fields.totalLost);
+    expect(first.fields).toEqual({
+      ...ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS,
+      ...activityLogLossSummaryFields(),
+    });
+    expect(Object.keys(first.fields)).toEqual([
+      "completeness",
+      "loss",
+      "trigger",
+      "totalLost",
+      "loggerWriteFailed",
+      "loggerUnavailable",
+      "schemaRejected",
+      "persistenceFailed",
+      "diagnosticSinkFailed",
+      "portSinkFailed",
+      "portUnwired",
+      "clientRejected",
+      "clientRateSuppressed",
+      "clientBufferEvicted",
+      "clientPostThrottled",
+      "clientPostFailed",
+      "clientRejectionSuppressed",
+      "clientErrorSuppressed",
+      "collectorDropped",
+      "summaryWriteFailed",
+    ]);
+    expect(first.fields.trigger?.values).toEqual(["heartbeat", "exit"]);
   });
 });

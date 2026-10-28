@@ -789,11 +789,13 @@ import type { ACTIVITY_LOG_OPERATION_REGISTRY } from "@oscharko-dev/keiko-contra
 import type {
   activityLogAutomaticCatalogFields,
   activityLogCommitDraftModelFields,
+  ActivityLogLossSummaryFields,
 } from "../packages/keiko-contracts/dist/activity-log-field-contracts.js";
 
 type Registry = typeof ACTIVITY_LOG_OPERATION_REGISTRY;
 type AutomaticProducerFields = ReturnType<typeof activityLogAutomaticCatalogFields>;
 type DraftProducerFields = ReturnType<typeof activityLogCommitDraftModelFields>;
+type LossProducerFields = Readonly<ActivityLogLossSummaryFields>;
 type GenericEqual<A, B> =
   (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
 type Assert<T extends true> = T;
@@ -809,6 +811,10 @@ type DraftAttemptBundle = Assert<GenericEqual<
 type DraftCompletedBundle = Assert<GenericEqual<
   Pick<Extract<Registry[number], { readonly op: "git.commit.draft.completed" }>["fields"], keyof DraftProducerFields>,
   DraftProducerFields
+>>;
+type LossSummaryBundle = Assert<GenericEqual<
+  Pick<Extract<Registry[number], { readonly op: "activity-log.loss" }>["fields"], keyof LossProducerFields>,
+  LossProducerFields
 >>;
 `;
 
@@ -847,4 +853,65 @@ it("preserves built public registry field bundles as their canonical producer re
     message: ts.flattenDiagnosticMessageText(diagnostic.messageText, " "),
   }));
   expect(diagnostics).toEqual([]);
+});
+
+function registeredLossRuntimePilot() {
+  return catalog.typedRegistry.operations.find((operation) => operation.op === "activity-log.loss");
+}
+
+describe("loss-summary runtime field policy rendering", () => {
+  it("renders the complete loss policy only after its unchanged global prefix", () => {
+    const pilot = registeredLossRuntimePilot();
+    const registry = { ...catalog.typedRegistry, operations: [pilot] };
+    expect(runtimeOperationsModule(registry)).toContain("...activityLogLossSummaryFields()");
+    withGeneratedRuntime(({ identity }) => {
+      const fields = identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields;
+      expect(fields).toEqual(pilot.fields);
+      expect(Reflect.ownKeys(fields)).toEqual(Reflect.ownKeys(pilot.fields));
+    }, registry);
+  });
+
+  it.each([
+    "other-operation",
+    "field-order",
+    "missing-field",
+    "requiredness",
+    "trigger-order",
+    "descriptor-order",
+  ])("keeps a nonexact loss policy on the full fallback path: %s", (variant) => {
+    const pilot = registeredLossRuntimePilot();
+    const fields = { ...pilot.fields };
+    let op = pilot.op;
+    if (variant === "other-operation") op = "gateway.catalog.automatic.completed";
+    if (variant === "field-order") {
+      const trigger = fields.trigger;
+      delete fields.trigger;
+      fields.trigger = trigger;
+    }
+    if (variant === "missing-field") delete fields.loggerWriteFailed;
+    if (variant === "requiredness") fields.totalLost = { ...fields.totalLost, required: false };
+    if (variant === "trigger-order")
+      fields.trigger = { ...fields.trigger, values: ["exit", "heartbeat"] };
+    if (variant === "descriptor-order")
+      fields.totalLost = { required: true, dataClass: "count", type: "integer" };
+    const registry = { ...catalog.typedRegistry, operations: [{ ...pilot, op, fields }] };
+    expect(runtimeOperationsModule(registry)).not.toContain("...activityLogLossSummaryFields()");
+    withGeneratedRuntime(({ identity }) => {
+      expect(identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields).toEqual(fields);
+      expect(Object.keys(identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields)).toEqual(
+        Object.keys(fields),
+      );
+    }, registry);
+  });
+
+  it("retains the descriptor extra-own-undefined refusal instead of folding the loss bundle", () => {
+    const pilot = registeredLossRuntimePilot();
+    const fields = { ...pilot.fields, totalLost: { ...pilot.fields.totalLost, extra: undefined } };
+    expect(Object.hasOwn(fields.totalLost, "extra")).toBe(true);
+    const registry = { ...catalog.typedRegistry, operations: [{ ...pilot, fields }] };
+    expect(runtimeOperationsModule(registry)).not.toContain("...activityLogLossSummaryFields()");
+    withGeneratedRuntime(({ identity }) => {
+      expect(identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields).toEqual(pilot.fields);
+    }, registry);
+  });
 });

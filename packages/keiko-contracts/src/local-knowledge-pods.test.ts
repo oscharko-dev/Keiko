@@ -1,4 +1,5 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
+import { observeIndexedMembers } from "./__tests__/support/observed-indexed-members.js";
 import {
   knowledgeCapturedExtentMembers,
   knowledgeFinalExtentFailureMembers,
@@ -1208,17 +1209,7 @@ it.each(["source", "public"] as const)(
     const trace: string[] = [];
     const values = new Array<unknown>(1);
     Object.setPrototypeOf(values, Object.defineProperty([], "0", { get: (): string => "healthy" }));
-    const members = new Proxy(values, {
-      get(target, key, receiver): unknown {
-        trace.push(`get:${String(key)}`);
-        const value: unknown = Reflect.get(target, key, receiver);
-        return value;
-      },
-      has(target, key): boolean {
-        trace.push(`has:${String(key)}`);
-        return Reflect.has(target, key);
-      },
-    });
+    const members = observeIndexedMembers(values, trace);
     const input = { ...happySummary(), tags: members };
     const result = validate(input);
     expect(result.ok).toBe(true);

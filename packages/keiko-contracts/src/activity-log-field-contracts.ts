@@ -436,3 +436,50 @@ export function activityLogCommitDraftModelFields(): Readonly<ActivityLogCommitD
     breakingTrailerCount: activityLogCountField(false),
   };
 }
+
+export interface ActivityLogLossSummaryFields {
+  readonly trigger: Readonly<
+    ActivityLogStringEnumFieldContract<true, readonly ["heartbeat", "exit"]>
+  >;
+  readonly totalLost: Readonly<ActivityLogCountFieldContract<true>>;
+  readonly loggerWriteFailed: Readonly<ActivityLogCountFieldContract<false>>;
+  readonly loggerUnavailable: Readonly<ActivityLogCountFieldContract<false>>;
+  readonly schemaRejected: Readonly<ActivityLogCountFieldContract<false>>;
+  readonly persistenceFailed: Readonly<ActivityLogCountFieldContract<false>>;
+  readonly diagnosticSinkFailed: Readonly<ActivityLogCountFieldContract<false>>;
+  readonly portSinkFailed: Readonly<ActivityLogCountFieldContract<false>>;
+  readonly portUnwired: Readonly<ActivityLogCountFieldContract<false>>;
+  readonly clientRejected: Readonly<ActivityLogCountFieldContract<false>>;
+  readonly clientRateSuppressed: Readonly<ActivityLogCountFieldContract<false>>;
+  readonly clientBufferEvicted: Readonly<ActivityLogCountFieldContract<false>>;
+  readonly clientPostThrottled: Readonly<ActivityLogCountFieldContract<false>>;
+  readonly clientPostFailed: Readonly<ActivityLogCountFieldContract<false>>;
+  readonly clientRejectionSuppressed: Readonly<ActivityLogCountFieldContract<false>>;
+  readonly clientErrorSuppressed: Readonly<ActivityLogCountFieldContract<false>>;
+  readonly collectorDropped: Readonly<ActivityLogCountFieldContract<false>>;
+  readonly summaryWriteFailed: Readonly<ActivityLogCountFieldContract<false>>;
+}
+
+/** The closed non-global policy of the process loss-summary operation. */
+export function activityLogLossSummaryFields(): Readonly<ActivityLogLossSummaryFields> {
+  return {
+    trigger: activityLogStringEnumField(true, ["heartbeat", "exit"]),
+    totalLost: activityLogCountField(true),
+    loggerWriteFailed: activityLogCountField(false),
+    loggerUnavailable: activityLogCountField(false),
+    schemaRejected: activityLogCountField(false),
+    persistenceFailed: activityLogCountField(false),
+    diagnosticSinkFailed: activityLogCountField(false),
+    portSinkFailed: activityLogCountField(false),
+    portUnwired: activityLogCountField(false),
+    clientRejected: activityLogCountField(false),
+    clientRateSuppressed: activityLogCountField(false),
+    clientBufferEvicted: activityLogCountField(false),
+    clientPostThrottled: activityLogCountField(false),
+    clientPostFailed: activityLogCountField(false),
+    clientRejectionSuppressed: activityLogCountField(false),
+    clientErrorSuppressed: activityLogCountField(false),
+    collectorDropped: activityLogCountField(false),
+    summaryWriteFailed: activityLogCountField(false),
+  };
+}

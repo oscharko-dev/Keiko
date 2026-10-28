@@ -2569,3 +2569,53 @@ it("retains the existing argument-work bound for bounded descriptors", () => {
     declarations.join("\n"),
   );
 });
+
+const LOSS_SUMMARY_FIELD_IMPORT =
+  'import { activityLogLossSummaryFields as lossFields } from "../../keiko-contracts/src/activity-log-field-contracts.js";';
+
+describe("canonical loss-summary field policy admission", () => {
+  it.each(["lossFields()", "{ ...lossFields() }"])(
+    "admits the complete canonical loss policy: %s",
+    (call) => {
+      inspectAutomaticCatalogFields(
+        call,
+        (registry) => {
+          expect(registry.operations).toHaveLength(1);
+          const loss = readCheckedInCatalog().typedRegistry.operations.find(
+            (entry) => entry.op === "activity-log.loss",
+          );
+          expect(registry.operations[0].fields).toEqual(loss.fields);
+          expect(Object.keys(registry.operations[0].fields)).toEqual(Object.keys(loss.fields));
+        },
+        LOSS_SUMMARY_FIELD_IMPORT,
+      );
+    },
+  );
+
+  it.each([
+    ["lossFields(true)", ""],
+    ["lossFields(...args)", "const args = [] as const;"],
+    ["selected()", "let selected = lossFields;"],
+    ["holder.lossFields()", "const holder = { lossFields };"],
+    [
+      "activityLogLossSummaryFields()",
+      'import type { ActivityLogLossSummaryFields } from "../../keiko-contracts/src/activity-log-field-contracts.js";\nfunction activityLogLossSummaryFields(): Readonly<ActivityLogLossSummaryFields> { return {\n    trigger: {\n      type: "string",\n      dataClass: "closed-enum",\n      required: true,\n      values: ["heartbeat", "exit"],\n    },\n    totalLost: { type: "integer", dataClass: "count", required: true },\n    loggerWriteFailed: { type: "integer", dataClass: "count", required: false },\n    loggerUnavailable: { type: "integer", dataClass: "count", required: false },\n    schemaRejected: { type: "integer", dataClass: "count", required: false },\n    persistenceFailed: { type: "integer", dataClass: "count", required: false },\n    diagnosticSinkFailed: { type: "integer", dataClass: "count", required: false },\n    portSinkFailed: { type: "integer", dataClass: "count", required: false },\n    portUnwired: { type: "integer", dataClass: "count", required: false },\n    clientRejected: { type: "integer", dataClass: "count", required: false },\n    clientRateSuppressed: { type: "integer", dataClass: "count", required: false },\n    clientBufferEvicted: { type: "integer", dataClass: "count", required: false },\n    clientPostThrottled: { type: "integer", dataClass: "count", required: false },\n    clientPostFailed: { type: "integer", dataClass: "count", required: false },\n    clientRejectionSuppressed: { type: "integer", dataClass: "count", required: false },\n    clientErrorSuppressed: { type: "integer", dataClass: "count", required: false },\n    collectorDropped: { type: "integer", dataClass: "count", required: false },\n    summaryWriteFailed: { type: "integer", dataClass: "count", required: false },\n  }; }',
+    ],
+    ["foreign()", 'import { activityLogLossSummaryFields as foreign } from "./loss-lookalike.js";'],
+  ])("refuses noncanonical or nonzero-argument loss policy: %s", (call, prelude) => {
+    inspectAutomaticCatalogFields(
+      call,
+      (registry) => {
+        expect(registry.operations).toEqual([]);
+        expect(registry.violations).toContainEqual(
+          expect.objectContaining({ code: "registration-not-literal" }),
+        );
+      },
+      LOSS_SUMMARY_FIELD_IMPORT + "\n" + prelude,
+      {
+        "packages/zzz-fixture-diagnostic/src/loss-lookalike.ts":
+          'import type { ActivityLogLossSummaryFields } from "../../keiko-contracts/src/activity-log-field-contracts.js";\nexport function activityLogLossSummaryFields(): Readonly<ActivityLogLossSummaryFields> { return {\n    trigger: {\n      type: "string",\n      dataClass: "closed-enum",\n      required: true,\n      values: ["heartbeat", "exit"],\n    },\n    totalLost: { type: "integer", dataClass: "count", required: true },\n    loggerWriteFailed: { type: "integer", dataClass: "count", required: false },\n    loggerUnavailable: { type: "integer", dataClass: "count", required: false },\n    schemaRejected: { type: "integer", dataClass: "count", required: false },\n    persistenceFailed: { type: "integer", dataClass: "count", required: false },\n    diagnosticSinkFailed: { type: "integer", dataClass: "count", required: false },\n    portSinkFailed: { type: "integer", dataClass: "count", required: false },\n    portUnwired: { type: "integer", dataClass: "count", required: false },\n    clientRejected: { type: "integer", dataClass: "count", required: false },\n    clientRateSuppressed: { type: "integer", dataClass: "count", required: false },\n    clientBufferEvicted: { type: "integer", dataClass: "count", required: false },\n    clientPostThrottled: { type: "integer", dataClass: "count", required: false },\n    clientPostFailed: { type: "integer", dataClass: "count", required: false },\n    clientRejectionSuppressed: { type: "integer", dataClass: "count", required: false },\n    clientErrorSuppressed: { type: "integer", dataClass: "count", required: false },\n    collectorDropped: { type: "integer", dataClass: "count", required: false },\n    summaryWriteFailed: { type: "integer", dataClass: "count", required: false },\n  }; }',
+      },
+    );
+  });
+});

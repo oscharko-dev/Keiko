@@ -5,6 +5,7 @@ import {
   activityLogAutomaticCatalogFields,
   activityLogEmbeddingBatchRetryFields,
   activityLogCommitDraftModelFields,
+  activityLogLossSummaryFields,
   activityLogCompletenessField,
   activityLogLossField,
   activityLogBooleanField,
@@ -17,6 +18,7 @@ import {
   activityLogFieldTypeClassPair,
   type ActivityLogFieldContract,
   type ActivityLogCommitDraftModelFields,
+  type ActivityLogLossSummaryFields,
   defineActivityLogOperation,
 } from "./observability.js";
 import { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
@@ -597,4 +599,73 @@ it("uses the one existing runtime primitive/class policy through its typed adapt
   expect(activityLogFieldTypeClassPair("string-array", "safe-version")).toBe(false);
   expect(activityLogFieldTypeClassPair("number", "safe-version")).toBe(false);
   expect(activityLogFieldTypeClassPair("boolean", "opaque-id")).toBe(false);
+});
+
+const EXPECTED_LOSS_COUNTER_NAMES = [
+  "loggerWriteFailed",
+  "loggerUnavailable",
+  "schemaRejected",
+  "persistenceFailed",
+  "diagnosticSinkFailed",
+  "portSinkFailed",
+  "portUnwired",
+  "clientRejected",
+  "clientRateSuppressed",
+  "clientBufferEvicted",
+  "clientPostThrottled",
+  "clientPostFailed",
+  "clientRejectionSuppressed",
+  "clientErrorSuppressed",
+  "collectorDropped",
+  "summaryWriteFailed",
+] as const;
+
+const EXPECTED_LOSS_TRIGGER = {
+  type: "string",
+  dataClass: "closed-enum",
+  required: true,
+  values: ["heartbeat", "exit"],
+} as const;
+const EXPECTED_LOSS_TOTAL = { type: "integer", dataClass: "count", required: true } as const;
+const EXPECTED_LOSS_COUNTER = { type: "integer", dataClass: "count", required: false } as const;
+
+type ExpectedLossSummaryFields = {
+  readonly [
+    Key in "trigger" | "totalLost" | (typeof EXPECTED_LOSS_COUNTER_NAMES)[number]
+  ]: Key extends "trigger"
+    ? typeof EXPECTED_LOSS_TRIGGER
+    : Key extends "totalLost"
+      ? typeof EXPECTED_LOSS_TOTAL
+      : typeof EXPECTED_LOSS_COUNTER;
+};
+
+describe("loss-summary field policy construction", () => {
+  it("retains all eighteen ordered literal field policies and their exact public type", () => {
+    const fields = activityLogLossSummaryFields();
+    expectOrdinaryDescriptor(fields, ["trigger", "totalLost", ...EXPECTED_LOSS_COUNTER_NAMES]);
+    expect(fields.trigger).toEqual(EXPECTED_LOSS_TRIGGER);
+    expect(fields.totalLost).toEqual(EXPECTED_LOSS_TOTAL);
+    expectOrdinaryDescriptor(fields.trigger, ["type", "dataClass", "required", "values"]);
+    expectOrdinaryDescriptor(fields.totalLost, ["type", "dataClass", "required"]);
+    for (const name of EXPECTED_LOSS_COUNTER_NAMES) {
+      expect(fields[name]).toEqual(EXPECTED_LOSS_COUNTER);
+      expectOrdinaryDescriptor(fields[name], ["type", "dataClass", "required"]);
+    }
+    expectTypeOf(fields).toEqualTypeOf<ExpectedLossSummaryFields>();
+    expectTypeOf(fields).toEqualTypeOf<Readonly<ActivityLogLossSummaryFields>>();
+    expectTypeOf<typeof activityLogLossSummaryFields>().parameters.toEqualTypeOf<[]>();
+  });
+
+  it("owns fresh fields, eighteen fresh descriptors and a fresh trigger vocabulary", () => {
+    const first = activityLogLossSummaryFields();
+    const second = activityLogLossSummaryFields();
+    expect(first).not.toBe(second);
+    expect(new Set([...Object.values(first), ...Object.values(second)]).size).toBe(36);
+    expect(first.trigger.values).not.toBe(second.trigger.values);
+    expect(Reflect.set(first.trigger.values, "0", "fixture-mutated")).toBe(true);
+    expect(Reflect.set(first.totalLost, "required", false)).toBe(true);
+    expect(second.trigger.values).toEqual(["heartbeat", "exit"]);
+    expect(second.totalLost.required).toBe(true);
+    expect(activityLogLossSummaryFields()).toEqual(second);
+  });
 });

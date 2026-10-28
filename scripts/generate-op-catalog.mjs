@@ -84,6 +84,7 @@ import {
   isActivityLogDiagnosticWhen,
 } from "../packages/keiko-contracts/dist/observability.js";
 import {
+  activityLogLossSummaryFields,
   activityLogCommitDraftModelFields,
   activityLogAutomaticCatalogFields,
   activityLogEmbeddingBatchRetryFields,
@@ -591,6 +592,7 @@ const GLOBAL_FIELD_CONSTRUCTORS = {
   activityLogLossField,
 };
 const ZERO_ARGUMENT_FIELD_CONSTRUCTORS = {
+  activityLogLossSummaryFields,
   activityLogCommitDraftModelFields,
   activityLogAutomaticCatalogFields,
   activityLogEmbeddingBatchRetryFields,
@@ -1918,6 +1920,11 @@ function renderedCommitDraftRuntimeFields(operation, fields) {
 }
 
 function runtimeFieldBundle(operation, fields, prefix) {
+  if (
+    operation.op === "activity-log.loss" &&
+    matchesOrderedFieldContracts(fields, { ...prefix, ...activityLogLossSummaryFields() })
+  )
+    return "activityLogLossSummaryFields";
   if (
     operation.op === "gateway.catalog.automatic.completed" &&
     matchesOrderedFieldContracts(fields, { ...prefix, ...activityLogAutomaticCatalogFields() })

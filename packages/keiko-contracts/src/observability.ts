@@ -40,6 +40,8 @@ export {
   activityLogAutomaticCatalogFields,
   activityLogEmbeddingBatchRetryFields,
   type ActivityLogEmbeddingBatchRetryFields,
+  activityLogLossSummaryFields,
+  type ActivityLogLossSummaryFields,
   activityLogCommitDraftModelFields,
   type ActivityLogCommitDraftModelFields,
   activityLogBooleanField,
