@@ -1,8 +1,5 @@
 import {
-  activityLogBooleanField,
-  activityLogCountField,
-  activityLogDurationField,
-  activityLogStringEnumField,
+  activityLogAutomaticCatalogFields,
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
@@ -17,42 +14,7 @@ const AUTOMATIC_CATALOG_OPERATION = defineActivityLogOperation({
   category: "gateway",
   owner: "keiko-server",
   emitter: "gateway-startup-activity.logAutomaticCatalog",
-  fields: {
-    outcome: activityLogStringEnumField(true, [
-      "applied",
-      "unchanged",
-      "stale",
-      "cancelled",
-      "failed",
-      "retry-decision",
-    ]),
-    phase: activityLogStringEnumField(false, ["catalog", "retry-decision"]),
-    backgroundAttempt: activityLogCountField(false),
-    configurationGeneration: activityLogCountField(false),
-    retryDisposition: activityLogStringEnumField(false, [
-      "scheduled",
-      "exhausted",
-      "coalesced",
-      "in-flight",
-      "backoff",
-      "conclusive",
-      "complete",
-    ]),
-    retryDelayMs: activityLogDurationField(false),
-    // Absolute epoch milliseconds observed by the existing timer/cache owner, not a timeout bound.
-    retryDeadlineMs: activityLogCountField(false),
-    configuredModelCount: activityLogCountField(true),
-    // Every model whose record differs after the reconciliation, the added and removed included.
-    updatedModelCount: activityLogCountField(true),
-    // Models the catalog listed that were not configured, and configured ones it no longer lists.
-    addedModelCount: activityLogCountField(true),
-    removedModelCount: activityLogCountField(true),
-    // Models whose observed deployment identity was first recorded or replaced (#3905); each one
-    // withdrew the tool-calling proof it carried until the readiness queue renews it.
-    deploymentChangedModelCount: activityLogCountField(true),
-    elapsedMs: activityLogDurationField(true),
-    retryable: activityLogBooleanField(true),
-  },
+  fields: activityLogAutomaticCatalogFields(),
   causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",

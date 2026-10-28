@@ -26,6 +26,55 @@ const ASSERTION_RULES = [
   "anti-slop/require-safety-comment-for-type-assertion",
 ];
 
+function expectPublicParserPolicyMetadata(record, { selector, rules, witness, assertionCount }) {
+  expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
+  expect(record.kind).toBe("public-parser");
+  expect(record.rules).toEqual(rules);
+  expect(record.input).toEqual({ ...selector, parameterIndex: 0 });
+  expect(record.transform).toEqual(selector);
+  expect(record.output).toEqual(selector);
+  expect(record.consumer).toEqual({
+    ...selector,
+    exportName: witness,
+    kind: "public-api-proof",
+    owner: record.owner,
+  });
+  expect(record.proofs).toEqual([selector.consumerPath]);
+  expect(record.proofAssertions).toHaveLength(assertionCount);
+}
+
+function registerAtlassianPublicParserPins(cases, title, prefix, reboundExport) {
+  it.each(cases)(title, (kind, producer, consumer) => {
+    const index = policy.responsibilities.findIndex(
+      (record) => record.id === `${prefix}-${kind}-public-parser`,
+    );
+    const record = policy.responsibilities[index];
+    const path = "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts";
+    const selector = {
+      consumerPath: path,
+      specifier: "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
+      exportName: producer,
+    };
+    expectPublicParserPolicyMetadata(record, {
+      selector,
+      rules: [
+        "anti-slop/no-unknown-parameters",
+        "anti-slop/no-runtime-typeof",
+        "anti-slop/no-unsafe-dictionary-type",
+      ],
+      witness: consumer,
+      assertionCount: 3,
+    });
+    expect(record.proofAssertions.every((proof) => proof.path === path)).toBe(true);
+    for (const mode of ["removed", "rebound"]) {
+      const changed = structuredClone(policy);
+      if (mode === "removed") changed.responsibilities.splice(index, 1);
+      else changed.responsibilities[index].consumer.exportName = reboundExport;
+      expect(validatePolicy(changed, [policy])).toContain("responsibility-shrank");
+    }
+  });
+}
+
 describe("shared symbol resource accounting", () => {
   it("keeps one immutable default profile and validates explicit profiles", () => {
     expect(SYMBOL_LIMITS).toEqual({
@@ -422,23 +471,12 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
         exportName: `parseGitRepository${kind}Response`,
       };
       expect(record.id).toBe(`git-${kind.toLowerCase()}-public-parser`);
-      expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
-      expect(record.kind).toBe("public-parser");
-      expect(record.rules).toEqual([
-        "anti-slop/no-unknown-parameters",
-        "anti-slop/no-runtime-typeof",
-      ]);
-      expect(record.input).toEqual({ ...selector, parameterIndex: 0 });
-      expect(record.transform).toEqual(selector);
-      expect(record.output).toEqual(selector);
-      expect(record.consumer).toEqual({
-        ...selector,
-        kind: "public-api-proof",
-        owner: record.owner,
-        exportName: `parsePublicGit${kind}`,
+      expectPublicParserPolicyMetadata(record, {
+        selector,
+        rules: ["anti-slop/no-unknown-parameters", "anti-slop/no-runtime-typeof"],
+        witness: `parsePublicGit${kind}`,
+        assertionCount: kind === "Status" ? 6 : 3,
       });
-      expect(record.proofs).toEqual([path]);
-      expect(record.proofAssertions).toHaveLength(kind === "Status" ? 6 : 3);
       expect(record.proofAssertions.every((proof) => proof.path === path)).toBe(true);
       for (const variant of ["removed", "rebound"]) {
         const changed = structuredClone(policy);
@@ -468,23 +506,12 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
         specifier: `@oscharko-dev/keiko-contracts/runtime/${module}`,
         exportName: producer,
       };
-      expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
-      expect(record.kind).toBe("public-parser");
-      expect(record.rules).toEqual([
-        "anti-slop/no-unknown-parameters",
-        "anti-slop/no-runtime-typeof",
-      ]);
-      expect(record.input).toEqual({ ...selector, parameterIndex: 0 });
-      expect(record.transform).toEqual(selector);
-      expect(record.output).toEqual(selector);
-      expect(record.consumer).toEqual({
-        ...selector,
-        exportName: consumer,
-        kind: "public-api-proof",
-        owner: record.owner,
+      expectPublicParserPolicyMetadata(record, {
+        selector,
+        rules: ["anti-slop/no-unknown-parameters", "anti-slop/no-runtime-typeof"],
+        witness: consumer,
+        assertionCount: 3,
       });
-      expect(record.proofs).toEqual([path]);
-      expect(record.proofAssertions).toHaveLength(3);
       expect(record.proofAssertions.every((proof) => proof.path === path)).toBe(true);
       for (const mode of ["removed", "rebound"]) {
         const changed = structuredClone(policy);
@@ -511,24 +538,16 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
         specifier: "@oscharko-dev/keiko-contracts/runtime/local-knowledge-pods",
         exportName: producer,
       };
-      expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
-      expect(record.kind).toBe("public-parser");
-      expect(record.rules).toEqual([
-        "anti-slop/no-unknown-parameters",
-        "anti-slop/no-runtime-typeof",
-        "anti-slop/no-unsafe-dictionary-type",
-      ]);
-      expect(record.input).toEqual({ ...selector, parameterIndex: 0 });
-      expect(record.transform).toEqual(selector);
-      expect(record.output).toEqual(selector);
-      expect(record.consumer).toEqual({
-        ...selector,
-        exportName: consumer,
-        kind: "public-api-proof",
-        owner: record.owner,
+      expectPublicParserPolicyMetadata(record, {
+        selector,
+        rules: [
+          "anti-slop/no-unknown-parameters",
+          "anti-slop/no-runtime-typeof",
+          "anti-slop/no-unsafe-dictionary-type",
+        ],
+        witness: consumer,
+        assertionCount: 3,
       });
-      expect(record.proofs).toEqual([path]);
-      expect(record.proofAssertions).toHaveLength(3);
       for (const mode of ["removed", "rebound"]) {
         const changed = structuredClone(policy);
         if (mode === "removed") changed.responsibilities.splice(index, 1);
@@ -555,24 +574,16 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
         specifier: "@oscharko-dev/keiko-contracts/runtime/memory",
         exportName: producer,
       };
-      expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
-      expect(record.kind).toBe("public-parser");
-      expect(record.rules).toEqual([
-        "anti-slop/no-unknown-parameters",
-        "anti-slop/no-runtime-typeof",
-        "anti-slop/no-unsafe-dictionary-type",
-      ]);
-      expect(record.input).toEqual({ ...selector, parameterIndex: 0 });
-      expect(record.transform).toEqual(selector);
-      expect(record.output).toEqual(selector);
-      expect(record.consumer).toEqual({
-        ...selector,
-        exportName: consumer,
-        kind: "public-api-proof",
-        owner: record.owner,
+      expectPublicParserPolicyMetadata(record, {
+        selector,
+        rules: [
+          "anti-slop/no-unknown-parameters",
+          "anti-slop/no-runtime-typeof",
+          "anti-slop/no-unsafe-dictionary-type",
+        ],
+        witness: consumer,
+        assertionCount: 3,
       });
-      expect(record.proofs).toEqual([path]);
-      expect(record.proofAssertions).toHaveLength(3);
       for (const mode of ["removed", "rebound"]) {
         const changed = structuredClone(policy);
         if (mode === "removed") changed.responsibilities.splice(index, 1);
@@ -582,106 +593,38 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
     },
   );
 
-  it.each([
+  registerAtlassianPublicParserPins(
     [
-      "sync-change-summary",
-      "validateAtlassianSyncChangeSummary",
-      "parsePublicAtlassianSyncChangeSummary",
+      [
+        "sync-change-summary",
+        "validateAtlassianSyncChangeSummary",
+        "parsePublicAtlassianSyncChangeSummary",
+      ],
+      ["sync-job-state", "validateAtlassianSyncJobState", "parsePublicAtlassianSyncJobState"],
+      [
+        "connector-pod-source",
+        "validateAtlassianConnectorPodSource",
+        "parsePublicAtlassianConnectorPodSource",
+      ],
     ],
-    ["sync-job-state", "validateAtlassianSyncJobState", "parsePublicAtlassianSyncJobState"],
-    [
-      "connector-pod-source",
-      "validateAtlassianConnectorPodSource",
-      "parsePublicAtlassianConnectorPodSource",
-    ],
-  ])(
     "pins the additive Atlassian %s parser and retains prior obligations",
-    (kind, producer, consumer) => {
-      const index = policy.responsibilities.findIndex(
-        (record) => record.id === `atlassian-${kind}-public-parser`,
-      );
-      const record = policy.responsibilities[index];
-      const path = "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts";
-      const selector = {
-        consumerPath: path,
-        specifier: "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
-        exportName: producer,
-      };
-      expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
-      expect(record.kind).toBe("public-parser");
-      expect(record.rules).toEqual([
-        "anti-slop/no-unknown-parameters",
-        "anti-slop/no-runtime-typeof",
-        "anti-slop/no-unsafe-dictionary-type",
-      ]);
-      expect(record.input).toEqual({ ...selector, parameterIndex: 0 });
-      expect(record.transform).toEqual(selector);
-      expect(record.output).toEqual(selector);
-      expect(record.consumer).toEqual({
-        ...selector,
-        exportName: consumer,
-        kind: "public-api-proof",
-        owner: record.owner,
-      });
-      expect(record.proofs).toEqual([path]);
-      expect(record.proofAssertions).toHaveLength(3);
-      expect(record.proofAssertions.every((proof) => proof.path === path)).toBe(true);
-      for (const mode of ["removed", "rebound"]) {
-        const changed = structuredClone(policy);
-        if (mode === "removed") changed.responsibilities.splice(index, 1);
-        else changed.responsibilities[index].consumer.exportName = "unreviewedAtlassianParser";
-        expect(validatePolicy(changed, [policy])).toContain("responsibility-shrank");
-      }
-    },
+    "atlassian",
+    "unreviewedAtlassianParser",
   );
 
-  it.each([
+  registerAtlassianPublicParserPins(
     [
-      "connector-descriptor",
-      "validateAtlassianConnectorDescriptor",
-      "parsePublicAtlassianConnectorDescriptor",
+      [
+        "connector-descriptor",
+        "validateAtlassianConnectorDescriptor",
+        "parsePublicAtlassianConnectorDescriptor",
+      ],
+      ["sync-bounds", "validateAtlassianSyncBounds", "parsePublicAtlassianSyncBounds"],
+      ["sync-scope", "validateAtlassianSyncScope", "parsePublicAtlassianSyncScope"],
     ],
-    ["sync-bounds", "validateAtlassianSyncBounds", "parsePublicAtlassianSyncBounds"],
-    ["sync-scope", "validateAtlassianSyncScope", "parsePublicAtlassianSyncScope"],
-  ])(
     "pins the additive Atlassian approved-scope %s parser and retains prior obligations",
-    (kind, producer, consumer) => {
-      const index = policy.responsibilities.findIndex(
-        (record) => record.id === `atlassian-${kind}-public-parser`,
-      );
-      const record = policy.responsibilities[index];
-      const path = "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts";
-      const selector = {
-        consumerPath: path,
-        specifier: "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
-        exportName: producer,
-      };
-      expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
-      expect(record.kind).toBe("public-parser");
-      expect(record.rules).toEqual([
-        "anti-slop/no-unknown-parameters",
-        "anti-slop/no-runtime-typeof",
-        "anti-slop/no-unsafe-dictionary-type",
-      ]);
-      expect(record.input).toEqual({ ...selector, parameterIndex: 0 });
-      expect(record.transform).toEqual(selector);
-      expect(record.output).toEqual(selector);
-      expect(record.consumer).toEqual({
-        ...selector,
-        exportName: consumer,
-        kind: "public-api-proof",
-        owner: record.owner,
-      });
-      expect(record.proofs).toEqual([path]);
-      expect(record.proofAssertions).toHaveLength(3);
-      expect(record.proofAssertions.every((proof) => proof.path === path)).toBe(true);
-      for (const mode of ["removed", "rebound"]) {
-        const changed = structuredClone(policy);
-        if (mode === "removed") changed.responsibilities.splice(index, 1);
-        else changed.responsibilities[index].consumer.exportName = "unreviewedApprovedScopeParser";
-        expect(validatePolicy(changed, [policy])).toContain("responsibility-shrank");
-      }
-    },
+    "atlassian",
+    "unreviewedApprovedScopeParser",
   );
 
   it.each([
@@ -721,105 +664,37 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
     expect(validatePolicy(policy, [broader])).toContain("activation-shrank");
   });
 
-  it.each([
+  registerAtlassianPublicParserPins(
     [
-      "connector-activity",
-      "validateAtlassianConnectorActivityRecord",
-      "parsePublicAtlassianConnectorActivityRecord",
+      [
+        "connector-activity",
+        "validateAtlassianConnectorActivityRecord",
+        "parsePublicAtlassianConnectorActivityRecord",
+      ],
+      [
+        "connector-pending-approval",
+        "validateAtlassianConnectorPendingApproval",
+        "parsePublicAtlassianConnectorPendingApproval",
+      ],
+      [
+        "connector-action-execution",
+        "validateAtlassianConnectorActionExecutionResult",
+        "parsePublicAtlassianConnectorActionExecutionResult",
+      ],
     ],
-    [
-      "connector-pending-approval",
-      "validateAtlassianConnectorPendingApproval",
-      "parsePublicAtlassianConnectorPendingApproval",
-    ],
-    [
-      "connector-action-execution",
-      "validateAtlassianConnectorActionExecutionResult",
-      "parsePublicAtlassianConnectorActionExecutionResult",
-    ],
-  ])(
     "pins the additive Atlassian governed-action %s parser and retains prior obligations",
-    (kind, producer, consumer) => {
-      const index = policy.responsibilities.findIndex(
-        (record) => record.id === `atlassian-${kind}-public-parser`,
-      );
-      const record = policy.responsibilities[index];
-      const path = "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts";
-      const selector = {
-        consumerPath: path,
-        specifier: "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
-        exportName: producer,
-      };
-      expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
-      expect(record.kind).toBe("public-parser");
-      expect(record.rules).toEqual([
-        "anti-slop/no-unknown-parameters",
-        "anti-slop/no-runtime-typeof",
-        "anti-slop/no-unsafe-dictionary-type",
-      ]);
-      expect(record.input).toEqual({ ...selector, parameterIndex: 0 });
-      expect(record.transform).toEqual(selector);
-      expect(record.output).toEqual(selector);
-      expect(record.consumer).toEqual({
-        ...selector,
-        exportName: consumer,
-        kind: "public-api-proof",
-        owner: record.owner,
-      });
-      expect(record.proofs).toEqual([path]);
-      expect(record.proofAssertions).toHaveLength(3);
-      expect(record.proofAssertions.every((proof) => proof.path === path)).toBe(true);
-      for (const mode of ["removed", "rebound"]) {
-        const changed = structuredClone(policy);
-        if (mode === "removed") changed.responsibilities.splice(index, 1);
-        else changed.responsibilities[index].consumer.exportName = "unreviewedGovernedActionParser";
-        expect(validatePolicy(changed, [policy])).toContain("responsibility-shrank");
-      }
-    },
+    "atlassian",
+    "unreviewedGovernedActionParser",
   );
 
-  it.each([
-    ["request", "validateJiraLiveSearchRequest", "parsePublicJiraLiveSearchRequest"],
-    ["result", "validateJiraLiveSearchResult", "parsePublicJiraLiveSearchResult"],
-  ])(
+  registerAtlassianPublicParserPins(
+    [
+      ["request", "validateJiraLiveSearchRequest", "parsePublicJiraLiveSearchRequest"],
+      ["result", "validateJiraLiveSearchResult", "parsePublicJiraLiveSearchResult"],
+    ],
     "pins the additive Atlassian live-search %s parser and retains prior obligations",
-    (kind, producer, consumer) => {
-      const index = policy.responsibilities.findIndex(
-        (record) => record.id === `jira-live-search-${kind}-public-parser`,
-      );
-      const record = policy.responsibilities[index];
-      const path = "packages/keiko-contracts/src/atlassian-connectors-validation.test.ts";
-      const selector = {
-        consumerPath: path,
-        specifier: "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation",
-        exportName: producer,
-      };
-      expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
-      expect(record.kind).toBe("public-parser");
-      expect(record.rules).toEqual([
-        "anti-slop/no-unknown-parameters",
-        "anti-slop/no-runtime-typeof",
-        "anti-slop/no-unsafe-dictionary-type",
-      ]);
-      expect(record.input).toEqual({ ...selector, parameterIndex: 0 });
-      expect(record.transform).toEqual(selector);
-      expect(record.output).toEqual(selector);
-      expect(record.consumer).toEqual({
-        ...selector,
-        exportName: consumer,
-        kind: "public-api-proof",
-        owner: record.owner,
-      });
-      expect(record.proofs).toEqual([path]);
-      expect(record.proofAssertions).toHaveLength(3);
-      expect(record.proofAssertions.every((proof) => proof.path === path)).toBe(true);
-      for (const mode of ["removed", "rebound"]) {
-        const changed = structuredClone(policy);
-        if (mode === "removed") changed.responsibilities.splice(index, 1);
-        else changed.responsibilities[index].consumer.exportName = "unreviewedLiveParser";
-        expect(validatePolicy(changed, [policy])).toContain("responsibility-shrank");
-      }
-    },
+    "jira-live-search",
+    "unreviewedLiveParser",
   );
 
   it("rejects missing, duplicated, unknown, cosmetic and malformed rule policies", () => {

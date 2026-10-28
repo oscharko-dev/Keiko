@@ -1,7 +1,7 @@
 import type {
   ParserTypeFacts,
   UnknownInputParserFacts,
-} from "../../../tests/support/parser-type-contract.js";
+} from "./__tests__/support/parser-type-contract.js";
 // Tests for the pure Prompt Enhancer validators and branded-id constructors (Issue #1309).
 // Covers happy-path acceptance, per-invariant rejection, and the Ok|Fail discriminated result so
 // downstream packages can rely on the wire-shape guarantees without re-validating.

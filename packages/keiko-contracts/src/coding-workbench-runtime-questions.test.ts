@@ -1,4 +1,4 @@
-import { observeIndexedMembers as observedPhysicalQuestions } from "../../../tests/support/observed-indexed-members.js";
+import { observeIndexedMembers as observedPhysicalQuestions } from "./__tests__/support/observed-indexed-members.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, expectTypeOf, it } from "vitest";

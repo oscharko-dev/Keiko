@@ -1,5 +1,6 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import {
+  activityLogAutomaticCatalogFields,
   activityLogBooleanField,
   activityLogCountField,
   activityLogDurationField,
@@ -68,4 +69,82 @@ describe("canonical Activity Log field construction", () => {
       readonly ["applied", "unchanged", "stale", "cancelled", "failed", "retry-decision"]
     >();
   });
+});
+
+describe("automatic catalog field policy", () => {
+  it("preserves the producer's exact ordered fourteen non-global descriptors", () => {
+    const fields = activityLogAutomaticCatalogFields();
+    const operation = ACTIVITY_LOG_OPERATION_REGISTRY.find(
+      (entry) => entry.op === "gateway.catalog.automatic.completed",
+    );
+    expect(operation).toBeDefined();
+    const expected = Object.fromEntries(Object.entries(operation?.fields ?? {}).slice(2));
+    expect(fields).toEqual(expected);
+    expectOrdinaryDescriptor(fields, [
+      "outcome",
+      "phase",
+      "backgroundAttempt",
+      "configurationGeneration",
+      "retryDisposition",
+      "retryDelayMs",
+      "retryDeadlineMs",
+      "configuredModelCount",
+      "updatedModelCount",
+      "addedModelCount",
+      "removedModelCount",
+      "deploymentChangedModelCount",
+      "elapsedMs",
+      "retryable",
+    ]);
+    for (const descriptor of Object.values(fields)) {
+      expectOrdinaryDescriptor(descriptor, Reflect.ownKeys(descriptor).map(String));
+    }
+    expectTypeOf(fields.outcome.values).toEqualTypeOf<
+      readonly ["applied", "unchanged", "stale", "cancelled", "failed", "retry-decision"]
+    >();
+    expectTypeOf(fields.phase.required).toEqualTypeOf<false>();
+    expectTypeOf(fields.configuredModelCount.required).toEqualTypeOf<true>();
+    expectTypeOf(fields.retryDeadlineMs.dataClass).toEqualTypeOf<"count">();
+    expectTypeOf(fields.elapsedMs.dataClass).toEqualTypeOf<"duration">();
+    expectTypeOf(fields.retryable.type).toEqualTypeOf<"boolean">();
+  });
+
+  it("allocates independent ordinary descriptors and vocabularies for every call", () => {
+    const first = activityLogAutomaticCatalogFields();
+    const second = activityLogAutomaticCatalogFields();
+    expect(first).not.toBe(second);
+    const descriptors = [...Object.values(first), ...Object.values(second)];
+    expect(new Set(descriptors).size).toBe(28);
+    const vocabularies = [
+      first.outcome.values,
+      first.phase.values,
+      first.retryDisposition.values,
+      second.outcome.values,
+      second.phase.values,
+      second.retryDisposition.values,
+    ];
+    expect(new Set(vocabularies).size).toBe(6);
+    for (const vocabulary of vocabularies) {
+      expect(Object.getPrototypeOf(vocabulary)).toBe(Array.prototype);
+      expect(Object.isFrozen(vocabulary)).toBe(false);
+    }
+    const before = JSON.stringify(second);
+    expect(Reflect.set(first.outcome.values, "0", "fixture-mutated")).toBe(true);
+    expect(Reflect.set(first.outcome, "required", false)).toBe(true);
+    expect(Reflect.deleteProperty(first, "elapsedMs")).toBe(true);
+    expect(JSON.stringify(second)).toBe(before);
+    expect(activityLogAutomaticCatalogFields()).toEqual(second);
+  });
+});
+
+it("preserves every automatic catalog field's concrete literal type", () => {
+  type Pilot = Extract<
+    (typeof ACTIVITY_LOG_OPERATION_REGISTRY)[number],
+    {
+      readonly op: "gateway.catalog.automatic.completed";
+    }
+  >;
+  expectTypeOf<ReturnType<typeof activityLogAutomaticCatalogFields>>().toEqualTypeOf<
+    Omit<Pilot["fields"], "completeness" | "loss">
+  >();
 });

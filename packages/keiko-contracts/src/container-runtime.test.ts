@@ -1,7 +1,7 @@
 import {
   registerPhysicalTaskCatalogContract,
   type PhysicalTaskCatalogValidator,
-} from "../../../tests/support/physical-task-catalog-contract.js";
+} from "./__tests__/support/physical-task-catalog-contract.js";
 import { describe, expect, it } from "vitest";
 import {
   CONTAINER_ENGINE_IDS,

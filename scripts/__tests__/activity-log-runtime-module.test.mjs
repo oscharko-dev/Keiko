@@ -288,3 +288,75 @@ it.each([{ values: ["404"] }, { values: ["provider:model"] }])(
     }, registry);
   },
 );
+
+describe("automatic catalog runtime field policy rendering", () => {
+  it("renders the complete ordered pilot after its unchanged completeness and loss prefix", () => {
+    const pilot = catalog.typedRegistry.operations.find(
+      (operation) => operation.op === "gateway.catalog.automatic.completed",
+    );
+    const registry = { ...catalog.typedRegistry, operations: [pilot] };
+    const source = runtimeOperationsModule(registry);
+    expect(source).toContain(
+      '"completeness": {"type":"string","dataClass":"completeness-state","required":true},"loss": {"type":"string","dataClass":"loss-state","required":true}, ...activityLogAutomaticCatalogFields()',
+    );
+    withGeneratedRuntime(({ identity }) => {
+      expect(identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields).toEqual(pilot.fields);
+      expect(Object.keys(identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields)).toEqual(
+        Object.keys(pilot.fields),
+      );
+    }, registry);
+  });
+
+  it.each([
+    "reordered",
+    "missing",
+    "extra",
+    "descriptor",
+    "descriptor-order",
+    "vocabulary",
+    "prefix",
+    "other-operation",
+  ])("retains literal field construction for a nonexact policy: %s", (mode) => {
+    const pilot = catalog.typedRegistry.operations.find(
+      (operation) => operation.op === "gateway.catalog.automatic.completed",
+    );
+    const fields = structuredClone(pilot.fields);
+    if (mode === "reordered") {
+      const first = fields.outcome;
+      delete fields.outcome;
+      fields.outcome = first;
+    }
+    if (mode === "missing") delete fields.phase;
+    if (mode === "extra") fields.extraCount = fields.configuredModelCount;
+    if (mode === "descriptor") fields.retryDeadlineMs.dataClass = "duration";
+    if (mode === "descriptor-order") {
+      const { required, ...descriptor } = fields.retryable;
+      fields.retryable = { required, ...descriptor };
+    }
+    if (mode === "vocabulary") fields.outcome.values.reverse();
+    if (mode === "prefix") fields.loss.required = false;
+    const operation = { ...pilot, fields };
+    if (mode === "other-operation") operation.op = "fixture.other.completed";
+    const registry = { ...catalog.typedRegistry, operations: [operation] };
+    expect(runtimeOperationsModule(registry)).not.toContain(
+      "...activityLogAutomaticCatalogFields()",
+    );
+    withGeneratedRuntime(({ identity }) => {
+      expect(identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields).toEqual(fields);
+      expect(Object.keys(identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields)).toEqual(
+        Object.keys(fields),
+      );
+    }, registry);
+  });
+});
+
+it("does not fold a descriptor with an extra own undefined property into the factory", () => {
+  const pilot = catalog.typedRegistry.operations.find(
+    (operation) => operation.op === "gateway.catalog.automatic.completed",
+  );
+  const fields = structuredClone(pilot.fields);
+  fields.retryable.extra = undefined;
+  expect(Object.hasOwn(fields.retryable, "extra")).toBe(true);
+  const registry = { ...catalog.typedRegistry, operations: [{ ...pilot, fields }] };
+  expect(runtimeOperationsModule(registry)).not.toContain("...activityLogAutomaticCatalogFields()");
+});

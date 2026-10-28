@@ -24,6 +24,7 @@ import { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.gener
 import { containsAbsolutePath } from "./text-safety.js";
 
 export {
+  activityLogAutomaticCatalogFields,
   activityLogBooleanField,
   activityLogCountField,
   activityLogDurationField,

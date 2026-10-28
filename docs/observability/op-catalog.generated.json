@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "7f54a24dbf0da90f62972f445ec7ade9c4703145b480e46bf90979ec4bd5ccb0",
+    "catalogDigest": "b9baa12cff9e699b4afc645d59495117726080f3cfbfe5944276431f0e32b1e0",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -19149,8 +19149,8 @@
         "failureClasses": ["gateway-setup-metadata"],
         "proofIds": ["gateway.catalog.automatic.completed.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gateway-startup-activity.ts:13",
-        "emitterSites": ["packages/keiko-server/src/gateway-startup-activity.ts:126"]
+        "registrationSite": "packages/keiko-server/src/gateway-startup-activity.ts:10",
+        "emitterSites": ["packages/keiko-server/src/gateway-startup-activity.ts:88"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -100169,7 +100169,7 @@
     {
       "op": "server-log.write-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-contracts/src/observability.ts:1523",
+      "site": "packages/keiko-contracts/src/observability.ts:1524",
       "package": "keiko-contracts"
     },
     {
@@ -103435,7 +103435,7 @@
     {
       "op": "gateway.catalog.automatic.completed",
       "category": "gateway",
-      "site": "packages/keiko-server/src/gateway-startup-activity.ts:16",
+      "site": "packages/keiko-server/src/gateway-startup-activity.ts:13",
       "package": "keiko-server"
     },
     {

@@ -2194,3 +2194,82 @@ it.each(["direct", "reexport"])(
     );
   },
 );
+
+function inspectAutomaticCatalogFields(expression, check, prelude = "", extraFiles = {}) {
+  const source = diagnosticRegistrationSource(undefined).replace(
+    /"fields":\{.*?\},"causal"/u,
+    `"fields":${expression},"causal"`,
+  );
+  withTypedRegistryFixture(
+    "zzz-fixture-diagnostic",
+    [
+      'import { activityLogAutomaticCatalogFields as automatic } from "../../keiko-contracts/src/activity-log-field-contracts.js";',
+      prelude,
+      source,
+    ].join("\n"),
+    (root) => {
+      check(generateTypedActivityLogRegistry(root, []));
+    },
+    extraFiles,
+  );
+}
+
+describe("canonical automatic catalog field policy admission", () => {
+  it.each(["automatic()", "{ ...automatic() }"])(
+    "expands the canonical closed policy: %s",
+    (expression) => {
+      inspectAutomaticCatalogFields(expression, (registry) => {
+        expect(registry.operations).toHaveLength(1);
+        const pilot = readCheckedInCatalog().typedRegistry.operations.find(
+          (operation) => operation.op === "gateway.catalog.automatic.completed",
+        );
+        expect(registry.operations[0].fields).toEqual(pilot.fields);
+        expect(Object.keys(registry.operations[0].fields)).toEqual(Object.keys(pilot.fields));
+      });
+    },
+  );
+
+  it.each([
+    [
+      "activityLogAutomaticCatalogFields()",
+      "function activityLogAutomaticCatalogFields() { return {}; }",
+    ],
+    [
+      "lookalike()",
+      'import { activityLogAutomaticCatalogFields as lookalike } from "./lookalike.js";',
+    ],
+    ["automatic(true)", ""],
+    ["automatic(...args)", "const args = [] as const;"],
+    ["chosen()", "let chosen = automatic;"],
+    ["cycle", "const cycle = cycle;"],
+  ])("refuses noncanonical or nonliteral policy expansion: %s", (expression, prelude) => {
+    inspectAutomaticCatalogFields(
+      expression,
+      (registry) => {
+        expect(registry.operations).toEqual([]);
+        expect(registry.violations).toContainEqual(
+          expect.objectContaining({ code: "registration-not-literal" }),
+        );
+      },
+      prelude,
+      {
+        "packages/zzz-fixture-diagnostic/src/lookalike.ts":
+          "export function activityLogAutomaticCatalogFields() { return {}; }",
+      },
+    );
+  });
+});
+
+it("admits a true reexport of the canonical automatic catalog policy", () => {
+  inspectAutomaticCatalogFields(
+    "forwarded()",
+    (registry) => {
+      expect(registry.operations).toHaveLength(1);
+    },
+    'import { forwarded } from "./forwarded-fields.js";',
+    {
+      "packages/zzz-fixture-diagnostic/src/forwarded-fields.ts":
+        'export { activityLogAutomaticCatalogFields as forwarded } from "../../keiko-contracts/src/activity-log-field-contracts.js";',
+    },
+  );
+});

@@ -1,7 +1,7 @@
 import type {
   ParserTypeFacts,
   UnknownInputParserFacts,
-} from "../../../tests/support/parser-type-contract.js";
+} from "./__tests__/support/parser-type-contract.js";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type {
   EnhancedPrompt,
