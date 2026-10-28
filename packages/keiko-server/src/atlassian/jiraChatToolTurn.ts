@@ -52,7 +52,7 @@ type TurnDeps = JiraChatAuthorityDeps &
     "jiraChatCatalog" | "gatewayConfig" | "atlassianActionApprovalRegistry" | "diagnostics"
   >;
 type Accepted = Extract<ReturnType<typeof mintAcceptedJiraChatAuthority>, { ok: true }>;
-interface TurnOptions {
+export interface JiraChatTurnOptions {
   readonly deps: TurnDeps;
   readonly message: ChatMessage;
   readonly authority: Accepted;
@@ -62,7 +62,7 @@ interface TurnOptions {
 }
 
 export class JiraChatToolTurn extends ChatToolTurn<JiraChatCatalogContext> {
-  public constructor(private readonly jiraOptions: TurnOptions) {
+  public constructor(private readonly jiraOptions: JiraChatTurnOptions) {
     const { authority, deps, managed, signal, correlationId, message } = jiraOptions;
     const context: JiraChatCatalogContext = {
       runId: authority.envelope.runId,
@@ -154,32 +154,41 @@ export class JiraChatToolTurn extends ChatToolTurn<JiraChatCatalogContext> {
     identity: string,
     result: ToolResultEnvelope,
   ): JiraMutationOutcome | undefined {
-    const operation = JIRA_MUTATION_OPERATIONS.find(
-      (value) => result.toolRef?.canonicalId === `keiko.${value}`,
-    );
-    if (operation === undefined) return undefined;
-    const { message, authority, correlationId, deps } = this.jiraOptions;
-    const expected = createJiraChatMutationIntent(
-      message,
-      authority.envelope.subject,
-      authority.reference,
-      {
-        tool: operation,
-        actionId: identity,
-        idempotencyKey: identity,
-        argumentsDigest: sha256Hex(canonicalise(call.arguments)),
-      },
-      correlationId,
-    );
-    return jiraChatMutationOutcome({
-      result,
-      expected,
-      record: deps.store.chatToolMutations?.find(identity),
-    });
+    return observeJiraChatMutation(this.jiraOptions, call, identity, result);
   }
   protected override refreshWriteApproval(callId: string): void {
     refreshChatToolWriteApproval(this.jiraOptions, callId);
   }
+}
+
+export function observeJiraChatMutation(
+  options: JiraChatTurnOptions,
+  call: NormalizedResponse["toolCalls"][number],
+  identity: string,
+  result: ToolResultEnvelope,
+): JiraMutationOutcome | undefined {
+  const operation = JIRA_MUTATION_OPERATIONS.find(
+    (value) => result.toolRef?.canonicalId === `keiko.${value}`,
+  );
+  if (operation === undefined) return undefined;
+  const { message, authority, correlationId, deps } = options;
+  const expected = createJiraChatMutationIntent(
+    message,
+    authority.envelope.subject,
+    authority.reference,
+    {
+      tool: operation,
+      actionId: identity,
+      idempotencyKey: identity,
+      argumentsDigest: sha256Hex(canonicalise(call.arguments)),
+    },
+    correlationId,
+  );
+  return jiraChatMutationOutcome({
+    result,
+    expected,
+    record: deps.store.chatToolMutations?.find(identity),
+  });
 }
 
 export async function createJiraChatToolTurn(

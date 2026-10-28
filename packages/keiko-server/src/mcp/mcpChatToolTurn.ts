@@ -42,7 +42,7 @@ import {
 type TurnDeps = McpChatAuthorityDeps &
   Pick<UiHandlerDeps, "mcpChatCatalog" | "gatewayConfig" | "diagnostics">;
 type Accepted = Extract<ReturnType<typeof mintAcceptedMcpChatAuthority>, { ok: true }>;
-interface Options {
+export interface McpChatTurnOptions {
   readonly deps: TurnDeps;
   readonly message: ChatMessage;
   readonly authority: Accepted;
@@ -51,7 +51,7 @@ interface Options {
   readonly correlationId: string;
 }
 
-function contextFor(options: Options): McpChatCatalogContext {
+export function mcpChatTurnContext(options: McpChatTurnOptions): McpChatCatalogContext {
   const { authority, message, managed, signal, correlationId } = options;
   return {
     runId: authority.envelope.runId,
@@ -67,14 +67,14 @@ function contextFor(options: Options): McpChatCatalogContext {
   };
 }
 export class McpChatToolTurn extends ChatToolTurn<McpChatCatalogContext> {
-  constructor(private readonly mcpOptions: Options) {
+  constructor(private readonly mcpOptions: McpChatTurnOptions) {
     const { deps, message, managed, correlationId } = mcpOptions;
     super({
       deps,
       message,
       managed,
       correlationId,
-      context: contextFor(mcpOptions),
+      context: mcpChatTurnContext(mcpOptions),
       bind: (context, budgetPort) =>
         createCatalogToolBinder<McpChatCatalogConsumer>(
           {
@@ -139,31 +139,40 @@ export class McpChatToolTurn extends ChatToolTurn<McpChatCatalogContext> {
     identity: string,
     result: ToolResultEnvelope,
   ): ChatToolExchange["mutationOutcome"] {
-    const { deps, message, authority, managed } = this.mcpOptions;
-    const tool = managed.tools.find(
-      (entry) => entry.descriptor.toolRef.canonicalId === result.toolRef?.canonicalId,
-    );
-    if (tool?.risk !== "write") return undefined;
-    const record = deps.store.chatToolMutations?.find(identity);
-    const expected = createMcpChatMutationIntent(
-      message,
-      authority.envelope.subject,
-      authority.reference,
-      {
-        ...tool,
-        actionId: identity,
-        idempotencyKey: identity,
-        argumentsDigest: sha256Hex(canonicalise(call.arguments)),
-      },
-      this.mcpOptions.correlationId,
-    );
-    if (record?.userMessageId !== message.id || !sameMutationIdentity(record, expected))
-      return undefined;
-    return observedChatToolMutationOutcome(record);
+    return observeMcpChatMutation(this.mcpOptions, call, identity, result);
   }
   protected override refreshWriteApproval(callId: string): void {
     refreshChatToolWriteApproval(this.mcpOptions, callId);
   }
+}
+
+export function observeMcpChatMutation(
+  options: McpChatTurnOptions,
+  call: NormalizedResponse["toolCalls"][number],
+  identity: string,
+  result: ToolResultEnvelope,
+): ChatToolExchange["mutationOutcome"] {
+  const { deps, message, authority, managed } = options;
+  const tool = managed.tools.find(
+    (entry) => entry.descriptor.toolRef.canonicalId === result.toolRef?.canonicalId,
+  );
+  if (tool?.risk !== "write") return undefined;
+  const record = deps.store.chatToolMutations?.find(identity);
+  const expected = createMcpChatMutationIntent(
+    message,
+    authority.envelope.subject,
+    authority.reference,
+    {
+      ...tool,
+      actionId: identity,
+      idempotencyKey: identity,
+      argumentsDigest: sha256Hex(canonicalise(call.arguments)),
+    },
+    options.correlationId,
+  );
+  if (record?.userMessageId !== message.id || !sameMutationIdentity(record, expected))
+    return undefined;
+  return observedChatToolMutationOutcome(record);
 }
 
 export async function createMcpChatToolTurn(

@@ -2720,6 +2720,8 @@ export class CodingRuntimeOrchestrator {
       recordRuntimeEventDropped(this.deps.activityLog, event, current);
       return this.fail("invalid-intent");
     }
+    const recovery = await this.ingestRecoveryEvent(current, event);
+    if (recovery !== undefined) return recovery;
     if (event.kind === "failure-redacted") {
       recordRuntimeLifecycleFailure(
         this.deps.diagnostics,
@@ -2732,6 +2734,19 @@ export class CodingRuntimeOrchestrator {
     this.observeVerificationSummary(current, event);
     const paused = await this.ingestPausedEvent(current, event);
     return paused ?? this.ingestActiveEvent(current, event);
+  }
+
+  private async ingestRecoveryEvent(
+    current: CodingRuntimeSnapshot,
+    event: CodingWorkbenchRuntimeEvent,
+  ): Promise<CodingRuntimeOrchestratorResult | undefined> {
+    if (current.state === "recovery-required")
+      return { ok: true, snapshot: this.publicSnapshotWithDescription(current) };
+    if (event.kind !== "failure-redacted" || event.failureCode !== "recovery-required")
+      return undefined;
+    const recovery = this.transition(current, "recovery-required", "recovery-required");
+    await this.stopForSettlement(current.runId, "failed");
+    return recovery;
   }
 
   private async ingestPausedEvent(

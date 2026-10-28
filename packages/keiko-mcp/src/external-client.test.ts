@@ -14,6 +14,7 @@ import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/go
 const clients: ExternalMcpConnection[] = [];
 afterEach(async () => {
   await Promise.all(clients.splice(0).map((client) => client.close()));
+  vi.restoreAllMocks();
 });
 const schema = {
   type: "object",
@@ -30,21 +31,24 @@ function context(allowed = true): ManagedMcpInvocationContext {
   };
 }
 function fixture(
-  failAfterEffect = false,
+  failAfterEffect: boolean | "header-mismatch" = false,
   signal = new AbortController().signal,
   inputSchema: CatalogJsonObject = schema,
   outputSchema?: CatalogJsonObject,
+  metadataOverride?: { readonly name: string; readonly inputSchema: CatalogJsonObject },
 ): {
   readonly connect: () => Promise<ExternalMcpConnection>;
   readonly calls: string[];
   readonly lines: string[];
   readonly effects: () => number;
   readonly contexts: (string | undefined)[];
+  readonly sentHeaders: Headers[];
 } {
   let effects = 0;
   const calls: string[] = [];
   const lines: string[] = [];
   const contexts: (string | undefined)[] = [];
+  const sentHeaders: Headers[] = [];
   const handler = createMcpHandler(
     () => {
       const server = new McpServer({ name: "synthetic-external", version: "1" });
@@ -68,6 +72,7 @@ function fixture(
     lines,
     effects: () => effects,
     contexts,
+    sentHeaders,
     connect: async (): Promise<ExternalMcpConnection> => {
       const connection = await connectExternalMcp({
         signal,
@@ -85,13 +90,28 @@ function fixture(
             const request = new Request(input, init);
             const rpc =
               request.method === "POST"
-                ? ((await request.clone().json()) as { method?: string })
+                ? ((await request.clone().json()) as { method?: string; id?: string | number })
                 : {};
             calls.push(rpc.method ?? request.method);
+            if (rpc.method === "tools/call") sentHeaders.push(new Headers(request.headers));
             contexts.push(context?.invocationId);
             const result = await handler.fetch(request);
-            if (failAfterEffect && rpc.method === "tools/call")
-              throw new TypeError("synthetic lost response");
+            if (rpc.method === "tools/list" && metadataOverride !== undefined) {
+              const body = (await result.json()) as { result: { tools: unknown[] } };
+              body.result.tools = [metadataOverride];
+              return new Response(JSON.stringify(body), {
+                status: result.status,
+                headers: result.headers,
+              });
+            }
+            if (rpc.method !== "tools/call") return result;
+            if (failAfterEffect === true) throw new TypeError("synthetic lost response");
+            if (failAfterEffect === "header-mismatch")
+              return Response.json({
+                jsonrpc: "2.0",
+                id: rpc.id,
+                error: { code: -32020, message: "synthetic mismatch after commit" },
+              });
             return result;
           },
         },
@@ -400,4 +420,60 @@ it("connects to a legacy HTTP+SSE endpoint through the SDK", async () => {
     reason: "descriptor-drift",
   });
   expect(effects).toBe(1);
+});
+
+it.each([
+  { text: { type: "string", "x-mcp-header": "synthetic-private-header value" } },
+  [{ type: "string", "x-mcp-header": "synthetic-private-header value" }],
+])(
+  "refuses invalid header metadata before the SDK can print private tool and schema values",
+  async (properties) => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const f = fixture(false, new AbortController().signal, schema, undefined, {
+      name: "synthetic-private-tool-name",
+      inputSchema: {
+        type: "object",
+        properties,
+        additionalProperties: false,
+      },
+    });
+    const connection = await f.connect().then(
+      () => "connected",
+      (error: unknown) => error,
+    );
+    expect(warn).not.toHaveBeenCalled();
+    expect(connection).toMatchObject({ reason: "protocol-error" });
+    expect(f.effects()).toBe(0);
+    const evidence = `${String(connection)} ${f.lines.join(" ")}`;
+    expect(evidence).not.toContain("synthetic-private-tool-name");
+    expect(evidence).not.toContain("synthetic-private-header value");
+    for (const line of f.lines) expectActivityLogProof("mcp.managed.lifecycle.line", line);
+  },
+);
+
+it("preserves supported metadata while namespacing tool headers away from HTTP routing", async () => {
+  const inputSchema = {
+    ...schema,
+    properties: { text: { type: "string", "x-mcp-header": "Host" } },
+  };
+  const f = fixture(false, new AbortController().signal, inputSchema);
+  const client = await f.connect();
+  expect(client.tools[0]?.inputSchema).toMatchObject(inputSchema);
+  expect(await client.call("save_note", { text: "synthetic-note" }, context())).toMatchObject({
+    content: [{ text: "synthetic-note" }],
+  });
+  expect(f.sentHeaders[0]?.get("host")).toBeNull();
+  expect(f.sentHeaders[0]?.get("mcp-param-host")).toBe("synthetic-note");
+  expect(f.sentHeaders[0]?.get("mcp-protocol-version")).toBe("2026-07-28");
+  expect(f.effects()).toBe(1);
+});
+
+it("never replays a mutation after a committed effect followed by HEADER_MISMATCH", async () => {
+  const f = fixture("header-mismatch");
+  const client = await f.connect();
+  await expect(
+    client.call("save_note", { text: "synthetic-once" }, context()),
+  ).rejects.toMatchObject({ reason: "protocol-error" });
+  expect(f.effects()).toBe(1);
+  expect(f.calls.filter((method) => method === "tools/call")).toHaveLength(1);
 });

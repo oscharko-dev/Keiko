@@ -1,5 +1,6 @@
 import type { Chat, ChatMessage } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { ApiError, fetchChatMessages } from "./api";
+import { chatToolReadGrants } from "./chat-tool-events";
 import { clientErrorEvidence } from "./client-error-evidence";
 import { reportClientDiagnostic } from "./client-diagnostics";
 import { bffRequestErrorKind } from "./http";
@@ -17,8 +18,8 @@ async function readConsent(
   );
   const transcript = message?.toolTranscript;
   if (message === undefined || transcript === undefined) return undefined;
-  if (transcript.readGrant !== undefined && transcript.readGrant.chatId !== chatId)
-    return undefined;
+  const grants = chatToolReadGrants(transcript);
+  if (grants.some((grant) => grant.chatId !== chatId)) return undefined;
   if (
     transcript.exchanges.some(
       (entry) => entry.approval !== undefined && entry.approval.chatId !== chatId,
@@ -30,8 +31,7 @@ async function readConsent(
     identity: JSON.stringify([
       message.id,
       message.turnState,
-      transcript.readGrant?.grantId,
-      transcript.readGrant?.state,
+      grants.map((grant) => [grant.kind, grant.grantId, grant.state]),
       transcript.exchanges.map((entry) => [
         entry.call.id,
         entry.approval?.approvalId,
@@ -51,8 +51,7 @@ export function watchChatToolConsent(
   signal: AbortSignal,
   publish: (message: ChatMessage) => void,
 ): () => void {
-  if (chat.jiraPodBinding === undefined || resolveReference === undefined)
-    return (): void => undefined;
+  if (resolveReference === undefined) return (): void => undefined;
   const stop = new AbortController();
   const combined = AbortSignal.any([signal, stop.signal]);
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -69,7 +68,7 @@ export function watchChatToolConsent(
       }
     } catch (error) {
       if (!combined.aborted)
-        reportClientDiagnostic("Jira Chat consent observation failed.", {
+        reportClientDiagnostic("Chat tool consent observation failed.", {
           kind: "other",
           correlationId: error instanceof ApiError ? error.correlationId : undefined,
           errorKind: bffRequestErrorKind(error),

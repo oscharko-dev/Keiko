@@ -9268,6 +9268,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "relay-unavailable",
           "credential-in-response-header",
           "credential-spelling-unbounded",
+          "mutation-outcome-unknown",
         ],
       },
       method: {

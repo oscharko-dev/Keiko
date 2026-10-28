@@ -1115,7 +1115,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.recovery.eyebrow": "Wiederherstellung erforderlich",
   "codingWorkbench.recovery.title": "Vor erneutem Versuch abgleichen",
   "codingWorkbench.recovery.summary":
-    "Keiko startet einen neuen Lauf. Vorherige Änderungen werden nicht wiederholt.",
+    "Eine vorherige Aktion kann Dateien oder ein externes System bereits verändert haben. Prüfe ihr Ergebnis, bevor du einen neuen Lauf startest. Keiko wiederholt die Aktion nicht automatisch.",
   "codingWorkbench.recovery.retry": "Als neuen Lauf wiederholen",
   "codingWorkbench.recovery.acknowledge": "Wiederherstellung bestätigen",
   "codingWorkbench.header.notReady": "Nicht startbereit",

@@ -6,6 +6,7 @@ import {
   StreamableHTTPClientTransport,
   SSEClientTransport,
   type Transport,
+  type Tool,
 } from "@modelcontextprotocol/client";
 import {
   DEFAULT_INHERITED_ENV_VARS,
@@ -24,6 +25,7 @@ import { deepFreeze } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { ManagedMcpError } from "./definitions.js";
 import { recordManagedMcp } from "./activity.js";
+import { installExternalMetadataAdmission } from "./external-metadata.js";
 
 export type ExternalMcpTransportOptions =
   | {
@@ -52,6 +54,8 @@ export interface ExternalMcpClientOptions {
 }
 const TIMEOUT_MS = 30_000;
 const MAX_BYTES = 1024 * 1024;
+// Retain the object-root types established by the SDK tools/list parser across JSON capture.
+type AdmittedTool = ExternalMcpTool & Pick<Tool, "inputSchema" | "outputSchema">;
 
 function captured<T>(value: T): T {
   const text = JSON.stringify(value);
@@ -110,7 +114,7 @@ class ExternalClient implements ExternalMcpConnection {
     },
   );
   readonly #transport: Transport;
-  #tools: readonly ExternalMcpTool[] = [];
+  #tools: readonly AdmittedTool[] = [];
   #digest = sha256Hex("[]");
   readonly #lifetime = new AbortController();
   #closed = false;
@@ -121,6 +125,10 @@ class ExternalClient implements ExternalMcpConnection {
   };
   constructor(private readonly options: ExternalMcpClientOptions) {
     this.#transport = transportFor(options.transport, this.#contexts);
+    installExternalMetadataAdmission(this.#transport, (error) => {
+      this.#lifetime.abort(error);
+      void this.close().catch(() => undefined);
+    });
     this.#client.onclose = (): void => {
       this.#closed = true;
       this.#lifetime.abort(new ManagedMcpError("closed"));
@@ -153,12 +161,13 @@ class ExternalClient implements ExternalMcpConnection {
   }
   async connect(): Promise<void> {
     this.options.signal.addEventListener("abort", this.#abort, { once: true });
+    const signal = AbortSignal.any([this.options.signal, this.signal]);
     await this.#client.connect(this.#transport, {
-      signal: this.options.signal,
+      signal,
       timeout: TIMEOUT_MS,
     });
     const listed = await this.#client.listTools(undefined, {
-      signal: this.options.signal,
+      signal,
       timeout: TIMEOUT_MS,
       maxTotalTimeout: TIMEOUT_MS,
     });
@@ -176,7 +185,7 @@ class ExternalClient implements ExternalMcpConnection {
       )
     )
       throw new ManagedMcpError("protocol-error");
-    this.#tools = captured(listed.tools) as readonly ExternalMcpTool[];
+    this.#tools = captured(listed.tools) as readonly AdmittedTool[];
     this.#digest = sha256Hex(canonicalise(this.#tools));
     recordManagedMcp(
       this.options.log,
@@ -198,9 +207,9 @@ class ExternalClient implements ExternalMcpConnection {
     if (this.#closed || tool === undefined || signal.aborted)
       throw new ManagedMcpError("not-admitted");
     const args = captured(argumentsValue);
-    const validation = await fromJsonSchema<CatalogJsonObject>(tool.inputSchema)[
-      "~standard"
-    ].validate(args);
+    const inputSchema: CatalogJsonObject = tool.inputSchema;
+    const validation =
+      await fromJsonSchema<CatalogJsonObject>(inputSchema)["~standard"].validate(args);
     if (validation.issues !== undefined) throw new ManagedMcpError("invalid-arguments");
     this.record("started", context);
     try {
@@ -208,6 +217,8 @@ class ExternalClient implements ExternalMcpConnection {
         this.#client.callTool(
           { name, arguments: args },
           {
+            // Pin the admitted definition: SDK HEADER_MISMATCH recovery must never replay effects.
+            toolDefinition: tool,
             signal,
             timeout: TIMEOUT_MS,
             maxTotalTimeout: TIMEOUT_MS,

@@ -202,7 +202,11 @@ import {
   type OpenCodeNativeMcpAdmission,
   type OpenCodeNativeMcpRelayEndpoint,
 } from "./opencodeNativeMcp.js";
-import { bindNativeMcpRelays, type OpenCodeMcpRelayInput } from "./opencodeNativeMcpRelay.js";
+import {
+  bindNativeMcpRelays,
+  recoverNativeMcpRun,
+  type OpenCodeMcpRelayInput,
+} from "./opencodeNativeMcpRelay.js";
 import type { McpOAuthIssuerValidation } from "../mcp/mcpOAuthIssuer.js";
 import type { McpOAuthCredentialStore } from "../mcp/mcpOAuthCredentialStore.js";
 import { harvestMcpCredentials, seedMcpCredentials } from "./opencodeNativeMcpCredentials.js";
@@ -1937,12 +1941,22 @@ function nativeMcpRelays(
   request: OpenCodeLifecyclePrepareRequest,
 ): ReadonlyMap<string, OpenCodeNativeMcpRelayEndpoint> {
   if (input.toolProfile !== "native" || input.mcpServers === undefined) return new Map();
+  const onRuntimeEvent = input.onRuntimeEvent;
   return bindNativeMcpRelays({
     servers: input.mcpServers(request.runId),
     mode: request.env.KEIKO_CODING_MODE,
     runId: request.runId,
     relay: input.mcpRelay,
     activityLog: input.activityLog,
+    onUncertainMutation:
+      onRuntimeEvent === undefined
+        ? undefined
+        : (): Promise<void> =>
+            recoverNativeMcpRun({
+              runId: request.runId,
+              authorityLifecycle: input.authorityLifecycle,
+              onRuntimeEvent,
+            }),
   });
 }
 

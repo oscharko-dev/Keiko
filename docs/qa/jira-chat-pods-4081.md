@@ -2833,3 +2833,65 @@ intact. Discovery commits reconnect under the final stored generation before suc
 reported. All final aggregate/coverage/evidence, package, performance, Sonar and current-head
 CI requirements remain pending; native ambiguous-write recovery and combined Jira/MCP Chat
 composition are separate ongoing work. This is not acceptance of all 55 epic criteria.
+
+### Combined Chat sources, SDK metadata admission and native recovery
+
+Refs #4081, #4089, #4091, #4084, #4086 and #4087. A Chat with a bound Jira Pod now
+combines its Jira catalog with centrally configured MCP tools before compiling one projection.
+One binder and one existing Chat tool loop retain the cumulative Harness budget. Source
+registration is atomic before first use; both authority envelopes share counters, actor, Chat,
+mode and deadlines. Neither source can be added later, and invalidating either source stops the
+accepted combined turn. Existing adapters continue to own their own exact consent, approval,
+mutation and transport boundaries. Additive readGrants retains both independent consent cards;
+readGrant remains the backward-compatible latest projection. Legacy transcripts remain readable.
+The buffered UI consent observer also now covers configured MCP without a Jira binding; the
+regression produced zero observations before the fix and passes afterward.
+
+The combined normal-handler tests use the actual shared binder and SDK hosts with synthetic
+model and upstream ports. They prove both model offerings, separate consent and write approvals,
+both durable journals, canonical replay without duplicate effects, invalidation by either source,
+and shared tool/prompt exhaustion. This is deterministic integration evidence, not a claim that
+the combined Jira/MCP scenario has already run through a real model/browser. An isolated test
+loading the previous factory fails specifically on the missing MCP offer in a Jira-bound Chat.
+
+External tool-list responses are now bounded and validated at the public SDK transport boundary
+before its recursive header scan or cache. Invalid metadata rejects the whole list; there is no
+schema pruning or global console override. Actual SDK regressions reproduce the previous raw
+warning with synthetic private metadata, including an invalid array-shaped properties map.
+Valid metadata and parameter headers remain supported. A separate Host-override hypothesis was
+refuted through the real SDK: parameter headers are prefixed and do not replace HTTP Host.
+
+Native MCP writes with observed transport/protocol uncertainty now synchronously revoke that
+run's relay capabilities and use the existing recovery owner. The persisted Coding snapshot
+retains recovery-required despite late stop/failure events and refuses resume. The UI explains
+that an external effect may already exist and asks for result reconciliation before a fresh run.
+This does not claim that the still-open unobserved relay-to-OpenCode response-loss case already
+has stable per-invocation identity or a durable acknowledgement journal.
+
+The actual in-app browser, Docker LiteLLM and Gemma completed a separate synthetic failure
+journey: Settings connected a local two-tool server; a fresh Ask-for-approval Coding run displayed
+and received its Code Mode program approval and exact MCP action approval. Independent fixture
+inspection counted zero effects before tool approval. The tool persisted and fsynced one effect,
+then exited before replying. The Workbench displayed Recovery required, revision 9, with the
+reconciliation instruction. An actual browser reload preserved that status and the effect count
+remained exactly one. The isolated workspace had zero changed files. This is intentional fault
+injection, not a successful ordinary tool result or a production-service outage.
+
+Focused verification: 246 authority/single-source/transcript cases; 65 single/combined Chat turn
+cases; 308 native relay/orchestrator cases; 249 Chat UI cases and 131 Workbench label cases;
+70 MCP cases followed by a 40-case SDK/metadata/combined rerun. These overlap and are not one
+aggregate. npm run typecheck, independent UI TypeScript, scoped lint, import policy, contract
+boundaries, error observability and ADR index pass. Final aggregates, coverage, UI evidence,
+package/performance/Sonar and exact-head CI qualification remain open.
+
+A new independent synthetic Jira session was set up through the normal first-run workflow on
+2026-10-28 using the published Atlassian test license. License checks, identity/permission seed
+and production-port HTTPS/read/write preflight all passed; the closing preflight reported
+10,389 seconds remaining. The prior expired session is stopped with its volumes retained.
+Each subsequent qualification group still requires its own opening and closing license checks.
+
+The SDK review additionally reproduced an automatic mutation replay after an upstream commit
+followed by HEADER_MISMATCH. The client now supplies the official callTool option with the
+validated frozen definition, disabling that refetch/re-dispatch branch. The actual SDK
+regression counts exactly one remote effect after the fix, compared with two before it.
+The final 35 client/metadata cases, scoped lint and MCP build pass independently.

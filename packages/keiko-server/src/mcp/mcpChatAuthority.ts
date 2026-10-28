@@ -127,6 +127,26 @@ function envelopeFor(
   };
 }
 
+/** Validate without registration so all source authorities can share one atomic admission. */
+export function prepareAcceptedMcpChatAuthority(
+  deps: McpChatAuthorityDeps,
+  turn: AcceptedJiraChatTurn,
+): { readonly ok: true; readonly envelope: McpChatAuthorityEnvelope } | Failure {
+  const subject = currentSubject(deps, turn.chatId, turn.correlationId);
+  if (
+    subject === undefined ||
+    deps.agentAuthorityRegistry === undefined ||
+    !acceptedTurn(deps, turn)
+  )
+    return recordChatAuthorityResult(
+      "register",
+      INVALID,
+      { chatId: turn.chatId },
+      turn.correlationId,
+    );
+  return { ok: true, envelope: envelopeFor(deps, turn, subject) };
+}
+
 /** Same accepted-message registry and cumulative budget as Jira; no fabricated Pod or Coding session. */
 export function mintAcceptedMcpChatAuthority(
   deps: McpChatAuthorityDeps,
@@ -138,23 +158,18 @@ export function mintAcceptedMcpChatAuthority(
       readonly reference: EditorAgentGovernedAuthorityReference;
     }
   | Failure {
-  const subject = currentSubject(deps, turn.chatId, turn.correlationId);
-  const registry = deps.agentAuthorityRegistry;
-  if (subject === undefined || registry === undefined || !acceptedTurn(deps, turn))
-    return recordChatAuthorityResult(
-      "register",
-      INVALID,
-      { chatId: turn.chatId },
-      turn.correlationId,
-    );
-  const envelope = envelopeFor(deps, turn, subject);
-  const result = registry.registerChat(
+  const prepared = prepareAcceptedMcpChatAuthority(deps, turn);
+  if (!prepared.ok) return prepared;
+  const { envelope } = prepared;
+  const result = deps.agentAuthorityRegistry?.registerChat(
     envelope,
     envelope.deploymentCeiling,
     new Date(turn.nowMs).toISOString(),
     turn.correlationId,
   );
-  return result.ok ? { ok: true, envelope, reference: result.authorityRef } : result;
+  return result?.ok === true
+    ? { ok: true, envelope, reference: result.authorityRef }
+    : (result ?? INVALID);
 }
 
 export function resolveCurrentMcpChatAuthority(

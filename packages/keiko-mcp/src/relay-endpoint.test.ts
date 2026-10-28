@@ -21,14 +21,19 @@ interface Fixture {
   readonly context: ManagedMcpInvocationContext;
   readonly call: Mock<ExternalMcpConnection["call"]>;
   readonly revoke: () => void;
+  readonly recover: Mock<() => void>;
 }
-function fixture(): Fixture {
+function fixture(risk: "read" | "write" = "read"): Fixture {
   let allowed = true;
+  const recover = vi.fn(() => {
+    allowed = false;
+  });
   const context: ManagedMcpInvocationContext = {
     invocationId: "private-invocation",
     correlationId: "relay-test",
     signal: new AbortController().signal,
     beforeEffect: () => allowed,
+    onUncertainMutation: recover,
   };
   const call = vi.fn<ExternalMcpConnection["call"]>((_name, args) =>
     Promise.resolve({
@@ -44,10 +49,11 @@ function fixture(): Fixture {
     call,
     close: () => Promise.resolve(),
   };
-  const endpoint = createMcpRelayEndpoint(connection, { echo: "read" });
+  const endpoint = createMcpRelayEndpoint(connection, { echo: risk });
   cleanup.push(endpoint.close);
   return {
     endpoint,
+    recover,
     context,
     call,
     revoke: (): void => {
@@ -151,4 +157,64 @@ it("isolates concurrent invocation contexts and suppresses a response after auth
   expect(result.result?.isError).toBe(true);
   expect(JSON.stringify(result)).not.toContain("must not escape");
   expect(f.call).toHaveBeenCalledTimes(3);
+});
+
+it.each(["lost-response", "provider-error", "malformed-result"])(
+  "revokes the run before a possibly committed write can replay after %s",
+  async (failure) => {
+    const f = fixture("write");
+    f.call.mockImplementation(() => {
+      if (failure === "lost-response")
+        return Promise.reject(new TypeError("synthetic committed-then-lost response"));
+      return Promise.resolve(
+        failure === "provider-error"
+          ? { isError: true, content: [{ type: "text", text: "synthetic failure" }] }
+          : { content: "synthetic malformed result" },
+      );
+    });
+    const client = await clientFor(f);
+    await expect(
+      client.call(
+        "echo",
+        { text: "synthetic note" },
+        { ...f.context, invocationId: "write-first" },
+      ),
+    ).resolves.toMatchObject({ isError: true });
+    await expect(
+      client.call(
+        "echo",
+        { text: "synthetic note" },
+        { ...f.context, invocationId: "model-retry" },
+      ),
+    ).rejects.toBeInstanceOf(Error);
+    expect(f.call).toHaveBeenCalledOnce();
+    expect(f.recover).toHaveBeenCalledOnce();
+  },
+);
+it("requires a recovery owner before dispatching a native write", async () => {
+  const f = fixture("write");
+  const result = await legacy(
+    f,
+    "tools/call",
+    { name: "echo", arguments: { text: "synthetic note" } },
+    { ...f.context, onUncertainMutation: undefined },
+  );
+  expect(result.result?.isError).toBe(true);
+  expect(f.call).not.toHaveBeenCalled();
+  expect(f.recover).not.toHaveBeenCalled();
+});
+it("does not enter recovery for confirmed successful writes or failed reads", async () => {
+  const write = fixture("write");
+  const writer = await clientFor(write);
+  await expect(
+    writer.call("echo", { text: "synthetic note" }, write.context),
+  ).resolves.toMatchObject({ content: [{ type: "text", text: "synthetic note" }] });
+  expect(write.recover).not.toHaveBeenCalled();
+  const read = fixture();
+  read.call.mockRejectedValue(new TypeError("synthetic read failure"));
+  const reader = await clientFor(read);
+  await expect(
+    reader.call("echo", { text: "synthetic read" }, read.context),
+  ).resolves.toMatchObject({ isError: true });
+  expect(read.recover).not.toHaveBeenCalled();
 });

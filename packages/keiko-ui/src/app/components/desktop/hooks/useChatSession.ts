@@ -1,6 +1,6 @@
 "use client";
 
-import { applyChatWriteApproval } from "@/lib/chat-tool-events";
+import { applyChatReadConsent, applyChatWriteApproval } from "@/lib/chat-tool-events";
 import { watchChatToolConsent } from "@/lib/chat-tool-consent";
 import { useChatDraft, useChatDraftUnloadGuard, type ChatDraftPersistence } from "./useChatDraft";
 import type { ChatCreationModelChoice } from "./chatCreationModelChoice";
@@ -4134,16 +4134,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
             ...previous,
             messages: previous.messages.map((message) =>
               message.id === optimisticId || message.id === messageId
-                ? {
-                    ...message,
-                    id: messageId,
-                    toolTranscript: {
-                      ...message.toolTranscript,
-                      schemaVersion: 1,
-                      exchanges: message.toolTranscript?.exchanges ?? [],
-                      readGrant: grant,
-                    },
-                  }
+                ? applyChatReadConsent(message, { messageId, grant })
                 : message,
             ),
           }));

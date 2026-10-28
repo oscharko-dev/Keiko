@@ -277,7 +277,8 @@ async function requestConsent(
   if (request.kind === "review-required")
     await options.requestReadConsent(request.grant, context.signal);
   if (!readPermission(options, action).ok) return undefined;
-  if (!READ_TOOLS.has(action.tool)) await requestCatalogWriteApproval(options, action);
+  if (!READ_TOOLS.has(action.tool))
+    await requestCatalogWriteApproval({ ...options, context: () => context }, action);
   return preview(options, context.authority, action).ok ? action : undefined;
 }
 

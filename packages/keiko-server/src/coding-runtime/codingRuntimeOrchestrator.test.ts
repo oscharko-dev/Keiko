@@ -5024,6 +5024,41 @@ describe("pause and resume (#2386 adversarial-review regressions)", () => {
     },
   );
 
+  it("persists uncertain-write recovery and retains it across late terminal events", async () => {
+    const f = await runningFixture();
+    const recovered = await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "mcp-uncertain-write",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:03.000Z",
+      kind: "failure-redacted",
+      failureCode: "recovery-required",
+    });
+    expect(successfulSnapshot(recovered)).toMatchObject({
+      state: "recovery-required",
+      failureCode: "recovery-required",
+    });
+    expect(f.rows.get("run-1")).toMatchObject({
+      state: "recovery-required",
+      failureCode: "recovery-required",
+    });
+    expect(f.manager.stop).toHaveBeenCalledWith("run-1", "failed");
+    for (const kind of ["runtime-stopped", "failure-redacted"] as const) {
+      const late = await f.orchestrator.ingest({
+        schemaVersion: "1",
+        eventId: `late-${kind}`,
+        runId: "run-1",
+        occurredAt: "2026-01-01T00:00:04.000Z",
+        kind,
+      });
+      expect(successfulSnapshot(late).state).toBe("recovery-required");
+    }
+    expect((await f.orchestrator.resume("run-1", { requestId: "resume-uncertain" })).ok).toBe(
+      false,
+    );
+    expect(f.manager.resume).not.toHaveBeenCalled();
+  });
+
   it("still terminates a paused run on a redacted runtime failure", async () => {
     const captured = captureDiagnostics();
     const f = await runningFixture(undefined, captured.diagnostics);

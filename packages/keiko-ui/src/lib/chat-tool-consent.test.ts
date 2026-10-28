@@ -71,7 +71,7 @@ describe("buffered Chat consent observation", () => {
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(publish).toHaveBeenCalledExactlyOnceWith(message);
     expect(diagnostic).toHaveBeenCalledWith(
-      "Jira Chat consent observation failed.",
+      "Chat tool consent observation failed.",
       expect.objectContaining({
         correlationId: failure.correlationId,
         kind: "other",
@@ -193,4 +193,95 @@ it("publishes write approvals and their outcomes even when a read grant is uncha
   await vi.advanceTimersByTimeAsync(3500);
   expect(publish.mock.calls.map(([entry]) => entry)).toEqual([pending, claimed, succeeded]);
   stop();
+});
+
+it("observes configured MCP approvals in a buffered Chat without a Jira binding", async () => {
+  vi.useFakeTimers();
+  const mcpMessage: ChatMessage = {
+    ...message,
+    toolTranscript: {
+      schemaVersion: 1,
+      exchanges: [],
+      readGrant: {
+        kind: "mcp-chat-read",
+        grantId: "mcp-read",
+        chatId: chat.id,
+        configurationDigest: "b".repeat(64),
+        state: "pending",
+        disclosureVersion: "mcp-chat-read-v1",
+        requestedAt: 1000,
+        expiresAt: 2000,
+      },
+    },
+  };
+  vi.spyOn(api, "fetchChatMessages").mockResolvedValue({ messages: [mcpMessage] });
+  const publish = vi.fn();
+  const stop = watchChatToolConsent(
+    { id: chat.id },
+    "/repo",
+    () => Promise.resolve("scoped-digest"),
+    new AbortController().signal,
+    publish,
+  );
+  await vi.advanceTimersByTimeAsync(500);
+  stop();
+  expect(publish).toHaveBeenCalledExactlyOnceWith(mcpMessage);
+});
+
+it("observes changes to either source and rejects a foreign Chat within the grant list", async () => {
+  vi.useFakeTimers();
+  const jira = message.toolTranscript?.readGrant;
+  if (jira === undefined) throw new TypeError("Missing test grant");
+  const mcp = {
+    kind: "mcp-chat-read",
+    grantId: "mcp-read",
+    chatId: chat.id,
+    configurationDigest: "b".repeat(64),
+    state: "pending",
+    disclosureVersion: "mcp-chat-read-v1",
+    requestedAt: 1000,
+    expiresAt: 2000,
+  } as const;
+  const pending: ChatMessage = {
+    ...message,
+    toolTranscript: {
+      schemaVersion: 1,
+      exchanges: [],
+      readGrant: mcp,
+      readGrants: [jira, mcp],
+    },
+  };
+  const granted: ChatMessage = {
+    ...message,
+    toolTranscript: {
+      schemaVersion: 1,
+      exchanges: [],
+      readGrant: mcp,
+      readGrants: [{ ...jira, state: "granted" }, mcp],
+    },
+  };
+  const foreign: ChatMessage = {
+    ...message,
+    toolTranscript: {
+      schemaVersion: 1,
+      exchanges: [],
+      readGrant: mcp,
+      readGrants: [{ ...jira, chatId: "other-chat" }, mcp],
+    },
+  };
+  vi.spyOn(api, "fetchChatMessages")
+    .mockResolvedValueOnce({ messages: [pending] })
+    .mockResolvedValueOnce({ messages: [granted] })
+    .mockResolvedValue({ messages: [foreign] });
+  const publish = vi.fn();
+  const stop = watchChatToolConsent(
+    chat,
+    "/repo",
+    () => Promise.resolve("scoped-digest"),
+    new AbortController().signal,
+    publish,
+  );
+  await vi.advanceTimersByTimeAsync(3500);
+  stop();
+  expect(publish.mock.calls.map(([entry]) => entry)).toEqual([pending, granted]);
 });

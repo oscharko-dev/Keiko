@@ -3,6 +3,8 @@ import type { ChatMessage } from "./store/index.js";
 import type { ChatToolTurnPort } from "./chat-tool-turn.js";
 import { createJiraChatToolTurn } from "./atlassian/jiraChatToolTurn.js";
 import { createMcpChatToolTurn } from "./mcp/mcpChatToolTurn.js";
+import { createChatSourcesToolTurn } from "./chat-tool-sources-turn.js";
+import { correlationIdOrUnknown } from "./correlation.js";
 export type { ChatToolTurnPort } from "./chat-tool-turn.js";
 
 /** Both normal and grounded Chat enter the same bounded orchestration before model work. */
@@ -13,9 +15,12 @@ export async function createChatToolTurn(
   signal: AbortSignal,
   correlationId: string | undefined,
 ): Promise<ChatToolTurnPort | undefined> {
-  if (deps.store.findChatById(message.chatId)?.jiraPodBinding !== undefined)
-    return createJiraChatToolTurn(deps, modelId, message, signal, correlationId);
-  return createMcpChatToolTurn(deps, modelId, message, signal, correlationId);
+  if (deps.store.findChatById(message.chatId)?.jiraPodBinding === undefined)
+    return createMcpChatToolTurn(deps, modelId, message, signal, correlationId);
+  const mcp = await deps.mcpChatCatalog?.get(correlationIdOrUnknown(correlationId));
+  return mcp === undefined
+    ? createJiraChatToolTurn(deps, modelId, message, signal, correlationId)
+    : createChatSourcesToolTurn(deps, modelId, message, signal, correlationId, mcp);
 }
 export function scopeChatToolTurn(
   deps: UiHandlerDeps,

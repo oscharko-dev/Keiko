@@ -517,3 +517,40 @@ describe("authoritative late mutation history", () => {
     ).toBeUndefined();
   });
 });
+
+it("retains both source disclosures and upgrades a legacy single disclosure without loss", () => {
+  const { store, db, id, chatId } = fixture();
+  const jira = {
+    kind: "jira-chat-read",
+    grantId: "jira-grant",
+    chatId,
+    podId: "pod-1",
+    bindingGeneration: 1,
+    authenticationGeneration: 1,
+    state: "granted",
+    disclosureVersion: "jira-chat-read-v1",
+    requestedAt: 1000,
+    expiresAt: 2000,
+  } as const;
+  const mcp = {
+    kind: "mcp-chat-read",
+    grantId: "mcp-grant",
+    chatId,
+    configurationDigest: "c".repeat(64),
+    state: "pending",
+    disclosureVersion: "mcp-chat-read-v1",
+    requestedAt: 1000,
+    expiresAt: 2000,
+  } as const;
+  db.prepare("UPDATE chat_messages SET tool_transcript_json = ? WHERE id = ?").run(
+    JSON.stringify({ schemaVersion: 1, exchanges: [], readGrant: jira }),
+    id,
+  );
+  store.updateChatToolTranscript(id, { kind: "read-consent", grant: mcp }, "mixed-consent");
+  expect(store.findMessageById(id)?.toolTranscript?.readGrants).toEqual([jira, mcp]);
+  const granted = { ...mcp, state: "granted" } as const;
+  store.updateChatToolTranscript(id, { kind: "read-consent", grant: granted }, "mixed-consent");
+  const transcript = store.findMessageById(id)?.toolTranscript;
+  expect(transcript?.readGrants).toEqual([jira, granted]);
+  expect(transcript?.readGrant).toEqual(granted);
+});

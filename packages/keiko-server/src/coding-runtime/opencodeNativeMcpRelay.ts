@@ -1,6 +1,10 @@
 import { isCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
-import type { McpServerDefinition } from "@oscharko-dev/keiko-contracts";
+import type {
+  CodingWorkbenchRuntimeEvent,
+  McpServerDefinition,
+} from "@oscharko-dev/keiko-contracts";
+import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { randomUUID } from "node:crypto";
 import type { ConfiguredMcpConnections } from "../mcp/mcpConfiguredConnections.js";
 
@@ -60,6 +64,7 @@ function bindManaged(
   runId: string,
   server: McpServerDefinition,
   log: ServerLogSink | undefined,
+  onUncertainMutation: (() => Promise<void>) | undefined,
 ): OpenCodeNativeMcpRelayEndpoint | BindRefusal {
   const manager = input.managed;
   if (manager === undefined) return "relay-unavailable";
@@ -86,6 +91,7 @@ function bindManaged(
             correlationId: runId,
             signal,
             beforeEffect: () => !signal.aborted,
+            onUncertainMutation,
           },
         );
       },
@@ -96,14 +102,24 @@ function bindManaged(
       capability: binding.capability,
     };
   } catch {
-    recordMcpRelay(log, runId, {
-      action: "bind",
-      outcome: "refused",
-      reason: "relay-unavailable",
-      refusedServerCount: 1,
-    });
+    recordMcpRelay(log, runId, MANAGED_BIND_REFUSAL);
     return "relay-unavailable";
   }
+}
+
+const MANAGED_BIND_REFUSAL = {
+  action: "bind",
+  outcome: "refused",
+  reason: "relay-unavailable",
+  refusedServerCount: 1,
+} as const;
+
+function recoverOnce(
+  input: Parameters<typeof recoverUncertainMutation>[0],
+): (() => Promise<void>) | undefined {
+  if (input.onUncertainMutation === undefined) return undefined;
+  let recovery: Promise<void> | undefined;
+  return (): Promise<void> => (recovery ??= recoverUncertainMutation(input));
 }
 
 /**
@@ -117,6 +133,8 @@ export function bindNativeMcpRelays(input: {
   readonly runId: string;
   readonly relay: OpenCodeMcpRelayInput | undefined;
   readonly activityLog: ServerLogSink | undefined;
+  /** Existing run authority owner; absent makes native writes unavailable before dispatch. */
+  readonly onUncertainMutation?: (() => Promise<void>) | undefined;
 }): ReadonlyMap<string, OpenCodeNativeMcpRelayEndpoint> {
   const servers =
     input.relay?.managed === undefined
@@ -130,13 +148,14 @@ export function bindNativeMcpRelays(input: {
   const endpoints = new Map<string, OpenCodeNativeMcpRelayEndpoint>();
   if (servers.length === 0) return endpoints;
   const refusals: BindRefusal[] = [];
+  const onUncertainMutation = recoverOnce(input);
   for (const server of servers) {
     const bound =
       input.relay === undefined
         ? "relay-unavailable"
         : input.relay.managed === undefined
           ? bindOne(input.relay, input.runId, server)
-          : bindManaged(input.relay, input.runId, server, input.activityLog);
+          : bindManaged(input.relay, input.runId, server, input.activityLog, onUncertainMutation);
     if (typeof bound === "string") refusals.push(bound);
     else endpoints.set(server.name, bound);
   }
@@ -149,4 +168,59 @@ export function bindNativeMcpRelays(input: {
     ...(reason === undefined ? {} : { reason }),
   });
   return endpoints;
+}
+
+async function recoverUncertainMutation(input: {
+  readonly runId: string;
+  readonly relay: OpenCodeMcpRelayInput | undefined;
+  readonly activityLog: ServerLogSink | undefined;
+  readonly onUncertainMutation?: (() => Promise<void>) | undefined;
+}): Promise<void> {
+  // Revoke every MCP capability synchronously before asking the existing run owner for recovery.
+  input.relay?.relay.releaseRun(input.runId);
+  try {
+    recordMcpRelay(input.activityLog, input.runId, {
+      action: "request",
+      outcome: "failed",
+      reason: "mutation-outcome-unknown",
+    });
+  } finally {
+    await input.onUncertainMutation?.();
+  }
+}
+
+interface NativeMcpRecoveryOwner {
+  readonly runId: string;
+  readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
+  readonly authorityLifecycle: {
+    readonly revokeRuntime: (runId: string) => boolean | Promise<boolean>;
+    readonly markRuntimeRecoveryRequired: (runId: string) => boolean | Promise<boolean>;
+  };
+}
+
+/** Queue recovery on the durable lifecycle owner before revocation can emit late terminal events. */
+export async function recoverNativeMcpRun(input: NativeMcpRecoveryOwner): Promise<void> {
+  try {
+    input.onRuntimeEvent({
+      schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
+      eventId: `mcp-recovery-${input.runId}`,
+      runId: input.runId,
+      occurredAt: new Date().toISOString(),
+      kind: "failure-redacted",
+      failureCode: "recovery-required",
+    });
+  } finally {
+    await revokeNativeMcpAuthority(input);
+  }
+}
+
+async function revokeNativeMcpAuthority(input: NativeMcpRecoveryOwner): Promise<void> {
+  let marked: boolean;
+  try {
+    if (!(await input.authorityLifecycle.revokeRuntime(input.runId)))
+      throw new Error("Native MCP authority revocation unavailable");
+  } finally {
+    marked = await input.authorityLifecycle.markRuntimeRecoveryRequired(input.runId);
+  }
+  if (!marked) throw new Error("Native MCP run recovery unavailable");
 }

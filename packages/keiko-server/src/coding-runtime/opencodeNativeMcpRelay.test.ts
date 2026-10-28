@@ -8,7 +8,7 @@ import {
 
 import { createMcpCredentialRelay } from "../mcp/mcpCredentialRelay.js";
 import { openCodeNativeMcpAdmission } from "./opencodeNativeMcp.js";
-import { bindNativeMcpRelays } from "./opencodeNativeMcpRelay.js";
+import { bindNativeMcpRelays, recoverNativeMcpRun } from "./opencodeNativeMcpRelay.js";
 
 const SECRET = "wiki-secret-canary";
 const ORIGIN = "http://127.0.0.1:1983";
@@ -183,4 +183,101 @@ it("routes local and token-backed servers through the shared manager and revokes
     managed: true,
   });
   expect(unavailable.config.servers).toEqual({});
+});
+
+it("withdraws all native relay capabilities once before requesting uncertain-write recovery", async () => {
+  const relay = createMcpCredentialRelay();
+  const generation = new AbortController();
+  const { sink: activityLog, records } = sink();
+  const other = relay.bind({
+    runId: "other-run",
+    url: "https://other.example.test",
+    headers: {},
+    secrets: [],
+  });
+  if (other === undefined) throw new TypeError("missing synthetic second run");
+  const recover = vi.fn((): Promise<void> => {
+    if (endpoint === undefined) throw new TypeError("missing synthetic endpoint");
+    const id = new URL(endpoint.url).pathname.split("/").at(-1) ?? "";
+    expect(relay.authenticate(id, endpoint.capability)).toBeUndefined();
+    return Promise.resolve();
+  });
+  const bindings = bindNativeMcpRelays({
+    servers: [credentialed("synthetic", "KEIKO_MCP_SECRET_SYNTHETIC")],
+    mode: "autonomous-delivery",
+    runId: "uncertain-run",
+    activityLog,
+    onUncertainMutation: recover,
+    relay: {
+      relay,
+      origin: ORIGIN,
+      secrets: {},
+      managed: {
+        generation: () => generation.signal,
+        serve: async (_name, _request, context): Promise<Response> => {
+          await Promise.all([context.onUncertainMutation?.(), context.onUncertainMutation?.()]);
+          return new Response("synthetic failure", { status: 502 });
+        },
+      },
+    },
+  });
+  const endpoint = bindings.get("synthetic");
+  if (endpoint === undefined) throw new TypeError("missing synthetic binding");
+  const id = new URL(endpoint.url).pathname.split("/").at(-1) ?? "";
+  const bound = relay.authenticate(id, endpoint.capability);
+  await bound?.target.upstream?.(bound.target.url, {
+    method: "POST",
+    headers: {},
+    body: new TextEncoder().encode("{}"),
+    signal: new AbortController().signal,
+  });
+  expect(recover).toHaveBeenCalledOnce();
+  expect(bound?.signal.aborted).toBe(true);
+  expect(relay.authenticate(other.relayId, other.capability)).toBeDefined();
+  expect(lines(records)).toContainEqual(
+    expect.objectContaining({
+      action: "request",
+      outcome: "failed",
+      reason: "mutation-outcome-unknown",
+      correlationId: "uncertain-run",
+    }),
+  );
+});
+
+it("publishes recovery before authority revocation and retains revocation when publication fails", async () => {
+  const order: string[] = [];
+  const revoke = vi.fn(() => {
+    order.push("revoke");
+    return true;
+  });
+  const mark = vi.fn(() => {
+    order.push("mark");
+    return true;
+  });
+  const owner = {
+    runId: "uncertain-run",
+    authorityLifecycle: { revokeRuntime: revoke, markRuntimeRecoveryRequired: mark },
+  };
+  const event = vi.fn(() => {
+    order.push("recovery");
+  });
+  await recoverNativeMcpRun({ ...owner, onRuntimeEvent: event });
+  expect(order).toEqual(["recovery", "revoke", "mark"]);
+  expect(event).toHaveBeenCalledWith(
+    expect.objectContaining({
+      kind: "failure-redacted",
+      failureCode: "recovery-required",
+      runId: "uncertain-run",
+    }),
+  );
+  await expect(
+    recoverNativeMcpRun({
+      ...owner,
+      onRuntimeEvent: () => {
+        throw new Error("synthetic event owner unavailable");
+      },
+    }),
+  ).rejects.toThrow("synthetic event owner unavailable");
+  expect(revoke).toHaveBeenCalledTimes(2);
+  expect(mark).toHaveBeenCalledTimes(2);
 });

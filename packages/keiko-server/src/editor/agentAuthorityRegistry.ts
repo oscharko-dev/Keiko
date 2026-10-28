@@ -34,6 +34,10 @@ export type EditorAgentAuthorityRegistration =
   | { readonly ok: true; readonly authorityRef: EditorAgentGovernedAuthorityReference }
   | { readonly ok: false; readonly reason: EditorAgentAuthorityFailureReason };
 
+export type ChatToolAuthorityRegistrations =
+  | { readonly ok: true; readonly authorityRefs: readonly EditorAgentGovernedAuthorityReference[] }
+  | { readonly ok: false; readonly reason: EditorAgentAuthorityFailureReason };
+
 export type EditorAgentAuthorityResolution =
   | { readonly ok: true; readonly envelope: CodingWorkbenchAuthorityEnvelope }
   | { readonly ok: false; readonly reason: EditorAgentAuthorityFailureReason };
@@ -222,15 +226,85 @@ export class EditorAgentAuthorityRegistry {
     );
   }
 
+  /** Admit the entire immutable source set before any source may spend the turn's one budget. */
+  public registerChatSources(
+    values: readonly unknown[],
+    deploymentCeiling: CodingWorkbenchMode,
+    nowIso: string,
+    correlationId?: string,
+  ): ChatToolAuthorityRegistrations {
+    const records = chatSourceRecords(values, deploymentCeiling, nowIso);
+    const result =
+      records === undefined
+        ? ({ ok: false, reason: "invalid" } as const)
+        : this.retainChatSources(records, nowIso);
+    for (const record of records ?? [undefined])
+      recordChatAuthorityResult(
+        "register",
+        result,
+        {
+          ...(record === undefined
+            ? {}
+            : { subject: record.envelope.subject, authorityDigest: record.digest }),
+          affectedCount: result.ok ? (records?.length ?? 0) : 0,
+        },
+        correlationId,
+      );
+    return result;
+  }
+
+  private retainChatSources(
+    records: readonly ChatAuthorityRecord[],
+    nowIso: string,
+  ): ChatToolAuthorityRegistrations {
+    const first = records[0];
+    if (first === undefined) return { ok: false, reason: "invalid" };
+    if (records.some((record) => expired(nowIso, record.envelope.expiresAt)))
+      return { ok: false, reason: "expired" };
+    const existing = Array.from(this.records.values()).filter(
+      (record) => record.envelope.runId === first.envelope.runId,
+    );
+    if (existing.length > 0) {
+      if (
+        existing.length !== records.length ||
+        existing.some(
+          (record) =>
+            record.kind !== "chat" ||
+            !records.some((candidate) => candidate.digest === record.digest),
+        )
+      )
+        return { ok: false, reason: "invalid" };
+      if (existing.some((record) => record.revoked)) return { ok: false, reason: "revoked" };
+    } else {
+      this.evictInactive(nowIso);
+      if (this.records.size + records.length > EDITOR_AGENT_AUTHORITY_MAX_RECORDS)
+        return { ok: false, reason: "invalid" };
+      for (const record of records) {
+        const reference = { runId: record.envelope.runId, envelopeDigest: record.digest };
+        this.records.set(recordKey(reference), { ...record, usage: first.usage });
+      }
+    }
+    return {
+      ok: true,
+      authorityRefs: records.map((record) => ({
+        runId: record.envelope.runId,
+        envelopeDigest: record.digest,
+      })),
+    };
+  }
+
   private retainChat(
     record: ChatAuthorityRecord,
     nowIso: string,
   ): EditorAgentAuthorityRegistration {
     // A canonical turn cannot acquire a second budget by changing its envelope facts.
-    const existing = Array.from(this.records.values()).find(
+    const existing = Array.from(this.records.values()).filter(
       (candidate) => candidate.envelope.runId === record.envelope.runId,
     );
-    if (existing !== undefined && (existing.kind !== "chat" || existing.digest !== record.digest))
+    if (
+      existing.length > 1 ||
+      existing.some((candidate) => candidate.kind !== "chat" || candidate.digest !== record.digest)
+    )
       return { ok: false, reason: "invalid" };
     return this.retain(record, nowIso);
   }
@@ -310,6 +384,12 @@ export class EditorAgentAuthorityRegistry {
     return count;
   }
 
+  private chatRunRevoked(runId: string): boolean {
+    return Array.from(this.records.values()).some(
+      (record) => record.kind === "chat" && record.envelope.runId === runId && record.revoked,
+    );
+  }
+
   private resolveChatRecord(
     reference: EditorAgentGovernedAuthorityReference,
     subject: ChatToolAuthoritySubject,
@@ -320,7 +400,7 @@ export class EditorAgentAuthorityRegistry {
     const record = this.records.get(key);
     if (record?.kind !== "chat" || !validateChatToolAuthoritySubject(subject).ok)
       return { ok: false, reason: "invalid" };
-    if (record.revoked) return { ok: false, reason: "revoked" };
+    if (this.chatRunRevoked(reference.runId)) return { ok: false, reason: "revoked" };
     if (expired(nowIso, record.envelope.expiresAt)) {
       this.records.delete(key);
       return { ok: false, reason: "expired" };
@@ -753,6 +833,42 @@ function chatSnapshot(value: ChatToolAuthorityEnvelope): ChatToolAuthorityEnvelo
   Object.freeze(snapshot.actionClasses);
   Object.freeze(snapshot.connectorScopes);
   return Object.freeze(snapshot);
+}
+
+function sharedChatFacts(envelope: ChatToolAuthorityEnvelope): string {
+  return canonicalise({
+    runId: envelope.runId,
+    actorDigest: envelope.subject.actorDigest,
+    chatId: envelope.subject.chatId,
+    requestedMode: envelope.requestedMode,
+    effectiveMode: envelope.effectiveMode,
+    deploymentCeiling: envelope.deploymentCeiling,
+    actionClasses: envelope.actionClasses,
+    expiresAt: envelope.expiresAt,
+    budget: envelope.budget,
+  });
+}
+
+function chatSourceRecords(
+  values: readonly unknown[],
+  deploymentCeiling: CodingWorkbenchMode,
+  nowIso: string,
+): readonly ChatAuthorityRecord[] | undefined {
+  if (values.length < 1 || values.length > 2) return undefined;
+  const records: ChatAuthorityRecord[] = [];
+  const kinds = new Set<string>();
+  let facts: string | undefined;
+  for (const value of values) {
+    const parsed = validateChatToolAuthorityEnvelope(value);
+    if (!parsed.ok || parsed.value.deploymentCeiling !== deploymentCeiling) return undefined;
+    const kind = parsed.value.subject.kind ?? "jira";
+    const currentFacts = sharedChatFacts(parsed.value);
+    if (kinds.has(kind) || (facts !== undefined && facts !== currentFacts)) return undefined;
+    facts = currentFacts;
+    kinds.add(kind);
+    records.push({ kind: "chat", ...initialRecord(chatSnapshot(parsed.value), nowIso) });
+  }
+  return records;
 }
 
 function nonEmptyIdentity(value: string): boolean {

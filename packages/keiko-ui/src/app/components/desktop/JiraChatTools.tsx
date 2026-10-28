@@ -16,6 +16,7 @@ import {
 import { decideJiraChatReadConsent } from "@/lib/atlassian-connectors-api";
 import { jiraToolLabel, jiraToolState, jiraToolOutcomeHelp } from "./jira-tool-presentation";
 import styles from "./JiraChatTools.module.css";
+import { chatToolReadGrants } from "@/lib/chat-tool-events";
 const STATE_KEYS: Readonly<Record<ChatToolReadGrantView["state"], WidgetMessageKey>> = {
   pending: "chat.jira.pending",
   granted: "chat.jira.granted",
@@ -91,9 +92,9 @@ export function JiraChatTools({
   if (transcript === undefined) return null;
   return (
     <div className={styles.cmpStack}>
-      {transcript.readGrant === undefined ? null : (
-        <JiraReadConsent key={transcript.readGrant.grantId} grant={transcript.readGrant} />
-      )}
+      {chatToolReadGrants(transcript).map((grant) => (
+        <JiraReadConsent key={grant.grantId} grant={grant} />
+      ))}
       {transcript.exchanges.map((exchange) => (
         <div key={exchange.call.id}>
           {exchange.approval === undefined ? null : (

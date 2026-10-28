@@ -1080,7 +1080,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.recovery.eyebrow": "Recovery required",
   "codingWorkbench.recovery.title": "Reconcile before retrying",
   "codingWorkbench.recovery.summary":
-    "Keiko will start a fresh run. It will not replay prior mutations.",
+    "A previous action may already have changed files or an external system. Check its result before starting a fresh run. Keiko will not automatically repeat the action.",
   "codingWorkbench.recovery.retry": "Retry as a fresh run",
   "codingWorkbench.recovery.acknowledge": "Acknowledge recovery",
   "codingWorkbench.header.notReady": "Not ready to start",

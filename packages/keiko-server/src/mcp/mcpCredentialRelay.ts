@@ -191,6 +191,7 @@ const REASONS = [
   "relay-unavailable",
   "credential-in-response-header",
   "credential-spelling-unbounded",
+  "mutation-outcome-unknown",
 ] as const;
 type RelayReason = (typeof REASONS)[number];
 

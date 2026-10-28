@@ -410,6 +410,7 @@ const RUN_FAILURE_MESSAGES: ReadonlyMap<string, CodingWorkbenchMessageKey> = new
   CodingWorkbenchMessageKey
 >([
   ["runtime-failed", "codingWorkbench.event.failure.runtime"],
+  ["recovery-required", "codingWorkbench.recovery.summary"],
   ["prompt-allowance-exhausted", "codingWorkbench.event.failure.prompt-allowance-exhausted"],
   ["envelope-duration-exhausted", "codingWorkbench.event.failure.envelope-duration-exhausted"],
   ["output-exhausted-repeated", "codingWorkbench.event.failure.output-exhausted-repeated"],

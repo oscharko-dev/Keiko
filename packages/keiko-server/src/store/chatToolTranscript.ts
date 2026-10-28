@@ -213,11 +213,35 @@ function validExchange(
   else if (value.resultBinding !== undefined) return false;
   return true;
 }
+function validReadGrants(
+  value: Record<string, unknown>,
+  identity: TranscriptIdentity | undefined,
+): boolean {
+  const valid = (grant: unknown): grant is ChatToolReadGrantView =>
+    isChatToolReadGrantView(grant) && (identity === undefined || grant.chatId === identity.chatId);
+  if (value.readGrant !== undefined && !valid(value.readGrant)) return false;
+  if (value.readGrants === undefined) return true;
+  if (
+    !Array.isArray(value.readGrants) ||
+    value.readGrants.length > 2 ||
+    !value.readGrants.every(valid)
+  )
+    return false;
+  const grants = value.readGrants;
+  return (
+    new Set(grants.map((grant) => grant.kind)).size === grants.length &&
+    new Set(grants.map((grant) => grant.grantId)).size === grants.length &&
+    (value.readGrant === undefined ||
+      grants.some((grant) => canonicalise(grant) === canonicalise(value.readGrant)))
+  );
+}
+
 function validTranscript(
   value: unknown,
   identity: TranscriptIdentity | undefined,
 ): value is StoredTranscript {
-  if (!object(value) || !exact(value, ["schemaVersion", "exchanges", "readGrant"])) return false;
+  if (!object(value) || !exact(value, ["schemaVersion", "exchanges", "readGrant", "readGrants"]))
+    return false;
   if (
     value.schemaVersion !== 1 ||
     !Array.isArray(value.exchanges) ||
@@ -228,8 +252,7 @@ function validTranscript(
     return false;
   return (
     new Set(value.exchanges.map((exchange: ChatToolExchange) => exchange.call.id)).size ===
-      value.exchanges.length &&
-    (value.readGrant === undefined || isChatToolReadGrantView(value.readGrant))
+      value.exchanges.length && validReadGrants(value, identity)
   );
 }
 export function decodeChatToolTranscript(
@@ -319,7 +342,11 @@ function applyUpdate(
   if (update.kind === "write-approval") return applyApproval(current, update, chatId, messageId);
   if (update.kind !== "read-consent") return applyExchange(current, update);
   if (update.grant.chatId !== chatId) throw invalidRequest("Tool consent Chat mismatch.");
-  return { ...current, readGrant: update.grant };
+  const grants = current.readGrants ?? (current.readGrant === undefined ? [] : [current.readGrant]);
+  const readGrants = grants.some((grant) => grant.kind === update.grant.kind)
+    ? grants.map((grant) => (grant.kind === update.grant.kind ? update.grant : grant))
+    : [...grants, update.grant];
+  return { ...current, readGrant: update.grant, readGrants };
 }
 
 function applyApproval(

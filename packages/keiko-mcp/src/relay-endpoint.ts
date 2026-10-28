@@ -18,9 +18,32 @@ interface RelayEndpoint {
   readonly close: () => Promise<void>;
 }
 
+async function uncertainMutation(context: ManagedMcpInvocationContext): Promise<void> {
+  try {
+    await context.onUncertainMutation?.();
+  } catch {
+    throw new ManagedMcpError("not-admitted");
+  }
+}
+
+function assertCurrent(
+  context: ManagedMcpInvocationContext | undefined,
+  active: () => boolean,
+  signal?: AbortSignal,
+): asserts context is ManagedMcpInvocationContext {
+  if (
+    !active() ||
+    context === undefined ||
+    context.signal.aborted ||
+    signal?.aborted === true ||
+    !context.beforeEffect()
+  )
+    throw new ManagedMcpError("not-admitted");
+}
+
 function relayServer(
   connection: ExternalMcpConnection,
-  allowed: ReadonlySet<string>,
+  allowed: ReadonlyMap<string, "read" | "write">,
   context: ManagedMcpInvocationContext | undefined,
   active: () => boolean,
 ): McpServer {
@@ -43,16 +66,19 @@ function relayServer(
         inputSchema: fromJsonSchema<CatalogJsonObject>(tool.inputSchema),
       },
       async (args, sdkContext) => {
-        if (!active() || context?.beforeEffect() !== true)
+        assertCurrent(context, active);
+        const mutation = allowed.get(tool.name) === "write";
+        if (mutation && context.onUncertainMutation === undefined)
           throw new ManagedMcpError("not-admitted");
         try {
           const signal = AbortSignal.any([context.signal, sdkContext.mcpReq.signal]);
           const result = await connection.call(tool.name, args, { ...context, signal });
-          if (!active() || signal.aborted || !context.beforeEffect())
-            throw new ManagedMcpError("not-admitted");
-          if (!isCallToolResult(result)) throw new ManagedMcpError("protocol-error");
+          assertCurrent(context, active, signal);
+          if (!isCallToolResult(result) || (mutation && result.isError === true))
+            throw new ManagedMcpError("protocol-error");
           return result;
         } catch {
+          if (mutation) await uncertainMutation(context);
           throw new ManagedMcpError("tool-error");
         }
       },
@@ -67,7 +93,7 @@ export function createMcpRelayEndpoint(
   allowed: Readonly<Record<string, "read" | "write">>,
 ): RelayEndpoint {
   const contexts = new AsyncLocalStorage<ManagedMcpInvocationContext>();
-  const admitted = new Set(Object.keys(allowed));
+  const admitted = new Map(Object.entries(allowed));
   let closed = false;
   const handler = createMcpHandler(
     () => relayServer(connection, admitted, contexts.getStore(), () => !closed),

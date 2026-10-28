@@ -196,6 +196,19 @@ only within the configured origin and resource directory. Local `.env` imports u
 literal parser, seal values in the existing vault and store references, never source file paths
 or file contents. Empty environment values remain non-secret literals.
 
+A Chat may use its bound Jira Pod and configured MCP servers in the same turn. Server
+composition recompiles their admitted descriptors into one catalog projection and uses one
+binder and one Chat tool loop. Provider adapters retain the existing credentials, grants,
+approvals and mutation journals; neither the model nor tool arguments choose an authority.
+Before execution, the existing authority registry atomically retains the complete source
+set for the canonical user message. Both envelopes must agree on actor, Chat, mode, ceiling,
+deadline and limits, and share the same cumulative usage object. Re-registration cannot add,
+remove or replace a source or reset its budget. Current facts for both sources are rechecked
+before model work and each effect; revocation terminates authority across the accepted set.
+The transcript retains one current read-consent view per source kind, with its legacy
+single `readGrant` field projecting the latest update. Existing single-source transcripts
+and execution paths remain valid.
+
 Mixed Chat turns create that same accepted-turn authority before continuity, memory and
 retrieval preparation. Existing grounding owners assemble their evidence packs before
 productive Jira orchestration. Every gateway attempt retains its cumulative token and
@@ -264,6 +277,18 @@ Server composition shares their connections and obtains credentials from the exi
 at the transport boundary. Native OpenCode reaches these connections through its existing,
 run-bound MCP relay; its configuration contains a revocable relay capability, never provider
 credentials. Disabling or changing a server invalidates that generation and its relay capabilities.
+
+A native managed MCP write requires the owning run's recovery callback before dispatch. A lost,
+malformed or error result after invoking the write, including observed cancellation, synchronously
+revokes all MCP relay capabilities for that run and asks the existing authority lifecycle to revoke
+and enter recovery. One run-local recovery promise prevents duplicate recovery actions; other runs
+and shared connections remain available. The existing active-run snapshot reconciliation handles
+restart admission. The existing lifecycle event queues `recovery-required` before revocation;
+the orchestrator persists that state and retains it across late stop/failure events. Recovery
+requires the existing explicit human acknowledgement and fresh-retry boundary. This is a
+conservative run barrier, not a durable per-invocation journal: an
+unobserved loss after the relay has completely written a successful response still requires stable
+OpenCode invocation correlation and remains outside this guarantee.
 
 A server-managed stdio provider runs outside the coding process's workspace sandbox. Its actions
 therefore use the external-effect policy, just like a managed HTTPS provider: Ask for approval and

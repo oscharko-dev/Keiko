@@ -153,14 +153,15 @@ function validAcceptedTurn(deps: JiraChatAuthorityDeps, turn: AcceptedJiraChatTu
   );
 }
 
-/** Normal turn settlement does not revoke this issuer; expiry/lifecycle retain that ownership. */
-export function mintAcceptedJiraChatAuthority(
+/** Validate a source before the accepted turn atomically retains its complete source set. */
+export function prepareAcceptedJiraChatAuthority(
   deps: JiraChatAuthorityDeps,
   turn: AcceptedJiraChatTurn,
-): AcceptedJiraChatAuthority {
+):
+  | { readonly ok: true; readonly envelope: JiraChatAuthorityEnvelope }
+  | Extract<AcceptedJiraChatAuthority, { ok: false }> {
   const facts = currentFacts(deps, turn.chatId);
-  const registry = deps.agentAuthorityRegistry;
-  if (!facts.ok || registry === undefined || !validAcceptedTurn(deps, turn))
+  if (!facts.ok || deps.agentAuthorityRegistry === undefined || !validAcceptedTurn(deps, turn))
     return recordChatAuthorityResult(
       "register",
       { ok: false, reason: "invalid" },
@@ -168,14 +169,26 @@ export function mintAcceptedJiraChatAuthority(
       turn.correlationId,
     );
   const ceiling = deps.autonomousDeliveryDeploymentCeiling ?? "governed-assist";
-  const envelope = acceptedTurnEnvelope(facts, turn, ceiling);
-  const result = registry.registerChat(
+  return { ok: true, envelope: acceptedTurnEnvelope(facts, turn, ceiling) };
+}
+
+/** Normal turn settlement does not revoke this issuer; expiry/lifecycle retain that ownership. */
+export function mintAcceptedJiraChatAuthority(
+  deps: JiraChatAuthorityDeps,
+  turn: AcceptedJiraChatTurn,
+): AcceptedJiraChatAuthority {
+  const prepared = prepareAcceptedJiraChatAuthority(deps, turn);
+  if (!prepared.ok) return prepared;
+  const { envelope } = prepared;
+  const result = deps.agentAuthorityRegistry?.registerChat(
     envelope,
-    ceiling,
+    envelope.deploymentCeiling,
     new Date(turn.nowMs).toISOString(),
     turn.correlationId,
   );
-  return result.ok ? { ok: true, envelope, reference: result.authorityRef } : result;
+  return result?.ok === true
+    ? { ok: true, envelope, reference: result.authorityRef }
+    : (result ?? { ok: false, reason: "invalid" });
 }
 
 function currentFacts(

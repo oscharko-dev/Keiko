@@ -530,7 +530,10 @@ export interface ChatToolExchange {
 export interface ChatToolTranscript {
   readonly schemaVersion: 1;
   readonly exchanges: readonly ChatToolExchange[];
+  /** Latest update retained for older clients and the existing consent event. */
   readonly readGrant?: ChatToolReadGrantView | undefined;
+  /** At most one current disclosure per source kind; older transcripts contain only readGrant. */
+  readonly readGrants?: readonly ChatToolReadGrantView[] | undefined;
 }
 
 export interface ChatMessage {
