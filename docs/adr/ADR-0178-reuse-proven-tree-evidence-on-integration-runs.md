@@ -102,10 +102,11 @@ architecture, Linux x64, or Windows x64 forces fresh execution. Its fixture is s
 post-merge portable workflow, while archive identity, staging, signing, and attestation remain
 release-specific proofs outside this reuse claim.
 
-The Firefox smoke matrix requires successful evidence for both exact names,
-`Firefox smoke (shard 1/2)` and `Firefox smoke (shard 2/2)`. Missing, failed, cancelled or skipped
-evidence for either leg forces fresh execution. A duplicate first leg, an unrelated name sharing
-the prefix or a successful `ui` aggregate cannot substitute for either partition.
+The Firefox smoke matrix requires successful evidence for all four exact names,
+`Firefox smoke (shard 1/4)`, `Firefox smoke (shard 2/4)`, `Firefox smoke (shard 3/4)` and
+`Firefox smoke (shard 4/4)`. Missing, failed, cancelled or skipped evidence for any leg forces fresh
+execution. A duplicate first leg, an unrelated name sharing the prefix or a successful `ui`
+aggregate cannot substitute for any partition.
 
 ### D3 — Every uncertainty runs the full matrix
 

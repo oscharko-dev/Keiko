@@ -1,4 +1,8 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
+import {
+  knowledgeCapturedExtentMembers,
+  knowledgeFinalExtentFailureMembers,
+} from "./__tests__/support/protocol-observation-mechanics.js";
 import type {
   LibraryParserTripleExpected,
   LibraryParserTripleFacts,
@@ -437,24 +441,10 @@ it.each(["source", "public"])("preserves captured extent observations through %s
     surface === "source" ? validateExtractionCheckpointRecord : publicValidateCheckpoint;
   for (const state of ["stable", "growth", "shrink", "invalid"]) {
     const trace: string[] = [];
-    let lengthReads = 0;
-    const members = new Proxy<unknown[]>(
+    const members = knowledgeCapturedExtentMembers(
       [{ severity: "info", code: "fixture", message: "fixture" }],
-      {
-        get(target, key): unknown {
-          if (key === "length") {
-            trace.push("length");
-            lengthReads += 1;
-            if (state === "invalid") return Number.NaN;
-            if (lengthReads > 1 && state === "growth") return 2;
-            if (lengthReads > 1 && state === "shrink") return 0;
-            return 1;
-          }
-          if (key === "0") trace.push("0");
-          const value: unknown = Reflect.get(target, key);
-          return value;
-        },
-      },
+      trace,
+      state,
     );
     const input = { ...baseCheckpoint(), terminalDiagnostics: members };
     const result = validate(input);
@@ -480,21 +470,10 @@ it.each(["source", "public"])("propagates final extent getter failure through %s
     surface === "source" ? validateExtractionCheckpointRecord : publicValidateCheckpoint;
   const trace: string[] = [];
   const refusal = new TypeError("fixture-final-extent");
-  let lengthReads = 0;
-  const members = new Proxy<unknown[]>(
+  const members = knowledgeFinalExtentFailureMembers(
     [{ severity: "info", code: "fixture", message: "fixture" }],
-    {
-      get(target, key): unknown {
-        if (key === "length") {
-          trace.push("length");
-          lengthReads += 1;
-          if (lengthReads === 2) throw refusal;
-        }
-        if (key === "0") trace.push("0");
-        const value: unknown = Reflect.get(target, key);
-        return value;
-      },
-    },
+    trace,
+    refusal,
   );
   const input = { ...baseCheckpoint(), terminalDiagnostics: members };
   let observed: unknown;
