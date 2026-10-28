@@ -283,6 +283,7 @@
   "gateway.readiness.automatic.completed": "model-gateway",
   "gateway.readiness.automatic.joined": "model-gateway",
   "gateway.readiness.automatic.started": "model-gateway",
+  "gateway.readiness.busy-retained": "model-gateway",
   "gateway.readiness.compatibility-retry": "model-gateway",
   "gateway.readiness.compatibility-retry.failed": "model-gateway",
   "gateway.readiness.compatibility-retry.skipped": "model-gateway",

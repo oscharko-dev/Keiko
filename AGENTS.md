@@ -1079,7 +1079,10 @@ responses cannot establish that continuation. Refusals distinguish model or
 generation replacement, absent observations, failed probes, invalid timestamps and expiry without
 recording model names, requests or answers. An uninvoked model port consumes no physical synthesis
 attempt or uncertain output reservation; actual interrupted provider calls retain conservative
-accounting. See [ADR-0171](docs/adr/ADR-0171-gateway-readiness-capability-reconciliation.md).
+accounting. A chat probe that only times out or meets a transient overload status keeps and renews
+a same-generation positive observation (`gateway.readiness.busy-retained`, a `provider-busy` warning
+diagnostic), so a busy single-slot model stays selectable (#4115). See
+[ADR-0171](docs/adr/ADR-0171-gateway-readiness-capability-reconciliation.md).
 
 `chat.scope.update` records a serialized source update as `applied` or `conflict` under the
 request correlation, with optional `expectedScopeDigest`, required `actualScopeDigest` and

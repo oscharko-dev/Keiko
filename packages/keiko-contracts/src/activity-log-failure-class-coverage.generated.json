@@ -23780,7 +23780,11 @@
       "lifecycleTransitions": ["end", "start", "state"],
       "lifecycleOperations": {
         "start": ["gateway.readiness.automatic.started", "gateway.readiness.started"],
-        "state": ["gateway.conversation.admission", "gateway.readiness.automatic.joined"],
+        "state": [
+          "gateway.conversation.admission",
+          "gateway.readiness.automatic.joined",
+          "gateway.readiness.busy-retained"
+        ],
         "end": ["gateway.readiness.automatic.completed", "gateway.readiness.completed"],
         "failure": [],
         "loss": []
@@ -23803,6 +23807,10 @@
           "mode": "correlation"
         },
         {
+          "op": "gateway.readiness.busy-retained",
+          "mode": "correlation"
+        },
+        {
           "op": "gateway.readiness.completed",
           "mode": "correlation"
         },
@@ -23817,6 +23825,7 @@
         "gateway.readiness.automatic.completed",
         "gateway.readiness.automatic.joined",
         "gateway.readiness.automatic.started",
+        "gateway.readiness.busy-retained",
         "gateway.readiness.completed",
         "gateway.readiness.started"
       ],
@@ -23993,6 +24002,36 @@
             "causeChain": false
           },
           "proofIds": ["gateway.readiness.automatic.started.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "gateway.readiness.busy-retained",
+          "owner": "keiko-server",
+          "category": "gateway",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "busySignal",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "modelIdDigest",
+              "type": "string",
+              "dataClass": "digest",
+              "required": false
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "digest", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["gateway.readiness.busy-retained.line"],
           "replayReferences": [],
           "missingObligations": []
         },

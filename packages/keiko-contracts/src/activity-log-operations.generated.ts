@@ -19648,6 +19648,44 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "gateway.readiness.busy-retained",
+    category: "gateway",
+    owner: "keiko-server",
+    emitter: "gateway-readiness.retainBusyConversationReadiness",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      modelIdDigest: {
+        type: "string",
+        dataClass: "digest",
+        required: false,
+        maxLength: 16,
+      },
+      busySignal: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["probe-timeout", "gateway-overloaded"],
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["gateway-readiness"],
+    proofIds: ["gateway.readiness.busy-retained.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "gateway.readiness.compatibility-retry",
     category: "gateway",
     owner: "keiko-model-gateway",
@@ -34850,7 +34888,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: false,
-        values: ["request-failed", "source-skipped", "request-refused"],
+        values: ["request-failed", "source-skipped", "request-refused", "provider-busy"],
       },
       validationReasons: {
         type: "string-array",
