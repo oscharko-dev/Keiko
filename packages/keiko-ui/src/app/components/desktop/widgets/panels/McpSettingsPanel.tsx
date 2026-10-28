@@ -76,7 +76,7 @@ function definition(
   const common = {
     name: form.name,
     description: previous?.description,
-    enabled: true,
+    enabled: previous?.enabled ?? true,
     discovery: "automatic" as const,
     tools: previous?.tools ?? {},
   };
@@ -194,7 +194,7 @@ async function submit(model: Model): Promise<void> {
     form.environmentFile === "" ? undefined : { [form.name]: form.environmentFile },
   );
   clearForm(model);
-  await connect(model, update.server.name);
+  if (update.server.enabled) await connect(model, update.server.name);
 }
 function edit(model: Model, server: McpServerDefinition): void {
   const transport = server.transport;
@@ -386,6 +386,8 @@ function LocalFields({ model, t }: ViewProps): ReactNode {
 }
 function McpForm({ model, t }: ViewProps): ReactNode {
   const { form, editing, busy, snapshot } = model.state;
+  const disabledServer =
+    snapshot?.servers.find((server) => server.name === editing)?.enabled === false;
   return (
     <form
       onSubmit={(event) => {
@@ -409,7 +411,9 @@ function McpForm({ model, t }: ViewProps): ReactNode {
           <LocalFields model={model} t={t} />
         )}
         <div className={styles.actions}>
-          <button type="submit">{t("settings.mcp.saveConnect")}</button>
+          <button type="submit">
+            {t(disabledServer ? "settings.mcp.save" : "settings.mcp.saveConnect")}
+          </button>
           {editing !== undefined && (
             <button type="button" onClick={() => clearForm(model)}>
               {t("settings.mcp.cancel")}

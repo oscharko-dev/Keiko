@@ -130,3 +130,24 @@ describe("MCP Settings", () => {
     expect(api).toHaveBeenCalledTimes(3);
   });
 });
+
+it("keeps a disabled server disabled when editing and does not start its transport", async () => {
+  const disabled = {
+    ...saved,
+    servers: saved.servers.map((server) => ({ ...server, enabled: false })),
+  };
+  api.mockResolvedValueOnce(disabled).mockResolvedValueOnce(disabled);
+  panel();
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  fireEvent.change(screen.getByLabelText("MCP endpoint (HTTPS)"), {
+    target: { value: "https://changed.example.test/mcp" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /^(Save|Save and connect)$/ }));
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Save and connect" })).toBeEnabled(),
+  );
+  const mutation = JSON.parse(String(api.mock.calls[1]?.[1]?.body)) as McpSettingsUpdate;
+  expect(mutation.servers[0]?.enabled).toBe(false);
+  expect(api).toHaveBeenCalledTimes(2);
+  expect(screen.getByText("Disabled")).toBeInTheDocument();
+});

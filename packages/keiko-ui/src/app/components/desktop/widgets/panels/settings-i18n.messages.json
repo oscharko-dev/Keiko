@@ -1342,5 +1342,9 @@
   "settings.tabs.mcp": {
     "en": "MCP",
     "de": "MCP"
+  },
+  "settings.mcp.save": {
+    "en": "Save",
+    "de": "Speichern"
   }
 }
