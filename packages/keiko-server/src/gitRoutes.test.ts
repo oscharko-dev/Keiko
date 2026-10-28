@@ -936,6 +936,47 @@ describe("GET /api/git/diff", () => {
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({ truncated: true, diff: "staged-outpu" });
   });
+
+  it("returns a tracked diff cut at the byte cap as truncated instead of failing (#4103)", async (): Promise<void> => {
+    // The real runner kills git once the output reaches the cap, so the result carries a signal
+    // and a non-zero exit. That cut is the intended bounded view, not a failed diff.
+    await runRealGit(["init", "--quiet"]);
+    await runRealGit(["config", "user.name", "Keiko Lab"]);
+    await runRealGit(["config", "user.email", "lab@keiko.invalid"]);
+    await runRealGit(["config", "commit.gpgsign", "false"]);
+    const rows = (field: string): string =>
+      Array.from(
+        { length: 16_000 },
+        (_, index) => `{ id: ${String(index)}, ${field}: ${String(index)} },`,
+      ).join("\n");
+    await writeFile(join(root, "stations.ts"), `${rows("elevationM")}\n`, "utf8");
+    await runRealGit(["add", "stations.ts"]);
+    await runRealGit(["commit", "--quiet", "-m", "baseline"]);
+    await writeFile(join(root, "stations.ts"), `${rows("elevationMeters")}\n`, "utf8");
+    // Identity redaction isolates the byte-cap behaviour from source redaction of the hunks.
+    const routeDeps = deps(defaultGitProcessRunner, (value) => value);
+
+    const raw = await handleGitDiff(
+      ctx(`/api/git/diff?root=${encodeURIComponent(root)}&scope=worktree`),
+      routeDeps,
+      {
+        runner: defaultGitProcessRunner,
+        maxDiffBytes: 4_096,
+        maxStatusBytes: 4_096,
+        maxChanges: 10,
+      },
+    );
+    expect(raw.status).toBe(200);
+    expect(raw.body).toMatchObject({ available: true, truncated: true });
+    expect(raw.body).toHaveProperty("diff", expect.stringContaining("diff --git a/stations.ts"));
+
+    const structured = await handleGitStructuredDiff(
+      ctx(`/api/git/diff/structured?root=${encodeURIComponent(root)}&scope=unstaged`),
+      routeDeps,
+    );
+    expect(structured.status).toBe(200);
+    expect(structured.body).toMatchObject({ truncated: true });
+  });
 });
 
 describe("GET /api/git/diff/structured", () => {

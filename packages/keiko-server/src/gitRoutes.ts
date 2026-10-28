@@ -1101,6 +1101,23 @@ function normalizeNoIndexDiff(
     : result;
 }
 
+/**
+ * The runner kills git once its output reaches the byte cap, so a large tracked diff ends with a
+ * signal and a non-zero exit. That cut is the bounded, truncated view the routes report, not a
+ * failed diff (#4103). A timeout, an abort, a refusal or any git error output stays a failure.
+ */
+function byteCapCutAsBoundedDiff(result: GitProcessResult): GitProcessResult {
+  const cutAtByteCap =
+    result.exitCode !== 0 &&
+    result.truncated &&
+    result.timedOut !== true &&
+    result.aborted !== true &&
+    result.refusal === undefined &&
+    result.stderr.length === 0 &&
+    result.stdout.startsWith("diff --git ");
+  return cutAtByteCap ? { ...result, exitCode: 0 } : result;
+}
+
 async function runSnapshotDiff(
   options: NormalizedGitRouteOptions,
   path: string,
@@ -1199,7 +1216,9 @@ async function runDiff(
   if (staged) args.push("--cached");
   const relativePath = gitPath(repo.selectedRootPrefix, path);
   if (relativePath !== undefined) args.push("--", literalGitPathspec(relativePath));
-  const result = await options.runner(args, gitProcessOptions(repo, options, maxBytes));
+  const result = byteCapCutAsBoundedDiff(
+    await options.runner(args, gitProcessOptions(repo, options, maxBytes)),
+  );
   if (
     staged ||
     path === undefined ||
