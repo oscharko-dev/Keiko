@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { mcpToolAction } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 
 import { parseCodingSidecarEventLine } from "./codingSidecarEventParser.js";
 
@@ -272,6 +273,24 @@ describe("parseCodingSidecarEventLine native action (#3897)", () => {
     expect(absent.status).toBe("parsed");
     if (absent.status !== "parsed" || absent.event.type !== "permission-request") throw new Error();
     expect(absent.event).not.toHaveProperty("nativeAction");
+  });
+
+  it("retains a complete MCP identity across the private sidecar event boundary", () => {
+    const permission = mcpToolAction("s".repeat(64), "t".repeat(64));
+    const event = { ...NATIVE_ASK, nativeAction: { permission, resources: ["*"] } };
+    expect(parseCodingSidecarEventLine(JSON.stringify(event))).toMatchObject({
+      status: "parsed",
+      event: { nativeAction: { permission } },
+    });
+    for (const invalid of ["x".repeat(65), `${permission}x`, `${"s".repeat(65)}_tool`])
+      expect(
+        parseCodingSidecarEventLine(
+          JSON.stringify({
+            ...event,
+            nativeAction: { permission: invalid, resources: ["*"] },
+          }),
+        ),
+      ).toEqual({ status: "invalid" });
   });
 
   it("rejects a malformed native action instead of dropping it silently", () => {

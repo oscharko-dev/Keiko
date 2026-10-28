@@ -52,7 +52,58 @@ function context(): import("@oscharko-dev/keiko-contracts/runtime/managed-mcp").
   };
 }
 
+function probeRequest(): Request {
+  return new Request("https://relay.example.test/mcp", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+      "mcp-protocol-version": "2025-03-26",
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "probe", arguments: {} },
+    }),
+  });
+}
+
 describe("configured MCP connections", () => {
+  it("never installs a stale connection's endpoint on its replacement generation", async () => {
+    const f = fixture();
+    const dispatch = vi.fn(() => Promise.resolve({ content: [{ type: "text", text: "fresh" }] }));
+    const manager = createConfiguredMcpConnections({
+      settings: f.store,
+      stateDir: f.root,
+      log: { write: () => undefined },
+      egress: () => undefined,
+      connect: () => Promise.resolve({ tools, call: dispatch, close: () => Promise.resolve() }),
+    });
+    managers.push(manager);
+    const first = manager.connect("notes", "test");
+    // Rotate after discovery resolves, but before the suspended serve resumes.
+    const replacement = first.then(() => {
+      f.store.update(
+        {
+          expectedRevision: f.store.read("test").revision,
+          servers: [{ ...f.server, tools: { probe: "write" } }],
+          secrets: {},
+        },
+        "test",
+      );
+      return manager.connect("notes", "test");
+    });
+    const stale = manager.serve("notes", probeRequest(), context());
+    const observed = Promise.allSettled([stale]);
+    await replacement;
+    const response = await manager.serve("notes", probeRequest(), context());
+    expect(await response.text()).toContain('"text":"fresh"');
+    expect(await observed).toMatchObject([
+      { status: "rejected", reason: { reason: "not-admitted" } },
+    ]);
+    expect(dispatch).toHaveBeenCalledTimes(1);
+  });
   it("shares a connection, immediately revokes it on disable, and never reuses it after re-enable", async () => {
     const f = fixture();
     const options: ExternalMcpClientOptions[] = [];

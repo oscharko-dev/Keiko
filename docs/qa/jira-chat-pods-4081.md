@@ -2718,3 +2718,18 @@ Ordinary Chat consumption of configured external MCP tools is still being integr
 checkpoint does not accept all 55 original criteria, qualify every transport/model combination,
 or establish durable mutation/restart safety for the new native path. The PR remains open and
 not merge-ready, with auto-merge disabled.
+
+### Native MCP follow-up: replacement races and complete private action identities
+
+An independent review reproduced a replacement race: a request awaiting an older connection
+could attach its endpoint to the new entry with the same server name. The relay now captures
+the owning entry before awaiting it; the revoked request fails and the replacement remains
+usable. A deterministic old/new-generation regression fails before and passes after the fix.
+
+The private native policy, sidecar parser and review also capped permission names at 64
+characters, although an admitted MCP server/tool pair can legitimately form a 129-character
+native identity. These three private boundaries now share the existing bounded MCP name
+grammar. Unrelated overlong permission names remain refused; the public fixed `mcp` evidence
+projection is unchanged. All four new regressions failed before the fixes. The six focused
+contract/server suites pass 298 tests; scoped lint, formatting and contract build pass.
+Complete final qualification remains pending.

@@ -252,12 +252,12 @@ export function createConfiguredMcpConnections(options: Options): ConfiguredMcpC
   const manager: ConfiguredMcpConnections = {
     generation: (server, correlationId) => currentGeneration(options, server, correlationId),
     serve: async (name, request, context): Promise<Response> => {
-      const connection = await manager.connect(name, context.correlationId);
-      return endpointFor(
-        connections.get(name),
-        connection,
-        currentServer(options, name, context.correlationId),
-      ).fetch(request, context);
+      const pending = manager.connect(name, context.correlationId);
+      // Keep the endpoint with the generation that owns this pending connection.
+      const entry = connections.get(name);
+      const connection = await pending;
+      const server = currentServer(options, name, context.correlationId);
+      return endpointFor(entry, connection, server).fetch(request, context);
     },
     connect: (name, correlationId): Promise<ExternalMcpConnection> => {
       if (lifetime.signal.aborted) return Promise.reject(new ManagedMcpError("closed"));

@@ -4,8 +4,8 @@
 // own: a consumer admits a server only within its own authority and mode, and an MCP tool the
 // registry does not name is never callable.
 //
-// The grammar is closed. A server name is a short lowercase word (no `_`, so the runtime's
-// `<server>_<tool>` action name splits unambiguously); a local server is an absolute executable
+// The grammar is closed. Server names are bounded lowercase identifiers; colliding native
+// `<server>_<tool>` action names are refused across the registry. A local server is an absolute executable
 // with literal arguments; a remote server is an `https` URL; every tool the server may expose is
 // named with its declared risk. No credential is part of this registry: an environment value is a
 // literal the operator writes, and a remote server's credential header names only the
@@ -17,6 +17,7 @@ export const MCP_SERVER_MAX = 16;
 export const MCP_SERVER_TOOL_MAX = 64;
 const MCP_SERVER_NAME = /^[a-z][a-z0-9_-]{0,63}$/u;
 const MCP_TOOL_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/u;
+const MCP_NATIVE_TOOL_ACTION = /^[a-z][a-z0-9_-]{0,63}_[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u;
 const MCP_ENVIRONMENT_NAME = /^[A-Z][A-Z0-9_]{0,63}$/u;
 const MCP_ARGUMENT_MAX = 32;
 const MCP_TEXT_MAX = 1024;
@@ -403,6 +404,11 @@ function admitUniqueActions(server: McpServerDefinition, actions: Set<string>): 
  */
 export function mcpToolAction(server: string, tool: string): string {
   return `${server}_${tool.replaceAll(/[^A-Za-z0-9_-]/gu, "_")}`;
+}
+
+/** A private native identity may contain both bounded names; admission still requires its exact grant. */
+export function isMcpToolActionName(value: unknown): value is string {
+  return typeof value === "string" && value.length <= 129 && MCP_NATIVE_TOOL_ACTION.test(value);
 }
 
 /** The admitted actions of the enabled servers, each with its declared risk and transport. */

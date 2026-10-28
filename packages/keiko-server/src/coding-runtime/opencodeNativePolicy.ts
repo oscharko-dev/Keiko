@@ -15,6 +15,7 @@ import {
   isCodingWorkbenchMode,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS } from "@oscharko-dev/keiko-contracts/runtime/tools";
+import { isMcpToolActionName } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 import {
   activityLogEvent,
   defineActivityLogOperation,
@@ -789,7 +790,11 @@ function parseIdentity(
   const { runId, sessionID, permission } = record;
   if (typeof runId !== "string" || !RUN_ID.test(runId)) return undefined;
   if (typeof sessionID !== "string" || !SESSION_ID.test(sessionID)) return undefined;
-  if (typeof permission !== "string" || permission.length === 0 || permission.length > 64)
+  if (
+    typeof permission !== "string" ||
+    permission.length === 0 ||
+    (permission.length > 64 && !isMcpToolActionName(permission))
+  )
     return undefined;
   return { runId, sessionID, permission };
 }

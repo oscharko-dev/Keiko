@@ -26,6 +26,7 @@ import {
   openCodeNativeVerificationKind,
 } from "./opencodeNativePolicy.js";
 import { openCodeNativeMcpAdmission } from "./opencodeNativeMcp.js";
+import { mcpToolAction } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -69,6 +70,20 @@ function effectOf(mode: string, permission: string, resources: readonly string[]
 }
 
 describe("native policy request parsing", () => {
+  it("accepts the complete bounded MCP permission identity without allowing arbitrary long names", () => {
+    const permission = mcpToolAction("s".repeat(64), "t".repeat(64));
+    const body = {
+      action: "native-policy",
+      ...request(permission, ["*"]),
+      source: { type: "tool", messageID: "msg_1", id: "call_1" },
+    };
+    expect(
+      parseOpenCodeNativePolicyRequest({ ...body, permission: "notes_probe" })?.permission,
+    ).toBe("notes_probe");
+    expect(parseOpenCodeNativePolicyRequest(body)?.permission).toBe(permission);
+    for (const invalid of ["x".repeat(65), `${permission}x`, `${"s".repeat(65)}_tool`])
+      expect(parseOpenCodeNativePolicyRequest({ ...body, permission: invalid })).toBeUndefined();
+  });
   it("accepts the plugin's bounded ask and refuses every other shape", () => {
     const body = {
       action: "native-policy",

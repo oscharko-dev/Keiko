@@ -20,6 +20,7 @@ import {
   parseSupervisedCodingApprovalClaim,
   type SupervisedCodingApprovalClaim,
 } from "./supervisedCodingApprovalStore.js";
+import { isMcpToolActionName } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 
 const APPROVAL_DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
 
@@ -158,7 +159,10 @@ function optionalNativeAction(
   const value = record.nativeAction;
   if (!isRecord(value) || Object.keys(value).length !== 2) return undefined;
   const { permission, resources } = value;
-  if (typeof permission !== "string" || !NATIVE_ACTION_PERMISSION.test(permission))
+  if (
+    typeof permission !== "string" ||
+    (!NATIVE_ACTION_PERMISSION.test(permission) && !isMcpToolActionName(permission))
+  )
     return undefined;
   if (
     !Array.isArray(resources) ||
