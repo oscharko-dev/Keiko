@@ -333,6 +333,23 @@ installed Keiko upgrade, original runtime restart, Authenticode release chain or
 the image is mapped as executable code but is not a running installed Keiko process. W13 remains
 partial, and gateway, source-approval and Windows npm publication blockers are unchanged.
 
+### UI source-evidence CI repair
+
+CI run [40759101186](https://github.com/oscharko-dev/Keiko/actions/runs/40759101186) on the preceding
+head `53fdbc5be` reports 11,785 UI tests passed, one failed and one skipped. Its sole failure is the
+source-input binding in `globals.css.test.ts`: the earlier Windows npm launcher repair changed the
+shared `host-executable.mjs`, invalidating all four visual proof documents. The exact test also
+fails locally before repair. The original component, editor, accessibility and running-app producers
+were executed again on Windows with the pinned Chromium; all pass, including 427 component probes,
+14 editor reference captures, seven accessibility modes and 108 running-app screenshots. The full
+stylesheet/evidence suite then passes **281/281**. No source hash was manually rebound and no
+producer, fixture, inventory or assertion was relaxed. The evidence and environment are recorded in
+[the existing producer record](../design-system/evidence/1300/README.md).
+
+These are seeded static-export UI fixtures, not a working model-backed Windows Workbench or an
+installed update qualification. The source-approval and gateway/service blockers remain. The earlier
+CI run is not evidence for the new commit; required CI must rerun on its exact head.
+
 ## Revalidation on 2026-10-27
 
 The continuation starts from PR #4088 head `475e91a3f9745a70a3371400c9fe265adf363bae` and

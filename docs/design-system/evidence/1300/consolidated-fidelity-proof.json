@@ -108,7 +108,7 @@
     },
     {
       "path": "scripts/lib/host-executable.mjs",
-      "sha256": "bd0f5e8cb05c8f3e5c57414c6da6e437b1b3848400d2b101bd0e6f8eff494d86"
+      "sha256": "bcf519f7f10372d45fcf5f5052a366b94f11f4f723269dca1f370d3d4d31f157"
     },
     {
       "path": "scripts/lib/ui-browser-evidence.mjs",
@@ -139,9 +139,9 @@
     "keiko-nav.css": "a84751a5e33b29484e57914c3d13bb9c165e9ea8bf2c2a5192bbb2e6db8be71b"
   },
   "run": {
-    "startedAt": "2026-10-27T21:10:36.338Z",
-    "generatedAt": "2026-10-27T21:10:39.038Z",
-    "repoHeadSha": "f3c668b501a855649795c1cc66cf63525511d1c0"
+    "startedAt": "2026-10-28T20:23:53.765Z",
+    "generatedAt": "2026-10-28T20:23:57.682Z",
+    "repoHeadSha": "53fdbc5be7aed21c4024f1df2bd90f6b2907998b"
   },
   "tolerance": "≤1 LSB per sRGB channel (canvas-normalised)",
   "groupR": {
@@ -395,9 +395,9 @@
   "boundedRowSmoke": {
     "ok": true,
     "rowCount": 250,
-    "durationMs": 0.10000002384185791,
-    "afterScrollTop": 8363,
-    "scrollHeight": 8783,
+    "durationMs": 0.2000000011175871,
+    "afterScrollTop": 8613,
+    "scrollHeight": 9033,
     "clientHeight": 420,
     "stickyHeaderDeltaPx": 0
   },

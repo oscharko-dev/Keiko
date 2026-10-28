@@ -156,3 +156,21 @@ probes, zero gated differences and all 14 reference captures, the seven-mode acc
 serious/critical violations and zero unresolved incomplete findings, and all 108 running-app
 captures with zero page errors, unexpected API requests, missing selectors, crashed windows or
 unavailable workspace-trust states. No gate, fixture or rule was changed.
+
+## Windows tooling qualification — 2026-10-28
+
+The Windows npm launcher repair for #4068 changes the shared `host-executable.mjs` producer
+input. The UI coverage job on `53fdbc5be` correctly rejected the stale source bindings; the exact
+`globals.css.test.ts` source-input test reproduced locally before regeneration. All four original
+producers were then rerun on Windows x64 with Node 24.18.0, npm 11.16.0 and the repository-pinned
+Playwright Chromium. Component fidelity retains 427 probes with zero gated or recorded differences;
+editor token fidelity retains zero gated differences and all 14 reference captures; the seven-mode
+accessibility proof retains zero serious/critical violations and zero unresolved incomplete findings.
+The fresh static export and all 108 running-app captures pass with zero page errors, unexpected API
+requests, missing selectors, visible error notices, crashed windows or unavailable trust states.
+
+The complete `globals.css.test.ts` suite passes after regeneration (281 tests). The four producer
+programs, source-input inventory, fixtures and assertions are unchanged. Captures now reflect this
+Windows host's rendering and German UI locale; the emitted CSS bundle digest is measured from its
+fresh build. This refresh proves the seeded UI fixtures and source bindings, not an installed
+Windows Coding Workbench, a model task or a new human designer acceptance.

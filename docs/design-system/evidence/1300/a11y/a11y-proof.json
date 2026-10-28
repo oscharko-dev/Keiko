@@ -109,7 +109,7 @@
     },
     {
       "path": "scripts/lib/host-executable.mjs",
-      "sha256": "bd0f5e8cb05c8f3e5c57414c6da6e437b1b3848400d2b101bd0e6f8eff494d86"
+      "sha256": "bcf519f7f10372d45fcf5f5052a366b94f11f4f723269dca1f370d3d4d31f157"
     },
     {
       "path": "scripts/lib/ui-browser-evidence.mjs",
@@ -122,8 +122,8 @@
   ],
   "postCssSha256": "6c8f21880aea2f6ab15c371bd7541e5fd3494f2bdfe37408153d9e4691663562",
   "run": {
-    "generatedAt": "2026-10-27T21:14:29.993Z",
-    "repoHeadSha": "f3c668b501a855649795c1cc66cf63525511d1c0"
+    "generatedAt": "2026-10-28T20:24:13.206Z",
+    "repoHeadSha": "53fdbc5be7aed21c4024f1df2bd90f6b2907998b"
   },
   "gate": "zero serious/critical violations, zero undispositioned axe incomplete rules, and deterministic focus/name/keyboard/motion/forced-colors checks passing in every theme/contrast/motion mode",
   "coverage": "contrast (color-contrast), name/role/value (aria-*, label, button-name, link-name), keyboard semantics (tablist/grid/listbox roles), reduced-motion, forced-colors, prefers-contrast",
