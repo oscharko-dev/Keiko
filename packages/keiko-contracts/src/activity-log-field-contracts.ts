@@ -483,3 +483,28 @@ export function activityLogLossSummaryFields(): Readonly<ActivityLogLossSummaryF
     summaryWriteFailed: activityLogCountField(false),
   };
 }
+
+/** The seven workspace-I/O observations shared by completion details and failed search. */
+export interface ActivityLogWorkspaceIoFields<Required extends boolean> {
+  readonly workspaceIoReadDirCalls: Readonly<ActivityLogCountFieldContract<Required>>;
+  readonly workspaceIoReadDirEntries: Readonly<ActivityLogCountFieldContract<Required>>;
+  readonly workspaceIoStatCalls: Readonly<ActivityLogCountFieldContract<Required>>;
+  readonly workspaceIoRealPathCalls: Readonly<ActivityLogCountFieldContract<Required>>;
+  readonly workspaceIoExistsCalls: Readonly<ActivityLogCountFieldContract<Required>>;
+  readonly workspaceIoContentReadCalls: Readonly<ActivityLogCountFieldContract<Required>>;
+  readonly workspaceIoContentReadBytes: Readonly<ActivityLogCountFieldContract<Required>>;
+}
+
+export function activityLogWorkspaceIoFields<const Required extends boolean>(
+  required: Required,
+): Readonly<ActivityLogWorkspaceIoFields<Required>> {
+  return {
+    workspaceIoReadDirCalls: activityLogCountField(required),
+    workspaceIoReadDirEntries: activityLogCountField(required),
+    workspaceIoStatCalls: activityLogCountField(required),
+    workspaceIoRealPathCalls: activityLogCountField(required),
+    workspaceIoExistsCalls: activityLogCountField(required),
+    workspaceIoContentReadCalls: activityLogCountField(required),
+    workspaceIoContentReadBytes: activityLogCountField(required),
+  };
+}

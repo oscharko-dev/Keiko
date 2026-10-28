@@ -5,6 +5,7 @@ import {
   activityLogAutomaticCatalogFields,
   activityLogEmbeddingBatchRetryFields,
   activityLogCommitDraftModelFields,
+  activityLogWorkspaceIoFields,
   activityLogLossSummaryFields,
   activityLogCompletenessField,
   activityLogLossField,
@@ -667,5 +668,65 @@ describe("loss-summary field policy construction", () => {
     expect(second.trigger.values).toEqual(["heartbeat", "exit"]);
     expect(second.totalLost.required).toBe(true);
     expect(activityLogLossSummaryFields()).toEqual(second);
+  });
+});
+
+const EXPECTED_WORKSPACE_IO_NAMES = [
+  "workspaceIoReadDirCalls",
+  "workspaceIoReadDirEntries",
+  "workspaceIoStatCalls",
+  "workspaceIoRealPathCalls",
+  "workspaceIoExistsCalls",
+  "workspaceIoContentReadCalls",
+  "workspaceIoContentReadBytes",
+] as const;
+
+type ExpectedWorkspaceIoFields<Required extends boolean> = Readonly<
+  Record<
+    (typeof EXPECTED_WORKSPACE_IO_NAMES)[number],
+    {
+      readonly type: "integer";
+      readonly dataClass: "count";
+      readonly required: Required;
+    }
+  >
+>;
+
+describe("workspace-I/O field policy construction", () => {
+  it.each([true, false] as const)(
+    "retains exactly seven ordered count policies with required=%s",
+    (required): void => {
+      const fields = activityLogWorkspaceIoFields(required);
+      expectOrdinaryDescriptor(fields, EXPECTED_WORKSPACE_IO_NAMES);
+      for (const name of EXPECTED_WORKSPACE_IO_NAMES) {
+        expect(fields[name]).toEqual({ type: "integer", dataClass: "count", required });
+        expectOrdinaryDescriptor(fields[name], ["type", "dataClass", "required"]);
+      }
+    },
+  );
+
+  it("preserves the literal requiredness and closed readonly keys in both variants", (): void => {
+    const required = activityLogWorkspaceIoFields(true);
+    const optional = activityLogWorkspaceIoFields(false);
+    expectTypeOf(required).toEqualTypeOf<ExpectedWorkspaceIoFields<true>>();
+    expectTypeOf(optional).toEqualTypeOf<ExpectedWorkspaceIoFields<false>>();
+    const requiredRecord: Record<string, unknown> = required;
+    const optionalRecord: Record<string, unknown> = optional;
+    expect(requiredRecord).toBe(required);
+    expect(optionalRecord).toBe(optional);
+  });
+
+  it("allocates every descriptor independently within and across both policies", (): void => {
+    const first = activityLogWorkspaceIoFields(true);
+    const second = activityLogWorkspaceIoFields(true);
+    const optional = activityLogWorkspaceIoFields(false);
+    expect(first).not.toBe(second);
+    expect(
+      new Set([...Object.values(first), ...Object.values(second), ...Object.values(optional)]).size,
+    ).toBe(21);
+    expect(Reflect.set(first.workspaceIoReadDirCalls, "required", false)).toBe(true);
+    expect(second.workspaceIoReadDirCalls.required).toBe(true);
+    expect(optional.workspaceIoReadDirCalls.required).toBe(false);
+    expect(activityLogWorkspaceIoFields(true)).toEqual(second);
   });
 });

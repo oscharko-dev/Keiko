@@ -84,6 +84,7 @@ import {
   isActivityLogDiagnosticWhen,
 } from "../packages/keiko-contracts/dist/observability.js";
 import {
+  activityLogWorkspaceIoFields,
   activityLogLossSummaryFields,
   activityLogCommitDraftModelFields,
   activityLogAutomaticCatalogFields,
@@ -587,6 +588,7 @@ const FIELD_CONSTRUCTORS = {
   activityLogStringEnumField,
   ...BOUNDED_FIELD_CONSTRUCTORS,
 };
+const PARAMETERIZED_FIELD_BUNDLES = { activityLogWorkspaceIoFields };
 const GLOBAL_FIELD_CONSTRUCTORS = {
   activityLogCompletenessField,
   activityLogLossField,
@@ -621,7 +623,8 @@ function canonicalFieldConstructor(checker, call, repoRoot) {
     return undefined;
   const name = declaration.name.text;
   return Object.hasOwn(ZERO_ARGUMENT_FIELD_CONSTRUCTORS, name) ||
-    Object.hasOwn(FIELD_CONSTRUCTORS, name)
+    Object.hasOwn(FIELD_CONSTRUCTORS, name) ||
+    Object.hasOwn(PARAMETERIZED_FIELD_BUNDLES, name)
     ? name
     : undefined;
 }
@@ -716,7 +719,8 @@ function literalFieldConstructor(call, checker, repoRoot, seen) {
     fieldArgumentValue(argument, checker, seen, budget),
   );
   if (!validFieldConstructorArguments(name, args)) return undefined;
-  return FIELD_CONSTRUCTORS[name](...args);
+  const construct = PARAMETERIZED_FIELD_BUNDLES[name] ?? FIELD_CONSTRUCTORS[name];
+  return construct(...args);
 }
 
 function literalRegistryValue(expression, checker, repoRoot, seen = new Set()) {
@@ -1939,7 +1943,43 @@ function runtimeFieldBundle(operation, fields, prefix) {
   return undefined;
 }
 
+function workspaceIoRuntimeRequired(operation) {
+  if (operation.op === "search.connected-context.completion-details") return false;
+  if (operation.op === "search.connected-context.failed") return true;
+  return undefined;
+}
+
+function renderedWorkspaceIoRuntimeFields(operation, fields) {
+  const required = workspaceIoRuntimeRequired(operation);
+  if (required === undefined) return undefined;
+  const expected = activityLogWorkspaceIoFields(required);
+  const segment = Reflect.ownKeys(expected);
+  const keys = Reflect.ownKeys(fields);
+  const entries = Object.entries(fields);
+  if (entries.length !== keys.length) return undefined;
+  const start = keys.indexOf(segment[0]);
+  if (
+    start < 0 ||
+    !segment.every(
+      (key, index) => keys[start + index] === key && equalDescriptor(fields[key], expected[key]),
+    )
+  )
+    return undefined;
+  const render = ([name, descriptor]) =>
+    `${JSON.stringify(name)}: ${renderedFieldDescriptor(descriptor)}`;
+  const leading = entries.slice(0, start).map(render);
+  const trailing = entries.slice(start + segment.length).map(render);
+  const renderedFields = [
+    ...leading,
+    `...activityLogWorkspaceIoFields(${String(required)})`,
+    ...trailing,
+  ];
+  return `{${renderedFields.join(",")}}`;
+}
+
 function renderedRuntimeFields(operation, fields) {
+  const workspaceIoFields = renderedWorkspaceIoRuntimeFields(operation, fields);
+  if (workspaceIoFields !== undefined) return workspaceIoFields;
   const draftFields = renderedCommitDraftRuntimeFields(operation, fields);
   if (draftFields !== undefined) return draftFields;
   const prefix = ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS;
@@ -1972,6 +2012,7 @@ export function runtimeOperationsModule(typedRegistry) {
     'import * as fieldContracts from "./activity-log-field-contracts.js";',
     `import { ${[
       ...Object.keys(ZERO_ARGUMENT_FIELD_CONSTRUCTORS),
+      ...Object.keys(PARAMETERIZED_FIELD_BUNDLES),
       ...Object.keys(FIELD_CONSTRUCTORS).filter(
         (name) => !Object.hasOwn(BOUNDED_FIELD_CONSTRUCTORS, name),
       ),

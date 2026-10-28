@@ -2619,3 +2619,136 @@ describe("canonical loss-summary field policy admission", () => {
     );
   });
 });
+
+const WORKSPACE_IO_FIELD_IMPORT =
+  'import { activityLogWorkspaceIoFields as workspaceFields } from "../../keiko-contracts/src/activity-log-field-contracts.js";';
+const WORKSPACE_IO_LOOKALIKE =
+  'import type { ActivityLogWorkspaceIoFields } from "../../keiko-contracts/src/activity-log-field-contracts.js";\nfunction activityLogWorkspaceIoFields<const R extends boolean>(required: R): Readonly<ActivityLogWorkspaceIoFields<R>> { return {\n  workspaceIoReadDirCalls: { type: "integer", dataClass: "count", required },\n  workspaceIoReadDirEntries: { type: "integer", dataClass: "count", required },\n  workspaceIoStatCalls: { type: "integer", dataClass: "count", required },\n  workspaceIoRealPathCalls: { type: "integer", dataClass: "count", required },\n  workspaceIoExistsCalls: { type: "integer", dataClass: "count", required },\n  workspaceIoContentReadCalls: { type: "integer", dataClass: "count", required },\n  workspaceIoContentReadBytes: { type: "integer", dataClass: "count", required },\n}; }';
+
+describe("canonical workspace-I/O seven-field policy admission", () => {
+  it.each(["workspaceFields(true)", "{ ...workspaceFields(false) }", "workspaceFields(required)"])(
+    "admits the canonical closed boolean policy: %s",
+    (expression) => {
+      inspectAutomaticCatalogFields(
+        expression,
+        (registry) => {
+          expect(registry.operations).toHaveLength(1);
+          const fields = registry.operations[0].fields;
+          const names = [
+            "workspaceIoReadDirCalls",
+            "workspaceIoReadDirEntries",
+            "workspaceIoStatCalls",
+            "workspaceIoRealPathCalls",
+            "workspaceIoExistsCalls",
+            "workspaceIoContentReadCalls",
+            "workspaceIoContentReadBytes",
+          ];
+          expect(Object.keys(fields).slice(-7)).toEqual(names);
+          const required = expression === "workspaceFields(true)";
+          for (const name of names) {
+            expect(fields[name]).toEqual({ type: "integer", dataClass: "count", required });
+          }
+        },
+        WORKSPACE_IO_FIELD_IMPORT + "\nconst required = false;",
+      );
+    },
+  );
+
+  it.each([
+    ["workspaceFields()", ""],
+    ["workspaceFields(true, false)", ""],
+    ['workspaceFields("true")', ""],
+    ["workspaceFields(...args)", "const args = [true] as const;"],
+    ["workspaceFields(dynamic())", "function dynamic(): boolean { return true; }"],
+    ["workspaceFields(cycle)", "const cycle = cycle;"],
+    ["selected(true)", "let selected = workspaceFields;"],
+    ["holder.workspaceFields(true)", "const holder = { workspaceFields };"],
+  ])("refuses unsupported boolean policy syntax: %s", (expression, prelude) => {
+    inspectAutomaticCatalogFields(
+      expression,
+      (registry) => {
+        expect(registry.operations).toEqual([]);
+        expect(registry.violations).toContainEqual(
+          expect.objectContaining({ code: "registration-not-literal" }),
+        );
+      },
+      WORKSPACE_IO_FIELD_IMPORT + "\n" + prelude,
+    );
+  });
+
+  it.each(["local", "foreign"])(
+    "refuses a compile-shaped %s declaration instead of the canonical symbol",
+    (kind) => {
+      const prelude =
+        kind === "local"
+          ? WORKSPACE_IO_LOOKALIKE
+          : 'import { activityLogWorkspaceIoFields } from "./workspace-lookalike.js";';
+      inspectAutomaticCatalogFields(
+        "activityLogWorkspaceIoFields(true)",
+        (registry) => {
+          expect(registry.operations).toEqual([]);
+          expect(registry.violations).toContainEqual(
+            expect.objectContaining({ code: "registration-not-literal" }),
+          );
+          expect(
+            registry.violations.some((violation) => violation.code === "typescript-diagnostic"),
+          ).toBe(false);
+        },
+        prelude,
+        {
+          "packages/zzz-fixture-diagnostic/src/workspace-lookalike.ts":
+            WORKSPACE_IO_LOOKALIKE.replace(
+              "function activityLogWorkspaceIoFields",
+              "export function activityLogWorkspaceIoFields",
+            ),
+        },
+      );
+    },
+  );
+});
+
+it("retains the existing finite argument-work refusal for the workspace-I/O boolean", () => {
+  const declarations = ["const required0 = true;"];
+  for (let index = 1; index <= 260; index += 1) {
+    declarations.push(`const required${String(index)} = required${String(index - 1)};`);
+  }
+  inspectAutomaticCatalogFields(
+    "workspaceFields(required260)",
+    (registry) => {
+      expect(registry.operations).toEqual([]);
+      expect(registry.violations).toContainEqual(
+        expect.objectContaining({ code: "registration-not-literal" }),
+      );
+    },
+    WORKSPACE_IO_FIELD_IMPORT + "\n" + declarations.join("\n"),
+  );
+});
+
+it("retains the canonical symbol through the existing observability reexport", () => {
+  const source = diagnosticRegistrationSource(undefined).replace(
+    /"fields":\{.*?\},"causal"/u,
+    '"fields":workspaceFields(true),"causal"',
+  );
+  withTypedRegistryFixture(
+    "zzz-fixture-diagnostic",
+    [
+      'import { activityLogWorkspaceIoFields as workspaceFields } from "../../keiko-contracts/src/observability.js";',
+      source,
+    ].join("\n"),
+    (root) => {
+      const facade = join(root, "packages/keiko-contracts/src/observability.ts");
+      writeFileSync(
+        facade,
+        readFileSync(facade, "utf8") +
+          '\nexport { activityLogWorkspaceIoFields } from "./activity-log-field-contracts.js";\n',
+      );
+      const registry = generateTypedActivityLogRegistry(root, []);
+      expect(registry.operations).toHaveLength(1);
+      expect(registry.operations[0].fields.workspaceIoContentReadBytes).toEqual({
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      });
+    },
+  );
+});

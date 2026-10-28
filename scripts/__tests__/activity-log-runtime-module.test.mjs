@@ -790,6 +790,7 @@ import type {
   activityLogAutomaticCatalogFields,
   activityLogCommitDraftModelFields,
   ActivityLogLossSummaryFields,
+  ActivityLogWorkspaceIoFields,
 } from "../packages/keiko-contracts/dist/activity-log-field-contracts.js";
 
 type Registry = typeof ACTIVITY_LOG_OPERATION_REGISTRY;
@@ -815,6 +816,16 @@ type DraftCompletedBundle = Assert<GenericEqual<
 type LossSummaryBundle = Assert<GenericEqual<
   Pick<Extract<Registry[number], { readonly op: "activity-log.loss" }>["fields"], keyof LossProducerFields>,
   LossProducerFields
+>>;
+type WorkspaceIoOptionalFields = Readonly<ActivityLogWorkspaceIoFields<false>>;
+type WorkspaceIoRequiredFields = Readonly<ActivityLogWorkspaceIoFields<true>>;
+type CompletionWorkspaceIoBundle = Assert<GenericEqual<
+  Pick<Extract<Registry[number], { readonly op: "search.connected-context.completion-details" }>["fields"], keyof WorkspaceIoOptionalFields>,
+  WorkspaceIoOptionalFields
+>>;
+type FailedWorkspaceIoBundle = Assert<GenericEqual<
+  Pick<Extract<Registry[number], { readonly op: "search.connected-context.failed" }>["fields"], keyof WorkspaceIoRequiredFields>,
+  WorkspaceIoRequiredFields
 >>;
 `;
 
@@ -915,3 +926,114 @@ describe("loss-summary runtime field policy rendering", () => {
     }, registry);
   });
 });
+
+function workspaceIoRuntimePilot(op) {
+  return catalog.typedRegistry.operations.find((operation) => operation.op === op);
+}
+
+const WORKSPACE_IO_RUNTIME_CASES = [
+  ["search.connected-context.completion-details", false],
+  ["search.connected-context.failed", true],
+];
+
+describe.each(WORKSPACE_IO_RUNTIME_CASES)(
+  "workspace-I/O segment rendering for %s",
+  (op, required) => {
+    it("folds only the seven-field segment and preserves every surrounding field and order", () => {
+      const pilot = workspaceIoRuntimePilot(op);
+      const registry = { ...catalog.typedRegistry, operations: [pilot] };
+      expect(runtimeOperationsModule(registry)).toContain(
+        `...activityLogWorkspaceIoFields(${String(required)})`,
+      );
+      withGeneratedRuntime(({ identity }) => {
+        const fields = identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields;
+        expect(fields).toEqual(pilot.fields);
+        expect(Reflect.ownKeys(fields)).toEqual(Reflect.ownKeys(pilot.fields));
+      }, registry);
+    });
+
+    it("preserves an independently changed neighbor while folding only its workspace-I/O segment", () => {
+      const pilot = workspaceIoRuntimePilot(op);
+      const fields = {
+        ...pilot.fields,
+        scopeIdentitySha256: { ...pilot.fields.scopeIdentitySha256, maxLength: 32 },
+      };
+      const registry = { ...catalog.typedRegistry, operations: [{ ...pilot, fields }] };
+      expect(runtimeOperationsModule(registry)).toContain(
+        `...activityLogWorkspaceIoFields(${String(required)})`,
+      );
+      withGeneratedRuntime(({ identity }) => {
+        expect(identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields).toEqual(fields);
+        expect(Object.keys(identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields)).toEqual(
+          Object.keys(fields),
+        );
+      }, registry);
+    });
+
+    it.each([
+      "other-op",
+      "missing",
+      "reordered",
+      "interrupted",
+      "required",
+      "type",
+      "class",
+      "descriptor-order",
+    ])("retains individual-field rendering for a nonexact segment: %s", (variant) => {
+      const pilot = workspaceIoRuntimePilot(op);
+      const fields = nonexactWorkspaceIoFields(pilot.fields, variant, required);
+      const selectedOp = variant === "other-op" ? "search.connected-context.completed" : op;
+      const registry = {
+        ...catalog.typedRegistry,
+        operations: [{ ...pilot, op: selectedOp, fields }],
+      };
+      expect(runtimeOperationsModule(registry)).not.toContain("...activityLogWorkspaceIoFields(");
+      withGeneratedRuntime(({ identity }) => {
+        expect(identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields).toEqual(fields);
+        expect(Object.keys(identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields)).toEqual(
+          Object.keys(fields),
+        );
+      }, registry);
+    });
+
+    it("refuses an extra own undefined descriptor member without changing serialization fallback", () => {
+      const pilot = workspaceIoRuntimePilot(op);
+      const descriptor = { ...pilot.fields.workspaceIoStatCalls, extra: undefined };
+      expect(Object.hasOwn(descriptor, "extra")).toBe(true);
+      const fields = { ...pilot.fields, workspaceIoStatCalls: descriptor };
+      const registry = { ...catalog.typedRegistry, operations: [{ ...pilot, fields }] };
+      expect(runtimeOperationsModule(registry)).not.toContain("...activityLogWorkspaceIoFields(");
+      withGeneratedRuntime(({ identity }) => {
+        expect(identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields).toEqual(pilot.fields);
+      }, registry);
+    });
+  },
+);
+
+function nonexactWorkspaceIoFields(original, variant, required) {
+  const fields = { ...original };
+  if (variant === "missing") delete fields.workspaceIoStatCalls;
+  if (variant === "reordered") {
+    const first = fields.workspaceIoReadDirCalls;
+    delete fields.workspaceIoReadDirCalls;
+    fields.workspaceIoReadDirCalls = first;
+  }
+  if (variant === "interrupted") {
+    const entries = Object.entries(fields);
+    const index = entries.findIndex(([name]) => name === "workspaceIoStatCalls");
+    entries.splice(index, 0, [
+      "fixtureInterruption",
+      { type: "integer", dataClass: "count", required },
+    ]);
+    return Object.fromEntries(entries);
+  }
+  if (variant === "required")
+    fields.workspaceIoStatCalls = { ...fields.workspaceIoStatCalls, required: !required };
+  if (variant === "type")
+    fields.workspaceIoStatCalls = { type: "number", dataClass: "count", required };
+  if (variant === "class")
+    fields.workspaceIoStatCalls = { type: "integer", dataClass: "duration", required };
+  if (variant === "descriptor-order")
+    fields.workspaceIoStatCalls = { required, dataClass: "count", type: "integer" };
+  return fields;
+}

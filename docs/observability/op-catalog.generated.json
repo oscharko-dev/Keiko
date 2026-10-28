@@ -100169,7 +100169,7 @@
     {
       "op": "server-log.write-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-contracts/src/observability.ts:1514",
+      "site": "packages/keiko-contracts/src/observability.ts:1516",
       "package": "keiko-contracts"
     },
     {
