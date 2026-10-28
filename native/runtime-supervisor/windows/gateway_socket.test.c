@@ -171,7 +171,9 @@ int gateway_socket_server(int family) {
   unsigned char announcement[8] = {'K', 'S', 'V', '1', 0, 0, 0, 0};
   DWORD written = 0;
   fd_set ready;
-  struct timeval timeout = {5, 0};
+  /* The runner-only NetSecurity fixture may cold-start PowerShell after this port announcement.
+   * This bounds setup only; the parent's actual network-connect deadline remains two seconds. */
+  struct timeval timeout = {40, 0};
   SOCKET connection = INVALID_SOCKET;
   int result = 91, ready_count;
   if (!appcontainer_member() || WSAStartup(MAKEWORD(2, 2), &data) != 0) return result;

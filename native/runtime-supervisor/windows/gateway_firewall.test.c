@@ -1,4 +1,4 @@
-/* Disposable-runner experiment only: a program/user/port-scoped inbound firewall rule.
+/* Disposable-runner experiment only: a package/program/user/port-scoped inbound firewall rule.
  * AppContainer admission and exact outbound confinement remain separate required controls.
  * No production integration or local default invocation. Remove/read back every created rule. */
 #define COBJMACROS
@@ -16,6 +16,83 @@ struct gateway_firewall_fixture {
   int initialized;
   int installed;
 };
+
+static DWORD install_package_rule(const wchar_t *name, const wchar_t *package,
+                                   const wchar_t *application, UINT16 family, UINT16 port) {
+  STARTUPINFOEXW startup = {0};
+  PROCESS_INFORMATION process = {0};
+  SECURITY_ATTRIBUTES inheritable = {sizeof(SECURITY_ATTRIBUTES), NULL, TRUE};
+  JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = {0};
+  HANDLE job = NULL, null_io = INVALID_HANDLE_VALUE;
+  wchar_t powershell[MAX_PATH], *script = NULL, *command = NULL, *separator;
+  DWORD result = ERROR_SUCCESS, length, code = 1;
+  SIZE_T bytes = 0;
+  int initialized = 0;
+  script = calloc(32768, sizeof(wchar_t));
+  command = calloc(32768, sizeof(wchar_t));
+  if (script == NULL || command == NULL) { result = ERROR_OUTOFMEMORY; goto done; }
+  length = GetModuleFileNameW(NULL, script, 32768);
+  if (length == 0 || length >= 32768) { result = ERROR_BUFFER_OVERFLOW; goto done; }
+  separator = wcsrchr(script, L'\\');
+  if (separator == NULL) { result = ERROR_INVALID_NAME; goto done; }
+  separator[1] = L'\0';
+  length = GetSystemDirectoryW(powershell, MAX_PATH);
+  if (length == 0 || length >= MAX_PATH ||
+      wcscat_s(powershell, MAX_PATH, L"\\WindowsPowerShell\\v1.0\\powershell.exe") != 0 ||
+      wcscat_s(script, 32768, L"gateway-firewall.ps1") != 0 ||
+      wcschr(application, L'\"') != NULL ||
+      _snwprintf_s(command, 32768, _TRUNCATE,
+        L"\"%ls\" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"%ls\" "
+        L"-RuleName %ls -PackageSid %ls -Program \"%ls\" -Family %u -Port %u",
+        powershell, script, name, package, application, (unsigned)family, (unsigned)port) < 0) {
+    result = ERROR_BUFFER_OVERFLOW; goto done;
+  }
+  /* A fixed script and bounded scalar arguments; no command-string evaluation. Suppress output
+   * containing private identities. The process-only policy does not alter machine configuration. */
+  null_io = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                         &inheritable, OPEN_EXISTING, 0, NULL);
+  (void)InitializeProcThreadAttributeList(NULL, 1, 0, &bytes);
+  startup.lpAttributeList = calloc(1, bytes);
+  if (startup.lpAttributeList == NULL) { result = ERROR_OUTOFMEMORY; goto done; }
+  if (null_io == INVALID_HANDLE_VALUE ||
+      !InitializeProcThreadAttributeList(startup.lpAttributeList, 1, 0, &bytes)) {
+    result = GetLastError(); goto done;
+  }
+  initialized = 1;
+  startup.StartupInfo.cb = sizeof(startup);
+  startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+  startup.StartupInfo.hStdInput = null_io;
+  startup.StartupInfo.hStdOutput = null_io;
+  startup.StartupInfo.hStdError = null_io;
+  job = CreateJobObjectW(NULL, NULL);
+  limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+  if (job == NULL ||
+      !SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits)) ||
+      !UpdateProcThreadAttribute(startup.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+                                  &null_io, sizeof(null_io), NULL, NULL) ||
+      !CreateProcessW(powershell, command, NULL, NULL, TRUE,
+        EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED | CREATE_NO_WINDOW, NULL, NULL,
+        &startup.StartupInfo, &process) || !AssignProcessToJobObject(job, process.hProcess) ||
+      ResumeThread(process.hThread) == (DWORD)-1) { result = GetLastError(); goto done; }
+  if (WaitForSingleObject(process.hProcess, 30000) != WAIT_OBJECT_0) result = ERROR_TIMEOUT;
+  else if (!GetExitCodeProcess(process.hProcess, &code)) result = GetLastError();
+  else result = code;
+done:
+  if (process.hProcess != NULL) {
+    if (WaitForSingleObject(process.hProcess, 0) != WAIT_OBJECT_0 &&
+        !TerminateProcess(process.hProcess, 1)) result = GetLastError();
+    if (job != NULL && !TerminateJobObject(job, 1)) result = GetLastError();
+    if (WaitForSingleObject(process.hProcess, 5000) != WAIT_OBJECT_0) result = ERROR_TIMEOUT;
+    CloseHandle(process.hProcess);
+  }
+  if (process.hThread != NULL) CloseHandle(process.hThread);
+  if (job != NULL) CloseHandle(job);
+  if (initialized) DeleteProcThreadAttributeList(startup.lpAttributeList);
+  free(startup.lpAttributeList);
+  if (null_io != INVALID_HANDLE_VALUE) CloseHandle(null_io);
+  free(script); free(command);
+  return result;
+}
 
 DWORD gateway_firewall_close(struct gateway_firewall_fixture *owner) {
   HRESULT result = S_OK;
@@ -42,17 +119,13 @@ DWORD gateway_firewall_close(struct gateway_firewall_fixture *owner) {
 DWORD gateway_firewall_open(PSID sid, const wchar_t *executable, UINT16 family, UINT16 port,
                              struct gateway_firewall_fixture **owned) {
   struct gateway_firewall_fixture *owner;
-  INetFwRule3 *rule = NULL;
   INetFwRule *existing = NULL;
   UUID id;
   RPC_WSTR id_text = NULL;
-  LPWSTR user_text = NULL, package_text = NULL;
-  HANDLE token = NULL;
-  union { TOKEN_USER alignment; BYTE bytes[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE]; } user;
-  DWORD returned = 0, length;
+  LPWSTR package_text = NULL;
+  DWORD length;
   wchar_t *expanded = NULL;
-  wchar_t name[100], port_text[6], authorization[256];
-  BSTR user_owner = NULL, application = NULL, address = NULL, local_port = NULL, local_users = NULL;
+  wchar_t name[100];
   HRESULT result;
   DWORD status;
   if (sid == NULL || !IsValidSid(sid) || executable == NULL || port == 0 ||
@@ -67,10 +140,7 @@ DWORD gateway_firewall_open(PSID sid, const wchar_t *executable, UINT16 family, 
   if (status != RPC_S_OK && status != RPC_S_UUID_LOCAL_ONLY) { result = HRESULT_FROM_WIN32(status); goto done; }
   status = UuidToStringW(&id, &id_text);
   if (status != RPC_S_OK) { result = HRESULT_FROM_WIN32(status); goto done; }
-  if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token) ||
-      !GetTokenInformation(token, TokenUser, &user, sizeof(user), &returned) ||
-      !ConvertSidToStringSidW(user.alignment.User.Sid, &user_text) ||
-      !ConvertSidToStringSidW(sid, &package_text)) {
+  if (!ConvertSidToStringSidW(sid, &package_text)) {
     result = HRESULT_FROM_WIN32(GetLastError()); goto done;
   }
   expanded = calloc(32768, sizeof(wchar_t));
@@ -79,19 +149,11 @@ DWORD gateway_firewall_open(PSID sid, const wchar_t *executable, UINT16 family, 
   if (length == 0 || length >= 32768) {
     result = HRESULT_FROM_WIN32(length == 0 ? GetLastError() : ERROR_BUFFER_OVERFLOW); goto done;
   }
-  if (_snwprintf_s(name, 100, _TRUNCATE, L"Keiko.Gateway.Inbound.Fixture.%ls", id_text) < 0 ||
-      _snwprintf_s(port_text, 6, _TRUNCATE, L"%u", (unsigned)port) < 0 ||
-      _snwprintf_s(authorization, 256, _TRUNCATE, L"D:(A;;CC;;;%ls)", package_text) < 0) {
+  if (_snwprintf_s(name, 100, _TRUNCATE, L"Keiko.Gateway.Inbound.Fixture.%ls", id_text) < 0) {
     result = E_INVALIDARG; goto done;
   }
   owner->name = SysAllocString(name);
-  user_owner = SysAllocString(user_text);
-  local_users = SysAllocString(authorization);
-  application = SysAllocString(expanded);
-  address = SysAllocString(family == AF_INET ? L"127.0.0.1" : L"::1");
-  local_port = SysAllocString(port_text);
-  if (owner->name == NULL || user_owner == NULL || local_users == NULL ||
-      application == NULL || address == NULL || local_port == NULL) {
+  if (owner->name == NULL) {
     result = E_OUTOFMEMORY; goto done;
   }
   result = CoCreateInstance(&CLSID_NetFwPolicy2, NULL, CLSCTX_INPROC_SERVER, &IID_INetFwPolicy2,
@@ -100,38 +162,17 @@ DWORD gateway_firewall_open(PSID sid, const wchar_t *executable, UINT16 family, 
   if (SUCCEEDED(result)) {
     result = INetFwRules_Item(owner->rules, owner->name, &existing);
     if (result != HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)) { result = E_UNEXPECTED; goto done; }
-    result = CoCreateInstance(&CLSID_NetFwRule, NULL, CLSCTX_INPROC_SERVER, &IID_INetFwRule3, (void **)&rule);
-  }
-  if (SUCCEEDED(result)) result = INetFwRule3_put_Name(rule, owner->name);
-  /* INetFwRules::Add explicitly does not support LocalAppPackageId. The supported local-principal
-   * authorization list accepts an AppContainer SID; real socket controls must prove its effect. */
-  if (SUCCEEDED(result)) result = INetFwRule3_put_LocalUserOwner(rule, user_owner);
-  if (SUCCEEDED(result)) result = INetFwRule3_put_LocalUserAuthorizedList(rule, local_users);
-  if (SUCCEEDED(result)) result = INetFwRule3_put_ApplicationName(rule, application);
-  if (SUCCEEDED(result)) result = INetFwRule3_put_Direction(rule, NET_FW_RULE_DIR_IN);
-  if (SUCCEEDED(result)) result = INetFwRule3_put_Protocol(rule, IPPROTO_TCP);
-  if (SUCCEEDED(result)) result = INetFwRule3_put_LocalAddresses(rule, address);
-  if (SUCCEEDED(result)) result = INetFwRule3_put_RemoteAddresses(rule, address);
-  if (SUCCEEDED(result)) result = INetFwRule3_put_LocalPorts(rule, local_port);
-  if (SUCCEEDED(result)) result = INetFwRule3_put_Profiles(rule, NET_FW_PROFILE2_ALL);
-  if (SUCCEEDED(result)) result = INetFwRule3_put_EdgeTraversal(rule, VARIANT_FALSE);
-  if (SUCCEEDED(result)) result = INetFwRule3_put_Action(rule, NET_FW_ACTION_ALLOW);
-  if (SUCCEEDED(result)) result = INetFwRule3_put_Enabled(rule, VARIANT_TRUE);
-  if (SUCCEEDED(result)) {
-    /* An uncertain Add outcome still requires deletion/readback of our fresh name. */
+    /* INetFwRules::Add excludes LocalAppPackageId. NetSecurity's documented Package parameter
+     * creates the complete rule; COM is used only for exact-name absence checks and cleanup. */
     owner->installed = 1;
-    result = INetFwRules_Add(owner->rules, (INetFwRule *)rule);
+    status = install_package_rule(name, package_text, expanded, family, port);
+    result = HRESULT_FROM_WIN32(status);
   }
 done:
   if (existing != NULL) INetFwRule_Release(existing);
-  if (rule != NULL) INetFwRule3_Release(rule);
   if (id_text != NULL) RpcStringFreeW(&id_text);
-  if (user_text != NULL) LocalFree(user_text);
   if (package_text != NULL) LocalFree(package_text);
-  if (token != NULL) CloseHandle(token);
   free(expanded);
-  SysFreeString(user_owner); SysFreeString(application); SysFreeString(address); SysFreeString(local_port);
-  SysFreeString(local_users);
   if (SUCCEEDED(result)) *owned = owner;
   else (void)gateway_firewall_close(owner);
   printf("socket-inbound-firewall: code=%lu\n", (DWORD)result);

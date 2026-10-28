@@ -55,6 +55,10 @@ if (
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
   const scratch = mkdtempSync(join(tmpdir(), "keiko-gateway-native-"));
   const executable = join(scratch, "gateway-wfp-test.exe");
+  writeFileSync(
+    join(scratch, "gateway-firewall.ps1"),
+    readFileSync(join(root, "scripts/testing/windows-gateway-firewall.ps1")),
+  );
   const env = resolveWindowsMsvcEnv();
   const args = [
     "/nologo",

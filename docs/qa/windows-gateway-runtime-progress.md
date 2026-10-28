@@ -217,6 +217,26 @@ This does not claim IPv6 inbound support or change the ordinary socket proof; it
 experimental composition to match the actual product. IPv6 AppContainer inbound admission remains
 an unresolved capability outside that current control contract.
 
+[Run 40387436811](https://github.com/oscharko-dev/Keiko/actions/runs/40387436811) creates and removes
+the local-principal COM rule successfully, but both IPv4 control probes still time out. The
+diagnostic identifies Windows Firewall's inbound block in both gateway-family cases. The next
+runner-only probe uses the documented NetSecurity `New-NetFirewallRule -Package` parameter to
+admit the exact AppContainer SID, retaining the executable, user, loopback and single-port limits.
+A fixed script verifies its application, transport, address and security filters; the native owner removes
+the unique rule and verifies absence even after uncertain creation. The script runs in a bounded,
+owned process with discarded output, never through the default native test or production code.
+The synthetic listener allows time for cold NetSecurity startup; the actual connection deadline
+remains two seconds. Foreign-principal, independent-deny, outbound and reaping controls remain
+mandatory. This is an unqualified experiment until the actual runner results are recorded.
+
+Local preparation on 2026-10-28 compiled the complete fixture with MSVC `/W4 /WX /analyze` and
+passed the default component tests without installing filters. The PowerShell parser passed.
+Separate guard probes, with the mutating cmdlet replaced by a rejecting stub, verified refusal on
+developer and self-hosted environments before rule creation. Only `github-hosted` Windows Actions
+jobs can invoke this experiment. These local checks do not replace the disposable-runner socket
+proof. The package rule uses Microsoft's documented
+[`New-NetFirewallRule -Package` contract](https://learn.microsoft.com/en-us/powershell/module/netsecurity/new-netfirewallrule#-package).
+
 Local protocol validation also ran the complete existing `runtime-gateway.test.ts`: 29 passed,
 eight failed on existing POSIX filesystem fixtures rejected by Windows path canonicalization, and
 25 macOS tests skipped. The new cross-language vector case passes individually. These baseline
