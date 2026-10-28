@@ -21,10 +21,12 @@ function patch(path: string, body: readonly string[]): string {
 
 const configuredSecret = ["fixture", "floor", "q41"].join("_");
 const githubToken = "ghp_" + "abcdefghijklmnopqrstuvwxyz0123456789";
+// A made-up key block, assembled at run time so the source carries no private-key literal.
+const keyLabel = ["RSA", "PRIVATE", "KEY"].join(" ");
 const keyBlock = [
-  "-----BEGIN RSA PRIVATE KEY-----",
-  "MIIEowIBAAKCAQEAuZ9b5XyQfloorfixture",
-  "-----END RSA PRIVATE KEY-----",
+  `-----BEGIN ${keyLabel}-----`,
+  ["MIIEowIBAAKCAQEA", "uZ9b5XyQ", "floorfixture"].join(""),
+  `-----END ${keyLabel}-----`,
 ];
 const rowRename = patch("stations.ts", [
   "-  { id: 0, elevationM: 0 },",
