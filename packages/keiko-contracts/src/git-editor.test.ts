@@ -1,4 +1,8 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
+import type {
+  LibraryParserTripleFacts,
+  LibraryParserTripleExpected,
+} from "./__tests__/support/library-parser-type-facts.js";
 import {
   GIT_EDITOR_BLAME_MAX_BYTES,
   GIT_EDITOR_BLAME_MAX_LINES,
@@ -585,20 +589,18 @@ describe("Git DiffRequest public parser (#3918)", () => {
     }
   });
   it("pins source public and forwarding unknown inputs and checked results", () => {
-    expectTypeOf(parseGitEditorDiffRequest).parameter(0).toBeUnknown();
-    expectTypeOf(publicDiffRequest).parameter(0).toBeUnknown();
-    expectTypeOf(parsePublicGitEditorDiffRequest).parameter(0).toBeUnknown();
-    expectTypeOf(parseGitEditorDiffRequest).parameter(0).not.toBeAny();
-    expectTypeOf(publicDiffRequest).parameter(0).not.toBeAny();
-    expectTypeOf(parsePublicGitEditorDiffRequest).parameter(0).not.toBeAny();
-    expectTypeOf(parseGitEditorDiffRequest).returns.toEqualTypeOf<
-      GitEditorParseResult<GitEditorDiffRequest>
-    >();
-    expectTypeOf(publicDiffRequest).returns.toEqualTypeOf<
-      PublicGitEditorParseResult<PublicGitEditorDiffRequest>
-    >();
-    expectTypeOf(parsePublicGitEditorDiffRequest).returns.toEqualTypeOf<
-      PublicGitEditorParseResult<PublicGitEditorDiffRequest>
+    expectTypeOf<
+      LibraryParserTripleFacts<
+        typeof parseGitEditorDiffRequest,
+        typeof publicDiffRequest,
+        typeof parsePublicGitEditorDiffRequest
+      >
+    >().toEqualTypeOf<
+      LibraryParserTripleExpected<
+        GitEditorParseResult<GitEditorDiffRequest>,
+        PublicGitEditorParseResult<PublicGitEditorDiffRequest>,
+        PublicGitEditorParseResult<PublicGitEditorDiffRequest>
+      >
     >();
     expectTypeOf(publicDiffRequest).returns.toEqualTypeOf<
       GitEditorParseResult<GitEditorDiffRequest>
@@ -606,9 +608,6 @@ describe("Git DiffRequest public parser (#3918)", () => {
     expectTypeOf(parsePublicGitEditorDiffRequest).returns.toEqualTypeOf<
       GitEditorParseResult<GitEditorDiffRequest>
     >();
-    expectTypeOf(parseGitEditorDiffRequest).returns.not.toBeAny();
-    expectTypeOf(publicDiffRequest).returns.not.toBeAny();
-    expectTypeOf(parsePublicGitEditorDiffRequest).returns.not.toBeAny();
   });
 
   it("retains original staged unstaged and optional-path presence", () => {
@@ -703,20 +702,18 @@ describe("Git DiffResponse public parser (#3918)", () => {
     }
   });
   it("pins source public and forwarding unknown inputs and checked results", () => {
-    expectTypeOf(parseGitEditorDiffResponse).parameter(0).toBeUnknown();
-    expectTypeOf(publicDiffResponse).parameter(0).toBeUnknown();
-    expectTypeOf(parsePublicGitEditorDiffResponse).parameter(0).toBeUnknown();
-    expectTypeOf(parseGitEditorDiffResponse).parameter(0).not.toBeAny();
-    expectTypeOf(publicDiffResponse).parameter(0).not.toBeAny();
-    expectTypeOf(parsePublicGitEditorDiffResponse).parameter(0).not.toBeAny();
-    expectTypeOf(parseGitEditorDiffResponse).returns.toEqualTypeOf<
-      GitEditorParseResult<GitEditorDiffResponse>
-    >();
-    expectTypeOf(publicDiffResponse).returns.toEqualTypeOf<
-      PublicGitEditorParseResult<PublicGitEditorDiffResponse>
-    >();
-    expectTypeOf(parsePublicGitEditorDiffResponse).returns.toEqualTypeOf<
-      PublicGitEditorParseResult<PublicGitEditorDiffResponse>
+    expectTypeOf<
+      LibraryParserTripleFacts<
+        typeof parseGitEditorDiffResponse,
+        typeof publicDiffResponse,
+        typeof parsePublicGitEditorDiffResponse
+      >
+    >().toEqualTypeOf<
+      LibraryParserTripleExpected<
+        GitEditorParseResult<GitEditorDiffResponse>,
+        PublicGitEditorParseResult<PublicGitEditorDiffResponse>,
+        PublicGitEditorParseResult<PublicGitEditorDiffResponse>
+      >
     >();
     expectTypeOf(publicDiffResponse).returns.toEqualTypeOf<
       GitEditorParseResult<GitEditorDiffResponse>
@@ -724,9 +721,6 @@ describe("Git DiffResponse public parser (#3918)", () => {
     expectTypeOf(parsePublicGitEditorDiffResponse).returns.toEqualTypeOf<
       GitEditorParseResult<GitEditorDiffResponse>
     >();
-    expectTypeOf(parseGitEditorDiffResponse).returns.not.toBeAny();
-    expectTypeOf(publicDiffResponse).returns.not.toBeAny();
-    expectTypeOf(parsePublicGitEditorDiffResponse).returns.not.toBeAny();
   });
 
   it("retains original response and nested collection references", () => {
@@ -859,20 +853,18 @@ describe("Git BlameRequest public parser (#3918)", () => {
     }
   });
   it("pins source public and forwarding unknown inputs and checked results", () => {
-    expectTypeOf(parseGitEditorBlameRequest).parameter(0).toBeUnknown();
-    expectTypeOf(publicBlameRequest).parameter(0).toBeUnknown();
-    expectTypeOf(parsePublicGitEditorBlameRequest).parameter(0).toBeUnknown();
-    expectTypeOf(parseGitEditorBlameRequest).parameter(0).not.toBeAny();
-    expectTypeOf(publicBlameRequest).parameter(0).not.toBeAny();
-    expectTypeOf(parsePublicGitEditorBlameRequest).parameter(0).not.toBeAny();
-    expectTypeOf(parseGitEditorBlameRequest).returns.toEqualTypeOf<
-      GitEditorParseResult<GitEditorBlameRequest>
-    >();
-    expectTypeOf(publicBlameRequest).returns.toEqualTypeOf<
-      PublicGitEditorParseResult<PublicGitEditorBlameRequest>
-    >();
-    expectTypeOf(parsePublicGitEditorBlameRequest).returns.toEqualTypeOf<
-      PublicGitEditorParseResult<PublicGitEditorBlameRequest>
+    expectTypeOf<
+      LibraryParserTripleFacts<
+        typeof parseGitEditorBlameRequest,
+        typeof publicBlameRequest,
+        typeof parsePublicGitEditorBlameRequest
+      >
+    >().toEqualTypeOf<
+      LibraryParserTripleExpected<
+        GitEditorParseResult<GitEditorBlameRequest>,
+        PublicGitEditorParseResult<PublicGitEditorBlameRequest>,
+        PublicGitEditorParseResult<PublicGitEditorBlameRequest>
+      >
     >();
     expectTypeOf(publicBlameRequest).returns.toEqualTypeOf<
       GitEditorParseResult<GitEditorBlameRequest>
@@ -880,9 +872,6 @@ describe("Git BlameRequest public parser (#3918)", () => {
     expectTypeOf(parsePublicGitEditorBlameRequest).returns.toEqualTypeOf<
       GitEditorParseResult<GitEditorBlameRequest>
     >();
-    expectTypeOf(parseGitEditorBlameRequest).returns.not.toBeAny();
-    expectTypeOf(publicBlameRequest).returns.not.toBeAny();
-    expectTypeOf(parsePublicGitEditorBlameRequest).returns.not.toBeAny();
   });
 
   it("retains original request at the positive range and cap boundaries", () => {
@@ -984,20 +973,18 @@ describe("Git BlameResponse public parser (#3918)", () => {
     }
   });
   it("pins source public and forwarding unknown inputs and checked results", () => {
-    expectTypeOf(parseGitEditorBlameResponse).parameter(0).toBeUnknown();
-    expectTypeOf(publicBlameResponse).parameter(0).toBeUnknown();
-    expectTypeOf(parsePublicGitEditorBlameResponse).parameter(0).toBeUnknown();
-    expectTypeOf(parseGitEditorBlameResponse).parameter(0).not.toBeAny();
-    expectTypeOf(publicBlameResponse).parameter(0).not.toBeAny();
-    expectTypeOf(parsePublicGitEditorBlameResponse).parameter(0).not.toBeAny();
-    expectTypeOf(parseGitEditorBlameResponse).returns.toEqualTypeOf<
-      GitEditorParseResult<GitEditorBlameResponse>
-    >();
-    expectTypeOf(publicBlameResponse).returns.toEqualTypeOf<
-      PublicGitEditorParseResult<PublicGitEditorBlameResponse>
-    >();
-    expectTypeOf(parsePublicGitEditorBlameResponse).returns.toEqualTypeOf<
-      PublicGitEditorParseResult<PublicGitEditorBlameResponse>
+    expectTypeOf<
+      LibraryParserTripleFacts<
+        typeof parseGitEditorBlameResponse,
+        typeof publicBlameResponse,
+        typeof parsePublicGitEditorBlameResponse
+      >
+    >().toEqualTypeOf<
+      LibraryParserTripleExpected<
+        GitEditorParseResult<GitEditorBlameResponse>,
+        PublicGitEditorParseResult<PublicGitEditorBlameResponse>,
+        PublicGitEditorParseResult<PublicGitEditorBlameResponse>
+      >
     >();
     expectTypeOf(publicBlameResponse).returns.toEqualTypeOf<
       GitEditorParseResult<GitEditorBlameResponse>
@@ -1005,9 +992,6 @@ describe("Git BlameResponse public parser (#3918)", () => {
     expectTypeOf(parsePublicGitEditorBlameResponse).returns.toEqualTypeOf<
       GitEditorParseResult<GitEditorBlameResponse>
     >();
-    expectTypeOf(parseGitEditorBlameResponse).returns.not.toBeAny();
-    expectTypeOf(publicBlameResponse).returns.not.toBeAny();
-    expectTypeOf(parsePublicGitEditorBlameResponse).returns.not.toBeAny();
   });
 
   it("retains original response and blame line collection references", () => {
