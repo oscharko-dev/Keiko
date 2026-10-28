@@ -5,6 +5,7 @@
 // CommandResult without omittedByteCount and a ToolCallResult without shapedObservation still type.
 
 import { describe, expect, expectTypeOf, it } from "vitest";
+import type { LibraryContextDiagnosticFacts } from "./__tests__/support/library-parser-type-facts.js";
 import { CONTEXT_ENGINEERING_SCHEMA_VERSION } from "./context-engineering.js";
 import {
   MAX_FAILING_TEST_NAMES,
@@ -603,33 +604,30 @@ export function countPublicContextToolRehydrationHandleDiagnostics(input: unknow
 }
 
 it("shipped context tool rehydration diagnostic retains independent source and public closed result types", () => {
-  expectTypeOf<Parameters<typeof validateContextToolRehydrationHandle>>().toEqualTypeOf<
-    [unknown]
+  expectTypeOf<
+    LibraryContextDiagnosticFacts<
+      typeof validateContextToolRehydrationHandle,
+      Extract<ReturnType<typeof validateContextToolRehydrationHandle>, { ok: false }>["reasons"],
+      Extract<
+        ReturnType<typeof validateContextToolRehydrationHandle>,
+        { ok: false }
+      >["reasons"][number]
+    >
+  >().toEqualTypeOf<
+    readonly [[unknown], true, ExpectedContextDiagnostic, readonly string[], true]
   >();
-  expectTypeOf<ReturnType<typeof validateContextToolRehydrationHandle>>().not.toBeAny();
   expectTypeOf<
-    ReturnType<typeof validateContextToolRehydrationHandle>
-  >().toEqualTypeOf<ExpectedContextDiagnostic>();
-  expectTypeOf<
-    Extract<ReturnType<typeof validateContextToolRehydrationHandle>, { ok: false }>["reasons"]
-  >().toEqualTypeOf<readonly string[]>();
-  expectTypeOf<
-    Extract<
-      ReturnType<typeof validateContextToolRehydrationHandle>,
-      { ok: false }
-    >["reasons"][number]
-  >().not.toBeAny();
-  expectTypeOf<Parameters<typeof publicContextToolRehydrationHandle>>().toEqualTypeOf<[unknown]>();
-  expectTypeOf<ReturnType<typeof publicContextToolRehydrationHandle>>().not.toBeAny();
-  expectTypeOf<
-    ReturnType<typeof publicContextToolRehydrationHandle>
-  >().toEqualTypeOf<ExpectedContextDiagnostic>();
-  expectTypeOf<
-    Extract<ReturnType<typeof publicContextToolRehydrationHandle>, { ok: false }>["reasons"]
-  >().toEqualTypeOf<readonly string[]>();
-  expectTypeOf<
-    Extract<ReturnType<typeof publicContextToolRehydrationHandle>, { ok: false }>["reasons"][number]
-  >().not.toBeAny();
+    LibraryContextDiagnosticFacts<
+      typeof publicContextToolRehydrationHandle,
+      Extract<ReturnType<typeof publicContextToolRehydrationHandle>, { ok: false }>["reasons"],
+      Extract<
+        ReturnType<typeof publicContextToolRehydrationHandle>,
+        { ok: false }
+      >["reasons"][number]
+    >
+  >().toEqualTypeOf<
+    readonly [[unknown], true, ExpectedContextDiagnostic, readonly string[], true]
+  >();
   expectTypeOf<ContextValidationResult>().toEqualTypeOf<ExpectedContextDiagnostic>();
   expectTypeOf<PublicContextValidationResult>().toEqualTypeOf<ExpectedContextDiagnostic>();
   expectTypeOf<
@@ -695,28 +693,24 @@ export function countPublicShapedCommandObservationDiagnostics(input: unknown): 
 }
 
 it("shipped shaped command diagnostic retains independent source and public closed result types", () => {
-  expectTypeOf<Parameters<typeof validateShapedCommandObservation>>().toEqualTypeOf<[unknown]>();
-  expectTypeOf<ReturnType<typeof validateShapedCommandObservation>>().not.toBeAny();
   expectTypeOf<
-    ReturnType<typeof validateShapedCommandObservation>
-  >().toEqualTypeOf<ExpectedContextDiagnostic>();
+    LibraryContextDiagnosticFacts<
+      typeof validateShapedCommandObservation,
+      Extract<ReturnType<typeof validateShapedCommandObservation>, { ok: false }>["reasons"],
+      Extract<ReturnType<typeof validateShapedCommandObservation>, { ok: false }>["reasons"][number]
+    >
+  >().toEqualTypeOf<
+    readonly [[unknown], true, ExpectedContextDiagnostic, readonly string[], true]
+  >();
   expectTypeOf<
-    Extract<ReturnType<typeof validateShapedCommandObservation>, { ok: false }>["reasons"]
-  >().toEqualTypeOf<readonly string[]>();
-  expectTypeOf<
-    Extract<ReturnType<typeof validateShapedCommandObservation>, { ok: false }>["reasons"][number]
-  >().not.toBeAny();
-  expectTypeOf<Parameters<typeof publicShapedCommandObservation>>().toEqualTypeOf<[unknown]>();
-  expectTypeOf<ReturnType<typeof publicShapedCommandObservation>>().not.toBeAny();
-  expectTypeOf<
-    ReturnType<typeof publicShapedCommandObservation>
-  >().toEqualTypeOf<ExpectedContextDiagnostic>();
-  expectTypeOf<
-    Extract<ReturnType<typeof publicShapedCommandObservation>, { ok: false }>["reasons"]
-  >().toEqualTypeOf<readonly string[]>();
-  expectTypeOf<
-    Extract<ReturnType<typeof publicShapedCommandObservation>, { ok: false }>["reasons"][number]
-  >().not.toBeAny();
+    LibraryContextDiagnosticFacts<
+      typeof publicShapedCommandObservation,
+      Extract<ReturnType<typeof publicShapedCommandObservation>, { ok: false }>["reasons"],
+      Extract<ReturnType<typeof publicShapedCommandObservation>, { ok: false }>["reasons"][number]
+    >
+  >().toEqualTypeOf<
+    readonly [[unknown], true, ExpectedContextDiagnostic, readonly string[], true]
+  >();
   expectTypeOf<ContextValidationResult>().toEqualTypeOf<ExpectedContextDiagnostic>();
   expectTypeOf<PublicContextValidationResult>().toEqualTypeOf<ExpectedContextDiagnostic>();
   expectTypeOf<Parameters<typeof countPublicShapedCommandObservationDiagnostics>>().toEqualTypeOf<
@@ -784,28 +778,24 @@ export function countPublicShapedTestObservationDiagnostics(input: unknown): num
 }
 
 it("shipped shaped test diagnostic retains independent source and public closed result types", () => {
-  expectTypeOf<Parameters<typeof validateShapedTestObservation>>().toEqualTypeOf<[unknown]>();
-  expectTypeOf<ReturnType<typeof validateShapedTestObservation>>().not.toBeAny();
   expectTypeOf<
-    ReturnType<typeof validateShapedTestObservation>
-  >().toEqualTypeOf<ExpectedContextDiagnostic>();
+    LibraryContextDiagnosticFacts<
+      typeof validateShapedTestObservation,
+      Extract<ReturnType<typeof validateShapedTestObservation>, { ok: false }>["reasons"],
+      Extract<ReturnType<typeof validateShapedTestObservation>, { ok: false }>["reasons"][number]
+    >
+  >().toEqualTypeOf<
+    readonly [[unknown], true, ExpectedContextDiagnostic, readonly string[], true]
+  >();
   expectTypeOf<
-    Extract<ReturnType<typeof validateShapedTestObservation>, { ok: false }>["reasons"]
-  >().toEqualTypeOf<readonly string[]>();
-  expectTypeOf<
-    Extract<ReturnType<typeof validateShapedTestObservation>, { ok: false }>["reasons"][number]
-  >().not.toBeAny();
-  expectTypeOf<Parameters<typeof publicShapedTestObservation>>().toEqualTypeOf<[unknown]>();
-  expectTypeOf<ReturnType<typeof publicShapedTestObservation>>().not.toBeAny();
-  expectTypeOf<
-    ReturnType<typeof publicShapedTestObservation>
-  >().toEqualTypeOf<ExpectedContextDiagnostic>();
-  expectTypeOf<
-    Extract<ReturnType<typeof publicShapedTestObservation>, { ok: false }>["reasons"]
-  >().toEqualTypeOf<readonly string[]>();
-  expectTypeOf<
-    Extract<ReturnType<typeof publicShapedTestObservation>, { ok: false }>["reasons"][number]
-  >().not.toBeAny();
+    LibraryContextDiagnosticFacts<
+      typeof publicShapedTestObservation,
+      Extract<ReturnType<typeof publicShapedTestObservation>, { ok: false }>["reasons"],
+      Extract<ReturnType<typeof publicShapedTestObservation>, { ok: false }>["reasons"][number]
+    >
+  >().toEqualTypeOf<
+    readonly [[unknown], true, ExpectedContextDiagnostic, readonly string[], true]
+  >();
   expectTypeOf<ContextValidationResult>().toEqualTypeOf<ExpectedContextDiagnostic>();
   expectTypeOf<PublicContextValidationResult>().toEqualTypeOf<ExpectedContextDiagnostic>();
   expectTypeOf<Parameters<typeof countPublicShapedTestObservationDiagnostics>>().toEqualTypeOf<
@@ -861,28 +851,24 @@ export function countPublicShapedSearchObservationDiagnostics(input: unknown): n
 }
 
 it("shipped shaped search diagnostic retains independent source and public closed result types", () => {
-  expectTypeOf<Parameters<typeof validateShapedSearchObservation>>().toEqualTypeOf<[unknown]>();
-  expectTypeOf<ReturnType<typeof validateShapedSearchObservation>>().not.toBeAny();
   expectTypeOf<
-    ReturnType<typeof validateShapedSearchObservation>
-  >().toEqualTypeOf<ExpectedContextDiagnostic>();
+    LibraryContextDiagnosticFacts<
+      typeof validateShapedSearchObservation,
+      Extract<ReturnType<typeof validateShapedSearchObservation>, { ok: false }>["reasons"],
+      Extract<ReturnType<typeof validateShapedSearchObservation>, { ok: false }>["reasons"][number]
+    >
+  >().toEqualTypeOf<
+    readonly [[unknown], true, ExpectedContextDiagnostic, readonly string[], true]
+  >();
   expectTypeOf<
-    Extract<ReturnType<typeof validateShapedSearchObservation>, { ok: false }>["reasons"]
-  >().toEqualTypeOf<readonly string[]>();
-  expectTypeOf<
-    Extract<ReturnType<typeof validateShapedSearchObservation>, { ok: false }>["reasons"][number]
-  >().not.toBeAny();
-  expectTypeOf<Parameters<typeof publicShapedSearchObservation>>().toEqualTypeOf<[unknown]>();
-  expectTypeOf<ReturnType<typeof publicShapedSearchObservation>>().not.toBeAny();
-  expectTypeOf<
-    ReturnType<typeof publicShapedSearchObservation>
-  >().toEqualTypeOf<ExpectedContextDiagnostic>();
-  expectTypeOf<
-    Extract<ReturnType<typeof publicShapedSearchObservation>, { ok: false }>["reasons"]
-  >().toEqualTypeOf<readonly string[]>();
-  expectTypeOf<
-    Extract<ReturnType<typeof publicShapedSearchObservation>, { ok: false }>["reasons"][number]
-  >().not.toBeAny();
+    LibraryContextDiagnosticFacts<
+      typeof publicShapedSearchObservation,
+      Extract<ReturnType<typeof publicShapedSearchObservation>, { ok: false }>["reasons"],
+      Extract<ReturnType<typeof publicShapedSearchObservation>, { ok: false }>["reasons"][number]
+    >
+  >().toEqualTypeOf<
+    readonly [[unknown], true, ExpectedContextDiagnostic, readonly string[], true]
+  >();
   expectTypeOf<ContextValidationResult>().toEqualTypeOf<ExpectedContextDiagnostic>();
   expectTypeOf<PublicContextValidationResult>().toEqualTypeOf<ExpectedContextDiagnostic>();
   expectTypeOf<Parameters<typeof countPublicShapedSearchObservationDiagnostics>>().toEqualTypeOf<
@@ -941,28 +927,24 @@ export function countPublicShapedBrowserObservationDiagnostics(input: unknown): 
 }
 
 it("shipped shaped browser diagnostic retains independent source and public closed result types", () => {
-  expectTypeOf<Parameters<typeof validateShapedBrowserObservation>>().toEqualTypeOf<[unknown]>();
-  expectTypeOf<ReturnType<typeof validateShapedBrowserObservation>>().not.toBeAny();
   expectTypeOf<
-    ReturnType<typeof validateShapedBrowserObservation>
-  >().toEqualTypeOf<ExpectedContextDiagnostic>();
+    LibraryContextDiagnosticFacts<
+      typeof validateShapedBrowserObservation,
+      Extract<ReturnType<typeof validateShapedBrowserObservation>, { ok: false }>["reasons"],
+      Extract<ReturnType<typeof validateShapedBrowserObservation>, { ok: false }>["reasons"][number]
+    >
+  >().toEqualTypeOf<
+    readonly [[unknown], true, ExpectedContextDiagnostic, readonly string[], true]
+  >();
   expectTypeOf<
-    Extract<ReturnType<typeof validateShapedBrowserObservation>, { ok: false }>["reasons"]
-  >().toEqualTypeOf<readonly string[]>();
-  expectTypeOf<
-    Extract<ReturnType<typeof validateShapedBrowserObservation>, { ok: false }>["reasons"][number]
-  >().not.toBeAny();
-  expectTypeOf<Parameters<typeof publicShapedBrowserObservation>>().toEqualTypeOf<[unknown]>();
-  expectTypeOf<ReturnType<typeof publicShapedBrowserObservation>>().not.toBeAny();
-  expectTypeOf<
-    ReturnType<typeof publicShapedBrowserObservation>
-  >().toEqualTypeOf<ExpectedContextDiagnostic>();
-  expectTypeOf<
-    Extract<ReturnType<typeof publicShapedBrowserObservation>, { ok: false }>["reasons"]
-  >().toEqualTypeOf<readonly string[]>();
-  expectTypeOf<
-    Extract<ReturnType<typeof publicShapedBrowserObservation>, { ok: false }>["reasons"][number]
-  >().not.toBeAny();
+    LibraryContextDiagnosticFacts<
+      typeof publicShapedBrowserObservation,
+      Extract<ReturnType<typeof publicShapedBrowserObservation>, { ok: false }>["reasons"],
+      Extract<ReturnType<typeof publicShapedBrowserObservation>, { ok: false }>["reasons"][number]
+    >
+  >().toEqualTypeOf<
+    readonly [[unknown], true, ExpectedContextDiagnostic, readonly string[], true]
+  >();
   expectTypeOf<ContextValidationResult>().toEqualTypeOf<ExpectedContextDiagnostic>();
   expectTypeOf<PublicContextValidationResult>().toEqualTypeOf<ExpectedContextDiagnostic>();
   expectTypeOf<Parameters<typeof countPublicShapedBrowserObservationDiagnostics>>().toEqualTypeOf<
@@ -1032,28 +1014,24 @@ export function countPublicContextToolObservationDiagnostics(input: unknown): nu
 }
 
 it("shipped context tool observation diagnostic retains independent source and public closed result types", () => {
-  expectTypeOf<Parameters<typeof validateContextToolObservation>>().toEqualTypeOf<[unknown]>();
-  expectTypeOf<ReturnType<typeof validateContextToolObservation>>().not.toBeAny();
   expectTypeOf<
-    ReturnType<typeof validateContextToolObservation>
-  >().toEqualTypeOf<ExpectedContextDiagnostic>();
+    LibraryContextDiagnosticFacts<
+      typeof validateContextToolObservation,
+      Extract<ReturnType<typeof validateContextToolObservation>, { ok: false }>["reasons"],
+      Extract<ReturnType<typeof validateContextToolObservation>, { ok: false }>["reasons"][number]
+    >
+  >().toEqualTypeOf<
+    readonly [[unknown], true, ExpectedContextDiagnostic, readonly string[], true]
+  >();
   expectTypeOf<
-    Extract<ReturnType<typeof validateContextToolObservation>, { ok: false }>["reasons"]
-  >().toEqualTypeOf<readonly string[]>();
-  expectTypeOf<
-    Extract<ReturnType<typeof validateContextToolObservation>, { ok: false }>["reasons"][number]
-  >().not.toBeAny();
-  expectTypeOf<Parameters<typeof publicContextToolObservation>>().toEqualTypeOf<[unknown]>();
-  expectTypeOf<ReturnType<typeof publicContextToolObservation>>().not.toBeAny();
-  expectTypeOf<
-    ReturnType<typeof publicContextToolObservation>
-  >().toEqualTypeOf<ExpectedContextDiagnostic>();
-  expectTypeOf<
-    Extract<ReturnType<typeof publicContextToolObservation>, { ok: false }>["reasons"]
-  >().toEqualTypeOf<readonly string[]>();
-  expectTypeOf<
-    Extract<ReturnType<typeof publicContextToolObservation>, { ok: false }>["reasons"][number]
-  >().not.toBeAny();
+    LibraryContextDiagnosticFacts<
+      typeof publicContextToolObservation,
+      Extract<ReturnType<typeof publicContextToolObservation>, { ok: false }>["reasons"],
+      Extract<ReturnType<typeof publicContextToolObservation>, { ok: false }>["reasons"][number]
+    >
+  >().toEqualTypeOf<
+    readonly [[unknown], true, ExpectedContextDiagnostic, readonly string[], true]
+  >();
   expectTypeOf<ContextValidationResult>().toEqualTypeOf<ExpectedContextDiagnostic>();
   expectTypeOf<PublicContextValidationResult>().toEqualTypeOf<ExpectedContextDiagnostic>();
   expectTypeOf<Parameters<typeof countPublicContextToolObservationDiagnostics>>().toEqualTypeOf<

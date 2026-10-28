@@ -49,3 +49,11 @@ export type LibraryParserTripleExpected<SOutput, POutput, WOutput> = readonly [
   WOutput,
   true,
 ];
+
+export type LibraryContextDiagnosticFacts<F extends Callable, Reasons, Element> = readonly [
+  Parameters<F>,
+  MatcherPass<ExpectTypeOf<ReturnType<F>, { positive: true }>["not"]["toBeAny"]>,
+  ReturnType<F>,
+  Reasons,
+  MatcherPass<ExpectTypeOf<Element, { positive: true }>["not"]["toBeAny"]>,
+];

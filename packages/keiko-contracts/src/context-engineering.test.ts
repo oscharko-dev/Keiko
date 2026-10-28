@@ -4,6 +4,7 @@
 // totality, determinism, monotonicity, and the conservatism bounds from ADR-0052 gate 2.
 
 import { describe, it, expect, expectTypeOf, vi } from "vitest";
+import type { LibraryContextDiagnosticFacts } from "./__tests__/support/library-parser-type-facts.js";
 import {
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
   CONTEXT_EVICTION_POLICIES,
@@ -1137,28 +1138,24 @@ export function countPublicContextProfileDiagnostics(input: unknown): number {
 }
 
 it("shipped context profile diagnostic retains independent source and public closed result types", () => {
-  expectTypeOf<Parameters<typeof validateContextProfile>>().toEqualTypeOf<[unknown]>();
-  expectTypeOf<ReturnType<typeof validateContextProfile>>().not.toBeAny();
   expectTypeOf<
-    ReturnType<typeof validateContextProfile>
-  >().toEqualTypeOf<ExpectedContextDiagnostic>();
+    LibraryContextDiagnosticFacts<
+      typeof validateContextProfile,
+      Extract<ReturnType<typeof validateContextProfile>, { ok: false }>["reasons"],
+      Extract<ReturnType<typeof validateContextProfile>, { ok: false }>["reasons"][number]
+    >
+  >().toEqualTypeOf<
+    readonly [[unknown], true, ExpectedContextDiagnostic, readonly string[], true]
+  >();
   expectTypeOf<
-    Extract<ReturnType<typeof validateContextProfile>, { ok: false }>["reasons"]
-  >().toEqualTypeOf<readonly string[]>();
-  expectTypeOf<
-    Extract<ReturnType<typeof validateContextProfile>, { ok: false }>["reasons"][number]
-  >().not.toBeAny();
-  expectTypeOf<Parameters<typeof publicContextProfile>>().toEqualTypeOf<[unknown]>();
-  expectTypeOf<ReturnType<typeof publicContextProfile>>().not.toBeAny();
-  expectTypeOf<
-    ReturnType<typeof publicContextProfile>
-  >().toEqualTypeOf<ExpectedContextDiagnostic>();
-  expectTypeOf<
-    Extract<ReturnType<typeof publicContextProfile>, { ok: false }>["reasons"]
-  >().toEqualTypeOf<readonly string[]>();
-  expectTypeOf<
-    Extract<ReturnType<typeof publicContextProfile>, { ok: false }>["reasons"][number]
-  >().not.toBeAny();
+    LibraryContextDiagnosticFacts<
+      typeof publicContextProfile,
+      Extract<ReturnType<typeof publicContextProfile>, { ok: false }>["reasons"],
+      Extract<ReturnType<typeof publicContextProfile>, { ok: false }>["reasons"][number]
+    >
+  >().toEqualTypeOf<
+    readonly [[unknown], true, ExpectedContextDiagnostic, readonly string[], true]
+  >();
   expectTypeOf<ContextValidationResult>().toEqualTypeOf<ExpectedContextDiagnostic>();
   expectTypeOf<PublicContextValidationResult>().toEqualTypeOf<ExpectedContextDiagnostic>();
   expectTypeOf<Parameters<typeof countPublicContextProfileDiagnostics>>().toEqualTypeOf<
@@ -1221,26 +1218,24 @@ export function countPublicContextBudgetDiagnostics(input: unknown): number {
 }
 
 it("shipped context budget diagnostic retains independent source and public closed result types", () => {
-  expectTypeOf<Parameters<typeof validateContextBudget>>().toEqualTypeOf<[unknown]>();
-  expectTypeOf<ReturnType<typeof validateContextBudget>>().not.toBeAny();
   expectTypeOf<
-    ReturnType<typeof validateContextBudget>
-  >().toEqualTypeOf<ExpectedContextDiagnostic>();
+    LibraryContextDiagnosticFacts<
+      typeof validateContextBudget,
+      Extract<ReturnType<typeof validateContextBudget>, { ok: false }>["reasons"],
+      Extract<ReturnType<typeof validateContextBudget>, { ok: false }>["reasons"][number]
+    >
+  >().toEqualTypeOf<
+    readonly [[unknown], true, ExpectedContextDiagnostic, readonly string[], true]
+  >();
   expectTypeOf<
-    Extract<ReturnType<typeof validateContextBudget>, { ok: false }>["reasons"]
-  >().toEqualTypeOf<readonly string[]>();
-  expectTypeOf<
-    Extract<ReturnType<typeof validateContextBudget>, { ok: false }>["reasons"][number]
-  >().not.toBeAny();
-  expectTypeOf<Parameters<typeof publicContextBudget>>().toEqualTypeOf<[unknown]>();
-  expectTypeOf<ReturnType<typeof publicContextBudget>>().not.toBeAny();
-  expectTypeOf<ReturnType<typeof publicContextBudget>>().toEqualTypeOf<ExpectedContextDiagnostic>();
-  expectTypeOf<
-    Extract<ReturnType<typeof publicContextBudget>, { ok: false }>["reasons"]
-  >().toEqualTypeOf<readonly string[]>();
-  expectTypeOf<
-    Extract<ReturnType<typeof publicContextBudget>, { ok: false }>["reasons"][number]
-  >().not.toBeAny();
+    LibraryContextDiagnosticFacts<
+      typeof publicContextBudget,
+      Extract<ReturnType<typeof publicContextBudget>, { ok: false }>["reasons"],
+      Extract<ReturnType<typeof publicContextBudget>, { ok: false }>["reasons"][number]
+    >
+  >().toEqualTypeOf<
+    readonly [[unknown], true, ExpectedContextDiagnostic, readonly string[], true]
+  >();
   expectTypeOf<ContextValidationResult>().toEqualTypeOf<ExpectedContextDiagnostic>();
   expectTypeOf<PublicContextValidationResult>().toEqualTypeOf<ExpectedContextDiagnostic>();
   expectTypeOf<Parameters<typeof countPublicContextBudgetDiagnostics>>().toEqualTypeOf<[unknown]>();
@@ -1295,28 +1290,27 @@ export function countPublicContextAssemblyDiagnosticsDiagnostics(input: unknown)
 }
 
 it("shipped context assembly diagnostic retains independent source and public closed result types", () => {
-  expectTypeOf<Parameters<typeof validateContextAssemblyDiagnostics>>().toEqualTypeOf<[unknown]>();
-  expectTypeOf<ReturnType<typeof validateContextAssemblyDiagnostics>>().not.toBeAny();
   expectTypeOf<
-    ReturnType<typeof validateContextAssemblyDiagnostics>
-  >().toEqualTypeOf<ExpectedContextDiagnostic>();
+    LibraryContextDiagnosticFacts<
+      typeof validateContextAssemblyDiagnostics,
+      Extract<ReturnType<typeof validateContextAssemblyDiagnostics>, { ok: false }>["reasons"],
+      Extract<
+        ReturnType<typeof validateContextAssemblyDiagnostics>,
+        { ok: false }
+      >["reasons"][number]
+    >
+  >().toEqualTypeOf<
+    readonly [[unknown], true, ExpectedContextDiagnostic, readonly string[], true]
+  >();
   expectTypeOf<
-    Extract<ReturnType<typeof validateContextAssemblyDiagnostics>, { ok: false }>["reasons"]
-  >().toEqualTypeOf<readonly string[]>();
-  expectTypeOf<
-    Extract<ReturnType<typeof validateContextAssemblyDiagnostics>, { ok: false }>["reasons"][number]
-  >().not.toBeAny();
-  expectTypeOf<Parameters<typeof publicContextAssemblyDiagnostics>>().toEqualTypeOf<[unknown]>();
-  expectTypeOf<ReturnType<typeof publicContextAssemblyDiagnostics>>().not.toBeAny();
-  expectTypeOf<
-    ReturnType<typeof publicContextAssemblyDiagnostics>
-  >().toEqualTypeOf<ExpectedContextDiagnostic>();
-  expectTypeOf<
-    Extract<ReturnType<typeof publicContextAssemblyDiagnostics>, { ok: false }>["reasons"]
-  >().toEqualTypeOf<readonly string[]>();
-  expectTypeOf<
-    Extract<ReturnType<typeof publicContextAssemblyDiagnostics>, { ok: false }>["reasons"][number]
-  >().not.toBeAny();
+    LibraryContextDiagnosticFacts<
+      typeof publicContextAssemblyDiagnostics,
+      Extract<ReturnType<typeof publicContextAssemblyDiagnostics>, { ok: false }>["reasons"],
+      Extract<ReturnType<typeof publicContextAssemblyDiagnostics>, { ok: false }>["reasons"][number]
+    >
+  >().toEqualTypeOf<
+    readonly [[unknown], true, ExpectedContextDiagnostic, readonly string[], true]
+  >();
   expectTypeOf<ContextValidationResult>().toEqualTypeOf<ExpectedContextDiagnostic>();
   expectTypeOf<PublicContextValidationResult>().toEqualTypeOf<ExpectedContextDiagnostic>();
   expectTypeOf<Parameters<typeof countPublicContextAssemblyDiagnosticsDiagnostics>>().toEqualTypeOf<
