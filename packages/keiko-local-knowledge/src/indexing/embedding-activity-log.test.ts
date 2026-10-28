@@ -13,6 +13,7 @@
 // Activity Log record for the operation the proof id names.
 
 import { describe, expect, it } from "vitest";
+import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import {
   expectActivityLogProof,
@@ -276,4 +277,60 @@ describe("emitEmbeddingActivity — Activity Log proofs", () => {
     );
     expect(persisted).toMatchObject({ chunkCount: 2, vectorCount: 1 });
   });
+});
+
+function retryFieldIdentityInput(): EmbeddingActivity & { readonly op: "embedding.batch.retry" } {
+  return {
+    op: "embedding.batch.retry",
+    attempt: 1,
+    zeroProgressRetries: 0,
+    maxRetries: 5,
+    delayMs: 1.5,
+    remainingCount: 6,
+    completedCount: 0,
+    transport: "array-batch",
+    endpointDigest: DIGEST,
+    failureKind: "unavailable",
+  };
+}
+
+function capturedBatchRetryEvents(): readonly [KnowledgeLogEvent, KnowledgeLogEvent] {
+  const retry = retryFieldIdentityInput();
+  const firstEvent = emitAndCapture({ ...retry, op: "embedding.batch.partial-progress" })[0];
+  const secondEvent = emitAndCapture(retry)[0];
+  if (firstEvent === undefined || secondEvent === undefined)
+    throw new TypeError("missing batch retry event");
+  return [firstEvent, secondEvent];
+}
+
+it("retains shared product retry descriptors and vocabulary across both captured registrations", () => {
+  const [firstEvent, secondEvent] = capturedBatchRetryEvents();
+  const first = activityLogEventRegistration(firstEvent);
+  const second = activityLogEventRegistration(secondEvent);
+  if (first === undefined || second === undefined)
+    throw new TypeError("missing batch retry registration");
+  expect(first.op).toBe("embedding.batch.partial-progress");
+  expect(second.op).toBe("embedding.batch.retry");
+  expect(Object.keys(first.fields)).toEqual([
+    "completeness",
+    "loss",
+    "capsuleIdDigest",
+    "documentIdDigest",
+    "attempt",
+    "zeroProgressRetries",
+    "maxRetries",
+    "delayMs",
+    "remainingCount",
+    "completedCount",
+    "transport",
+    "endpointDigest",
+    "failureKind",
+  ]);
+  expect(Object.keys(second.fields)).toEqual(Object.keys(first.fields));
+  for (const key of Object.keys(first.fields)) expect(first.fields[key]).toBe(second.fields[key]);
+  expect(first.fields.transport?.values).toEqual(["array-batch"]);
+  expect(first.fields.transport?.values).toBe(second.fields.transport?.values);
+  expect(first.fields.delayMs?.type).toBe("number");
+  expect(firstEvent.extra?.delayMs).toBe(1.5);
+  expect(secondEvent.extra?.delayMs).toBe(1.5);
 });

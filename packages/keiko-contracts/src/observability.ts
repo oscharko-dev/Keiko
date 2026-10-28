@@ -32,6 +32,8 @@ export {
   type ActivityLogCompletenessFieldContract,
   type ActivityLogLossFieldContract,
   activityLogAutomaticCatalogFields,
+  activityLogEmbeddingBatchRetryFields,
+  type ActivityLogEmbeddingBatchRetryFields,
   activityLogBooleanField,
   activityLogCountField,
   activityLogDurationField,

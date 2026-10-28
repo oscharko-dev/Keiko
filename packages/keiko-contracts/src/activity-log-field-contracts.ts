@@ -153,3 +153,87 @@ export function activityLogCompletenessField(): Readonly<ActivityLogCompleteness
 export function activityLogLossField(): Readonly<ActivityLogLossFieldContract> {
   return { type: "string", dataClass: "loss-state", required: true };
 }
+
+export interface ActivityLogEmbeddingBatchRetryFields {
+  readonly capsuleIdDigest: {
+    readonly type: "string";
+    readonly dataClass: "digest";
+    readonly required: false;
+    readonly maxLength: 64;
+  };
+  readonly documentIdDigest: {
+    readonly type: "string";
+    readonly dataClass: "digest";
+    readonly required: false;
+    readonly maxLength: 64;
+  };
+  readonly attempt: {
+    readonly type: "integer";
+    readonly dataClass: "count";
+    readonly required: true;
+  };
+  readonly zeroProgressRetries: {
+    readonly type: "integer";
+    readonly dataClass: "count";
+    readonly required: true;
+  };
+  readonly maxRetries: {
+    readonly type: "integer";
+    readonly dataClass: "count";
+    readonly required: true;
+  };
+  readonly delayMs: {
+    readonly type: "number";
+    readonly dataClass: "duration";
+    readonly required: true;
+  };
+  readonly remainingCount: {
+    readonly type: "integer";
+    readonly dataClass: "count";
+    readonly required: true;
+  };
+  readonly completedCount: {
+    readonly type: "integer";
+    readonly dataClass: "count";
+    readonly required: true;
+  };
+  readonly transport: {
+    readonly type: "string";
+    readonly dataClass: "closed-enum";
+    readonly required: true;
+    readonly values: readonly ["array-batch"];
+  };
+  readonly endpointDigest: {
+    readonly type: "string";
+    readonly dataClass: "digest";
+    readonly required: false;
+    readonly maxLength: 16;
+  };
+  readonly failureKind: {
+    readonly type: "string";
+    readonly dataClass: "error-kind";
+    readonly required: true;
+    readonly maxLength: 64;
+  };
+}
+
+export function activityLogEmbeddingBatchRetryFields(): Readonly<ActivityLogEmbeddingBatchRetryFields> {
+  return {
+    capsuleIdDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    documentIdDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    attempt: { type: "integer", dataClass: "count", required: true },
+    zeroProgressRetries: { type: "integer", dataClass: "count", required: true },
+    maxRetries: { type: "integer", dataClass: "count", required: true },
+    delayMs: { type: "number", dataClass: "duration", required: true },
+    remainingCount: { type: "integer", dataClass: "count", required: true },
+    completedCount: { type: "integer", dataClass: "count", required: true },
+    transport: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["array-batch"],
+    },
+    endpointDigest: { type: "string", dataClass: "digest", required: false, maxLength: 16 },
+    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+  };
+}

@@ -415,6 +415,124 @@ async function mountNativeFilesSession(
   await screen.findByRole("treeitem", { name: /one\.ts/u });
 }
 
+type PendingChatReply = ReturnType<typeof deferred<{ readonly chat: Chat }>>;
+
+function mountAcknowledgedOldFiles(): ReturnType<typeof screen.findByTestId> {
+  const initial = fixture(["/manuals/Old"]);
+  mocks.initialChat = chat([scope("/manuals/Old")]);
+  mocks.serverChat = mocks.initialChat;
+  persist(initial.wins, initial.conns);
+  render(<AppShell />);
+  return screen.findByTestId("workspace");
+}
+
+function mountDisconnectedFiles(
+  initial: ReturnType<typeof fixture>,
+  scopes: readonly ChatConnectedScope[],
+): ReturnType<typeof screen.findByTestId> {
+  mocks.initialChat = chat(scopes);
+  mocks.serverChat = mocks.initialChat;
+  persist(initial.wins, initial.conns);
+  render(<AppShell />);
+  return screen.findByTestId("workspace");
+}
+
+async function mountFailedFilesNavigation(): Promise<void> {
+  await mountAcknowledgedOldFiles();
+  mocks.updateChatConnectedScopes.mockRejectedValueOnce(
+    new ApiError("UNAVAILABLE", "Unavailable", 503),
+  );
+  await act(async () =>
+    mocks.workspace?.api.update("files-0", {
+      cfg: { root: "/manuals/New", resolvedRoot: "/manuals/New" },
+    }),
+  );
+  await waitFor(() => expect(chatScopeTransition("chat-1")).toBe("failed"));
+}
+
+async function mountFailedInitialFilesBind(): Promise<void> {
+  const initial = fixture(["/manuals/New"]);
+  initial.conns.length = 0;
+  await mountDisconnectedFiles(initial, []);
+  fireEvent.pointerDown(document.body);
+  mocks.updateChatConnectedScopes.mockRejectedValueOnce(
+    new ApiError("UNAVAILABLE", "Unavailable", 503),
+  );
+  await auditConnect();
+  await waitFor(() => expect(chatScopeTransition("chat-1")).toBe("failed"));
+}
+
+function prepareFilesCompensation(): {
+  readonly pending: PendingChatReply;
+  readonly compensation: PendingChatReply;
+} {
+  const pending = deferred<{ readonly chat: Chat }>();
+  const compensation = deferred<{ readonly chat: Chat }>();
+  mocks.updateChatConnectedScopes
+    .mockReturnValueOnce(pending.promise)
+    .mockReturnValueOnce(compensation.promise);
+  return { pending, compensation };
+}
+
+async function timeOutAndDetachFilesNavigation(pending: PendingChatReply): Promise<void> {
+  await act(async () =>
+    mocks.workspace?.api.update("files-0", {
+      cfg: { root: "/manuals/New", resolvedRoot: "/manuals/New" },
+    }),
+  );
+  await act(async () => vi.advanceTimersByTimeAsync(CHAT_MUTATION_TIMEOUT_MS));
+  expect(chatScopeTransition("chat-1")).toBe("failed");
+  await act(async () =>
+    mocks.workspace?.api.update("chat-window", {
+      cfg: { chatId: "chat-2", projectPath: "/repo" },
+    }),
+  );
+  expect(chatScopeTransition("chat-1")).toBe("failed");
+  await act(async () => {
+    mocks.serverChat = chat([scope("/manuals/New")], 2);
+    pending.resolve({ chat: mocks.serverChat });
+  });
+  expect(mocks.updateChatConnectedScopes).toHaveBeenCalledTimes(2);
+  expect(chatScopeTransition("chat-1")).toBe("failed");
+}
+
+function observeBoundChatCancellation(): {
+  readonly cancel: ReturnType<typeof vi.fn>;
+  readonly release: ReturnType<typeof registerChatWindowRuntime>;
+  readonly cancellation: Pick<ReturnType<typeof renderHook>, "unmount">;
+} {
+  const cancel = vi.fn();
+  const release = registerChatWindowRuntime("chat-window", {
+    conversationId: "chat-1",
+    projectPath: "/repo",
+  });
+  const cancellation = renderHook(() =>
+    useChatScopeCancellation((conversationId): void => {
+      if (conversationId === "chat-1") cancel();
+    }),
+  );
+  return { cancel, release, cancellation };
+}
+
+function prepareStableOpaqueReplay(): {
+  readonly initial: ReturnType<typeof fixture>;
+  readonly cancel: ReturnType<typeof vi.fn>;
+  readonly cancellation: Pick<ReturnType<typeof renderHook>, "unmount">;
+} {
+  const initial = fixture(["/manuals/Stable"]);
+  mocks.initialChat = chat([scope("/manuals/Stable")]);
+  mocks.serverChat = mocks.initialChat;
+  persist(initial.wins, sanitizePersistedWorkspace(initial.wins, initial.conns).conns);
+  const cancel = vi.fn();
+  const cancellation = renderHook(() => useChatScopeCancellation(cancel));
+  return { initial, cancel, cancellation };
+}
+
+function renderStableOpaqueWorkspace(): ReturnType<typeof waitFor> {
+  render(<AppShell />);
+  return waitFor(() => expect(mocks.workspace?.conns[0]?.boundRoot).toBe("/manuals/Stable"));
+}
+
 describe("AppShell canonical workspace scope synchronization", () => {
   it.each([
     { kind: "workspace-root", cfg: {} },
@@ -461,15 +579,9 @@ describe("AppShell canonical workspace scope synchronization", () => {
   );
 
   it("preserves an active response when another browser restores the same opaque Files edge", async () => {
-    const initial = fixture(["/manuals/Stable"]);
-    mocks.initialChat = chat([scope("/manuals/Stable")]);
-    mocks.serverChat = mocks.initialChat;
-    persist(initial.wins, sanitizePersistedWorkspace(initial.wins, initial.conns).conns);
-    const cancel = vi.fn();
-    const cancellation = renderHook(() => useChatScopeCancellation(cancel));
+    const { initial, cancel, cancellation } = prepareStableOpaqueReplay();
     try {
-      render(<AppShell />);
-      await waitFor(() => expect(mocks.workspace?.conns[0]?.boundRoot).toBe("/manuals/Stable"));
+      await renderStableOpaqueWorkspace();
       cancel.mockClear();
       mocks.fetchChats.mockClear();
       vi.mocked(reportFilesScopeDecision).mockClear();
@@ -501,15 +613,9 @@ describe("AppShell canonical workspace scope synchronization", () => {
   it.each(["missing", "changed"] as const)(
     "revalidates an opaque Files edge with a %s ownership fingerprint before retaining a response",
     async (fingerprint) => {
-      const initial = fixture(["/manuals/Stable"]);
-      mocks.initialChat = chat([scope("/manuals/Stable")]);
-      mocks.serverChat = mocks.initialChat;
-      persist(initial.wins, sanitizePersistedWorkspace(initial.wins, initial.conns).conns);
-      const cancel = vi.fn();
-      const cancellation = renderHook(() => useChatScopeCancellation(cancel));
+      const { initial, cancel, cancellation } = prepareStableOpaqueReplay();
       try {
-        render(<AppShell />);
-        await waitFor(() => expect(mocks.workspace?.conns[0]?.boundRoot).toBe("/manuals/Stable"));
+        await renderStableOpaqueWorkspace();
         cancel.mockClear();
         mocks.fetchChats.mockClear();
         vi.mocked(reportFilesScopeDecision).mockClear();
@@ -571,16 +677,7 @@ describe("AppShell canonical workspace scope synchronization", () => {
     mocks.serverChat = mocks.initialChat;
     persist(initial.wins, initial.conns);
     const pending = deferred<{ readonly chat: Chat }>();
-    const cancel = vi.fn();
-    const release = registerChatWindowRuntime("chat-window", {
-      conversationId: "chat-1",
-      projectPath: "/repo",
-    });
-    const cancellation = renderHook(() =>
-      useChatScopeCancellation((conversationId): void => {
-        if (conversationId === "chat-1") cancel();
-      }),
-    );
+    const { cancel, release, cancellation } = observeBoundChatCancellation();
     try {
       render(<AppShell />);
       await screen.findByTestId("workspace");
@@ -1407,16 +1504,7 @@ it.each([false, true])(
     mocks.serverChat = mocks.initialChat;
     persist(initial.wins, initial.conns);
     const pending = deferred<{ readonly chat: Chat }>();
-    const cancel = vi.fn();
-    const release = registerChatWindowRuntime("chat-window", {
-      conversationId: "chat-1",
-      projectPath: "/repo",
-    });
-    const cancellation = renderHook(() =>
-      useChatScopeCancellation((conversationId): void => {
-        if (conversationId === "chat-1") cancel();
-      }),
-    );
+    const { cancel, release, cancellation } = observeBoundChatCancellation();
     try {
       render(<AppShell />);
       await screen.findByTestId("workspace");
@@ -1453,21 +1541,7 @@ it.each([false, true])(
 );
 
 it("returning to acknowledged root releases a failed navigation hold", async () => {
-  const initial = fixture(["/manuals/Old"]);
-  mocks.initialChat = chat([scope("/manuals/Old")]);
-  mocks.serverChat = mocks.initialChat;
-  persist(initial.wins, initial.conns);
-  render(<AppShell />);
-  await screen.findByTestId("workspace");
-  mocks.updateChatConnectedScopes.mockRejectedValueOnce(
-    new ApiError("UNAVAILABLE", "Unavailable", 503),
-  );
-  await act(async () =>
-    mocks.workspace?.api.update("files-0", {
-      cfg: { root: "/manuals/New", resolvedRoot: "/manuals/New" },
-    }),
-  );
-  await waitFor(() => expect(chatScopeTransition("chat-1")).toBe("failed"));
+  await mountFailedFilesNavigation();
   await act(async () =>
     mocks.workspace?.api.update("files-0", {
       cfg: { root: "/manuals/Old", resolvedRoot: "/manuals/Old" },
@@ -1478,21 +1552,7 @@ it("returning to acknowledged root releases a failed navigation hold", async () 
 });
 
 it("chat switch cannot leave an unreachable source hold on the old conversation", async () => {
-  const initial = fixture(["/manuals/Old"]);
-  mocks.initialChat = chat([scope("/manuals/Old")]);
-  mocks.serverChat = mocks.initialChat;
-  persist(initial.wins, initial.conns);
-  render(<AppShell />);
-  await screen.findByTestId("workspace");
-  mocks.updateChatConnectedScopes.mockRejectedValueOnce(
-    new ApiError("UNAVAILABLE", "Unavailable", 503),
-  );
-  await act(async () =>
-    mocks.workspace?.api.update("files-0", {
-      cfg: { root: "/manuals/New", resolvedRoot: "/manuals/New" },
-    }),
-  );
-  await waitFor(() => expect(chatScopeTransition("chat-1")).toBe("failed"));
+  await mountFailedFilesNavigation();
   await act(async () =>
     mocks.workspace?.api.update("chat-window", { cfg: { chatId: "chat-2", projectPath: "/repo" } }),
   );
@@ -1505,38 +1565,11 @@ it("chat switch cannot leave an unreachable source hold on the old conversation"
 });
 
 it("retains a detached timeout hold until the underlying compensation settles", async () => {
-  const initial = fixture(["/manuals/Old"]);
-  mocks.initialChat = chat([scope("/manuals/Old")]);
-  mocks.serverChat = mocks.initialChat;
-  persist(initial.wins, initial.conns);
-  render(<AppShell />);
-  await screen.findByTestId("workspace");
-  const pending = deferred<{ readonly chat: Chat }>();
-  const compensation = deferred<{ readonly chat: Chat }>();
-  mocks.updateChatConnectedScopes
-    .mockReturnValueOnce(pending.promise)
-    .mockReturnValueOnce(compensation.promise);
+  await mountAcknowledgedOldFiles();
+  const { pending, compensation } = prepareFilesCompensation();
   vi.useFakeTimers();
   try {
-    await act(async () =>
-      mocks.workspace?.api.update("files-0", {
-        cfg: { root: "/manuals/New", resolvedRoot: "/manuals/New" },
-      }),
-    );
-    await act(async () => vi.advanceTimersByTimeAsync(CHAT_MUTATION_TIMEOUT_MS));
-    expect(chatScopeTransition("chat-1")).toBe("failed");
-    await act(async () =>
-      mocks.workspace?.api.update("chat-window", {
-        cfg: { chatId: "chat-2", projectPath: "/repo" },
-      }),
-    );
-    expect(chatScopeTransition("chat-1")).toBe("failed");
-    await act(async () => {
-      mocks.serverChat = chat([scope("/manuals/New")], 2);
-      pending.resolve({ chat: mocks.serverChat });
-    });
-    expect(mocks.updateChatConnectedScopes).toHaveBeenCalledTimes(2);
-    expect(chatScopeTransition("chat-1")).toBe("failed");
+    await timeOutAndDetachFilesNavigation(pending);
     await act(async () => {
       mocks.serverChat = chat([scope("/manuals/Old")], 3);
       compensation.resolve({ chat: mocks.serverChat });
@@ -1562,19 +1595,7 @@ async function auditConnect(filesId = "files-0"): Promise<void> {
 }
 
 it("recovers the same failed initial binding without orphaning its hold", async () => {
-  const initial = fixture(["/manuals/New"]);
-  initial.conns.length = 0;
-  mocks.initialChat = chat([]);
-  mocks.serverChat = mocks.initialChat;
-  persist(initial.wins, initial.conns);
-  render(<AppShell />);
-  await screen.findByTestId("workspace");
-  fireEvent.pointerDown(document.body);
-  mocks.updateChatConnectedScopes.mockRejectedValueOnce(
-    new ApiError("UNAVAILABLE", "Unavailable", 503),
-  );
-  await auditConnect();
-  await waitFor(() => expect(chatScopeTransition("chat-1")).toBe("failed"));
+  await mountFailedInitialFilesBind();
   expect(mocks.workspace?.conns).toHaveLength(0);
   await auditConnect();
   await waitFor(() => expect(mocks.workspace?.conns).toHaveLength(1));
@@ -1583,19 +1604,7 @@ it("recovers the same failed initial binding without orphaning its hold", async 
 });
 
 it("releases a settled failed initial intent when its Files owner closes", async () => {
-  const initial = fixture(["/manuals/New"]);
-  initial.conns.length = 0;
-  mocks.initialChat = chat([]);
-  mocks.serverChat = mocks.initialChat;
-  persist(initial.wins, initial.conns);
-  render(<AppShell />);
-  await screen.findByTestId("workspace");
-  fireEvent.pointerDown(document.body);
-  mocks.updateChatConnectedScopes.mockRejectedValueOnce(
-    new ApiError("UNAVAILABLE", "Unavailable", 503),
-  );
-  await auditConnect();
-  await waitFor(() => expect(chatScopeTransition("chat-1")).toBe("failed"));
+  await mountFailedInitialFilesBind();
   await act(async () => mocks.workspace?.api.close("files-0"));
   await waitFor(() =>
     expect(mocks.workspace?.wins?.find((win) => win.id === "files-0")).toBeUndefined(),
@@ -1655,21 +1664,7 @@ it("retains a detached hold when canonical compensation fails", async () => {
 it.each([true, false])(
   "revalidates restored roots through canonical persistence (accepted=%s)",
   async (accepted) => {
-    const initial = fixture(["/manuals/Old"]);
-    mocks.initialChat = chat([scope("/manuals/Old")]);
-    mocks.serverChat = mocks.initialChat;
-    persist(initial.wins, initial.conns);
-    render(<AppShell />);
-    await screen.findByTestId("workspace");
-    mocks.updateChatConnectedScopes.mockRejectedValueOnce(
-      new ApiError("UNAVAILABLE", "Unavailable", 503),
-    );
-    await act(async () =>
-      mocks.workspace?.api.update("files-0", {
-        cfg: { root: "/manuals/New", resolvedRoot: "/manuals/New" },
-      }),
-    );
-    await waitFor(() => expect(chatScopeTransition("chat-1")).toBe("failed"));
+    await mountFailedFilesNavigation();
     mocks.serverChat = chat([scope("/manuals/New")], 2);
     if (!accepted)
       mocks.updateChatConnectedScopes.mockRejectedValueOnce(
@@ -1760,38 +1755,11 @@ async function assertBlockedDetachedRebind(): Promise<void> {
 }
 
 it("blocks detached recovery until the original compensation settles", async () => {
-  const initial = fixture(["/manuals/Old"]);
-  mocks.initialChat = chat([scope("/manuals/Old")]);
-  mocks.serverChat = mocks.initialChat;
-  persist(initial.wins, initial.conns);
-  render(<AppShell />);
-  await screen.findByTestId("workspace");
-  const pending = deferred<{ readonly chat: Chat }>();
-  const compensation = deferred<{ readonly chat: Chat }>();
-  mocks.updateChatConnectedScopes
-    .mockReturnValueOnce(pending.promise)
-    .mockReturnValueOnce(compensation.promise);
+  await mountAcknowledgedOldFiles();
+  const { pending, compensation } = prepareFilesCompensation();
   vi.useFakeTimers();
   try {
-    await act(async () =>
-      mocks.workspace?.api.update("files-0", {
-        cfg: { root: "/manuals/New", resolvedRoot: "/manuals/New" },
-      }),
-    );
-    await act(async () => vi.advanceTimersByTimeAsync(CHAT_MUTATION_TIMEOUT_MS));
-    expect(chatScopeTransition("chat-1")).toBe("failed");
-    await act(async () =>
-      mocks.workspace?.api.update("chat-window", {
-        cfg: { chatId: "chat-2", projectPath: "/repo" },
-      }),
-    );
-    expect(chatScopeTransition("chat-1")).toBe("failed");
-    await act(async () => {
-      mocks.serverChat = chat([scope("/manuals/New")], 2);
-      pending.resolve({ chat: mocks.serverChat });
-    });
-    expect(mocks.updateChatConnectedScopes).toHaveBeenCalledTimes(2);
-    expect(chatScopeTransition("chat-1")).toBe("failed");
+    await timeOutAndDetachFilesNavigation(pending);
     await assertBlockedDetachedRebind();
     await act(async () => {
       mocks.serverChat = chat([scope("/manuals/Old")], 3);
@@ -1884,11 +1852,7 @@ it("initial source-cap refusal leaves no hold without any persistence attempt", 
     { length: DEFAULT_GROUNDING_LIMITS.maxConnectedSources },
     (_, index) => scope(`/manuals/Existing${index}`),
   );
-  mocks.initialChat = chat(existing);
-  mocks.serverChat = mocks.initialChat;
-  persist(initial.wins, initial.conns);
-  render(<AppShell />);
-  await screen.findByTestId("workspace");
+  await mountDisconnectedFiles(initial, existing);
   fireEvent.pointerDown(document.body);
   await auditConnect();
   expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
@@ -1948,11 +1912,7 @@ it.each(["pending", "failed"] as const)(
     const existing = Array.from({ length: DEFAULT_GROUNDING_LIMITS.maxConnectedSources }, (_, i) =>
       scope(`/manuals/Existing${i}`),
     );
-    mocks.initialChat = chat(existing);
-    mocks.serverChat = mocks.initialChat;
-    persist(initial.wins, initial.conns);
-    render(<AppShell />);
-    await screen.findByTestId("workspace");
+    await mountDisconnectedFiles(initial, existing);
     fireEvent.pointerDown(document.body);
     const unrelated = beginChatScopeTransition("chat-1", "unrelated-accepted-write");
     if (state === "failed") unrelated.settle(false);
@@ -1971,11 +1931,7 @@ it("clean refusal cannot clear a prior pending same-key bind", async () => {
   const existing = Array.from({ length: DEFAULT_GROUNDING_LIMITS.maxConnectedSources }, (_, i) =>
     scope(`/manuals/Existing${i}`),
   );
-  mocks.initialChat = chat(existing);
-  mocks.serverChat = mocks.initialChat;
-  persist(initial.wins, initial.conns);
-  render(<AppShell />);
-  await screen.findByTestId("workspace");
+  await mountDisconnectedFiles(initial, existing);
   fireEvent.pointerDown(document.body);
   beginChatScopeTransition("chat-1", "bind:chat-window:files-0");
   await auditConnect();
@@ -1991,11 +1947,7 @@ it("obsolete clean refusal cannot settle a newer same-key pending intent", async
   const existing = Array.from({ length: DEFAULT_GROUNDING_LIMITS.maxConnectedSources }, (_, i) =>
     scope(`/manuals/Existing${i}`),
   );
-  mocks.initialChat = chat(existing);
-  mocks.serverChat = mocks.initialChat;
-  persist(initial.wins, initial.conns);
-  render(<AppShell />);
-  await screen.findByTestId("workspace");
+  await mountDisconnectedFiles(initial, existing);
   fireEvent.pointerDown(document.body);
   const lookup = deferred<{ chats: Chat[] }>();
   mocks.fetchChats.mockReturnValueOnce(lookup.promise);

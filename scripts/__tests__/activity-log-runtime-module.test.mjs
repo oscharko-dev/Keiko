@@ -421,3 +421,75 @@ describe("universal runtime descriptor rendering", () => {
     },
   );
 });
+
+describe("embedding retry runtime field policy rendering", () => {
+  it.each(["embedding.batch.partial-progress", "embedding.batch.retry"])(
+    "renders a fresh exact bundle for %s",
+    (op) => {
+      const operation = catalog.typedRegistry.operations.find((entry) => entry.op === op);
+      const registry = { ...catalog.typedRegistry, operations: [operation] };
+      expect(runtimeOperationsModule(registry)).toContain(
+        "...activityLogEmbeddingBatchRetryFields()",
+      );
+      withGeneratedRuntime(({ identity }) => {
+        expect(identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields).toEqual(operation.fields);
+        expect(Object.keys(identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields)).toEqual(
+          Object.keys(operation.fields),
+        );
+      }, registry);
+    },
+  );
+
+  it.each([
+    "reordered",
+    "missing",
+    "extra",
+    "descriptor-order",
+    "integer-delay",
+    "vocabulary",
+    "other-operation",
+  ])("keeps nonexact retry policy literal: %s", (mode) => {
+    const prior = catalog.typedRegistry.operations.find(
+      (entry) => entry.op === "embedding.batch.retry",
+    );
+    const fields = structuredClone(prior.fields);
+    if (mode === "reordered") {
+      const value = fields.attempt;
+      delete fields.attempt;
+      fields.attempt = value;
+    }
+    if (mode === "missing") delete fields.completedCount;
+    if (mode === "extra") fields.extraCount = fields.attempt;
+    if (mode === "descriptor-order") {
+      const { required, ...rest } = fields.delayMs;
+      fields.delayMs = { required, ...rest };
+    }
+    if (mode === "integer-delay") fields.delayMs.type = "integer";
+    if (mode === "vocabulary") fields.transport.values.push("scalar");
+    const operation = { ...prior, fields };
+    if (mode === "other-operation") operation.op = "embedding.chunk.retry";
+    const registry = { ...catalog.typedRegistry, operations: [operation] };
+    expect(runtimeOperationsModule(registry)).not.toContain(
+      "...activityLogEmbeddingBatchRetryFields()",
+    );
+    withGeneratedRuntime(({ identity }) => {
+      expect(identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields).toEqual(fields);
+      expect(Object.keys(identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields)).toEqual(
+        Object.keys(fields),
+      );
+    }, registry);
+  });
+
+  it("refuses an extra own undefined descriptor property when considering retry folding", () => {
+    const prior = catalog.typedRegistry.operations.find(
+      (entry) => entry.op === "embedding.batch.retry",
+    );
+    const fields = structuredClone(prior.fields);
+    fields.delayMs.extra = undefined;
+    expect(Object.hasOwn(fields.delayMs, "extra")).toBe(true);
+    const registry = { ...catalog.typedRegistry, operations: [{ ...prior, fields }] };
+    expect(runtimeOperationsModule(registry)).not.toContain(
+      "...activityLogEmbeddingBatchRetryFields()",
+    );
+  });
+});

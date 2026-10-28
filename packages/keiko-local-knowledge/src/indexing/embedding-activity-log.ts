@@ -1,4 +1,6 @@
 import {
+  activityLogEmbeddingBatchRetryFields,
+  type ActivityLogEmbeddingBatchRetryFields,
   activityLogEvent,
   defineActivityLogOperation,
   type ActivityLogErrorKind,
@@ -13,24 +15,8 @@ import {
 } from "../knowledge-log.js";
 import type { IndexingLogContext } from "./types.js";
 
-const BATCH_RETRY_FIELD_CONTRACTS = {
-  capsuleIdDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
-  documentIdDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
-  attempt: { type: "integer", dataClass: "count", required: true },
-  zeroProgressRetries: { type: "integer", dataClass: "count", required: true },
-  maxRetries: { type: "integer", dataClass: "count", required: true },
-  delayMs: { type: "number", dataClass: "duration", required: true },
-  remainingCount: { type: "integer", dataClass: "count", required: true },
-  completedCount: { type: "integer", dataClass: "count", required: true },
-  transport: {
-    type: "string",
-    dataClass: "closed-enum",
-    required: true,
-    values: ["array-batch"],
-  },
-  endpointDigest: { type: "string", dataClass: "digest", required: false, maxLength: 16 },
-  failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
-} as const satisfies Readonly<Record<string, ActivityLogFieldContract>>;
+const BATCH_RETRY_FIELD_CONTRACTS: Readonly<ActivityLogEmbeddingBatchRetryFields> =
+  activityLogEmbeddingBatchRetryFields();
 
 const CLOSING_FAILURE_FIELD_CONTRACTS = {
   capsuleIdDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },

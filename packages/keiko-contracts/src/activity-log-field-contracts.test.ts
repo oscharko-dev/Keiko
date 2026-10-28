@@ -1,6 +1,7 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   activityLogAutomaticCatalogFields,
+  activityLogEmbeddingBatchRetryFields,
   activityLogCompletenessField,
   activityLogLossField,
   activityLogBooleanField,
@@ -286,5 +287,58 @@ describe("universal Activity Log field construction", () => {
     });
     expect(overridden.fields.completeness).toBe(explicit);
     expect(overridden.fields.loss).toBe(ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS.loss);
+  });
+});
+
+describe("embedding batch retry field policy", () => {
+  it("preserves all eleven ordered descriptors and exact numeric duration and bounds", () => {
+    const fields = activityLogEmbeddingBatchRetryFields();
+    const operation = ACTIVITY_LOG_OPERATION_REGISTRY.find(
+      (entry) => entry.op === "embedding.batch.retry",
+    );
+    expect(operation).toBeDefined();
+    expect(fields).toEqual(Object.fromEntries(Object.entries(operation?.fields ?? {}).slice(2)));
+    expectOrdinaryDescriptor(fields, [
+      "capsuleIdDigest",
+      "documentIdDigest",
+      "attempt",
+      "zeroProgressRetries",
+      "maxRetries",
+      "delayMs",
+      "remainingCount",
+      "completedCount",
+      "transport",
+      "endpointDigest",
+      "failureKind",
+    ]);
+    expectTypeOf(fields.delayMs.type).toEqualTypeOf<"number">();
+    expectTypeOf(fields.delayMs.dataClass).toEqualTypeOf<"duration">();
+    expectTypeOf(fields.capsuleIdDigest.required).toEqualTypeOf<false>();
+    expectTypeOf(fields.capsuleIdDigest.maxLength).toEqualTypeOf<64>();
+    expectTypeOf(fields.endpointDigest.maxLength).toEqualTypeOf<16>();
+    expectTypeOf(fields.failureKind.maxLength).toEqualTypeOf<64>();
+    expectTypeOf(fields.transport.values).toEqualTypeOf<readonly ["array-batch"]>();
+    type Retry = Extract<
+      (typeof ACTIVITY_LOG_OPERATION_REGISTRY)[number],
+      { readonly op: "embedding.batch.retry" }
+    >;
+    expectTypeOf<typeof fields>().toEqualTypeOf<Omit<Retry["fields"], "completeness" | "loss">>();
+  });
+
+  it("owns a fresh plain descriptor and vocabulary graph per factory call", () => {
+    const first = activityLogEmbeddingBatchRetryFields();
+    const second = activityLogEmbeddingBatchRetryFields();
+    expect(first).not.toBe(second);
+    expect(new Set([...Object.values(first), ...Object.values(second)]).size).toBe(22);
+    expect(first.transport.values).not.toBe(second.transport.values);
+    for (const descriptor of Object.values(first)) {
+      expectOrdinaryDescriptor(descriptor, Reflect.ownKeys(descriptor).map(String));
+    }
+    expect(Object.getPrototypeOf(first.transport.values)).toBe(Array.prototype);
+    expect(Reflect.set(first.transport.values, "0", "fixture-mutated")).toBe(true);
+    expect(Reflect.set(first.delayMs, "type", "integer")).toBe(true);
+    expect(second.transport.values).toEqual(["array-batch"]);
+    expect(second.delayMs.type).toBe("number");
+    expect(activityLogEmbeddingBatchRetryFields()).toEqual(second);
   });
 });

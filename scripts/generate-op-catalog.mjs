@@ -84,6 +84,7 @@ import {
 } from "../packages/keiko-contracts/dist/observability.js";
 import {
   activityLogAutomaticCatalogFields,
+  activityLogEmbeddingBatchRetryFields,
   activityLogCompletenessField,
   activityLogLossField,
   activityLogBooleanField,
@@ -582,6 +583,7 @@ const GLOBAL_FIELD_CONSTRUCTORS = {
 };
 const ZERO_ARGUMENT_FIELD_CONSTRUCTORS = {
   activityLogAutomaticCatalogFields,
+  activityLogEmbeddingBatchRetryFields,
   ...GLOBAL_FIELD_CONSTRUCTORS,
 };
 // This is local to newly admitted helper arguments, not a limit on existing literal declarations.
@@ -1815,8 +1817,7 @@ function renderedFieldDescriptor(descriptor) {
   return JSON.stringify(descriptor);
 }
 
-function matchesAutomaticCatalogFields(fields, prefix) {
-  const expected = { ...prefix, ...activityLogAutomaticCatalogFields() };
+function matchesOrderedFieldContracts(fields, expected) {
   const keys = Reflect.ownKeys(expected);
   const actualKeys = Reflect.ownKeys(fields);
   return (
@@ -1827,17 +1828,30 @@ function matchesAutomaticCatalogFields(fields, prefix) {
   );
 }
 
-function renderedRuntimeFields(operation, fields) {
-  const prefix = ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS;
+function runtimeFieldBundle(operation, fields, prefix) {
   if (
     operation.op === "gateway.catalog.automatic.completed" &&
-    matchesAutomaticCatalogFields(fields, prefix)
-  ) {
+    matchesOrderedFieldContracts(fields, { ...prefix, ...activityLogAutomaticCatalogFields() })
+  )
+    return "activityLogAutomaticCatalogFields";
+  if (
+    (operation.op === "embedding.batch.partial-progress" ||
+      operation.op === "embedding.batch.retry") &&
+    matchesOrderedFieldContracts(fields, { ...prefix, ...activityLogEmbeddingBatchRetryFields() })
+  )
+    return "activityLogEmbeddingBatchRetryFields";
+  return undefined;
+}
+
+function renderedRuntimeFields(operation, fields) {
+  const prefix = ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS;
+  const bundle = runtimeFieldBundle(operation, fields, prefix);
+  if (bundle !== undefined) {
     return `{${Object.entries(prefix)
       .map(
         ([name, descriptor]) => `${JSON.stringify(name)}: ${renderedFieldDescriptor(descriptor)}`,
       )
-      .join(",")}, ...activityLogAutomaticCatalogFields()}`;
+      .join(",")}, ...${bundle}()}`;
   }
   return `{${Object.entries(fields)
     .map(([name, descriptor]) => `${JSON.stringify(name)}: ${renderedFieldDescriptor(descriptor)}`)

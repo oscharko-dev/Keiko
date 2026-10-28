@@ -2321,3 +2321,51 @@ describe("canonical universal field constructor admission", () => {
     },
   );
 });
+
+describe("canonical embedding batch retry field expansion", () => {
+  it("admits the actual canonical zero-argument policy alias", () => {
+    inspectAutomaticCatalogFields(
+      "retryFields()",
+      (registry) => {
+        expect(registry.operations).toHaveLength(1);
+        const prior = readCheckedInCatalog().typedRegistry.operations.find(
+          (operation) => operation.op === "embedding.batch.retry",
+        );
+        expect(registry.operations[0].fields).toEqual(prior.fields);
+        expect(Object.keys(registry.operations[0].fields)).toEqual(Object.keys(prior.fields));
+      },
+      'import { activityLogEmbeddingBatchRetryFields as retryFields } from "../../keiko-contracts/src/activity-log-field-contracts.js";',
+    );
+  });
+
+  it.each([
+    [
+      "activityLogEmbeddingBatchRetryFields()",
+      "function activityLogEmbeddingBatchRetryFields() { return {}; }",
+    ],
+    [
+      "foreign()",
+      'import { activityLogEmbeddingBatchRetryFields as foreign } from "./retry-lookalike.js";',
+    ],
+    ["retryFields(true)", ""],
+    ["retryFields(...args)", "const args = [] as const;"],
+    ["selected()", "let selected = retryFields;"],
+    ["holder.retryFields()", "const holder = { retryFields };"],
+  ])("refuses noncanonical or nonzero-argument retry policy: %s", (call, prelude) => {
+    inspectAutomaticCatalogFields(
+      call,
+      (registry) => {
+        expect(registry.operations).toEqual([]);
+        expect(registry.violations).toContainEqual(
+          expect.objectContaining({ code: "registration-not-literal" }),
+        );
+      },
+      'import { activityLogEmbeddingBatchRetryFields as retryFields } from "../../keiko-contracts/src/activity-log-field-contracts.js";\n' +
+        prelude,
+      {
+        "packages/zzz-fixture-diagnostic/src/retry-lookalike.ts":
+          "export function activityLogEmbeddingBatchRetryFields() { return {}; }",
+      },
+    );
+  });
+});
