@@ -17,6 +17,7 @@ import {
   APP_SESSION_GROUNDED_SEND_COOKIE_PATH,
   APP_SESSION_SKILLS_COOKIE_PATH,
   APP_SESSION_CHATS_COOKIE_PATH,
+  APP_SESSION_MCP_COOKIE_PATH,
   APP_SESSION_SKILL_DRAFT_COOKIE_PATH,
   clearSessionCookie,
   clearSessionCookies,
@@ -41,6 +42,7 @@ const activeCookiePaths = [
   APP_SESSION_GROUNDED_SEND_COOKIE_PATH,
   APP_SESSION_SKILLS_COOKIE_PATH,
   APP_SESSION_CHATS_COOKIE_PATH,
+  APP_SESSION_MCP_COOKIE_PATH,
   APP_SESSION_SKILL_DRAFT_COOKIE_PATH,
 ];
 const retiredCookiePaths = ["/api/editor/local-history", "/api"];
@@ -176,4 +178,15 @@ it("issues and clears the exact task-workspaces projection required by issue pro
   expect(cleared.filter((cookie) => cookie.includes("Path=/api/task-workspaces;"))).toEqual([
     `${APP_SESSION_COOKIE_NAME}=; Path=/api/task-workspaces; HttpOnly; SameSite=Strict; Max-Age=0`,
   ]);
+});
+
+it("issues and clears the same bearer for authenticated MCP Settings and connect routes", () => {
+  const issued = serializeSessionCookies("mcp-session", { secure: false, maxAgeSeconds: 60 });
+  const mcp = issued.find((cookie) => cookie.includes("Path=/api/mcp;"));
+  expect(mcp).toBe(
+    "keiko_coding_app_session=mcp-session; Path=/api/mcp; HttpOnly; SameSite=Strict; Max-Age=60",
+  );
+  expect(clearSessionCookies(false)).toContain(
+    "keiko_coding_app_session=; Path=/api/mcp; HttpOnly; SameSite=Strict; Max-Age=0",
+  );
 });

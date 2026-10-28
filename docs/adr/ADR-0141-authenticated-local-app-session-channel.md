@@ -525,7 +525,9 @@ support artifact. Other diagnostics routes receive no bearer through this path.
 The exact `/api/chats/messages/grounded` entry point also receives a projection to verify optional
 existing-session activity on admitted normal grounded sends. Plaintext `/api/desktop/chat` sends use
 their existing projection. Neither path grants new authority or requires pairing for ordinary Chat;
-image attachment authority remains separately enforced. Private Markdown skills (#4022) add
+image attachment authority remains separately enforced. Central MCP configuration and discovery
+(#4081) add `/api/mcp` and validate the same paired session before accessing settings or starting a
+connection. Private Markdown skills (#4022) add
 `/api/skills` for the private library and `/api/chats` for revision-pinned selections at
 `/api/chats/:id/skill`. The private document-to-skill variant of the existing Prompt Enhancer
 adds `/api/prompt-enhancement` for its authenticated model request (#4027). The ordinary enhancer
