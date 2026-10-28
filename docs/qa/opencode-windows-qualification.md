@@ -81,7 +81,9 @@ retention file has 71 passes and four unresolved Windows observations:
 - Creating the original symbolic-link fixture fails with `EPERM` on this developer host. The
   passing junction case is separate evidence, not a substitute for that symlink proof.
 - The 5,000-character filename fixture does not raise its expected `ENAMETOOLONG` on Windows.
-  The expected error-propagation assertion remains in place and is not counted as passed.
+  An isolated native Node 24.18.0 `lstat` probe confirms `ENOENT` for that path component, which
+  the store classifies as an absent source. The expected error-propagation assertion remains
+  in place and is not counted as passed.
 
 The SQLite files use the producer-derived persistence schema with synthetic rows. No original
 OpenCode service, model turn, Workbench restart/resume/fork, or installed upgrade is executed by
@@ -125,6 +127,35 @@ The required local Sonar rerun passes without unresolved findings (analysis task
 `a9e5d336-93f3-4a07-bd12-8946a74a7a2a`). On the preceding pushed head `ae8b28957`, customer-shape,
 CodeQL, Dependency Review and Workflow hygiene have completed successfully; both full CI runs
 remain queued at revalidation. These results do not include the subsequent root-validation fix.
+
+### Activity Log gate launcher repair
+
+The Windows gate-launch defect above is reproduced by an actual child-process regression: the
+existing runner returns failure before its synthetic npm script can execute. The gate now uses
+the existing host-executable owner to select npm's installed CLI and starts it with the current
+Node executable, preserving `shell: false`. It does not use an environment-provided
+`npm_execpath`, fall back to a shell, or change the seven constituent scripts.
+
+The regression passes after the repair, including a path with spaces, Unicode, `&` and `%PATH%`,
+and a nonzero child exit still fails. Missing CLI files, workspace-local targets and a real
+directory junction redirecting the CLI outside the selected npm installation are refused.
+The two affected suites pass **91 tests**, with **nine existing platform-specific tests skipped** on
+Windows. These skips are separate from the five new passing regression/containment cases.
+
+The regular `npm run check:activity-log` now executes **all seven steps without runner injection**:
+six pass, the scenario step fails with the same **126 passed, 17 failed, five skipped**, and no
+step is omitted. Its nonzero aggregate exit is preserved. The failing file remains the unchanged
+support-report CLI suite described above. Build, TypeScript, package graph, scoped ESLint,
+formatting, semantic duplication (932 baseline groups), both architecture checks, release impact
+and ADR index pass. This repairs execution of the gate, not the remaining Windows support-report
+permission/symlink observations or Workbench launch boundary.
+The required local Sonar rerun also passes with no unresolved finding on the changed files
+(2026-10-28, scanner completion 18:45 UTC; scanner duration 7 minutes 18 seconds).
+
+On head `aa7319b82d201235c69cf09d497e460c8350feaf`, Dependency Review, Workflow hygiene,
+customer-shape qualification and CodeQL now pass. Both full CI runs remain incomplete at this
+revalidation; these partial results are not a complete current-head CI verdict. The gateway PR
+#4090 remains unchanged, so the production Windows launch blocker remains open.
 
 ## Revalidation on 2026-10-27
 
