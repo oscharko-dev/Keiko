@@ -142,6 +142,17 @@ export function invalidReadGrant(correlationId?: string): {
 }
 
 export function projectChatReadGrant(grant: ChatToolReadGrant): ChatToolReadGrantView {
+  if (grant.subject.kind === "configured-mcp")
+    return {
+      kind: "mcp-chat-read",
+      grantId: grant.grantId,
+      chatId: grant.subject.chatId,
+      configurationDigest: grant.subject.configurationDigest,
+      state: grant.state,
+      disclosureVersion: "mcp-chat-read-v1",
+      requestedAt: grant.requestedAt,
+      expiresAt: grant.expiresAt,
+    };
   return {
     kind: "jira-chat-read",
     grantId: grant.grantId,

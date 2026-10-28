@@ -44,7 +44,7 @@ import { createJiraProviderForCatalog } from "./jiraManagedProvider.js";
 import { executeJiraChatMutation } from "./jiraChatMutation.js";
 import { buildAtlassianConnectorCredentialDeps } from "./wiring.js";
 import type { AtlassianConnectorCredentialDeps } from "./credentialRoutes.js";
-import type { ChatToolMutationIntent } from "../store/chatToolMutationTypes.js";
+import type { JiraChatToolMutationIntent as ChatToolMutationIntent } from "../store/chatToolMutationTypes.js";
 import { jiraChatMutationOutcome } from "./jiraChatMutationOutcome.js";
 
 const cleanup: (() => void | Promise<void>)[] = [];

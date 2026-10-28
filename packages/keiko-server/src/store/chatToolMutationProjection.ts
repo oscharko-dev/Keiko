@@ -78,8 +78,11 @@ function validObservation(
 ): boolean {
   if (!matchesCall(message, call, record) || !observationAvailable(message, call, record))
     return false;
-  if (call.result !== undefined && call.result.toolRef?.canonicalId !== `keiko.${record.operation}`)
-    return false;
+  const canonicalId =
+    record.sourceKind === "configured-mcp"
+      ? `keiko.mcp.t${sha256Hex(canonicalise({ server: record.serverName, tool: record.toolName }))}`
+      : `keiko.${record.operation}`;
+  if (call.result !== undefined && call.result.toolRef?.canonicalId !== canonicalId) return false;
   return mutationIntentError({ ...record, userMessageId: message.id }) === undefined;
 }
 

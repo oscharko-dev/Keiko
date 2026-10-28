@@ -2521,6 +2521,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
         maxLength: 64,
       },
+      configurationDigest: {
+        type: "string",
+        dataClass: "digest",
+        required: false,
+        maxLength: 64,
+      },
       bindingGeneration: {
         type: "integer",
         dataClass: "count",

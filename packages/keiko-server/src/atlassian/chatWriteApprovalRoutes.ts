@@ -9,6 +9,7 @@ import { validateChatToolWriteApprovalDecision } from "@oscharko-dev/keiko-contr
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type { UiHandlerDeps } from "../deps.js";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
+import { isCurrentMcpChatWriteApproval } from "../mcp/mcpChatWriteApproval.js";
 import { isCurrentJiraChatWriteApproval } from "./jiraChatWriteApproval.js";
 import {
   projectChatWriteApproval,
@@ -23,7 +24,10 @@ const OWNER: ChatConsentRouteOwner<ChatWriteApprovalEntry, ChatToolWriteApproval
     return projectChatWriteApproval(entry);
   },
   retained: (registry, id, correlation) => registry.getChatWriteApproval(id, correlation),
-  isCurrent: isCurrentJiraChatWriteApproval,
+  isCurrent: (deps, entry, nowIso, correlationId) =>
+    entry.subject.kind === "configured-mcp"
+      ? isCurrentMcpChatWriteApproval(deps, entry, nowIso, correlationId)
+      : isCurrentJiraChatWriteApproval(deps, entry, nowIso, correlationId),
   validate: validateChatToolWriteApprovalDecision,
 };
 export const handleGetChatWriteApproval = getChatConsent(OWNER);
@@ -40,7 +44,10 @@ export async function handleDecideChatWriteApproval(
     return chatConsentFailure(ctx, OWNER.phase, 409);
   const proof = sha256Hex(
     canonicalise({
-      kind: "jira-chat-write-approval",
+      kind:
+        entry.approval.kind === "mcp-chat-write"
+          ? "mcp-chat-write-approval"
+          : "jira-chat-write-approval",
       approvalId: entry.approval.approvalId,
       action: entry.approval,
       subject: entry.subject,

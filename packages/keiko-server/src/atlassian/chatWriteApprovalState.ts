@@ -9,10 +9,13 @@ import { correlationIdOrUnknown } from "../correlation.js";
 import { recordChatAuthorityResult } from "../editor/chatAuthorityActivity.js";
 import { sameReadGrantAuthority, sameReadGrantSubject } from "./chatReadGrantState.js";
 
-export interface JiraChatWriteActionIdentity {
+export interface ChatToolWriteActionIdentity {
   readonly invocationId: string;
-  readonly operation: JiraMutationOperation;
+  readonly operation: string;
   readonly actionDigest: string;
+}
+export interface JiraChatWriteActionIdentity extends ChatToolWriteActionIdentity {
+  readonly operation: JiraMutationOperation;
 }
 export interface ChatWriteApprovalEntry {
   readonly approval: ChatToolWriteApprovalView;
@@ -36,7 +39,7 @@ export type ChatWriteApprovalResult =
 
 export function sameWriteAction(
   approval: ChatToolWriteApprovalView,
-  action: JiraChatWriteActionIdentity,
+  action: ChatToolWriteActionIdentity,
 ): boolean {
   return (
     approval.invocationId === action.invocationId &&
@@ -47,7 +50,15 @@ export function sameWriteAction(
 
 function matchesApprovalSubject(entry: ChatWriteApprovalEntry): boolean {
   const { approval, subject } = entry;
+  if (subject.kind === "configured-mcp")
+    return (
+      approval.kind === "mcp-chat-write" &&
+      sameReadGrantSubject(entry, subject) &&
+      approval.chatId === subject.chatId &&
+      approval.configurationDigest === subject.configurationDigest
+    );
   return (
+    approval.kind === "jira-chat-write" &&
     sameReadGrantSubject(entry, subject) &&
     approval.chatId === subject.chatId &&
     approval.podId === subject.podId &&

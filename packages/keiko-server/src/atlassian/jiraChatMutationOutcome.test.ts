@@ -5,7 +5,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { createToolRef, validateToolResultEnvelope } from "@oscharko-dev/keiko-tool-catalog";
 import type {
-  ChatToolMutationIntent,
+  JiraChatToolMutationIntent as ChatToolMutationIntent,
   ChatToolMutationRecord,
 } from "../store/chatToolMutationTypes.js";
 import { jiraChatMutationOutcome } from "./jiraChatMutationOutcome.js";
@@ -36,7 +36,8 @@ const RESULT: ToolResultEnvelope = {
   page: null,
   metrics: { inputBytes: 10, outputBytes: 0, resultCount: 0, durationMs: 10 },
 };
-function record(overrides: Partial<ChatToolMutationRecord> = {}): ChatToolMutationRecord {
+type JiraRecord = Exclude<ChatToolMutationRecord, { sourceKind: "configured-mcp" }>;
+function record(overrides: Partial<JiraRecord> = {}): JiraRecord {
   return {
     ...EXPECTED,
     phase: "acknowledged",

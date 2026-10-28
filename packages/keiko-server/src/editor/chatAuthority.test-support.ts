@@ -1,4 +1,4 @@
-import type { ChatToolAuthorityEnvelope } from "@oscharko-dev/keiko-contracts";
+import type { JiraChatAuthorityEnvelope as ChatToolAuthorityEnvelope } from "../atlassian/jiraChatAuthority.js";
 import { resolveEffectiveCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 
 export const CHAT_AUTHORITY_TEST_NOW = "2026-07-09T12:00:00.000Z";

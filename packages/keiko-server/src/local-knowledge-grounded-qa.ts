@@ -863,7 +863,7 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
     signal: AbortSignal,
     profile: ContextProfile | undefined,
   ): Promise<NormalizedResponse> {
-    const toolTurn = this.context.deps.jiraChatToolTurn;
+    const toolTurn = this.context.deps.chatToolTurn;
     if (toolTurn === undefined) return this.model.call(request, signal);
     const limits = profile ?? DEFAULT_CONTEXT_PROFILE;
     const outputTokensMax = limits.reservedOutputTokens;
@@ -2561,7 +2561,7 @@ function buildPersistedScopedAnswer(input: {
   readonly deps: UiHandlerDeps;
 }): GroundedAnswer {
   return buildLocalKnowledgeAnswer({
-    liveToolSourceAvailable: input.deps.jiraChatToolTurn !== undefined,
+    liveToolSourceAvailable: input.deps.chatToolTurn !== undefined,
     chat: input.chat,
     store: input.store,
     selected: input.selected,

@@ -37,10 +37,12 @@ export function JiraReadConsent({
     current: grant,
     decide: (decision) => decide(grant, decision),
   });
+  const mcp = grant.kind === "mcp-chat-read";
+  const title = mcp ? "chat.mcp.title" : "chat.jira.title";
   return (
-    <section className={styles.cmpCard} aria-label={t("chat.jira.title")}>
-      <strong>{t("chat.jira.title")}</strong>
-      <p>{t("chat.jira.disclosure")}</p>
+    <section className={styles.cmpCard} aria-label={t(title)}>
+      <strong>{t(title)}</strong>
+      <p>{t(mcp ? "chat.mcp.disclosure" : "chat.jira.disclosure")}</p>
       <output aria-live="polite">{t(busy ? "chat.jira.working" : STATE_KEYS[view.state])}</output>
       {failed ? <p role="alert">{t("chat.jira.failed")}</p> : null}
       {view.state === "pending" ? (
@@ -62,16 +64,17 @@ function JiraToolExchange({
   readonly turnState: ChatTurnState | undefined;
 }): ReactNode {
   const t = useTranslate();
+  const mcp = exchange.call.name.startsWith("mcp_");
   const state = jiraToolState(exchange, turnState);
   const help = jiraToolOutcomeHelp(state);
   return (
-    <section className={styles.cmpCard} aria-label={t("chat.jira.tool")}>
-      <strong>{t(jiraToolLabel(exchange))}</strong>
+    <section className={styles.cmpCard} aria-label={t(mcp ? "chat.mcp.tool" : "chat.jira.tool")}>
+      <strong>{mcp ? exchange.call.name : t(jiraToolLabel(exchange))}</strong>
       <output>{t(state)}</output>
       {help === undefined ? null : <p>{t(help)}</p>}
       {exchange.result?.data == null ? null : (
         <details>
-          <summary>{t("chat.jira.details")}</summary>
+          <summary>{t(mcp ? "chat.mcp.details" : "chat.jira.details")}</summary>
           <pre className={styles.cmpResult}>{JSON.stringify(exchange.result.data, null, 2)}</pre>
         </details>
       )}

@@ -1,5 +1,10 @@
 import type { CatalogJsonObject, ToolDescriptor } from "./governed-tool-catalog.js";
 import type { ActivityLogEventEnvelope, RegisteredActivityLogEvent } from "./observability.js";
+export {
+  EXTERNAL_JSON_SCHEMA_DEFAULT,
+  isBoundedExternalJsonSchema,
+  isExternalJsonSchemaDialect,
+} from "./external-json-schema.js";
 
 export const MANAGED_MCP_PROTOCOL_VERSION = "2026-07-28";
 

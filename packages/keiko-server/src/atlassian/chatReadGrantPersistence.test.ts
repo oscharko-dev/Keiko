@@ -134,6 +134,7 @@ it("persists a decision before publishing it and refuses stale decisions or iden
   const port = persistence(f.store);
   expect(port.save(f.entry)).toBe(true);
   const grant = { ...f.entry.grant, state: "granted", consentProofDigest: "c".repeat(64) } as const;
+  if (grant.subject.kind === "configured-mcp") throw new Error("Expected Jira fixture");
   expect(
     port.save(
       { ...f.entry, grant: { ...grant, subject: { ...grant.subject, bindingGeneration: 2 } } },

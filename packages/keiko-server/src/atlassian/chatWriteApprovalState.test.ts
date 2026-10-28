@@ -1,3 +1,7 @@
+import type {
+  JiraChatToolAuthoritySubject,
+  JiraChatToolWriteApprovalView,
+} from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -22,7 +26,11 @@ import {
 import { projectChatWriteApproval, type ChatWriteApprovalEntry } from "./chatWriteApprovalState.js";
 
 const NOW = 1700000000000;
-function pending(id = "write-1"): ChatWriteApprovalEntry {
+type JiraWriteFixture = ChatWriteApprovalEntry & {
+  readonly subject: JiraChatToolAuthoritySubject;
+  readonly approval: JiraChatToolWriteApprovalView;
+};
+function pending(id = "write-1"): JiraWriteFixture {
   const envelope = chatAuthorityFixture();
   const subject = envelope.subject;
   return {

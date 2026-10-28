@@ -1,5 +1,5 @@
 import type { ParsedDesktopChatSend } from "./chat-handlers.js";
-import { createJiraChatToolTurn, scopeJiraChatToolTurn } from "./atlassian/jiraChatToolTurn.js";
+import { createChatToolTurn, scopeChatToolTurn } from "./chat-tool-runtime.js";
 import {
   callGroundedSynthesisModel,
   requiresObservedToolResult,
@@ -1891,7 +1891,7 @@ async function dispatchGroundedSynthesis(
       },
       ctx.signal,
       tracker,
-      ctx.deps.jiraChatToolTurn,
+      ctx.deps.chatToolTurn,
       requiresObservedToolResult(ctx.deps, sent.sentReferenceCount),
     );
     ctx.synthesis.recordCompleted();
@@ -2253,7 +2253,7 @@ function hasAnswerOnlyContext(prepared: PreparedGroundedAsk): boolean {
 }
 
 function canAnswerWithoutDataEvidence(prepared: PreparedGroundedAsk, deps: UiHandlerDeps): boolean {
-  return hasAnswerOnlyContext(prepared) || deps.jiraChatToolTurn !== undefined;
+  return hasAnswerOnlyContext(prepared) || deps.chatToolTurn !== undefined;
 }
 
 function admittedGroundedUser(prepared: PreparedGroundedAsk): ChatMessage {
@@ -3413,9 +3413,9 @@ async function runAdmittedGroundedAsk(
 async function admitGroundedJiraTurn(
   admitted: PreparedGroundedAsk,
   deps: UiHandlerDeps,
-): Promise<Awaited<ReturnType<typeof createJiraChatToolTurn>> | RouteResult> {
+): Promise<Awaited<ReturnType<typeof createChatToolTurn>> | RouteResult> {
   try {
-    return await createJiraChatToolTurn(
+    return await createChatToolTurn(
       deps,
       groundedModelId(admitted),
       admittedGroundedUser(admitted),
@@ -3454,7 +3454,7 @@ async function executeGroundedAskInTurn(
   try {
     const toolTurn = await admitGroundedJiraTurn(admitted, deps);
     if (isRouteResult(toolTurn)) return toolTurn;
-    const scoped = scopeJiraChatToolTurn(deps, toolTurn);
+    const scoped = scopeChatToolTurn(deps, toolTurn);
     return await runAdmittedGroundedAsk(
       toolTurn === undefined
         ? admitted

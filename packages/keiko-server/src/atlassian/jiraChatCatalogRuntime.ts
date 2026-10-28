@@ -166,15 +166,15 @@ export function installJiraChatCatalogRuntime(
   log: CatalogLifecycleLogPort,
 ): UiHandlerDeps {
   const runtime = createJiraChatCatalogRuntime(deps, log);
-  return {
-    ...deps,
+  const previousDispose = deps.dispose;
+  return Object.assign(deps, {
     jiraChatCatalog: runtime,
     dispose: async (): Promise<void> => {
       try {
         await runtime.close();
       } finally {
-        await deps.dispose?.();
+        await previousDispose?.();
       }
     },
-  };
+  });
 }

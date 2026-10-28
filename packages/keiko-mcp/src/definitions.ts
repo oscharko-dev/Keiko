@@ -1,5 +1,9 @@
 import type { Tool } from "@modelcontextprotocol/client";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import {
+  isBoundedExternalJsonSchema,
+  isExternalJsonSchemaDialect,
+} from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { deepFreeze } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
 import { canonicalise } from "@oscharko-dev/keiko-security/hashing";
 import type {
@@ -29,6 +33,21 @@ export class ManagedMcpError extends Error {
 }
 const RISKS: ReadonlySet<string> = new Set(["read", "write"]);
 
+function admittedSchemaDialect(schema: CatalogJsonObject): boolean {
+  return (
+    schema.$schema === undefined ||
+    (isExternalJsonSchemaDialect(schema.$schema) && isBoundedExternalJsonSchema(schema))
+  );
+}
+
+function admittedInputSchema(schema: CatalogJsonObject): boolean {
+  return (
+    schema.type === "object" &&
+    admittedSchemaDialect(schema) &&
+    (schema.$schema !== undefined || schema.additionalProperties === false)
+  );
+}
+
 export function toolDefinition<Context extends ManagedMcpInvocationContext>(
   tool: ManagedMcpTool<Context>,
 ): Tool {
@@ -37,8 +56,8 @@ export function toolDefinition<Context extends ManagedMcpInvocationContext>(
     throw new ManagedMcpError("invalid-arguments");
   if (
     !/^[A-Za-z0-9_.:-]{1,128}$/.test(tool.name) ||
-    descriptor.inputSchema.type !== "object" ||
-    descriptor.inputSchema.additionalProperties !== false ||
+    !admittedInputSchema(descriptor.inputSchema) ||
+    !admittedSchemaDialect(descriptor.resultSchema) ||
     descriptor.resultSchema.type !== "object"
   )
     throw new ManagedMcpError("invalid-arguments");

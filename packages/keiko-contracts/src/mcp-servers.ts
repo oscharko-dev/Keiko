@@ -118,7 +118,11 @@ export type McpServerRegistryRefusal =
   "malformed" | "schema-version" | "too-many-servers" | "server-invalid" | "duplicate-server";
 
 export type McpServerRegistryParse =
-  | { readonly ok: true; readonly servers: readonly McpServerDefinition[] }
+  | {
+      readonly ok: true;
+      readonly servers: readonly McpServerDefinition[];
+      readonly generation?: string;
+    }
   | { readonly ok: false; readonly reason: McpServerRegistryRefusal };
 
 type Json = Readonly<Record<string, unknown>>;
@@ -362,17 +366,32 @@ function serverOf(value: unknown): McpServerDefinition | undefined {
   };
 }
 
+function registryDocument(value: unknown): Json | undefined {
+  const document = record(value);
+  return document !== undefined && hasOnlyKeys(document, ["schemaVersion", "servers", "generation"])
+    ? document
+    : undefined;
+}
+
+function registryGeneration(value: unknown): { readonly generation?: string } | undefined {
+  if (value === undefined) return {};
+  return typeof value === "string" && /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/u.test(value)
+    ? { generation: value }
+    : undefined;
+}
+
 /**
  * The registry document as the operator wrote it, or the closed reason it is refused. One invalid
  * server refuses the whole registry: a partial admission would hide which entry the operator got
  * wrong.
  */
 export function parseMcpServerRegistry(value: unknown): McpServerRegistryParse {
-  const document = record(value);
-  if (document === undefined || !hasOnlyKeys(document, ["schemaVersion", "servers"]))
-    return { ok: false, reason: "malformed" };
+  const document = registryDocument(value);
+  if (document === undefined) return { ok: false, reason: "malformed" };
   if (document.schemaVersion !== MCP_SERVER_REGISTRY_SCHEMA_VERSION)
     return { ok: false, reason: "schema-version" };
+  const generation = registryGeneration(document.generation);
+  if (generation === undefined) return { ok: false, reason: "malformed" };
   const entries = document.servers;
   if (!Array.isArray(entries)) return { ok: false, reason: "malformed" };
   if (entries.length > MCP_SERVER_MAX) return { ok: false, reason: "too-many-servers" };
@@ -386,7 +405,11 @@ export function parseMcpServerRegistry(value: unknown): McpServerRegistryParse {
     if (!admitUniqueActions(server, actions)) return { ok: false, reason: "server-invalid" };
     servers.push(server);
   }
-  return { ok: true, servers };
+  return {
+    ok: true,
+    servers,
+    ...generation,
+  };
 }
 
 function admitUniqueActions(server: McpServerDefinition, actions: Set<string>): boolean {

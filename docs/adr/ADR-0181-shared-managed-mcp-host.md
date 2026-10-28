@@ -36,7 +36,8 @@ late consumers. Independently assembled application graphs remain isolated. Conn
 selection uses the private invocation context and current Chat authority, then obtains
 the existing generation-bound custody HTTP port with its final dispatch guard. Catalog
 discovery itself performs no credential resolution or Jira HTTP. Ordinary Chat turn
-orchestration remains separate acceptance work.
+orchestration uses the shared bounded loop with provider-specific admission adapters;
+complete acceptance remains tracked separately from this architectural decision.
 
 ### D2 — Explicit modern protocol and bounded capabilities
 
@@ -260,3 +261,19 @@ Supervised workspace require the existing action approval; Full access may act w
 authority. The relay uses the already admitted loopback gateway route. This capability does not
 relax the coding process's network sandbox or the Full access restriction on direct external
 connections, including the existing native OAuth path.
+
+
+Ordinary Chat also consumes this Settings-owned catalog. Its consumer uses the existing
+accepted-turn authority and a configured-MCP subject (actor, Chat and configuration identity),
+without a Coding session or Jira Pod identity. Read disclosure and exact write approvals reuse
+the existing registry and authenticated routes. The common bounded Chat loop owns model
+attempts, tool calls, transcript pairing and cumulative budgets; provider adapters supply
+catalog admission and durable mutation outcomes. The existing mutation journal stores MCP
+protocol acknowledgement without an invented HTTP status. Unknown effects remain non-replayable.
+
+External schemas follow the explicitly separate JSON Schema dialect described in
+[ADR-0175 D3](ADR-0175-canonical-governed-tool-catalog.md#d3--digest-inputs-and-compatibility).
+The adapter preserves admitted remote schemas and validates actual arguments and results;
+it does not strip unsupported constraints to make a server connect. Internal closed schemas
+retain their existing contract. External schema complexity, references and patterns are
+bounded before compilation, with no remote schema fetches or execution of schema-supplied code.

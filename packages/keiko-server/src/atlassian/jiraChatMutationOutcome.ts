@@ -5,7 +5,7 @@ import {
   sameMutationIdentity,
 } from "../store/chatToolMutationState.js";
 import type {
-  ChatToolMutationIntent,
+  JiraChatToolMutationIntent as ChatToolMutationIntent,
   ChatToolMutationRecord,
 } from "../store/chatToolMutationTypes.js";
 

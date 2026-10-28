@@ -84,11 +84,26 @@ export function JiraWriteApproval({
   const status = state.verified
     ? APPROVAL_KEYS[state.view.state]
     : "chat.jira.writeApproval.unavailable";
+  const statusText = t(state.busy ? "chat.jira.writeApproval.working" : status);
+  const title =
+    approval.kind === "mcp-chat-write"
+      ? "chat.mcp.writeApproval.title"
+      : "chat.jira.writeApproval.title";
   return (
-    <section className={styles.cmpCard} aria-label={t("chat.jira.writeApproval.title")}>
-      <strong>{t("chat.jira.writeApproval.title")}</strong>
-      <p>{t(actionTypeLabelKey(JIRA_MANAGED_ACTION_TYPES[approval.operation]))}</p>
-      <p>{t("chat.jira.writeApproval.disclosure")}</p>
+    <section className={styles.cmpCard} aria-label={t(title)}>
+      <strong>{t(title)}</strong>
+      <p>
+        {approval.kind === "mcp-chat-write"
+          ? approval.operation
+          : t(actionTypeLabelKey(JIRA_MANAGED_ACTION_TYPES[approval.operation]))}
+      </p>
+      <p>
+        {t(
+          approval.kind === "mcp-chat-write"
+            ? "chat.mcp.writeApproval.disclosure"
+            : "chat.jira.writeApproval.disclosure",
+        )}
+      </p>
       <textarea
         className={`${styles.cmpResult} ${styles.cmpPreview}`}
         readOnly
@@ -96,9 +111,7 @@ export function JiraWriteApproval({
         aria-label={t("chat.jira.writeApproval.preview")}
         value={JSON.stringify(call.arguments, null, 2)}
       />
-      <output aria-live="polite">
-        {t(state.busy ? "chat.jira.writeApproval.working" : status)}
-      </output>
+      <output aria-live="polite">{statusText}</output>
       <WriteApprovalActions state={state} turnState={turnState} />
     </section>
   );

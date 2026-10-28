@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "893e5437ff4a316b7a99e2056a95c5f5cb42084bf3f88a8bc516bcb694714672",
+    "catalogDigest": "a7648ef2eed5fd16b55009b7b8f251700c857636520bfe40688285b9880cb4f7",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -2627,6 +2627,12 @@
             "required": false,
             "maxLength": 64
           },
+          "configurationDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": false,
+            "maxLength": 64
+          },
           "bindingGeneration": {
             "type": "integer",
             "dataClass": "count",
@@ -2671,7 +2677,7 @@
         ],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/editor/chatAuthorityActivity.ts:48",
-        "emitterSites": ["packages/keiko-server/src/editor/chatAuthorityActivity.ts:235"]
+        "emitterSites": ["packages/keiko-server/src/editor/chatAuthorityActivity.ts:242"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -2775,7 +2781,7 @@
         "proofIds": ["chat.tool-mutation.projected.line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/store/chatToolMutationProjection.ts:22",
-        "emitterSites": ["packages/keiko-server/src/store/chatToolMutationProjection.ts:108"]
+        "emitterSites": ["packages/keiko-server/src/store/chatToolMutationProjection.ts:111"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -2820,7 +2826,7 @@
         "proofIds": ["chat.tool-transcript.updated.line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/store/chatToolTranscript.ts:56",
-        "emitterSites": ["packages/keiko-server/src/store/chatToolTranscript.ts:408"]
+        "emitterSites": ["packages/keiko-server/src/store/chatToolTranscript.ts:427"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -10137,8 +10143,8 @@
         "failureClasses": ["coding-runtime-native-policy"],
         "proofIds": ["coding-runtime.native-policy.decided.emitted-line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1507",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1705"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1512",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1710"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -30648,7 +30654,7 @@
         "proofIds": ["mcp.registry.loaded.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/mcp/mcpServerRegistry.ts:39",
-        "emitterSites": ["packages/keiko-server/src/mcp/mcpServerRegistry.ts:155"]
+        "emitterSites": ["packages/keiko-server/src/mcp/mcpServerRegistry.ts:160"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -30704,7 +30710,7 @@
         "proofIds": ["mcp.settings.updated.emitted-line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/mcp/mcpSettingsStore.ts:26",
-        "emitterSites": ["packages/keiko-server/src/mcp/mcpSettingsStore.ts:81"]
+        "emitterSites": ["packages/keiko-server/src/mcp/mcpSettingsStore.ts:87"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -56147,6 +56153,12 @@
                 },
                 {
                   "name": "chatDigest",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": false
+                },
+                {
+                  "name": "configurationDigest",
                   "type": "string",
                   "dataClass": "digest",
                   "required": false
@@ -103732,7 +103744,7 @@
     {
       "op": "coding-runtime.native-policy.decided",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1510",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeNativePolicy.ts:1515",
       "package": "keiko-server"
     },
     {
@@ -104640,7 +104652,7 @@
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:1613",
+      "site": "packages/keiko-server/src/deps.ts:1618",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -105431,7 +105443,7 @@
     {
       "op": "managed-lsp.trust.restrict",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:2478",
+      "site": "packages/keiko-server/src/deps.ts:2483",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -105446,6 +105458,13 @@
       "op": "mcp.connection",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/mcp/mcpSettingsRoutes.ts:95",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "mcp.mutation-execution-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/mcp/mcpChatMutation.ts:109",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -105894,7 +105913,7 @@
     {
       "op": "server.composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:4742",
+      "site": "packages/keiko-server/src/deps.ts:4747",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -106047,7 +106066,7 @@
     {
       "op": "task-workspace.reconcile.startup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:3335",
+      "site": "packages/keiko-server/src/deps.ts:3340",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -106114,6 +106133,13 @@
     {
       "op": "tool-catalog.binding-failed",
       "category": "diagnostic",
+      "site": "packages/keiko-server/src/mcp/mcpChatCatalogRuntime.ts:57",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "tool-catalog.binding-failed",
+      "category": "diagnostic",
       "site": "packages/keiko-server/src/tool-catalog/catalogToolBinder.ts:225",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
@@ -106146,7 +106172,7 @@
     {
       "op": "tool-catalog.dispatch-context-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolDispatch.ts:194",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolDispatch.ts:197",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -107033,6 +107059,7 @@
     "manual-pod.job",
     "mcp.connection",
     "mcp.managed.lifecycle",
+    "mcp.mutation-execution-failed",
     "mcp.oauth.issuer.checked",
     "mcp.registry.loaded",
     "mcp.settings.updated",

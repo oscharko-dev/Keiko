@@ -13,7 +13,10 @@ import { createNodeUiStore, buildUiStoreOverDatabase, type UiStore } from "./ind
 import { rewindSchemaFixture } from "./legacySchemaTestFixture.js";
 import { runMigrations } from "./schema.js";
 import { createChatToolMutationStore } from "./chatToolMutations.js";
-import type { ChatToolMutationIntent, ChatToolMutationStore } from "./chatToolMutationTypes.js";
+import type {
+  JiraChatToolMutationIntent as ChatToolMutationIntent,
+  ChatToolMutationStore,
+} from "./chatToolMutationTypes.js";
 const dispose: (() => void)[] = [];
 afterEach(() => {
   for (const cleanup of dispose.splice(0)) cleanup();
@@ -412,3 +415,124 @@ it("does not allow the non-terminal pending projection to settle a journal recor
   expect(() => f.journal.settle(f.intent.invocationId, "pending" as JiraMutationOutcome)).toThrow();
   expect(f.journal.find(f.intent.invocationId)).toMatchObject({ phase: "prepared", outcome: null });
 });
+
+function mcpIntent(
+  f: Pick<Fixture, "intent">,
+): import("./chatToolMutationTypes.js").McpChatToolMutationIntent {
+  return {
+    ...f.intent,
+    sourceKind: "configured-mcp",
+    podId: null,
+    bindingGeneration: null,
+    credentialGeneration: null,
+    configurationDigest: "c".repeat(64),
+    serverName: "synthetic",
+    toolName: "create_note",
+    operation: "mcp_synthetic_create_note_1",
+  };
+}
+it("journals a protocol success without a fabricated HTTP response or Jira binding", () => {
+  const f = fixture();
+  const intent = mcpIntent(f);
+  expect(f.journal.prepare(intent).kind).toBe("prepared");
+  expect(f.journal.beginDispatch(intent.invocationId, () => false)).toBe(false);
+  expect(f.journal.find(intent.invocationId)?.phase).toBe("prepared");
+  expect(f.journal.beginDispatch(intent.invocationId, () => true)).toBe(true);
+  expect(() => f.journal.settle(intent.invocationId, "succeeded")).toThrow();
+  f.journal.acknowledgeMcp(intent.invocationId, true);
+  expect(f.journal.settle(intent.invocationId, "succeeded")).toMatchObject({
+    sourceKind: "configured-mcp",
+    podId: null,
+    bindingGeneration: null,
+    credentialGeneration: null,
+    httpStatus: null,
+    protocolOutcome: "success",
+    outcome: "succeeded",
+  });
+  expect(f.journal.prepare({ ...intent, invocationId: "different-call" }).kind).toBe("replayed");
+  expect(f.journal.beginDispatch(intent.invocationId, () => true)).toBe(false);
+});
+it.each([true, false])(
+  "a missing or error MCP response blocks further writes (reply=%s)",
+  (reply) => {
+    const f = fixture();
+    const intent = mcpIntent(f);
+    f.journal.prepare(intent);
+    expect(f.journal.beginDispatch(intent.invocationId, () => true)).toBe(true);
+    if (reply) f.journal.acknowledgeMcp(intent.invocationId, false);
+    expect(() => f.journal.settle(intent.invocationId, "rejected")).toThrow();
+    expect(() => f.journal.settle(intent.invocationId, "succeeded")).toThrow();
+    f.journal.settle(intent.invocationId, "unknown");
+    const reopened = createChatToolMutationStore(f.db, () => 1001, f.logs);
+    expect(
+      reopened.prepare({ ...intent, invocationId: "another-write", actionDigest: "d".repeat(64) }),
+    ).toEqual({ kind: "blocked", reason: "unknown-effect" });
+    expect(reopened.beginDispatch(intent.invocationId, () => true)).toBe(false);
+  },
+);
+it("refuses to mix protocol acknowledgements with Jira HTTP acknowledgements", () => {
+  const f = fixture();
+  const intent = mcpIntent(f);
+  f.journal.prepare(intent);
+  f.journal.beginDispatch(intent.invocationId, () => true);
+  expect(() => f.journal.acknowledge(intent.invocationId, 200)).toThrow();
+  f.journal.acknowledgeMcp(intent.invocationId, true);
+  expect(() => f.journal.acknowledgeMcp(intent.invocationId, false)).toThrow();
+});
+it("SQL also refuses an unacknowledged MCP success", () => {
+  const f = fixture();
+  const intent = mcpIntent(f);
+  f.journal.prepare(intent);
+  f.journal.beginDispatch(intent.invocationId, () => true);
+  expect(() =>
+    f.db
+      .prepare(
+        "UPDATE chat_tool_mutations SET phase = 'settled', outcome = 'succeeded' WHERE invocation_id = ?",
+      )
+      .run(intent.invocationId),
+  ).toThrow();
+});
+
+it.each(["missing", "error", "success"] as const)(
+  "retains MCP dispatch and %s response across a real database close/reopen",
+  (response) => {
+    const directory = mkdtempSync(join(tmpdir(), "keiko-mcp-restart-"));
+    const path = join(directory, "ui.sqlite");
+    let store: UiStore | undefined = createNodeUiStore(path);
+    let effects = 0;
+    try {
+      const project = store.createProject(process.cwd());
+      const intent = mcpIntent({
+        intent: intentFor(store, store.createChat(project.path, "Synthetic", "model").id),
+      });
+      let journal = journalOf(store);
+      journal.prepare(intent);
+      if (journal.beginDispatch(intent.invocationId, () => true)) effects++;
+      if (response !== "missing")
+        journal.acknowledgeMcp(intent.invocationId, response === "success");
+      store.close();
+      store = undefined;
+      store = createNodeUiStore(path);
+      intentFor(store, intent.chatId);
+      journal = journalOf(store);
+      expect(journal.find(intent.invocationId)).toMatchObject({
+        sourceKind: "configured-mcp",
+        serverName: intent.serverName,
+        toolName: intent.toolName,
+        protocolOutcome: response === "missing" ? null : response,
+        phase: response === "success" ? "acknowledged" : "dispatched",
+      });
+      expect(journal.prepare(intent).kind).toBe("replayed");
+      if (journal.beginDispatch(intent.invocationId, () => true)) effects++;
+      expect(effects).toBe(1);
+      if (response !== "success") {
+        expect(
+          journal.prepare({ ...intent, invocationId: "next", actionDigest: "d".repeat(64) }),
+        ).toEqual({ kind: "blocked", reason: "in-flight" });
+      }
+    } finally {
+      store?.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  },
+);

@@ -1,6 +1,7 @@
 export { ToolCatalogError } from "./errors.js";
 export type { CatalogFailureReason, CatalogSchemaMismatch } from "./errors.js";
 export { describeCatalogSchemaMismatch } from "./schema.js";
+export { compileExternalCatalogSchema } from "./external-schema.js";
 export { createToolRef } from "./identity.js";
 export { createToolDescriptor, verifyToolDescriptor } from "./descriptor.js";
 export { createCatalogProfileDeclaration } from "./profile.js";

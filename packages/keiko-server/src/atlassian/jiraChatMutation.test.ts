@@ -7,7 +7,7 @@ import type { JiraMutationAttempt } from "@oscharko-dev/keiko-contracts/runtime/
 import { buildUiStoreOverDatabase, createNodeUiStore } from "../store/index.js";
 import { runMigrations } from "../store/schema.js";
 import { createChatToolMutationStore } from "../store/chatToolMutations.js";
-import type { ChatToolMutationIntent } from "../store/chatToolMutationTypes.js";
+import type { JiraChatToolMutationIntent as ChatToolMutationIntent } from "../store/chatToolMutationTypes.js";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import { executeJiraChatMutation, type JiraChatMutationExecution } from "./jiraChatMutation.js";
 import { createGatewayAtlassianHttpBodyPort } from "./httpPort.js";
@@ -420,6 +420,7 @@ it("retains acknowledged uncertainty when terminal persistence fails", async () 
     prepare: journal.prepare.bind(journal),
     beginDispatch: journal.beginDispatch.bind(journal),
     acknowledge: journal.acknowledge.bind(journal),
+    acknowledgeMcp: journal.acknowledgeMcp.bind(journal),
     settle: (): never => {
       throw new Error("synthetic persistence failure");
     },

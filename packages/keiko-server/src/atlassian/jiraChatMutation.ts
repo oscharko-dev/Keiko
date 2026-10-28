@@ -15,7 +15,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import type {
-  ChatToolMutationIntent,
+  JiraChatToolMutationIntent as ChatToolMutationIntent,
   ChatToolMutationRecord,
   ChatToolMutationStore,
 } from "../store/chatToolMutationTypes.js";

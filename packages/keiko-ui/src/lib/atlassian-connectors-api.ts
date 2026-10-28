@@ -315,20 +315,31 @@ export const defaultAtlassianConnectorsClient: AtlassianConnectorsClient = {
   rejectAction: rejectAtlassianConnectorAction,
 };
 
+function sameReadGrantSource(
+  grant: ChatToolReadGrantView,
+  expected: ChatToolReadGrantView,
+): boolean {
+  if (grant.kind === "mcp-chat-read")
+    return (
+      expected.kind === "mcp-chat-read" &&
+      grant.configurationDigest === expected.configurationDigest
+    );
+  return (
+    expected.kind === "jira-chat-read" &&
+    grant.podId === expected.podId &&
+    grant.bindingGeneration === expected.bindingGeneration &&
+    grant.authenticationGeneration === expected.authenticationGeneration
+  );
+}
 function checkedReadGrant(value: unknown, expected: ChatToolReadGrantView): ChatToolReadGrantView {
   const grant =
     typeof value === "object" && value !== null && "approval" in value ? value.approval : undefined;
-  const identity = [
-    "grantId",
-    "chatId",
-    "podId",
-    "bindingGeneration",
-    "authenticationGeneration",
-    "disclosureVersion",
-    "requestedAt",
-    "expiresAt",
-  ] as const;
-  if (!isChatToolReadGrantView(grant) || !identity.every((key) => grant[key] === expected[key]))
+  const identity = ["grantId", "chatId", "disclosureVersion", "requestedAt", "expiresAt"] as const;
+  if (
+    !isChatToolReadGrantView(grant) ||
+    !sameReadGrantSource(grant, expected) ||
+    !identity.every((key) => grant[key] === expected[key])
+  )
     throw new ApiError("CONTRACT_VALIDATION_FAILED", "Chat read consent response is invalid.", 502);
   return grant;
 }

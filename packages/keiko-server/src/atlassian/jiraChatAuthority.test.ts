@@ -37,7 +37,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
   AtlassianCredentialMetadata,
-  ChatToolAuthorityEnvelope,
   AtlassianConnectorActionType,
   CodingWorkbenchMode,
   EditorAgentGovernedAuthorityReference,
@@ -60,6 +59,7 @@ import {
   decideGovernedJiraChatAction,
   reserveCurrentJiraChatAuthority,
   type JiraChatAuthorityDeps,
+  type JiraChatAuthorityEnvelope as ChatToolAuthorityEnvelope,
 } from "./jiraChatAuthority.js";
 
 const POD = "d5f5681e-ce98-4c3c-b27e-51d707c9d018";

@@ -136,6 +136,7 @@ it.each(["origin", "pod", "binding", "credentials", "requested-at", "expiry"] as
 
 function mismatchedEntry(entry: ChatReadGrantEntry, change: string): ChatReadGrantEntry {
   const subject = entry.grant.subject;
+  if (subject.kind === "configured-mcp") throw new Error("Expected Jira fixture");
   const changes: Readonly<Record<string, Partial<typeof entry.grant>>> = {
     pod: { subject: { ...subject, podId: "d5f5681e-ce98-4c3c-b27e-51d707c9d019" } },
     binding: { subject: { ...subject, bindingGeneration: subject.bindingGeneration + 1 } },

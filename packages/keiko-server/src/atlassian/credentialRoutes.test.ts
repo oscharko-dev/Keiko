@@ -1,5 +1,5 @@
 import type {
-  ChatToolAuthoritySubject,
+  JiraChatToolAuthoritySubject,
   ChatToolReadGrant,
   KnowledgeCapsuleId,
 } from "@oscharko-dev/keiko-contracts";
@@ -1303,7 +1303,7 @@ async function updatedJiraChat(chat: Chat, patch: Record<string, unknown>): Prom
   return ((await response.json()) as { chat: Chat }).chat;
 }
 
-function jiraChatSubject(chat: Chat): ChatToolAuthoritySubject {
+function jiraChatSubject(chat: Chat): JiraChatToolAuthoritySubject {
   const binding = chat.jiraPodBinding;
   const actorDigest = jiraChatActorDigest(baseDeps(wiring));
   if (binding === undefined || actorDigest === undefined)
@@ -2105,7 +2105,8 @@ it.each(["scope", "lifetime", "subject"] as const)(
   async (mismatch) => {
     const pending = await pendingChatReadConsent();
     const entry = fixtureApprovalRegistry.getChatReadGrant(pending.grantId);
-    if (entry === undefined) throw new Error("Expected pending grant");
+    if (entry === undefined || entry.grant.subject.kind === "configured-mcp")
+      throw new Error("Expected pending Jira grant");
     const grantId = randomUUID();
     const envelope = chatAuthorityFixture({
       runId: `limited-${grantId}`,
@@ -2142,7 +2143,8 @@ it.each(["scope", "lifetime", "subject"] as const)(
 it("does not restore an expired read grant through the consent endpoint", async () => {
   const pending = await pendingChatReadConsent();
   const entry = fixtureApprovalRegistry.getChatReadGrant(pending.grantId);
-  if (entry === undefined) throw new Error("Expected pending grant");
+  if (entry === undefined || entry.grant.subject.kind === "configured-mcp")
+    throw new Error("Expected pending Jira grant");
   let now = Date.now();
   fixtureApprovalRegistry = new AtlassianActionApprovalRegistry(() => now);
   expect(

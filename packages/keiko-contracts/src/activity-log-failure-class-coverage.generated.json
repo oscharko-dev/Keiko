@@ -2818,6 +2818,12 @@
               "required": false
             },
             {
+              "name": "configurationDigest",
+              "type": "string",
+              "dataClass": "digest",
+              "required": false
+            },
+            {
               "name": "consentProofDigest",
               "type": "string",
               "dataClass": "digest",

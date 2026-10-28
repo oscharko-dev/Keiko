@@ -2733,3 +2733,67 @@ grammar. Unrelated overlong permission names remain refused; the public fixed `m
 projection is unchanged. All four new regressions failed before the fixes. The six focused
 contract/server suites pass 298 tests; scoped lint, formatting and contract build pass.
 Complete final qualification remains pending.
+
+### Ordinary Chat consumes centrally configured MCP tools
+
+The ordinary Chat buffered/streaming owners now consume the configured MCP catalog without
+requiring a Jira Pod, Coding session or synthetic workspace. The existing bounded Chat loop
+serves both the Jira adapter and the configured-MCP adapter; its gateway capability checks,
+Harness meters, cancellation, transcript pairing and grounding/synthesis limits remain shared.
+The existing authority, read-disclosure and exact-action approval owners use an additive
+configured-MCP subject bound to actor, Chat and current configuration. The existing SQLite
+mutation journal records durable intent before external dispatch, protocol acknowledgement
+and uncertain outcomes without invented HTTP status or Jira identities. Automatic replay and
+Regenerate cannot repeat the mutation. The existing tool-access panel and DE/EN cards present
+these subjects and results. Unknown remote tool annotations never confer read-only authority.
+
+On 2026-10-28 the actual in-app browser used the running Docker LiteLLM gateway and Gemma
+with the same synthetic Settings server already accepted in OpenCode:
+
+- A normal Chat with no bound Jira Pod requested the status tool. Visible read disclosure and
+  exact action approval preceded the real SDK invocation. The model returned the actual
+  fixture marker, and the Activity Log recorded a completed invocation with an effect.
+- A write request left unapproved reached its execution deadline. Independent inspection
+  established zero matching remote records. It was not retried automatically.
+- A separate, explicitly requested write was approved in the UI, followed by approval of the
+  readback of its returned identifier. The model returned that identifier and the exact text
+  read from the server. Independent inspection found exactly one matching new record; the
+  unapproved request still had zero effects. This used real model and transport calls, not a
+  mocked model or an API-only substitute for the UI journey.
+
+The first live normal-Chat attempt exposed an action-decoder defect: catalog metadata was
+spread into the strict authority action. The adapter now projects only its seven canonical
+identity fields. Regression tests cover this production consumer path and the real UI rerun
+succeeds. All fixtures are synthetic; private customer material remains excluded.
+
+Focused evidence includes six production Chat/catalog/binder/SDK integration scenarios,
+56 mutation-journal tests, 165 legacy Jira/journal/transcript tests, 531 authority/approval
+regressions, 74 UI cases and 332 external-schema/SDK/catalog cases. Package builds, scoped
+TypeScript/lint/format checks are recorded separately. These counts overlap and are not a
+claimed aggregate run. Final aggregate coverage, UI evidence, assembled-package, Sonar and
+current-head CI qualification remain open. Combining a bound Jira Pod with configured MCP
+tools in the same Chat is also still under review. This checkpoint does not accept all 55
+original criteria or every external transport/model combination.
+
+The follow-up review reproduces and closes configuration A→B→A revival: every real Settings
+commit stores a fresh private generation atomically with its definitions. Deletion/recreation,
+restart and interruption immediately after commit cannot recover an older consent subject.
+Changing an already active secret requires the existing fresh-reference rotation flow. The
+105-case Settings/connection/authority regression group passes. No-op saves retain their revision.
+
+The live unapproved timeout also exposed incomplete cancellation propagation. Binder approval
+waiters now observe the invocation deadline signal; both Chat adapters revoke pending decisions
+when it expires without increasing budgets. The eight focused consumer/journal/Jira/binder suites
+pass 214 tests, and root TypeScript including tests plus UI TypeScript pass independently.
+
+The operation registry resolves 628 proofs and 30 scenarios with zero violations. The first
+Activity Log gate run found three unobserved catches and an unregistered validator import
+boundary; these are repaired through the existing error owners and an exact pure-validator
+import allowance with negative fixtures. Error observability, import policy and 78 negative
+architecture fixtures now pass. Catalog conformance passes; the portable performance receipt
+correctly reports stale producer provenance and must be regenerated from the committed source
+with its pinned baseline/candidate toolchain. No measurement or budget is manually changed.
+
+Remaining configured-MCP qualification includes an independently reproduced native ambiguous-write
+retry, the SDK's raw schema-warning diagnostic path, lifecycle-derived Settings status and the
+requested Settings usability redesign. These are ongoing work, not accepted production behavior.

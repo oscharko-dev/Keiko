@@ -4,6 +4,7 @@ import { exactKeys } from "./contract-validation-primitives.js";
 import { parseSafely } from "./managed-lsp-parse-safely.js";
 import {
   CHAT_TOOL_READ_DISCLOSURE_VERSION,
+  MCP_CHAT_READ_DISCLOSURE_VERSION,
   CHAT_TOOL_READ_GRANT_STATES,
   type ChatToolReadGrantView,
   type ChatToolWriteApprovalView,
@@ -1184,35 +1185,46 @@ function isDesktopChatWriteApprovalData(data: unknown): boolean {
   );
 }
 
-export function isChatToolReadGrantView(value: unknown): value is ChatToolReadGrantView {
-  if (
-    !isWireRecord(value) ||
-    exactKeys(
-      value,
-      [
-        "kind",
-        "grantId",
-        "chatId",
-        "podId",
-        "bindingGeneration",
-        "authenticationGeneration",
-        "state",
-        "disclosureVersion",
-        "requestedAt",
-        "expiresAt",
-      ],
-      "readGrant",
-    ).length !== 0
-  )
-    return false;
+const CHAT_READ_VIEW_KEYS = [
+  "kind",
+  "grantId",
+  "chatId",
+  "state",
+  "disclosureVersion",
+  "requestedAt",
+  "expiresAt",
+];
+function validReadGrantSubject(value: Record<string, unknown>): boolean {
+  if (value.kind === "mcp-chat-read")
+    return (
+      value.disclosureVersion === MCP_CHAT_READ_DISCLOSURE_VERSION &&
+      typeof value.configurationDigest === "string" &&
+      /^[a-f0-9]{64}$/u.test(value.configurationDigest)
+    );
   return (
     value.kind === "jira-chat-read" &&
     value.disclosureVersion === CHAT_TOOL_READ_DISCLOSURE_VERSION &&
-    [value.grantId, value.chatId, value.podId].every(
-      (id) => typeof id === "string" && /^[\w-]{1,128}$/.test(id),
-    ) &&
+    typeof value.podId === "string" &&
+    /^[\w-]{1,128}$/u.test(value.podId) &&
     [value.bindingGeneration, value.authenticationGeneration].every(
       (n) => Number.isSafeInteger(n) && Number(n) > 0,
+    )
+  );
+}
+export function isChatToolReadGrantView(value: unknown): value is ChatToolReadGrantView {
+  if (!isWireRecord(value)) return false;
+  const keys = [
+    ...CHAT_READ_VIEW_KEYS,
+    ...(value.kind === "mcp-chat-read"
+      ? ["configurationDigest"]
+      : ["podId", "bindingGeneration", "authenticationGeneration"]),
+  ];
+  return (
+    exactKeys(value, keys, "readGrant").length === 0 &&
+    keys.every((key) => Object.hasOwn(value, key)) &&
+    validReadGrantSubject(value) &&
+    [value.grantId, value.chatId].every(
+      (id) => typeof id === "string" && /^[\w-]{1,128}$/u.test(id),
     ) &&
     [value.requestedAt, value.expiresAt].every((n) => Number.isSafeInteger(n) && Number(n) >= 0) &&
     Number(value.expiresAt) > Number(value.requestedAt) &&

@@ -90,6 +90,21 @@ describe("checkArchitectureImportPolicy", () => {
     );
   });
 
+  it("admits only exact standard validator imports in the external schema owner", async () => {
+    root = makeRoot("catalog-import-policy-");
+    writeText(
+      root,
+      "packages/keiko-tool-catalog/src/external-schema.ts",
+      [
+        'import { Ajv } from "ajv";',
+        'import { Ajv2019 } from "ajv/dist/2019.js";',
+        'import { Ajv2020 } from "ajv/dist/2020.js";',
+        'import formats from "ajv-formats";',
+      ].join("\n"),
+    );
+    await expect(checkArchitectureImportPolicy(root)).resolves.toEqual([]);
+  });
+
   it("allows the catalog's own modules and existing pure contract/security owners", async () => {
     root = makeRoot("catalog-import-policy-");
     writeText(
@@ -190,7 +205,7 @@ describe("checkArchitectureImportPolicy", () => {
 
     expect(Object.fromEntries([...counts.entries()].sort())).toEqual({
       // Both core filesystem access and third-party SDK access are independently forbidden.
-      "adr-0175-tool-catalog-pure-imports": 2,
+      "adr-0175-tool-catalog-pure-imports": 4,
       "adr-0165-raw-coordinate-owner": 1,
       "adr-0005-owned-root-authority-implementation-private": 1,
       "adr-0005-owned-root-containment-allowed-callers": 1,

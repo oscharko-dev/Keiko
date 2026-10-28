@@ -9,6 +9,7 @@ import {
   formatActivityLogProofLine,
 } from "../../../tests/support/activity-log-proof.js";
 import { connectExternalMcp } from "./external-client.js";
+import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 
 const clients: ExternalMcpConnection[] = [];
 afterEach(async () => {
@@ -31,6 +32,8 @@ function context(allowed = true): ManagedMcpInvocationContext {
 function fixture(
   failAfterEffect = false,
   signal = new AbortController().signal,
+  inputSchema: CatalogJsonObject = schema,
+  outputSchema?: CatalogJsonObject,
 ): {
   readonly connect: () => Promise<ExternalMcpConnection>;
   readonly calls: string[];
@@ -47,7 +50,10 @@ function fixture(
       const server = new McpServer({ name: "synthetic-external", version: "1" });
       server.registerTool(
         "save_note",
-        { inputSchema: fromJsonSchema<{ text: string }>(schema) },
+        {
+          inputSchema: fromJsonSchema<{ text: string }>(inputSchema),
+          ...(outputSchema === undefined ? {} : { outputSchema: fromJsonSchema(outputSchema) }),
+        },
         ({ text }) => {
           effects++;
           return { content: [{ type: "text", text }] };
@@ -97,6 +103,31 @@ function fixture(
 }
 
 describe("external MCP SDK client", () => {
+  it("refuses unsafe external schemas during discovery before they reach a tool validator", async () => {
+    const f = fixture(false, new AbortController().signal, {
+      ...schema,
+      properties: { text: { type: "string", pattern: "^(a+)+$" } },
+    });
+    await expect(f.connect()).rejects.toMatchObject({ reason: "protocol-error" });
+    expect(f.effects()).toBe(0);
+    expect(f.calls).not.toContain("tools/call");
+    const events = f.lines.map((line) =>
+      expectActivityLogProof("mcp.managed.lifecycle.line", line),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({ phase: "failed", reason: "protocol-error", toolCount: 0 }),
+    );
+    expect(f.lines.join("\n")).not.toContain("^(a+)+$");
+    expect(f.lines.join("\n")).not.toContain("synthetic.example.test");
+  });
+  it("refuses unsafe external output schemas before the SDK lazily compiles them", async () => {
+    const f = fixture(false, new AbortController().signal, schema, {
+      type: "object",
+      properties: { text: { type: "string", pattern: "^(a+)+$" } },
+    });
+    await expect(f.connect()).rejects.toMatchObject({ reason: "protocol-error" });
+    expect(f.effects()).toBe(0);
+  });
   it("negotiates the modern protocol and invokes the server through real SDK transport", async () => {
     const f = fixture();
     const client = await f.connect();

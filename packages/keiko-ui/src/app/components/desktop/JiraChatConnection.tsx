@@ -261,7 +261,7 @@ function ConnectionMode({
         ceiling={chat.toolModeCeiling ?? "governed-assist"}
         onChange={(mode) => setDraft({ ...draft, mode })}
       />
-      <p>{t("chat.jira.modeHelp")}</p>
+      <p>{t("chat.tools.modeHelp")}</p>
       <p role="status">
         {t("chat.jira.effectiveMode", {
           mode: t(`codingWorkbench.mode.${chat.effectiveToolMode ?? "governed-assist"}.label`),
@@ -305,7 +305,7 @@ function ConnectionForm({
         <ConnectionMode chat={chat} draft={draft} setDraft={setDraft} />
         <ReplacementConfirmation required={plan.replacement} draft={draft} setDraft={setDraft} />
         <button className="lk-btn" type="submit" disabled={blocked}>
-          {t("chat.jira.apply")}
+          {t("chat.tools.apply")}
         </button>
       </fieldset>
       {mutation.failed || catalog.failed ? (
@@ -494,7 +494,7 @@ function ConnectionSummary({
   const fallback = catalog.loading ? "chat.jira.podLabel" : "chat.jira.podUnavailable";
   return (
     <summary className="lk-btn">
-      <span>{t("chat.jira.connection")}</span>
+      <span>{t("chat.tools.connection")}</span>
       {chat.jiraPodBinding !== undefined ? (
         <span>
           {" "}

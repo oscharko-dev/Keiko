@@ -147,6 +147,7 @@ const CHAT_AUTHORITY_OPERATION = defineActivityLogOperation({
     actorDigest: OPTIONAL_DIGEST,
     chatDigest: OPTIONAL_DIGEST,
     podDigest: OPTIONAL_DIGEST,
+    configurationDigest: OPTIONAL_DIGEST,
     bindingGeneration: OPTIONAL_COUNT,
     authenticationGeneration: OPTIONAL_COUNT,
     toolCalls: OPTIONAL_COUNT,
@@ -195,6 +196,12 @@ function subjectFields(
   subject: ChatToolAuthoritySubject | undefined,
 ): Record<string, string | number> {
   if (!validateChatToolAuthoritySubject(subject).ok || subject === undefined) return {};
+  if (subject.kind === "configured-mcp")
+    return {
+      actorDigest: subject.actorDigest,
+      chatDigest: sha256Hex(subject.chatId),
+      configurationDigest: subject.configurationDigest,
+    };
   return {
     actorDigest: subject.actorDigest,
     chatDigest: sha256Hex(subject.chatId),

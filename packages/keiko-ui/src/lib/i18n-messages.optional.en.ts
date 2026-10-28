@@ -86,6 +86,30 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.live.subtitle":
     "Read current Jira data in a connected Chat with explicit read consent. Live access does not create an index or stored document collection.",
   "atlassianConnectors.live.add": "Create Jira Pod",
+  "chat.tools.connection": "Tool access",
+  "chat.tools.modeHelp":
+    "The selected mode applies to tools in this chat. Reading through MCP or Jira requires consent; writes follow the mode and deployment limits. Configure MCP servers in Settings.",
+  "chat.tools.apply": "Apply tool settings",
+  "chat.mcp.title": "Read MCP data in this chat",
+  "chat.mcp.disclosure":
+    "Content retrieved through configured MCP servers will be sent to the selected model and retained in this conversation. Permission applies to this chat until it expires or the configuration or authority changes. It does not grant permission to write.",
+  "chat.mcp.tool": "MCP action",
+  "chat.mcp.details": "View MCP result",
+  "chat.mcp.writeApproval.title": "Approve MCP action",
+  "chat.mcp.writeApproval.disclosure":
+    "Review this tool and its arguments. Approval permits this action once within the current connection and authority.",
+  "chat.mcp.write.notDispatched": "Not sent to the MCP server",
+  "chat.mcp.write.rejected": "MCP action rejected",
+  "chat.mcp.write.succeeded": "Action confirmed",
+  "chat.mcp.write.unconfirmed": "The server accepted the change; confirmation incomplete",
+  "chat.mcp.write.unknown": "MCP action outcome unknown",
+  "chat.mcp.write.pending": "Awaiting a confirmed MCP outcome",
+  "chat.mcp.write.unconfirmedHelp":
+    "The server reported success, but the final result could not be confirmed. Check the remote state before starting another write.",
+  "chat.mcp.write.unknownHelp":
+    "The change may have been applied. It will not be repeated automatically. Check the remote state before starting another write.",
+  "chat.mcp.write.pendingHelp":
+    "The action has started. Wait for its outcome before starting another write.",
   "chat.jira.title": "Read Jira in this chat",
   "chat.jira.disclosure":
     "Jira content will be sent to the selected model and retained in this conversation. Permission applies to this chat until it expires or the connection or authority changes. It does not grant permission to write.",

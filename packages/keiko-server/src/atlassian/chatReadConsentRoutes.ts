@@ -9,6 +9,7 @@ import { validateChatToolReadConsentDecision } from "@oscharko-dev/keiko-contrac
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type { UiHandlerDeps } from "../deps.js";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
+import { isCurrentMcpChatReadGrant } from "../mcp/mcpChatAuthority.js";
 import { isCurrentJiraChatReadGrant } from "./jiraChatAuthority.js";
 import { projectChatReadGrant, type ChatReadGrantEntry } from "./chatReadGrantState.js";
 
@@ -16,7 +17,10 @@ const OWNER: ChatConsentRouteOwner<ChatReadGrantEntry, ChatToolReadConsentDecisi
   phase: "read-grant",
   project: (entry) => projectChatReadGrant(entry.grant),
   retained: (registry, id, correlation) => registry.getChatReadGrant(id, correlation),
-  isCurrent: isCurrentJiraChatReadGrant,
+  isCurrent: (deps, entry, nowIso, correlationId) =>
+    entry.grant.subject.kind === "configured-mcp"
+      ? isCurrentMcpChatReadGrant(deps, entry, nowIso, correlationId)
+      : isCurrentJiraChatReadGrant(deps, entry, nowIso, correlationId),
   validate: validateChatToolReadConsentDecision,
 };
 export const handleGetChatReadConsent = getChatConsent(OWNER);
@@ -29,9 +33,14 @@ export async function handleDecideChatReadConsent(
   const parsed = await readCurrentChatDecision(ctx, deps, OWNER);
   if (!parsed.ok) return parsed.response;
   const { entry, registry, nowIso } = parsed;
+  if (parsed.value.disclosureVersion !== entry.grant.disclosureVersion)
+    return chatConsentFailure(ctx, OWNER.phase, 409);
   const proof = sha256Hex(
     canonicalise({
-      kind: "jira-chat-read-consent",
+      kind:
+        entry.grant.kind === "mcp-chat-read-grant"
+          ? "mcp-chat-read-consent"
+          : "jira-chat-read-consent",
       grantId: entry.grant.grantId,
       subject: entry.grant.subject,
       authority: entry.authority,

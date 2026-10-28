@@ -19,6 +19,7 @@ import type {
   ManagedMcpLogPort,
   ManagedMcpFailure,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
+import { isBoundedExternalJsonSchema } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { deepFreeze } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { ManagedMcpError } from "./definitions.js";
@@ -158,6 +159,14 @@ class ExternalClient implements ExternalMcpConnection {
       new Set(listed.tools.map((tool) => tool.name)).size !== listed.tools.length
     )
       throw new ManagedMcpError("descriptor-drift");
+    if (
+      listed.tools.some(
+        (tool) =>
+          !isBoundedExternalJsonSchema(tool.inputSchema) ||
+          (tool.outputSchema !== undefined && !isBoundedExternalJsonSchema(tool.outputSchema)),
+      )
+    )
+      throw new ManagedMcpError("protocol-error");
     this.#tools = captured(listed.tools) as readonly ExternalMcpTool[];
     this.#digest = sha256Hex(canonicalise(this.#tools));
     recordManagedMcp(
@@ -262,6 +271,14 @@ export async function connectExternalMcp(
     await client.connect();
     return client;
   } catch {
+    recordManagedMcp(
+      options.log,
+      options.correlationId,
+      "failed",
+      0,
+      sha256Hex("[]"),
+      "protocol-error",
+    );
     await client.close();
     throw new ManagedMcpError("protocol-error");
   }

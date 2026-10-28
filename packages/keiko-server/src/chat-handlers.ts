@@ -1,8 +1,8 @@
 import {
-  createJiraChatToolTurn,
-  scopeJiraChatToolTurn,
-  type JiraChatToolTurn,
-} from "./atlassian/jiraChatToolTurn.js";
+  createChatToolTurn,
+  scopeChatToolTurn,
+  type ChatToolTurnPort,
+} from "./chat-tool-runtime.js";
 import { CatalogDispatchFault } from "./tool-catalog/catalogToolErrors.js";
 import {
   deploymentContentPolicy,
@@ -2481,7 +2481,7 @@ function buildBufferedGatewayAssembly(
 // The per-attempt inputs of one buffered assembly: the turn's abort signal and correlation, and the
 // context-window attempt that decides whether a failure is retried with the adopted window.
 interface BufferedAssemblyAttempt {
-  readonly toolTurn?: JiraChatToolTurn | undefined;
+  readonly toolTurn?: ChatToolTurnPort | undefined;
   readonly signal: AbortSignal;
   readonly correlationId: string | undefined;
   readonly attempt: ContextWindowAttempt;
@@ -2535,7 +2535,7 @@ function callPreparedAssembly(
   assembly: GatewayPromptAssembly,
   signal: AbortSignal,
   correlationId: string | undefined,
-  toolTurn: JiraChatToolTurn | undefined,
+  toolTurn: ChatToolTurnPort | undefined,
 ): Promise<NormalizedResponse> {
   const request = {
     modelId,
@@ -2605,9 +2605,9 @@ async function prepareBufferedToolTurn(
   admitted: AdmittedTurnHandle,
   signal: AbortSignal,
   correlationId: string | undefined,
-): Promise<JiraChatToolTurn | undefined> {
+): Promise<ChatToolTurnPort | undefined> {
   try {
-    return await createJiraChatToolTurn(
+    return await createChatToolTurn(
       deps,
       prepared.modelId,
       admitted.userMessage,
@@ -2640,7 +2640,7 @@ async function executeBufferedModelTurn(
     abortSignal,
     correlationId,
   );
-  const turnDeps = scopeJiraChatToolTurn(deps, toolTurn);
+  const turnDeps = scopeChatToolTurn(deps, toolTurn);
   const snapshot = captureAdmittedSnapshot(
     turnDeps,
     prepared,
@@ -2670,7 +2670,7 @@ async function executeBufferedModelTurn(
 interface PreparedBufferedRun {
   readonly memory: ConversationMemoryResultWire;
   readonly snapshot: GatewayTurnSnapshot;
-  readonly toolTurn: JiraChatToolTurn | undefined;
+  readonly toolTurn: ChatToolTurnPort | undefined;
   readonly abortSignal: AbortSignal;
   readonly messageCountBeforeTurn: number;
   readonly startedAt: number;

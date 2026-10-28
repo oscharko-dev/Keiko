@@ -59,6 +59,8 @@ export interface McpSettingsStore {
   readonly read: (correlationId: string) => McpSettingsSnapshot;
   /** Revoked synchronously when the committed definition changes, is disabled, or disappears. */
   readonly generation: (server: McpServerDefinition, correlationId: string) => AbortSignal;
+  /** Whole-catalog authority changes also when an unrelated server is added. */
+  readonly revisionSignal: (revision: string, correlationId: string) => AbortSignal;
   readonly update: (
     update: McpSettingsUpdate,
     correlationId: string,
@@ -66,8 +68,12 @@ export interface McpSettingsStore {
   readonly secret: (reference: string, server: McpServerDefinition) => string | undefined;
 }
 
-function snapshot(servers: readonly McpServerDefinition[]): McpSettingsSnapshot {
-  return { servers, revision: createHash("sha256").update(JSON.stringify(servers)).digest("hex") };
+function snapshot(
+  servers: readonly McpServerDefinition[],
+  generation?: string,
+): McpSettingsSnapshot {
+  const identity = generation === undefined ? servers : { servers, generation };
+  return { servers, revision: createHash("sha256").update(JSON.stringify(identity)).digest("hex") };
 }
 
 function recordMcpSettingsUpdate(
@@ -103,7 +109,7 @@ function readSettings(
     consumer: "settings",
   });
   if (current.state === "refused") throw new TypeError("MCP registry is unavailable");
-  return snapshot(current.servers);
+  return snapshot(current.servers, current.generation);
 }
 
 function importEnvironmentFiles(update: McpSettingsUpdate): McpSettingsUpdate {
@@ -136,7 +142,7 @@ function validUpdate(update: McpSettingsUpdate): McpSettingsUpdate {
     input === undefined ? undefined : parseMcpSettingsUpdate(importEnvironmentFiles(input));
   if (validated === undefined) throw new TypeError("MCP settings are invalid");
   const document = { schemaVersion: 1, servers: validated.servers };
-  if (Buffer.byteLength(JSON.stringify(document), "utf8") > 64 * 1024)
+  if (Buffer.byteLength(JSON.stringify(document), "utf8") + 64 > 64 * 1024)
     throw new TypeError("MCP settings exceed the registry size limit");
   return validated;
 }
@@ -163,10 +169,17 @@ type StoreInput = McpOAuthCredentialStoreInput & { readonly activityLog?: Server
 class SettingsStore implements McpSettingsStore {
   readonly #secrets: ReturnType<typeof createMcpServerSecretStore>;
   readonly #generations = new Map<string, { definition: string; controller: AbortController }>();
+  #revision: { digest: string; controller: AbortController } | undefined;
   constructor(private readonly input: StoreInput) {
     this.#secrets = createMcpServerSecretStore(input);
   }
-  private reconcileGenerations(servers: readonly McpServerDefinition[]): void {
+  private reconcileGenerations(state: McpSettingsSnapshot): void {
+    const { revision: digest, servers } = state;
+    if (this.#revision?.digest !== digest) {
+      const previous = this.#revision;
+      this.#revision = { digest, controller: new AbortController() };
+      previous?.controller.abort();
+    }
     for (const [name, generation] of this.#generations) {
       const current = servers.find((server) => server.name === name && server.enabled);
       if (current === undefined || JSON.stringify(current) !== generation.definition) {
@@ -180,10 +193,10 @@ class SettingsStore implements McpSettingsStore {
     try {
       current = readSettings(this.input, correlationId);
     } catch (error) {
-      this.reconcileGenerations([]);
+      this.reconcileGenerations(snapshot([]));
       throw error;
     }
-    this.reconcileGenerations(current.servers);
+    this.reconcileGenerations(current);
     const result = reconcileSecrets(this.#secrets, current, this.input.activityLog, correlationId);
     if (result.changed && result.snapshot.credentialCleanup !== "pending")
       recordMcpSettingsUpdate(
@@ -194,6 +207,12 @@ class SettingsStore implements McpSettingsStore {
         0,
       );
     return result.snapshot;
+  };
+  readonly revisionSignal = (revision: string, correlationId: string): AbortSignal => {
+    this.read(correlationId);
+    return this.#revision?.digest === revision
+      ? this.#revision.controller.signal
+      : AbortSignal.abort();
   };
   readonly generation = (server: McpServerDefinition, correlationId: string): AbortSignal => {
     const definition = JSON.stringify(server);
@@ -227,7 +246,6 @@ class SettingsStore implements McpSettingsStore {
     correlationId: string,
   ): { readonly ok: boolean; readonly snapshot: McpSettingsSnapshot } => {
     const validated = validUpdate(update);
-    const document = { schemaVersion: 1, servers: validated.servers };
     const current = this.read(correlationId);
     if (current.revision !== update.expectedRevision) {
       recordMcpSettingsUpdate(this.input.activityLog, correlationId, "conflict", current, 0);
@@ -238,12 +256,30 @@ class SettingsStore implements McpSettingsStore {
       if (server === undefined) throw new TypeError("MCP secret binding is invalid");
       return { reference, server, value: entry.value };
     });
+    const activeReferences = new Set(current.servers.flatMap(mcpServerSecretReferences));
+    for (const entry of entries) {
+      if (
+        activeReferences.has(entry.reference) &&
+        this.#secrets.get(entry.reference, entry.server) !== entry.value
+      )
+        throw new TypeError("An active MCP credential requires a new reference");
+    }
     this.#secrets.put(entries);
-    savePrivateJson(join(this.input.stateDir, MCP_SERVER_REGISTRY_FILE), document);
-    this.reconcileGenerations(validated.servers);
+    let committed = current;
+    if (JSON.stringify(current.servers) !== JSON.stringify(validated.servers)) {
+      // The epoch and definitions commit together: restoring old definitions never restores consent.
+      const generation = randomUUID();
+      savePrivateJson(join(this.input.stateDir, MCP_SERVER_REGISTRY_FILE), {
+        schemaVersion: 1,
+        generation,
+        servers: validated.servers,
+      });
+      committed = snapshot(validated.servers, generation);
+    }
+    this.reconcileGenerations(committed);
     const next = reconcileSecrets(
       this.#secrets,
-      snapshot(validated.servers),
+      committed,
       this.input.activityLog,
       correlationId,
     ).snapshot;

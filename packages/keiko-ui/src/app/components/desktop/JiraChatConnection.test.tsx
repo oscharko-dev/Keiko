@@ -44,7 +44,7 @@ const POD: AtlassianConnectorMetadata = {
   },
 };
 async function open(user: ReturnType<typeof userEvent.setup>): Promise<void> {
-  await user.click(screen.getByText("Jira connection"));
+  await user.click(screen.getByText("Tool access"));
 }
 
 describe("Jira Chat connection", () => {
@@ -70,7 +70,7 @@ describe("Jira Chat connection", () => {
     await screen.findByRole("option", { name: "Lab Jira" });
     expect(screen.getByLabelText("Chat autonomy mode")).toHaveTextContent("Ask for approval");
     await user.selectOptions(screen.getByLabelText("Jira Pod"), "pod-one");
-    await user.click(screen.getByRole("button", { name: "Apply Jira settings" }));
+    await user.click(screen.getByRole("button", { name: "Apply tool settings" }));
     expect(changed).not.toHaveBeenCalled();
     expect(persist).toHaveBeenCalledWith(
       CHAT,
@@ -119,9 +119,9 @@ describe("Jira Chat connection", () => {
     await open(user);
     await screen.findByRole("option", { name: "Lab Jira" });
     await user.selectOptions(screen.getByLabelText("Jira Pod"), "pod-one");
-    expect(screen.getByRole("button", { name: "Apply Jira settings" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Apply tool settings" })).toBeDisabled();
     await user.click(screen.getByRole("checkbox"));
-    await user.click(screen.getByRole("button", { name: "Apply Jira settings" }));
+    await user.click(screen.getByRole("button", { name: "Apply tool settings" }));
     unmount();
     if (finish === undefined) throw new Error("Missing server completion");
     finish(CHAT);
@@ -169,7 +169,7 @@ it("shows the bound Pod identity while the connection disclosure stays closed", 
   );
   expect(await screen.findByText("Lab Jira")).toBeVisible();
   expect(screen.getByTestId("jira-chat-connection")).not.toHaveAttribute("open");
-  expect(screen.queryByRole("button", { name: "Apply Jira settings" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Apply tool settings" })).not.toBeInTheDocument();
 });
 
 it("persists the selected mode through the same owner and never treats failure as confirmation", async () => {
@@ -188,7 +188,7 @@ it("persists the selected mode through the same owner and never treats failure a
   await screen.findByRole("option", { name: "Lab Jira" });
   await user.click(screen.getByRole("combobox", { name: "Chat autonomy mode" }));
   await user.click(screen.getByRole("option", { name: "Full access" }));
-  await user.click(screen.getByRole("button", { name: "Apply Jira settings" }));
+  await user.click(screen.getByRole("button", { name: "Apply tool settings" }));
   await screen.findByRole("alert");
   expect(persist).toHaveBeenCalledWith(
     CHAT,
@@ -217,7 +217,7 @@ it("disables unverified Pods and closes with Escape while restoring focus", asyn
   await waitFor(() =>
     expect(screen.getByTestId("jira-chat-connection")).not.toHaveAttribute("open"),
   );
-  expect(screen.getByText("Jira connection").closest("summary")).toHaveFocus();
+  expect(screen.getByText("Tool access").closest("summary")).toHaveFocus();
 });
 
 describe("Jira workspace connection requests", () => {
@@ -247,7 +247,7 @@ describe("Jira workspace connection requests", () => {
     const settled = vi.fn();
     void pending.then(settled);
     await screen.findByRole("option", { name: "Lab Jira" });
-    await user.click(screen.getByRole("button", { name: "Apply Jira settings" }));
+    await user.click(screen.getByRole("button", { name: "Apply tool settings" }));
     expect(settled).not.toHaveBeenCalled();
     await act(async () => {
       finish({
@@ -290,8 +290,8 @@ describe("Jira workspace connection requests", () => {
       pending = requestJiraChatConnection("chat-window", CHAT.id, "pod-one");
     });
     await screen.findByRole("option", { name: "Lab Jira" });
-    expect(screen.getByRole("button", { name: "Apply Jira settings" })).toBeEnabled();
-    await user.click(screen.getByRole("button", { name: "Apply Jira settings" }));
+    expect(screen.getByRole("button", { name: "Apply tool settings" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Apply tool settings" }));
     expect(await pending).toBe(true);
     expect(persist).toHaveBeenCalledWith(
       bound,
@@ -327,7 +327,7 @@ describe("Jira workspace connection requests", () => {
       pending = requestJiraChatConnection("chat-window", CHAT.id, "pod-one");
     });
     await screen.findByRole("option", { name: "Lab Jira" });
-    expect(screen.getByRole("button", { name: "Apply Jira settings" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Apply tool settings" })).toBeDisabled();
     expect(screen.getByRole("checkbox")).not.toBeChecked();
     await user.keyboard("{Escape}");
     await waitFor(async () => expect(await pending).toBe(false));
@@ -364,7 +364,7 @@ describe("Jira workspace connection requests", () => {
     });
     expect(await first).toBe(false);
     await screen.findByRole("option", { name: "Lab Jira" });
-    await user.click(screen.getByRole("button", { name: "Apply Jira settings" }));
+    await user.click(screen.getByRole("button", { name: "Apply tool settings" }));
     view.unmount();
     expect(await second).toBe(false);
     await act(async () => {

@@ -149,6 +149,24 @@ function validApproval(
       matchesApprovalCall(value.approval, call, identity))
   );
 }
+function isMcpMutationProjection(
+  value: Record<string, unknown>,
+  call: ChatToolExchange["call"],
+  canonicalId: unknown,
+): boolean {
+  if (
+    !call.name.startsWith("mcp_") ||
+    typeof canonicalId !== "string" ||
+    !/^keiko\.mcp\.t[a-f0-9]{64}$/u.test(canonicalId) ||
+    !object(value.resultBinding)
+  )
+    return false;
+  const descriptor = verifyToolDescriptor(value.resultBinding.descriptor);
+  return (
+    descriptor.toolRef.canonicalId === canonicalId &&
+    descriptor.actionMapping.some((mapping) => mapping.action === call.name)
+  );
+}
 function validMutationProjection(
   value: Record<string, unknown>,
   call: ChatToolExchange["call"],
@@ -158,7 +176,8 @@ function validMutationProjection(
   return (
     object(result) &&
     object(result.toolRef) &&
-    MUTATION_ALIASES.get(call.name) === result.toolRef.canonicalId &&
+    (MUTATION_ALIASES.get(call.name) === result.toolRef.canonicalId ||
+      isMcpMutationProjection(value, call, result.toolRef.canonicalId)) &&
     JIRA_MUTATION_OUTCOMES.some((outcome) => outcome === value.mutationOutcome)
   );
 }

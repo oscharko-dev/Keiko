@@ -146,3 +146,36 @@ it.each([
   expect(screen.getByText(label)).toBeVisible();
   expect(screen.queryByText("Could not complete")).toBeNull();
 });
+
+it.each([
+  ["succeeded", "Action confirmed"],
+  ["unknown", "MCP action outcome unknown"],
+] as const)(
+  "renders the recorded MCP %s outcome without Jira labels or automatic retries",
+  (outcome, label) => {
+    const original = exchange("succeeded");
+    render(
+      <JiraChatTools
+        transcript={{
+          schemaVersion: 1,
+          exchanges: [
+            {
+              ...original,
+              call: {
+                id: "mcp-call",
+                name: "mcp_fixture_create_note",
+                arguments: { text: "Synthetic" },
+              },
+              mutationOutcome: outcome,
+            },
+          ],
+        }}
+        turnState="completed"
+      />,
+    );
+    expect(screen.getByRole("region", { name: "MCP action" })).toBeVisible();
+    expect(screen.getByText(label)).toBeVisible();
+    expect(screen.queryByText("Jira change confirmed")).toBeNull();
+    expect(screen.queryByRole("button", { name: /retry/i })).toBeNull();
+  },
+);

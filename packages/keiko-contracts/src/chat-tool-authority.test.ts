@@ -222,3 +222,46 @@ describe("generation-bound Jira Chat read consent", () => {
     expect(JSON.stringify(result)).not.toContain("private-");
   });
 });
+
+describe("configured MCP Chat authority", () => {
+  const subject = {
+    kind: "configured-mcp",
+    actorDigest: "a".repeat(64),
+    chatId: "chat-mcp",
+    configurationDigest: "c".repeat(64),
+  };
+  it("accepts a configuration-bound subject without any fabricated Pod or workspace", () => {
+    expect(validateChatToolAuthoritySubject(subject)).toEqual({ ok: true, value: subject });
+    const value = { ...envelope(), subject, connectorScopes: ["mcp.tools"] };
+    expect(validateChatToolAuthorityEnvelope(value)).toEqual({ ok: true, value });
+  });
+  it.each([
+    { configurationDigest: "bad" },
+    { kind: "jira" },
+    { podId: "d5f5681e-ce98-4c3c-b27e-51d707c9d018" },
+    { bindingGeneration: 1 },
+    { authenticationGeneration: 1 },
+    { endpoint: "https://private.example.invalid" },
+  ])("rejects mixed or unbound MCP subjects %j", (patch) => {
+    expect(validateChatToolAuthoritySubject({ ...subject, ...patch }).ok).toBe(false);
+  });
+  it("does not permit a scope from another subject family", () => {
+    expect(validateChatToolAuthorityEnvelope({ ...envelope(), subject }).ok).toBe(false);
+    expect(
+      validateChatToolAuthorityEnvelope({ ...envelope(), connectorScopes: ["mcp.tools"] }).ok,
+    ).toBe(false);
+  });
+  it("keeps MCP consent distinct from Jira consent", () => {
+    const value = {
+      ...readGrant(),
+      subject,
+      kind: "mcp-chat-read-grant",
+      disclosureVersion: "mcp-chat-read-v1",
+    };
+    expect(validateChatToolReadGrant(value)).toEqual({ ok: true, value });
+    expect(validateChatToolReadGrant({ ...value, disclosureVersion: "jira-chat-read-v1" }).ok).toBe(
+      false,
+    );
+    expect(validateChatToolReadGrant({ ...value, kind: "jira-chat-read-grant" }).ok).toBe(false);
+  });
+});

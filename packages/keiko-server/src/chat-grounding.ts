@@ -14,3 +14,8 @@ export function hasGroundingScope(chat: Chat): boolean {
 export function hasMixedJiraGroundingScope(chat: Chat): boolean {
   return chat.jiraPodBinding !== undefined && hasGroundingScope(chat);
 }
+
+/** Mixed tool/source turns share the existing buffered grounding and synthesis budget owner. */
+export function hasMixedToolGroundingScope(chat: Chat, configuredMcp: boolean): boolean {
+  return hasGroundingScope(chat) && (chat.jiraPodBinding !== undefined || configuredMcp);
+}

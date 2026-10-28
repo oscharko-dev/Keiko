@@ -23,7 +23,6 @@ export function mutationIntentError(intent: ChatToolMutationIntent): UiStoreErro
     intent.chatId,
     intent.userMessageId,
     intent.actorId,
-    intent.podId,
     intent.correlationId,
   ];
   if (!identifiers.every((value) => typeof value === "string" && ID.test(value)))
@@ -36,14 +35,35 @@ export function mutationIntentError(intent: ChatToolMutationIntent): UiStoreErro
     return invalidRequest("Invalid mutation turn reference.");
   if (!DIGEST.test(intent.actionDigest) || !DIGEST.test(intent.authorityDigest))
     return invalidRequest("Invalid mutation digest.");
-  if (
-    ![intent.bindingGeneration, intent.credentialGeneration].every(
+  return mutationSourceError(intent);
+}
+function isJiraSource(value: unknown): boolean {
+  return value === undefined || value === "jira";
+}
+function validIdentifier(value: unknown): boolean {
+  return typeof value === "string" && ID.test(value);
+}
+function mutationSourceError(intent: ChatToolMutationIntent): UiStoreError | undefined {
+  if (intent.sourceKind === "configured-mcp") {
+    const absent: readonly unknown[] = [
+      intent.podId,
+      intent.bindingGeneration,
+      intent.credentialGeneration,
+    ];
+    const valid =
+      DIGEST.test(intent.configurationDigest) &&
+      [intent.serverName, intent.toolName, intent.operation].every(validIdentifier) &&
+      absent.every((value) => value === null);
+    return valid ? undefined : invalidRequest("Invalid MCP mutation source.");
+  }
+  const valid =
+    isJiraSource(intent.sourceKind) &&
+    validIdentifier(intent.podId) &&
+    [intent.bindingGeneration, intent.credentialGeneration].every(
       (value) => Number.isSafeInteger(value) && value > 0,
-    )
-  )
-    return invalidRequest("Invalid mutation generation.");
-  if (!OPERATIONS.has(intent.operation)) return invalidRequest("Invalid mutation operation.");
-  return undefined;
+    ) &&
+    OPERATIONS.has(intent.operation);
+  return valid ? undefined : invalidRequest("Invalid mutation source.");
 }
 export function validateMutationIntent(intent: ChatToolMutationIntent): void {
   const error = mutationIntentError(intent);
@@ -55,6 +75,7 @@ export function sameMutationIdentity(
   intent: ChatToolMutationIntent,
 ): boolean {
   return (
+    sameMutationSource(record, intent) &&
     record.chatId === intent.chatId &&
     record.turnRef === intent.turnRef &&
     record.actorId === intent.actorId &&
@@ -64,6 +85,29 @@ export function sameMutationIdentity(
     record.authorityDigest === intent.authorityDigest &&
     record.actionDigest === intent.actionDigest &&
     record.operation === intent.operation
+  );
+}
+function sameMutationSource(
+  record: ChatToolMutationRecord,
+  intent: ChatToolMutationIntent,
+): boolean {
+  if (record.sourceKind !== "configured-mcp") return intent.sourceKind !== "configured-mcp";
+  return (
+    intent.sourceKind === "configured-mcp" &&
+    record.configurationDigest === intent.configurationDigest &&
+    record.serverName === intent.serverName &&
+    record.toolName === intent.toolName
+  );
+}
+export function mutationAcknowledged(record: ChatToolMutationRecord): boolean {
+  return record.sourceKind === "configured-mcp"
+    ? record.protocolOutcome === "success"
+    : acknowledgedStatus(record.httpStatus);
+}
+export function mutationHasResponse(record: ChatToolMutationRecord): boolean {
+  return (
+    record.httpStatus !== null ||
+    (record.sourceKind === "configured-mcp" && record.protocolOutcome !== null)
   );
 }
 export function acknowledgedStatus(status: number | null): boolean {
@@ -78,7 +122,7 @@ const ACKNOWLEDGED: ReadonlySet<JiraMutationOutcome> = new Set([
 const UNKNOWN: ReadonlySet<JiraMutationOutcome> = new Set(["unknown"]);
 function allowedOutcomes(record: ChatToolMutationRecord): ReadonlySet<JiraMutationOutcome> {
   if (record.phase === "prepared") return UNSTARTED;
-  if (acknowledgedStatus(record.httpStatus)) return ACKNOWLEDGED;
+  if (mutationAcknowledged(record)) return ACKNOWLEDGED;
   // Status alone cannot prove absence of effects: a proxy can replace a response after commit.
   return UNKNOWN;
 }
@@ -98,12 +142,12 @@ function settledOutcome(record: ChatToolMutationRecord): JiraMutationOutcome | u
   switch (record.outcome) {
     case "succeeded":
     case "succeeded-unconfirmed":
-      return acknowledgedStatus(record.httpStatus) ? record.outcome : undefined;
+      return mutationAcknowledged(record) ? record.outcome : undefined;
     case "not-dispatched":
     case "rejected":
-      return record.httpStatus === null ? record.outcome : undefined;
+      return !mutationHasResponse(record) ? record.outcome : undefined;
     case "unknown":
-      return acknowledgedStatus(record.httpStatus) ? undefined : record.outcome;
+      return mutationAcknowledged(record) ? undefined : record.outcome;
     default:
       return undefined;
   }
@@ -121,11 +165,11 @@ export function observedChatToolMutationOutcome(
   if (record.outcome !== null) return undefined;
   switch (record.phase) {
     case "prepared":
-      return record.httpStatus === null ? "not-dispatched" : undefined;
+      return !mutationHasResponse(record) ? "not-dispatched" : undefined;
     case "dispatched":
-      return acknowledgedStatus(record.httpStatus) ? undefined : "unknown";
+      return mutationAcknowledged(record) ? undefined : "unknown";
     case "acknowledged":
-      return acknowledgedStatus(record.httpStatus) ? "succeeded-unconfirmed" : undefined;
+      return mutationAcknowledged(record) ? "succeeded-unconfirmed" : undefined;
     default:
       return undefined;
   }

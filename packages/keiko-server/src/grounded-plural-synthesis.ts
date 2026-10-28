@@ -1,7 +1,7 @@
 import { currentOwnAssessmentPolicy, type UiHandlerDeps } from "./deps.js";
 import { connectedSearchNoEvidenceAnswer } from "./grounded-faithfulness.js";
 import { logGroundedToolRound } from "./chat-activity.js";
-import type { JiraChatToolTurn } from "./atlassian/jiraChatToolTurn.js";
+import type { ChatToolTurnPort } from "./chat-tool-turn.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { ContextProfile } from "@oscharko-dev/keiko-contracts";
 import {
@@ -143,7 +143,7 @@ export async function callPluralGroundedSynthesis(
       { ...input.request, attemptAdmission: tracker.admission },
       input.signal,
       tracker,
-      input.deps?.jiraChatToolTurn,
+      input.deps?.chatToolTurn,
       requiresObservedToolResult(input.deps, input.evidenceCount),
     );
     input.budget.recordCompleted();
@@ -161,7 +161,7 @@ export async function callGroundedSynthesisModel(
   request: GatewayCallRequest,
   signal: AbortSignal,
   tracker: GroundedSynthesisAttemptTracker,
-  toolTurn?: JiraChatToolTurn,
+  toolTurn?: ChatToolTurnPort,
   requireToolResult = false,
 ): Promise<NormalizedResponse> {
   if (toolTurn === undefined) return model.call(request, signal);
@@ -192,7 +192,7 @@ export function requiresObservedToolResult(
   evidenceCount: number | undefined,
 ): boolean {
   return (
-    deps?.jiraChatToolTurn !== undefined &&
+    deps?.chatToolTurn !== undefined &&
     evidenceCount === 0 &&
     deps.groundedMemoryContextAvailable !== true &&
     currentOwnAssessmentPolicy(deps) !== "allowed"

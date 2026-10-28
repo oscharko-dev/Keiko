@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import type {
-  ChatToolAuthorityEnvelope,
   ChatToolWriteApprovalView,
   EditorAgentGovernedAuthorityReference,
 } from "@oscharko-dev/keiko-contracts";
@@ -20,11 +19,12 @@ import {
   isCurrentJiraChatReadGrant,
   resolveCurrentJiraChatAuthority,
   type JiraChatAuthorityDeps,
+  type JiraChatAuthorityEnvelope,
 } from "./jiraChatAuthority.js";
 
 type WriteDeps = JiraChatAuthorityDeps & Pick<UiHandlerDeps, "atlassianActionApprovalRegistry">;
 interface WriteFacts {
-  readonly envelope: ChatToolAuthorityEnvelope;
+  readonly envelope: JiraChatAuthorityEnvelope;
   readonly readExpiresAt: number;
 }
 export type JiraChatWriteApprovalAdmission =
@@ -63,6 +63,7 @@ export function isCurrentJiraChatWriteApproval(
   nowIso: string,
   correlationId: string,
 ): boolean {
+  if (entry.approval.kind !== "jira-chat-write") return false;
   const facts = currentWriteFacts(
     deps,
     entry.subject.chatId,

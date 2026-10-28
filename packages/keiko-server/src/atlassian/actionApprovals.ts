@@ -27,13 +27,13 @@ import {
   type ChatWriteApprovalEntry,
   type ChatWriteApprovalClaim,
   type ChatWriteApprovalResult,
-  type JiraChatWriteActionIdentity,
+  type ChatToolWriteActionIdentity,
   type RetainedChatWriteApproval,
 } from "./chatWriteApprovalState.js";
 export type {
   ChatWriteApprovalEntry,
   ChatWriteApprovalClaim,
-  JiraChatWriteActionIdentity,
+  ChatToolWriteActionIdentity,
 } from "./chatWriteApprovalState.js";
 
 // Server-side pending-approval state for review-required connector actions (Issue #2244, Epic
@@ -334,7 +334,7 @@ export class AtlassianActionApprovalRegistry {
     approvalId: string,
     subject: ChatToolAuthoritySubject,
     authority: EditorAgentGovernedAuthorityReference,
-    action: JiraChatWriteActionIdentity,
+    action: ChatToolWriteActionIdentity,
     proofDigest: string,
     correlationId?: string,
   ): ChatWriteApprovalResult {
@@ -360,7 +360,7 @@ export class AtlassianActionApprovalRegistry {
     approvalId: string,
     subject: ChatToolAuthoritySubject,
     authority: EditorAgentGovernedAuthorityReference,
-    action: JiraChatWriteActionIdentity,
+    action: ChatToolWriteActionIdentity,
     correlationId?: string,
   ): ChatWriteApprovalResult {
     const entry = this.currentWriteApproval(approvalId, subject, authority, action, correlationId);
@@ -379,7 +379,7 @@ export class AtlassianActionApprovalRegistry {
     approvalId: string,
     subject: ChatToolAuthoritySubject,
     authority: EditorAgentGovernedAuthorityReference,
-    action: JiraChatWriteActionIdentity,
+    action: ChatToolWriteActionIdentity,
     correlationId?: string,
   ):
     | { readonly ok: true; readonly claim: ChatWriteApprovalClaim }
@@ -399,7 +399,7 @@ export class AtlassianActionApprovalRegistry {
     claim: ChatWriteApprovalClaim,
     subject: ChatToolAuthoritySubject,
     authority: EditorAgentGovernedAuthorityReference,
-    action: JiraChatWriteActionIdentity,
+    action: ChatToolWriteActionIdentity,
     correlationId?: string,
   ): boolean {
     const entry = this.currentWriteApproval(
@@ -444,7 +444,7 @@ export class AtlassianActionApprovalRegistry {
     approvalId: string,
     subject: ChatToolAuthoritySubject,
     authority: EditorAgentGovernedAuthorityReference,
-    action: JiraChatWriteActionIdentity,
+    action: ChatToolWriteActionIdentity,
     correlationId?: string,
   ): ChatWriteApprovalEntry | undefined {
     const entry = this.getChatWriteApproval(approvalId, correlationId);

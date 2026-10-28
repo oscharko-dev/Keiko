@@ -1,4 +1,8 @@
-import type { JiraChatToolTurn } from "./atlassian/jiraChatToolTurn.js";
+import type { ChatToolTurnPort } from "./chat-tool-turn.js";
+import {
+  installMcpChatCatalogRuntime,
+  type McpChatCatalogRuntime,
+} from "./mcp/mcpChatCatalogRuntime.js";
 import { createMcpSettingsStore, type McpSettingsStore } from "./mcp/mcpSettingsStore.js";
 import {
   createConfiguredMcpConnections,
@@ -969,7 +973,8 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   /** Lazy application-owned managed host; shared by ordinary Chat turns and bound Pods. */
   readonly jiraChatCatalog?: JiraChatCatalogRuntime;
   /** Accepted Chat turn scope reused by grounded preparation, tools and answer repair. */
-  readonly jiraChatToolTurn?: JiraChatToolTurn;
+  readonly chatToolTurn?: ChatToolTurnPort;
+  readonly mcpChatCatalog?: McpChatCatalogRuntime;
   /** Projection of the existing Memory admission for the productive grounded phase only. */
   readonly groundedMemoryContextAvailable?: boolean;
   // Shared resolved Coding/connector ceiling. Production always sets it; incomplete injected deps
@@ -5030,12 +5035,18 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     deps,
   );
   attachRepositorySemanticSearch(services.codingRuntimeControlPlane, deps);
-  return installConversationReadinessInitialization(
-    installJiraChatCatalogRuntime(deps, {
-      primary: args.options.activityLog ?? processServerLogSink(),
-      diagnostics: args.options.diagnostics ?? defaultServerDiagnosticSink,
-    }),
-  );
+  return installConversationReadinessInitialization(installChatToolCatalogs(deps, args.options));
+}
+
+function installChatToolCatalogs(
+  deps: UiHandlerDeps,
+  options: UiHandlerDepsAssemblyArgs["options"],
+): UiHandlerDeps {
+  const log = {
+    primary: options.activityLog ?? processServerLogSink(),
+    diagnostics: options.diagnostics ?? defaultServerDiagnosticSink,
+  };
+  return installMcpChatCatalogRuntime(installJiraChatCatalogRuntime(deps, log), log);
 }
 
 /**

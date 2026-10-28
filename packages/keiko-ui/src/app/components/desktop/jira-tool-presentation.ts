@@ -17,6 +17,14 @@ const OUTCOME_KEYS: Readonly<Record<JiraMutationResultState, WidgetMessageKey>> 
   unknown: "chat.jira.write.unknown",
   pending: "chat.jira.write.pending",
 };
+const MCP_OUTCOME_KEYS: Readonly<Record<JiraMutationResultState, WidgetMessageKey>> = {
+  "not-dispatched": "chat.mcp.write.notDispatched",
+  rejected: "chat.mcp.write.rejected",
+  succeeded: "chat.mcp.write.succeeded",
+  "succeeded-unconfirmed": "chat.mcp.write.unconfirmed",
+  unknown: "chat.mcp.write.unknown",
+  pending: "chat.mcp.write.pending",
+};
 const MANAGED_TOOLS = [...JIRA_MANAGED_READ_TOOLS, ...JIRA_MUTATION_OPERATIONS];
 
 export function jiraToolLabel(exchange: ChatToolExchange): WidgetMessageKey {
@@ -44,6 +52,8 @@ export function jiraToolState(
   exchange: ChatToolExchange,
   turnState: ChatTurnState | undefined,
 ): WidgetMessageKey {
+  if (exchange.call.name.startsWith("mcp_") && exchange.mutationOutcome !== undefined)
+    return MCP_OUTCOME_KEYS[exchange.mutationOutcome];
   if (isMutation(exchange)) {
     const outcome = mutationOutcome(exchange);
     if (outcome !== undefined) return OUTCOME_KEYS[outcome];
@@ -57,6 +67,12 @@ export function jiraToolState(
 }
 export function jiraToolOutcomeHelp(state: WidgetMessageKey): WidgetMessageKey | undefined {
   switch (state) {
+    case "chat.mcp.write.unconfirmed":
+      return "chat.mcp.write.unconfirmedHelp";
+    case "chat.mcp.write.unknown":
+      return "chat.mcp.write.unknownHelp";
+    case "chat.mcp.write.pending":
+      return "chat.mcp.write.pendingHelp";
     case "chat.jira.write.unconfirmed":
       return "chat.jira.write.unconfirmedHelp";
     case "chat.jira.write.unknown":

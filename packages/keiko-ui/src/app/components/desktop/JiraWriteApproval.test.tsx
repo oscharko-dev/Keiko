@@ -297,3 +297,43 @@ it("offers the action preview and decision in German without accessibility viola
     window.localStorage.removeItem(I18N_STORAGE_KEY);
   }
 });
+
+it("reviews a configured MCP action and its arguments through the existing approval controls", async () => {
+  const view: ChatToolWriteApprovalView = {
+    kind: "mcp-chat-write",
+    approvalId: "mcp-approval",
+    chatId: "chat-1",
+    configurationDigest: "a".repeat(64),
+    invocationId: "mcp-call",
+    operation: "mcp_fixture_create_note",
+    actionDigest: "b".repeat(64),
+    requestedAt: Date.now(),
+    expiresAt: Date.now() + 60000,
+    state: "pending",
+  };
+  const observe = vi.fn().mockResolvedValue(view);
+  const decide = vi.fn().mockResolvedValue({ ...view, state: "approved" });
+  const { container } = render(
+    <JiraWriteApproval
+      approval={view}
+      call={{
+        id: "mcp-call",
+        name: "mcp_fixture_create_note",
+        arguments: { text: "Synthetic note" },
+      }}
+      turnState="pending"
+      observe={observe}
+      decide={decide}
+    />,
+  );
+  await ready();
+  expect(screen.getByRole("region", { name: "Approve MCP action" })).toBeVisible();
+  expect(screen.getByText("mcp_fixture_create_note")).toBeVisible();
+  expect(screen.getByLabelText("Proposed action details")).toHaveValue(
+    JSON.stringify({ text: "Synthetic note" }, null, 2),
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Approve this action" }));
+  expect(decide).toHaveBeenCalledExactlyOnceWith(view, "approve");
+  expect(await screen.findByText("Approved for this action")).toBeVisible();
+  expect(await axe(container)).toHaveNoViolations();
+});

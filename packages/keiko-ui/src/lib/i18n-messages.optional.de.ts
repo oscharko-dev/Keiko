@@ -91,6 +91,30 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "atlassianConnectors.live.subtitle":
     "Aktuelle Jira-Daten im verbundenen Chat nach ausdrücklicher Lesefreigabe lesen. Der Live-Zugriff erstellt keinen Index und keine Dokumentensammlung.",
   "atlassianConnectors.live.add": "Jira-Pod erstellen",
+  "chat.tools.connection": "Tool-Zugriff",
+  "chat.tools.modeHelp":
+    "Der gewählte Modus gilt für Tools in diesem Chat. Lesen über MCP oder Jira erfordert eine Freigabe; Schreibzugriffe folgen dem Modus und den Bereitstellungsgrenzen. MCP-Server konfigurierst du in den Einstellungen.",
+  "chat.tools.apply": "Tool-Einstellungen anwenden",
+  "chat.mcp.title": "MCP-Daten in diesem Chat lesen",
+  "chat.mcp.disclosure":
+    "Über konfigurierte MCP-Server abgerufene Inhalte werden an das ausgewählte Modell gesendet und in diesem Gespräch gespeichert. Die Freigabe gilt für diesen Chat bis zum Ablauf oder bis sich Konfiguration oder Berechtigung ändern. Sie erlaubt keine Schreibzugriffe.",
+  "chat.mcp.tool": "MCP-Aktion",
+  "chat.mcp.details": "MCP-Ergebnis anzeigen",
+  "chat.mcp.writeApproval.title": "MCP-Aktion freigeben",
+  "chat.mcp.writeApproval.disclosure":
+    "Prüfe das Tool und seine Argumente. Die Freigabe erlaubt diese Aktion einmal innerhalb der aktuellen Verbindung und Berechtigung.",
+  "chat.mcp.write.notDispatched": "Nicht an den MCP-Server gesendet",
+  "chat.mcp.write.rejected": "MCP-Aktion abgelehnt",
+  "chat.mcp.write.succeeded": "Aktion bestätigt",
+  "chat.mcp.write.unconfirmed": "Der Server hat die Änderung angenommen; Bestätigung unvollständig",
+  "chat.mcp.write.unknown": "Ergebnis der MCP-Aktion unbekannt",
+  "chat.mcp.write.pending": "Warten auf ein bestätigtes MCP-Ergebnis",
+  "chat.mcp.write.unconfirmedHelp":
+    "Der Server hat Erfolg gemeldet, aber das endgültige Ergebnis konnte nicht bestätigt werden. Prüfe den entfernten Zustand vor einem weiteren Schreibzugriff.",
+  "chat.mcp.write.unknownHelp":
+    "Die Änderung wurde möglicherweise ausgeführt. Sie wird nicht automatisch wiederholt. Prüfe den entfernten Zustand vor einem weiteren Schreibzugriff.",
+  "chat.mcp.write.pendingHelp":
+    "Die Aktion hat begonnen. Warte auf ihr Ergebnis, bevor du einen weiteren Schreibzugriff startest.",
   "chat.jira.title": "Jira in diesem Chat lesen",
   "chat.jira.disclosure":
     "Jira-Inhalte werden an das ausgewählte Modell übermittelt und in diesem Gespräch gespeichert. Die Freigabe gilt für diesen Chat bis zum Ablauf oder einer Änderung der Verbindung oder Berechtigungen. Sie erlaubt keine Schreibaktionen.",

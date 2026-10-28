@@ -270,3 +270,137 @@ describe("shared MCP settings custody", () => {
       expect(JSON.stringify(line)).not.toContain(privateValue);
   });
 });
+
+it("revokes whole-catalog authority on additions without revoking unchanged server connections", () => {
+  const f = fixture();
+  const initial = f.store.read("revision-proof");
+  const initialSignal = f.store.revisionSignal(initial.revision, "revision-proof");
+  const saved = f.store.update(
+    {
+      expectedRevision: initial.revision,
+      servers: [f.server],
+      secrets: { [reference]: { server: f.server.name, value: token } },
+    },
+    "revision-proof",
+  );
+  expect(initialSignal.aborted).toBe(true);
+  const signal = f.store.revisionSignal(saved.snapshot.revision, "revision-proof");
+  const savedServer = saved.snapshot.servers[0];
+  if (savedServer === undefined) throw new Error("Expected saved server");
+  const serverSignal = f.store.generation(savedServer, "revision-proof");
+  f.store.update(
+    { expectedRevision: saved.snapshot.revision, servers: saved.snapshot.servers, secrets: {} },
+    "revision-proof",
+  );
+  expect(signal.aborted).toBe(false);
+  f.store.update(
+    {
+      expectedRevision: saved.snapshot.revision,
+      servers: [
+        ...saved.snapshot.servers,
+        {
+          name: "added",
+          discovery: "automatic",
+          description: "Synthetic additional server",
+          enabled: true,
+          transport: { kind: "local", command: ["/synthetic/mcp"], environment: {} },
+          tools: {},
+        },
+      ],
+      secrets: {},
+    },
+    "revision-proof",
+  );
+  expect(signal.aborted).toBe(true);
+  expect(serverSignal.aborted).toBe(false);
+  expect(f.store.revisionSignal(saved.snapshot.revision, "revision-proof").aborted).toBe(true);
+});
+
+it("never restores old authority after delete/recreate of identical definitions across restart", () => {
+  const f = fixture();
+  const first = f.store.update(
+    {
+      expectedRevision: f.store.read("settings-test").revision,
+      servers: [f.server],
+      secrets: { [reference]: { server: f.server.name, value: token } },
+    },
+    "settings-test",
+  );
+  const deleted = f.store.update(
+    { expectedRevision: first.snapshot.revision, servers: [], secrets: {} },
+    "settings-test",
+  );
+  const reopened = createMcpSettingsStore(f.input);
+  expect(reopened.read("settings-test").revision).toBe(deleted.snapshot.revision);
+  const restored = reopened.update(
+    {
+      expectedRevision: deleted.snapshot.revision,
+      servers: [f.server],
+      secrets: { [reference]: { server: f.server.name, value: token } },
+    },
+    "settings-test",
+  );
+  expect(restored.ok).toBe(true);
+  expect(restored.snapshot.servers).toEqual(first.snapshot.servers);
+  expect(restored.snapshot.revision).not.toBe(first.snapshot.revision);
+  expect(createMcpSettingsStore(f.input).read("settings-test")).toEqual(restored.snapshot);
+});
+
+it("retains the committed generation after interruption immediately following registry publication", () => {
+  const f = fixture();
+  const first = f.store.update(
+    {
+      expectedRevision: f.store.read("settings-test").revision,
+      servers: [f.server],
+      secrets: { [reference]: { server: f.server.name, value: token } },
+    },
+    "settings-test",
+  );
+  const original = privateJson.savePrivateJson;
+  const interrupted = vi
+    .spyOn(privateJson, "savePrivateJson")
+    .mockImplementationOnce((path, value) => {
+      original(path, value);
+      throw new Error("Synthetic process interruption after atomic publication");
+    });
+  expect(() =>
+    f.store.update(
+      { expectedRevision: first.snapshot.revision, servers: [], secrets: {} },
+      "settings-test",
+    ),
+  ).toThrow("Synthetic process interruption");
+  interrupted.mockRestore();
+  const reopened = createMcpSettingsStore(f.input);
+  const committed = reopened.read("settings-test");
+  expect(committed.servers).toEqual([]);
+  const restored = reopened.update(
+    {
+      expectedRevision: committed.revision,
+      servers: [f.server],
+      secrets: { [reference]: { server: f.server.name, value: token } },
+    },
+    "settings-test",
+  );
+  expect(restored.ok).toBe(true);
+  expect(restored.snapshot.revision).not.toBe(first.snapshot.revision);
+});
+
+it("requires a new reference before introducing a credential into an already active definition", () => {
+  const f = fixture();
+  const active = f.store.update(
+    { expectedRevision: f.store.read("settings-test").revision, servers: [f.server], secrets: {} },
+    "settings-test",
+  );
+  expect(() =>
+    f.store.update(
+      {
+        expectedRevision: active.snapshot.revision,
+        servers: [f.server],
+        secrets: { [reference]: { server: f.server.name, value: token } },
+      },
+      "settings-test",
+    ),
+  ).toThrow("new reference");
+  expect(f.store.secret(reference, f.server)).toBeUndefined();
+  expect(f.store.read("settings-test").revision).toBe(active.snapshot.revision);
+});

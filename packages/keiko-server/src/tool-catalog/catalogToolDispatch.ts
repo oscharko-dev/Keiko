@@ -157,7 +157,10 @@ async function executeInvocation<Consumer extends CatalogConsumer = CodingCatalo
       invocation.state.executionOverride,
       invocation.state.profile,
     );
-    const approved = await approveCatalogAction<Consumer>(invocation.state, action, initial);
+    const approved = await approveCatalogAction<Consumer>(invocation.state, action, {
+      ...initial,
+      signal: invocation.controller.signal,
+    });
     if (invocation.checkStopped()) return;
     const current = currentContext<Consumer>(invocation);
     requireDispatch(

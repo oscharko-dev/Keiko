@@ -21,7 +21,9 @@ import type {
 const COLUMNS = `invocation_id AS invocationId, chat_id AS chatId, user_message_id AS userMessageId,
   turn_ref AS turnRef, actor_id AS actorId, pod_id AS podId, binding_generation AS bindingGeneration,
   authentication_generation AS credentialGeneration, authority_digest AS authorityDigest, action_digest AS actionDigest,
-  operation, correlation_id AS correlationId, phase, outcome, http_status AS httpStatus, created_at AS createdAt, updated_at AS updatedAt`;
+  operation, correlation_id AS correlationId, phase, outcome, http_status AS httpStatus, created_at AS createdAt, updated_at AS updatedAt,
+  source_kind AS sourceKind, configuration_digest AS configurationDigest, server_name AS serverName,
+  tool_name AS toolName, protocol_outcome AS protocolOutcome`;
 const MAX_MUTATIONS_PER_TURN = 32;
 class GuardDenied extends Error {}
 interface MutationChange {
@@ -45,7 +47,18 @@ function timestamp(now: () => number, previous = 0): number {
   return Math.max(value, previous);
 }
 function rowRecord(value: unknown): ChatToolMutationRecord | undefined {
-  return value === undefined ? undefined : Object.freeze(value as ChatToolMutationRecord);
+  if (value === undefined) return undefined;
+  const row = value as ChatToolMutationRecord;
+  if (row.sourceKind === "configured-mcp") return Object.freeze(row);
+  const {
+    sourceKind: _source,
+    configurationDigest: _configuration,
+    serverName: _server,
+    toolName: _tool,
+    protocolOutcome: _protocol,
+    ...legacy
+  } = value as Record<string, unknown>;
+  return Object.freeze(legacy as unknown as ChatToolMutationRecord);
 }
 /** Read the already admitted canonical turn; this never prepares or dispatches an action. */
 export function readChatToolMutationTurn(
@@ -58,7 +71,8 @@ export function readChatToolMutationTurn(
       `SELECT ${COLUMNS} FROM chat_tool_mutations WHERE chat_id = ? AND turn_ref = ? LIMIT 33`,
     )
     .all(chatId, turnRef)
-    .map((row) => Object.freeze(row as unknown as ChatToolMutationRecord));
+    .map((row) => rowRecord(row))
+    .filter((row): row is ChatToolMutationRecord => row !== undefined);
 }
 
 function assertCurrentTurn(
@@ -124,30 +138,37 @@ class MutationStore implements ChatToolMutationStore {
       if (blocked !== undefined) return blocked;
       if (this.find(intent.invocationId) !== undefined) throw journalConflict();
       const createdAt = timestamp(this.now);
-      this.db
-        .prepare(
-          `INSERT INTO chat_tool_mutations (invocation_id, chat_id, user_message_id, turn_ref, actor_id, pod_id, binding_generation, authentication_generation, authority_digest, action_digest, operation, correlation_id, phase, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'prepared',?,?)`,
-        )
-        .run(
-          intent.invocationId,
-          intent.chatId,
-          intent.userMessageId,
-          intent.turnRef,
-          intent.actorId,
-          intent.podId,
-          intent.bindingGeneration,
-          intent.credentialGeneration,
-          intent.authorityDigest,
-          intent.actionDigest,
-          intent.operation,
-          intent.correlationId,
-          createdAt,
-          createdAt,
-        );
+      this.insertPrepared(intent, createdAt);
       return { kind: "prepared", record: this.requireRecord(intent.invocationId) };
     });
     if (result.kind !== "blocked") recordChatToolMutation(this.log, result.record, result.kind);
     return result;
+  }
+  private insertPrepared(intent: ChatToolMutationIntent, createdAt: number): void {
+    this.db
+      .prepare(
+        `INSERT INTO chat_tool_mutations (invocation_id, chat_id, user_message_id, turn_ref, actor_id, pod_id, binding_generation, authentication_generation, authority_digest, action_digest, operation, correlation_id, phase, created_at, updated_at, source_kind, configuration_digest, server_name, tool_name) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'prepared',?,?,?,?,?,?)`,
+      )
+      .run(
+        intent.invocationId,
+        intent.chatId,
+        intent.userMessageId,
+        intent.turnRef,
+        intent.actorId,
+        intent.podId,
+        intent.bindingGeneration,
+        intent.credentialGeneration,
+        intent.authorityDigest,
+        intent.actionDigest,
+        intent.operation,
+        intent.correlationId,
+        createdAt,
+        createdAt,
+        intent.sourceKind ?? "jira",
+        intent.sourceKind === "configured-mcp" ? intent.configurationDigest : null,
+        intent.sourceKind === "configured-mcp" ? intent.serverName : null,
+        intent.sourceKind === "configured-mcp" ? intent.toolName : null,
+      );
   }
   beginDispatch(invocationId: string, guard: () => boolean): boolean {
     try {
@@ -183,6 +204,7 @@ class MutationStore implements ChatToolMutationStore {
       throw journalConflict();
     const change = durableWrite(this.db, (): MutationChange => {
       const current = this.requireRecord(invocationId);
+      if (current.sourceKind === "configured-mcp") throw journalConflict();
       if (current.httpStatus !== null) {
         if (current.httpStatus !== httpStatus) throw journalConflict();
         return { record: current, event: "replayed" };
@@ -195,6 +217,31 @@ class MutationStore implements ChatToolMutationStore {
         .run(
           acknowledgedStatus(httpStatus) ? "acknowledged" : "dispatched",
           httpStatus,
+          timestamp(this.now, current.updatedAt),
+          invocationId,
+        );
+      return { record: this.requireRecord(invocationId), event: "response" };
+    });
+    recordChatToolMutation(this.log, change.record, change.event);
+    return change.record;
+  }
+  acknowledgeMcp(invocationId: string, success: boolean): ChatToolMutationRecord {
+    const protocolOutcome = success ? "success" : "error";
+    const change = durableWrite(this.db, (): MutationChange => {
+      const current = this.requireRecord(invocationId);
+      if (current.sourceKind !== "configured-mcp") throw journalConflict();
+      if (current.protocolOutcome !== null) {
+        if (current.protocolOutcome !== protocolOutcome) throw journalConflict();
+        return { record: current, event: "replayed" };
+      }
+      if (current.phase !== "dispatched") throw journalConflict();
+      this.db
+        .prepare(
+          "UPDATE chat_tool_mutations SET phase = ?, protocol_outcome = ?, updated_at = ? WHERE invocation_id = ?",
+        )
+        .run(
+          success ? "acknowledged" : "dispatched",
+          protocolOutcome,
           timestamp(this.now, current.updatedAt),
           invocationId,
         );

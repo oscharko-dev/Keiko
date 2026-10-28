@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   CanonicalToolId,
+  CatalogJsonObject,
   CatalogDigest,
   ToolDescriptor,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
@@ -90,7 +91,7 @@ afterEach(async () => {
 function fixture(
   execute?: ManagedMcpTool<Context>["execute"],
   log: ManagedMcpLogPort = { write: () => undefined },
-  options: { durationMs?: number; risk?: "read" | "write" } = {},
+  options: { durationMs?: number; risk?: "read" | "write"; inputSchema?: CatalogJsonObject } = {},
 ): {
   host: ManagedMcpHost<Context>;
   execute: ManagedMcpTool<Context>["execute"];
@@ -104,6 +105,7 @@ function fixture(
     );
   let current: ToolDescriptor = {
     ...descriptor,
+    inputSchema: options.inputSchema ?? descriptor.inputSchema,
     bounds: { ...descriptor.bounds, maxDurationMs: options.durationMs ?? 1000 },
     idempotency: options.risk === "write" ? "server-key-required" : "read-only",
   };
@@ -583,4 +585,31 @@ it.each([
   if (!(error instanceof ManagedMcpError)) throw new Error("Expected managed failure");
   expect(error.structuredResult).toBeUndefined();
   expect(JSON.stringify(error)).not.toMatch(/private-error|unwanted-field/u);
+});
+
+// Explicit external schemas preserve standard MCP openness and optional properties through the SDK.
+it("executes an external open schema with a local reference and optional union without narrowing it", async () => {
+  const run = vi.fn<ManagedMcpTool<Context>["execute"]>((args, ctx) =>
+    Promise.resolve({ data: { text: args.text ?? "", binding: ctx.binding } }),
+  );
+  const f = fixture(
+    run,
+    { write: () => undefined },
+    {
+      inputSchema: {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        $defs: { text: { type: "string", maxLength: 100 } },
+        properties: {
+          text: { $ref: "#/$defs/text" },
+          optional: { anyOf: [{ type: "string" }, { type: "null" }], default: null },
+        },
+        required: ["text"],
+      },
+    },
+  );
+  await f.host.admit("synthetic-schema-admission");
+  await f.host.call("fixture.echo", { text: "synthetic", extra: 7 }, context("external"));
+  expect(run).toHaveBeenCalledOnce();
+  expect(run.mock.calls[0]?.[0]).toEqual({ text: "synthetic", extra: 7 });
 });

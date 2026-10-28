@@ -1,9 +1,9 @@
-import { hasMixedJiraGroundingScope } from "./chat-grounding.js";
+import { hasMixedToolGroundingScope } from "./chat-grounding.js";
 import {
-  createJiraChatToolTurn,
-  scopeJiraChatToolTurn,
-  type JiraChatToolTurn,
-} from "./atlassian/jiraChatToolTurn.js";
+  createChatToolTurn,
+  scopeChatToolTurn,
+  type ChatToolTurnPort,
+} from "./chat-tool-runtime.js";
 import { currentContentRedactor, withChatContentPolicy } from "./content-redactor.js";
 import { setImmediate as yieldHttpWrites } from "node:timers/promises";
 import { createStreamingRedactor } from "@oscharko-dev/keiko-security/redaction";
@@ -652,7 +652,14 @@ async function prepareDesktopChatStream(
 ): Promise<DesktopChatStreamPreparation> {
   const parsed = await parseDesktopChatSend(ctx, deps, signal);
   if ("status" in parsed) return { kind: "outcome", outcome: parsed };
-  if (hasMixedJiraGroundingScope(parsed.chat))
+  if (
+    hasMixedToolGroundingScope(
+      parsed.chat,
+      deps.mcpSettings
+        ?.read(ctx.correlationId ?? "unknown")
+        .servers.some((server) => server.enabled) ?? false,
+    )
+  )
     return { kind: "outcome", outcome: streamingUnsupportedOutcome(ctx.correlationId) };
   const prepared = validateDesktopChatSend(parsed, deps);
   if ("status" in prepared) return { kind: "outcome", outcome: prepared };
@@ -701,7 +708,7 @@ function resolveDesktopChatStreamCall(
 }
 
 interface AdmittedDesktopChatStream {
-  readonly toolTurn?: JiraChatToolTurn | undefined;
+  readonly toolTurn?: ChatToolTurnPort | undefined;
   readonly admitted: AdmittedTurnHandle;
   readonly prepared: PreparedDesktopChatSend;
   readonly callStream: StreamCall;
@@ -866,16 +873,16 @@ async function prepareDesktopChatProviderStream(
   correlationId: string | undefined,
 ): Promise<PreparedStreamProvider | RouteResult> {
   let memory: AdmittedDesktopChatStream["memory"];
-  let toolTurn: JiraChatToolTurn | undefined;
+  let toolTurn: ChatToolTurnPort | undefined;
   try {
-    toolTurn = await createJiraChatToolTurn(
+    toolTurn = await createChatToolTurn(
       deps,
       prepared.modelId,
       admitted.userMessage,
       controller.signal,
       correlationId,
     );
-    deps = scopeJiraChatToolTurn(deps, toolTurn);
+    deps = scopeChatToolTurn(deps, toolTurn);
     memory =
       deps.gatewayConfig === undefined
         ? undefined

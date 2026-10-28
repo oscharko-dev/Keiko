@@ -16,13 +16,26 @@ import {
 } from "./coding-workbench.js";
 
 /** Private server facts. A model or browser cannot choose the actor or either generation. */
-export interface ChatToolAuthoritySubject {
+export interface JiraChatToolAuthoritySubject {
+  readonly kind?: never;
+  readonly configurationDigest?: never;
   readonly actorDigest: string;
   readonly chatId: string;
   readonly podId: string;
   readonly bindingGeneration: number;
   readonly authenticationGeneration: number;
 }
+
+export interface McpChatToolAuthoritySubject {
+  readonly kind: "configured-mcp";
+  readonly actorDigest: string;
+  readonly chatId: string;
+  readonly configurationDigest: string;
+  readonly podId?: never;
+  readonly bindingGeneration?: never;
+  readonly authenticationGeneration?: never;
+}
+export type ChatToolAuthoritySubject = JiraChatToolAuthoritySubject | McpChatToolAuthoritySubject;
 
 /** Ordinary Chat authority has no repository, branch, Editor session or Coding runtime. */
 export interface ChatToolAuthorityEnvelope {
@@ -34,13 +47,14 @@ export interface ChatToolAuthorityEnvelope {
   readonly deploymentCeiling: CodingWorkbenchMode;
   readonly effectiveMode: CodingWorkbenchMode;
   readonly actionClasses: readonly ["connector-access", "network-egress"];
-  readonly connectorScopes: readonly ("issue-tracker.read" | "issue-tracker.write")[];
+  readonly connectorScopes: readonly ("issue-tracker.read" | "issue-tracker.write" | "mcp.tools")[];
   readonly budget: CodingWorkbenchBudget & { readonly maxPatchBytes: 0 };
   readonly expiresAt: string;
   /** Digest of server-validated human acceptance; never a model-supplied approval. */
   readonly approvalProofDigest: string;
 }
 
+const MCP_SUBJECT_KEYS = ["kind", "actorDigest", "chatId", "configurationDigest"] as const;
 const SUBJECT_KEYS = [
   "actorDigest",
   "chatId",
@@ -90,9 +104,13 @@ export function validateChatToolAuthoritySubject(
 ): CodingWorkbenchValidationResult<ChatToolAuthoritySubject> {
   if (!isRecord(value)) return invalid("chatAuthority.subject must be an object");
   const errors: string[] = [];
-  validateKeys(value, SUBJECT_KEYS, errors);
+  validateKeys(value, value.kind === "configured-mcp" ? MCP_SUBJECT_KEYS : SUBJECT_KEYS, errors);
   validateDigest(value.actorDigest, "chatAuthority.subject.actorDigest", errors);
   validateSafeId(value.chatId, "chatAuthority.subject.chatId", errors, 128);
+  if (value.kind === "configured-mcp") {
+    validateDigest(value.configurationDigest, "chatAuthority.subject.configurationDigest", errors);
+    return result(value, errors);
+  }
   if (!isChatJiraPodId(value.podId)) errors.push("chatAuthority.subject.podId is invalid");
   for (const key of ["bindingGeneration", "authenticationGeneration"]) {
     if (!positiveCount(value[key]))
@@ -113,6 +131,11 @@ function validateModes(value: Record<string, unknown>, errors: string[]): void {
   }
 }
 
+function scopesFor(subject: unknown): ReadonlySet<string> {
+  return isRecord(subject) && subject.kind === "configured-mcp"
+    ? new Set(["mcp.tools"])
+    : CONNECTOR_SCOPES;
+}
 function validateCapabilities(value: Record<string, unknown>, errors: string[]): void {
   if (
     !Array.isArray(value.actionClasses) ||
@@ -123,14 +146,15 @@ function validateCapabilities(value: Record<string, unknown>, errors: string[]):
     errors.push("chatAuthority.actionClasses must contain only connector and network access");
   }
   const scopes: unknown = value.connectorScopes;
+  const allowed = scopesFor(value.subject);
   if (
     !Array.isArray(scopes) ||
     scopes.length < 1 ||
     scopes.length > 2 ||
-    !scopes.every((scope: unknown) => typeof scope === "string" && CONNECTOR_SCOPES.has(scope)) ||
+    !scopes.every((scope: unknown) => typeof scope === "string" && allowed.has(scope)) ||
     new Set(scopes).size !== scopes.length
   ) {
-    errors.push("chatAuthority.connectorScopes must contain distinct Jira scopes");
+    errors.push("chatAuthority.connectorScopes must contain distinct scopes for its subject");
   }
 }
 
@@ -176,14 +200,17 @@ export const CHAT_TOOL_READ_GRANT_STATES = [
 ] as const;
 export type ChatToolReadGrantState = (typeof CHAT_TOOL_READ_GRANT_STATES)[number];
 export const CHAT_TOOL_READ_DISCLOSURE_VERSION = "jira-chat-read-v1";
+export const MCP_CHAT_READ_DISCLOSURE_VERSION = "mcp-chat-read-v1";
+type ReadDisclosureVersion =
+  typeof CHAT_TOOL_READ_DISCLOSURE_VERSION | typeof MCP_CHAT_READ_DISCLOSURE_VERSION;
 
 interface ChatToolReadGrantFacts {
   readonly schemaVersion: "1";
-  readonly kind: "jira-chat-read-grant";
+  readonly kind: "jira-chat-read-grant" | "mcp-chat-read-grant";
   readonly grantId: string;
   readonly subject: ChatToolAuthoritySubject;
   /** Consent covers model transmission and retention in this conversation, not writes or import. */
-  readonly disclosureVersion: typeof CHAT_TOOL_READ_DISCLOSURE_VERSION;
+  readonly disclosureVersion: ReadDisclosureVersion;
   readonly requestedAt: number;
   readonly expiresAt: number;
 }
@@ -197,22 +224,38 @@ export type ChatToolReadGrant = ChatToolReadGrantFacts &
   );
 
 /** Public consent card; private actor, authority and acceptance evidence remain server-owned. */
-export interface ChatToolReadGrantView {
+export interface JiraChatToolReadGrantView {
   readonly kind: "jira-chat-read";
+  readonly configurationDigest?: never;
   readonly grantId: string;
   readonly chatId: string;
   readonly podId: string;
   readonly bindingGeneration: number;
   readonly authenticationGeneration: number;
   readonly state: ChatToolReadGrantState;
-  readonly disclosureVersion: typeof CHAT_TOOL_READ_DISCLOSURE_VERSION;
+  readonly disclosureVersion: ReadDisclosureVersion;
   readonly requestedAt: number;
   readonly expiresAt: number;
 }
 
+export interface McpChatToolReadGrantView {
+  readonly kind: "mcp-chat-read";
+  readonly grantId: string;
+  readonly chatId: string;
+  readonly configurationDigest: string;
+  readonly podId?: never;
+  readonly bindingGeneration?: never;
+  readonly authenticationGeneration?: never;
+  readonly state: ChatToolReadGrantState;
+  readonly disclosureVersion: typeof MCP_CHAT_READ_DISCLOSURE_VERSION;
+  readonly requestedAt: number;
+  readonly expiresAt: number;
+}
+export type ChatToolReadGrantView = JiraChatToolReadGrantView | McpChatToolReadGrantView;
+
 export interface ChatToolReadConsentDecision {
   readonly decision: "approve" | "reject";
-  readonly disclosureVersion: typeof CHAT_TOOL_READ_DISCLOSURE_VERSION;
+  readonly disclosureVersion: ReadDisclosureVersion;
 }
 
 export function validateChatToolReadConsentDecision(
@@ -223,7 +266,10 @@ export function validateChatToolReadConsentDecision(
   validateKeys(value, ["decision", "disclosureVersion"], errors, "chatReadConsent");
   if (value.decision !== "approve" && value.decision !== "reject")
     errors.push("chatReadConsent.decision is invalid");
-  if (value.disclosureVersion !== CHAT_TOOL_READ_DISCLOSURE_VERSION)
+  if (
+    value.disclosureVersion !== CHAT_TOOL_READ_DISCLOSURE_VERSION &&
+    value.disclosureVersion !== MCP_CHAT_READ_DISCLOSURE_VERSION
+  )
     errors.push("chatReadConsent.disclosureVersion is invalid");
   return result(value, errors);
 }
@@ -252,6 +298,11 @@ function validateReadGrantState(value: Record<string, unknown>, errors: string[]
     errors.push("chatReadGrant has unexpected acceptance evidence");
 }
 
+function readGrantFamily(subject: unknown): { kind: string; disclosure: ReadDisclosureVersion } {
+  return isRecord(subject) && subject.kind === "configured-mcp"
+    ? { kind: "mcp-chat-read-grant", disclosure: MCP_CHAT_READ_DISCLOSURE_VERSION }
+    : { kind: "jira-chat-read-grant", disclosure: CHAT_TOOL_READ_DISCLOSURE_VERSION };
+}
 /** Structural validation does not establish consent or extend its lifetime. */
 export function validateChatToolReadGrant(
   value: unknown,
@@ -259,10 +310,11 @@ export function validateChatToolReadGrant(
   if (!isRecord(value)) return invalid("chatReadGrant must be an object");
   const errors: string[] = [];
   validateKeys(value, READ_GRANT_KEYS, errors, "chatReadGrant");
-  if (value.schemaVersion !== "1" || value.kind !== "jira-chat-read-grant")
+  const family = readGrantFamily(value.subject);
+  if (value.schemaVersion !== "1" || value.kind !== family.kind)
     errors.push("chatReadGrant kind or schemaVersion is invalid");
   validateSafeId(value.grantId, "chatReadGrant.grantId", errors, 128);
-  if (value.disclosureVersion !== CHAT_TOOL_READ_DISCLOSURE_VERSION)
+  if (value.disclosureVersion !== family.disclosure)
     errors.push("chatReadGrant.disclosureVersion is invalid");
   const subject = validateChatToolAuthoritySubject(value.subject);
   if (!subject.ok) errors.push(...subject.errors);
@@ -287,8 +339,9 @@ export const CHAT_TOOL_WRITE_APPROVAL_STATES = [
 export type ChatToolWriteApprovalState = (typeof CHAT_TOOL_WRITE_APPROVAL_STATES)[number];
 
 /** The corresponding stored tool call owns the redacted action preview; private authority stays server-side. */
-export interface ChatToolWriteApprovalView {
+export interface JiraChatToolWriteApprovalView {
   readonly kind: "jira-chat-write";
+  readonly configurationDigest?: never;
   readonly approvalId: string;
   readonly chatId: string;
   readonly podId: string;
@@ -301,6 +354,24 @@ export interface ChatToolWriteApprovalView {
   readonly expiresAt: number;
   readonly state: ChatToolWriteApprovalState;
 }
+export interface McpChatToolWriteApprovalView {
+  readonly kind: "mcp-chat-write";
+  readonly approvalId: string;
+  readonly chatId: string;
+  readonly configurationDigest: string;
+  readonly podId?: never;
+  readonly bindingGeneration?: never;
+  readonly authenticationGeneration?: never;
+  readonly invocationId: string;
+  readonly operation: string;
+  readonly actionDigest: string;
+  readonly requestedAt: number;
+  readonly expiresAt: number;
+  readonly state: ChatToolWriteApprovalState;
+}
+export type ChatToolWriteApprovalView =
+  JiraChatToolWriteApprovalView | McpChatToolWriteApprovalView;
+
 export interface ChatToolWriteApprovalDecision {
   readonly decision: "approve" | "reject";
   readonly actionDigest: string;
@@ -319,11 +390,24 @@ const WRITE_APPROVAL_KEYS = [
   "expiresAt",
   "state",
 ] as const;
+const JIRA_APPROVAL_SUBJECT_KEYS = new Set([
+  "podId",
+  "bindingGeneration",
+  "authenticationGeneration",
+]);
+const MCP_WRITE_APPROVAL_KEYS = [
+  ...WRITE_APPROVAL_KEYS.filter((key) => !JIRA_APPROVAL_SUBJECT_KEYS.has(key)),
+  "configurationDigest",
+];
 const WRITE_APPROVAL_STATES: ReadonlySet<unknown> = new Set(CHAT_TOOL_WRITE_APPROVAL_STATES);
 const WRITE_OPERATIONS: ReadonlySet<unknown> = new Set(JIRA_MUTATION_OPERATIONS);
 
 function validateWriteApprovalLifetime(value: Record<string, unknown>, errors: string[]): void {
-  for (const key of ["bindingGeneration", "authenticationGeneration", "requestedAt", "expiresAt"])
+  const keys =
+    value.kind === "mcp-chat-write"
+      ? ["requestedAt", "expiresAt"]
+      : ["bindingGeneration", "authenticationGeneration", "requestedAt", "expiresAt"];
+  for (const key of keys)
     if (!positiveCount(value[key])) errors.push(`chatWriteApproval.${key} is invalid`);
   if (
     typeof value.expiresAt === "number" &&
@@ -333,18 +417,33 @@ function validateWriteApprovalLifetime(value: Record<string, unknown>, errors: s
     errors.push("chatWriteApproval lifetime is invalid");
 }
 
+function validateWriteApprovalSubject(value: Record<string, unknown>, errors: string[]): void {
+  if (value.kind === "mcp-chat-write") {
+    validateDigest(value.configurationDigest, "chatWriteApproval.configurationDigest", errors);
+    validateSafeId(value.operation, "chatWriteApproval.operation", errors, 256);
+  } else {
+    if (!isChatJiraPodId(value.podId)) errors.push("chatWriteApproval.podId is invalid");
+    if (!WRITE_OPERATIONS.has(value.operation))
+      errors.push("chatWriteApproval.operation is invalid");
+  }
+}
 export function validateChatToolWriteApprovalView(
   value: unknown,
 ): CodingWorkbenchValidationResult<ChatToolWriteApprovalView> {
   if (!isRecord(value)) return invalid("chatWriteApproval must be an object");
   const errors: string[] = [];
-  validateKeys(value, WRITE_APPROVAL_KEYS, errors, "chatWriteApproval");
-  if (value.kind !== "jira-chat-write") errors.push("chatWriteApproval.kind is invalid");
+  const mcp = value.kind === "mcp-chat-write";
+  validateKeys(
+    value,
+    mcp ? MCP_WRITE_APPROVAL_KEYS : WRITE_APPROVAL_KEYS,
+    errors,
+    "chatWriteApproval",
+  );
+  if (!mcp && value.kind !== "jira-chat-write") errors.push("chatWriteApproval.kind is invalid");
   for (const key of ["approvalId", "chatId", "invocationId"])
     validateSafeId(value[key], `chatWriteApproval.${key}`, errors, 128);
-  if (!isChatJiraPodId(value.podId)) errors.push("chatWriteApproval.podId is invalid");
+  validateWriteApprovalSubject(value, errors);
   validateWriteApprovalLifetime(value, errors);
-  if (!WRITE_OPERATIONS.has(value.operation)) errors.push("chatWriteApproval.operation is invalid");
   if (!WRITE_APPROVAL_STATES.has(value.state)) errors.push("chatWriteApproval.state is invalid");
   validateDigest(value.actionDigest, "chatWriteApproval.actionDigest", errors);
   return result(value, errors);

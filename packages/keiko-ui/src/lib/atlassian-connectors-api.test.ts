@@ -363,3 +363,32 @@ it.each([
     status: 502,
   });
 });
+
+const MCP_READ_GRANT = {
+  kind: "mcp-chat-read",
+  grantId: "mcp-grant",
+  chatId: "chat-1",
+  configurationDigest: "a".repeat(64),
+  state: "pending",
+  disclosureVersion: "mcp-chat-read-v1",
+  requestedAt: 1000,
+  expiresAt: 2000,
+} as const;
+it("retains the configured MCP disclosure and exact configuration identity", async () => {
+  const approval = { ...MCP_READ_GRANT, state: "granted" };
+  const calls = stubFetch(200, { approval });
+  expect(await decideJiraChatReadConsent(MCP_READ_GRANT, "approve")).toEqual(approval);
+  expect(JSON.parse(calls[0]?.body ?? "null")).toEqual({
+    decision: "approve",
+    disclosureVersion: "mcp-chat-read-v1",
+  });
+});
+it("refuses a consent response for a replaced MCP configuration", async () => {
+  stubFetch(200, {
+    approval: { ...MCP_READ_GRANT, state: "granted", configurationDigest: "b".repeat(64) },
+  });
+  await expect(decideJiraChatReadConsent(MCP_READ_GRANT, "approve")).rejects.toMatchObject({
+    code: "CONTRACT_VALIDATION_FAILED",
+    status: 502,
+  });
+});

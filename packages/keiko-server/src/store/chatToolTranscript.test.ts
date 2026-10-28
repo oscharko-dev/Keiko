@@ -1,6 +1,6 @@
 import type { ChatToolMutationIntent } from "./chatToolMutationTypes.js";
 import { validateToolResultEnvelope } from "@oscharko-dev/keiko-tool-catalog";
-import type { ChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts";
+import type { JiraChatToolWriteApprovalView as ChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";

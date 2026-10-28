@@ -21,6 +21,10 @@ export type { KEIKO_CONTRACTS_VERSION, KEIKO_PRODUCT_VERSION } from "./version.j
 export type {
   ChatToolAuthorityEnvelope,
   ChatToolAuthoritySubject,
+  JiraChatToolAuthoritySubject,
+  McpChatToolAuthoritySubject,
+  McpChatToolReadGrantView,
+  McpChatToolWriteApprovalView,
   ChatToolReadGrant,
   ChatToolReadGrantState,
   ChatToolReadGrantView,

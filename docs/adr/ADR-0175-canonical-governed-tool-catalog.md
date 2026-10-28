@@ -39,8 +39,12 @@ binds it to those owners; it adds no parallel execution, policy, search or evide
 | Adapter projection semantics | catalog compiler | consumers materialize only the compiled result |
 | Approved-skill state and effects | existing server-approved skill catalog and governed skill handler; the catalog owns only the `keiko.skill.discover` descriptor and its projection | #3417 |
 
-The new pure package depends only on contracts and security. It cannot import I/O, providers,
-handlers, credentials, readiness, log sinks or policy evaluators. Server composition alone injects
+The pure package's internal dependencies are only contracts and security. Its external-schema
+compiler alone may import exactly `ajv`, `ajv/dist/2019.js`, `ajv/dist/2020.js` and `ajv-formats`
+for bounded synchronous validation (D3), without a remote schema loader or I/O configuration.
+Every other third-party import, arbitrary validator internal subpath, and validator import outside
+that owner remains denied. It cannot import I/O, providers, handlers, credentials, readiness,
+log sinks or policy evaluators. Server composition alone injects
 live authority, root, action, correlation, idempotency, handler and budget ports. Generic types do
 not reference the server. Browser types remain JSON-safe BFF projections with no handlers,
 Authority Envelopes, approval proofs, environment, credentials, filesystem handles or server roots.
@@ -127,11 +131,31 @@ existing security producer over `canonicalise({domain, ...fields})`, then `sha25
 ASCII identity and reject duplicates before hashing; preserve semantically ordered arrays. Reject
 undefined, non-finite numbers, prototypes, accessors, functions, symbols, cycles, unsafe refs,
 unknown keys and inputs exceeding the table's depth/width/byte bounds before canonicalization.
-Schemas are a closed, bounded JSON Schema subset; unsupported dialect semantics are incompatibility,
-never silently omitted keywords. #3406 owns the explicit keyword allowlist and equivalence tests.
+Internal schemas retain their closed, bounded JSON Schema subset; unsupported dialect semantics
+are incompatibility, never silently omitted keywords. #3406 owns that keyword allowlist and its
+equivalence tests. Configured external MCP tools (#4081/#4089, PR #4093) use a separate explicit
+JSON Schema dialect through `compileExternalCatalogSchema`: 2020-12 by MCP default, or an explicit
+2019-09 or draft-07 declaration. Ajv validates the exact admitted schema, including optional fields,
+open objects, schema-valued maps, unions, composition, local references and supported standard
+formats. Defaults remain annotations; validation never inserts defaults, coerces values, removes
+properties or prunes constraints. Gateway projections retain the admitted schema. Existing managed
+OpenCode built-in projections retain their lossless closed/required-field invariant.
 
-Descriptor/projection/catalog digest inputs are trusted local source declarations and **never
-customer content**. Description, transformed input/result schemas, effects/actions/policy references,
+External schemas are untrusted metadata. Before either catalog compilation or the external MCP
+SDK's argument/result validation, the shared contracts guard bounds the schema to 64 KiB, JSON
+depth 16, 128 entries per container, 2,048 JSON nodes, 256 schema nodes and 2,048 expanded reference
+work units. References must resolve locally through JSON Pointers and form an acyclic graph of
+height at most 16; remote references, IDs/anchors, dynamic/recursive references and asynchronous
+schemas are unsupported. Regex admission uses the existing conservative safety check plus an
+explicit linear exception: one completely anchored ASCII character-class or character-escape
+atom with at most one quantifier. Groups, competing repetitions and other unsupported regex
+grammar do not acquire an exception. The `regex` data format is refused. Ajv's format support is
+explicitly limited to date/time/duration, URI/reference/template, email/hostname, IP, UUID and JSON
+Pointer formats; unknown keywords or formats fail closed. The compiler cache is bounded to 64
+entries. These are compatibility limits, not claims to implement every JSON Schema extension.
+
+Descriptor/projection/catalog digest inputs are local source declarations or admitted external
+MCP tool metadata, **never tool arguments or results**. Description, transformed input/result schemas, effects/actions/policy references,
 handler requirement, bounds, alias, profile, catalog revision and exact adapter identity all bind
 the projection. Native extensions and accepted compatibility transforms bind it too. Generated
 manifests expose IDs, versions, digests, bounds and enums; omit descriptions and schemas.

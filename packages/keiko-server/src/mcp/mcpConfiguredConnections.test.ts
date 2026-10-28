@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   parseMcpServerRegistry,
   type McpServerDefinition,
+  type McpSettingsUpdate,
 } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 import type { ExternalMcpClientOptions } from "@oscharko-dev/keiko-mcp";
 import {
@@ -22,6 +23,7 @@ afterEach(async () => {
 });
 function fixture(
   transport: unknown = { kind: "remote", url: "https://synthetic.example.test/mcp" },
+  secrets: McpSettingsUpdate["secrets"] = {},
 ): { root: string; store: ReturnType<typeof createMcpSettingsStore>; server: McpServerDefinition } {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-configured-mcp-")));
   roots.push(root);
@@ -37,7 +39,7 @@ function fixture(
   if (!parsed.ok || parsed.servers[0] === undefined) throw new Error("Invalid fixture");
   const server = parsed.servers[0];
   store.update(
-    { expectedRevision: store.read("fixture").revision, servers: [server], secrets: {} },
+    { expectedRevision: store.read("fixture").revision, servers: [server], secrets },
     "fixture",
   );
   return { root, store, server };
@@ -174,19 +176,14 @@ describe("configured MCP connections", () => {
   it("applies the configured network class and headers only to the admitted target", async () => {
     const reference = "KEIKO_MCP_SECRET_SYNTHETIC";
     const token = "synthetic-private-mcp-token";
-    const f = fixture({
-      kind: "remote",
-      url: "https://synthetic.example.test/mcp",
-      network: "private",
-      headers: { Authorization: { secretEnv: reference, prefix: "Bearer " } },
-    });
-    f.store.update(
+    const f = fixture(
       {
-        expectedRevision: f.store.read("test").revision,
-        servers: [f.server],
-        secrets: { [reference]: { server: "notes", value: token } },
+        kind: "remote",
+        url: "https://synthetic.example.test/mcp",
+        network: "private",
+        headers: { Authorization: { secretEnv: reference, prefix: "Bearer " } },
       },
-      "test",
+      { [reference]: { server: "notes", value: token } },
     );
     let transport: ExternalMcpClientOptions["transport"] | undefined;
     const fetch = vi.fn(() => Promise.resolve(Response.json({})));

@@ -25,7 +25,7 @@ import type {
   ChatToolReadGrantView,
   AtlassianConnectorActionType,
   CodingWorkbenchRuntimeDelegationUsage,
-  ChatToolAuthoritySubject,
+  JiraChatToolAuthoritySubject,
   EditorAgentGovernedAuthorityReference,
 } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "../deps.js";
@@ -45,10 +45,23 @@ import {
 export type JiraChatAuthorityDeps = JiraPodAccessDeps &
   Pick<UiHandlerDeps, "store" | "agentAuthorityRegistry" | "autonomousDeliveryDeploymentCeiling">;
 
+export type JiraChatAuthorityEnvelope = ChatToolAuthorityEnvelope & {
+  readonly subject: JiraChatToolAuthoritySubject;
+  readonly connectorScopes: readonly ("issue-tracker.read" | "issue-tracker.write")[];
+};
+function isJiraEnvelope(
+  envelope: ChatToolAuthorityEnvelope,
+): envelope is JiraChatAuthorityEnvelope {
+  return (
+    envelope.subject.kind !== "configured-mcp" &&
+    envelope.connectorScopes.every((scope) => scope !== "mcp.tools")
+  );
+}
+
 type CurrentJiraChatAuthority =
   | {
       readonly ok: true;
-      readonly envelope: ChatToolAuthorityEnvelope;
+      readonly envelope: JiraChatAuthorityEnvelope;
       readonly credential: JiraLivePodCredential;
     }
   | { readonly ok: false; readonly reason: EditorAgentAuthorityFailureReason };
@@ -57,7 +70,7 @@ interface CurrentFacts {
   readonly ok: true;
   readonly chat: Chat;
   readonly credential: JiraLivePodCredential;
-  readonly subject: ChatToolAuthoritySubject;
+  readonly subject: JiraChatToolAuthoritySubject;
 }
 
 export interface AcceptedJiraChatTurn {
@@ -70,7 +83,7 @@ export interface AcceptedJiraChatTurn {
 type AcceptedJiraChatAuthority =
   | {
       readonly ok: true;
-      readonly envelope: ChatToolAuthorityEnvelope;
+      readonly envelope: JiraChatAuthorityEnvelope;
       readonly reference: EditorAgentGovernedAuthorityReference;
     }
   | { readonly ok: false; readonly reason: EditorAgentAuthorityFailureReason };
@@ -79,7 +92,7 @@ function acceptedTurnEnvelope(
   facts: CurrentFacts,
   turn: AcceptedJiraChatTurn,
   deploymentCeiling: CodingWorkbenchMode,
-): ChatToolAuthorityEnvelope {
+): JiraChatAuthorityEnvelope {
   const requestedMode = facts.chat.toolMode ?? "governed-assist";
   const runId = `chat-${sha256Hex(canonicalise({ chatId: turn.chatId, userMessageId: turn.userMessageId }))}`;
   return {
@@ -227,6 +240,7 @@ export function resolveCurrentJiraChatAuthority(
       { ...evidence, subject: facts.subject, readiness: "authority-denied" },
       correlationId,
     );
+  if (!isJiraEnvelope(resolution.envelope)) return { ok: false, reason: "invalid" };
   if (resolution.envelope.requestedMode !== (facts.chat.toolMode ?? "governed-assist")) {
     return recordChatAuthorityResult(
       "current-state",
@@ -237,7 +251,11 @@ export function resolveCurrentJiraChatAuthority(
   }
   return recordChatAuthorityResult(
     "current-state",
-    { ok: true, envelope: resolution.envelope, credential: facts.credential },
+    {
+      ok: true,
+      envelope: { ...resolution.envelope, subject: resolution.envelope.subject },
+      credential: facts.credential,
+    },
     { ...evidence, subject: facts.subject, readiness: "ready" },
     correlationId,
   );
@@ -369,7 +387,7 @@ function readAdmissionDenied(
 }
 
 function pendingChatReadGrant(
-  envelope: ChatToolAuthorityEnvelope,
+  envelope: JiraChatAuthorityEnvelope,
   nowIso: string,
 ): ChatToolReadGrant {
   const now = Date.parse(nowIso);
@@ -389,7 +407,7 @@ function pendingChatReadGrant(
 function reuseChatReadGrant(
   deps: JiraChatAuthorityDeps,
   registry: AtlassianActionApprovalRegistry,
-  subject: ChatToolAuthoritySubject,
+  subject: JiraChatToolAuthoritySubject,
   authority: EditorAgentGovernedAuthorityReference,
   nowIso: string,
   correlationId: string,

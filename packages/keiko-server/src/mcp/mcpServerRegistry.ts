@@ -90,6 +90,7 @@ export interface McpServerRegistryLoad {
   readonly state: McpRegistryLoadState;
   readonly servers: readonly McpServerDefinition[];
   readonly reason?: McpRegistryLoadReason | undefined;
+  readonly generation?: string;
 }
 
 // The owner-private file, opened without following a link and checked on its descriptor.
@@ -100,7 +101,11 @@ function readRegistryText(path: string): string | undefined {
 function parsedRegistry(text: string): McpServerRegistryLoad {
   const parsed = parseMcpServerRegistry(JSON.parse(text) as unknown);
   return parsed.ok
-    ? { state: "loaded", servers: parsed.servers }
+    ? {
+        state: "loaded",
+        servers: parsed.servers,
+        ...(parsed.generation === undefined ? {} : { generation: parsed.generation }),
+      }
     : { state: "refused", servers: [], reason: parsed.reason };
 }
 

@@ -1625,3 +1625,58 @@ it("refuses a write-call argument accessor without propagating its private excep
     }),
   ).toBe(false);
 });
+
+it("admits MCP consent and write cards without accepting mixed identities or private data", () => {
+  const grant = {
+    kind: "mcp-chat-read",
+    grantId: "grant-1",
+    chatId: "chat-1",
+    configurationDigest: "a".repeat(64),
+    state: "pending",
+    disclosureVersion: "mcp-chat-read-v1",
+    requestedAt: 1000,
+    expiresAt: 2000,
+  };
+  const read = (value: unknown): boolean =>
+    isDesktopChatStreamEvent({
+      event: "tool-read-consent",
+      data: { messageId: "message-1", grant: value },
+    });
+  expect(read(grant)).toBe(true);
+  for (const patch of [
+    { podId: "pod-1" },
+    { actorDigest: "f".repeat(64) },
+    { configurationDigest: "bad" },
+    { disclosureVersion: "jira-chat-read-v1" },
+    { kind: "jira-chat-read" },
+  ])
+    expect(read({ ...grant, ...patch })).toBe(false);
+  expect(read(Object.create(grant))).toBe(false);
+  const approval = {
+    kind: "mcp-chat-write",
+    approvalId: "approval-1",
+    chatId: "chat-1",
+    configurationDigest: "a".repeat(64),
+    invocationId: "invocation-1",
+    operation: "mcp_fixture_write_123",
+    actionDigest: "b".repeat(64),
+    requestedAt: 1000,
+    expiresAt: 2000,
+    state: "pending",
+  };
+  const call = { id: "call-1", name: approval.operation, arguments: { text: "Synthetic" } };
+  const write = (value: unknown): boolean =>
+    isDesktopChatStreamEvent({
+      event: "tool-write-approval",
+      data: { messageId: "message-1", call, approval: value },
+    });
+  expect(write(approval)).toBe(true);
+  for (const patch of [
+    { podId: "pod-1" },
+    { actorDigest: "f".repeat(64) },
+    { configurationDigest: "bad" },
+    { operation: "mcp_different_tool" },
+    { kind: "jira-chat-write" },
+  ])
+    expect(write({ ...approval, ...patch })).toBe(false);
+});
