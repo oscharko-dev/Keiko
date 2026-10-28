@@ -315,6 +315,21 @@ static DWORD run_child(PSID sid, const wchar_t *executable, int family,
                        UINT16 gateway, UINT16 hostile, DWORD *observed, PSID_AND_ATTRIBUTES network);
 static int udp_received(SOCKET listener);
 
+static DWORD foreign_principal_probe(PSID sid, PSID peer_sid, const wchar_t *executable,
+                                       int family, PSID_AND_ATTRIBUTES network) {
+  struct gateway_inbound_fixture *owner = NULL;
+  DWORD result = gateway_inbound_start(peer_sid, &owner), closed;
+  /* First prove this peer can receive with its own rule; its subsequent refusal must be about
+   * the wrong package rule, not an unavailable peer listener or missing isolation permit. */
+  if (result == ERROR_SUCCESS)
+    result = control_route_probe(peer_sid, executable, family, "foreign-baseline", network, peer_sid);
+  if (result == ERROR_SUCCESS &&
+      control_route_probe(peer_sid, executable, family, "foreign-principal", network, sid) !=
+        ERROR_CONNECTION_REFUSED) result = ERROR_INVALID_DATA;
+  closed = gateway_inbound_stop(owner);
+  return closed == ERROR_SUCCESS ? result : closed;
+}
+
 static DWORD scoped_inbound_probe(PSID sid, PSID peer_sid, const wchar_t *executable, int family,
                                   UINT16 gateway, UINT16 hostile, SOCKET udp, PSID_AND_ATTRIBUTES network) {
   /* opencodeLaunchProfile and opencodeV2HttpClient require IPv4 control, independently of the
@@ -325,7 +340,7 @@ static DWORD scoped_inbound_probe(PSID sid, PSID peer_sid, const wchar_t *execut
   struct gateway_diagnostics *diagnostics = NULL;
   HANDLE deny = NULL;
   DWORD result = gateway_diagnostics_start(executable, &diagnostics), closed;
-  DWORD observed = 99;
+  DWORD observed = 99, concurrent_result = ERROR_SUCCESS;
   printf("socket-control-composition: gateway-family=%d control-family=%d\n", family, control_family);
   /* Establish a real blocked-flow control inside the diagnostic interval, even if the inbound
    * route subsequently fails. Zero recorded drops then means an unqualified diagnostic. */
@@ -336,13 +351,15 @@ static DWORD scoped_inbound_probe(PSID sid, PSID peer_sid, const wchar_t *execut
     if (result == ERROR_SUCCESS &&
         (observed > 7 || (observed & 3) != 1 || udp_received(udp) != 0)) result = ERROR_INVALID_DATA;
   }
+  if (result == ERROR_SUCCESS)
+    result = foreign_principal_probe(sid, peer_sid, executable, control_family, network);
   if (result == ERROR_SUCCESS) result = gateway_inbound_start(sid, &owner);
   if (result == ERROR_SUCCESS)
     result = control_route_probe(sid, executable, control_family, "inbound-firewall", network, sid);
-  if (result == ERROR_SUCCESS) result = gateway_inbound_start(peer_sid, &peer_owner);
-  if (result == ERROR_SUCCESS &&
-      control_route_probe(peer_sid, executable, control_family, "foreign-principal", network, sid) !=
-        ERROR_CONNECTION_REFUSED) result = ERROR_INVALID_DATA;
+  if (result == ERROR_SUCCESS) {
+    concurrent_result = gateway_inbound_start(peer_sid, &peer_owner);
+    printf("socket-inbound-concurrent-owner: code=%lu\n", concurrent_result);
+  }
   closed = gateway_inbound_stop(peer_owner);
   if (closed != ERROR_SUCCESS) result = closed;
   if (result == ERROR_SUCCESS) {
@@ -367,6 +384,9 @@ static DWORD scoped_inbound_probe(PSID sid, PSID peer_sid, const wchar_t *execut
   if (result == ERROR_SUCCESS &&
       control_route_probe(sid, executable, control_family, "inbound-owner-reaped", network, sid) != ERROR_CONNECTION_REFUSED)
     result = ERROR_INVALID_DATA;
+  /* A separate peer baseline does not qualify concurrent owner lifetimes. Preserve that failure,
+   * but collect independent deny, egress and owner-reaping evidence before reporting it. */
+  if (result == ERROR_SUCCESS) result = concurrent_result;
   if (diagnostics != NULL) {
     closed = gateway_diagnostics_read(diagnostics, sid);
     if (closed != ERROR_SUCCESS) result = closed;

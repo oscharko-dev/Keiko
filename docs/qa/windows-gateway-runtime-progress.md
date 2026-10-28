@@ -237,6 +237,20 @@ jobs can invoke this experiment. These local checks do not replace the disposabl
 proof. The package rule uses Microsoft's documented
 [`New-NetFirewallRule -Package` contract](https://learn.microsoft.com/en-us/powershell/module/netsecurity/new-netfirewallrule#-package).
 
+[Run 40771565282](https://github.com/oscharko-dev/Keiko/actions/runs/40771565282) on `c8b77ae8b`
+successfully creates, verifies and removes the package rule. The actual IPv4 host-to-AppContainer
+connection passes both before and after Keiko's outbound filters, for both outbound gateway
+families. The experiment then fails with `ERROR_NOT_READY` when starting a second inbound utility
+while the first remains alive. No foreign-principal, independent-deny or reaping success is claimed
+from that interrupted sequence, and the ordinary socket proof remains failed.
+
+The follow-up probe first establishes a positive peer listener baseline and then tests that peer
+against the wrong package rule with an independently owned utility. It retains the separate
+concurrent-owner requirement and its failure verdict, while collecting the subsequent independent
+deny, egress and owner-reaping results. Early utility exits report only a numeric exit code and
+bounded filter readback, not localized output or private identities. This distinguishes package
+scope from utility concurrency without turning a failed concurrent lifetime into a pass.
+
 Local protocol validation also ran the complete existing `runtime-gateway.test.ts`: 29 passed,
 eight failed on existing POSIX filesystem fixtures rejected by Windows path canonicalization, and
 25 macOS tests skipped. The new cross-language vector case passes individually. These baseline

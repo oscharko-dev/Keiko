@@ -132,7 +132,15 @@ DWORD gateway_inbound_start(PSID sid, struct gateway_inbound_fixture **owned) {
       !AssignProcessToJobObject(fixture->job, fixture->process.hProcess) ||
       ResumeThread(fixture->process.hThread) == (DWORD)-1) { result = GetLastError(); goto done; }
   /* Bounded diagnostic readiness window; socket behavior, not process existence, is the oracle. */
-  if (WaitForSingleObject(fixture->process.hProcess, 1000) != WAIT_TIMEOUT) result = ERROR_NOT_READY;
+  if (WaitForSingleObject(fixture->process.hProcess, 1000) != WAIT_TIMEOUT) {
+    DWORD code = 0;
+    BOOL observed = GetExitCodeProcess(fixture->process.hProcess, &code);
+    printf("socket-inbound-early-exit: observed=%d code=%lu\n", observed != FALSE, code);
+    /* Read back even this refusal for diagnosis; a leftover/foreign filter never converts an
+     * exited owner into a qualified lifetime. Do not print localized utility output or SIDs. */
+    (void)inbound_readback(sid);
+    result = ERROR_NOT_READY;
+  }
   if (result == ERROR_SUCCESS) result = inbound_readback(sid);
 done:
   if (attributes_ready) DeleteProcThreadAttributeList(startup.lpAttributeList);
