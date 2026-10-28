@@ -394,7 +394,7 @@ class Store {
     input: Parameters<RetainedSessionStore["checkout"]>[0],
   ): CheckoutResult {
     const source = join(entry, DATABASE_FILE);
-    if (fileSize(source) !== manifest.databaseBytes) {
+    if (fileSize(source, "retained") !== manifest.databaseBytes) {
       return this.refuse(input.binding.taskId, "integrity-failed");
     }
     // Exclusive: a file that is already there is not Keiko's to overwrite, and not to delete either.
@@ -477,13 +477,15 @@ class Store {
 
   private readManifest(entry: string): RetainedSessionManifest | undefined {
     const path = join(entry, MANIFEST_FILE);
-    const size = fileSize(path);
-    if (size === undefined || size > this.limits.maxManifestBytes) return undefined;
     try {
+      const directory = lstatSync(entry);
+      if (!directory.isDirectory() || directory.isSymbolicLink()) return undefined;
+      const size = fileSize(path, "retained");
+      if (size === undefined || size > this.limits.maxManifestBytes) return undefined;
       return parseManifest(JSON.parse(readFileSync(path, "utf8")) as unknown);
     } catch (error) {
       // Text that is not JSON is a manifest that cannot be trusted; an unreadable file is a failure.
-      if (error instanceof SyntaxError) return undefined;
+      if (error instanceof SyntaxError || isAbsentPath(error)) return undefined;
       throw error;
     }
   }
@@ -632,10 +634,12 @@ function validManifestEvidence(manifest: RetainedSessionManifest): boolean {
   );
 }
 
-function fileSize(path: string): number | undefined {
+function fileSize(path: string, kind: "source" | "retained" = "source"): number | undefined {
   try {
-    const stat = statSync(path);
-    return stat.isFile() ? stat.size : undefined;
+    // Stored entries are private copies: never read through a final link or a second file name.
+    // The runtime-owned source retains its existing read-only input semantics.
+    const stat = kind === "retained" ? lstatSync(path) : statSync(path);
+    return stat.isFile() && (kind !== "retained" || stat.nlink === 1) ? stat.size : undefined;
   } catch (error) {
     // Only an absent path is "no file"; a path that cannot be examined is a failure.
     if (isAbsentPath(error)) return undefined;

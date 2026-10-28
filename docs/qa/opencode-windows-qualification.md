@@ -157,6 +157,49 @@ customer-shape qualification and CodeQL now pass. Both full CI runs remain incom
 revalidation; these partial results are not a complete current-head CI verdict. The gateway PR
 #4090 remains unchanged, so the production Windows launch blocker remains open.
 
+### Retained-entry boundary repair
+
+The next Windows increment reproduces redirection below the already-validated retention root.
+A retained entry replaced with a directory junction was accepted by checkout and kept by pruning;
+stored manifests and databases with another hard link were also accepted. Four native regression
+cases fail before the repair. They use synthetic runtime-schema databases and real NTFS links.
+
+The store now checks the entry itself with `lstat` before reading its manifest. Retained manifests
+and databases must be regular, single-link files; final symbolic links and hard links are refused
+before reading/copying the stored file. Checkout returns the existing `integrity-failed` result
+and removes the invalid entry, while pruning counts redirected entries as invalid. The runtime's
+source-database input semantics remain unchanged.
+
+All four regressions pass after the repair. Two additional read-only hardlink cases prove that
+refusal preserves both external file bytes and its read-only attributes. A seventh production
+composition case confirms startup removal of a redirected entry, an unchanged external database,
+and exactly one existing `coding-runtime.session-continuity` event with the startup correlation,
+`action: prune`, `outcome: pruned`, `prunedCount: 1` and `entryCount: 0`. The event passes the
+registered Activity Log proof and contains no fixture path; the generated failure-surface
+inventory now includes this proof site.
+
+The wider session test selection additionally exposed two path-fixture defects in the native
+session-tree suite. Its workspace and moved-directory fixtures now use host-absolute normalized
+paths. The previously failing directory tracking and two-job cancellation assertions remain
+unchanged, and all **31 session-tree tests pass** after the fixture repair.
+
+The final expanded selection covers ten complete retention, continuation, session-tree, history,
+export and import suites: **489 passed, four failed, zero skipped**. The four failures are the
+previously documented retention observations (two Unix permission assertions, local file-symlink
+privilege and the overlong-filename error behavior). No assertion was relaxed or omitted. Build,
+TypeScript/package graph, scoped ESLint and semantic duplication (932 baseline groups) pass.
+After regenerating the proof inventory, the complete Activity Log gate again executes all seven
+steps: six pass, including all 97 registry tests, and the unchanged support-report scenario step
+has 126 passes, 17 failures and five skips. Architecture, negative architecture and release-impact
+checks pass; the aggregate remains nonzero and no complete gate pass is claimed.
+Required local Sonar passes on the final source/test set with no unresolved findings
+(analysis task `fb4b484b-2564-4504-ac52-2dcc27606d68`, 2026-10-28 19:10 UTC). Final formatting,
+ADR index and `git diff --check` also pass. No inline review threads are present on PR #4088.
+
+These are deterministic entry/file-link and component proofs, not atomic filesystem-race,
+Windows ACL, native-service or full Workbench qualification. The production gateway and source
+approval blockers remain open; no W1–W15 acceptance group is closed.
+
 ## Revalidation on 2026-10-27
 
 The continuation starts from PR #4088 head `475e91a3f9745a70a3371400c9fe265adf363bae` and

@@ -1668,7 +1668,8 @@
     ],
     "coding-runtime.session-continuity.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingSessionContinuity.test.ts",
-      "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts"
+      "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts",
+      "packages/keiko-server/src/coding-runtime/opencodeSessionRetention.test.ts"
     ],
     "coding-runtime.sidecar-session.bound.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts"

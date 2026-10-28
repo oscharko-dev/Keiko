@@ -2374,8 +2374,15 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
     directory, rejecting a symbolic link or Windows junction before traversing its entries. A root
     replaced between operations is not trusted because a prior retention succeeded. Invalid roots
     propagate through the existing `coding-runtime.session-continuity` failed/copy-failed event;
-    startup pruning leaves their targets untouched. This pathname check does not attest Windows
-    ACL privacy, ancestor containment or atomic protection against replacement during an operation.
+    startup pruning leaves their targets untouched. Each retained entry must also be an actual
+    directory before its manifest is read. Stored manifests and databases must be regular files
+    with a single hard link; final symbolic links and multiply linked files are refused before
+    reading or copying them. A redirected entry or linked stored file is an integrity refusal,
+    and removal unlinks the store entry without changing external file contents. Startup pruning
+    reports removed invalid entries through the existing count-only continuity event. The
+    runtime-owned source database keeps its existing read-only input semantics. These pathname
+    checks do not attest Windows ACL privacy, ancestor containment or atomic protection against
+    replacement during an operation.
   - **Resume.** The orchestrator declares the intent before it launches; the composition's prepare
     step checks the entry out into the new run's own state root (exclusive copy, then the digest and
     the audit again, workspace, runtime version and window checked against the new run), so the
