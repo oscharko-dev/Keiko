@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import {
+  installIgnoredProtocolMetadata,
+  protocolEnumerationInput,
+} from "./__tests__/support/protocol-observation-mechanics.js";
 
 import {
   MANAGED_LSP_ACTIVATION_REASON_CODES,
@@ -344,23 +348,7 @@ for (const surface of ["source", "public"] as const) {
         ? await import("./managed-lsp-activation.js")
         : await import("@oscharko-dev/keiko-contracts/runtime/managed-lsp-activation");
     const trace: string[] = [];
-    const value = new Proxy(
-      {},
-      {
-        ownKeys(): string[] {
-          trace.push("ownKeys");
-          return ["unexpected", "schemaVersion"];
-        },
-        getOwnPropertyDescriptor(_target, key): PropertyDescriptor {
-          trace.push(`descriptor:${String(key)}`);
-          return { configurable: true, enumerable: true, value: undefined, writable: true };
-        },
-        get(_target, key): never {
-          trace.push(`get:${String(key)}`);
-          throw new TypeError("Protocol field inspection after key enumeration");
-        },
-      },
-    );
+    const value = protocolEnumerationInput(trace);
     expect(module.parseManagedLspActivationInput(value)).toEqual({
       ok: false,
       errors: ["payload could not be inspected: TypeError"],
@@ -380,12 +368,9 @@ for (const surface of ["source", "public"] as const) {
         : await import("@oscharko-dev/keiko-contracts/runtime/managed-lsp-activation");
     const value = activeInput();
     let reads = 0;
-    const inspect = (): never => {
+    installIgnoredProtocolMetadata(value, (): void => {
       reads += 1;
-      throw new TypeError("Ignored metadata was read");
-    };
-    Object.defineProperty(value, "ignoredMetadata", { enumerable: false, get: inspect });
-    Object.defineProperty(value, Symbol("ignoredMetadata"), { enumerable: true, get: inspect });
+    });
     expect(module.parseManagedLspActivationInput(value).ok).toBe(true);
     expect(reads).toBe(0);
   });

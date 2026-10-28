@@ -34,6 +34,7 @@ import { createOpenCodeV2HttpClient, type OpenCodeV2HttpClient } from "./opencod
 import { RIPGREP_RUNTIME_MANIFEST } from "./ripgrepRuntime.js";
 
 import {
+  writeNativeHttpStreamedTurn,
   startNativeHttpStub as startStub,
   withNativeHttpStub,
 } from "../../../../tests/support/opencode-native-http.js";
@@ -88,32 +89,13 @@ function object(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-function frame(value: unknown): string {
-  return `data: ${JSON.stringify(value)}\n\n`;
-}
-
 function lastRole(body: unknown): unknown {
   const messages = object(body)?.messages;
   return Array.isArray(messages) ? object(messages.at(-1))?.role : undefined;
 }
 
 function streamedTurn(response: ServerResponse, delta: unknown, finish: string): void {
-  response.writeHead(200, { "Content-Type": "text/event-stream" });
-  response.write(
-    frame({
-      id: "ripgrep-real",
-      object: "chat.completion.chunk",
-      choices: [{ index: 0, delta, finish_reason: null }],
-    }),
-  );
-  response.end(
-    frame({
-      id: "ripgrep-real",
-      object: "chat.completion.chunk",
-      choices: [{ index: 0, delta: {}, finish_reason: finish }],
-      usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 },
-    }) + "data: [DONE]\n\n",
-  );
+  writeNativeHttpStreamedTurn(response, delta, finish, "ripgrep-real");
 }
 
 async function startGateway(): Promise<GatewayStub> {

@@ -47,6 +47,7 @@ import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import { createOpenCodeV2HttpClient, type OpenCodeV2HttpClient } from "./opencodeV2HttpClient.js";
 
 import {
+  writeNativeHttpStreamedTurn,
   startNativeHttpStub as startStub,
   withNativeHttpStub,
   type NativeHttpStub as Stub,
@@ -99,32 +100,13 @@ function object(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-function frame(value: unknown): string {
-  return `data: ${JSON.stringify(value)}\n\n`;
-}
-
 function lastRole(body: unknown): unknown {
   const messages = object(body)?.messages;
   return Array.isArray(messages) ? object(messages.at(-1))?.role : undefined;
 }
 
 function streamedTurn(response: ServerResponse, delta: unknown, finish: string): void {
-  response.writeHead(200, { "Content-Type": "text/event-stream" });
-  response.write(
-    frame({
-      id: "native-delivery",
-      object: "chat.completion.chunk",
-      choices: [{ index: 0, delta, finish_reason: null }],
-    }),
-  );
-  response.end(
-    frame({
-      id: "native-delivery",
-      object: "chat.completion.chunk",
-      choices: [{ index: 0, delta: {}, finish_reason: finish }],
-      usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 },
-    }) + "data: [DONE]\n\n",
-  );
+  writeNativeHttpStreamedTurn(response, delta, finish, "native-delivery");
 }
 
 async function startGateway(): Promise<GatewayStub> {

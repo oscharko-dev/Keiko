@@ -34,6 +34,53 @@ async function installSemanticFixtureTools(own) {
   await installResponsibilityFixtureTools(own);
 }
 
+function expectPendingDispatchRequiresQualification(assessment, slot, finding) {
+  if (assessment.kind === "public-parser") slot.contributingResponsibilityIds = [assessment.id];
+  expect(
+    adaptResponsibilityDiagnostics({ violations: [finding] }, { assessments: [assessment] })
+      .violations,
+  ).toEqual([finding]);
+  assessment.semantic = "qualified";
+  expect(
+    adaptResponsibilityDiagnostics({ violations: [finding] }, { assessments: [assessment] })
+      .violations,
+  ).toEqual([]);
+}
+
+function completedParentDispatch(parent, kind, slots, proofAssertions) {
+  const assessment = {
+    ...parent,
+    kind,
+    slots,
+    proofs: parent.proofs.map((proof) => ({ ...proof, executed: true })),
+    proofAssertions: proofAssertions.map((proof) => ({ ...proof, status: "passed" })),
+  };
+  if (kind === "public-parser")
+    for (const slot of slots) slot.contributingResponsibilityIds = [assessment.id];
+  const findings = slots.map(({ path, rule, line, column }) => ({ path, rule, line, column }));
+  const adapted = () =>
+    adaptResponsibilityDiagnostics({ violations: findings }, { assessments: [assessment] })
+      .violations;
+  expect(adapted()).toEqual(findings);
+  assessment.semantic = "qualified";
+  expect(adapted()).toEqual([]);
+  const completed = assessment.proofAssertions;
+  assessment.proofAssertions = completed.slice(0, 1);
+  expect(adapted()).toEqual(findings);
+  assessment.proofAssertions = completed;
+  return { assessment, findings, adapted };
+}
+
+async function expectCompletedSemanticProof(subject, own, pending) {
+  const qualified = await qualifyPolicyResponsibilities(subject, own.policy);
+  expect(qualified.counts).toMatchObject({ ready: 1, qualified: 1, pending: 0 });
+  expect(qualified.assessments[0].slots).toEqual(pending.assessments[0].slots);
+  expect(qualified.assessments[0].proofAssertions.every((proof) => proof.status === "passed")).toBe(
+    true,
+  );
+  return qualified;
+}
+
 describe("optional own-key and raw-root observation capability", () => {
   it.each([
     ["default", {}, 3],
@@ -305,16 +352,7 @@ describe("optional object validator responsibility (#3918)", () => {
         semantic: "pending",
         slots: [slot],
       };
-      if (kind === "public-parser") slot.contributingResponsibilityIds = [assessment.id];
-      expect(
-        adaptResponsibilityDiagnostics({ violations: [finding] }, { assessments: [assessment] })
-          .violations,
-      ).toEqual([finding]);
-      assessment.semantic = "qualified";
-      expect(
-        adaptResponsibilityDiagnostics({ violations: [finding] }, { assessments: [assessment] })
-          .violations,
-      ).toEqual([]);
+      expectPendingDispatchRequiresQualification(assessment, slot, finding);
     }
   });
 
@@ -342,12 +380,7 @@ describe("optional object validator responsibility (#3918)", () => {
       expect(adaptResponsibilityDiagnostics({ violations: [finding] }, pending).violations).toEqual(
         [finding],
       );
-      const qualified = await qualifyPolicyResponsibilities(subject, own.policy);
-      expect(qualified.counts).toMatchObject({ ready: 1, qualified: 1, pending: 0 });
-      expect(qualified.assessments[0].slots).toEqual(pending.assessments[0].slots);
-      expect(
-        qualified.assessments[0].proofAssertions.every((proof) => proof.status === "passed"),
-      ).toBe(true);
+      const qualified = await expectCompletedSemanticProof(subject, own, pending);
       expect(
         adaptResponsibilityDiagnostics({ violations: [finding] }, qualified).violations,
       ).toEqual([]);
@@ -440,16 +473,7 @@ describe("raw metadata source responsibility (#3918)", () => {
         semantic: "pending",
         slots: [slot],
       };
-      if (kind === "public-parser") slot.contributingResponsibilityIds = [assessment.id];
-      expect(
-        adaptResponsibilityDiagnostics({ violations: [finding] }, { assessments: [assessment] })
-          .violations,
-      ).toEqual([finding]);
-      assessment.semantic = "qualified";
-      expect(
-        adaptResponsibilityDiagnostics({ violations: [finding] }, { assessments: [assessment] })
-          .violations,
-      ).toEqual([]);
+      expectPendingDispatchRequiresQualification(assessment, slot, finding);
     }
   });
 
@@ -471,12 +495,7 @@ describe("raw metadata source responsibility (#3918)", () => {
         );
         return;
       }
-      const qualified = await qualifyPolicyResponsibilities(subject, own.policy);
-      expect(qualified.counts).toMatchObject({ ready: 1, qualified: 1, pending: 0 });
-      expect(qualified.assessments[0].slots).toEqual(pending.assessments[0].slots);
-      expect(
-        qualified.assessments[0].proofAssertions.every((proof) => proof.status === "passed"),
-      ).toBe(true);
+      await expectCompletedSemanticProof(subject, own, pending);
     },
   );
 });
@@ -626,29 +645,12 @@ describe("owned refusal marker pair responsibility (#3918)", () => {
     for (const kind of ["raw-property-observation", "public-parser"]) {
       // Non-object findings isolate parent gating on both dispatches, not native form grants.
       const slots = added.map((slot) => ({ ...slot, rule: "anti-slop/no-known-value-widening" }));
-      const assessment = {
-        ...parent,
+      const { findings, adapted } = completedParentDispatch(
+        parent,
         kind,
         slots,
-        proofs: parent.proofs.map((proof) => ({ ...proof, executed: true })),
-        proofAssertions: own.record.proofAssertions.map((proof) => ({
-          ...proof,
-          status: "passed",
-        })),
-      };
-      if (kind === "public-parser")
-        for (const slot of slots) slot.contributingResponsibilityIds = [assessment.id];
-      const findings = slots.map(({ path, rule, line, column }) => ({ path, rule, line, column }));
-      const adapted = () =>
-        adaptResponsibilityDiagnostics({ violations: findings }, { assessments: [assessment] })
-          .violations;
-      expect(adapted()).toEqual(findings);
-      assessment.semantic = "qualified";
-      expect(adapted()).toEqual([]);
-      const completed = assessment.proofAssertions;
-      assessment.proofAssertions = completed.slice(0, 1);
-      expect(adapted()).toEqual(findings);
-      assessment.proofAssertions = completed;
+        own.record.proofAssertions,
+      );
       slots[1].markerPairRoot = { ...slots[1].markerPairRoot, recordId: "other-parent" };
       expect(adapted()).toEqual([findings[1]]);
     }
@@ -673,12 +675,7 @@ describe("owned refusal marker pair responsibility (#3918)", () => {
         );
         return;
       }
-      const qualified = await qualifyPolicyResponsibilities(subject, own.policy);
-      expect(qualified.counts).toMatchObject({ ready: 1, qualified: 1, pending: 0 });
-      expect(qualified.assessments[0].slots).toEqual(pending.assessments[0].slots);
-      expect(
-        qualified.assessments[0].proofAssertions.every((proof) => proof.status === "passed"),
-      ).toBe(true);
+      await expectCompletedSemanticProof(subject, own, pending);
     },
   );
 });
@@ -726,25 +723,12 @@ describe("owned raw-registration transport responsibility (#3918)", () => {
         ...slot,
         rule: "anti-slop/no-known-value-widening",
       }));
-      const assessment = { ...parent, kind, slots };
-      assessment.proofs = parent.proofs.map((proof) => ({ ...proof, executed: true }));
-      assessment.proofAssertions = own.record.proofAssertions.map((proof) => ({
-        ...proof,
-        status: "passed",
-      }));
-      if (kind === "public-parser")
-        for (const slot of slots) slot.contributingResponsibilityIds = [assessment.id];
-      const findings = slots.map(({ path, rule, line, column }) => ({ path, rule, line, column }));
-      const adapted = () =>
-        adaptResponsibilityDiagnostics({ violations: findings }, { assessments: [assessment] })
-          .violations;
-      expect(adapted()).toEqual(findings);
-      assessment.semantic = "qualified";
-      expect(adapted()).toEqual([]);
-      const completed = assessment.proofAssertions;
-      assessment.proofAssertions = completed.slice(0, 1);
-      expect(adapted()).toEqual(findings);
-      assessment.proofAssertions = completed;
+      const { findings, adapted } = completedParentDispatch(
+        parent,
+        kind,
+        slots,
+        own.record.proofAssertions,
+      );
       slots[1].registrationTransportRoot = {
         ...slots[1].registrationTransportRoot,
         recordId: "other-parent",

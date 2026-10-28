@@ -36,6 +36,7 @@ import {
   type CodeTaskQualificationFlowArtifactV1,
 } from "./code-task-acceptance.js";
 import { withPollutedPrototype } from "./code-task-pollution-test-support.js";
+import { expectCodeTaskRecordAdmission } from "./__tests__/support/code-task-record-admission.js";
 
 const COMMIT_SHA = "a".repeat(40);
 const TREE_SHA = "b".repeat(40);
@@ -1826,15 +1827,7 @@ describe("C1A concrete acceptance member admission", () => {
           : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance"))
               .validateCodeTaskQualificationFlowArtifact;
       const flow = validQualificationFlow();
-      const approvalRequests = [
-        { actionClass: 0, actionKind: "file-edit", requestCount: 1 },
-        { actionClass: "delivery-substrate", actionKind: "commit", requestCount: 1 },
-      ];
-      const approvedProposalActions = [{ actionKind: "commit", approvalCount: 0 }];
-      const effectStartedTools = [{ canonicalId: 0, contractVersion: 1, invocationCount: 3 }];
-      for (const entries of [approvalRequests, approvedProposalActions, effectStartedTools]) {
-        Object.defineProperty(entries, "flatMap", { value: (): unknown[] => [] });
-      }
+      const { approvalRequests } = skippedAuthorityArrays();
       const authority = flow.authorityObservation;
       expect(
         validate({ ...flow, authorityObservation: { ...authority, approvalRequests } }).ok,
@@ -1850,15 +1843,7 @@ describe("C1A concrete acceptance member admission", () => {
           : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance"))
               .validateCodeTaskQualificationFlowArtifact;
       const flow = validQualificationFlow();
-      const approvalRequests = [
-        { actionClass: 0, actionKind: "file-edit", requestCount: 1 },
-        { actionClass: "delivery-substrate", actionKind: "commit", requestCount: 1 },
-      ];
-      const approvedProposalActions = [{ actionKind: "commit", approvalCount: 0 }];
-      const effectStartedTools = [{ canonicalId: 0, contractVersion: 1, invocationCount: 3 }];
-      for (const entries of [approvalRequests, approvedProposalActions, effectStartedTools]) {
-        Object.defineProperty(entries, "flatMap", { value: (): unknown[] => [] });
-      }
+      const { approvedProposalActions } = skippedAuthorityArrays();
       const authority = flow.authorityObservation;
       expect(
         validate({ ...flow, authorityObservation: { ...authority, approvedProposalActions } }).ok,
@@ -1874,15 +1859,7 @@ describe("C1A concrete acceptance member admission", () => {
           : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance"))
               .validateCodeTaskQualificationFlowArtifact;
       const flow = validQualificationFlow();
-      const approvalRequests = [
-        { actionClass: 0, actionKind: "file-edit", requestCount: 1 },
-        { actionClass: "delivery-substrate", actionKind: "commit", requestCount: 1 },
-      ];
-      const approvedProposalActions = [{ actionKind: "commit", approvalCount: 0 }];
-      const effectStartedTools = [{ canonicalId: 0, contractVersion: 1, invocationCount: 3 }];
-      for (const entries of [approvalRequests, approvedProposalActions, effectStartedTools]) {
-        Object.defineProperty(entries, "flatMap", { value: (): unknown[] => [] });
-      }
+      const { effectStartedTools } = skippedAuthorityArrays();
       const authority = flow.authorityObservation;
       expect(
         validate({ ...flow, authorityObservation: { ...authority, effectStartedTools } }).ok,
@@ -1900,12 +1877,7 @@ describe("C1A concrete acceptance member admission", () => {
               .validateCodeTaskQualificationFlowArtifact;
       const flow = validQualificationFlow();
       const authority = flow.authorityObservation;
-      const approvalRequests = [...authority.approvalRequests];
-      const approvedProposalActions = [...authority.approvedProposalActions];
-      const effectStartedTools = [...authority.effectStartedTools];
-      approvalRequests.length += 1;
-      approvedProposalActions.length += 1;
-      effectStartedTools.length += 1;
+      const { approvalRequests } = missingAuthoritySlots(authority);
       expect(
         validate({ ...flow, authorityObservation: { ...authority, approvalRequests } }).ok,
       ).toBe(false);
@@ -1921,12 +1893,7 @@ describe("C1A concrete acceptance member admission", () => {
               .validateCodeTaskQualificationFlowArtifact;
       const flow = validQualificationFlow();
       const authority = flow.authorityObservation;
-      const approvalRequests = [...authority.approvalRequests];
-      const approvedProposalActions = [...authority.approvedProposalActions];
-      const effectStartedTools = [...authority.effectStartedTools];
-      approvalRequests.length += 1;
-      approvedProposalActions.length += 1;
-      effectStartedTools.length += 1;
+      const { approvedProposalActions } = missingAuthoritySlots(authority);
       expect(
         validate({ ...flow, authorityObservation: { ...authority, approvedProposalActions } }).ok,
       ).toBe(false);
@@ -1942,18 +1909,45 @@ describe("C1A concrete acceptance member admission", () => {
               .validateCodeTaskQualificationFlowArtifact;
       const flow = validQualificationFlow();
       const authority = flow.authorityObservation;
-      const approvalRequests = [...authority.approvalRequests];
-      const approvedProposalActions = [...authority.approvedProposalActions];
-      const effectStartedTools = [...authority.effectStartedTools];
-      approvalRequests.length += 1;
-      approvedProposalActions.length += 1;
-      effectStartedTools.length += 1;
+      const { effectStartedTools } = missingAuthoritySlots(authority);
       expect(
         validate({ ...flow, authorityObservation: { ...authority, effectStartedTools } }).ok,
       ).toBe(false);
     },
   );
 });
+
+function skippedAuthorityArrays(): {
+  approvalRequests: { actionClass: string | number; actionKind: string; requestCount: number }[];
+  approvedProposalActions: { actionKind: string; approvalCount: number }[];
+  effectStartedTools: { canonicalId: number; contractVersion: number; invocationCount: number }[];
+} {
+  const approvalRequests = [
+    { actionClass: 0, actionKind: "file-edit", requestCount: 1 },
+    { actionClass: "delivery-substrate", actionKind: "commit", requestCount: 1 },
+  ];
+  const approvedProposalActions = [{ actionKind: "commit", approvalCount: 0 }];
+  const effectStartedTools = [{ canonicalId: 0, contractVersion: 1, invocationCount: 3 }];
+  for (const entries of [approvalRequests, approvedProposalActions, effectStartedTools]) {
+    Object.defineProperty(entries, "flatMap", { value: (): unknown[] => [] });
+  }
+  return { approvalRequests, approvedProposalActions, effectStartedTools };
+}
+
+function missingAuthoritySlots(
+  authority: CodeTaskQualificationFlowArtifactV1["authorityObservation"],
+): Pick<
+  CodeTaskQualificationFlowArtifactV1["authorityObservation"],
+  "approvalRequests" | "approvedProposalActions" | "effectStartedTools"
+> {
+  const approvalRequests = [...authority.approvalRequests];
+  const approvedProposalActions = [...authority.approvedProposalActions];
+  const effectStartedTools = [...authority.effectStartedTools];
+  approvalRequests.length += 1;
+  approvedProposalActions.length += 1;
+  effectStartedTools.length += 1;
+  return { approvalRequests, approvedProposalActions, effectStartedTools };
+}
 
 describe("C1A acceptance preservation", () => {
   it.each(["source", "public"])(
@@ -2255,39 +2249,16 @@ it.each(["source", "public"])(
         ? validateCodeTaskAcceptanceContribution
         : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-acceptance"))
             .validateCodeTaskAcceptanceContribution;
-    const healthy = validContribution();
-    const accepted = validate(healthy);
-    expect(accepted.ok).toBe(true);
-    if (accepted.ok) expect(accepted.value).toBe(healthy);
-    const prototypeTrace: string[] = [];
-    const inherited = new Proxy(healthy, {
-      getPrototypeOf(): object {
-        prototypeTrace.push("prototype");
-        return { fixtureInherited: true };
-      },
-      ownKeys(): never {
-        throw new TypeError("prototype admission must precede key inspection");
-      },
-    });
-    expect(validate(inherited).ok).toBe(false);
-    expect(prototypeTrace).toEqual(["prototype"]);
-    const input = validContribution();
-    Object.defineProperty(input, "fixtureExtra", { value: true });
-    Object.defineProperty(input, Symbol("fixtureExtra"), { value: true });
-    const result = validate(input);
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(
-        result.errors.filter(
-          (error) =>
-            error.includes("fixtureExtra") ||
-            error === "contribution must not carry symbol-keyed properties",
-        ),
-      ).toEqual([
+    expectCodeTaskRecordAdmission(
+      validate,
+      validContribution,
+      (input): object => input,
+      "contribution must not carry symbol-keyed properties",
+      (): readonly [string, string] => [
         "contribution.fixtureExtra is not allowed",
         "contribution must not carry symbol-keyed properties",
-      ]);
-    }
+      ],
+    );
   },
 );
 

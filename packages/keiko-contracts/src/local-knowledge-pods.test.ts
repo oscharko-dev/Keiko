@@ -1037,16 +1037,20 @@ describe("Knowledge pod summary public responsibility (#3918)", () => {
     expectTypeOf(validateKnowledgePodSummary).parameter(0).not.toBeAny();
     expectTypeOf(publicValidateSummary).parameter(0).not.toBeAny();
     expectTypeOf(parsePublicKnowledgeSummary).parameter(0).not.toBeAny();
-    expectTypeOf(validateKnowledgePodSummary).returns.toEqualTypeOf<
-      LocalKnowledgeValidation<KnowledgePodSummary>
+    expectTypeOf<
+      readonly [
+        ReturnType<typeof validateKnowledgePodSummary>,
+        ReturnType<typeof publicValidateSummary>,
+        ReturnType<typeof parsePublicKnowledgeSummary>,
+      ]
+    >().toEqualTypeOf<
+      readonly [
+        LocalKnowledgeValidation<KnowledgePodSummary>,
+        PublicKnowledgeValidation<PublicPodSummary>,
+        PublicKnowledgeValidation<PublicPodSummary>,
+      ]
     >();
     expectTypeOf(validateKnowledgePodSummary).returns.not.toBeAny();
-    expectTypeOf(publicValidateSummary).returns.toEqualTypeOf<
-      PublicKnowledgeValidation<PublicPodSummary>
-    >();
-    expectTypeOf(parsePublicKnowledgeSummary).returns.toEqualTypeOf<
-      PublicKnowledgeValidation<PublicPodSummary>
-    >();
     expectTypeOf(publicValidateSummary).returns.not.toBeAny();
     expectTypeOf(parsePublicKnowledgeSummary).returns.not.toBeAny();
     const result = parsePublicKnowledgeSummary(happySummary());

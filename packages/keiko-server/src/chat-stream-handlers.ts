@@ -261,6 +261,14 @@ function writeTerminalFrame(ctx: RouteContext, frame: string): void {
   ctx.res.write(frame);
 }
 
+function streamedAttachmentDeliveryFields(
+  request: SendDesktopChatRequest,
+): Pick<DesktopChatSendResponse, "attachmentDeliveries"> {
+  return conversationImageDeliveries(request).length === 0
+    ? {}
+    : { attachmentDeliveries: conversationImageDeliveries(request) };
+}
+
 // Persists the streamed turn EXACTLY like persistModelChatTurn: redact content, create the
 // assistant message, collect memory actions, patch the chat. Returns the `done` event payload.
 // The user message is created BEFORE the prompt is built (mirroring the buffered path), so it is
@@ -311,9 +319,7 @@ async function persistStreamedTurn(
     messages: [canonicalUser, assistantMessage],
     usage: turn.response.usage,
     memory: { ...memory, actions },
-    ...(conversationImageDeliveries(request).length === 0
-      ? {}
-      : { attachmentDeliveries: conversationImageDeliveries(request) }),
+    ...streamedAttachmentDeliveryFields(request),
   };
 }
 

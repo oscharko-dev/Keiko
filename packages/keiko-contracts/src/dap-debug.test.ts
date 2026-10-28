@@ -1,4 +1,9 @@
 import { describe, expect, it } from "vitest";
+import {
+  installIgnoredProtocolMetadata,
+  observeCapturedExtent,
+  protocolEnumerationInput,
+} from "./__tests__/support/protocol-observation-mechanics.js";
 
 import {
   DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
@@ -880,36 +885,17 @@ describe.each([
     readonly lengths: readonly unknown[];
   } {
     const values: unknown[] = [watch];
-    const lengths: unknown[] = [];
-    let indexReads = 0;
-    let nativeVisits = 0;
-    const observed = new Proxy(values, {
-      get(target, key, receiver): unknown {
-        if (key === "length") {
-          const length =
-            lengths.length === 0
-              ? firstObservation.first
-              : lengths.length === 1
-                ? laterExtent
-                : target.length;
-          lengths.push(length);
-          return length;
-        }
-        if (typeof key === "string" && /^\d+$/u.test(key)) indexReads += 1;
-        const datum: unknown = Reflect.get(target, key, receiver);
-        return datum;
-      },
-      has(target, key): boolean {
-        if (typeof key === "string" && /^\d+$/u.test(key)) nativeVisits += 1;
-        if (nativeVisits > DEFAULT_DEBUG_PAYLOAD_LIMITS.maxWatches + 1)
-          throw new TypeError("fixture native traversal bound");
-        return Reflect.has(target, key);
-      },
-    });
+    const observation = observeCapturedExtent(
+      values,
+      laterExtent,
+      firstObservation,
+      () => DEFAULT_DEBUG_PAYLOAD_LIMITS.maxWatches + 1,
+    );
+    const { observed } = observation;
     return {
       result: parse({ schemaVersion, workspaceId, expectedRevision: 0, watches: observed }).ok,
-      indexReads,
-      lengths,
+      indexReads: observation.indexReads,
+      lengths: observation.lengths,
     };
   }
   it("preserves a healthy actual captured extent", () => {
@@ -1037,23 +1023,7 @@ for (const surface of ["source", "public"] as const) {
         ? await import("./dap-debug.js")
         : await import("@oscharko-dev/keiko-contracts/runtime/dap-debug");
     const trace: string[] = [];
-    const value = new Proxy(
-      {},
-      {
-        ownKeys(): string[] {
-          trace.push("ownKeys");
-          return ["unexpected", "schemaVersion"];
-        },
-        getOwnPropertyDescriptor(_target, key): PropertyDescriptor {
-          trace.push(`descriptor:${String(key)}`);
-          return { configurable: true, enumerable: true, value: undefined, writable: true };
-        },
-        get(_target, key): never {
-          trace.push(`get:${String(key)}`);
-          throw new TypeError("Protocol field inspection after key enumeration");
-        },
-      },
-    );
+    const value = protocolEnumerationInput(trace);
     expect(module.parseDebugSessionControlRequest(value)).toEqual({
       ok: false,
       errors: ["debug session control request is invalid or contains unknown fields"],
@@ -1068,12 +1038,9 @@ for (const surface of ["source", "public"] as const) {
         : await import("@oscharko-dev/keiko-contracts/runtime/dap-debug");
     const value = { schemaVersion, sessionId: opaqueId, pauseGeneration: 0, action: "continue" };
     let reads = 0;
-    const inspect = (): never => {
+    installIgnoredProtocolMetadata(value, (): void => {
       reads += 1;
-      throw new TypeError("Ignored metadata was read");
-    };
-    Object.defineProperty(value, "ignoredMetadata", { enumerable: false, get: inspect });
-    Object.defineProperty(value, Symbol("ignoredMetadata"), { enumerable: true, get: inspect });
+    });
     expect(module.parseDebugSessionControlRequest(value).ok).toBe(true);
     expect(reads).toBe(0);
   });

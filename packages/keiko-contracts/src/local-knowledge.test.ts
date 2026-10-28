@@ -1229,14 +1229,20 @@ describe("Knowledge capsule set public responsibility (#3918)", () => {
     expectTypeOf(validateCapsuleSet).parameter(0).not.toBeAny();
     expectTypeOf(publicValidateSet).parameter(0).not.toBeAny();
     expectTypeOf(parsePublicKnowledgeSet).parameter(0).not.toBeAny();
-    expectTypeOf(validateCapsuleSet).returns.toEqualTypeOf<LocalKnowledgeValidation<CapsuleSet>>();
+    expectTypeOf<
+      readonly [
+        ReturnType<typeof validateCapsuleSet>,
+        ReturnType<typeof publicValidateSet>,
+        ReturnType<typeof parsePublicKnowledgeSet>,
+      ]
+    >().toEqualTypeOf<
+      readonly [
+        LocalKnowledgeValidation<CapsuleSet>,
+        PublicKnowledgeValidation<PublicCapsuleSet>,
+        PublicKnowledgeValidation<PublicCapsuleSet>,
+      ]
+    >();
     expectTypeOf(validateCapsuleSet).returns.not.toBeAny();
-    expectTypeOf(publicValidateSet).returns.toEqualTypeOf<
-      PublicKnowledgeValidation<PublicCapsuleSet>
-    >();
-    expectTypeOf(parsePublicKnowledgeSet).returns.toEqualTypeOf<
-      PublicKnowledgeValidation<PublicCapsuleSet>
-    >();
     expectTypeOf(publicValidateSet).returns.not.toBeAny();
     expectTypeOf(parsePublicKnowledgeSet).returns.not.toBeAny();
     const result = parsePublicKnowledgeSet(happyCapsuleSet());
@@ -1272,16 +1278,20 @@ describe("Knowledge reindex public responsibility (#3918)", () => {
     expectTypeOf(validateCapsuleReindexRequest).parameter(0).not.toBeAny();
     expectTypeOf(publicValidateReindex).parameter(0).not.toBeAny();
     expectTypeOf(parsePublicKnowledgeReindex).parameter(0).not.toBeAny();
-    expectTypeOf(validateCapsuleReindexRequest).returns.toEqualTypeOf<
-      LocalKnowledgeValidation<CapsuleReindexRequest>
+    expectTypeOf<
+      readonly [
+        ReturnType<typeof validateCapsuleReindexRequest>,
+        ReturnType<typeof publicValidateReindex>,
+        ReturnType<typeof parsePublicKnowledgeReindex>,
+      ]
+    >().toEqualTypeOf<
+      readonly [
+        LocalKnowledgeValidation<CapsuleReindexRequest>,
+        PublicKnowledgeValidation<PublicReindexRequest>,
+        PublicKnowledgeValidation<PublicReindexRequest>,
+      ]
     >();
     expectTypeOf(validateCapsuleReindexRequest).returns.not.toBeAny();
-    expectTypeOf(publicValidateReindex).returns.toEqualTypeOf<
-      PublicKnowledgeValidation<PublicReindexRequest>
-    >();
-    expectTypeOf(parsePublicKnowledgeReindex).returns.toEqualTypeOf<
-      PublicKnowledgeValidation<PublicReindexRequest>
-    >();
     expectTypeOf(publicValidateReindex).returns.not.toBeAny();
     expectTypeOf(parsePublicKnowledgeReindex).returns.not.toBeAny();
     const result = parsePublicKnowledgeReindex({
@@ -1322,16 +1332,20 @@ describe("Knowledge graph public responsibility (#3918)", () => {
     expectTypeOf(validateConnectorGraphState).parameter(0).not.toBeAny();
     expectTypeOf(publicValidateGraph).parameter(0).not.toBeAny();
     expectTypeOf(parsePublicKnowledgeGraph).parameter(0).not.toBeAny();
-    expectTypeOf(validateConnectorGraphState).returns.toEqualTypeOf<
-      LocalKnowledgeValidation<ConnectorGraphState>
+    expectTypeOf<
+      readonly [
+        ReturnType<typeof validateConnectorGraphState>,
+        ReturnType<typeof publicValidateGraph>,
+        ReturnType<typeof parsePublicKnowledgeGraph>,
+      ]
+    >().toEqualTypeOf<
+      readonly [
+        LocalKnowledgeValidation<ConnectorGraphState>,
+        PublicKnowledgeValidation<PublicGraphState>,
+        PublicKnowledgeValidation<PublicGraphState>,
+      ]
     >();
     expectTypeOf(validateConnectorGraphState).returns.not.toBeAny();
-    expectTypeOf(publicValidateGraph).returns.toEqualTypeOf<
-      PublicKnowledgeValidation<PublicGraphState>
-    >();
-    expectTypeOf(parsePublicKnowledgeGraph).returns.toEqualTypeOf<
-      PublicKnowledgeValidation<PublicGraphState>
-    >();
     expectTypeOf(publicValidateGraph).returns.not.toBeAny();
     expectTypeOf(parsePublicKnowledgeGraph).returns.not.toBeAny();
     const result = parsePublicKnowledgeGraph(happyGraph());

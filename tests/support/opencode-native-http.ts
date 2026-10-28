@@ -2,6 +2,34 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 
 const MAX_FIXTURE_BODY_BYTES = 4 * 1_024 * 1_024;
 
+export function nativeHttpEventFrame(value: unknown): string {
+  return `data: ${JSON.stringify(value)}\n\n`;
+}
+
+export function writeNativeHttpStreamedTurn(
+  response: ServerResponse,
+  delta: unknown,
+  finish: string,
+  id: string,
+): void {
+  response.writeHead(200, { "Content-Type": "text/event-stream" });
+  response.write(
+    nativeHttpEventFrame({
+      id,
+      object: "chat.completion.chunk",
+      choices: [{ index: 0, delta, finish_reason: null }],
+    }),
+  );
+  response.end(
+    nativeHttpEventFrame({
+      id,
+      object: "chat.completion.chunk",
+      choices: [{ index: 0, delta: {}, finish_reason: finish }],
+      usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 },
+    }) + "data: [DONE]\n\n",
+  );
+}
+
 export interface NativeRecordedRequest {
   readonly url: string;
   readonly authorization: string | undefined;

@@ -20,6 +20,7 @@ import {
   type AuxiliaryResearchScopeV1,
 } from "./code-task-auxiliary.js";
 import { withPollutedPrototype } from "./code-task-pollution-test-support.js";
+import { expectCodeTaskRecordAdmission } from "./__tests__/support/code-task-record-admission.js";
 
 const DIGEST = "a".repeat(64);
 
@@ -1059,39 +1060,16 @@ it.each(["source", "public"])(
         ? validateAuxiliaryCapabilityRequestV1
         : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary"))
             .validateAuxiliaryCapabilityRequestV1;
-    const healthy = researchRequest();
-    const accepted = validate(healthy);
-    expect(accepted.ok).toBe(true);
-    if (accepted.ok) expect(accepted.value).toBe(healthy);
-    const prototypeTrace: string[] = [];
-    const inherited = new Proxy(healthy, {
-      getPrototypeOf(): object {
-        prototypeTrace.push("prototype");
-        return { fixtureInherited: true };
-      },
-      ownKeys(): never {
-        throw new TypeError("prototype admission must precede key inspection");
-      },
-    });
-    expect(validate(inherited).ok).toBe(false);
-    expect(prototypeTrace).toEqual(["prototype"]);
-    const input = researchRequest();
-    Object.defineProperty(input, "fixtureExtra", { value: true });
-    Object.defineProperty(input, Symbol("fixtureExtra"), { value: true });
-    const result = validate(input);
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(
-        result.errors.filter(
-          (error) =>
-            error.includes("fixtureExtra") ||
-            error === "auxiliaryRequest must not carry symbol-keyed properties",
-        ),
-      ).toEqual([
+    expectCodeTaskRecordAdmission(
+      validate,
+      researchRequest,
+      (input): object => input,
+      "auxiliaryRequest must not carry symbol-keyed properties",
+      (): readonly [string, string] => [
         "auxiliaryRequest.fixtureExtra is not allowed",
         "auxiliaryRequest must not carry symbol-keyed properties",
-      ]);
-    }
+      ],
+    );
   },
 );
 

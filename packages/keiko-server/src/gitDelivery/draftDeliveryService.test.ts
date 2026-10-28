@@ -10,6 +10,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodingRuntimeDeliveryResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery";
 import { DraftDeliveryFixture } from "./draftDeliveryServiceTestSupport.js";
 import { DraftDeliveryController } from "./draftDeliveryService.js";
+import { logDraftDeliveryActivity } from "./draftDeliveryLedger.js";
+import {
+  activityLogEventRegistration,
+  type ActivityLogOperationRegistration,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   resolveDraftDeliveryTemplate,
   DRAFT_DELIVERY_RELATED_ISSUES_MAX,
@@ -988,4 +993,92 @@ describe("draft delivery checks after a later push (#3452)", () => {
       extra: { state: "failed", reason: "read-failed" },
     });
   });
+});
+
+function expectLedgerFieldOrder(registration: ActivityLogOperationRegistration): void {
+  expect(Object.keys(registration.fields)).toEqual([
+    "completeness",
+    "loss",
+    "runId",
+    "phase",
+    "reason",
+    "revision",
+    "proposalId",
+    "proposalDigest",
+    "recoveryId",
+    "headSha",
+    "baseSha",
+    "remoteDigest",
+    "issueBindingDigest",
+    "issueIdDigest",
+    "issueNumber",
+    "verifiedCommitProposalId",
+    "runtimeAuthorityDigest",
+    "envelopeDigest",
+    "workspaceDigest",
+    "failureKind",
+    "errorClass",
+    "code",
+    "frames",
+    "causeChain",
+  ]);
+}
+
+function expectLedgerBoundedPolicies(registration: ActivityLogOperationRegistration): void {
+  expect(registration.fields.runId).toEqual({
+    type: "string",
+    dataClass: "opaque-id",
+    required: true,
+    maxLength: 128,
+  });
+  expect(registration.fields.frames).toEqual({
+    type: "string-array",
+    dataClass: "safe-platform-class",
+    required: false,
+    maxLength: 512,
+    maxItems: 8,
+  });
+  expect(registration.fields.causeChain).toEqual({
+    type: "string-array",
+    dataClass: "error-kind",
+    required: false,
+    maxLength: 128,
+    maxItems: 5,
+  });
+}
+
+it("retains one shared bounded ledger registration across actual emitted events", () => {
+  const start = fixture.events.length;
+  logDraftDeliveryActivity(fixture.options, fixture.context.correlationId, {
+    runId: fixture.context.runId,
+    phase: "approval",
+  });
+  logDraftDeliveryActivity(fixture.options, fixture.context.correlationId, {
+    runId: fixture.context.runId,
+    phase: "approval",
+  });
+  const events = fixture.events.slice(start);
+  expect(events).toHaveLength(2);
+  const [first, second] = events;
+  if (first === undefined || second === undefined)
+    throw new TypeError("ledger fixture events missing");
+  const registration = activityLogEventRegistration(first);
+  expect(registration).toBeDefined();
+  if (registration === undefined) throw new TypeError("ledger fixture registration missing");
+  expect(registration).toBe(activityLogEventRegistration(second));
+  expect(registration.op).toBe("git.draft-delivery");
+  expectLedgerFieldOrder(registration);
+  expectLedgerBoundedPolicies(registration);
+  const secondRegistration = activityLogEventRegistration(second);
+  expect(secondRegistration?.fields.frames).toBe(registration.fields.frames);
+  expect(secondRegistration?.fields.causeChain).toBe(registration.fields.causeChain);
+  expect(first.correlationId).toBe(fixture.context.correlationId);
+  expect(second.correlationId).toBe(fixture.context.correlationId);
+  for (const event of events) {
+    const persisted = expectActivityLogProof(
+      "git.draft-delivery.emitted-line",
+      formatActivityLogProofLine(event),
+    );
+    expect(persisted).toMatchObject({ runId: fixture.context.runId, phase: "approval" });
+  }
 });

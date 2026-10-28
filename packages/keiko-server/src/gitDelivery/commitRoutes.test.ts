@@ -3168,3 +3168,104 @@ it.each(["exhausted", "malformed", "transport", "repaired"] as const)(
     expect(report.sufficiency.status, JSON.stringify(report.sufficiency)).toBe("complete");
   },
 );
+
+it("shares the actual draft model field descriptors between attempt and final events", async () => {
+  const { activityLogEventRegistration, ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS } =
+    await import("@oscharko-dev/keiko-contracts/runtime/observability");
+  const events: ServerLogEvent[] = [];
+  const handler = createHandleCommitDraft({
+    execution: seams({
+      stagedDiffReader: () => Promise.resolve("diff --git a/a.ts b/a.ts\n+change"),
+    }),
+    activityLog: {
+      write: (event): void => {
+        events.push(event);
+      },
+    },
+  });
+  const result = await handler(
+    ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+    deps({
+      config: DRAFT_GATEWAY_CONFIG,
+      modelPortFactory: () =>
+        draftModelPort(() =>
+          draftResponse({ subject: "fix: share draft field policy", body: "- Update parser." }),
+        ),
+    }),
+  );
+  expect(result.status).toBe(200);
+  const attempts = events.filter((event) => event.op === "git.commit.draft.attempt.completed");
+  const completed = events.filter((event) => event.op === "git.commit.draft.completed");
+  expect(attempts).toHaveLength(1);
+  expect(completed).toHaveLength(1);
+  const attempt = attempts[0];
+  const final = completed[0];
+  if (attempt === undefined || final === undefined)
+    throw new TypeError("Missing actual draft attempt or final event");
+  const attemptRegistration = activityLogEventRegistration(attempt);
+  const finalRegistration = activityLogEventRegistration(final);
+  if (attemptRegistration === undefined || finalRegistration === undefined)
+    throw new TypeError("Missing actual draft event registration");
+  expect(attemptRegistration).toMatchObject({
+    op: "git.commit.draft.attempt.completed",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "gitDelivery/commitRoutes.logCommitDraftAttempt",
+    lifecycle: "state",
+  });
+  expect(finalRegistration).toMatchObject({
+    op: "git.commit.draft.completed",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "gitDelivery/commitRoutes.logCommitDraft",
+    lifecycle: "end",
+  });
+  const modelFieldNames = [
+    "outcome",
+    "failureCode",
+    "maxOutputTokens",
+    "deadlineMs",
+    "promptTokens",
+    "maxPromptTokens",
+    "diffCompacted",
+    "generationAttempts",
+    "reused",
+    "draftKeyDigest",
+    "normalizationVersion",
+    "normalizationRule",
+    "normalizationChanged",
+    "bodyBulletCount",
+    "trailerLikeLineCount",
+    "trailerCount",
+    "trailerContinuationCount",
+    "trailerParagraphBreakCount",
+    "referenceTrailerCount",
+    "breakingTrailerCount",
+  ] as const;
+  expect(Object.keys(attemptRegistration.fields)).toEqual([
+    ...Object.keys(ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS),
+    ...modelFieldNames,
+    "attempt",
+  ]);
+  expect(Object.keys(finalRegistration.fields)).toEqual([
+    ...Object.keys(ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS),
+    "stagedFileCount",
+    "areaCount",
+    "touchesTests",
+    ...modelFieldNames,
+  ]);
+  expect(finalRegistration.fields).not.toBe(attemptRegistration.fields);
+  for (const name of modelFieldNames) {
+    expect(attemptRegistration.fields[name]).toBeDefined();
+    expect(finalRegistration.fields[name]).toBe(attemptRegistration.fields[name]);
+  }
+  for (const name of [
+    "outcome",
+    "failureCode",
+    "normalizationVersion",
+    "normalizationRule",
+  ] as const) {
+    expect(attemptRegistration.fields[name]?.values).toBeDefined();
+    expect(finalRegistration.fields[name]?.values).toBe(attemptRegistration.fields[name]?.values);
+  }
+});

@@ -23,17 +23,25 @@
 import {
   activityLogCompletenessField,
   activityLogLossField,
+  type ActivityLogFieldContract,
 } from "./activity-log-field-contracts.js";
 
 import { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 import { containsAbsolutePath } from "./text-safety.js";
 
 export {
+  type ActivityLogFieldContract,
+  type ActivityLogBoundedStringFieldContract,
+  type ActivityLogBoundedStringArrayFieldContract,
+  activityLogBoundedStringField,
+  activityLogBoundedStringArrayField,
   type ActivityLogCompletenessFieldContract,
   type ActivityLogLossFieldContract,
   activityLogAutomaticCatalogFields,
   activityLogEmbeddingBatchRetryFields,
   type ActivityLogEmbeddingBatchRetryFields,
+  activityLogCommitDraftModelFields,
+  type ActivityLogCommitDraftModelFields,
   activityLogBooleanField,
   activityLogCountField,
   activityLogDurationField,
@@ -383,43 +391,6 @@ export function isActivityLogProcessId(value: unknown): value is number {
 export function isActivityLogSequence(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
-
-interface ActivityLogFieldContractBase {
-  readonly required: boolean;
-  readonly maxLength?: number | undefined;
-  readonly maxItems?: number | undefined;
-  readonly values?: readonly string[] | undefined;
-}
-
-// Keep the declared primitive and semantic class coupled. The generated-registry program consumes
-// TypeScript diagnostics, so an impossible pair is rejected at generation time rather than becoming
-// a runtime contract whose data class can never be enforced coherently.
-export type ActivityLogFieldContract = ActivityLogFieldContractBase &
-  (
-    | { readonly type: "boolean"; readonly dataClass: "closed-enum" }
-    | {
-        readonly type: "integer";
-        readonly dataClass: "count" | "duration" | "safe-version";
-      }
-    | { readonly type: "number"; readonly dataClass: "count" | "duration" }
-    | {
-        readonly type: "string";
-        readonly dataClass:
-          | "closed-enum"
-          | "completeness-state"
-          | "digest"
-          | "error-kind"
-          | "loss-state"
-          | "opaque-id"
-          | "safe-platform-class"
-          | "safe-version";
-      }
-    | {
-        readonly type: "string-array";
-        readonly dataClass:
-          "closed-enum" | "digest" | "error-kind" | "opaque-id" | "safe-platform-class";
-      }
-  );
 
 // These two fields are part of every persisted v2 operation, not optional per-emitter metadata.
 // Centralizing them keeps loss/completeness evidence structurally present while still allowing an
@@ -1029,6 +1000,14 @@ function registrationStrings(value: unknown): value is readonly string[] {
 
 function registrationBooleans(value: unknown): value is readonly boolean[] {
   return Array.isArray(value) && registrationMembers(value, (entry) => typeof entry === "boolean");
+}
+
+/** Exposes the existing primitive/class policy to canonical descriptor construction. */
+export function activityLogFieldTypeClassPair(
+  type: ActivityLogFieldContract["type"],
+  dataClass: ActivityLogFieldContract["dataClass"],
+): boolean {
+  return registeredFieldTypePair({ type, dataClass });
 }
 
 function registeredFieldTypePair(value: Readonly<Record<string, unknown>>): boolean {

@@ -49,6 +49,52 @@ vi.mock("@oscharko-dev/keiko-model-gateway", async (importOriginal) => {
   };
 });
 
+function openCodeRunPort(
+  submitTask: OpenCodeRunPort["submitTask"],
+  selectableAgents?: OpenCodeRunPort["selectableAgents"],
+): OpenCodeRunPort {
+  return {
+    submitTask,
+    ...(selectableAgents === undefined ? {} : { selectableAgents }),
+    abortTask: () => Promise.resolve(true),
+    waitForTerminal: () => Promise.resolve(true),
+    listQuestions: () => Promise.resolve([]),
+    answerQuestion: () => Promise.resolve(false),
+    rejectQuestion: () => Promise.resolve(false),
+    replyPermission: () => Promise.resolve(false),
+  };
+}
+
+function freshTurnLifecycleMocks(): Pick<
+  ProductionRuntimeRunRecord["turnPort"],
+  "submitTurn" | "abortTurn" | "waitForTerminal"
+> {
+  return {
+    submitTurn: vi.fn(() => Promise.resolve(true)),
+    abortTurn: vi.fn(() => Promise.resolve(true)),
+    waitForTerminal: () => Promise.resolve("succeeded" as const),
+  };
+}
+
+function controlledRunRecord(
+  runId: string,
+  port:
+    | Pick<ProductionRuntimeRunRecord["turnPort"], "revertTurn" | "revertState">
+    | Pick<ProductionRuntimeRunRecord["turnPort"], "actOnInbox" | "listInbox">,
+  live: () => boolean,
+): ProductionRuntimeRunRecord {
+  return {
+    controller: new AbortController(),
+    operationGuard: createProductionRuntimeOperationGuard(runId, live),
+    turnPort: {
+      submitTurn: () => Promise.resolve(true),
+      abortTurn: () => Promise.resolve(true),
+      waitForTerminal: () => Promise.resolve("succeeded" as const),
+      ...port,
+    },
+  };
+}
+
 describe("production coding runtime turn ports", () => {
   it("submits initial and follow-up OpenCode turns through the run-bound port", async () => {
     const submitted: string[] = [];
@@ -84,22 +130,6 @@ describe("production coding runtime turn ports", () => {
   });
 
   describe("primary agent (#3897)", () => {
-    function openCodeRunPort(
-      submitTask: OpenCodeRunPort["submitTask"],
-      selectableAgents?: OpenCodeRunPort["selectableAgents"],
-    ): OpenCodeRunPort {
-      return {
-        submitTask,
-        ...(selectableAgents === undefined ? {} : { selectableAgents }),
-        abortTask: () => Promise.resolve(true),
-        waitForTerminal: () => Promise.resolve(true),
-        listQuestions: () => Promise.resolve([]),
-        answerQuestion: () => Promise.resolve(false),
-        rejectQuestion: () => Promise.resolve(false),
-        replyPermission: () => Promise.resolve(false),
-      };
-    }
-
     it("hands the requested agent to the run-bound turn and none for a plain turn", async () => {
       const submitTask = vi.fn<OpenCodeRunPort["submitTask"]>(() => Promise.resolve(true));
       const runs = new Map<string, ProductionRuntimeRunRecord>([
@@ -287,9 +317,7 @@ describe("production coding runtime turn ports", () => {
       overrides: Partial<ProductionRuntimeRunRecord["turnPort"]> = {},
     ): ProductionRuntimeRunRecord["turnPort"] {
       return {
-        submitTurn: vi.fn(() => Promise.resolve(true)),
-        abortTurn: vi.fn(() => Promise.resolve(true)),
-        waitForTerminal: () => Promise.resolve("succeeded" as const),
+        ...freshTurnLifecycleMocks(),
         admitPromptInputs: vi.fn((_runId: string, request: PromptInputsRequest) => ({
           ok: true as const,
           inputs: { ...ADMITTED, delivery: request.delivery },
@@ -564,15 +592,7 @@ describe("production coding runtime turn ports", () => {
     it("forwards a profile's prompt inputs from the OpenCode run port, and none from one without them", () => {
       const deliverPrompt = vi.fn(() => Promise.resolve(true));
       const admitPromptInputs = vi.fn(() => ({ ok: true as const, inputs: ADMITTED }));
-      const base: OpenCodeRunPort = {
-        submitTask: () => Promise.resolve(true),
-        abortTask: () => Promise.resolve(true),
-        waitForTerminal: () => Promise.resolve(true),
-        listQuestions: () => Promise.resolve([]),
-        answerQuestion: () => Promise.resolve(false),
-        rejectQuestion: () => Promise.resolve(false),
-        replyPermission: () => Promise.resolve(false),
-      };
+      const base = openCodeRunPort(() => Promise.resolve(true));
       expect(createOpenCodeRuntimeTurnPort(base).admitPromptInputs).toBeUndefined();
       expect(createOpenCodeRuntimeTurnPort(base).deliverPrompt).toBeUndefined();
       const port = createOpenCodeRuntimeTurnPort({ ...base, admitPromptInputs, deliverPrompt });
@@ -591,9 +611,7 @@ describe("production coding runtime turn ports", () => {
       overrides: Partial<ProductionRuntimeRunRecord["turnPort"]> = {},
     ): ProductionRuntimeRunRecord["turnPort"] {
       return {
-        submitTurn: vi.fn(() => Promise.resolve(true)),
-        abortTurn: vi.fn(() => Promise.resolve(true)),
-        waitForTerminal: () => Promise.resolve("succeeded" as const),
+        ...freshTurnLifecycleMocks(),
         admitPromptInputs: vi.fn((_runId: string, request: PromptInputsRequest) => ({
           ok: true as const,
           inputs: { ...ADMITTED, command: request.command ?? COMMAND },
@@ -817,15 +835,7 @@ describe("production coding runtime turn ports", () => {
       const admitCommand = vi.fn((_runId: string, inputs: AdmittedPromptInputs) =>
         Promise.resolve({ ok: true as const, inputs }),
       );
-      const base: OpenCodeRunPort = {
-        submitTask: () => Promise.resolve(true),
-        abortTask: () => Promise.resolve(true),
-        waitForTerminal: () => Promise.resolve(true),
-        listQuestions: () => Promise.resolve([]),
-        answerQuestion: () => Promise.resolve(false),
-        rejectQuestion: () => Promise.resolve(false),
-        replyPermission: () => Promise.resolve(false),
-      };
+      const base = openCodeRunPort(() => Promise.resolve(true));
       expect(createOpenCodeRuntimeTurnPort(base).listCommands).toBeUndefined();
       expect(createOpenCodeRuntimeTurnPort(base).admitCommand).toBeUndefined();
       expect(
@@ -2452,16 +2462,7 @@ describe("turn revert admission (B3, S04)", () => {
     port: { readonly revertTurn?: RevertTurn; readonly revertState?: RevertState },
     live: () => boolean = () => true,
   ): ProductionRuntimeRunRecord {
-    return {
-      controller: new AbortController(),
-      operationGuard: createProductionRuntimeOperationGuard(runId, live),
-      turnPort: {
-        submitTurn: () => Promise.resolve(true),
-        abortTurn: () => Promise.resolve(true),
-        waitForTerminal: () => Promise.resolve("succeeded" as const),
-        ...port,
-      },
-    };
+    return controlledRunRecord(runId, port, live);
   }
 
   function revertRequest(
@@ -2609,15 +2610,7 @@ describe("turn revert admission (B3, S04)", () => {
   });
 
   it("exposes revert on the OpenCode turn port only when the run port offers it", () => {
-    const base: OpenCodeRunPort = {
-      submitTask: () => Promise.resolve(true),
-      abortTask: () => Promise.resolve(true),
-      waitForTerminal: () => Promise.resolve(true),
-      listQuestions: () => Promise.resolve([]),
-      answerQuestion: () => Promise.resolve(false),
-      rejectQuestion: () => Promise.resolve(false),
-      replyPermission: () => Promise.resolve(false),
-    };
+    const base = openCodeRunPort(() => Promise.resolve(true));
     const revertTurn: NonNullable<OpenCodeRunPort["revertTurn"]> = () => Promise.resolve(APPLIED);
     const revertState: NonNullable<OpenCodeRunPort["revertState"]> = () =>
       Promise.resolve(undefined);
@@ -2761,16 +2754,7 @@ describe("pending message admission (S07)", () => {
     port: { readonly actOnInbox?: ActOnInbox; readonly listInbox?: ListInbox },
     live: () => boolean = () => true,
   ): ProductionRuntimeRunRecord {
-    return {
-      controller: new AbortController(),
-      operationGuard: createProductionRuntimeOperationGuard(runId, live),
-      turnPort: {
-        submitTurn: () => Promise.resolve(true),
-        abortTurn: () => Promise.resolve(true),
-        waitForTerminal: () => Promise.resolve("succeeded" as const),
-        ...port,
-      },
-    };
+    return controlledRunRecord(runId, port, live);
   }
 
   function inboxRequest(
@@ -2935,15 +2919,7 @@ describe("pending message admission (S07)", () => {
   });
 
   it("exposes the inbox on the OpenCode turn port only when the run port offers both operations", () => {
-    const base: OpenCodeRunPort = {
-      submitTask: () => Promise.resolve(true),
-      abortTask: () => Promise.resolve(true),
-      waitForTerminal: () => Promise.resolve(true),
-      listQuestions: () => Promise.resolve([]),
-      answerQuestion: () => Promise.resolve(false),
-      rejectQuestion: () => Promise.resolve(false),
-      replyPermission: () => Promise.resolve(false),
-    };
+    const base = openCodeRunPort(() => Promise.resolve(true));
     const actOnInbox: NonNullable<OpenCodeRunPort["actOnInbox"]> = () => Promise.resolve(CANCELLED);
     const listInbox: NonNullable<OpenCodeRunPort["listInbox"]> = () => Promise.resolve(undefined);
 

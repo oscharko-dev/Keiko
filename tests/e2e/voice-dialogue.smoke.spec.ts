@@ -770,8 +770,8 @@ function expectGroundingCharge(
   correlationId: string,
 ): void {
   const prompt = identity.promptContext;
-  const estimate = prompt?.estimatedPromptTokens;
-  if (prompt === undefined || estimate === undefined)
+  const estimate = prompt.estimatedPromptTokens;
+  if (estimate === undefined)
     throw new TypeError("Persisted grounded prompt accounting was unavailable");
   const admission = groundingActivity(result, correlationId, "gateway.prompt.admission");
   const completed = groundingActivity(result, correlationId, "gateway.chat.completed");

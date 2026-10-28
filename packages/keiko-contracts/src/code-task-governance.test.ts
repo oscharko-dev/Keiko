@@ -39,6 +39,7 @@ import {
   type GovernedActionV1,
 } from "./code-task-governance.js";
 import { withPollutedPrototype } from "./code-task-pollution-test-support.js";
+import { expectCodeTaskRecordAdmission } from "./__tests__/support/code-task-record-admission.js";
 
 const DIGEST = "a".repeat(64);
 const INSTANT = "2026-07-16T00:00:00.000Z";
@@ -1309,39 +1310,16 @@ it.each(["source", "public"])(
         ? validateGovernedActionV1
         : (await import("@oscharko-dev/keiko-contracts/runtime/code-task-governance"))
             .validateGovernedActionV1;
-    const healthy = allowedAction();
-    const accepted = validate(healthy);
-    expect(accepted.ok).toBe(true);
-    if (accepted.ok) expect(accepted.value).toBe(healthy);
-    const prototypeTrace: string[] = [];
-    const inherited = new Proxy(healthy, {
-      getPrototypeOf(): object {
-        prototypeTrace.push("prototype");
-        return { fixtureInherited: true };
-      },
-      ownKeys(): never {
-        throw new TypeError("prototype admission must precede key inspection");
-      },
-    });
-    expect(validate(inherited).ok).toBe(false);
-    expect(prototypeTrace).toEqual(["prototype"]);
-    const input = allowedAction();
-    Object.defineProperty(input.grant, "fixtureExtra", { value: true });
-    Object.defineProperty(input.grant, Symbol("fixtureExtra"), { value: true });
-    const result = validate(input);
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(
-        result.errors.filter(
-          (error) =>
-            error.includes("fixtureExtra") ||
-            error === "grant must not carry symbol-keyed properties",
-        ),
-      ).toEqual([
+    expectCodeTaskRecordAdmission(
+      validate,
+      allowedAction,
+      (input): object => input.grant,
+      "grant must not carry symbol-keyed properties",
+      (): readonly [string, string] => [
         "grant.fixtureExtra is not allowed",
         "grant must not carry symbol-keyed properties",
-      ]);
-    }
+      ],
+    );
   },
 );
 

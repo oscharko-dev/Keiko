@@ -1,4 +1,12 @@
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -281,7 +289,7 @@ it.each([{ values: ["404"] }, { values: ["provider:model"] }])(
       operations: [{ ...catalog.typedRegistry.operations[0], fields: { outcome: descriptor } }],
     };
     expect(runtimeOperationsModule(registry)).toContain(
-      `activityLogStringEnumField(true, ${JSON.stringify(values)})`,
+      `fieldContracts.activityLogStringEnumField(true, ${JSON.stringify(values)})`,
     );
     withGeneratedRuntime(({ identity }) => {
       expect(identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields.outcome).toEqual(descriptor);
@@ -297,7 +305,7 @@ describe("automatic catalog runtime field policy rendering", () => {
     const registry = { ...catalog.typedRegistry, operations: [pilot] };
     const source = runtimeOperationsModule(registry);
     expect(source).toContain(
-      '"completeness": activityLogCompletenessField(),"loss": activityLogLossField(), ...activityLogAutomaticCatalogFields()',
+      '"completeness": fieldContracts.activityLogCompletenessField(),"loss": fieldContracts.activityLogLossField(), ...fieldContracts.activityLogAutomaticCatalogFields()',
     );
     withGeneratedRuntime(({ identity }) => {
       expect(identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields).toEqual(pilot.fields);
@@ -339,7 +347,7 @@ describe("automatic catalog runtime field policy rendering", () => {
     if (mode === "other-operation") operation.op = "fixture.other.completed";
     const registry = { ...catalog.typedRegistry, operations: [operation] };
     expect(runtimeOperationsModule(registry)).not.toContain(
-      "...activityLogAutomaticCatalogFields()",
+      "...fieldContracts.activityLogAutomaticCatalogFields()",
     );
     withGeneratedRuntime(({ identity }) => {
       expect(identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields).toEqual(fields);
@@ -358,13 +366,15 @@ it("does not fold a descriptor with an extra own undefined property into the fac
   fields.retryable.extra = undefined;
   expect(Object.hasOwn(fields.retryable, "extra")).toBe(true);
   const registry = { ...catalog.typedRegistry, operations: [{ ...pilot, fields }] };
-  expect(runtimeOperationsModule(registry)).not.toContain("...activityLogAutomaticCatalogFields()");
+  expect(runtimeOperationsModule(registry)).not.toContain(
+    "...fieldContracts.activityLogAutomaticCatalogFields()",
+  );
 });
 
 describe("universal runtime descriptor rendering", () => {
   it.each([
-    ["complete", "completeness-state", "activityLogCompletenessField"],
-    ["lost", "loss-state", "activityLogLossField"],
+    ["complete", "completeness-state", "fieldContracts.activityLogCompletenessField"],
+    ["lost", "loss-state", "fieldContracts.activityLogLossField"],
   ])("uses only the exact ordered %s descriptor", (field, dataClass, constructor) => {
     const descriptor = { type: "string", dataClass, required: true };
     const registry = {
@@ -393,9 +403,11 @@ describe("universal runtime descriptor rendering", () => {
         operations: [{ ...catalog.typedRegistry.operations[0], fields: { tested: descriptor } }],
       };
       expect(runtimeOperationsModule(registry)).not.toContain(
-        '"tested": activityLogCompletenessField()',
+        '"tested": fieldContracts.activityLogCompletenessField()',
       );
-      expect(runtimeOperationsModule(registry)).not.toContain('"tested": activityLogLossField()');
+      expect(runtimeOperationsModule(registry)).not.toContain(
+        '"tested": fieldContracts.activityLogLossField()',
+      );
       withGeneratedRuntime(({ identity }) => {
         expect(identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields.tested).toEqual(descriptor);
         expect(Object.keys(identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields.tested)).toEqual(
@@ -415,9 +427,11 @@ describe("universal runtime descriptor rendering", () => {
       };
       expect(Object.hasOwn(descriptor, "extra")).toBe(true);
       expect(runtimeOperationsModule(registry)).not.toContain(
-        '"tested": activityLogCompletenessField()',
+        '"tested": fieldContracts.activityLogCompletenessField()',
       );
-      expect(runtimeOperationsModule(registry)).not.toContain('"tested": activityLogLossField()');
+      expect(runtimeOperationsModule(registry)).not.toContain(
+        '"tested": fieldContracts.activityLogLossField()',
+      );
     },
   );
 });
@@ -429,7 +443,7 @@ describe("embedding retry runtime field policy rendering", () => {
       const operation = catalog.typedRegistry.operations.find((entry) => entry.op === op);
       const registry = { ...catalog.typedRegistry, operations: [operation] };
       expect(runtimeOperationsModule(registry)).toContain(
-        "...activityLogEmbeddingBatchRetryFields()",
+        "...fieldContracts.activityLogEmbeddingBatchRetryFields()",
       );
       withGeneratedRuntime(({ identity }) => {
         expect(identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields).toEqual(operation.fields);
@@ -470,7 +484,7 @@ describe("embedding retry runtime field policy rendering", () => {
     if (mode === "other-operation") operation.op = "embedding.chunk.retry";
     const registry = { ...catalog.typedRegistry, operations: [operation] };
     expect(runtimeOperationsModule(registry)).not.toContain(
-      "...activityLogEmbeddingBatchRetryFields()",
+      "...fieldContracts.activityLogEmbeddingBatchRetryFields()",
     );
     withGeneratedRuntime(({ identity }) => {
       expect(identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields).toEqual(fields);
@@ -489,7 +503,356 @@ describe("embedding retry runtime field policy rendering", () => {
     expect(Object.hasOwn(fields.delayMs, "extra")).toBe(true);
     const registry = { ...catalog.typedRegistry, operations: [{ ...prior, fields }] };
     expect(runtimeOperationsModule(registry)).not.toContain(
-      "...activityLogEmbeddingBatchRetryFields()",
+      "...fieldContracts.activityLogEmbeddingBatchRetryFields()",
     );
   });
+});
+
+const GIT_DRAFT_MODEL_OPERATIONS = [
+  "git.commit.draft.completed",
+  "git.commit.draft.attempt.completed",
+];
+
+describe("Git draft runtime model field policy rendering", () => {
+  it.each(GIT_DRAFT_MODEL_OPERATIONS)("renders the exact ordered model policy for %s", (op) => {
+    const operation = catalog.typedRegistry.operations.find((entry) => entry.op === op);
+    const registry = { ...catalog.typedRegistry, operations: [operation] };
+    expect(runtimeOperationsModule(registry)).toContain(
+      "...fieldContracts.activityLogCommitDraftModelFields()",
+    );
+    withGeneratedRuntime(({ identity }) => {
+      const actual = identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields;
+      expect(actual).toEqual(operation.fields);
+      expect(Object.keys(actual)).toEqual(Object.keys(operation.fields));
+      for (const name of Object.keys(operation.fields)) {
+        expect(Object.keys(actual[name])).toEqual(Object.keys(operation.fields[name]));
+      }
+    }, registry);
+  });
+
+  it.each([
+    [
+      "field-order",
+      (fields) => {
+        const outcome = fields.outcome;
+        delete fields.outcome;
+        fields.outcome = outcome;
+      },
+    ],
+    [
+      "missing-field",
+      (fields) => {
+        delete fields.breakingTrailerCount;
+      },
+    ],
+    [
+      "extra-field",
+      (fields) => {
+        fields.extraCount = fields.bodyBulletCount;
+      },
+    ],
+    [
+      "descriptor-order",
+      (fields) => {
+        const { required, ...rest } = fields.deadlineMs;
+        fields.deadlineMs = { required, ...rest };
+      },
+    ],
+    [
+      "requiredness",
+      (fields) => {
+        fields.outcome.required = false;
+      },
+    ],
+    [
+      "vocabulary-value",
+      (fields) => {
+        fields.outcome.values.push("later");
+      },
+    ],
+    [
+      "vocabulary-order",
+      (fields) => {
+        fields.normalizationRule.values.reverse();
+      },
+    ],
+    [
+      "numeric-duration",
+      (fields) => {
+        fields.deadlineMs.type = "number";
+      },
+    ],
+    [
+      "digest-bound",
+      (fields) => {
+        fields.draftKeyDigest.maxLength = 63;
+      },
+    ],
+  ])("keeps a nonexact draft policy literal: %s", (_mode, mutate) => {
+    for (const op of GIT_DRAFT_MODEL_OPERATIONS) {
+      const prior = catalog.typedRegistry.operations.find((entry) => entry.op === op);
+      const fields = structuredClone(prior.fields);
+      mutate(fields);
+      const registry = { ...catalog.typedRegistry, operations: [{ ...prior, fields }] };
+      expect(runtimeOperationsModule(registry)).not.toContain(
+        "...fieldContracts.activityLogCommitDraftModelFields()",
+      );
+      withGeneratedRuntime(({ identity }) => {
+        const actual = identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields;
+        expect(actual).toEqual(fields);
+        expect(Object.keys(actual)).toEqual(Object.keys(fields));
+        for (const name of Object.keys(fields)) {
+          expect(Object.keys(actual[name])).toEqual(Object.keys(fields[name]));
+        }
+      }, registry);
+    }
+  });
+
+  it.each(GIT_DRAFT_MODEL_OPERATIONS)(
+    "refuses a changed operation or undefined extra key for %s",
+    (op) => {
+      const prior = catalog.typedRegistry.operations.find((entry) => entry.op === op);
+      const fields = structuredClone(prior.fields);
+      fields.draftKeyDigest.extra = undefined;
+      expect(Object.hasOwn(fields.draftKeyDigest, "extra")).toBe(true);
+      expect(
+        runtimeOperationsModule({ ...catalog.typedRegistry, operations: [{ ...prior, fields }] }),
+      ).not.toContain("...fieldContracts.activityLogCommitDraftModelFields()");
+      const other = { ...prior, op: "git.commit.preview.completed" };
+      expect(
+        runtimeOperationsModule({ ...catalog.typedRegistry, operations: [other] }),
+      ).not.toContain("...fieldContracts.activityLogCommitDraftModelFields()");
+      withGeneratedRuntime(
+        ({ identity }) => {
+          expect(identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields).toEqual(prior.fields);
+        },
+        { ...catalog.typedRegistry, operations: [other] },
+      );
+    },
+  );
+
+  it("refuses changed final context requiredness and the attempt counter", () => {
+    for (const [op, name] of [
+      ["git.commit.draft.completed", "stagedFileCount"],
+      ["git.commit.draft.attempt.completed", "attempt"],
+    ]) {
+      const prior = catalog.typedRegistry.operations.find((entry) => entry.op === op);
+      const fields = structuredClone(prior.fields);
+      fields[name].required = !fields[name].required;
+      const registry = { ...catalog.typedRegistry, operations: [{ ...prior, fields }] };
+      expect(runtimeOperationsModule(registry)).not.toContain(
+        "...fieldContracts.activityLogCommitDraftModelFields()",
+      );
+      withGeneratedRuntime(({ identity }) => {
+        expect(identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields).toEqual(fields);
+      }, registry);
+    }
+  });
+
+  it("keeps separately generated draft operations' descriptor and enum graphs distinct", () => {
+    const operations = GIT_DRAFT_MODEL_OPERATIONS.map((op) =>
+      catalog.typedRegistry.operations.find((entry) => entry.op === op),
+    );
+    withGeneratedRuntime(
+      ({ inspection }) => {
+        expect(inspection).toEqual({
+          distinctFields: true,
+          distinctOutcome: true,
+          distinctValues: true,
+        });
+      },
+      { ...catalog.typedRegistry, operations },
+      `(() => {
+      const [final, attempt] = operations.ACTIVITY_LOG_OPERATION_REGISTRY;
+      return {
+        distinctFields: final.fields !== attempt.fields,
+        distinctOutcome: final.fields.outcome !== attempt.fields.outcome,
+        distinctValues: final.fields.outcome.values !== attempt.fields.outcome.values,
+      };
+    })()`,
+    );
+  });
+});
+
+describe("bounded descriptor runtime rendering", () => {
+  it.each([
+    [
+      { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+      'fieldContracts.activityLogBoundedStringField(true, "opaque-id", 128)',
+    ],
+    [
+      {
+        type: "string-array",
+        dataClass: "safe-platform-class",
+        required: false,
+        maxLength: 512,
+        maxItems: 8,
+      },
+      'fieldContracts.activityLogBoundedStringArrayField(false, "safe-platform-class", 512, 8)',
+    ],
+  ])("constructs an exact ordered bounded policy %#", (descriptor, call) => {
+    const base = catalog.typedRegistry.operations[0];
+    const registry = {
+      ...catalog.typedRegistry,
+      operations: [{ ...base, fields: { bounded: descriptor } }],
+    };
+    expect(runtimeOperationsModule(registry)).toContain(call);
+    withGeneratedRuntime(({ identity }) => {
+      const actual = identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields.bounded;
+      expect(actual).toEqual(descriptor);
+      expect(Reflect.ownKeys(actual)).toEqual(Reflect.ownKeys(descriptor));
+    }, registry);
+  });
+
+  it.each([
+    { required: false, type: "string", dataClass: "digest", maxLength: 64 },
+    { type: "string", dataClass: "digest", required: false, maxLength: 64, values: ["a"] },
+    { type: "string", dataClass: "count", required: false, maxLength: 64 },
+    { type: "string", dataClass: "completeness-state", required: false, maxLength: 64 },
+    { type: "string", dataClass: "digest", required: false, maxLength: 8193 },
+    { type: "string-array", dataClass: "digest", required: false, maxItems: 5, maxLength: 64 },
+    {
+      type: "string-array",
+      dataClass: "safe-version",
+      required: false,
+      maxLength: 64,
+      maxItems: 5,
+    },
+    { type: "string-array", dataClass: "digest", required: false, maxLength: 64, maxItems: 65 },
+  ])("retains noncanonical bounded descriptor keys, class, bounds or order %#", (descriptor) => {
+    const base = catalog.typedRegistry.operations[0];
+    const registry = {
+      ...catalog.typedRegistry,
+      operations: [{ ...base, fields: { bounded: descriptor } }],
+    };
+    const source = runtimeOperationsModule(registry);
+    expect(source).not.toContain('"bounded": fieldContracts.activityLogBoundedString');
+    withGeneratedRuntime(({ identity }) => {
+      const actual = identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields.bounded;
+      expect(actual).toEqual(descriptor);
+      expect(Object.keys(actual)).toEqual(Object.keys(descriptor));
+    }, registry);
+  });
+});
+
+it.each(["extra", "values"])(
+  "does not fold a bounded array with an extra own undefined %s",
+  (key) => {
+    const expected = {
+      type: "string-array",
+      dataClass: "digest",
+      required: false,
+      maxLength: 64,
+      maxItems: 5,
+    };
+    const descriptor = { ...expected, [key]: undefined };
+    expect(Object.hasOwn(descriptor, key)).toBe(true);
+    const base = catalog.typedRegistry.operations[0];
+    const registry = {
+      ...catalog.typedRegistry,
+      operations: [{ ...base, fields: { bounded: descriptor } }],
+    };
+    expect(runtimeOperationsModule(registry)).not.toContain(
+      '"bounded": fieldContracts.activityLogBoundedString',
+    );
+    withGeneratedRuntime(({ identity }) => {
+      expect(identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields.bounded).toEqual(expected);
+    }, registry);
+  },
+);
+
+function builtFieldBundleCompilerOptions(root) {
+  const config = ts.readConfigFile(join(root, "tsconfig.json"), ts.sys.readFile);
+  expect(config.error).toBeUndefined();
+  const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, root);
+  expect(parsed.errors).toEqual([]);
+  expect(parsed.options.module).toBe(ts.ModuleKind.NodeNext);
+  expect(parsed.options.moduleResolution).toBe(ts.ModuleResolutionKind.NodeNext);
+  return { options: { ...parsed.options, noEmit: true }, references: parsed.projectReferences };
+}
+
+function builtFieldBundleCompilerHost(options, proofPath, proof) {
+  const host = ts.createCompilerHost(options, true);
+  const readFile = host.readFile.bind(host);
+  const fileExists = host.fileExists.bind(host);
+  const getSourceFile = host.getSourceFile.bind(host);
+  host.readFile = (path) => (path === proofPath ? proof : readFile(path));
+  host.fileExists = (path) => path === proofPath || fileExists(path);
+  host.getSourceFile = (path, languageVersion, onError, shouldCreateNewSourceFile) =>
+    path === proofPath
+      ? ts.createSourceFile(path, proof, languageVersion, true)
+      : getSourceFile(path, languageVersion, onError, shouldCreateNewSourceFile);
+  return host;
+}
+
+function expectLoadedBuiltFieldDeclaration(program, path) {
+  const source = program
+    .getSourceFiles()
+    .find((file) => file.isDeclarationFile && realpathSync(file.fileName) === path);
+  expect(source?.text).toBe(readFileSync(path, "utf8"));
+}
+
+const BUILT_FIELD_BUNDLE_DECLARATION_PROOF = `
+import type { ACTIVITY_LOG_OPERATION_REGISTRY } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import type {
+  activityLogAutomaticCatalogFields,
+  activityLogCommitDraftModelFields,
+} from "../packages/keiko-contracts/dist/activity-log-field-contracts.js";
+
+type Registry = typeof ACTIVITY_LOG_OPERATION_REGISTRY;
+type AutomaticProducerFields = ReturnType<typeof activityLogAutomaticCatalogFields>;
+type DraftProducerFields = ReturnType<typeof activityLogCommitDraftModelFields>;
+type GenericEqual<A, B> =
+  (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Assert<T extends true> = T;
+
+type AutomaticCatalogBundle = Assert<GenericEqual<
+  Pick<Extract<Registry[number], { readonly op: "gateway.catalog.automatic.completed" }>["fields"], keyof AutomaticProducerFields>,
+  AutomaticProducerFields
+>>;
+type DraftAttemptBundle = Assert<GenericEqual<
+  Pick<Extract<Registry[number], { readonly op: "git.commit.draft.attempt.completed" }>["fields"], keyof DraftProducerFields>,
+  DraftProducerFields
+>>;
+type DraftCompletedBundle = Assert<GenericEqual<
+  Pick<Extract<Registry[number], { readonly op: "git.commit.draft.completed" }>["fields"], keyof DraftProducerFields>,
+  DraftProducerFields
+>>;
+`;
+
+it("preserves built public registry field bundles as their canonical producer return types", () => {
+  const root = realpathSync(new URL("../../", import.meta.url));
+  const proofPath = join(root, "tests", "activity-log-field-bundle-declarations.proof.ts");
+  const proof = BUILT_FIELD_BUNDLE_DECLARATION_PROOF;
+  const { options, references } = builtFieldBundleCompilerOptions(root);
+  const resolved = ts.resolveModuleName(
+    "@oscharko-dev/keiko-contracts/runtime/observability",
+    proofPath,
+    options,
+    ts.sys,
+  ).resolvedModule;
+  const dist = join(root, "packages", "keiko-contracts", "dist");
+  expect(resolved).toBeDefined();
+  expect(realpathSync(resolved.resolvedFileName)).toBe(join(dist, "observability.d.ts"));
+  const program = ts.createProgram({
+    rootNames: [proofPath],
+    options,
+    projectReferences: references,
+    host: builtFieldBundleCompilerHost(options, proofPath, proof),
+  });
+  expect(program.getSourceFile(proofPath)?.text).toBe(proof);
+  for (const file of [
+    "observability.d.ts",
+    "activity-log-operations.generated.d.ts",
+    "activity-log-field-contracts.d.ts",
+  ]) {
+    expectLoadedBuiltFieldDeclaration(program, join(dist, file));
+  }
+  const diagnostics = ts.getPreEmitDiagnostics(program).map((diagnostic) => ({
+    code: diagnostic.code,
+    file: diagnostic.file?.fileName,
+    start: diagnostic.start,
+    message: ts.flattenDiagnosticMessageText(diagnostic.messageText, " "),
+  }));
+  expect(diagnostics).toEqual([]);
 });

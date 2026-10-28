@@ -365,16 +365,20 @@ describe("Knowledge checkpoint public responsibility (#3918)", () => {
     expectTypeOf(validateExtractionCheckpointRecord).parameter(0).not.toBeAny();
     expectTypeOf(publicValidateCheckpoint).parameter(0).not.toBeAny();
     expectTypeOf(parsePublicKnowledgeCheckpoint).parameter(0).not.toBeAny();
-    expectTypeOf(validateExtractionCheckpointRecord).returns.toEqualTypeOf<
-      LocalKnowledgeValidation<ExtractionCheckpointRecord>
+    expectTypeOf<
+      readonly [
+        ReturnType<typeof validateExtractionCheckpointRecord>,
+        ReturnType<typeof publicValidateCheckpoint>,
+        ReturnType<typeof parsePublicKnowledgeCheckpoint>,
+      ]
+    >().toEqualTypeOf<
+      readonly [
+        LocalKnowledgeValidation<ExtractionCheckpointRecord>,
+        PublicKnowledgeValidation<PublicCheckpoint>,
+        PublicKnowledgeValidation<PublicCheckpoint>,
+      ]
     >();
     expectTypeOf(validateExtractionCheckpointRecord).returns.not.toBeAny();
-    expectTypeOf(publicValidateCheckpoint).returns.toEqualTypeOf<
-      PublicKnowledgeValidation<PublicCheckpoint>
-    >();
-    expectTypeOf(parsePublicKnowledgeCheckpoint).returns.toEqualTypeOf<
-      PublicKnowledgeValidation<PublicCheckpoint>
-    >();
     expectTypeOf(publicValidateCheckpoint).returns.not.toBeAny();
     expectTypeOf(parsePublicKnowledgeCheckpoint).returns.not.toBeAny();
     const result = parsePublicKnowledgeCheckpoint(baseCheckpoint());

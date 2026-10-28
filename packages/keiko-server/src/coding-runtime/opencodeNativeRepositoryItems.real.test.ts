@@ -19,6 +19,11 @@ import { dirname, join } from "node:path";
 import type { Readable } from "node:stream";
 import { describe, expect, it } from "vitest";
 import {
+  nativeChildEndpoint as childEndpoint,
+  stopNativeChild as stopChild,
+} from "../../../../tests/support/opencode-native-child.js";
+import { nativeHttpEventFrame as frame } from "../../../../tests/support/opencode-native-http.js";
+import {
   buildRuntimeGatewaySeatbeltCommand,
   createRuntimeGatewayConfinement,
   resolveDarwinGitExecutable,
@@ -61,11 +66,7 @@ import { bindNativeMcpRelays } from "./opencodeNativeMcpRelay.js";
 import { createRemoteSkillsPort } from "./opencodeRemoteSkills.js";
 import { createGeneratedOpenCodeV2Plugins } from "./opencodeRuntimeAdapter.js";
 import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
-import {
-  createOpenCodeV2HttpClient,
-  parseOpenCodeV2ChildEndpoint,
-  type OpenCodeV2HttpClient,
-} from "./opencodeV2HttpClient.js";
+import { createOpenCodeV2HttpClient, type OpenCodeV2HttpClient } from "./opencodeV2HttpClient.js";
 import type {
   SecureWorkspaceNativeListResult,
   SecureWorkspaceTextReadPort,
@@ -118,10 +119,6 @@ function object(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
-}
-
-function frame(value: unknown): string {
-  return `data: ${JSON.stringify(value)}\n\n`;
 }
 
 async function listen(server: Server): Promise<number> {
@@ -527,45 +524,6 @@ function launch(
       }),
     }),
   };
-}
-
-async function childEndpoint(
-  child: ChildProcessByStdio<null, Readable, Readable>,
-): Promise<string> {
-  return await new Promise<string>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      reject(new Error("fixture-startup-timeout"));
-    }, 20_000);
-    const onData = (bytes: Buffer): void => {
-      for (const line of bytes.toString("utf8").split("\n")) {
-        const endpoint = parseOpenCodeV2ChildEndpoint(line + "\n");
-        if (endpoint !== undefined) {
-          clearTimeout(timeout);
-          resolve(endpoint);
-        }
-      }
-    };
-    child.stdout.on("data", onData);
-    child.stderr.on("data", onData);
-    child.once("error", () => {
-      clearTimeout(timeout);
-      reject(new Error("fixture-startup-failed"));
-    });
-    child.once("exit", () => {
-      clearTimeout(timeout);
-      reject(new Error("fixture-child-exited"));
-    });
-  });
-}
-
-async function stopChild(child: ChildProcessByStdio<null, Readable, Readable>): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  await new Promise<void>((resolve) => {
-    child.once("exit", () => {
-      resolve();
-    });
-    child.kill("SIGKILL");
-  });
 }
 
 interface Run {

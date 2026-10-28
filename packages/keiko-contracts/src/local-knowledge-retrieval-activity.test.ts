@@ -429,16 +429,20 @@ describe("Knowledge retrieval activity public responsibility (#3918)", () => {
     expectTypeOf(validateKnowledgePodRetrievalActivity).parameter(0).not.toBeAny();
     expectTypeOf(publicValidateActivity).parameter(0).not.toBeAny();
     expectTypeOf(parsePublicKnowledgeActivity).parameter(0).not.toBeAny();
-    expectTypeOf(validateKnowledgePodRetrievalActivity).returns.toEqualTypeOf<
-      LocalKnowledgeValidation<KnowledgePodRetrievalActivity>
+    expectTypeOf<
+      readonly [
+        ReturnType<typeof validateKnowledgePodRetrievalActivity>,
+        ReturnType<typeof publicValidateActivity>,
+        ReturnType<typeof parsePublicKnowledgeActivity>,
+      ]
+    >().toEqualTypeOf<
+      readonly [
+        LocalKnowledgeValidation<KnowledgePodRetrievalActivity>,
+        PublicKnowledgeValidation<PublicRetrievalActivity>,
+        PublicKnowledgeValidation<PublicRetrievalActivity>,
+      ]
     >();
     expectTypeOf(validateKnowledgePodRetrievalActivity).returns.not.toBeAny();
-    expectTypeOf(publicValidateActivity).returns.toEqualTypeOf<
-      PublicKnowledgeValidation<PublicRetrievalActivity>
-    >();
-    expectTypeOf(parsePublicKnowledgeActivity).returns.toEqualTypeOf<
-      PublicKnowledgeValidation<PublicRetrievalActivity>
-    >();
     expectTypeOf(publicValidateActivity).returns.not.toBeAny();
     expectTypeOf(parsePublicKnowledgeActivity).returns.not.toBeAny();
     const result = parsePublicKnowledgeActivity(happyActivity());

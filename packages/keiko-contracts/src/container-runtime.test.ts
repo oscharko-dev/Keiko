@@ -2,6 +2,7 @@ import {
   registerPhysicalTaskCatalogContract,
   type PhysicalTaskCatalogValidator,
 } from "./__tests__/support/physical-task-catalog-contract.js";
+import { observeIndexedMembers } from "./__tests__/support/observed-indexed-members.js";
 import { describe, expect, it } from "vitest";
 import {
   CONTAINER_ENGINE_IDS,
@@ -742,4 +743,5 @@ registerPhysicalTaskCatalogContract(
   baseCatalog,
   catalogTraversalValidator,
   assertContainerCatalogInspection,
+  observeIndexedMembers,
 );

@@ -2,6 +2,7 @@ import {
   registerPhysicalTaskCatalogContract,
   type PhysicalTaskCatalogValidator,
 } from "./__tests__/support/physical-task-catalog-contract.js";
+import { observeIndexedMembers } from "./__tests__/support/observed-indexed-members.js";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   MAX_PROJECT_ID_LENGTH,
@@ -985,4 +986,5 @@ registerPhysicalTaskCatalogContract(
   baseCatalog,
   catalogTraversalValidator,
   assertCommandCatalogInspection,
+  observeIndexedMembers,
 );

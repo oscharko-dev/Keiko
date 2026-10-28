@@ -1,7 +1,10 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import {
+  activityLogBoundedStringField,
+  activityLogBoundedStringArrayField,
   activityLogAutomaticCatalogFields,
   activityLogEmbeddingBatchRetryFields,
+  activityLogCommitDraftModelFields,
   activityLogCompletenessField,
   activityLogLossField,
   activityLogBooleanField,
@@ -11,6 +14,9 @@ import {
 } from "./activity-log-field-contracts.js";
 import {
   ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS,
+  activityLogFieldTypeClassPair,
+  type ActivityLogFieldContract,
+  type ActivityLogCommitDraftModelFields,
   defineActivityLogOperation,
 } from "./observability.js";
 import { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
@@ -78,6 +84,17 @@ describe("canonical Activity Log field construction", () => {
   });
 });
 
+function expectIndependentVocabularies(
+  vocabularies: readonly (readonly string[])[],
+  expectedCount: number,
+): void {
+  expect(new Set(vocabularies).size).toBe(expectedCount);
+  for (const vocabulary of vocabularies) {
+    expect(Object.getPrototypeOf(vocabulary)).toBe(Array.prototype);
+    expect(Object.isFrozen(vocabulary)).toBe(false);
+  }
+}
+
 describe("automatic catalog field policy", () => {
   it("preserves the producer's exact ordered fourteen non-global descriptors", () => {
     const fields = activityLogAutomaticCatalogFields();
@@ -130,11 +147,7 @@ describe("automatic catalog field policy", () => {
       second.phase.values,
       second.retryDisposition.values,
     ];
-    expect(new Set(vocabularies).size).toBe(6);
-    for (const vocabulary of vocabularies) {
-      expect(Object.getPrototypeOf(vocabulary)).toBe(Array.prototype);
-      expect(Object.isFrozen(vocabulary)).toBe(false);
-    }
+    expectIndependentVocabularies(vocabularies, 6);
     const before = JSON.stringify(second);
     expect(Reflect.set(first.outcome.values, "0", "fixture-mutated")).toBe(true);
     expect(Reflect.set(first.outcome, "required", false)).toBe(true);
@@ -341,4 +354,247 @@ describe("embedding batch retry field policy", () => {
     expect(second.delayMs.type).toBe("number");
     expect(activityLogEmbeddingBatchRetryFields()).toEqual(second);
   });
+});
+
+describe("Git commit draft model field policy", () => {
+  it("preserves all twenty ordered literal descriptors and their public contract", () => {
+    const fields = activityLogCommitDraftModelFields();
+    const expected = {
+      outcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["succeeded", "failed"],
+      },
+      failureCode: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: [
+          "GIT_DELIVERY_COMMIT_BAD_REQUEST",
+          "GIT_DELIVERY_COMMIT_PAYLOAD_TOO_LARGE",
+          "GIT_DELIVERY_COMMIT_FORBIDDEN_PAYLOAD",
+          "GIT_DELIVERY_COMMIT_DRAFT_CONTEXT_TOO_LARGE",
+          "GIT_DELIVERY_COMMIT_DRAFT_FAILED",
+          "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT",
+          "GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED",
+          "GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT",
+          "GIT_DELIVERY_COMMIT_DRAFT_CANCELLED",
+          "GIT_DELIVERY_COMMIT_DRAFT_MODEL_UNAVAILABLE",
+          "GIT_DELIVERY_COMMIT_DRAFT_NO_CHANGES",
+          "GIT_DELIVERY_COMMIT_UNKNOWN_PROJECT",
+          "GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE",
+        ],
+      },
+      maxOutputTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      deadlineMs: {
+        type: "integer",
+        dataClass: "duration",
+        required: false,
+      },
+      promptTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      maxPromptTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      diffCompacted: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
+      generationAttempts: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      reused: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
+      draftKeyDigest: {
+        type: "string",
+        dataClass: "digest",
+        required: false,
+        maxLength: 64,
+      },
+      normalizationVersion: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["1"],
+      },
+      normalizationRule: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["body-only", "terminal-trailers", "explicit-trailers"],
+      },
+      normalizationChanged: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
+      bodyBulletCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      trailerLikeLineCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      trailerCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      trailerContinuationCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      trailerParagraphBreakCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      referenceTrailerCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      breakingTrailerCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+    } as const;
+    expect(fields).toEqual(expected);
+    expectOrdinaryDescriptor(fields, Object.keys(expected));
+    for (const descriptor of Object.values(fields)) {
+      const keys = ["type", "dataClass", "required"];
+      if ("values" in descriptor) keys.push("values");
+      if ("maxLength" in descriptor) keys.push("maxLength");
+      expectOrdinaryDescriptor(descriptor, keys);
+    }
+    expectTypeOf(fields).toEqualTypeOf<typeof expected>();
+    expectTypeOf<ReturnType<typeof activityLogCommitDraftModelFields>>().toEqualTypeOf<
+      Readonly<ActivityLogCommitDraftModelFields>
+    >();
+    expectTypeOf<typeof activityLogCommitDraftModelFields>().parameters.toEqualTypeOf<[]>();
+  });
+
+  it("allocates fresh ordinary descriptors and four fresh vocabularies per call", () => {
+    const first = activityLogCommitDraftModelFields();
+    const second = activityLogCommitDraftModelFields();
+    expect(first).not.toBe(second);
+    expect(new Set([...Object.values(first), ...Object.values(second)]).size).toBe(40);
+    const vocabularies = [
+      first.outcome.values,
+      first.failureCode.values,
+      first.normalizationVersion.values,
+      first.normalizationRule.values,
+      second.outcome.values,
+      second.failureCode.values,
+      second.normalizationVersion.values,
+      second.normalizationRule.values,
+    ];
+    expectIndependentVocabularies(vocabularies, 8);
+    const before = JSON.stringify(second);
+    expect(Reflect.set(first.failureCode.values, "0", "fixture-mutated")).toBe(true);
+    expect(Reflect.set(first.diffCompacted, "required", true)).toBe(true);
+    expect(Reflect.set(first.draftKeyDigest, "maxLength", 63)).toBe(true);
+    expect(JSON.stringify(second)).toBe(before);
+    expect(activityLogCommitDraftModelFields()).toEqual(second);
+  });
+});
+
+describe("bounded Activity Log descriptor construction", () => {
+  it("retains exact ordinary string and array descriptors with independent allocation", () => {
+    const string = activityLogBoundedStringField(true, "opaque-id", 128);
+    const array = activityLogBoundedStringArrayField(false, "safe-platform-class", 512, 8);
+    expect(string).toEqual({
+      type: "string",
+      dataClass: "opaque-id",
+      required: true,
+      maxLength: 128,
+    });
+    expect(array).toEqual({
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    });
+    expectOrdinaryDescriptor(string, ["type", "dataClass", "required", "maxLength"]);
+    expectOrdinaryDescriptor(array, ["type", "dataClass", "required", "maxLength", "maxItems"]);
+    expect(activityLogBoundedStringField(true, "opaque-id", 128)).not.toBe(string);
+    expect(activityLogBoundedStringArrayField(false, "safe-platform-class", 512, 8)).not.toBe(
+      array,
+    );
+    Object.defineProperty(string, "maxLength", { value: 1 });
+    Object.defineProperty(array, "maxItems", { value: 1 });
+    expect(activityLogBoundedStringField(true, "opaque-id", 128).maxLength).toBe(128);
+    expect(activityLogBoundedStringArrayField(false, "safe-platform-class", 512, 8).maxItems).toBe(
+      8,
+    );
+  });
+
+  it("preserves literal readonly keys, classes, bounds and the coupled public field type", () => {
+    const string = activityLogBoundedStringField(false, "digest", 64);
+    const array = activityLogBoundedStringArrayField(true, "error-kind", 128, 5);
+    expectTypeOf(string).toEqualTypeOf<
+      Readonly<{ type: "string"; dataClass: "digest"; required: false; maxLength: 64 }>
+    >();
+    expectTypeOf(array).toEqualTypeOf<
+      Readonly<{
+        type: "string-array";
+        dataClass: "error-kind";
+        required: true;
+        maxLength: 128;
+        maxItems: 5;
+      }>
+    >();
+    expectTypeOf(string).toExtend<ActivityLogFieldContract>();
+    expectTypeOf(array).toExtend<ActivityLogFieldContract>();
+    const stringRecord: Record<string, unknown> = string;
+    const arrayRecord: Record<string, unknown> = array;
+    expect(stringRecord).toBe(string);
+    expect(arrayRecord).toBe(array);
+    expectTypeOf<
+      Extract<
+        Parameters<typeof activityLogBoundedStringField>[1],
+        "count" | "closed-enum" | "completeness-state" | "loss-state"
+      >
+    >().toEqualTypeOf<never>();
+    expectTypeOf<
+      Extract<
+        Parameters<typeof activityLogBoundedStringArrayField>[1],
+        "safe-version" | "closed-enum" | "duration"
+      >
+    >().toEqualTypeOf<never>();
+  });
+});
+
+it("uses the one existing runtime primitive/class policy through its typed adapter", () => {
+  expect(activityLogFieldTypeClassPair("string", "opaque-id")).toBe(true);
+  expect(activityLogFieldTypeClassPair("string-array", "error-kind")).toBe(true);
+  expect(activityLogFieldTypeClassPair("integer", "duration")).toBe(true);
+  expect(activityLogFieldTypeClassPair("number", "count")).toBe(true);
+  expect(activityLogFieldTypeClassPair("boolean", "closed-enum")).toBe(true);
+  expect(activityLogFieldTypeClassPair("string", "count")).toBe(false);
+  expect(activityLogFieldTypeClassPair("string-array", "safe-version")).toBe(false);
+  expect(activityLogFieldTypeClassPair("number", "safe-version")).toBe(false);
+  expect(activityLogFieldTypeClassPair("boolean", "opaque-id")).toBe(false);
 });

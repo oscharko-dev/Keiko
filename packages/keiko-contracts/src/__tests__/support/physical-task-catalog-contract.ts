@@ -1,4 +1,3 @@
-import { observeIndexedMembers as observedCatalogMembers } from "./observed-indexed-members.js";
 import { expect, it } from "vitest";
 
 interface PhysicalTask {
@@ -13,6 +12,7 @@ type PhysicalCatalogResult =
 export type PhysicalTaskCatalogValidator = (input: unknown) => PhysicalCatalogResult;
 type TaskFactory = () => PhysicalTask;
 type CatalogFactory = () => PhysicalCatalog;
+type CatalogMemberObserver = (members: unknown[], reads: string[]) => unknown[];
 type ValidatorResolver = (surface: "source" | "public") => Promise<PhysicalTaskCatalogValidator>;
 type InspectionAssertion = (
   validate: PhysicalTaskCatalogValidator,
@@ -131,6 +131,7 @@ function registerCapturedExtent(
   createTask: TaskFactory,
   createCatalog: CatalogFactory,
   resolveValidator: ValidatorResolver,
+  observedCatalogMembers: CatalogMemberObserver,
 ): void {
   it.each(["source", "public"] as const)(
     `${domain} catalog validates the second array with one captured extent through %s`,
@@ -172,6 +173,7 @@ function registerEarlyHole(
   domain: "Command" | "Container",
   createCatalog: CatalogFactory,
   resolveValidator: ValidatorResolver,
+  observedCatalogMembers: CatalogMemberObserver,
 ): void {
   it.each(["source", "public"] as const)(
     `${domain} catalog stops at the first hole before later getters through %s`,
@@ -197,6 +199,7 @@ function registerInspectionPolicy(
   createCatalog: CatalogFactory,
   resolveValidator: ValidatorResolver,
   assertInspection: InspectionAssertion,
+  observedCatalogMembers: CatalogMemberObserver,
 ): void {
   it.each(["source", "public"] as const)(
     `${domain} catalog continues after an invalid present task and retains inspection policy through %s`,
@@ -222,10 +225,24 @@ export function registerPhysicalTaskCatalogContract(
   createCatalog: CatalogFactory,
   resolveValidator: ValidatorResolver,
   assertInspection: InspectionAssertion,
+  observedCatalogMembers: CatalogMemberObserver,
 ): void {
   registerArgumentAdmission(createTask, createCatalog, resolveValidator);
   registerNonarrayObservation(domain, createCatalog, resolveValidator);
-  registerCapturedExtent(domain, createTask, createCatalog, resolveValidator);
-  registerEarlyHole(domain, createCatalog, resolveValidator);
-  registerInspectionPolicy(domain, createTask, createCatalog, resolveValidator, assertInspection);
+  registerCapturedExtent(
+    domain,
+    createTask,
+    createCatalog,
+    resolveValidator,
+    observedCatalogMembers,
+  );
+  registerEarlyHole(domain, createCatalog, resolveValidator, observedCatalogMembers);
+  registerInspectionPolicy(
+    domain,
+    createTask,
+    createCatalog,
+    resolveValidator,
+    assertInspection,
+    observedCatalogMembers,
+  );
 }

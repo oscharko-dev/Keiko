@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "86c4f85efcf272add21c54010fdbbf9571a696e57ef61a71960c22faaa3c571b",
+    "catalogDigest": "21c10d91ede46f2faa223f0ce88b3910388b0a11f63817942519574d2d66bec3",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -23370,8 +23370,8 @@
         "failureClasses": ["git-commit-draft"],
         "proofIds": ["git.commit.draft.attempt.completed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:260",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/commitRoutes.ts:1162"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:194",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/commitRoutes.ts:1096"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -23532,8 +23532,8 @@
         "failureClasses": ["git-commit-draft"],
         "proofIds": ["git.commit.draft.completed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:235",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/commitRoutes.ts:1190"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:169",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/commitRoutes.ts:1124"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -23586,8 +23586,8 @@
         "failureClasses": ["git-commit-preview"],
         "proofIds": ["git.commit.preview.completed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:139",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/commitRoutes.ts:438"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:140",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/commitRoutes.ts:372"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -25194,8 +25194,8 @@
         "failureClasses": ["git-draft-delivery"],
         "proofIds": ["git.draft-delivery.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/draftDeliveryLedger.ts:26",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/draftDeliveryLedger.ts:158"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/draftDeliveryLedger.ts:28",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/draftDeliveryLedger.ts:143"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -100169,7 +100169,7 @@
     {
       "op": "server-log.write-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-contracts/src/observability.ts:1533",
+      "site": "packages/keiko-contracts/src/observability.ts:1512",
       "package": "keiko-contracts"
     },
     {
@@ -103704,60 +103704,60 @@
     {
       "op": "git.commit.draft.attempt.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:263",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:197",
       "package": "keiko-server"
     },
     {
       "op": "git.commit.draft.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:238",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:172",
       "package": "keiko-server"
     },
     {
       "op": "git.commit.draft.model",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:515",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:449",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "git.commit.draft.worktree",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:501",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:435",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "git.commit.execute.conflict-scan",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:529",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:463",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "git.commit.execute.mutation",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:543",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:477",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "git.commit.preview.branch-protection",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:473",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:407",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "git.commit.preview.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:142",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:143",
       "package": "keiko-server"
     },
     {
       "op": "git.commit.preview.worktree",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:487",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:421",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -103788,7 +103788,7 @@
     {
       "op": "git.delivery.commit.approval.minted",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:1728",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:1662",
       "package": "keiko-server"
     },
     {
@@ -103800,7 +103800,7 @@
     {
       "op": "git.delivery.commit.approval.required",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:1582",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:1516",
       "package": "keiko-server"
     },
     {
@@ -103950,7 +103950,7 @@
     {
       "op": "git.draft-delivery",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/draftDeliveryLedger.ts:29",
+      "site": "packages/keiko-server/src/gitDelivery/draftDeliveryLedger.ts:31",
       "package": "keiko-server"
     },
     {

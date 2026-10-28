@@ -387,16 +387,20 @@ describe("Knowledge capsule public responsibility (#3918)", () => {
     expectTypeOf(validateKnowledgeCapsule).parameter(0).not.toBeAny();
     expectTypeOf(publicValidateKnowledgeCapsule).parameter(0).not.toBeAny();
     expectTypeOf(parsePublicKnowledgeCapsule).parameter(0).not.toBeAny();
-    expectTypeOf(validateKnowledgeCapsule).returns.toEqualTypeOf<
-      LocalKnowledgeValidation<SourceKnowledgeCapsule>
+    expectTypeOf<
+      readonly [
+        ReturnType<typeof validateKnowledgeCapsule>,
+        ReturnType<typeof publicValidateKnowledgeCapsule>,
+        ReturnType<typeof parsePublicKnowledgeCapsule>,
+      ]
+    >().toEqualTypeOf<
+      readonly [
+        LocalKnowledgeValidation<SourceKnowledgeCapsule>,
+        PublicKnowledgeValidation<PublicKnowledgeCapsule>,
+        PublicKnowledgeValidation<PublicKnowledgeCapsule>,
+      ]
     >();
     expectTypeOf(validateKnowledgeCapsule).returns.not.toBeAny();
-    expectTypeOf(publicValidateKnowledgeCapsule).returns.toEqualTypeOf<
-      PublicKnowledgeValidation<PublicKnowledgeCapsule>
-    >();
-    expectTypeOf(parsePublicKnowledgeCapsule).returns.toEqualTypeOf<
-      PublicKnowledgeValidation<PublicKnowledgeCapsule>
-    >();
     expectTypeOf(publicValidateKnowledgeCapsule).returns.not.toBeAny();
     expectTypeOf(parsePublicKnowledgeCapsule).returns.not.toBeAny();
     const result = parsePublicKnowledgeCapsule(capsuleInput());

@@ -1,4 +1,9 @@
 import { describe, expect, it } from "vitest";
+import {
+  installIgnoredProtocolMetadata,
+  observeCapturedExtent,
+  protocolEnumerationInput,
+} from "./__tests__/support/protocol-observation-mechanics.js";
 
 import {
   MANAGED_LSP_CAPABILITY_SCHEMA_VERSION,
@@ -346,33 +351,18 @@ describe.each([
     readonly lengths: readonly unknown[];
   } {
     const values: unknown[] = ["hover"];
-    const lengths: unknown[] = [];
-    let indexReads = 0;
-    let nativeVisits = 0;
-    const observed = new Proxy(values, {
-      get(target, key, receiver): unknown {
-        if (key === "length") {
-          const length =
-            lengths.length === 0
-              ? firstObservation.first
-              : lengths.length === 1
-                ? laterExtent
-                : target.length;
-          lengths.push(length);
-          return length;
-        }
-        if (typeof key === "string" && /^\d+$/u.test(key)) indexReads += 1;
-        const datum: unknown = Reflect.get(target, key, receiver);
-        return datum;
-      },
-      has(target, key): boolean {
-        if (typeof key === "string" && /^\d+$/u.test(key)) nativeVisits += 1;
-        if (nativeVisits > LANGUAGE_SERVICE_OPERATIONS.length + 1)
-          throw new TypeError("fixture native traversal bound");
-        return Reflect.has(target, key);
-      },
-    });
-    return { result: parse({ ...candidate(), operations: observed }).ok, indexReads, lengths };
+    const observation = observeCapturedExtent(
+      values,
+      laterExtent,
+      firstObservation,
+      () => LANGUAGE_SERVICE_OPERATIONS.length + 1,
+    );
+    const { observed } = observation;
+    return {
+      result: parse({ ...candidate(), operations: observed }).ok,
+      indexReads: observation.indexReads,
+      lengths: observation.lengths,
+    };
   }
   it("preserves a healthy actual captured extent", () => {
     const observation = inspectExtent(1);
@@ -568,23 +558,7 @@ for (const surface of ["source", "public"] as const) {
         ? await import("./managed-lsp-capabilities.js")
         : await import("@oscharko-dev/keiko-contracts/runtime/managed-lsp-capabilities");
     const trace: string[] = [];
-    const value = new Proxy(
-      {},
-      {
-        ownKeys(): string[] {
-          trace.push("ownKeys");
-          return ["unexpected", "schemaVersion"];
-        },
-        getOwnPropertyDescriptor(_target, key): PropertyDescriptor {
-          trace.push(`descriptor:${String(key)}`);
-          return { configurable: true, enumerable: true, value: undefined, writable: true };
-        },
-        get(_target, key): never {
-          trace.push(`get:${String(key)}`);
-          throw new TypeError("Protocol field inspection after key enumeration");
-        },
-      },
-    );
+    const value = protocolEnumerationInput(trace);
     expect(module.parseManagedLspCandidateCapabilities(value)).toEqual({
       ok: false,
       errors: ["candidate capabilities are invalid or contain unknown fields"],
@@ -599,12 +573,9 @@ for (const surface of ["source", "public"] as const) {
         : await import("@oscharko-dev/keiko-contracts/runtime/managed-lsp-capabilities");
     const value = candidate();
     let reads = 0;
-    const inspect = (): never => {
+    installIgnoredProtocolMetadata(value, (): void => {
       reads += 1;
-      throw new TypeError("Ignored metadata was read");
-    };
-    Object.defineProperty(value, "ignoredMetadata", { enumerable: false, get: inspect });
-    Object.defineProperty(value, Symbol("ignoredMetadata"), { enumerable: true, get: inspect });
+    });
     expect(module.parseManagedLspCandidateCapabilities(value).ok).toBe(true);
     expect(reads).toBe(0);
   });

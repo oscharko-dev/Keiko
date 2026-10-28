@@ -2369,3 +2369,203 @@ describe("canonical embedding batch retry field expansion", () => {
     );
   });
 });
+
+function inspectCommitDraftModelFields(expression, check, prelude = "", extraFiles = {}) {
+  inspectAutomaticCatalogFields(
+    expression,
+    check,
+    'import { activityLogCommitDraftModelFields as modelFields } from "../../keiko-contracts/src/activity-log-field-contracts.js";\n' +
+      prelude,
+    extraFiles,
+  );
+}
+
+describe("canonical Git draft model field admission", () => {
+  it.each(["modelFields()", "{ ...modelFields() }"])(
+    "admits the canonical closed model policy: %s",
+    (expression) => {
+      inspectCommitDraftModelFields(expression, (registry) => {
+        expect(registry.operations).toHaveLength(1);
+        const prior = readCheckedInCatalog().typedRegistry.operations.find(
+          (operation) => operation.op === "git.commit.draft.completed",
+        );
+        const expected = Object.fromEntries([
+          ...Object.entries(prior.fields).slice(0, 2),
+          ...Object.entries(prior.fields).slice(5),
+        ]);
+        expect(registry.operations[0].fields).toEqual(expected);
+        expect(Object.keys(registry.operations[0].fields)).toEqual(Object.keys(expected));
+      });
+    },
+  );
+
+  it("admits a true reexport of the canonical model policy", () => {
+    inspectCommitDraftModelFields(
+      "forwarded()",
+      (registry) => {
+        expect(registry.operations).toHaveLength(1);
+        expect(registry.violations).not.toContainEqual(
+          expect.objectContaining({ code: "registration-not-literal" }),
+        );
+      },
+      'import { forwarded } from "./git-model-forwarder.js";',
+      {
+        "packages/zzz-fixture-diagnostic/src/git-model-forwarder.ts":
+          'export { activityLogCommitDraftModelFields as forwarded } from "../../keiko-contracts/src/activity-log-field-contracts.js";',
+      },
+    );
+  });
+
+  it.each([
+    [
+      "activityLogCommitDraftModelFields()",
+      "function activityLogCommitDraftModelFields() { return {}; }",
+    ],
+    [
+      "foreign()",
+      'import { activityLogCommitDraftModelFields as foreign } from "./git-model-lookalike.js";',
+    ],
+    ["modelFields(true)", ""],
+    ["modelFields(...args)", "const args = [] as const;"],
+    ["selected()", "let selected = modelFields;"],
+    ["holder.modelFields()", "const holder = { modelFields };"],
+    ["unresolved()", ""],
+  ])("refuses noncanonical or argument-bearing model policy: %s", (call, prelude) => {
+    inspectCommitDraftModelFields(
+      call,
+      (registry) => {
+        expect(registry.operations).toEqual([]);
+        expect(registry.violations).toContainEqual(
+          expect.objectContaining({ code: "registration-not-literal" }),
+        );
+      },
+      prelude,
+      {
+        "packages/zzz-fixture-diagnostic/src/git-model-lookalike.ts":
+          "export function activityLogCommitDraftModelFields() { return {}; }",
+      },
+    );
+  });
+});
+
+const BOUNDED_FIELD_IMPORTS =
+  'import { activityLogBoundedStringField as boundedString, activityLogBoundedStringArrayField as boundedArray } from "../../keiko-contracts/src/activity-log-field-contracts.js";';
+
+function inspectBoundedField(expression, check, prelude = "", extraFiles = {}) {
+  inspectFieldConstructor(expression, check, BOUNDED_FIELD_IMPORTS + "\n" + prelude, extraFiles);
+}
+
+describe("canonical bounded field constructor admission", () => {
+  it.each([
+    [
+      'boundedString(true, "opaque-id", 128)',
+      { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    ],
+    [
+      'boundedArray(false, "error-kind", 128, 5)',
+      {
+        type: "string-array",
+        dataClass: "error-kind",
+        required: false,
+        maxLength: 128,
+        maxItems: 5,
+      },
+    ],
+    [
+      'boundedString(false, "safe-version", 8192)',
+      { type: "string", dataClass: "safe-version", required: false, maxLength: 8192 },
+    ],
+    [
+      'boundedArray(false, "digest", 8192, 64)',
+      { type: "string-array", dataClass: "digest", required: false, maxLength: 8192, maxItems: 64 },
+    ],
+  ])("expands the exact canonical descriptor %s", (expression, expected) => {
+    inspectBoundedField(expression, (registry) => {
+      expect(registry.operations).toHaveLength(1);
+      expect(registry.operations[0].fields.errorCount).toEqual(expected);
+      expect(Reflect.ownKeys(registry.operations[0].fields.errorCount)).toEqual(
+        Reflect.ownKeys(expected),
+      );
+    });
+  });
+
+  it("admits canonical reexports and finite const arguments", () => {
+    inspectBoundedField(
+      'forwarded(required, "digest", bound)',
+      (registry) => {
+        expect(registry.operations).toHaveLength(1);
+        expect(registry.operations[0].fields.errorCount.maxLength).toBe(64);
+      },
+      'import { forwarded } from "./bounded-reexport.js"; const required = false; const bound = 64;',
+      {
+        "packages/zzz-fixture-diagnostic/src/bounded-reexport.ts":
+          'export { activityLogBoundedStringField as forwarded } from "../../keiko-contracts/src/activity-log-field-contracts.js";',
+      },
+    );
+  });
+
+  it.each([
+    ['boundedString(true, "count", 64)', ""],
+    ['boundedString(true, "not-a-class", 64)', ""],
+    ['boundedString(true, "closed-enum", 64)', ""],
+    ['boundedString(true, "completeness-state", 64)', ""],
+    ['boundedString(true, "loss-state", 64)', ""],
+    ['boundedArray(false, "safe-version", 64, 5)', ""],
+    ['boundedArray(false, "closed-enum", 64, 5)', ""],
+    ['boundedString(true, "digest", 0)', ""],
+    ['boundedString(true, "digest", -1)', ""],
+    ['boundedString(true, "digest", 1.5)', ""],
+    ['boundedString(true, "digest", 8193)', ""],
+    ['boundedArray(false, "digest", 64, 0)', ""],
+    ['boundedArray(false, "digest", 64, 65)', ""],
+    ['boundedArray(false, "digest", 64)', ""],
+    ['boundedString(true, "digest", 64, 5)', ""],
+    ["boundedString(...args)", 'const args = [true, "digest", 64] as const;'],
+    ['boundedString(true, "digest", dynamic)', "let dynamic = 64;"],
+    ['boundedString(true, "digest", cycle)', "const cycle = cycle;"],
+    ['holder.boundedString(true, "digest", 64)', "const holder = { boundedString };"],
+    [
+      'activityLogBoundedStringField(true, "digest", 64)',
+      'function activityLogBoundedStringField(required: true, dataClass: "digest", maxLength: 64): { readonly type: "string"; readonly dataClass: "digest"; readonly required: true; readonly maxLength: 64 } { return { type: "string", dataClass, required, maxLength }; }',
+    ],
+    [
+      'foreign(true, "digest", 64)',
+      'import { activityLogBoundedStringField as foreign } from "./bounded-lookalike.js";',
+    ],
+  ])(
+    "refuses unsupported bounded constructor provenance or arguments: %s",
+    (expression, prelude) => {
+      inspectBoundedField(
+        expression,
+        (registry) => {
+          expect(registry.operations).toEqual([]);
+          expect(registry.violations).toContainEqual(
+            expect.objectContaining({ code: "registration-not-literal" }),
+          );
+        },
+        prelude,
+        {
+          "packages/zzz-fixture-diagnostic/src/bounded-lookalike.ts":
+            'export function activityLogBoundedStringField(required: true, dataClass: "digest", maxLength: 64): { readonly type: "string"; readonly dataClass: "digest"; readonly required: true; readonly maxLength: 64 } { return { type: "string", dataClass, required, maxLength }; }',
+        },
+      );
+    },
+  );
+});
+
+it("retains the existing argument-work bound for bounded descriptors", () => {
+  const declarations = ["const bound0 = 64;"];
+  for (let index = 1; index <= 260; index += 1) {
+    declarations.push(`const bound${String(index)} = bound${String(index - 1)};`);
+  }
+  inspectBoundedField(
+    'boundedString(false, "digest", bound260)',
+    (registry) => {
+      expect(registry.operations).toEqual([]);
+      expect(registry.violations).toContainEqual(
+        expect.objectContaining({ code: "registration-not-literal" }),
+      );
+    },
+    declarations.join("\n"),
+  );
+});

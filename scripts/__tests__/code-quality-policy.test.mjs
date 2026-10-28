@@ -26,13 +26,16 @@ const ASSERTION_RULES = [
   "anti-slop/require-safety-comment-for-type-assertion",
 ];
 
-function expectPublicParserPolicyMetadata(record, { selector, rules, witness, assertionCount }) {
+function expectPublicParserPolicyMetadata(
+  record,
+  { selector, rules, witness, assertionCount, output = selector },
+) {
   expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
   expect(record.kind).toBe("public-parser");
   expect(record.rules).toEqual(rules);
   expect(record.input).toEqual({ ...selector, parameterIndex: 0 });
   expect(record.transform).toEqual(selector);
-  expect(record.output).toEqual(selector);
+  expect(record.output).toEqual(output);
   expect(record.consumer).toEqual({
     ...selector,
     exportName: witness,
@@ -41,6 +44,27 @@ function expectPublicParserPolicyMetadata(record, { selector, rules, witness, as
   });
   expect(record.proofs).toEqual([selector.consumerPath]);
   expect(record.proofAssertions).toHaveLength(assertionCount);
+}
+
+function expectResponsibilityRemovalRefused(record) {
+  const removed = structuredClone(policy);
+  removed.responsibilities = removed.responsibilities.filter(({ id }) => id !== record.id);
+  expect(validatePolicy(removed, [policy])).toContain("responsibility-shrank");
+}
+
+function expectDeclaredPublicParserProof(
+  record,
+  { path, specifier, producer, witness, rules, assertions },
+) {
+  expectPublicParserPolicyMetadata(record, {
+    selector: { consumerPath: path, specifier, exportName: producer },
+    rules,
+    witness,
+    assertionCount: assertions,
+    output: record.transform,
+  });
+  expect(record.proofAssertions.every((proof) => proof.path === path)).toBe(true);
+  expect(validatePolicy(policy)).toEqual([]);
 }
 
 function registerAtlassianPublicParserPins(cases, title, prefix, reboundExport) {
@@ -826,9 +850,7 @@ describe("remaining Memory public parser obligations (#3918)", () => {
         "Memory remaining public parsers (#3918) refuses malformed Memory envelopes with exact owning diagnostics",
         "Memory remaining public parsers (#3918) retains branded domain result types acknowledgement and array admission",
       ]);
-      const removed = structuredClone(policy);
-      removed.responsibilities = removed.responsibilities.filter(({ id }) => id !== record.id);
-      expect(validatePolicy(removed, [policy])).toContain("responsibility-shrank");
+      expectResponsibilityRemovalRefused(record);
     }
   });
 });
@@ -852,9 +874,7 @@ describe("documentation request public parser obligations (#3918)", () => {
       expect(record.input.parameterIndex).toBe(0);
       expect(record.consumer.kind).toBe("public-api-proof");
       expect(record.proofs).toEqual([record.input.consumerPath]);
-      const removed = structuredClone(policy);
-      removed.responsibilities = removed.responsibilities.filter(({ id }) => id !== record.id);
-      expect(validatePolicy(removed, [policy])).toContain("responsibility-shrank");
+      expectResponsibilityRemovalRefused(record);
     }
   });
 });
@@ -877,9 +897,7 @@ describe("governance public parser obligations (#3918)", () => {
       expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
       expect(record.input.parameterIndex).toBe(0);
       expect(record.consumer.kind).toBe("public-api-proof");
-      const removed = structuredClone(policy);
-      removed.responsibilities = removed.responsibilities.filter(({ id }) => id !== record.id);
-      expect(validatePolicy(removed, [policy])).toContain("responsibility-shrank");
+      expectResponsibilityRemovalRefused(record);
     }
   });
 });
@@ -908,9 +926,7 @@ describe("run control public parser obligations (#3918)", () => {
       expect(record.input.parameterIndex).toBe(0);
       expect(record.consumer.kind).toBe("public-api-proof");
       expect(record.proofs).toEqual([record.input.consumerPath]);
-      const removed = structuredClone(policy);
-      removed.responsibilities = removed.responsibilities.filter(({ id }) => id !== record.id);
-      expect(validatePolicy(removed, [policy])).toContain("responsibility-shrank");
+      expectResponsibilityRemovalRefused(record);
     }
   });
 });
@@ -951,9 +967,7 @@ describe("acceptance and auxiliary public parser obligations (#3918)", () => {
       expect(record.input.parameterIndex).toBe(0);
       expect(record.consumer.kind).toBe("public-api-proof");
       expect(record.proofs).toEqual([record.input.consumerPath]);
-      const removed = structuredClone(policy);
-      removed.responsibilities = removed.responsibilities.filter(({ id }) => id !== record.id);
-      expect(validatePolicy(removed, [policy])).toContain("responsibility-shrank");
+      expectResponsibilityRemovalRefused(record);
     }
   });
 });
@@ -977,9 +991,7 @@ describe("typed task public recheck obligations (#3918)", () => {
       });
       expect(record.output).toEqual(record.transform);
       expect(record.consumer.kind).toBe("public-api-proof");
-      const removed = structuredClone(policy);
-      removed.responsibilities = removed.responsibilities.filter(({ id }) => id !== record.id);
-      expect(validatePolicy(removed, [policy])).toContain("responsibility-shrank");
+      expectResponsibilityRemovalRefused(record);
       for (const rules of [
         [],
         ["anti-slop/no-unknown-parameters"],
@@ -1207,32 +1219,18 @@ describe("Knowledge family raw input responsibilities (#3918)", () => {
     "preserves the declared producer and proof owner for $producer",
     ({ id, producer, witness, path, specifier, assertions }) => {
       const record = policy.responsibilities.find((entry) => entry.id === id);
-      expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
-      expect(record.kind).toBe("public-parser");
-      expect(record.rules).toEqual([
-        "anti-slop/no-unknown-parameters",
-        "anti-slop/no-runtime-typeof",
-        "anti-slop/no-unsafe-dictionary-type",
-      ]);
-      expect(record.input).toEqual({
-        consumerPath: path,
+      expectDeclaredPublicParserProof(record, {
+        path,
         specifier,
-        exportName: producer,
-        parameterIndex: 0,
+        producer,
+        witness,
+        rules: [
+          "anti-slop/no-unknown-parameters",
+          "anti-slop/no-runtime-typeof",
+          "anti-slop/no-unsafe-dictionary-type",
+        ],
+        assertions,
       });
-      expect(record.transform).toEqual({ consumerPath: path, specifier, exportName: producer });
-      expect(record.output).toEqual(record.transform);
-      expect(record.consumer).toEqual({
-        consumerPath: path,
-        specifier,
-        exportName: witness,
-        kind: "public-api-proof",
-        owner: record.owner,
-      });
-      expect(record.proofs).toEqual([path]);
-      expect(record.proofAssertions).toHaveLength(assertions);
-      expect(record.proofAssertions.every((proof) => proof.path === path)).toBe(true);
-      expect(validatePolicy(policy)).toEqual([]);
     },
   );
 });
@@ -1260,28 +1258,14 @@ describe("Workbench family raw input responsibilities (#3918)", () => {
       const record = policy.responsibilities.find((entry) => entry.id === id);
       const consumerPath = "packages/keiko-contracts/src/coding-workbench.test.ts";
       const specifier = "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
-      expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
-      expect(record.kind).toBe("public-parser");
-      expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
-      expect(record.input).toEqual({
-        consumerPath,
+      expectDeclaredPublicParserProof(record, {
+        path: consumerPath,
         specifier,
-        exportName: producer,
-        parameterIndex: 0,
+        producer,
+        witness,
+        rules: ["anti-slop/no-unknown-parameters"],
+        assertions: 3,
       });
-      expect(record.transform).toEqual({ consumerPath, specifier, exportName: producer });
-      expect(record.output).toEqual(record.transform);
-      expect(record.consumer).toEqual({
-        consumerPath,
-        specifier,
-        exportName: witness,
-        kind: "public-api-proof",
-        owner: record.owner,
-      });
-      expect(record.proofs).toEqual([consumerPath]);
-      expect(record.proofAssertions).toHaveLength(3);
-      expect(record.proofAssertions.every((proof) => proof.path === consumerPath)).toBe(true);
-      expect(validatePolicy(policy)).toEqual([]);
     },
   );
 });
@@ -1340,28 +1324,14 @@ describe("Prompt family raw input responsibilities (#3918)", () => {
     "preserves the declared producer and proof owner for $producer",
     ({ id, producer, witness, path, specifier, assertions }) => {
       const record = policy.responsibilities.find((entry) => entry.id === id);
-      expect(record.owner).toBe("@oscharko-dev/keiko-contracts");
-      expect(record.kind).toBe("public-parser");
-      expect(record.rules).toEqual(["anti-slop/no-unknown-parameters"]);
-      expect(record.input).toEqual({
-        consumerPath: path,
+      expectDeclaredPublicParserProof(record, {
+        path,
         specifier,
-        exportName: producer,
-        parameterIndex: 0,
+        producer,
+        witness,
+        rules: ["anti-slop/no-unknown-parameters"],
+        assertions,
       });
-      expect(record.transform).toEqual({ consumerPath: path, specifier, exportName: producer });
-      expect(record.output).toEqual(record.transform);
-      expect(record.consumer).toEqual({
-        consumerPath: path,
-        specifier,
-        exportName: witness,
-        kind: "public-api-proof",
-        owner: record.owner,
-      });
-      expect(record.proofs).toEqual([path]);
-      expect(record.proofAssertions).toHaveLength(assertions);
-      expect(record.proofAssertions.every((proof) => proof.path === path)).toBe(true);
-      expect(validatePolicy(policy)).toEqual([]);
     },
   );
 });
