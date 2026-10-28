@@ -113,3 +113,21 @@ export function defineClassifierObservationContract(classify: (input: unknown) =
     expect(classify(revoked.proxy)).toBe("unknown");
   });
 }
+
+export function inheritedFallbackCause(trace: string[], receivers: unknown[]): Error {
+  const prototype = {
+    get code(): never {
+      trace.push("code");
+      receivers.push(this);
+      throw new TypeError("private-classifier-canary");
+    },
+    get name(): string {
+      trace.push("name");
+      receivers.push(this);
+      return "ENOSPC";
+    },
+  };
+  const cause: Error = new TypeError("private-classifier-canary");
+  Object.setPrototypeOf(cause, prototype);
+  return cause;
+}

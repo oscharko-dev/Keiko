@@ -9,7 +9,10 @@
 //     silently.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { defineClassifierObservationContract } from "../../../tests/support/log-classifier-observations.js";
+import {
+  defineClassifierObservationContract,
+  inheritedFallbackCause,
+} from "../../../tests/support/log-classifier-observations.js";
 import {
   activityLogLossCounters,
   resetActivityLogLossCountersForTests,
@@ -472,20 +475,7 @@ it("#3918 preserves inherited fallback observations through the registered failu
   try {
     const trace: string[] = [];
     const receivers: unknown[] = [];
-    const prototype = {
-      get code(): never {
-        trace.push("code");
-        receivers.push(this);
-        throw new TypeError("private-classifier-canary");
-      },
-      get name(): string {
-        trace.push("name");
-        receivers.push(this);
-        return "ENOSPC";
-      },
-    };
-    const cause: Error = new TypeError("private-classifier-canary");
-    Object.setPrototypeOf(cause, prototype);
+    const cause: Error = inheritedFallbackCause(trace, receivers);
     const notices: ConsolidationLogEvent[] = [];
     const sink: ConsolidationLogSink = {
       write(event): void {
