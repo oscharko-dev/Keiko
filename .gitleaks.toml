@@ -50,6 +50,15 @@ regexTarget = "line"
 regexes = ['''idempotencyKey: "idempotency-1",''']
 
 [[allowlists]]
+description = "PR #4102: the editor-action fixtures idempotency-1 and idempotency-2 in one immutable checkpoint of the changeset-size contract test. They are test metadata (the idempotency keys of synthetic editor actions), not credentials; the generic-api-key rule matches the key name and its entropy. Later commits use the non-secret-shaped idem-1 and idem-2. Only these exact historical fixture lines in this one commit are exempt."
+condition = "AND"
+commits = ["668fc8584bf14062e3cbba632e255dcd9a9bb7a1"]
+paths = ['''packages/keiko-contracts/src/editor-agent\.changeset-size\.test\.ts''']
+targetRules = ["generic-api-key"]
+regexTarget = "line"
+regexes = ['''idempotencyKey: "idempotency-[12]",''']
+
+[[allowlists]]
 description = "PR #4064: the synthetic MCP relay credential of exactly the admitted minimum length in one immutable checkpoint of the relay test. It is a generated test value that proves the relay scrubs a reflected credential, not a credential of any service; the generic-api-key rule matches its entropy. Later commits assemble it at run time. Only this exact historical fixture line in this one commit is exempt."
 condition = "AND"
 commits = ["84dddde8921ef6b0b80b0d7a69df5bc648790e42"]

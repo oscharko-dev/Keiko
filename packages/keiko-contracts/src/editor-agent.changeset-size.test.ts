@@ -24,7 +24,7 @@ function changesetActionWith(patch: string): EditorAgentAction {
   return {
     schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
     actionId: "action-1",
-    idempotencyKey: "idempotency-1",
+    idempotencyKey: "idem-1",
     sessionId: "session-1",
     type: "applyChangeset",
     authorityRef: { runId: "run-size", envelopeDigest: HASH },
@@ -123,7 +123,7 @@ describe("governed changeset size bounds", () => {
     const action = (patch: string): EditorAgentAction => ({
       schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
       actionId: "action-2",
-      idempotencyKey: "idempotency-2",
+      idempotencyKey: "idem-2",
       sessionId: "session-1",
       type: "applyPatch",
       patch,

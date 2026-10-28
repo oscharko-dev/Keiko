@@ -157,10 +157,6 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
     "A failed metadata or containment probe returns unavailable and admits no fingerprint read. The existing semantic freshness observer records the resulting unavailableFileCount on the connected-context source/selection evidence.",
   ],
   [
-    "packages/keiko-server/src/coding-runtime/opencodeRipgrepLaunch.ts:isFile",
-    "A metadata probe failure other than a missing path is the fail-closed true result of this ripgrep-provider predicate: the entry leaves the degraded PATH. coding-runtime.ripgrep.resolved records the launch outcome without paths.",
-  ],
-  [
     "packages/keiko-server/src/grounded-worktree-recency.ts:admittedPath",
     "A failed fresh containment or safe-file metadata probe is the fail-closed false result of this path eligibility predicate; it cannot admit a recency path or source read.",
   ],
@@ -493,6 +489,10 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
   [
     "packages/keiko-activity-log/src/server-log.ts:syncActiveSegment",
     "A failed fsync is returned as the closed durability-uncertain deferral of the batch.",
+  ],
+  [
+    "packages/keiko-server/src/coding-runtime/opencodeRipgrepLaunch.ts:isFile",
+    "A metadata probe failure other than a missing path is the fail-closed true result of this ripgrep-provider predicate: the entry leaves the degraded PATH. coding-runtime.ripgrep.resolved records the launch outcome without paths.",
   ],
 ]);
 
