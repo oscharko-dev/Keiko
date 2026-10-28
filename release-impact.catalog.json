@@ -3862,6 +3862,76 @@
         "verifiedCarryForward": true,
         "carryForwardPath": "Verified managed-install bootstrap with existing state and keys outside the application bundle, then authenticated native handoff using the canonical update-state root introduced in 1.2.7."
       }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "supportedFrom": ["0.2.0", "1.2.5", "1.2.6", "1.2.7", "1.3.0", "1.3.1"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "id": "2026-10-28-keiko-1.3.2-stream-stability-and-parity-fixes",
+      "packageVersion": "1.3.2",
+      "releaseTag": "v1.3.2",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Live streams no longer end because a message is large, larger code changes fit in one Coding Workbench task, a large Git diff opens as a bounded view, and a busy local model stays selectable.",
+      "affectedStateStores": ["activity-log"],
+      "stateImpact": [
+        {
+          "store": "activity-log",
+          "description": "No schema migration. The Activity Log gains additive, body-free fields and operations (the stream drain-wait count, the bounded Git diff view and the busy-provider readiness retention); older segments stay readable and nothing is rewritten.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        }
+      ],
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "oneClickEligible": true,
+      "releaseNoteBullets": [
+        "Live streams no longer end because a message is large. Chat, task timelines and the other live feeds queue a large frame and wait for the browser to read it, and only a browser that reads nothing for 30 seconds is disconnected. Before, any frame of 64 KiB or more could close the stream.",
+        "The Coding Workbench accepts code changes of up to 8 MiB per changeset and 64 MiB per run, and the model is told the same limits.",
+        "A Git diff above the size limit opens as a bounded, truncated view instead of failing with an error (#4113).",
+        "The raw Git diff view of your own repository keeps hunks that cannot be parsed readable and shows a cut diff as a complete patch. Keys, token shapes, configured secrets and private literals stay masked (#4114).",
+        "A local model that is busy answering another request, such as a single-slot server, stays selectable in the Coding Workbench instead of being reported as not ready (#4115).",
+        "Credentials shaped like a JSON Web Token are now removed everywhere the credential floor applies, and the bundled search tool runs only after its checksum has been verified; Keiko never downloads or runs a different one.",
+        "Coding runs are steadier: a model answer that stops mid tool call is repaired once, runs left over from an interrupted session are cleaned up at startup, history reads load the newest window, and the task timeline follows the newest entry, reconnects with a notice and labels its tools.",
+        "`keiko start` reports a healthy instance that is already running on another port instead of starting a second one.",
+        "Updating from 1.3.0 or 1.3.1 needs no action. An installation on 1.2.6 or earlier still runs the verified updater bootstrap once before automatic updates."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-10-28",
+        "humanApproved": true,
+        "approvalReference": "owner-chat-instruction:2026-10-28:prepare-keiko-1.3.2-on-epic-3897",
+        "rationale": "The owner explicitly asked in chat on 2026-10-28 to prepare release 1.3.2 on epic #3897. The entry accounts for every change integrated since v1.3.1: the SSE flow-control fix with the 1.3.1 stress-qualification findings (#4102) and the OpenCode parity deviations in the Git diff view and model readiness (#4113, #4114, #4115, #4116). This records release-impact preparation under the signed-version-bump policy, not permission to integrate or publish. Integration remains subject to the owner's authorization, exact-head required checks and settled review findings, and publication requires the protected release workflow after the owner's live lab re-check."
+      },
+      "breakingException": {
+        "rationale": "Immutable published 1.2.6 and earlier source updaters still look for the handoff plan outside the canonical update-state root. A newer target cannot repair that source before handoff; the verified managed-install bootstrap introduced with 1.2.7 remains the carry-forward path.",
+        "warningText": "Published 1.2.6 and earlier installations require the verified managed-install updater bootstrap before using automatic updates. Keep a backup of local state and preserve private keys when replacing the application bundle.",
+        "verifiedCarryForward": true,
+        "carryForwardPath": "Verified managed-install bootstrap with existing state and keys outside the application bundle, then authenticated native handoff using the canonical update-state root introduced in 1.2.7."
+      }
     }
   ]
 }
