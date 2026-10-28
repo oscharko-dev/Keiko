@@ -203,6 +203,8 @@ export type CodingSafeActivitySignal =
        * line; absent when the line is no check or another command could decide its status.
        */
       readonly exitStatusCheck?: VerificationKind | undefined;
+      /** The finished call ran in a working directory it named itself, not the session's. */
+      readonly ownWorkdir?: boolean | undefined;
     })
   | (SignalBase & {
       readonly kind: "plan";

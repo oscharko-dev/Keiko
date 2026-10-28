@@ -4351,9 +4351,10 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
       await handleAsk(fixture, shellAsk("call_typecheck", ["npm run typecheck"]));
       await handleAsk(fixture, shellAsk("call_listing", ["ls -la"]));
       await handleAsk(fixture, shellAsk("call_masked", ["npm test", "true"]));
+      // The admitted line travels with its check, so a pass can credit what else it ran.
       expect(verificationAdmitted.mock.calls).toEqual([
-        [{ messageId: "msg_1", callId: "call_test" }, "test"],
-        [{ messageId: "msg_1", callId: "call_typecheck" }, "typecheck"],
+        [{ messageId: "msg_1", callId: "call_test" }, "test", ["cd packages/app", "npm test"]],
+        [{ messageId: "msg_1", callId: "call_typecheck" }, "typecheck", ["npm run typecheck"]],
       ]);
     } finally {
       await fixture.stop();
@@ -4597,7 +4598,7 @@ describe("native tool evidence from the runtime's own history (#3873, #3897 revi
         ...part("call_shell_evidence", "shell", finished ? "completed" : "running"),
         state: {
           status: finished ? "completed" : "running",
-          input: { command: "npm test" },
+          input: { command: "npm test", workdir: "packages/app" },
           ...(finished
             ? { content: [{ type: "text", text: "Synthetic check" }], metadata: { exit: exitCode } }
             : {}),
@@ -4659,7 +4660,7 @@ describe("native tool evidence from the runtime's own history (#3873, #3897 revi
           expect(toolState()).toBe(exitCode === 0 ? "succeeded" : "failed");
         });
         expect(settled).toHaveBeenCalledWith(
-          expect.objectContaining({ exitCode, exitStatusCheck: "test" }),
+          expect.objectContaining({ exitCode, exitStatusCheck: "test", ownWorkdir: true }),
         );
         const terminal = ingest.mock.calls
           .map(([signal]) => signal)
@@ -4670,6 +4671,7 @@ describe("native tool evidence from the runtime's own history (#3873, #3897 revi
         expect(terminal).toBeDefined();
         expect(terminal).not.toHaveProperty("exitCode");
         expect(terminal).not.toHaveProperty("exitStatusCheck");
+        expect(terminal).not.toHaveProperty("ownWorkdir");
         // The timeline says why a command failed: its exit status, a number, and nothing else.
         expect(terminal).toHaveProperty("presentation", { exitCode });
         const feed = projection.currentContent()?.feed;

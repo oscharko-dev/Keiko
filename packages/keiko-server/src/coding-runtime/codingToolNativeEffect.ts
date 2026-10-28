@@ -234,8 +234,8 @@ export function createCodingToolNativeSettlementFacet(
       verification.settled(key, input, refusedByPolicy);
       return "counted";
     },
-    verificationAdmitted: (call, kind): void => {
-      verification.admitted(nativeCallKey(call), kind);
+    verificationAdmitted: (call, kind, resources): void => {
+      verification.admitted(nativeCallKey(call), kind, resources);
     },
     verificationDenied: (): void => {
       observers.verification?.blocked?.("verification-command-denied");
@@ -253,6 +253,9 @@ interface NativeSettlementObservers {
 
 interface PendingNativeVerification {
   readonly kind: VerificationKind;
+  readonly resources: readonly string[];
+  /** Read at admission: the package scripts the line runs are the ones it was admitted with. */
+  readonly credited: readonly VerificationKind[];
   readonly editRevision: number | undefined;
   readonly executed: CodingVerificationExecutedObserver | undefined;
   readonly admittedAtMs: number;
@@ -262,10 +265,11 @@ interface PendingNativeVerification {
  * A verification command is remembered from its admission (with the edit revision and admission
  * observer the governed verifier captures at the same point) until the runtime reports it. Only a
  * call that actually ran and reported an exit status is evidence: a refused, cancelled or
- * backgrounded one proves nothing either way.
+ * backgrounded one proves nothing either way. A pass also proves the other checks its `&&` line
+ * and package scripts ran; a failure is the named check's alone.
  */
 function nativeVerificationTracker(hooks: CodingToolNativeVerificationHooks | undefined): {
-  readonly admitted: (key: string, kind: VerificationKind) => void;
+  readonly admitted: (key: string, kind: VerificationKind, resources?: readonly string[]) => void;
   readonly settled: (
     key: string,
     input: CodingToolNativeSettlementInput,
@@ -274,12 +278,14 @@ function nativeVerificationTracker(hooks: CodingToolNativeVerificationHooks | un
 } {
   const pending = new Map<string, PendingNativeVerification>();
   return {
-    admitted: (key, kind): void => {
+    admitted: (key, kind, resources = []): void => {
       if (hooks === undefined) return;
       if (pending.size >= NATIVE_SETTLEMENT_MEMORY_MAX)
         pending.delete(pending.keys().next().value ?? "");
       pending.set(key, {
         kind,
+        resources,
+        credited: hooks.credited?.(resources, true) ?? [],
         editRevision: hooks.revision?.(),
         executed: hooks.admitted?.(),
         admittedAtMs: Date.now(),
@@ -293,15 +299,28 @@ function nativeVerificationTracker(hooks: CodingToolNativeVerificationHooks | un
       // The admission saw the line's commands; the finished line shows whether its status is the
       // check's own. A line whose status another command decided proves nothing either way.
       if (input.exitStatusCheck !== entry.kind) return;
-      hooks.publish({
-        kind: entry.kind,
-        passed: input.exitCode === 0,
-        editRevision: entry.editRevision,
-        durationMs: Math.max(0, Date.now() - entry.admittedAtMs),
-        executed: entry.executed,
-      });
+      const passed = input.exitCode === 0;
+      const durationMs = Math.max(0, Date.now() - entry.admittedAtMs);
+      const result = { passed, editRevision: entry.editRevision, durationMs };
+      hooks.publish({ ...result, kind: entry.kind, executed: entry.executed });
+      if (!passed) return;
+      for (const kind of creditedKinds(hooks, entry, input.ownWorkdir === true)) {
+        hooks.publish({ ...result, kind, executed: entry.executed, creditedBy: entry.kind });
+      }
     },
   };
+}
+
+/**
+ * A call that named its own working directory ran the scripts of whichever package.json governs
+ * that directory, not necessarily the one read at admission: it credits its line's checks alone.
+ */
+function creditedKinds(
+  hooks: CodingToolNativeVerificationHooks,
+  entry: PendingNativeVerification,
+  ownWorkdir: boolean,
+): readonly VerificationKind[] {
+  return ownWorkdir ? (hooks.credited?.(entry.resources, false) ?? []) : entry.credited;
 }
 
 function nativeToolStatus(

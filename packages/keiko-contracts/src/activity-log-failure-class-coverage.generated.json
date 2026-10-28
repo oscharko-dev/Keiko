@@ -13551,6 +13551,12 @@
               "required": false
             },
             {
+              "name": "creditedBy",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "frames",
               "type": "string-array",
               "dataClass": "opaque-id",
