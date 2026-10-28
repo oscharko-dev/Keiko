@@ -162,3 +162,27 @@ export async function withNativeHttpStub(
   }
   await closeNativeHttpStub(resource);
 }
+
+export interface NativeHttpToolCall {
+  readonly index: 0;
+  readonly id: string;
+  readonly type: "function";
+  readonly function: {
+    readonly name: string;
+    readonly arguments: string | undefined;
+  };
+}
+
+/** The exact single function-call packet used by scripted native gateway turns. */
+export function nativeHttpToolCall(
+  id: string,
+  name: string,
+  argumentsValue: Readonly<Record<string, unknown>>,
+): NativeHttpToolCall {
+  return {
+    index: 0,
+    id,
+    type: "function",
+    function: { name, arguments: JSON.stringify(argumentsValue) },
+  };
+}

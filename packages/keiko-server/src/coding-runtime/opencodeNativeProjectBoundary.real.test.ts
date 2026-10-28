@@ -38,6 +38,7 @@ import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import { createOpenCodeV2HttpClient, type OpenCodeV2HttpClient } from "./opencodeV2HttpClient.js";
 
 import {
+  nativeHttpToolCall,
   writeNativeHttpStreamedTurn,
   startNativeHttpStub as startStub,
   withNativeHttpStub,
@@ -123,12 +124,11 @@ async function startGateway(): Promise<GatewayStub> {
     const gateway = self as GatewayStub;
     if (gateway.toolTurns > 0 && lastRole(recorded.body) === "user") {
       gateway.toolTurns -= 1;
-      const call = {
-        index: 0,
-        id: `call_boundary_${String(self.requests.length)}`,
-        type: "function",
-        function: { name: gateway.call.name, arguments: JSON.stringify(gateway.call.arguments) },
-      };
+      const call = nativeHttpToolCall(
+        `call_boundary_${String(self.requests.length)}`,
+        gateway.call.name,
+        gateway.call.arguments,
+      );
       streamedTurn(response, { tool_calls: [call] }, "tool_calls");
       return;
     }

@@ -30,6 +30,8 @@ import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import { createOpenCodeV2HttpClient, type OpenCodeV2HttpClient } from "./opencodeV2HttpClient.js";
 
 import {
+  nativeHttpToolCall,
+  writeNativeHttpStreamedTurn,
   startNativeHttpByteListener,
   parseNativeHttpJson,
   closeNativeHttpStub as closeStub,
@@ -98,10 +100,6 @@ function object(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-function frame(value: unknown): string {
-  return `data: ${JSON.stringify(value)}\n\n`;
-}
-
 async function startStub(
   respond: (stub: Stub, recorded: Recorded, response: ServerResponse) => void,
 ): Promise<Stub> {
@@ -123,22 +121,7 @@ function lastRole(body: unknown): unknown {
 }
 
 function streamedTurn(response: ServerResponse, delta: unknown, finish: string): void {
-  response.writeHead(200, { "Content-Type": "text/event-stream" });
-  const chunk = (payload: unknown, reason: string | null): string =>
-    frame({
-      id: "native-formatter",
-      object: "chat.completion.chunk",
-      choices: [{ index: 0, delta: payload, finish_reason: reason }],
-    });
-  response.write(chunk(delta, null));
-  response.end(
-    frame({
-      id: "native-formatter",
-      object: "chat.completion.chunk",
-      choices: [{ index: 0, delta: {}, finish_reason: finish }],
-      usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 },
-    }) + "data: [DONE]\n\n",
-  );
+  writeNativeHttpStreamedTurn(response, delta, finish, "native-formatter");
 }
 
 async function startGateway(): Promise<GatewayStub> {
@@ -146,12 +129,11 @@ async function startGateway(): Promise<GatewayStub> {
     const gateway = self as GatewayStub;
     if (gateway.toolTurns > 0 && lastRole(recorded.body) === "user") {
       gateway.toolTurns -= 1;
-      const call = {
-        index: 0,
-        id: `call_formatter_${String(self.requests.length)}`,
-        type: "function",
-        function: { name: gateway.call.name, arguments: JSON.stringify(gateway.call.arguments) },
-      };
+      const call = nativeHttpToolCall(
+        `call_formatter_${String(self.requests.length)}`,
+        gateway.call.name,
+        gateway.call.arguments,
+      );
       streamedTurn(response, { tool_calls: [call] }, "tool_calls");
       return;
     }

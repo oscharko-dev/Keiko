@@ -13,6 +13,8 @@ import {
 } from "./opencode-native-child.js";
 import { describe, expect, it, vi } from "vitest";
 import {
+  nativeHttpToolCall,
+  writeNativeHttpStreamedTurn,
   closeNativeHttpStub,
   startNativeHttpStub,
   startNativeHttpByteListener,
@@ -381,4 +383,79 @@ describe("native fixture byte-listener projections", () => {
       }
     },
   );
+});
+
+describe("native scripted tool-call packets (hermetic fixture mechanics, not native qualification)", () => {
+  it("retains the exact ordered wire shape without sharing packet or nested objects", (): void => {
+    const argumentsValue = Object.freeze({ path: "README.md" });
+    const first = nativeHttpToolCall("call_fixture_1", "read", argumentsValue);
+    const second = nativeHttpToolCall("call_fixture_1", "read", argumentsValue);
+    expect(first).toEqual({
+      index: 0,
+      id: "call_fixture_1",
+      type: "function",
+      function: { name: "read", arguments: '{"path":"README.md"}' },
+    });
+    expect(Object.getPrototypeOf(first)).toBe(Object.prototype);
+    expect(Object.keys(first)).toEqual(["index", "id", "type", "function"]);
+    expect(Object.keys(first.function)).toEqual(["name", "arguments"]);
+    expect(first).not.toBe(second);
+    expect(first.function).not.toBe(second.function);
+    expect(argumentsValue).toEqual({ path: "README.md" });
+  });
+
+  it("serializes the supplied argument record exactly once", (): void => {
+    const reads: string[] = [];
+    const argumentsValue = {
+      get path(): string {
+        reads.push("path");
+        return "README.md";
+      },
+    };
+    const call = nativeHttpToolCall("call_fixture_2", "read", argumentsValue);
+    expect(reads).toEqual(["path"]);
+    expect(call.function.arguments).toBe('{"path":"README.md"}');
+  });
+
+  it("preserves an own undefined serialization result instead of substituting a value", (): void => {
+    const argumentsValue = { toJSON: (): undefined => undefined };
+    const call = nativeHttpToolCall("call_fixture_3", "read", argumentsValue);
+    expect(Object.hasOwn(call.function, "arguments")).toBe(true);
+    expect(call.function.arguments).toBeUndefined();
+  });
+
+  it("propagates the original argument serialization failure identity", (): void => {
+    const failure: TypeError = Object.freeze(new TypeError("fixture-arguments-refused"));
+    const argumentsValue = {
+      toJSON(): never {
+        throw failure;
+      },
+    };
+    let caught: unknown;
+    try {
+      nativeHttpToolCall("call_fixture_4", "read", argumentsValue);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBe(failure);
+  });
+
+  it("preserves the real SSE response ID, chunk order, usage and done terminator", async (): Promise<void> => {
+    const stub = await startNativeHttpStub((_self, _recorded, response) => {
+      writeNativeHttpStreamedTurn(response, { content: "fixture" }, "stop", "fixture-stream");
+    });
+    try {
+      const response = await fetch(url(stub, "/stream"), { method: "POST", body: "{}" });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toBe("text/event-stream");
+      expect(await response.text()).toBe(
+        'data: {"id":"fixture-stream","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"fixture"},"finish_reason":null}]}\n\n' +
+          'data: {"id":"fixture-stream","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120}}\n\n' +
+          "data: [DONE]\n\n",
+      );
+    } finally {
+      await closeNativeHttpStub(stub);
+    }
+    expect(stub.server.listening).toBe(false);
+  });
 });

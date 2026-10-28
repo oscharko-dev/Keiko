@@ -192,6 +192,14 @@ function happyScopeProject(): Record<string, unknown> {
   return { kind: "project", projectId: "p-1" };
 }
 
+function happyRetrievalRequest(): {
+  schemaVersion: string;
+  requestedAt: number;
+  scopes: Record<string, unknown>[];
+} {
+  return { schemaVersion: "1", requestedAt: 0, scopes: [happyScopeUser()] };
+}
+
 function happyRecord(): Record<string, unknown> {
   return {
     id: "mem-1",
@@ -3199,9 +3207,7 @@ it("preserves source and public RetrievalFilters option presence with truthful t
   assertRetrievalFiltersPresentUndefinedTypes();
   for (const validate of [validateMemoryRetrievalRequest, validatePublicMemoryRetrievalRequest]) {
     const input = {
-      schemaVersion: "1",
-      requestedAt: 0,
-      scopes: [happyScopeUser()],
+      ...happyRetrievalRequest(),
       typeFilter: undefined,
       statusFilter: undefined,
       textQuery: undefined,
@@ -3261,9 +3267,7 @@ it("preserves source and public RetrievalBudgets option presence with truthful t
   assertRetrievalBudgetsPresentUndefinedTypes();
   for (const validate of [validateMemoryRetrievalRequest, validatePublicMemoryRetrievalRequest]) {
     const input = {
-      schemaVersion: "1",
-      requestedAt: 0,
-      scopes: [happyScopeUser()],
+      ...happyRetrievalRequest(),
       maxResults: undefined,
       maxBodyChars: undefined,
       includeArchived: undefined,

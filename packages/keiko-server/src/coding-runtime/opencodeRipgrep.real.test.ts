@@ -34,6 +34,7 @@ import { createOpenCodeV2HttpClient, type OpenCodeV2HttpClient } from "./opencod
 import { RIPGREP_RUNTIME_MANIFEST } from "./ripgrepRuntime.js";
 
 import {
+  nativeHttpToolCall,
   writeNativeHttpStreamedTurn,
   startNativeHttpStub as startStub,
   withNativeHttpStub,
@@ -103,12 +104,11 @@ async function startGateway(): Promise<GatewayStub> {
     const gateway = self as GatewayStub;
     if (gateway.toolTurns > 0 && lastRole(recorded.body) === "user") {
       gateway.toolTurns -= 1;
-      const call = {
-        index: 0,
-        id: `call_ripgrep_${String(self.requests.length)}`,
-        type: "function",
-        function: { name: gateway.call.name, arguments: JSON.stringify(gateway.call.arguments) },
-      };
+      const call = nativeHttpToolCall(
+        `call_ripgrep_${String(self.requests.length)}`,
+        gateway.call.name,
+        gateway.call.arguments,
+      );
       streamedTurn(response, { tool_calls: [call] }, "tool_calls");
       return;
     }
