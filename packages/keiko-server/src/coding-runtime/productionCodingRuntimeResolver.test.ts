@@ -1130,17 +1130,7 @@ describe("production coding runtime resolver", () => {
   // `run-272120967981827964065820685403290179367`) settles under that cause, not an internal error.
   it("answers a run's envelope end from its minted authority on the composition clock", () => {
     const fixture = workspaceFixture();
-    const confirmations = confirmationFixture();
-    const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
-      backendRun(input.request.runId),
-    );
-    const host = createProductionCodingRuntimeHost(
-      resolverFor(fixture, createRun, confirmations.consumer),
-    );
-    if (host === undefined) throw new Error("expected qualified host");
-    const request = launchRequest(fixture.workspace);
-    confirmations.issue(resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request));
-    host.launchResolver.resolve(request);
+    const { host, request, createRun } = launchedManagedRuntimeFixture(fixture);
     const expiresAt = createRun.mock.calls[0]?.[0].context.expiresAt;
     if (expiresAt === undefined) throw new Error("expected a composed run");
 
@@ -1167,17 +1157,7 @@ describe("production coding runtime resolver", () => {
       chargePrompt: () => ({ accepted: true }),
       observed: () => undefined,
     };
-    const confirmations = confirmationFixture();
-    const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
-      backendRun(input.request.runId),
-    );
-    const host = createProductionCodingRuntimeHost(
-      resolverFor(fixture, createRun, confirmations.consumer),
-    );
-    if (host === undefined) throw new Error("expected qualified host");
-    const request = launchRequest(fixture.workspace);
-    confirmations.issue(resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request));
-    host.launchResolver.resolve(request);
+    const { host, request, createRun } = launchedManagedRuntimeFixture(fixture);
     const backend = createRun.mock.calls[0]?.[0];
     const ledger = host.runtimeCapabilityAuthenticator;
     if (backend === undefined || ledger === undefined || !hasPromptSettlement(ledger)) {
@@ -1235,17 +1215,7 @@ describe("production coding runtime resolver", () => {
       chargePrompt: () => ({ accepted: true }),
       observed: () => undefined,
     };
-    const confirmations = confirmationFixture();
-    const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
-      backendRun(input.request.runId),
-    );
-    const host = createProductionCodingRuntimeHost(
-      resolverFor(fixture, createRun, confirmations.consumer),
-    );
-    if (host === undefined) throw new Error("expected qualified host");
-    const request = launchRequest(fixture.workspace);
-    confirmations.issue(resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request));
-    host.launchResolver.resolve(request);
+    const { host, request, createRun } = launchedManagedRuntimeFixture(fixture);
     const settlement = createRun.mock.calls[0]?.[0].toolFacade.nativeSettlement;
     if (settlement === undefined) throw new Error("expected the composed run's native evidence");
 
@@ -1268,6 +1238,27 @@ describe("production coding runtime resolver", () => {
     expect(host.runEffort?.read("run-other")).toBeUndefined();
   });
 });
+
+function launchedManagedRuntimeFixture(fixture: ReturnType<typeof workspaceFixture>): {
+  host: ProductionCodingRuntimeHost;
+  request: ReturnType<typeof launchRequest>;
+  createRun: ReturnType<
+    typeof vi.fn<(input: ProductionRuntimeBackendInput) => ReturnType<typeof backendRun>>
+  >;
+} {
+  const confirmations = confirmationFixture();
+  const createRun = vi.fn((input: ProductionRuntimeBackendInput) =>
+    backendRun(input.request.runId),
+  );
+  const host = createProductionCodingRuntimeHost(
+    resolverFor(fixture, createRun, confirmations.consumer),
+  );
+  if (host === undefined) throw new Error("expected qualified host");
+  const request = launchRequest(fixture.workspace);
+  confirmations.issue(resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request));
+  host.launchResolver.resolve(request);
+  return { host, request, createRun };
+}
 
 interface PromptSettlementPort {
   readonly settlePromptTokens: (

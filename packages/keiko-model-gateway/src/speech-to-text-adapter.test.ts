@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { observeSpeechCompletionFields } from "./__fixtures__/speech-completion-observation.js";
 import { requestSpeechToText as publicSpeechToText } from "@oscharko-dev/keiko-model-gateway";
 import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import {
@@ -915,28 +916,13 @@ function observeSttCompletionFields(
     ["log", sink],
     ["correlationId", request.correlationId],
   ] as const;
-  const originals = fields.map(([key]) => ({
-    key,
-    descriptor: Object.getOwnPropertyDescriptor(request, key),
-  }));
-  for (const [key, value] of fields) {
-    Object.defineProperty(request, key, {
-      configurable: true,
-      get(this: SpeechToTextRequest): string | ModelGatewayLogSink | undefined {
-        if (!state.active) return value;
-        state.trace.push(key);
-        state.requestReceivers.push(this);
-        if (state.refusedField === key) throw state.failure;
-        return key === "endpoint" && state.status === 429 ? "not a provider endpoint" : value;
-      },
-    });
-  }
-  return (): void => {
-    for (const { key, descriptor } of originals) {
-      if (descriptor === undefined) Reflect.deleteProperty(request, key);
-      else Object.defineProperty(request, key, descriptor);
-    }
-  };
+  return observeSpeechCompletionFields(
+    request,
+    fields,
+    state,
+    () => state.status === 429,
+    "not a provider endpoint",
+  );
 }
 
 function expectSttCompletionOrder(
@@ -1083,4 +1069,140 @@ describe("STT completion evidence observations (#3918)", (): void => {
       });
     }
   }
+});
+
+describe("speech completion descriptor fixture controls", (): void => {
+  it("bypasses inactive observations without reading the live rate condition", (): void => {
+    const state = sttCompletionObservation(429, "endpoint");
+    const sink = sttCompletionSink(state);
+    const request = sttCompletionRequest(state, sink);
+    let rateReads = 0;
+    Object.defineProperty(state, "status", {
+      get(): never {
+        rateReads += 1;
+        throw new TypeError("Inactive completion must not inspect the rate condition");
+      },
+    });
+    const restore = observeSttCompletionFields(request, sink, state);
+    try {
+      expect(request.endpoint).toBe(ENDPOINT);
+      expect(request.modelId).toBe("keiko-stt");
+      expect(request.log).toBe(sink);
+      expect(request.correlationId).toBeUndefined();
+      expect(rateReads).toBe(0);
+      expect(state.trace).toEqual([]);
+      expect(state.requestReceivers).toEqual([]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("defers the live endpoint condition and preserves default and explicit receivers", (): void => {
+    const state = sttCompletionObservation(429, "none");
+    const sink = sttCompletionSink(state);
+    const request = sttCompletionRequest(state, sink);
+    let status: 200 | 429 = 429;
+    let rateReads = 0;
+    Object.defineProperty(state, "status", {
+      get(): 200 | 429 {
+        rateReads += 1;
+        return status;
+      },
+    });
+    const restore = observeSttCompletionFields(request, sink, state);
+    try {
+      state.active = true;
+      expect(request.log).toBe(sink);
+      expect(request.modelId).toBe("keiko-stt");
+      expect(request.correlationId).toBeUndefined();
+      expect(rateReads).toBe(0);
+      expect(request.endpoint).toBe("not a provider endpoint");
+      expect(rateReads).toBe(1);
+      expect(state.trace).toEqual(["log", "modelId", "correlationId", "endpoint"]);
+      expect(state.requestReceivers).toHaveLength(4);
+      for (const receiver of state.requestReceivers) expect(receiver).toBe(request);
+      status = 200;
+      const receiver = { completionReceiver: true };
+      const value: unknown = Reflect.get(request, "endpoint", receiver);
+      expect(value).toBe(ENDPOINT);
+      expect(rateReads).toBe(2);
+      expect(state.requestReceivers.at(-1)).toBe(receiver);
+    } finally {
+      restore();
+    }
+  });
+
+  const refusedFields: readonly ["endpoint", "modelId"] = ["endpoint", "modelId"];
+  for (const refusedField of refusedFields) {
+    it(`retains the exact ${refusedField} failure before any rate observation`, (): void => {
+      const state = sttCompletionObservation(200, refusedField);
+      const sink = sttCompletionSink(state);
+      const request = sttCompletionRequest(state, sink);
+      let rateReads = 0;
+      Object.defineProperty(state, "status", {
+        get(): never {
+          rateReads += 1;
+          throw new TypeError("Refused completion must not inspect the rate condition");
+        },
+      });
+      const restore = observeSttCompletionFields(request, sink, state);
+      let observed: unknown;
+      try {
+        state.active = true;
+        observed = request[refusedField];
+      } catch (error) {
+        observed = error;
+      } finally {
+        restore();
+      }
+      expect(observed).toBe(state.failure);
+      expect(rateReads).toBe(0);
+      expect(state.trace).toEqual([refusedField]);
+      expect(state.requestReceivers).toHaveLength(1);
+      expect(state.requestReceivers[0]).toBe(request);
+    });
+  }
+
+  it("restores original accessors and distinguishes absent from own undefined fields", (): void => {
+    const state = sttCompletionObservation(200, "none");
+    const sink = sttCompletionSink(state);
+    const request = sttCompletionRequest(state, sink);
+    const originalReceivers: unknown[] = [];
+    const originalEndpoint = function (this: SpeechToTextRequest): string {
+      originalReceivers.push(this);
+      return ENDPOINT;
+    };
+    Object.defineProperty(request, "endpoint", {
+      configurable: true,
+      enumerable: false,
+      get: originalEndpoint,
+    });
+    Object.defineProperty(request, "log", {
+      configurable: true,
+      enumerable: false,
+      writable: false,
+      value: undefined,
+    });
+    Reflect.deleteProperty(request, "correlationId");
+    const before = Object.getOwnPropertyDescriptors(request);
+    const restore = observeSttCompletionFields(request, sink, state);
+    try {
+      expect(request.log).toBe(sink);
+      expect(Object.hasOwn(request, "correlationId")).toBe(true);
+      expect(originalReceivers).toEqual([]);
+    } finally {
+      restore();
+    }
+    expect(Object.getOwnPropertyDescriptors(request)).toEqual(before);
+    expect(Object.hasOwn(request, "correlationId")).toBe(false);
+    expect(Object.hasOwn(request, "log")).toBe(true);
+    expect(request.log).toBeUndefined();
+    expect(Object.getOwnPropertyDescriptor(request, "endpoint")).toHaveProperty(
+      "get",
+      originalEndpoint,
+    );
+    expect(request.endpoint).toBe(ENDPOINT);
+    expect(originalReceivers).toHaveLength(1);
+    expect(originalReceivers[0]).toBe(request);
+  });
 });
