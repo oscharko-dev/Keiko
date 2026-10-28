@@ -16,6 +16,7 @@ import {
   rmSync,
   statSync,
   writeFileSync,
+  type Stats,
 } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -288,6 +289,9 @@ class Store {
   }
 
   public checkout(input: Parameters<RetainedSessionStore["checkout"]>[0]): CheckoutResult {
+    if (this.existingRoot() === undefined) {
+      return { ok: false, reason: "no-retained-state", removed: false };
+    }
     const entry = join(this.root, retainedSessionKey(input.binding.taskId));
     if (!existsSync(entry)) return { ok: false, reason: "no-retained-state", removed: false };
     const manifest = this.readManifest(entry);
@@ -308,6 +312,7 @@ class Store {
   }
 
   public remove(taskId: string): void {
+    if (this.existingRoot() === undefined) return;
     rmSync(join(this.root, retainedSessionKey(taskId)), { recursive: true, force: true });
   }
 
@@ -315,7 +320,7 @@ class Store {
     isLiveTask: ((taskId: string) => boolean) | undefined = this.isLiveTask,
   ): PruneResult {
     const counts = { expired: 0, orphaned: 0, invalid: 0, quota: 0 };
-    if (!existsSync(this.root)) return { ...counts, entryCount: 0 };
+    if (this.existingRoot() === undefined) return { ...counts, entryCount: 0 };
     const entries: PrunableEntry[] = [];
     for (const name of readdirSync(this.root)) {
       if (INTERRUPTED_ENTRY.test(name)) {
@@ -451,9 +456,23 @@ class Store {
 
   private ensureRoot(): void {
     mkdirSync(this.root, { recursive: true, mode: 0o700 });
-    const stat = lstatSync(this.root);
-    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("retained-root-invalid");
+    const stat = this.existingRoot();
+    if (stat === undefined) throw new Error("retained-root-invalid");
     if ((stat.mode & 0o077) !== 0) chmodSync(this.root, 0o700);
+  }
+
+  // Recheck at every public entry: a root accepted during retain may have been redirected since.
+  // This rejects an existing link/junction; it is not descriptor-relative protection from races.
+  private existingRoot(): Stats | undefined {
+    let stat: Stats;
+    try {
+      stat = lstatSync(this.root);
+    } catch (error) {
+      if (isAbsentPath(error)) return undefined;
+      throw error;
+    }
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("retained-root-invalid");
+    return stat;
   }
 
   private readManifest(entry: string): RetainedSessionManifest | undefined {

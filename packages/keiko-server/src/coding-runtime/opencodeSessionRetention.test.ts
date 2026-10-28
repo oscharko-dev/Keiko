@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -520,6 +521,29 @@ describe("retaining a settled run's session state", () => {
 
       expect(() => retain(f)).toThrow("retained-root-invalid");
       expect(readdirSync(target)).toEqual([]);
+    },
+  );
+
+  it.each(["checkout", "prune", "remove"] as const)(
+    "refuses a redirected retention root during %s without touching its target",
+    (operation) => {
+      const f = fixture();
+      expect(retain(f)).toMatchObject({ ok: true });
+      const target = join(f.root, "redirected");
+      renameSync(f.storeRoot, target);
+      symlinkSync(target, f.storeRoot, process.platform === "win32" ? "junction" : "dir");
+      const entry = join(target, retainedSessionKey("task-1"));
+      const databaseBefore = sha256(join(entry, "opencode.db"));
+      const manifestBefore = sha256(join(entry, "manifest.json"));
+
+      expect(() => {
+        if (operation === "checkout") return checkout(f);
+        if (operation === "prune") return f.store.prune(() => false);
+        f.store.remove("task-1");
+      }).toThrow("retained-root-invalid");
+      expect(sha256(join(entry, "opencode.db"))).toBe(databaseBefore);
+      expect(sha256(join(entry, "manifest.json"))).toBe(manifestBefore);
+      expect(readdirSync(target)).toEqual([retainedSessionKey("task-1")]);
     },
   );
 

@@ -87,6 +87,45 @@ The SQLite files use the producer-derived persistence schema with synthetic rows
 OpenCode service, model turn, Workbench restart/resume/fork, or installed upgrade is executed by
 these suites. W9 advances to partial storage-component evidence and remains open alongside W1.
 
+### Retention-root redirection repair
+
+Further native Windows qualification reproduced a productive defect: `retain` rejected a linked
+retention root, but `checkout`, `prune` and `remove` traversed a root replaced with a real directory
+junction after retention. Three regression cases failed before the repair. They use only isolated
+synthetic state; no application or customer state is involved.
+
+The existing root validation now runs at every public store entry point. A non-directory,
+symbolic link or junction raises `retained-root-invalid` before entry traversal. Absent roots
+retain their normal no-state/no-op behavior. All three regression cases pass after the repair,
+including byte-identical target database/manifest and unchanged directory contents. A fourth
+production-composition case proves that startup pruning preserves a canary in the redirected
+target and records exactly one existing `coding-runtime.session-continuity` warning with the
+startup correlation, `errorKind: internal`, `action: prune`, `outcome: failed` and `reason:
+copy-failed`. Its serialized event contains no fixture path and passes the existing log proof.
+The startup/continuity suite passes **27/27**. The full eight-file selection now gives
+**465 passed, four failed, zero skipped**; the four previously recorded platform observations
+remain unchanged. No POSIX permission assertion or symlink/error-propagation test is relaxed.
+
+This fixes deterministic redirection of the configured root between operations. It does not
+qualify ancestor containment, concurrent pathname replacement, Windows ACL privacy, or the
+original-runtime Workbench. The shared security owner already labels its Windows permission
+assurance `platform-inherited`; Unix mode bits cannot establish a Windows DACL proof.
+
+Build/typecheck, scoped ESLint, formatting, semantic duplication and the ADR index pass. The
+Activity Log aggregate initially cannot start its prerequisite on Windows: its default runner
+directly spawns the resolved npm command with `shell: false`. Running the same seven-step gate
+through its existing runner injection, with the qualified Node executing npm's CLI directly,
+executes every constituent. Six checks pass: build, registry (97 tests), failure paths,
+architecture, negative architecture and release impact. The scenario check remains **failed**:
+126 passed, 17 failed, five skipped across 11 files. All failures are in the unchanged
+`support-report-cli.test.ts`, involving Unix mode/private-permission expectations or local
+symlink privileges. No scenario is removed or counted as passed, and no successful aggregate
+verdict is claimed. The storage failure's own production-composition/log proof passes above.
+The required local Sonar rerun passes without unresolved findings (analysis task
+`a9e5d336-93f3-4a07-bd12-8946a74a7a2a`). On the preceding pushed head `ae8b28957`, customer-shape,
+CodeQL, Dependency Review and Workflow hygiene have completed successfully; both full CI runs
+remain queued at revalidation. These results do not include the subsequent root-validation fix.
+
 ## Revalidation on 2026-10-27
 
 The continuation starts from PR #4088 head `475e91a3f9745a70a3371400c9fe265adf363bae` and
@@ -463,8 +502,11 @@ Next work, in dependency order:
 
 Release-impacting supervisor reliability fix: retain inherited-handle storage through Windows
 process creation. Category `fixes`, priority `normal`, remediation `no-action-required`; no state
-stores or protocol versions change. Proposed note: "Fix a Windows runtime supervisor startup
-failure caused by expired process-attribute storage." Target release version and release-owner
+formats or protocol versions change. The retention-root repair additionally affects validation
+before accessing the existing retained-session store, without migration. Proposed notes: "Fix a
+Windows runtime supervisor startup failure caused by expired process-attribute storage" and
+"Refuse redirected retained-session directories before restoring or removing session state."
+Target release version and release-owner
 approval are pending; catalog insertion is deferred to the release-cut PR under the
 [release-impact runbook](../release/release-impact-runbook.md). This does not itself enable the
 still-unimplemented Windows gateway service.

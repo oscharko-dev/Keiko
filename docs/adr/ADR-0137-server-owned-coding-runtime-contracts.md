@@ -2370,6 +2370,12 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
     entries in all, 14 days, 3,000 messages; the store prunes on startup and on every retain, and an
     entry whose task Coding History no longer holds is removed. `KEIKO_CODING_SESSION_RETENTION=off`
     retains, resumes and forks nothing; any other unknown value fails closed to off.
+    Every retain, checkout, prune and remove validates the configured retention root as an actual
+    directory, rejecting a symbolic link or Windows junction before traversing its entries. A root
+    replaced between operations is not trusted because a prior retention succeeded. Invalid roots
+    propagate through the existing `coding-runtime.session-continuity` failed/copy-failed event;
+    startup pruning leaves their targets untouched. This pathname check does not attest Windows
+    ACL privacy, ancestor containment or atomic protection against replacement during an operation.
   - **Resume.** The orchestrator declares the intent before it launches; the composition's prepare
     step checks the entry out into the new run's own state root (exclusive copy, then the digest and
     the audit again, workspace, runtime version and window checked against the new run), so the
