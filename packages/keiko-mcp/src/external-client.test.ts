@@ -3,6 +3,7 @@ import { createMcpHandler, fromJsonSchema, McpServer } from "@modelcontextprotoc
 import type {
   ExternalMcpConnection,
   ManagedMcpInvocationContext,
+  ManagedMcpLogPort,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import {
   expectActivityLogProof,
@@ -347,80 +348,124 @@ describe("external MCP compatibility", () => {
   });
 });
 
-it("connects to a legacy HTTP+SSE endpoint through the SDK", async () => {
-  const encoder = new TextEncoder();
-  let stream: ReadableStreamDefaultController<Uint8Array> | undefined;
-  let effects = 0;
-  const connection = await connectExternalMcp({
-    signal: new AbortController().signal,
-    correlationId: "external-sse-test",
-    log: { write: () => undefined },
-    transport: {
-      kind: "remote",
-      url: "https://synthetic.example.test/sse",
-      transport: "sse",
-      fetch: async (input, init) => {
-        const request = new Request(input, init);
-        if (request.method === "GET")
-          return new Response(
-            new ReadableStream<Uint8Array>({
-              start(controller): void {
-                stream = controller;
-                controller.enqueue(encoder.encode("event: endpoint\ndata: /messages\n\n"));
-              },
-            }),
-            { headers: { "content-type": "text/event-stream" } },
-          );
-        const rpc = (await request.json()) as { method: string; id?: number };
-        if (rpc.id === undefined) return new Response(null, { status: 202 });
-        let result: unknown;
-        if (rpc.method === "initialize")
-          result = {
-            protocolVersion: "2025-11-25",
-            capabilities: { tools: {} },
-            serverInfo: { name: "synthetic-sse", version: "1" },
-          };
-        if (rpc.method === "tools/list")
-          result = {
-            tools: [
-              {
-                name: "probe",
-                inputSchema: { type: "object", properties: {}, additionalProperties: false },
-              },
-            ],
-          };
-        if (rpc.method === "tools/call") {
-          effects++;
-          result = { content: [{ type: "text", text: "sse-result" }] };
-        }
-        const message =
-          result === undefined
-            ? { jsonrpc: "2.0", id: rpc.id, error: { code: -32601, message: "Method not found" } }
-            : { jsonrpc: "2.0", id: rpc.id, result };
-        stream?.enqueue(encoder.encode(`event: message\ndata: ${JSON.stringify(message)}\n\n`));
-        return new Response(null, { status: 202 });
+it.each(["descriptor-drift", "connection-close", "request-rejection"] as const)(
+  "preserves the legacy HTTP+SSE lifetime boundary for %s",
+  async (termination) => {
+    const encoder = new TextEncoder();
+    let stream: ReadableStreamDefaultController<Uint8Array> | undefined;
+    let effects = 0;
+    let opened = 0;
+    const lines: Parameters<ManagedMcpLogPort["write"]>[0][] = [];
+    const connection = await connectExternalMcp({
+      signal: new AbortController().signal,
+      correlationId: "external-sse-test",
+      log: {
+        write: (line) => {
+          lines.push(line);
+        },
       },
-    },
-  });
-  clients.push(connection);
-  expect(await connection.call("probe", {}, context())).toMatchObject({
-    content: [{ text: "sse-result" }],
-  });
-  expect(effects).toBe(1);
-  expect(connection.signal.aborted).toBe(false);
-  stream?.enqueue(
-    encoder.encode(
-      'event: message\ndata: {"jsonrpc":"2.0","method":"notifications/tools/list_changed"}\n\n',
-    ),
-  );
-  await vi.waitFor(() => {
-    expect(connection.signal.aborted).toBe(true);
-  });
-  await expect(connection.call("probe", {}, context())).rejects.toMatchObject({
-    reason: "descriptor-drift",
-  });
-  expect(effects).toBe(1);
-});
+      transport: {
+        kind: "remote",
+        url: "https://synthetic.example.test/sse",
+        transport: "sse",
+        fetch: async (input, init) => {
+          const request = new Request(input, init);
+          if (request.method === "GET") {
+            opened++;
+            return new Response(
+              new ReadableStream<Uint8Array>({
+                start(controller): void {
+                  stream = controller;
+                  controller.enqueue(
+                    encoder.encode("retry: 1\nevent: endpoint\ndata: /messages\n\n"),
+                  );
+                },
+              }),
+              { headers: { "content-type": "text/event-stream" } },
+            );
+          }
+          const rpc = (await request.json()) as { method: string; id?: number };
+          if (rpc.id === undefined) return new Response(null, { status: 202 });
+          let result: unknown;
+          if (rpc.method === "initialize")
+            result = {
+              protocolVersion: "2025-11-25",
+              capabilities: { tools: {} },
+              serverInfo: { name: "synthetic-sse", version: "1" },
+            };
+          if (rpc.method === "tools/list")
+            result = {
+              tools: [
+                {
+                  name: "probe",
+                  inputSchema: { type: "object", properties: {}, additionalProperties: false },
+                },
+              ],
+            };
+          if (rpc.method === "tools/call") {
+            if (termination === "request-rejection" && effects === 1)
+              return new Response(null, { status: 503 });
+            effects++;
+            result = { content: [{ type: "text", text: "sse-result" }] };
+          }
+          const message =
+            result === undefined
+              ? { jsonrpc: "2.0", id: rpc.id, error: { code: -32601, message: "Method not found" } }
+              : { jsonrpc: "2.0", id: rpc.id, result };
+          stream?.enqueue(encoder.encode(`event: message\ndata: ${JSON.stringify(message)}\n\n`));
+          return new Response(null, { status: 202 });
+        },
+      },
+    });
+    clients.push(connection);
+    expect(await connection.call("probe", {}, context())).toMatchObject({
+      content: [{ text: "sse-result" }],
+    });
+    expect(effects).toBe(1);
+    expect(connection.signal.aborted).toBe(false);
+    if (termination === "request-rejection") {
+      await expect(connection.call("probe", {}, context())).rejects.toMatchObject({
+        reason: "protocol-error",
+      });
+      expect(connection.signal.aborted).toBe(false);
+      expect(effects).toBe(1);
+      expect(opened).toBe(1);
+      return;
+    }
+    if (termination === "connection-close") stream?.close();
+    else
+      stream?.enqueue(
+        encoder.encode(
+          'event: message\ndata: {"jsonrpc":"2.0","method":"notifications/tools/list_changed"}\n\n',
+        ),
+      );
+    await vi.waitFor(() => {
+      expect(connection.signal.aborted).toBe(true);
+    });
+    await expect(connection.call("probe", {}, context())).rejects.toMatchObject({
+      reason: termination === "descriptor-drift" ? "descriptor-drift" : "not-admitted",
+    });
+    if (termination === "connection-close") {
+      await vi.waitFor(() => {
+        expect(lines.slice(-2)).toMatchObject([
+          {
+            op: "mcp.managed.lifecycle",
+            extra: { phase: "failed", reason: "closed", toolCount: 1 },
+          },
+          {
+            op: "mcp.managed.lifecycle",
+            extra: { phase: "completed", reason: "closed", toolCount: 1 },
+          },
+        ]);
+      });
+      expect(JSON.stringify(lines)).not.toContain("synthetic.example.test");
+      for (const line of lines)
+        expectActivityLogProof("mcp.managed.lifecycle.line", formatActivityLogProofLine(line));
+    }
+    expect(effects).toBe(1);
+    expect(opened).toBe(1);
+  },
+);
 
 it.each([
   { text: { type: "string", "x-mcp-header": "synthetic-private-header value" } },

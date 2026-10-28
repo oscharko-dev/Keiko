@@ -323,6 +323,33 @@ Prioritized work identified at that checkpoint (later repairs are reflected in t
 
 ## Verification checkpoints
 
+### Central HTTPS MCP: actual Settings, Chat and OpenCode UI
+
+The 2026-10-28 browser group ran at `8318665ff248f2e48cb7a2de326d46c09d1181b5`
+through the running Docker LiteLLM gateway and its configured Gemma model. An independent
+synthetic HTTPS/Bearer MCP server supplied three tools and a durable remote effect counter.
+No customer endpoints, tokens, screenshots or issue content were used.
+
+- Settings created the server through its ordinary form. The explicit private-network option
+  and operator-provided CA were required; discovery displayed **Connected · 3 tools**.
+  A preceding public-target attempt was refused before the server received a request.
+- A new ordinary Chat, without a Jira binding or Coding session, displayed read disclosure
+  and exact-action approvals. Its write had zero matching effects before approval and one
+  afterward. The following read returned the actual record ID and original synthetic text;
+  both tool cards settled as confirmed.
+- A separate OpenCode task used that same configured server in **Ask for approval**.
+  The real Code Mode and network-action approvals preceded its write and read. It finished
+  **Succeeded, revision 13**, with the actual second record ID and matching text.
+- Independent server inspection measured one baseline preflight write and exactly two
+  additional writes: one from Chat and one from OpenCode. The Coding repository remained clean.
+
+The retained local screenshots and receipt are private qualification artifacts. This group
+proves the normal modern HTTPS/static-token path through both real UI consumers. It does not
+claim native durable acknowledgement, legacy-SSE disconnect recovery, the complete original
+Jira acceptance matrix or final aggregate gates. The earlier uncertain-write UI group separately
+proved persisted **Recovery required** and one effect after reload. Its synthetic remote effect
+was reconciled before a fresh, different HTTPS task was accepted; it was never replayed.
+
 ### Deterministic normal-Chat browser CI lane — #4087 AC5 (partial)
 
 `npm run test:e2e:jira-chat` owns `playwright.jira-chat-4081.config.ts` and

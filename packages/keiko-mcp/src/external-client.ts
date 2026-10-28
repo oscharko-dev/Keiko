@@ -5,6 +5,7 @@ import {
   fromJsonSchema,
   StreamableHTTPClientTransport,
   SSEClientTransport,
+  SseError,
   type Transport,
   type Tool,
 } from "@modelcontextprotocol/client";
@@ -129,6 +130,21 @@ class ExternalClient implements ExternalMcpConnection {
       this.#lifetime.abort(error);
       void this.close().catch(() => undefined);
     });
+    this.#client.onerror = (error): void => {
+      // The legacy EventSource otherwise reconnects with stale session/catalog state.
+      // A POST rejection is not a stream loss and must not close other consumers.
+      if (!(error instanceof SseError) || this.#closed) return;
+      recordManagedMcp(
+        this.options.log,
+        this.options.correlationId,
+        "failed",
+        this.#tools.length,
+        this.#digest,
+        "closed",
+      );
+      this.#lifetime.abort(new ManagedMcpError("closed"));
+      void this.close().catch(() => undefined);
+    };
     this.#client.onclose = (): void => {
       this.#closed = true;
       this.#lifetime.abort(new ManagedMcpError("closed"));
