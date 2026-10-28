@@ -1848,8 +1848,11 @@ export function runtimeMetadataModule() {
     'import operationSurfaceData from "./activity-log-operation-surfaces.generated.json" with { type: "json" };',
     'import type { ActivityLogFailureClassCoverageMetadata, ReadonlyRegistryData } from "./activity-log-registry-metadata.js";',
     "const failureMetadata: ReadonlyRegistryData<typeof failureCoverageData> = failureCoverageData;",
-    "// The producer validates these data against the canonical operation and failure-class contracts.",
+    "// SAFETY: Qualified canonical registry/inventory and metadata synchronization proofs bind this JSON",
+    "// to the closed coverage schema; the assertion restores literals widened by JSON module typing.",
     "export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = failureMetadata as ActivityLogFailureClassCoverageMetadata;",
+    "// SAFETY: Qualified canonical inventory and metadata synchronization proofs bind these JSON values",
+    "// to the closed failure-surface vocabulary; the assertion restores JSON-widened literals.",
     "export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLogFailureSurface>> = operationSurfaceData as Readonly<Record<string, ActivityLogFailureSurface>>;",
     "",
   ].join("\n");

@@ -372,7 +372,8 @@ export const CODING_TASK_EXPORT_FORMATS = ["json", "markdown"] as const;
 export type CodingTaskExportFormat = (typeof CODING_TASK_EXPORT_FORMATS)[number];
 
 export function isCodingTaskExportFormat(value: unknown): value is CodingTaskExportFormat {
-  return (CODING_TASK_EXPORT_FORMATS as readonly unknown[]).includes(value);
+  const formats: readonly unknown[] = CODING_TASK_EXPORT_FORMATS;
+  return formats.includes(value);
 }
 
 export const CODING_TASK_EXPORT_SCHEMA = "keiko-coding-task-export";

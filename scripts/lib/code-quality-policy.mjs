@@ -59,6 +59,14 @@ export const NON_COSMETIC_RULES = Object.freeze([
   "anti-slop-effect/prefer-effect-match",
   "oxc/no-accumulating-spread",
 ]);
+export const NATIVE_EFFECT_RULES = Object.freeze([
+  "anti-slop-effect/no-manual-effect-error-tag",
+  "anti-slop-effect/no-manual-tag-comparison",
+  "anti-slop-effect/no-manual-tagged-construction",
+  "anti-slop-effect/no-service-constructor-imports",
+  "anti-slop-effect/prefer-effect-match",
+]);
+
 const DISPOSITIONS = new Set([
   "production-required",
   "boundary-scoped",
@@ -89,22 +97,52 @@ function validScopes(scopes) {
 
 function validRule(rule) {
   return (
-    exactKeys(rule, ["id", "disposition", "migrationIssue", "reason", "activeScopes"]) &&
+    exactKeys(rule, policyRuleKeys(rule)) &&
     NON_COSMETIC_RULES.includes(rule.id) &&
     DISPOSITIONS.has(rule.disposition) &&
     Number.isSafeInteger(rule.migrationIssue) &&
     rule.migrationIssue > 0 &&
     typeof rule.reason === "string" &&
     rule.reason.length > 0 &&
-    validScopes(rule.activeScopes)
+    validScopes(rule.activeScopes) &&
+    validRetiredRuleScopes(rule)
   );
+}
+
+function policyRuleKeys(rule) {
+  const keys = ["id", "disposition", "migrationIssue", "reason", "activeScopes"];
+  if (rule && Object.hasOwn(rule, "retiredScopes")) keys.push("retiredScopes");
+  return keys;
+}
+
+function validRetiredRuleScopes(rule) {
+  if (!Object.hasOwn(rule, "retiredScopes")) return true;
+  return (
+    NATIVE_EFFECT_RULES.includes(rule.id) &&
+    rule.disposition === "Effect-host-only" &&
+    rule.activeScopes.length === 0 &&
+    Array.isArray(rule.retiredScopes) &&
+    rule.retiredScopes.length === 1 &&
+    rule.retiredScopes[0] === "native-host"
+  );
+}
+
+function validRetirementCohort(policy) {
+  const retired = policy.rules.filter((rule) => Object.hasOwn(rule, "retiredScopes"));
+  return (
+    retired.length === 0 || (policy.version === 2 && retired.length === NATIVE_EFFECT_RULES.length)
+  );
+}
+
+function obligationScopes(rule) {
+  return [...rule.activeScopes, ...(rule.retiredScopes ?? [])];
 }
 
 function activationShrank(policy, previous) {
   return previous.some((baseline) =>
     baseline.rules.some((rule) => {
       const current = policy.rules.find((entry) => entry.id === rule.id);
-      return rule.activeScopes.some((scope) => !current?.activeScopes.includes(scope));
+      return obligationScopes(rule).some((scope) => !obligationScopes(current).includes(scope));
     }),
   );
 }
@@ -512,6 +550,10 @@ function responsibilityShrank(policy, previous) {
   );
 }
 
+function validPolicyRuleInventory(policy) {
+  return validRuleInventory(policy.rules) && validRetirementCohort(policy);
+}
+
 function validateCurrentPolicy(policy) {
   const keys = ["version", "upstream", "runner", "rules"];
   if (policy?.version === 2) keys.push("responsibilities");
@@ -522,7 +564,7 @@ function validateCurrentPolicy(policy) {
     policy.runner === RUNNER_VERSION,
   ];
   if (!identity.every(Boolean)) return ["invalid-policy-identity"];
-  if (!validRuleInventory(policy.rules)) return ["invalid-rule-inventory"];
+  if (!validPolicyRuleInventory(policy)) return ["invalid-rule-inventory"];
   if (policy.version === 2 && !validResponsibilities(policy.responsibilities))
     return ["invalid-responsibilities"];
   const guards = policy.rules.filter((rule) => INITIAL_GUARDS.has(rule.id));

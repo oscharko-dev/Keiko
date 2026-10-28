@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { readFileSync, writeFileSync, mkdirSync, rmSync, globSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, rmSync, globSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { parse } from "yaml";
@@ -10,10 +10,11 @@ import {
 } from "../check-runtime-toolchain.mjs";
 import { Linter } from "eslint";
 import coveragePlugin from "../code-quality-coverage-plugin.mjs";
-import { codeQualityPolicyMain } from "../check-code-quality-policy.mjs";
+import { codeQualityPolicyMain, executeCodeQualityPolicy } from "../check-code-quality-policy.mjs";
 import {
   policyDigest,
   collectPolicyInventory,
+  collectPolicyMembership,
   selectPolicyScope,
 } from "../lib/code-quality-inventory.mjs";
 import {
@@ -76,10 +77,7 @@ describe("production code-quality invocation wiring (#3915)", () => {
     const production = JSON.parse(read("scripts/code-quality-policy.json"));
     const synthetic = fixtureOwnedPolicy();
     expect(synthetic.rules).toEqual(
-      production.rules.map((rule) => ({
-        ...rule,
-        activeScopes: rule.activeScopes.filter((scope) => scope !== CONTRACTS_SCOPE),
-      })),
+      production.rules.map((rule) => expectedHistoricalFixtureRule(rule)),
     );
     expect(production.responsibilities).toHaveLength(129);
     expect(production.responsibilities.slice(-5).map(({ id }) => id)).toEqual([
@@ -861,6 +859,16 @@ function qualificationValidatorFixture() {
     counts: { expected: 1, visited: 1, packages: 27, violations: 0 },
     pack: Array.from({ length: 27 }, () => ({})),
     rules: policy.rules,
+    scopeRetirements: [
+      {
+        scope: "native-host",
+        state: "owner-absent",
+        ownerMemberCount: 0,
+        obligationCount: 5,
+        pathCount: 1,
+        pathsSha256: "b".repeat(64),
+      },
+    ],
     violations: [],
     responsibilities: {
       counts: {
@@ -1445,3 +1453,201 @@ describe("diagnostics ingress route responsibility wiring (#3918)", () => {
     }
   });
 });
+
+function expectedHistoricalFixtureRule(rule) {
+  const { retiredScopes, ...active } = rule;
+  return {
+    ...active,
+    activeScopes: retiredScopes ?? rule.activeScopes.filter((scope) => scope !== CONTRACTS_SCOPE),
+  };
+}
+
+function retiredOwnerFixture() {
+  const root = enforcingFixture();
+  rmSync(join(root, "native/opencode-service-host"), { recursive: true });
+  const path = join(root, "scripts/code-quality-policy.json");
+  const policy = JSON.parse(readFileSync(path, "utf8"));
+  for (const rule of policy.rules.filter(({ disposition }) => disposition === "Effect-host-only")) {
+    rule.activeScopes = [];
+    rule.retiredScopes = ["native-host"];
+  }
+  writeFileSync(path, JSON.stringify(policy));
+  return root;
+}
+
+async function captureRetirementVerdict(root) {
+  const output = vi.spyOn(console, "log").mockImplementation(() => undefined);
+  const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  try {
+    const status = await codeQualityPolicyMain(["--json"], root);
+    return {
+      status,
+      output: output.mock.calls.map(([line]) => line),
+      errors: error.mock.calls.map(([line]) => line),
+    };
+  } finally {
+    output.mockRestore();
+    error.mockRestore();
+  }
+}
+
+function writeReturnedOwner(root, leaf, tracked) {
+  const path = `native/opencode-service-host/${leaf}`;
+  mkdirSync(join(root, "native/opencode-service-host"), { recursive: true });
+  writeFileSync(join(root, path), "export const marker = 1;\n");
+  if (tracked) execFileSync("git", ["add", "--", path], { cwd: root, stdio: "ignore" });
+  return path;
+}
+
+describe("complete-membership native retirement witness (#3918)", () => {
+  it("reports real absent-owner membership without claiming historical analyzer visits", async () => {
+    const root = retiredOwnerFixture();
+    const verdict = await captureRetirementVerdict(root);
+    expect(verdict.status).toBe(0);
+    expect(verdict.errors).toEqual([]);
+    const report = JSON.parse(verdict.output[0]);
+    expect(report.scopeRetirements).toHaveLength(1);
+    expect(report.scopeRetirements[0]).toMatchObject({
+      scope: "native-host",
+      state: "owner-absent",
+      ownerMemberCount: 0,
+      obligationCount: 5,
+      pathCount: collectPolicyMembership(root).paths.length,
+    });
+    expect(report.scopeRetirements[0].pathsSha256).toMatch(/^[a-f0-9]{64}$/u);
+    expect(report.inventory.files.some(({ scope }) => scope === "native-host")).toBe(false);
+    expect(report.counts.expected).toBe(report.counts.visited);
+    expect(report.enforcementOutcome).toBe("passed");
+  }, 60_000);
+
+  it.each([
+    ["README.md", false],
+    ["README.md", true],
+    ["owner.d.ts", false],
+    ["owner.d.ts", true],
+    ["owner.test.mjs", false],
+    ["owner.test.mjs", true],
+    ["entry.mjs", false],
+    ["entry.mjs", true],
+  ])(
+    "rejects returned owner member %s tracked=%s without a success report",
+    async (leaf, tracked) => {
+      const root = retiredOwnerFixture();
+      writeReturnedOwner(root, leaf, tracked);
+      const verdict = await captureRetirementVerdict(root);
+      expect(verdict.status).toBe(1);
+      expect(verdict.output).toEqual([]);
+      expect(verdict.errors).toEqual([expect.stringContaining("retired-scope-owner-present")]);
+    },
+    60_000,
+  );
+
+  it.each(["entry.mjs", "README.md"])(
+    "refuses tracked missing owner member %s",
+    async (leaf) => {
+      const root = retiredOwnerFixture();
+      const path = writeReturnedOwner(root, leaf, true);
+      unlinkSync(join(root, path));
+      const verdict = await captureRetirementVerdict(root);
+      expect(verdict.status).toBe(1);
+      expect(verdict.output).toEqual([]);
+      expect(verdict.errors).toHaveLength(1);
+    },
+    60_000,
+  );
+
+  it.each(["native/opencode-service-host/README.md", "unrelated-membership.md"])(
+    "invalidates actual final membership after scanning when %s appears",
+    async (path) => {
+      const root = retiredOwnerFixture();
+      const progress = (phase, state) => {
+        if (phase !== "final-currentness" || state !== "started") return;
+        mkdirSync(join(root, path, ".."), { recursive: true });
+        writeFileSync(join(root, path), "membership changed after actual scanning\n");
+      };
+      const reason = path.startsWith("native/")
+        ? "retired-scope-owner-present"
+        : "retired-scope-membership-changed";
+      await expect(
+        executeCodeQualityPolicy(
+          { mode: "enforce", scope: "repository", json: true },
+          root,
+          progress,
+        ),
+      ).rejects.toThrow(reason);
+      rmSync(join(root, path));
+      const healthy = await captureRetirementVerdict(root);
+      expect(healthy.status).toBe(0);
+      expect(healthy.errors).toEqual([]);
+    },
+    60_000,
+  );
+
+  it("does not mistake a sibling directory name for the retired owner", async () => {
+    const root = retiredOwnerFixture();
+    mkdirSync(join(root, "native/opencode-service-host-nearby"), { recursive: true });
+    writeFileSync(join(root, "native/opencode-service-host-nearby/README.md"), "sibling fixture");
+    const verdict = await captureRetirementVerdict(root);
+    expect(verdict.status).toBe(0);
+    expect(verdict.errors).toEqual([]);
+    expect(JSON.parse(verdict.output[0]).scopeRetirements[0].ownerMemberCount).toBe(0);
+  }, 60_000);
+
+  it("keeps explicit retired-scope selection refused and active fixture reporting separate", async () => {
+    const retired = retiredOwnerFixture();
+    const output = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      expect(await codeQualityPolicyMain(["--scope", "native-host", "--json"], retired)).toBe(1);
+      expect(output).not.toHaveBeenCalled();
+      expect(error).toHaveBeenCalledWith(expect.stringContaining("unknown-or-empty-scope"));
+    } finally {
+      output.mockRestore();
+      error.mockRestore();
+    }
+    const active = await captureRetirementVerdict(enforcingFixture());
+    expect(active.status).toBe(0);
+    expect(JSON.parse(active.output[0]).scopeRetirements).toEqual([]);
+  }, 60_000);
+
+  it.each([
+    "missing",
+    "extra",
+    "scope",
+    "state",
+    "owner-count",
+    "obligations",
+    "count",
+    "digest",
+    "key",
+    "policy-correspondence",
+  ])("refuses a constructed retirement witness with %s drift", (variant) => {
+    const { report, policy, policyBytes } = qualificationValidatorFixture();
+    mutateRetirementWitness(report, variant);
+    expect(() => assertRepositoryQualification(report, policy, policyBytes)).toThrow();
+  });
+});
+
+function mutateRetirementWitness(report, variant) {
+  const witness = report.scopeRetirements[0];
+  const values = new Map([
+    ["scope", ["scope", "tests"]],
+    ["state", ["state", "active"]],
+    ["owner-count", ["ownerMemberCount", 1]],
+    ["obligations", ["obligationCount", 4]],
+    ["count", ["pathCount", -1]],
+    ["digest", ["pathsSha256", "invalid"]],
+    ["key", ["approved", true]],
+  ]);
+  if (variant === "policy-correspondence") {
+    report.rules = structuredClone(report.rules);
+    report.rules.find(({ disposition }) => disposition === "Effect-host-only").activeScopes = [
+      "native-host",
+    ];
+  } else if (variant === "missing") report.scopeRetirements = [];
+  else if (variant === "extra") report.scopeRetirements.push({ ...witness });
+  else {
+    const [key, value] = values.get(variant);
+    witness[key] = value;
+  }
+}

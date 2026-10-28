@@ -403,3 +403,63 @@ function budgetEdge(): {
     overByOne: [...atBudget.slice(0, -1), toolOfDefinitionBytes(last, maxSchemaBytes + 1)],
   };
 }
+
+describe("the native tool name actually consumed for duplicate admission", () => {
+  it.each([undefined, 42, "", "not a tool name"])(
+    "refuses an invalid second name observation: %s",
+    (second): void => {
+      let reads = 0;
+      const receivers: unknown[] = [];
+      const tool = nativeTool();
+      Object.defineProperty(tool, "name", {
+        get: function (this: unknown): unknown {
+          reads += 1;
+          receivers.push(this);
+          return reads === 1 ? "read" : second;
+        },
+      });
+      const admitted = admits(advertisement({ tools: [tool] }));
+      expect(admitted).toBe(false);
+      expect(reads).toBe(2);
+      expect(receivers).toHaveLength(2);
+      for (const receiver of receivers) expect(receiver).toBe(tool);
+    },
+  );
+
+  it.each(["read", "write"])(
+    "admits a valid second name without imposing capture equality: %s",
+    (second): void => {
+      let reads = 0;
+      const tool = nativeTool();
+      Object.defineProperty(tool, "name", {
+        get: (): string => {
+          reads += 1;
+          return reads === 1 ? "read" : second;
+        },
+      });
+      expect(admits(advertisement({ tools: [tool] }))).toBe(true);
+      expect(reads).toBe(2);
+    },
+  );
+
+  it("preserves a thrown second name observation by identity", (): void => {
+    const failure: TypeError = Object.freeze(new TypeError("second tool name failed"));
+    let reads = 0;
+    const tool = nativeTool();
+    Object.defineProperty(tool, "name", {
+      get: (): string => {
+        reads += 1;
+        if (reads === 2) throw failure;
+        return "read";
+      },
+    });
+    let caught: unknown;
+    try {
+      admits(advertisement({ tools: [tool] }));
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBe(failure);
+    expect(reads).toBe(2);
+  });
+});

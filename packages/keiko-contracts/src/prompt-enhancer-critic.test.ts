@@ -1,3 +1,7 @@
+import type {
+  ParserTypeFacts,
+  UnknownInputParserFacts,
+} from "../../../tests/support/parser-type-contract.js";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type {
   EnhancedPrompt,
@@ -521,23 +525,17 @@ export function parsePublicPromptScorecard(
 
 describe("Prompt scorecard public parser (#3918)", () => {
   it("pins source public and forwarding unknown inputs and checked results", () => {
-    expectTypeOf(validatePromptCandidateScorecard).parameter(0).toBeUnknown();
-    expectTypeOf(validatePromptCandidateScorecard).parameter(0).not.toBeAny();
-    expectTypeOf(validatePromptCandidateScorecard).returns.not.toBeAny();
-    expectTypeOf(validatePromptCandidateScorecard).returns.toEqualTypeOf<
-      PromptEnhancerValidation<PromptCandidateScorecard>
+    expectTypeOf<ParserTypeFacts<typeof validatePromptCandidateScorecard>>().toEqualTypeOf<
+      UnknownInputParserFacts<PromptEnhancerValidation<PromptCandidateScorecard>>
     >();
-    expectTypeOf(publicPromptScorecard).parameter(0).toBeUnknown();
-    expectTypeOf(publicPromptScorecard).parameter(0).not.toBeAny();
+    expectTypeOf(validatePromptCandidateScorecard).returns.not.toBeAny();
+    expectTypeOf<ParserTypeFacts<typeof publicPromptScorecard>>().toEqualTypeOf<
+      UnknownInputParserFacts<PublicPromptValidation<PublicPromptScorecard>>
+    >();
     expectTypeOf(publicPromptScorecard).returns.not.toBeAny();
     expectTypeOf(publicPromptScorecard).returns.not.toBeUnknown();
-    expectTypeOf(publicPromptScorecard).returns.toEqualTypeOf<
-      PublicPromptValidation<PublicPromptScorecard>
-    >();
-    expectTypeOf(parsePublicPromptScorecard).parameter(0).toBeUnknown();
-    expectTypeOf(parsePublicPromptScorecard).parameter(0).not.toBeAny();
-    expectTypeOf(parsePublicPromptScorecard).returns.toEqualTypeOf<
-      PublicPromptValidation<PublicPromptScorecard>
+    expectTypeOf<ParserTypeFacts<typeof parsePublicPromptScorecard>>().toEqualTypeOf<
+      UnknownInputParserFacts<PublicPromptValidation<PublicPromptScorecard>>
     >();
   });
   it("pins independent public nested output fields", () => {
@@ -594,23 +592,17 @@ export function parsePublicPromptSelection(
 
 describe("Prompt selection public parser (#3918)", () => {
   it("pins source public and forwarding unknown inputs and checked results", () => {
-    expectTypeOf(validatePromptCandidateSelection).parameter(0).toBeUnknown();
-    expectTypeOf(validatePromptCandidateSelection).parameter(0).not.toBeAny();
-    expectTypeOf(validatePromptCandidateSelection).returns.not.toBeAny();
-    expectTypeOf(validatePromptCandidateSelection).returns.toEqualTypeOf<
-      PromptEnhancerValidation<PromptCandidateSelection>
+    expectTypeOf<ParserTypeFacts<typeof validatePromptCandidateSelection>>().toEqualTypeOf<
+      UnknownInputParserFacts<PromptEnhancerValidation<PromptCandidateSelection>>
     >();
-    expectTypeOf(publicPromptSelection).parameter(0).toBeUnknown();
-    expectTypeOf(publicPromptSelection).parameter(0).not.toBeAny();
+    expectTypeOf(validatePromptCandidateSelection).returns.not.toBeAny();
+    expectTypeOf<ParserTypeFacts<typeof publicPromptSelection>>().toEqualTypeOf<
+      UnknownInputParserFacts<PublicPromptValidation<PublicPromptSelection>>
+    >();
     expectTypeOf(publicPromptSelection).returns.not.toBeAny();
     expectTypeOf(publicPromptSelection).returns.not.toBeUnknown();
-    expectTypeOf(publicPromptSelection).returns.toEqualTypeOf<
-      PublicPromptValidation<PublicPromptSelection>
-    >();
-    expectTypeOf(parsePublicPromptSelection).parameter(0).toBeUnknown();
-    expectTypeOf(parsePublicPromptSelection).parameter(0).not.toBeAny();
-    expectTypeOf(parsePublicPromptSelection).returns.toEqualTypeOf<
-      PublicPromptValidation<PublicPromptSelection>
+    expectTypeOf<ParserTypeFacts<typeof parsePublicPromptSelection>>().toEqualTypeOf<
+      UnknownInputParserFacts<PublicPromptValidation<PublicPromptSelection>>
     >();
   });
   it("pins independent public nested output fields", () => {

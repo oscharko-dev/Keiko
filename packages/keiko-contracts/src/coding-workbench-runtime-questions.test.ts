@@ -1,3 +1,4 @@
+import { observeIndexedMembers as observedPhysicalQuestions } from "../../../tests/support/observed-indexed-members.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, expectTypeOf, it } from "vitest";
@@ -785,19 +786,6 @@ function physicalQuestionMember(): unknown {
   const member = response.questions[0]?.questions[0];
   if (member === undefined) throw new TypeError("Expected question fixture");
   return member;
-}
-
-function observedPhysicalQuestions(members: unknown[], reads: string[]): unknown[] {
-  return new Proxy(members, {
-    get(target, key, receiver): unknown {
-      reads.push(`get:${String(key)}`);
-      return Reflect.get(target, key, receiver);
-    },
-    has(target, key): boolean {
-      reads.push(`has:${String(key)}`);
-      return Reflect.has(target, key);
-    },
-  });
 }
 
 for (const [surface, validate] of [

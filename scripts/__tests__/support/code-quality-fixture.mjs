@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import ts from "typescript";
 import { URL } from "node:url";
 import { join } from "node:path";
+import { NATIVE_EFFECT_RULES } from "../../lib/code-quality-policy.mjs";
 
 export function createPolicyFixtureRepository() {
   const root = mkdtempSync(join(tmpdir(), "keiko-policy-inventory-"));
@@ -76,13 +77,30 @@ export function fixtureOwnedPolicy(records = [], owners = ["alpha"]) {
   );
   // The base fixture owns alpha, not every migrated production package. Keep package activations
   // only for declared fixture owners; global production and native-host guards remain intact.
-  const fixtureRules = rules.map((rule) => ({
-    ...rule,
-    activeScopes: rule.activeScopes.filter(
-      (scope) => !scope.startsWith("package:") || owners.includes(scope.slice("package:".length)),
-    ),
-  }));
+  const fixtureRules = rules.map((source) => {
+    const rule = historicalNativeFixtureRule(source);
+    return {
+      ...rule,
+      activeScopes: rule.activeScopes.filter(
+        (scope) => !scope.startsWith("package:") || owners.includes(scope.slice("package:".length)),
+      ),
+    };
+  });
   return { version: 2, upstream, runner, rules: fixtureRules, responsibilities: records };
+}
+
+function historicalNativeFixtureRule(rule) {
+  if (!NATIVE_EFFECT_RULES.includes(rule.id) || !Object.hasOwn(rule, "retiredScopes")) return rule;
+  if (
+    rule.disposition !== "Effect-host-only" ||
+    rule.activeScopes.length !== 0 ||
+    !Array.isArray(rule.retiredScopes) ||
+    rule.retiredScopes.length !== 1 ||
+    rule.retiredScopes[0] !== "native-host"
+  )
+    throw new TypeError("invalid-historical-native-rule");
+  const { retiredScopes, ...active } = rule;
+  return { ...active, activeScopes: [...retiredScopes] };
 }
 
 export function configureEnforcingPolicyFixture(root) {

@@ -1,3 +1,6 @@
+import { spawnSync } from "node:child_process";
+import { fileURLToPath, URL } from "node:url";
+import { resolveGitExecutable } from "../check-dependency-hygiene.mjs";
 import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -147,5 +150,48 @@ describe("real pinned native analyzer and visitation contract (#3915)", () => {
     ]) {
       expect(() => parsePolicyArguments(args, true)).toThrow();
     }
+  });
+});
+
+const AUTHORED_DECLARATIONS = [
+  "packages/keiko-editor/src/monaco/standalone-enums.d.ts",
+  "packages/keiko-ui/src/types/style-evidence-modules.d.ts",
+];
+
+describe("hand-authored declaration parser membership (#3918)", () => {
+  it("requires real Program receipts for both actual authored declaration sources", () => {
+    const root = fileURLToPath(new URL("../../", import.meta.url));
+    const scan = runNativePolicy(
+      root,
+      AUTHORED_DECLARATIONS.map((path) => ({ path })),
+    );
+    expect(scan.visited).toBe(2);
+    expect(scan.batches).toBe(1);
+    expect(scan.configSha256).toMatch(/^[a-f0-9]{64}$/u);
+  }, 120_000);
+
+  it.each([
+    [AUTHORED_DECLARATIONS[0], 1],
+    [AUTHORED_DECLARATIONS[1], 1],
+    ["packages/keiko-editor/src/monaco/generated-enums.d.ts", 0],
+    ["packages/keiko-ui/src/types/style-evidence.generated.d.ts", 0],
+  ])("keeps the exact Git ignore disposition for %s", (path, status) => {
+    const root = fileURLToPath(new URL("../../", import.meta.url));
+    const result = spawnSync(
+      resolveGitExecutable(),
+      ["check-ignore", "--no-index", "--quiet", "--", path],
+      {
+        cwd: root,
+        encoding: "utf8",
+        timeout: 20_000,
+        maxBuffer: 1024 * 1024,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.signal).toBeNull();
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toBe("");
+    expect(result.status).toBe(status);
   });
 });

@@ -17,6 +17,7 @@ import { fileURLToPath, URL } from "node:url";
 import {
   createPolicyFixtureRepository,
   fixtureOwnedPolicy,
+  copyNativePolicyFixtureSources,
 } from "./support/code-quality-fixture.mjs";
 
 import { responsibilityRecord } from "./support/code-quality-responsibility-fixture.mjs";
@@ -48,9 +49,15 @@ describe("actual tracked/build/workspace inventory (#3915)", () => {
       true,
     );
     expect(inventory.files.some((file) => file.scope === "tooling" && file.production)).toBe(true);
-    expect(inventory.files.some((file) => file.scope === "native-host" && file.production)).toBe(
-      true,
-    );
+    const membership = policyMembership.collectPolicyMembership(root);
+    expect(
+      membership.paths.some(
+        (path) =>
+          path === "native/opencode-service-host" ||
+          path.startsWith("native/opencode-service-host/"),
+      ),
+    ).toBe(false);
+    expect(inventory.files.some((file) => file.scope === "native-host")).toBe(false);
     expect(inventory.files.some((file) => file.scope === "documentary" && !file.production)).toBe(
       true,
     );
@@ -775,4 +782,19 @@ describe("exact fourth package-fixture membership (#3918)", () => {
       await expect(collectPolicyInventory(root)).rejects.toThrow("unclassified-source");
     },
   );
+});
+
+describe("retired owner presence pin relocation (#3918)", () => {
+  it("retains production native-host membership on the three byte-pinned historical inputs", async () => {
+    const root = trackedRepository();
+    copyNativePolicyFixtureSources(root);
+    const inventory = await collectPolicyInventory(root);
+    const native = inventory.files.filter((file) => file.scope === "native-host");
+    expect(native.map(({ path }) => path)).toEqual([
+      "native/opencode-service-host/entry.mjs",
+      "native/opencode-service-host/guard-seams.mjs",
+      "native/opencode-service-host/host.mjs",
+    ]);
+    expect(native.every((file) => file.production)).toBe(true);
+  });
 });

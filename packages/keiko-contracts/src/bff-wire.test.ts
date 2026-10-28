@@ -23,6 +23,7 @@ import {
   isConversationMemoryCaptureSurfaceWire,
   isExpandableDirectory,
   isGroundedRerankerFailureKind,
+  isCodingTaskExportFormat,
   isDesktopChatStreamEvent,
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENT_MIME_BYTES,
@@ -1660,4 +1661,24 @@ describe("connected-context omission groups", () => {
     expect(summary.filesInPrompt).toBe(0);
     expect(JSON.stringify(summary)).not.toContain("private/canary");
   });
+});
+
+it("admits exactly the existing coding task export formats", (): void => {
+  expect(isCodingTaskExportFormat("json")).toBe(true);
+  expect(isCodingTaskExportFormat("markdown")).toBe(true);
+  for (const value of ["JSON", "md", "", undefined, null, 1, Symbol("json")]) {
+    expect(isCodingTaskExportFormat(value)).toBe(false);
+  }
+});
+
+it("does not coerce a coding task export format candidate", (): void => {
+  let coercions = 0;
+  const value = {
+    [Symbol.toPrimitive](): string {
+      coercions += 1;
+      return "json";
+    },
+  };
+  expect(isCodingTaskExportFormat(value)).toBe(false);
+  expect(coercions).toBe(0);
 });

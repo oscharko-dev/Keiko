@@ -12,6 +12,8 @@
 // `KEIKO_MCP_SECRET_*` variable of Keiko's own environment that holds it (#3903 AC3), which Keiko
 // adds to the requests it relays and never hands to a runtime.
 
+import { isRecord } from "./run-result-validation.js";
+
 export const MCP_SERVER_REGISTRY_SCHEMA_VERSION = 1;
 export const MCP_SERVER_MAX = 16;
 export const MCP_SERVER_TOOL_MAX = 64;
@@ -115,9 +117,7 @@ export type McpServerRegistryParse =
 type Json = Readonly<Record<string, unknown>>;
 
 function record(value: unknown): Json | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Json)
-    : undefined;
+  return isRecord(value) ? value : undefined;
 }
 
 function boundedText(value: unknown): value is string {
@@ -145,11 +145,27 @@ function localTransport(value: Json): McpLocalTransport | undefined {
   if (!Array.isArray(command) || command.length === 0 || command.length > MCP_ARGUMENT_MAX)
     return undefined;
   if (!command.every((part) => boundedText(part) && literal(part))) return undefined;
-  const [executable, ...args] = command as string[];
-  if (!executable?.startsWith("/")) return undefined;
+  const captured: readonly unknown[] = command;
+  const admitted = capturedLocalCommand(captured);
+  if (admitted === undefined) return undefined;
   const environment = environmentOf(value.environment);
   if (environment === undefined) return undefined;
-  return { kind: "local", command: [executable, ...args], environment };
+  return { kind: "local", command: admitted, environment };
+}
+
+function capturedLocalCommand(
+  command: readonly unknown[],
+): readonly [string, ...string[]] | undefined {
+  const captured: unknown[] = [];
+  for (const member of command) {
+    if (captured.length === MCP_ARGUMENT_MAX) return undefined;
+    captured.push(member);
+  }
+  const [executable, ...args] = captured;
+  if (!boundedText(executable) || !literal(executable) || !executable.startsWith("/"))
+    return undefined;
+  if (!args.every((part): part is string => boundedText(part) && literal(part))) return undefined;
+  return [executable, ...args];
 }
 
 function environmentOf(value: unknown): Readonly<Record<string, string>> | undefined {
@@ -157,14 +173,19 @@ function environmentOf(value: unknown): Readonly<Record<string, string>> | undef
   const entries = record(value);
   if (entries === undefined || Object.keys(entries).length > MCP_ENVIRONMENT_MAX) return undefined;
   const pairs = Object.entries(entries);
-  const valid = pairs.every(
-    ([name, text]) =>
-      MCP_ENVIRONMENT_NAME.test(name) &&
-      typeof text === "string" &&
-      text.length <= MCP_TEXT_MAX &&
-      literal(text),
-  );
-  return valid ? Object.fromEntries(pairs as [string, string][]) : undefined;
+  if (
+    !pairs.every((entry): entry is [string, string] => {
+      const [name, text] = entry;
+      return (
+        MCP_ENVIRONMENT_NAME.test(name) &&
+        typeof text === "string" &&
+        text.length <= MCP_TEXT_MAX &&
+        literal(text)
+      );
+    })
+  )
+    return undefined;
+  return Object.fromEntries(pairs);
 }
 
 function remoteUrl(value: unknown): string | undefined {
@@ -199,7 +220,7 @@ function secretHeaderOf(name: string, value: unknown): McpRemoteSecretHeader | u
   if (typeof secretEnv !== "string" || !MCP_SECRET_ENVIRONMENT_NAME.test(secretEnv))
     return undefined;
   if (!optionalMatch(prefix, MCP_HEADER_PREFIX)) return undefined;
-  return { secretEnv, ...(prefix === undefined ? {} : { prefix: prefix as string }) };
+  return { secretEnv, ...(prefix === undefined ? {} : { prefix }) };
 }
 
 function secretHeadersOf(
@@ -230,13 +251,13 @@ function oauthOf(value: unknown): McpRemoteOAuth | undefined {
     return undefined;
   return {
     issuer,
-    ...(clientId === undefined ? {} : { clientId: clientId as string }),
-    ...(scope === undefined ? {} : { scope: scope as string }),
+    ...(clientId === undefined ? {} : { clientId }),
+    ...(scope === undefined ? {} : { scope }),
   };
 }
 
 // Absent, or a bounded literal of the grammar.
-function optionalMatch(value: unknown, grammar: RegExp): boolean {
+function optionalMatch(value: unknown, grammar: RegExp): value is string | undefined {
   if (value === undefined) return true;
   return (
     typeof value === "string" &&
@@ -266,13 +287,20 @@ function toolsOf(value: unknown): Readonly<Record<string, McpToolRisk>> | undefi
   if (tools === undefined) return undefined;
   const entries = Object.entries(tools);
   if (entries.length === 0 || entries.length > MCP_SERVER_TOOL_MAX) return undefined;
-  const valid = entries.every(
-    ([name, risk]) => MCP_TOOL_NAME.test(name) && (risk === "read" || risk === "write"),
-  );
+  const admitted = admittedToolEntries(entries);
   // Two tools the runtime would name alike (`a.b` and `a_b`) cannot carry two risks.
   const actions = new Set(entries.map(([name]) => mcpToolAction("s", name)));
-  if (!valid || actions.size !== entries.length) return undefined;
-  return Object.fromEntries(entries as [string, McpToolRisk][]);
+  if (admitted === undefined || actions.size !== entries.length) return undefined;
+  return Object.fromEntries(admitted);
+}
+
+function admittedToolEntries(entries: [string, unknown][]): [string, McpToolRisk][] | undefined {
+  return entries.every((entry): entry is [string, McpToolRisk] => {
+    const [name, risk] = entry;
+    return MCP_TOOL_NAME.test(name) && (risk === "read" || risk === "write");
+  })
+    ? entries
+    : undefined;
 }
 
 // The name, description and switch of one entry, or undefined when any of them is malformed.
@@ -436,7 +464,8 @@ export function isMcpAuthorizationAttemptId(value: unknown): value is string {
 }
 
 function isOneOfValues<T extends string>(value: unknown, values: readonly T[]): value is T {
-  return typeof value === "string" && (values as readonly string[]).includes(value);
+  const strings: readonly string[] = values;
+  return typeof value === "string" && strings.includes(value);
 }
 
 function workbenchServer(value: unknown): CodingWorkbenchMcpServer | undefined {
@@ -468,7 +497,8 @@ export function parseCodingWorkbenchRuntimeMcpChannelPayload(
 function workbenchServers(value: unknown): readonly CodingWorkbenchMcpServer[] | undefined {
   if (!Array.isArray(value) || value.length > MCP_SERVER_MAX) return undefined;
   const servers: CodingWorkbenchMcpServer[] = [];
-  for (const entry of value as readonly unknown[]) {
+  const entries: readonly unknown[] = value;
+  for (const entry of entries) {
     const server = workbenchServer(entry);
     if (server === undefined || servers.some(({ name }) => name === server.name)) return undefined;
     servers.push(server);

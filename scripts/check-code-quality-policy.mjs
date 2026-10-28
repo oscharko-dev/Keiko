@@ -28,6 +28,8 @@ import { buildResponsibilityProofPackages } from "./lib/code-quality-responsibil
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const FAILURE_REASONS = new Set([
+  "retired-scope-owner-present",
+  "retired-scope-membership-changed",
   "invalid-arguments",
   "invalid-mode",
   "partial-ci-verdict",
@@ -177,7 +179,7 @@ export async function executeCodeQualityPolicy(
   const subject = await asyncPolicyStep(progress, "subject-inventory", () =>
     collectPolicySubject(repositoryRoot),
   );
-  const { inventory } = subject;
+  const { inventory, scopeRetirements } = policySubjectApplicability(policy, subject);
   const { scope, pack } = policyScopeAndPack(repositoryRoot, inventory, policy, options, progress);
   const scan = policyStep(progress, "native-scan", () =>
     runNativePolicy(repositoryRoot, scope.files),
@@ -194,7 +196,7 @@ export async function executeCodeQualityPolicy(
       : rawAssessment,
   );
   await asyncPolicyStep(progress, "final-currentness", () =>
-    assertPolicySubjectCurrent(repositoryRoot, source, inventorySha256),
+    assertPolicySubjectCurrent(repositoryRoot, source, inventorySha256, scopeRetirements),
   );
   return policyReport({
     options,
@@ -208,7 +210,13 @@ export async function executeCodeQualityPolicy(
     assessed,
     responsibilities,
     inventorySha256,
+    scopeRetirements,
   });
+}
+
+function policySubjectApplicability(policy, subject) {
+  const { inventory } = subject;
+  return { inventory, scopeRetirements: initialScopeRetirements(policy, subject.membership.paths) };
 }
 
 function policyScopeAndPack(repositoryRoot, inventory, policy, options, progress) {
@@ -243,6 +251,7 @@ function policyReport({
   assessed,
   responsibilities,
   inventorySha256,
+  scopeRetirements,
 }) {
   return {
     schemaVersion: policy.version,
@@ -254,6 +263,7 @@ function policyReport({
     tools,
     configSha256: scan.configSha256,
     inventorySha256,
+    scopeRetirements,
     ...policyScanSummary(policy, inventory, scope, scan, assessed),
     ...assessed,
     inventory,
@@ -294,10 +304,44 @@ function policyScanSummary(policy, inventory, scope, scan, assessed) {
   };
 }
 
-async function assertPolicySubjectCurrent(repositoryRoot, source, inventorySha256) {
+function retiredScopeWitness(paths) {
+  const owner = "native/opencode-service-host";
+  if (paths.some((path) => path === owner || path.startsWith(`${owner}/`)))
+    throw new TypeError("retired-scope-owner-present");
+  return {
+    scope: "native-host",
+    state: "owner-absent",
+    ownerMemberCount: 0,
+    obligationCount: 5,
+    pathCount: paths.length,
+    pathsSha256: policyDigest(JSON.stringify(paths)),
+  };
+}
+
+function initialScopeRetirements(policy, paths) {
+  return policy.rules.some((rule) => Object.hasOwn(rule, "retiredScopes"))
+    ? [retiredScopeWitness(paths)]
+    : [];
+}
+
+function assertScopeRetirementsCurrent(scopeRetirements, paths) {
+  if (scopeRetirements.length === 0) return;
+  const current = retiredScopeWitness(paths);
+  const initial = scopeRetirements[0];
+  if (current.pathCount !== initial.pathCount || current.pathsSha256 !== initial.pathsSha256)
+    throw new TypeError("retired-scope-membership-changed");
+}
+
+async function assertPolicySubjectCurrent(
+  repositoryRoot,
+  source,
+  inventorySha256,
+  scopeRetirements = [],
+) {
+  const current = await collectPolicySubject(repositoryRoot);
+  assertScopeRetirementsCurrent(scopeRetirements, current.membership.paths);
   if (
-    policyDigest(JSON.stringify(await collectPolicyInventory(repositoryRoot))) !==
-      inventorySha256 ||
+    policyDigest(JSON.stringify(current.inventory)) !== inventorySha256 ||
     policyDigest(readFileSync(resolve(repositoryRoot, "scripts/code-quality-policy.json"))) !==
       policyDigest(source)
   )

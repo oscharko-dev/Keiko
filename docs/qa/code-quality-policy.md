@@ -136,7 +136,21 @@ Owning tests run all 21 upstream noncosmetic fixture suites through that same co
 a current native runtime. The Node service host qualified in #3988 has been retired. Its three
 byte-pinned source snapshots now live only as historical analyzer fixture data; synthetic
 repositories preserve the native-scope and global-graph regression checks. The real retired
-checkout has no such owner, so selecting its empty `native-host` scope still fails. Neither these
+checkout has no such owner, so selecting its empty `native-host` scope still fails.
+The five exact Effect rule obligations remain conserved as `retiredScopes: ["native-host"]`,
+with no active scope; every other rule retains its existing activation contract. Only this complete
+five-rule cohort can retire under policy version2. Historical fixture policies explicitly reactivate
+all five on their byte-pinned owner. Active plus retired scopes remain monotonic through policy
+history: neither retirement nor reactivation can erase an obligation. A returned owner requires
+reviewed reactivation and qualification.
+
+A retired policy can produce a report only after complete Git membership proves the owner absent
+and final currentness confirms the same complete membership count and digest. This includes
+non-Source and test-looking members, tracked paths and nonignored untracked paths; existing
+inventory safety failures still reject before a witness can be produced. The closed
+`scopeRetirements` report witness records absence, five obligations and the membership commitment,
+not analyzer visitation or replacement-runtime qualification. Active historical fixtures report an
+empty witness list. These checks do not lock the filesystem against later edits. Neither these
 fixtures nor the dormant scope establish replacement runtime or SDK/native qualification. The native accumulating-spread rule has a distinct
 qualification workstream. Real parser and policy negatives also pin malformed syntax, missing
 visits, dropped packages, suppression and invalid scopes.

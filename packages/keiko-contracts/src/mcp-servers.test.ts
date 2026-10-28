@@ -5,6 +5,9 @@ import {
   mcpToolAction,
   mcpToolActions,
   parseMcpServerRegistry,
+  parseCodingWorkbenchRuntimeMcpChannelPayload,
+  parseCodingWorkbenchMcpAuthorizationStart,
+  parseCodingWorkbenchMcpAuthorizationStatus,
   type McpServerDefinition,
 } from "./mcp-servers.js";
 
@@ -245,4 +248,295 @@ describe("the MCP server registry (#3903)", () => {
       reason: "server-invalid",
     });
   });
+});
+
+function registryWithCommand(command: unknown): unknown {
+  return registry({ ...LOCAL, transport: { ...LOCAL.transport, command } });
+}
+
+function expectAdmittedCommand(command: unknown, expected: readonly string[]): void {
+  const result = parseMcpServerRegistry(registryWithCommand(command));
+  expect(result.ok).toBe(true);
+  if (!result.ok) throw new TypeError("Expected an admitted local command");
+  expect(result.servers[0]?.transport).toEqual({
+    kind: "local",
+    command: expected,
+    environment: LOCAL.transport.environment,
+  });
+}
+
+describe("captured MCP command admission", () => {
+  it("refuses a command whose later physical slot is absent", (): void => {
+    const command = new Array<unknown>(2);
+    command[0] = "/bin/x";
+    expect(parseMcpServerRegistry(registryWithCommand(command))).toEqual({
+      ok: false,
+      reason: "server-invalid",
+    });
+  });
+
+  it.each([undefined, 42, "{env:TOKEN}"])(
+    "refuses an invalid argument actually yielded by the command iterator: %s",
+    (argument): void => {
+      const command = ["/bin/x", "--stdio"];
+      Object.defineProperty(command, Symbol.iterator, {
+        value: (): ArrayIterator<unknown> => ["/bin/x", argument][Symbol.iterator](),
+      });
+      expect(parseMcpServerRegistry(registryWithCommand(command))).toEqual({
+        ok: false,
+        reason: "server-invalid",
+      });
+    },
+  );
+
+  it("refuses an iterator that materializes more than the command argument bound", (): void => {
+    const command = ["/bin/x"];
+    const materialized = ["/bin/x", ...Array.from({ length: 32 }, () => "--stdio")];
+    Object.defineProperty(command, Symbol.iterator, {
+      value: (): ArrayIterator<string> => materialized[Symbol.iterator](),
+    });
+    expect(parseMcpServerRegistry(registryWithCommand(command))).toEqual({
+      ok: false,
+      reason: "server-invalid",
+    });
+  });
+
+  it("continues to admit inherited valid command members", (): void => {
+    const command = new Array<unknown>(2);
+    command[0] = "/bin/x";
+    Object.setPrototypeOf(command, Object.assign([], { 1: "--stdio" }));
+    expectAdmittedCommand(command, ["/bin/x", "--stdio"]);
+  });
+
+  it("retains both command read phases and their original receivers", (): void => {
+    const reads: string[] = [];
+    const receivers: unknown[] = [];
+    const command = Object.defineProperties([], {
+      0: {
+        get: function (this: unknown): string {
+          reads.push("executable");
+          receivers.push(this);
+          return "/bin/x";
+        },
+        configurable: true,
+      },
+      1: {
+        get: function (this: unknown): string {
+          reads.push("argument");
+          receivers.push(this);
+          return "--stdio";
+        },
+        configurable: true,
+      },
+    });
+    expectAdmittedCommand(command, ["/bin/x", "--stdio"]);
+    expect(reads).toEqual(["executable", "argument", "executable", "argument"]);
+    expect(receivers).toHaveLength(4);
+    for (const receiver of receivers) expect(receiver).toBe(command);
+  });
+
+  it("preserves the exact command iterator failure", (): void => {
+    const failure: TypeError = Object.freeze(new TypeError("command iterator failed"));
+    const command = ["/bin/x"];
+    Object.defineProperty(command, Symbol.iterator, {
+      value: (): never => {
+        throw failure;
+      },
+    });
+    let caught: unknown;
+    try {
+      parseMcpServerRegistry(registryWithCommand(command));
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBe(failure);
+  });
+});
+
+it("captures guarded optional MCP fields once and omits absent values", (): void => {
+  const reads: string[] = [];
+  const header = {
+    secretEnv: "KEIKO_MCP_SECRET_TRACKER",
+    get prefix(): undefined {
+      reads.push("prefix");
+      return undefined;
+    },
+  };
+  const oauth = {
+    issuer: ISSUER,
+    get clientId(): undefined {
+      reads.push("clientId");
+      return undefined;
+    },
+    get scope(): string {
+      reads.push("scope");
+      return "tracker.read";
+    },
+  };
+  const headerResult = parseMcpServerRegistry(registry(withHeaders({ Authorization: header })));
+  const oauthResult = parseMcpServerRegistry(registry(withOAuth(oauth)));
+  expect(reads).toEqual(["prefix", "clientId", "scope"]);
+  expect(headerResult).toMatchObject({
+    ok: true,
+    servers: [{ transport: { headers: { Authorization: { secretEnv: header.secretEnv } } } }],
+  });
+  expect(oauthResult).toMatchObject({
+    ok: true,
+    servers: [{ transport: { oauth: { issuer: ISSUER, scope: "tracker.read" } } }],
+  });
+  if (!headerResult.ok || !oauthResult.ok) throw new TypeError("Expected admitted remote fields");
+  expect(headerResult.servers[0]?.transport).not.toHaveProperty("headers.Authorization.prefix");
+  expect(oauthResult.servers[0]?.transport).not.toHaveProperty("oauth.clientId");
+});
+
+it("retains captured environment and tool values without rereading their properties", (): void => {
+  const reads: string[] = [];
+  const environment = {
+    get DOCS_INDEX(): string {
+      reads.push("environment");
+      return "/srv/docs";
+    },
+  };
+  const tools = {
+    get search(): "read" {
+      reads.push("tool");
+      return "read";
+    },
+  };
+  const result = parseMcpServerRegistry(
+    registry({
+      ...LOCAL,
+      transport: { ...LOCAL.transport, environment },
+      tools,
+    }),
+  );
+  expect(reads).toEqual(["environment", "tool"]);
+  expect(result).toMatchObject({
+    ok: true,
+    servers: [
+      { transport: { environment: { DOCS_INDEX: "/srv/docs" } }, tools: { search: "read" } },
+    ],
+  });
+});
+
+it("retains the MCP channel's closed statuses and authorization vocabularies", (): void => {
+  for (const status of ["connected", "needs-authorization", "failed", "disabled", "pending"]) {
+    const server = { name: "docs", status, authorization: "none" };
+    expect(
+      parseCodingWorkbenchRuntimeMcpChannelPayload({ session: "active", servers: [server] }),
+    ).toEqual({ session: "active", servers: [server] });
+  }
+  for (const reason of ["unavailable", "not-oauth", "connected", "url-refused", "failed"]) {
+    expect(parseCodingWorkbenchMcpAuthorizationStart({ outcome: "refused", reason })).toEqual({
+      outcome: "refused",
+      reason,
+    });
+  }
+  for (const state of ["pending", "complete", "failed", "expired", "cancelled", "unavailable"]) {
+    expect(parseCodingWorkbenchMcpAuthorizationStatus({ state })).toEqual({ state });
+  }
+});
+
+it("refuses foreign and nonstring MCP catalog values without coercion", (): void => {
+  let coercions = 0;
+  const hostile = {
+    [Symbol.toPrimitive](): string {
+      coercions += 1;
+      return "connected";
+    },
+  };
+  for (const value of ["foreign", "", undefined, null, 1, hostile]) {
+    expect(
+      parseCodingWorkbenchRuntimeMcpChannelPayload({
+        session: "active",
+        servers: [{ name: "docs", status: value, authorization: "none" }],
+      }),
+    ).toBeUndefined();
+    expect(
+      parseCodingWorkbenchMcpAuthorizationStart({ outcome: "refused", reason: value }),
+    ).toBeUndefined();
+    expect(parseCodingWorkbenchMcpAuthorizationStatus({ state: value })).toBeUndefined();
+  }
+  expect(coercions).toBe(0);
+});
+
+it("retains MCP channel iteration over inherited members and refuses a missing member", (): void => {
+  const server = { name: "docs", status: "connected", authorization: "none" };
+  const inherited = new Array<unknown>(1);
+  Object.setPrototypeOf(inherited, Object.assign([], { 0: server }));
+  expect(
+    parseCodingWorkbenchRuntimeMcpChannelPayload({ session: "active", servers: inherited }),
+  ).toEqual({ session: "active", servers: [server] });
+  expect(
+    parseCodingWorkbenchRuntimeMcpChannelPayload({
+      session: "active",
+      servers: new Array<unknown>(1),
+    }),
+  ).toBeUndefined();
+  expect(
+    parseCodingWorkbenchRuntimeMcpChannelPayload({ session: "active", servers: [server, server] }),
+  ).toBeUndefined();
+});
+
+it("closes command capture at the first overflow without requesting a later value", (): void => {
+  const failure: TypeError = Object.freeze(
+    new TypeError("unexpected thirty-fourth command observation"),
+  );
+  let yielded = 0;
+  let closed = 0;
+  const command = ["/bin/x"];
+  Object.defineProperty(command, Symbol.iterator, {
+    value: function* (): Generator<string, void, unknown> {
+      try {
+        for (let index = 0; index < 33; index += 1) {
+          yielded += 1;
+          yield index === 0 ? "/bin/x" : "--stdio";
+        }
+        throw failure;
+      } finally {
+        closed += 1;
+      }
+    },
+  });
+  let caught: unknown;
+  let result: ReturnType<typeof parseMcpServerRegistry> | undefined;
+  try {
+    result = parseMcpServerRegistry(registryWithCommand(command));
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBeUndefined();
+  expect(result).toEqual({ ok: false, reason: "server-invalid" });
+  expect(yielded).toBe(33);
+  expect(closed).toBe(1);
+});
+
+it("admits the full thirty-two-member command iterator boundary", (): void => {
+  const materialized = ["/bin/x", ...Array.from({ length: 31 }, () => "--stdio")];
+  const command = ["/bin/x"];
+  Object.defineProperty(command, Symbol.iterator, {
+    value: (): ArrayIterator<string> => materialized[Symbol.iterator](),
+  });
+  expectAdmittedCommand(command, materialized);
+});
+
+it("preserves a command iterator failure after an in-budget yielded member", (): void => {
+  const failure: TypeError = Object.freeze(new TypeError("in-budget command iterator failed"));
+  let yielded = 0;
+  const command = ["/bin/x"];
+  Object.defineProperty(command, Symbol.iterator, {
+    value: function* (): Generator<string, void, unknown> {
+      yielded += 1;
+      yield "/bin/x";
+      throw failure;
+    },
+  });
+  let caught: unknown;
+  try {
+    parseMcpServerRegistry(registryWithCommand(command));
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBe(failure);
+  expect(yielded).toBe(1);
 });

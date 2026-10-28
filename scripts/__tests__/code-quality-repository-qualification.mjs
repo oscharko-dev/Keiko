@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath, URL } from "node:url";
 import { policyDigest } from "../lib/code-quality-inventory.mjs";
+import { NATIVE_EFFECT_RULES } from "../lib/code-quality-policy.mjs";
 import { isMainModule } from "../lib/is-main-module.mjs";
 import { executePolicyWithDiagnostics } from "./code-quality-wiring-smoke.mjs";
 
@@ -53,8 +54,46 @@ function assertRepositoryScope(report, policyBytes) {
   assert.deepEqual(report.violations, []);
 }
 
+function assertScopeRetirementReport(report, policy) {
+  const ruleScopes = ({ id, activeScopes, retiredScopes }) => ({ id, activeScopes, retiredScopes });
+  assert.deepEqual(report.rules.map(ruleScopes), policy.rules.map(ruleScopes));
+  const retired = policy.rules.filter((rule) => Object.hasOwn(rule, "retiredScopes"));
+  assert.ok(Array.isArray(report.scopeRetirements));
+  if (retired.length === 0) {
+    assert.deepEqual(report.scopeRetirements, []);
+    return;
+  }
+  assert.deepEqual(
+    retired.map(({ id }) => id),
+    NATIVE_EFFECT_RULES,
+  );
+  for (const rule of retired) {
+    assert.deepEqual(rule.activeScopes, []);
+    assert.deepEqual(rule.retiredScopes, ["native-host"]);
+    assert.equal(rule.disposition, "Effect-host-only");
+  }
+  assert.equal(report.scopeRetirements.length, 1);
+  const witness = report.scopeRetirements[0];
+  assert.deepEqual(Object.keys(witness).sort(), [
+    "obligationCount",
+    "ownerMemberCount",
+    "pathCount",
+    "pathsSha256",
+    "scope",
+    "state",
+  ]);
+  assert.equal(witness.scope, "native-host");
+  assert.equal(witness.state, "owner-absent");
+  assert.equal(witness.ownerMemberCount, 0);
+  assert.equal(witness.obligationCount, 5);
+  assert.ok(Number.isSafeInteger(witness.pathCount));
+  assert.ok(witness.pathCount >= 0);
+  assert.match(witness.pathsSha256, /^[a-f0-9]{64}$/u);
+}
+
 export function assertRepositoryQualification(report, policy, policyBytes) {
   assertRepositoryScope(report, policyBytes);
+  assertScopeRetirementReport(report, policy);
   assert.ok(policy.responsibilities.length > 0);
   const responsibilities = report.responsibilities;
   assert.deepEqual(responsibilities.counts, {

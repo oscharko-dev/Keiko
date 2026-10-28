@@ -10,6 +10,7 @@ import {
 } from "../lib/code-quality-policy.mjs";
 import { classifyPolicyPath, selectPolicyScope } from "../lib/code-quality-inventory.mjs";
 
+import { fixtureOwnedPolicy } from "./support/code-quality-fixture.mjs";
 import { publicParserRecord } from "./support/code-quality-symbol-fixture.mjs";
 
 const policy = JSON.parse(readFileSync(new URL("../code-quality-policy.json", import.meta.url)));
@@ -188,6 +189,7 @@ describe("canonical policy report diagnostic order", () => {
 
 describe("code-quality policy fail-closed contract (#3915)", () => {
   it("activates the qualified Effect rules only for the exact native host owner (#3988)", () => {
+    const policy = fixtureOwnedPolicy([], ["@oscharko-dev/keiko-contracts"]);
     const effects = policy.rules.filter(({ id }) => id.startsWith("anti-slop-effect/"));
     expect(effects).toHaveLength(5);
     const owners = [
@@ -366,7 +368,7 @@ describe("code-quality policy fail-closed contract (#3915)", () => {
       version: 1,
       upstream: policy.upstream,
       runner: policy.runner,
-      rules: policy.rules,
+      rules: fixtureOwnedPolicy([], ["@oscharko-dev/keiko-contracts"]).rules,
     };
     expect(validatePolicy(legacy)).toEqual([]);
     expect(validatePolicy(legacy, [policy])).toContain("responsibility-downgrade");
@@ -1776,5 +1778,98 @@ describe("qualified raw role metadata retention (#3918)", () => {
       record.rules = record.rules.filter((candidate) => candidate !== rule);
       expect(validatePolicy(removed, [policy])).toContain("responsibility-shrank");
     }
+  });
+});
+
+const HISTORICAL_EFFECT_IDS = [
+  "anti-slop-effect/no-manual-effect-error-tag",
+  "anti-slop-effect/no-manual-tag-comparison",
+  "anti-slop-effect/no-manual-tagged-construction",
+  "anti-slop-effect/no-service-constructor-imports",
+  "anti-slop-effect/prefer-effect-match",
+];
+
+function activeHistoricalPolicy() {
+  return {
+    ...structuredClone(policy),
+    rules: fixtureOwnedPolicy([], ["@oscharko-dev/keiko-contracts"]).rules,
+  };
+}
+
+function alteredRetirement(variant) {
+  const candidate = structuredClone(policy);
+  const rule = candidate.rules.find(({ id }) => id === HISTORICAL_EFFECT_IDS[0]);
+  const replacements = new Map([
+    ["null", null],
+    ["undefined", undefined],
+    ["empty", []],
+    ["duplicate", ["native-host", "native-host"]],
+    ["unknown", ["production"]],
+  ]);
+  if (replacements.has(variant)) rule.retiredScopes = replacements.get(variant);
+  if (variant === "overlap") rule.activeScopes = ["native-host"];
+  if (variant === "extra") rule.approved = true;
+  if (variant === "disposition") rule.disposition = "boundary-scoped";
+  if (variant === "partial") delete rule.retiredScopes;
+  if (variant === "v1") {
+    delete candidate.responsibilities;
+    candidate.version = 1;
+  }
+  if (variant === "foreign") candidate.rules[0].retiredScopes = ["native-host"];
+  return candidate;
+}
+
+describe("closed five-rule native retirement (#3918)", () => {
+  it("conserves exactly the historical five obligations and explicitly reactivates fixtures", () => {
+    const retired = policy.rules.filter((rule) => Object.hasOwn(rule, "retiredScopes"));
+    expect(retired.map(({ id }) => id)).toEqual(HISTORICAL_EFFECT_IDS);
+    for (const rule of retired) {
+      expect(rule.activeScopes).toEqual([]);
+      expect(rule.retiredScopes).toEqual(["native-host"]);
+      expect(rule.disposition).toBe("Effect-host-only");
+    }
+    const active = activeHistoricalPolicy();
+    expect(validatePolicy(policy, [active])).toEqual([]);
+    expect(validatePolicy(active, [policy])).toEqual([]);
+    for (const rule of active.rules.filter(({ id }) => HISTORICAL_EFFECT_IDS.includes(id))) {
+      expect(rule.activeScopes).toEqual(["native-host"]);
+      expect(Object.hasOwn(rule, "retiredScopes")).toBe(false);
+    }
+  });
+
+  it.each([
+    "null",
+    "undefined",
+    "empty",
+    "duplicate",
+    "unknown",
+    "overlap",
+    "extra",
+    "disposition",
+    "partial",
+    "v1",
+    "foreign",
+  ])("refuses malformed or partial retirement %s", (variant) => {
+    expect(validatePolicy(alteredRetirement(variant))).toContain("invalid-rule-inventory");
+  });
+
+  it("rejects lost obligations from every ancestor while retaining valid legacy policies", () => {
+    const active = activeHistoricalPolicy();
+    const erased = structuredClone(active);
+    for (const rule of erased.rules.filter(({ id }) => HISTORICAL_EFFECT_IDS.includes(id)))
+      rule.activeScopes = [];
+    expect(validatePolicy(erased, [active])).toContain("activation-shrank");
+    expect(validatePolicy(erased, [policy])).toContain("activation-shrank");
+    const broader = structuredClone(active);
+    broader.rules.find(({ id }) => id === HISTORICAL_EFFECT_IDS[0]).activeScopes.push("production");
+    expect(validatePolicy(policy, [active, broader])).toContain("activation-shrank");
+    const { responsibilities, ...legacy } = active;
+    legacy.version = 1;
+    expect(validatePolicy(legacy)).toEqual([]);
+    expect(validatePolicy(legacy, [policy])).toContain("responsibility-downgrade");
+    expect(validatePolicy(policy, [alteredRetirement("partial")])).toContain(
+      "invalid-baseline-policy",
+    );
+    expect(responsibilities).toEqual(policy.responsibilities);
   });
 });

@@ -1,3 +1,4 @@
+import { isRecord } from "./run-result-validation.js";
 import type {
   CatalogCompatibility,
   CatalogDigest,
@@ -146,7 +147,12 @@ export const GATEWAY_NATIVE_EXACT_CONTENT_TOOLS: readonly string[] = Object.free
 const NATIVE_TOOL_NAME = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/u;
 const DIGEST = /^[a-f0-9]{64}$/u;
 
-function nativeToolDefinitionBytes(value: unknown): number | undefined {
+interface CheckedNativeToolDefinition {
+  readonly record: Record<string, unknown>;
+  readonly bytes: number;
+}
+
+function checkedNativeToolDefinition(value: unknown): CheckedNativeToolDefinition | undefined {
   const record = plainRecord(value);
   if (record === undefined || Object.keys(record).length !== 3) return undefined;
   const { name, description, parameters } = record;
@@ -157,13 +163,14 @@ function nativeToolDefinitionBytes(value: unknown): number | undefined {
     gatewayNativeToolSchemaBytes(schema) > GATEWAY_NATIVE_TOOL_ADVERTISEMENT_LIMITS.maxSchemaBytes
   )
     return undefined;
-  return gatewayNativeToolDefinitionBytes({ name, description, parameters: schema });
+  return {
+    record,
+    bytes: gatewayNativeToolDefinitionBytes({ name, description, parameters: schema }),
+  };
 }
 
 function plainRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
+  return isRecord(value) ? value : undefined;
 }
 
 function boundedDescription(value: unknown): value is string {
@@ -202,12 +209,13 @@ function validNativeTools(value: unknown): boolean {
   const names = new Set<string>();
   let total = 0;
   for (const tool of value) {
-    const bytes = nativeToolDefinitionBytes(tool);
-    if (bytes === undefined) return false;
-    const name = (tool as { name: string }).name;
+    const checked = checkedNativeToolDefinition(tool);
+    if (checked === undefined) return false;
+    const name = checked.record.name;
+    if (typeof name !== "string" || !NATIVE_TOOL_NAME.test(name)) return false;
     if (names.has(name)) return false;
     names.add(name);
-    total += bytes;
+    total += checked.bytes;
     if (total > GATEWAY_NATIVE_TOOL_ADVERTISEMENT_LIMITS.maxTotalBytes) return false;
   }
   return true;
