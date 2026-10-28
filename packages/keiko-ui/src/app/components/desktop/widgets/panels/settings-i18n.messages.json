@@ -1240,8 +1240,8 @@
     "de": "MCP-Server"
   },
   "settings.mcp.description": {
-    "en": "Configure tool servers centrally. Each conversation and coding task applies its own permissions.",
-    "de": "Tool-Server zentral konfigurieren. Für jedes Gespräch und jede Coding-Aufgabe gelten die jeweiligen Berechtigungen."
+    "en": "Connect your tools once. Use them in Chat and the Coding Workbench.",
+    "de": "Tools einmal verbinden und in Chat und Coding Workbench nutzen."
   },
   "settings.mcp.error": {
     "en": "The operation failed. Check the configuration, credentials and connection. Reload if settings changed elsewhere.",
@@ -1256,8 +1256,8 @@
     "de": "MCP-Server werden geladen…"
   },
   "settings.mcp.unverified": {
-    "en": "Not checked in this session",
-    "de": "In dieser Sitzung nicht geprüft"
+    "en": "Not connected",
+    "de": "Nicht verbunden"
   },
   "settings.mcp.disabled": {
     "en": "Disabled",
@@ -1346,5 +1346,81 @@
   "settings.mcp.save": {
     "en": "Save",
     "de": "Speichern"
+  },
+  "settings.mcp.availability": {
+    "en": "Each conversation and coding task keeps its own permissions.",
+    "de": "Für jedes Gespräch und jede Coding-Aufgabe gelten die jeweiligen Berechtigungen."
+  },
+  "settings.mcp.configured": {
+    "en": "Your servers",
+    "de": "Deine Server"
+  },
+  "settings.mcp.serverCount": {
+    "en": "{count} configured",
+    "de": "{count} konfiguriert"
+  },
+  "settings.mcp.emptyTitle": {
+    "en": "No servers yet",
+    "de": "Noch keine Server"
+  },
+  "settings.mcp.emptyHelp": {
+    "en": "Add an MCP server to make its tools available in Keiko.",
+    "de": "Füge einen MCP-Server hinzu, um seine Tools in Keiko zu nutzen."
+  },
+  "settings.mcp.remote": {
+    "en": "Remote · HTTPS",
+    "de": "Remote · HTTPS"
+  },
+  "settings.mcp.local": {
+    "en": "Local · stdio",
+    "de": "Lokal · stdio"
+  },
+  "settings.mcp.errorTitle": {
+    "en": "Could not complete the request",
+    "de": "Anfrage konnte nicht abgeschlossen werden"
+  },
+  "settings.mcp.sessionTitle": {
+    "en": "Connect this browser to Keiko",
+    "de": "Diesen Browser mit Keiko verbinden"
+  },
+  "settings.mcp.sessionHelp": {
+    "en": "The browser connection has expired. Use “Connect browser” at the top, then reload this list. Your draft stays here.",
+    "de": "Die Browserverbindung ist abgelaufen. Wähle oben „Browser verbinden“ und lade danach diese Liste neu. Dein Entwurf bleibt erhalten."
+  },
+  "settings.mcp.saveUnavailable": {
+    "en": "You can prepare the connection now. Reload the server list before saving.",
+    "de": "Du kannst die Verbindung bereits eingeben. Lade vor dem Speichern die Serverliste neu."
+  },
+  "settings.mcp.removeTitle": {
+    "en": "Remove {name}",
+    "de": "{name} entfernen"
+  },
+  "settings.mcp.removeHelp": {
+    "en": "Remove {name} and its stored credentials? Its tools will no longer be available.",
+    "de": "{name} und die gespeicherten Zugangsdaten entfernen? Seine Tools stehen danach nicht mehr zur Verfügung."
+  },
+  "settings.mcp.confirmRemove": {
+    "en": "Remove server",
+    "de": "Server entfernen"
+  },
+  "settings.mcp.connecting": {
+    "en": "Connecting…",
+    "de": "Verbindung wird hergestellt…"
+  },
+  "settings.mcp.failed": {
+    "en": "Connection failed",
+    "de": "Verbindung fehlgeschlagen"
+  },
+  "settings.mcp.credentialsRequired": {
+    "en": "Credentials belong to the original destination. Enter the token again or reimport the .env file. If this connection uses additional credential headers, create a new connection for the new destination.",
+    "de": "Zugangsdaten gehören zum ursprünglichen Ziel. Gib den Token erneut ein oder importiere die .env-Datei neu. Verwendet die Verbindung zusätzliche Zugangsdaten-Header, lege für das neue Ziel eine neue Verbindung an."
+  },
+  "settings.mcp.credentialsTitle": {
+    "en": "New credentials required for this destination",
+    "de": "Neue Zugangsdaten für dieses Ziel erforderlich"
+  },
+  "settings.mcp.statusUnavailable": {
+    "en": "Status unavailable",
+    "de": "Status nicht verfügbar"
   }
 }

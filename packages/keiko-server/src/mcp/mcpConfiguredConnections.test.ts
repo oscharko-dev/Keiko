@@ -80,7 +80,13 @@ describe("configured MCP connections", () => {
       stateDir: f.root,
       log: { write: () => undefined },
       egress: () => undefined,
-      connect: () => Promise.resolve({ tools, call: dispatch, close: () => Promise.resolve() }),
+      connect: () =>
+        Promise.resolve({
+          signal: new AbortController().signal,
+          tools,
+          call: dispatch,
+          close: () => Promise.resolve(),
+        }),
     });
     managers.push(manager);
     const first = manager.connect("notes", "test");
@@ -112,7 +118,12 @@ describe("configured MCP connections", () => {
     const dispatch = vi.fn(() => Promise.resolve({ content: [{ type: "text", text: "ok" }] }));
     const connect = vi.fn((input: ExternalMcpClientOptions) => {
       options.push(input);
-      return Promise.resolve({ tools, call: dispatch, close: () => Promise.resolve() });
+      return Promise.resolve({
+        signal: new AbortController().signal,
+        tools,
+        call: dispatch,
+        close: () => Promise.resolve(),
+      });
     });
     const manager = createConfiguredMcpConnections({
       settings: f.store,
@@ -155,6 +166,7 @@ describe("configured MCP connections", () => {
       egress: () => undefined,
       connect: () =>
         Promise.resolve({
+          signal: new AbortController().signal,
           tools,
           call: () =>
             new Promise((resolve) => {
@@ -196,6 +208,7 @@ describe("configured MCP connections", () => {
       connect: (options) => {
         transport = options.transport;
         return Promise.resolve({
+          signal: new AbortController().signal,
           tools,
           call: () => Promise.resolve({ content: [{ type: "text", text: token }] }),
           close: () => Promise.resolve(),
@@ -304,4 +317,76 @@ describe("configured MCP connections", () => {
       reason: "not-admitted",
     });
   });
+});
+
+it("reports only runtime connection facts and recovers a closed connection without changing settings", async () => {
+  const f = fixture();
+  let ready: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => {
+    ready = resolve;
+  });
+  const lifetimes: AbortController[] = [];
+  const connect = vi.fn(async () => {
+    await gate;
+    const lifetime = new AbortController();
+    lifetimes.push(lifetime);
+    return {
+      signal: lifetime.signal,
+      tools,
+      call: (): Promise<{ content: [] }> => Promise.resolve({ content: [] }),
+      close: (): Promise<void> => {
+        lifetime.abort();
+        return Promise.resolve();
+      },
+    };
+  });
+  const manager = createConfiguredMcpConnections({
+    settings: f.store,
+    stateDir: f.root,
+    log: { write: () => undefined },
+    egress: () => undefined,
+    connect,
+  });
+  managers.push(manager);
+  expect(manager.inspect("test")).toEqual([{ name: "notes", state: "idle", toolCount: null }]);
+  expect(connect).not.toHaveBeenCalled();
+  const pending = manager.connect("notes", "test");
+  expect(manager.inspect("test")[0]?.state).toBe("connecting");
+  ready?.();
+  const first = await pending;
+  expect(manager.inspect("test")).toEqual([{ name: "notes", state: "connected", toolCount: 1 }]);
+  expect(f.store.read("test").servers[0]?.tools).toEqual({});
+  lifetimes[0]?.abort();
+  expect(manager.inspect("test")).toEqual([{ name: "notes", state: "failed", toolCount: null }]);
+  expect(await manager.connect("notes", "test")).not.toBe(first);
+  expect(connect).toHaveBeenCalledTimes(2);
+  expect(manager.inspect("test")[0]?.state).toBe("connected");
+  f.store.update(
+    {
+      expectedRevision: f.store.read("test").revision,
+      servers: [{ ...f.server, enabled: false }],
+      secrets: {},
+    },
+    "test",
+  );
+  expect(manager.inspect("test")).toEqual([{ name: "notes", state: "disabled", toolCount: null }]);
+});
+
+it("keeps a failed connection observable and retries only on explicit connection demand", async () => {
+  const f = fixture();
+  const connect = vi.fn(() => Promise.reject(new Error("synthetic unreachable endpoint")));
+  const manager = createConfiguredMcpConnections({
+    settings: f.store,
+    stateDir: f.root,
+    log: { write: () => undefined },
+    egress: () => undefined,
+    connect,
+  });
+  managers.push(manager);
+  await expect(manager.connect("notes", "test")).rejects.toThrow("synthetic unreachable");
+  expect(manager.inspect("test")).toEqual([{ name: "notes", state: "failed", toolCount: null }]);
+  expect(manager.inspect("test")[0]?.state).toBe("failed");
+  expect(connect).toHaveBeenCalledTimes(1);
+  await expect(manager.connect("notes", "test")).rejects.toThrow();
+  expect(connect).toHaveBeenCalledTimes(2);
 });

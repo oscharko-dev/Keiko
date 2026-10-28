@@ -76,8 +76,9 @@ async function discover(
     "authority-invalid",
   );
   try {
-    const signal = mcpSettings.generation(server, correlationId);
+    const generation = mcpSettings.generation(server, correlationId);
     const connection = await mcpConnections.connect(server.name, correlationId);
+    const signal = AbortSignal.any([generation, connection.signal]);
     requireDispatch(!signal.aborted, "denied", "consumer-stale");
     const tools = connection.tools
       .filter((tool) => server.discovery === "automatic" || Object.hasOwn(server.tools, tool.name))

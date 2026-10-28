@@ -36,6 +36,7 @@ function fixture(): Fixture {
     }),
   );
   const connection: ExternalMcpConnection = {
+    signal: new AbortController().signal,
     tools: [
       { name: "echo", inputSchema },
       { name: "unadmitted", inputSchema },
@@ -43,7 +44,7 @@ function fixture(): Fixture {
     call,
     close: () => Promise.resolve(),
   };
-  const endpoint = createMcpRelayEndpoint(connection, ["echo"]);
+  const endpoint = createMcpRelayEndpoint(connection, { echo: "read" });
   cleanup.push(endpoint.close);
   return {
     endpoint,

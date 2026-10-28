@@ -112,6 +112,7 @@ class ExternalClient implements ExternalMcpConnection {
   readonly #transport: Transport;
   #tools: readonly ExternalMcpTool[] = [];
   #digest = sha256Hex("[]");
+  readonly #lifetime = new AbortController();
   #closed = false;
   #drifted = false;
   #closing: Promise<void> | undefined;
@@ -120,8 +121,13 @@ class ExternalClient implements ExternalMcpConnection {
   };
   constructor(private readonly options: ExternalMcpClientOptions) {
     this.#transport = transportFor(options.transport, this.#contexts);
+    this.#client.onclose = (): void => {
+      this.#closed = true;
+      this.#lifetime.abort(new ManagedMcpError("closed"));
+    };
     this.#client.setNotificationHandler("notifications/tools/list_changed", () => {
       this.#drifted = true;
+      this.#lifetime.abort(new ManagedMcpError("descriptor-drift"));
     });
     const send = this.#transport.send.bind(this.#transport);
     this.#transport.send = (message, sendOptions): ReturnType<Transport["send"]> => {
@@ -138,6 +144,9 @@ class ExternalClient implements ExternalMcpConnection {
       }
       return send(message, sendOptions);
     };
+  }
+  get signal(): AbortSignal {
+    return this.#lifetime.signal;
   }
   get tools(): readonly ExternalMcpTool[] {
     return this.#tools;
@@ -183,11 +192,11 @@ class ExternalClient implements ExternalMcpConnection {
     context: ManagedMcpInvocationContext,
   ): Promise<CatalogJsonObject> {
     const tool = this.#tools.find((candidate) => candidate.name === name);
-    const signal = AbortSignal.any([context.signal, this.options.signal]);
+    const signal = AbortSignal.any([context.signal, this.options.signal, this.signal]);
     const invocation = { ...context, signal };
+    if (this.#drifted) throw new ManagedMcpError("descriptor-drift");
     if (this.#closed || tool === undefined || signal.aborted)
       throw new ManagedMcpError("not-admitted");
-    if (this.#drifted) throw new ManagedMcpError("descriptor-drift");
     const args = captured(argumentsValue);
     const validation = await fromJsonSchema<CatalogJsonObject>(tool.inputSchema)[
       "~standard"
@@ -232,6 +241,7 @@ class ExternalClient implements ExternalMcpConnection {
   }
   async close(): Promise<void> {
     this.#closed = true;
+    this.#lifetime.abort(new ManagedMcpError("closed"));
     this.options.signal.removeEventListener("abort", this.#abort);
     this.#closing ??= this.disconnect();
     await this.#closing;

@@ -8,6 +8,7 @@ import type {
 import type {
   McpServerDefinition,
   McpRemoteTransport,
+  McpServerConnectionView,
 } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 import { mcpServerSecretReferences } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
@@ -27,6 +28,8 @@ import { resolveMcpSecretHeaders } from "./mcpCredentialRelay.js";
 import type { McpSettingsStore } from "./mcpSettingsStore.js";
 
 export interface ConfiguredMcpConnections {
+  /** Current shared runtime facts only; inspection never starts a transport or executes a tool. */
+  readonly inspect: (correlationId: string) => readonly McpServerConnectionView[];
   readonly connect: (name: string, correlationId: string) => Promise<ExternalMcpConnection>;
   readonly generation: (server: McpServerDefinition, correlationId: string) => AbortSignal;
   readonly serve: (
@@ -197,6 +200,7 @@ function guardedConnection(
     throw new ManagedMcpError("not-admitted");
   }
   return {
+    signal: connection.signal,
     tools: connection.tools,
     close: () => connection.close(),
     call: async (name, args, context): Promise<CatalogJsonObject> => {
@@ -224,6 +228,8 @@ function guardedConnection(
 interface ConnectionEntry {
   readonly signal: AbortSignal;
   readonly connection: Promise<ExternalMcpConnection>;
+  client?: ExternalMcpConnection;
+  failed: boolean;
   endpoint?: ReturnType<typeof createMcpRelayEndpoint>;
 }
 
@@ -234,9 +240,9 @@ function endpointFor(
 ): ReturnType<typeof createMcpRelayEndpoint> {
   if (entry === undefined || entry.signal.aborted) throw new ManagedMcpError("not-admitted");
   if (entry.endpoint !== undefined) return entry.endpoint;
-  const endpoint = createMcpRelayEndpoint(connection, Object.keys(server.tools));
+  const endpoint = createMcpRelayEndpoint(connection, server.tools);
   entry.endpoint = endpoint;
-  entry.signal.addEventListener(
+  AbortSignal.any([entry.signal, connection.signal]).addEventListener(
     "abort",
     () => {
       void endpoint.close().catch(() => undefined);
@@ -246,51 +252,113 @@ function endpointFor(
   return endpoint;
 }
 
+function connectionView(
+  options: Options,
+  connections: ReadonlyMap<string, ConnectionEntry>,
+  server: McpServerDefinition,
+  correlationId: string,
+): McpServerConnectionView {
+  const idle = {
+    name: server.name,
+    state: server.enabled ? "idle" : "disabled",
+    toolCount: null,
+  } as const;
+  if (!server.enabled) return idle;
+  const generation = currentGeneration(options, server, correlationId);
+  const entry = connections.get(server.name);
+  if (generation.aborted || entry === undefined || entry.signal.aborted) return idle;
+  if (entry.failed || entry.client?.signal.aborted === true)
+    return { name: server.name, state: "failed", toolCount: null };
+  return entry.client === undefined
+    ? { name: server.name, state: "connecting", toolCount: null }
+    : { name: server.name, state: "connected", toolCount: entry.client.tools.length };
+}
+async function openConnection(
+  options: Options,
+  server: McpServerDefinition,
+  signal: AbortSignal,
+  correlationId: string,
+  previous: ExternalMcpConnection | undefined,
+): Promise<ExternalMcpConnection> {
+  await previous?.close();
+  const transport =
+    server.transport.kind === "remote"
+      ? remoteTransport(options, server, correlationId, signal)
+      : localTransport(options, server);
+  const client = await (options.connect ?? connectExternalMcp)({
+    transport,
+    log: options.log,
+    correlationId,
+    signal,
+  });
+  currentGeneration(options, server, correlationId);
+  if (signal.aborted || client.signal.aborted) {
+    await client.close();
+    throw new ManagedMcpError("closed");
+  }
+  return guardedConnection(options, server, signal, client);
+}
+function connectCurrent(
+  options: Options,
+  lifetime: AbortSignal,
+  connections: Map<string, ConnectionEntry>,
+  name: string,
+  correlationId: string,
+): Promise<ExternalMcpConnection> {
+  if (lifetime.aborted) return Promise.reject(new ManagedMcpError("closed"));
+  const server = currentServer(options, name, correlationId);
+  const generation = currentGeneration(options, server, correlationId);
+  const existing = connections.get(name);
+  if (
+    existing !== undefined &&
+    !existing.signal.aborted &&
+    !existing.failed &&
+    existing.client?.signal.aborted !== true
+  )
+    return existing.connection;
+  const signal = AbortSignal.any([lifetime, generation]);
+  const connection = openConnection(options, server, signal, correlationId, existing?.client).then(
+    (client) => {
+      entry.client = client;
+      return client;
+    },
+  );
+  const entry: ConnectionEntry = { signal, connection, failed: false };
+  connections.set(name, entry);
+  signal.addEventListener(
+    "abort",
+    () => {
+      if (connections.get(name) === entry) connections.delete(name);
+    },
+    { once: true },
+  );
+  void connection.catch(() => {
+    entry.failed = true;
+  });
+  return connection;
+}
 export function createConfiguredMcpConnections(options: Options): ConfiguredMcpConnections {
   const lifetime = new AbortController();
   const connections = new Map<string, ConnectionEntry>();
   const manager: ConfiguredMcpConnections = {
+    inspect: (correlationId) =>
+      options.settings
+        .read(correlationId)
+        .servers.map((server) => connectionView(options, connections, server, correlationId)),
     generation: (server, correlationId) => currentGeneration(options, server, correlationId),
     serve: async (name, request, context): Promise<Response> => {
       const pending = manager.connect(name, context.correlationId);
-      // Keep the endpoint with the generation that owns this pending connection.
       const entry = connections.get(name);
       const connection = await pending;
       const server = currentServer(options, name, context.correlationId);
       return endpointFor(entry, connection, server).fetch(request, context);
     },
-    connect: (name, correlationId): Promise<ExternalMcpConnection> => {
-      if (lifetime.signal.aborted) return Promise.reject(new ManagedMcpError("closed"));
-      const server = currentServer(options, name, correlationId);
-      const generation = currentGeneration(options, server, correlationId);
-      const existing = connections.get(name);
-      if (existing !== undefined && !existing.signal.aborted) return existing.connection;
-      const signal = AbortSignal.any([lifetime.signal, generation]);
-      const transport =
-        server.transport.kind === "remote"
-          ? remoteTransport(options, server, correlationId, signal)
-          : localTransport(options, server);
-      const connection = (options.connect ?? connectExternalMcp)({
-        transport,
-        log: options.log,
-        correlationId,
-        signal,
-      }).then((client) => {
-        currentGeneration(options, server, correlationId);
-        return guardedConnection(options, server, signal, client);
-      });
-      const entry = { signal, connection };
-      connections.set(name, entry);
-      void connection.catch(() => {
-        if (connections.get(name) === entry) connections.delete(name);
-      });
-      return connection;
-    },
+    connect: (name, correlationId) =>
+      connectCurrent(options, lifetime.signal, connections, name, correlationId),
     close: async (): Promise<void> => {
+      const pending = [...connections.values()];
       lifetime.abort();
-      await Promise.allSettled(
-        [...connections.values()].map(async ({ connection }) => (await connection).close()),
-      );
+      await Promise.allSettled(pending.map(async ({ connection }) => (await connection).close()));
       connections.clear();
     },
   };

@@ -14,7 +14,12 @@ import {
 import { APP_SESSION_COOKIE_NAME } from "../coding-app-session/sessionCookie.js";
 import { API_ROUTES, type RouteContext } from "../routes.js";
 import { createMcpSettingsStore } from "./mcpSettingsStore.js";
-import { handleGetMcpSettings, handlePutMcpSettings } from "./mcpSettingsRoutes.js";
+import { createConfiguredMcpConnections } from "./mcpConfiguredConnections.js";
+import {
+  handleConnectMcpServer,
+  handleGetMcpSettings,
+  handlePutMcpSettings,
+} from "./mcpSettingsRoutes.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -131,4 +136,70 @@ describe("authenticated shared MCP settings routes", () => {
     expect((await pending).status).toBe(403);
     expect(update).not.toHaveBeenCalled();
   });
+});
+
+it("GET observes the existing owner and connect confirms the committed discovery generation", async () => {
+  const { deps, cookie } = fixture();
+  const settings = deps.mcpSettings;
+  const root = roots.at(-1);
+  if (settings === undefined || root === undefined) throw new Error("Missing fixture");
+  const original = settings.read("test");
+  await handlePutMcpSettings(
+    context(cookie, {
+      expectedRevision: original.revision,
+      servers: [
+        {
+          name: "notes",
+          discovery: "automatic",
+          tools: {},
+          transport: { kind: "remote", url: "https://example.test/mcp" },
+        },
+      ],
+      secrets: {},
+    }),
+    deps,
+  );
+  const signals: AbortSignal[] = [];
+  const manager = createConfiguredMcpConnections({
+    settings,
+    stateDir: root,
+    log: { write: () => undefined },
+    egress: () => undefined,
+    connect: (options) => {
+      signals.push(options.signal);
+      return Promise.resolve({
+        signal: options.signal,
+        tools: [{ name: "probe", inputSchema: { type: "object" } }],
+        call: () => Promise.resolve({ content: [] }),
+        close: () => Promise.resolve(),
+      });
+    },
+  });
+  const wired = { ...deps, mcpConnections: manager };
+  try {
+    expect(handleGetMcpSettings(context(cookie), wired).body).toMatchObject({
+      connections: [{ name: "notes", state: "idle", toolCount: null }],
+    });
+    expect(signals).toHaveLength(0);
+    const result = await handleConnectMcpServer(
+      { ...context(cookie), params: { serverName: "notes" } },
+      wired,
+    );
+    expect(result.status).toBe(200);
+    expect(signals).toHaveLength(2);
+    expect(signals[0]?.aborted).toBe(true);
+    expect(signals[1]?.aborted).toBe(false);
+    expect(result.body).toMatchObject({
+      snapshot: {
+        connections: [{ name: "notes", state: "connected", toolCount: 1 }],
+      },
+      toolCount: 1,
+    });
+    expect(handleGetMcpSettings(context(cookie), wired).body).toMatchObject({
+      connections: [{ name: "notes", state: "connected", toolCount: 1 }],
+    });
+    expect(signals).toHaveLength(2);
+  } finally {
+    await manager.close();
+  }
 });

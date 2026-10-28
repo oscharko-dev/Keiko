@@ -636,12 +636,21 @@ export function parseCodingWorkbenchMcpAuthorizationRequest(
     : undefined;
 }
 
+export interface McpServerConnectionView {
+  readonly name: string;
+  readonly state: "disabled" | "idle" | "connecting" | "connected" | "failed";
+  /** Discovered tools of this live generation, absent when no connection is usable. */
+  readonly toolCount: number | null;
+}
+
 /** Shared Settings projection. Secret values are write-only and never part of this document. */
 export interface McpSettingsSnapshot {
   readonly revision: string;
   readonly servers: readonly McpServerDefinition[];
   /** Committed configuration is authoritative even when encrypted orphan cleanup needs retry. */
   readonly credentialCleanup?: "pending";
+  /** Runtime-only projection from the shared connection owner; never persisted as configuration. */
+  readonly connections?: readonly McpServerConnectionView[];
 }
 export interface McpSettingsSecretInput {
   readonly server: string;

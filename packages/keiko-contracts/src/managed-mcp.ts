@@ -10,6 +10,8 @@ export const MANAGED_MCP_PROTOCOL_VERSION = "2026-07-28";
 
 /** Resolved by server composition; never serialized into MCP arguments or metadata. */
 export interface ManagedMcpInvocationContext {
+  /** Server-private recovery fence; never supplied by model tool arguments. */
+  readonly onUncertainMutation?: (() => void | Promise<void>) | undefined;
   readonly invocationId: string;
   readonly correlationId: string;
   readonly signal: AbortSignal;
@@ -79,6 +81,8 @@ export interface ExternalMcpTool {
   readonly annotations?: CatalogJsonObject;
 }
 export interface ExternalMcpConnection {
+  /** Aborts on connection closure or schema drift; it never authorizes reconnect/replay. */
+  readonly signal: AbortSignal;
   readonly tools: readonly ExternalMcpTool[];
   readonly call: (
     name: string,

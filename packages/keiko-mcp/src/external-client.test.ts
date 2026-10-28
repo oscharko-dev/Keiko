@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMcpHandler, fromJsonSchema, McpServer } from "@modelcontextprotocol/server";
 import type {
   ExternalMcpConnection,
@@ -160,6 +160,7 @@ describe("external MCP SDK client", () => {
     });
     expect(f.effects()).toBe(1);
     expect(f.calls.filter((method) => method === "tools/call")).toHaveLength(1);
+    expect(client.signal.aborted).toBe(false);
   });
 });
 
@@ -167,8 +168,11 @@ it("ends a connection on lifetime cancellation and refuses further effects", asy
   const controller = new AbortController();
   const f = fixture(false, controller.signal);
   const client = await f.connect();
+  expect(client.signal.aborted).toBe(false);
   controller.abort();
+  expect(client.signal.aborted).toBe(true);
   await client.close();
+  expect(client.signal.aborted).toBe(true);
   await client.close();
   await expect(client.call("save_note", { text: "synthetic" }, context())).rejects.toMatchObject({
     reason: "not-admitted",
@@ -381,6 +385,19 @@ it("connects to a legacy HTTP+SSE endpoint through the SDK", async () => {
   clients.push(connection);
   expect(await connection.call("probe", {}, context())).toMatchObject({
     content: [{ text: "sse-result" }],
+  });
+  expect(effects).toBe(1);
+  expect(connection.signal.aborted).toBe(false);
+  stream?.enqueue(
+    encoder.encode(
+      'event: message\ndata: {"jsonrpc":"2.0","method":"notifications/tools/list_changed"}\n\n',
+    ),
+  );
+  await vi.waitFor(() => {
+    expect(connection.signal.aborted).toBe(true);
+  });
+  await expect(connection.call("probe", {}, context())).rejects.toMatchObject({
+    reason: "descriptor-drift",
   });
   expect(effects).toBe(1);
 });

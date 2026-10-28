@@ -125,6 +125,7 @@ function fixture(
   calls: GatewayCallRequest[];
   effects: string[];
   server: McpServerDefinition;
+  connectionLifetime: AbortController;
 } {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-mcp-chat-")));
   const calls: GatewayCallRequest[] = [];
@@ -150,7 +151,9 @@ function fixture(
     "mcp-chat-test",
   );
   const effects: string[] = [];
+  const connectionLifetime = new AbortController();
   const connection: ExternalMcpConnection = {
+    signal: connectionLifetime.signal,
     tools: [
       {
         name: "get_status",
@@ -187,6 +190,7 @@ function fixture(
     close: () => Promise.resolve(),
   };
   const connections: NonNullable<UiHandlerDeps["mcpConnections"]> = {
+    inspect: () => [],
     connect: () => Promise.resolve(connection),
     generation: (definition, correlation) => settings.generation(definition, correlation),
     serve: () => Promise.resolve(new Response(null, { status: 404 })),
@@ -204,7 +208,7 @@ function fixture(
   configure(deps);
   deps.store.createProject(root);
   const chat = deps.store.createChat(root, "Synthetic MCP", MODEL);
-  return { deps, root, chatId: chat.id, calls, effects, server };
+  return { deps, root, chatId: chat.id, calls, effects, server, connectionLifetime };
 }
 function send(
   f: ReturnType<typeof fixture>,
@@ -465,3 +469,20 @@ it.each([false, true])(
     }
   },
 );
+
+it("revokes pending consent when its actual connection closes without a Settings change", async () => {
+  const f = fixture();
+  const pending = send(f);
+  void pending.catch(() => undefined);
+  await vi.waitFor(() => {
+    expect(f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.readGrant?.state).toBe(
+      "pending",
+    );
+  });
+  const revision = f.deps.mcpSettings?.read("test").revision;
+  f.connectionLifetime.abort();
+  await pending;
+  expect(f.effects).toEqual([]);
+  expect(f.deps.mcpSettings?.read("test").revision).toBe(revision);
+  expect(f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.readGrant?.state).toBe("revoked");
+});

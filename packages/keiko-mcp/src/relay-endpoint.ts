@@ -64,10 +64,10 @@ function relayServer(
 /** Protocol boundary for the existing authenticated native relay; it opens no listener. */
 export function createMcpRelayEndpoint(
   connection: ExternalMcpConnection,
-  allowed: readonly string[],
+  allowed: Readonly<Record<string, "read" | "write">>,
 ): RelayEndpoint {
   const contexts = new AsyncLocalStorage<ManagedMcpInvocationContext>();
-  const admitted = new Set(allowed);
+  const admitted = new Set(Object.keys(allowed));
   let closed = false;
   const handler = createMcpHandler(
     () => relayServer(connection, admitted, contexts.getStore(), () => !closed),

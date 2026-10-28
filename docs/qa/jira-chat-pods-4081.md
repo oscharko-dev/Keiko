@@ -2795,5 +2795,41 @@ correctly reports stale producer provenance and must be regenerated from the com
 with its pinned baseline/candidate toolchain. No measurement or budget is manually changed.
 
 Remaining configured-MCP qualification includes an independently reproduced native ambiguous-write
-retry, the SDK's raw schema-warning diagnostic path, lifecycle-derived Settings status and the
-requested Settings usability redesign. These are ongoing work, not accepted production behavior.
+retry and the SDK's raw schema-warning diagnostic path. The following checkpoint completes
+the focused Settings redesign/lifecycle journey; final qualification remains open.
+
+### Settings overview, management and truthful live status
+
+Refs #4081, #4086, #4089 and #4087. The existing Settings panel now opens with a server
+list instead of a disabled creation form. Each card offers connection checking, editing,
+disable/enable and confirmed removal. Add/edit forms use the existing design tokens and
+DE/EN messages, preserve keyboard focus and remain editable after a failed initial load.
+Saving still requires a valid paired snapshot. Failed observations cannot retain a green
+connected badge; connection state and tool counts come from the actual shared SDK owner.
+A browser reload therefore retains real status rather than resetting a component-local flag.
+
+Editing preserves manually admitted tool policies and stored credentials for unchanged
+targets. Changing a credential-bound target requires new credentials; transport changes
+clear incompatible draft secrets. Stale GET responses cannot overwrite a newer mutation,
+while importing an environment draft does not discard the initial Settings response.
+Independent UI review reproduced three credential/scope failures before repair and added
+stale-response/import race regressions. The two focused UI suites pass 23 tests, including
+accessibility, exact failed-load behavior and status truthfulness; UI TypeScript and scoped
+lint/format are checked independently. The connection/route/SDK/consumer group passes
+38 tests, with root TypeScript including tests and scoped backend lint also passing.
+
+On 2026-10-28, the actual in-app browser created a separate synthetic local MCP entry,
+connected it and displayed its three discovered tools. Editing its launch arguments,
+saving, reopening and inspecting the form proved persistence. Disable showed Disabled;
+Enable showed Not connected until the explicit successful connection check. Cancelling
+removal preserved the entry; confirming removal deleted only that test entry. The original
+server remained present, reconnected with three tools and still displayed Connected after
+a real browser reload. The retained screenshot contains only synthetic fixture metadata.
+This journey uses the production Settings UI and API, not direct API substitutes.
+
+SDK close and tool-list change invalidate the actual connection/catalog and pending Chat
+consent. A possibly lost individual response leaves other consumers' connection lifecycle
+intact. Discovery commits reconnect under the final stored generation before success is
+reported. All final aggregate/coverage/evidence, package, performance, Sonar and current-head
+CI requirements remain pending; native ambiguous-write recovery and combined Jira/MCP Chat
+composition are separate ongoing work. This is not acceptance of all 55 epic criteria.

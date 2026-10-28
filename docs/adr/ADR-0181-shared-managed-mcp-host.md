@@ -179,6 +179,16 @@ only, persists a validated tool map with revision comparison and treats unknown 
 write; descriptive remote annotations do not confer authority. Consumers still require their
 own catalog admission before invoking any discovered tool.
 
+Settings displays a response-only projection of that existing connection owner: disabled,
+idle, connecting, connected or failed, with the actual discovered tool count. Inspection
+never starts a transport. SDK close or tool-list drift invalidates the affected live entry
+and pending consumer consent immediately. A possibly lost invocation response alone does
+not disconnect unrelated consumers. Discovery that changes the stored tool map must reconnect
+under its committed generation before returning connected. The UI renders current server
+facts, marks unavailable observations explicitly and never persists a local connected flag.
+Editing preserves manual admission and existing credentials only for their original target;
+a changed endpoint or local command requires fresh credentials for that target.
+
 Remote traffic uses the existing gateway egress with DNS/proxy pinning, TLS verification and
 redirect refusal. An explicit private-network selection admits only the configured private
 resource; loopback and metadata addresses remain denied. Legacy SSE can address messages
