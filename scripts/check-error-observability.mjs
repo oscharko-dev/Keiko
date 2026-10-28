@@ -490,6 +490,10 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
     "packages/keiko-activity-log/src/server-log.ts:syncActiveSegment",
     "A failed fsync is returned as the closed durability-uncertain deferral of the batch.",
   ],
+  [
+    "packages/keiko-server/src/coding-runtime/opencodeRipgrepLaunch.ts:isFile",
+    "A metadata probe failure other than a missing path is the fail-closed true result of this ripgrep-provider predicate: the entry leaves the degraded PATH. coding-runtime.ripgrep.resolved records the launch outcome without paths.",
+  ],
 ]);
 
 function isReviewedFailurePath(path, owner) {

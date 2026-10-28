@@ -2,12 +2,19 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   boundGatewayToolCatalog,
   GATEWAY_NATIVE_EXACT_CONTENT_TOOLS,
+  GATEWAY_NATIVE_FILE_CONTENT_TOOLS,
   GATEWAY_NATIVE_TOOL_ADVERTISEMENT_LIMITS,
   gatewayNativeToolDefinitionBytes,
   gatewayNativeToolSchemaBytes,
   type GatewayNativeToolDefinition,
   isGatewayNativeToolAdvertisement,
+  toolArgumentLimitsByToolName,
 } from "./governed-tool-bridge.js";
+import {
+  CHANGESET_EDIT_ARGUMENT_LIMITS,
+  GENERIC_TOOL_ARGUMENT_LIMITS,
+  GOVERNED_CHANGESET_EDIT_TOOL_ALIAS,
+} from "./governed-tool-catalog.js";
 import type {
   GatewayNativeToolAdvertisement,
   GatewayToolCatalogAdvertisement,
@@ -82,6 +89,20 @@ describe("native tool advertisement limits and exact-content tools (#3897, #4009
       "write",
     ]);
     expect(Object.isFrozen(GATEWAY_NATIVE_EXACT_CONTENT_TOOLS)).toBe(true);
+  });
+
+  it("names exactly the native file-content tools, a subset of the exact-content ones", () => {
+    expect([...GATEWAY_NATIVE_FILE_CONTENT_TOOLS].sort()).toEqual(["edit", "patch", "write"]);
+    expect(Object.isFrozen(GATEWAY_NATIVE_FILE_CONTENT_TOOLS)).toBe(true);
+    for (const name of GATEWAY_NATIVE_FILE_CONTENT_TOOLS)
+      expect(GATEWAY_NATIVE_EXACT_CONTENT_TOOLS).toContain(name);
+  });
+
+  it("holds a call known by name to the changeset ceilings only for file content", () => {
+    for (const name of [GOVERNED_CHANGESET_EDIT_TOOL_ALIAS, ...GATEWAY_NATIVE_FILE_CONTENT_TOOLS])
+      expect(toolArgumentLimitsByToolName(name)).toBe(CHANGESET_EDIT_ARGUMENT_LIMITS);
+    for (const name of ["read", "shell", "execute", "keiko_workspace_read", "question", ""])
+      expect(toolArgumentLimitsByToolName(name)).toBe(GENERIC_TOOL_ARGUMENT_LIMITS);
   });
 
   it("advertises every exact-content tool under a name the admission grammar accepts", () => {

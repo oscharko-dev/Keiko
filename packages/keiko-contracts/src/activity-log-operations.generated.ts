@@ -1864,6 +1864,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      toolCallFragmentsPositional: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      toolCallFragmentsDropped: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       codeRedactionRevision: {
         type: "integer",
         dataClass: "count",
@@ -1919,6 +1929,10 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       {
         field: "outputExhausted",
         values: [true],
+      },
+      {
+        field: "toolCallFragmentsDropped",
+        positive: true,
       },
     ],
   },
@@ -3379,6 +3393,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "pending-decision-focused",
           "repository-trust-bound",
           "changeset-review-prepared",
+          "history-repository-switched",
+          "event-stream-reconnecting",
         ],
       },
       section: {
@@ -9015,6 +9031,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "revoked",
           "authority-resolution-failed",
           "action-not-authorized",
+          "patch-too-large",
           "drift",
           "unavailable",
           "other",
@@ -35741,6 +35758,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: true,
+      },
+      drainWaitCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
       },
       reason: {
         type: "string",

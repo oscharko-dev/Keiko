@@ -389,6 +389,92 @@ describe("useCodingWorkbenchSafeActivity", () => {
     await waitFor(() => expect(view.result.current.feed?.runId).toBe("run-2"));
   });
 
+  // Stability audit item 5: every reconnect used to blank the conversation until the snapshot read
+  // answered, and a failed read then left it blank. The feed already held is kept, captioned by the
+  // non-live status, until a new snapshot replaces it.
+  it("keeps the previous feed, not live, while a reconnect reads its new snapshot", async () => {
+    const view = renderHook(() =>
+      useCodingWorkbenchSafeActivity({
+        runId: "run-1",
+        runState: "running",
+        runtimeEventSignal: 0,
+      }),
+    );
+    await waitFor(() => expect(view.result.current.status).toBe("live"));
+    const confirmed = view.result.current.feed;
+    expect(confirmed).not.toBeNull();
+
+    getSnapshotMock.mockImplementation(
+      () => new Promise<CodingAppSessionChannelSnapshot>(() => undefined),
+    );
+    act(() => view.result.current.retry());
+
+    expect(view.result.current.status).toBe("loading");
+    expect(view.result.current.feed).toBe(confirmed);
+  });
+
+  it("keeps the previous feed when the reconnect's snapshot read fails", async () => {
+    const view = renderHook(() =>
+      useCodingWorkbenchSafeActivity({
+        runId: "run-1",
+        runState: "running",
+        runtimeEventSignal: 0,
+      }),
+    );
+    await waitFor(() => expect(view.result.current.status).toBe("live"));
+    const confirmed = view.result.current.feed;
+
+    getSnapshotMock.mockRejectedValue(new TypeError("Network request failed"));
+    act(() => view.result.current.retry());
+
+    await waitFor(() => expect(view.result.current.status).toBe("offline"));
+    expect(view.result.current.feed).toBe(confirmed);
+  });
+
+  it("does not relabel a held feed as live while its reconnect is still reading", async () => {
+    const view = renderHook(
+      ({ runState }: { readonly runState: "running" | "paused" }) =>
+        useCodingWorkbenchSafeActivity({ runId: "run-1", runState, runtimeEventSignal: 0 }),
+      { initialProps: { runState: "running" as "running" | "paused" } },
+    );
+    await waitFor(() => expect(view.result.current.status).toBe("live"));
+
+    getSnapshotMock.mockImplementation(
+      () => new Promise<CodingAppSessionChannelSnapshot>(() => undefined),
+    );
+    act(() => view.result.current.retry());
+    view.rerender({ runState: "paused" });
+
+    expect(view.result.current.status).toBe("loading");
+  });
+
+  // Audit item 14 relocates the Epic #3384 pin here: the window no longer calls `retry` when a run
+  // id changes, because this hook already reconnects for the new run on its own, exactly once.
+  it("reconnects for a new run id by itself, once, even from a disconnected state", async () => {
+    getSnapshotMock.mockResolvedValue(snapshot(0, "run-1"));
+    streamSnapshotsMock.mockResolvedValue(undefined);
+    const view = renderHook(
+      (input: UseCodingWorkbenchSafeActivityInput) => useCodingWorkbenchSafeActivity(input),
+      {
+        initialProps: {
+          runId: "run-1",
+          runState: "running",
+          runtimeEventSignal: 0,
+        } satisfies UseCodingWorkbenchSafeActivityInput,
+      },
+    );
+    await waitFor(() => expect(view.result.current.status).toBe("disconnected"));
+    expect(getSnapshotMock).toHaveBeenCalledTimes(1);
+
+    getSnapshotMock.mockResolvedValue(snapshot(0, "run-2"));
+    holdStreamUntilAbort();
+    view.rerender({ runId: "run-2", runState: "running", runtimeEventSignal: 0 });
+
+    await waitFor(() => expect(view.result.current.feed?.runId).toBe("run-2"));
+    expect(view.result.current.status).toBe("live");
+    expect(getSnapshotMock).toHaveBeenCalledTimes(2);
+  });
+
   it("ignores a superseded initial read after a newer connection confirmed its feed", async () => {
     vi.useFakeTimers();
     let release!: (value: CodingAppSessionChannelSnapshot) => void;

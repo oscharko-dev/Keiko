@@ -1,15 +1,17 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 
-import type {
-  CatalogDigest,
-  CompiledCatalogTool,
+import {
+  CHANGESET_EDIT_ARGUMENT_LIMITS,
+  type CatalogDigest,
+  type CompiledCatalogTool,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { isGatewayNativeToolAdvertisement } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 import {
   createToolInvocationNormalizer,
   createToolRef,
   OPENCODE_NATIVE_EXTENSION_DEFINITIONS,
+  opencodeRegistrationSet,
 } from "@oscharko-dev/keiko-tool-catalog";
 import {
   createOpenCodeGatewayToolCatalogAdvertisement,
@@ -253,6 +255,26 @@ describe("OpenCode visible tool contract", () => {
       "newString",
       "replaceAll",
     ]);
+  });
+
+  // Owner decision 2026-10-28: one edit string is bounded by the changeset cap, in the schema the
+  // model sees and in the catalog descriptor behind it -- never by 64 KiB.
+  it("bounds each edit string by the changeset cap, identically on the wire and in the catalog", () => {
+    const edit = OPENCODE_MODEL_VISIBLE_TOOLS.find((tool) => tool.name === "keiko_changeset_edit");
+    const properties = edit?.parameters.properties.changeset.properties.edits.items.properties;
+    if (properties === undefined) throw new Error("Expected the edit item schema.");
+    expect(properties.oldString.maxLength).toBe(CHANGESET_EDIT_ARGUMENT_LIMITS.maxStringBytes);
+    expect(properties.newString.maxLength).toBe(CHANGESET_EDIT_ARGUMENT_LIMITS.maxStringBytes);
+    const descriptor = opencodeRegistrationSet().entries.find(
+      (entry) => entry.alias === "keiko_changeset_edit",
+    )?.descriptor;
+    const catalog = (descriptor?.inputSchema as { properties: { changeset: unknown } }).properties
+      .changeset as {
+      properties: { edits: { items: { properties: Record<string, { maxLength: number }> } } };
+    };
+    const catalogProperties = catalog.properties.edits.items.properties;
+    expect(catalogProperties.oldString?.maxLength).toBe(properties.oldString.maxLength);
+    expect(catalogProperties.newString?.maxLength).toBe(properties.newString.maxLength);
   });
 
   // #3873 follow-up: deletions and renames ride the same closed changeset object. A call that only

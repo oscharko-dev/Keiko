@@ -3,11 +3,7 @@
 // events are exempt by the same gate. SSE framing reuses the existing sse.ts helpers.
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import {
-  sseBackpressureReporter,
-  writeOrDestroy,
-  type SseBackpressureSignal,
-} from "./sse-write.js";
+import { sseBackpressureReporter, writeSseFrame, type SseBackpressureSignal } from "./sse-write.js";
 import {
   BrowserToolError,
   type BrowserEventEnvelope,
@@ -289,7 +285,7 @@ export function openBrowserSseStream(
   correlationId?: string,
 ): void {
   res.writeHead(200, SSE_HEADERS);
-  // Per-connection abort: a slow-client backpressure kill (writeOrDestroy) aborts this controller,
+  // Per-connection abort: a slow-client backpressure kill (writeSseFrame) aborts this controller,
   // which unsubscribes from the manager so no further frames are produced for a dead socket. The
   // res.on("close") listener also unsubscribes; `unsubscribed` guards against the double call.
   // subscribe() returns synchronously and events fire only asynchronously afterward, so no event
@@ -322,8 +318,8 @@ export function openBrowserSseStream(
   controller.signal.addEventListener("abort", stop, { once: true });
   // The ready frame goes through the same protective path: a client that is already not draining
   // must abort and unsubscribe here too, rather than leaving the subscription live until some
-  // later event happens to trip writeOrDestroy.
-  writeOrDestroy(res, readyMessage(), controller, onBackpressure, correlationId);
+  // later event happens to trip writeSseFrame.
+  writeSseFrame(res, readyMessage(), controller, onBackpressure, correlationId);
   res.on("close", () => {
     stop();
   });
@@ -343,5 +339,5 @@ function writeBrowserEvent(
   // routes through this helper; this one was the last inline call to redactor()+JSON.stringify.
   const data = redactedEventJson(redactor, event);
   const frame = `id: ${String(seq)}\nevent: browser:${event.kind}\ndata: ${data}\n\n`;
-  writeOrDestroy(res, frame, controller, onBackpressure);
+  writeSseFrame(res, frame, controller, onBackpressure);
 }

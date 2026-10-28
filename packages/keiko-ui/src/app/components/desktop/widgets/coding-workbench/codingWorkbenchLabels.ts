@@ -576,6 +576,19 @@ export function visibleAlertFailure(
   return failure === undefined ? null : state[failure[0]].error;
 }
 
+/**
+ * A polite status for conditions that are expected to heal on their own: the browser reconnecting an
+ * interrupted live stream. Never an alert; a stream that stays down escalates through `visibleAlert`.
+ */
+export function visibleStatusNotice(
+  state: CodingWorkbenchRuntimeState,
+  t: CodingWorkbenchTranslate,
+): string | null {
+  return state.stream.status === "loading"
+    ? t("codingWorkbench.status.eventStreamReconnecting")
+    : null;
+}
+
 type StartReadinessResource = "modelSource" | "workspace" | "runtime" | "run";
 
 const START_BLOCKED_KEYS: Readonly<Record<StartReadinessResource, CodingWorkbenchMessageKey>> = {

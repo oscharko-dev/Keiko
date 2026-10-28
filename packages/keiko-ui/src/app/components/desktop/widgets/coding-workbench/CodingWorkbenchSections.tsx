@@ -977,6 +977,7 @@ function StopControl({ input, t }: Pick<ComposerViewProps, "input" | "t">): Reac
       data-tip={t("codingWorkbench.controls.stop")}
       aria-label={t("codingWorkbench.controls.stop")}
       disabled={input.mutationPending || input.runState === "stopping"}
+      aria-busy={input.mutationPending}
       onClick={input.actions.onStop}
     >
       <StopIcon size={14} />

@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 
+import { EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import type {
   CodingWorkbenchMode,
   CodingWorkbenchRuntimeAdapterKind,
@@ -57,7 +58,7 @@ const NATIVE_CALL_USAGE: CodingWorkbenchRuntimeDelegationUsage = Object.freeze({
 });
 
 /**
- * A proposed edit also spends the run's patch budget: the size of the diff the producer computed for
+ * A proposed edit also spends the run's patch budget (and may not exceed one changeset's cap): the size of the diff the producer computed for
  * it, the measure the mapped path charges for a materialized patch (#3897 review). It rides the same
  * invocation-bound reservation as the tool call, so a repeated check charges neither twice, and a
  * budget it would exceed refuses the edit before the runtime writes anything.
@@ -128,6 +129,10 @@ function admitNativeEffect(
   // A class the envelope does not carry is refused before it can spend a tool call.
   if (!revalidated.envelope.authority.actionClasses.includes(input.actionClass))
     return { ok: false, reason: "action-not-authorized" };
+  // One edit is capped at the changeset size the mapped path enforces (`patch-too-large`), checked
+  // before the reservation so a refused edit spends neither the tool call nor patch budget.
+  if ((input.patchBytes ?? 0) > EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES)
+    return { ok: false, reason: "patch-too-large" };
   const identity = nativeInvocationIdentity(current.runId, input.invocation);
   const delegationId = identity ?? `native-${randomBytes(12).toString("hex")}`;
   const reserved = authority.resolveCapabilityForDelegation({

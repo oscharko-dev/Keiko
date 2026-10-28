@@ -4,10 +4,23 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-lifecycle";
 import { MAX_TIMER_DELAY_MS } from "../abort-race.js";
 import type { CodingToolNativeReadOwner } from "./codingToolFacadePorts.js";
+import { CODING_TOOL_MAX_REQUEST_BODY_BYTES } from "./codingToolIpc.js";
 
 export const CODING_TOOL_INVOCATION_MAX_LIVE_PER_RUN = 8;
-export const CODING_TOOL_INVOCATION_MAX_BYTES_PER_ENTRY = 262_144;
-export const CODING_TOOL_INVOCATION_MAX_AGGREGATE_BYTES = 2 * 1024 * 1024;
+/**
+ * One staged payload is one tool request, so the largest entry is the largest request: a governed
+ * changeset edit (`CODING_TOOL_MAX_REQUEST_BODY_BYTES`, owner decision 2026-10-28). Every other
+ * request is a few hundred bytes, so the figure is a runaway safeguard, not a typical size.
+ */
+export const CODING_TOOL_INVOCATION_MAX_BYTES_PER_ENTRY = CODING_TOOL_MAX_REQUEST_BODY_BYTES;
+/**
+ * The bytes all live and claimed payloads may hold together: two cap-sized edits in flight at
+ * once, the ordinary 2 MiB of everything else on top. Memory stays proportional to this figure --
+ * a payload is held once and wiped when it settles -- and a third concurrent cap-sized edit is
+ * `busy`, a transient answer, never a size refusal.
+ */
+export const CODING_TOOL_INVOCATION_MAX_AGGREGATE_BYTES =
+  2 * CODING_TOOL_INVOCATION_MAX_BYTES_PER_ENTRY + 2 * 1024 * 1024;
 /**
  * The life of an invocation whose dispatcher declares none (a staged edit, a catalog cursor), from
  * staging until it is settled; its abort controller fires at this point. A catalog dispatch

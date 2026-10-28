@@ -140,6 +140,45 @@ describe("credential floor of preserved content", () => {
     expect(preserved).not.toContain("MIIEowIBAAKCAQEA");
   });
 
+  describe("JWT-shaped bearer tokens (F2)", () => {
+    // Synthetic fixtures assembled from parts so no JWT literal is contiguous in the source.
+    const HEADER = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9";
+    const PAYLOAD = "eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIn0";
+    const SIGNATURE = "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
+    const JWT = [HEADER, PAYLOAD, SIGNATURE].join(".");
+
+    it.each([
+      ["a bare assignment", `const DEMO_JWT = "${JWT}";`],
+      ["prose", `The session token ${JWT} was issued yesterday.`],
+      ["a cookie value", `Cookie: session=${JWT}; Path=/`],
+      ["an unsigned token", `token ${HEADER}.${PAYLOAD}.`],
+    ])("removes %s", (_label, text) => {
+      const preserved = redactContent(text, "preserve");
+      expect(preserved).toContain("[REDACTED]");
+      expect(preserved).not.toContain(PAYLOAD);
+      expect(preserved).not.toContain(HEADER);
+      expect(preserved).toBe(redactCredentialShapes(text));
+    });
+
+    it("keeps the text around the token", () => {
+      expect(redactContent(`before ${JWT} after`, "preserve")).toBe("before [REDACTED] after");
+    });
+
+    it("keeps ordinary text, hashes, identifiers and encoded blobs", () => {
+      const text = [
+        "sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "uuid 123e4567-e89b-12d3-a456-426614174000",
+        "png iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+        "version 12.4.1 and 2026.10.28.1-rc.2",
+        "a.b.c and foo.bar.baz and eyJ.eyJ.eyJ",
+        "import { a } from 'pkg.sub.module';",
+        "eyJhbGciOiJIUzI1NiJ9 alone is not a token",
+        `${HEADER}.${PAYLOAD} has only two segments`,
+      ].join("\n");
+      expect(redactContent(text, "preserve")).toBe(text);
+    });
+  });
+
   it("removes the whole private key block, the same way the default projection does", () => {
     expect(redactContent(PRIVATE_KEY, "preserve")).toBe(redact(PRIVATE_KEY));
     expect(redactContent(`before\n${PRIVATE_KEY}\nafter`, "preserve")).toBe(

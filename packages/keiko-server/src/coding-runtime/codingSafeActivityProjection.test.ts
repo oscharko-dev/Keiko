@@ -953,9 +953,10 @@ describe("bounded coding safe-activity projection", () => {
     const rejectedSubscriber = projection.subscribeContent(vi.fn());
     rejectedSubscriber.detach();
 
+    // The refused second call to an unsettled first one counts toward the loss counter as well.
     expect(projection.currentContent()).toMatchObject({
       feed: {
-        droppedEventCount: 2,
+        droppedEventCount: 3,
         turns: [
           {
             messages: [
@@ -1712,5 +1713,84 @@ describe("committed native retry signal metadata", () => {
     current = false;
     expect(projection.ingest(RUN_ID, retry)).toBe(false);
     expect(projection.currentContent()).toBeNull();
+  });
+});
+
+// Stability audit item 4: past the per-turn tool bound the newest call used to be dropped silently,
+// so the Changes refresh signal and the run phase (both derived from the feed) stopped following
+// the run. The newest call now replaces the oldest settled one and every displacement counts
+// toward `droppedEventCount`, the feed's monotonic, bounded loss counter the UI can follow.
+describe("saturated per-turn tool capacity", () => {
+  function openSaturated(maxToolsPerTurn: number): {
+    readonly projection: ReturnType<typeof createCodingSafeActivityProjection>;
+    readonly call: (callId: string, state: "pending" | "running" | "succeeded") => boolean;
+  } {
+    const projection = createCodingSafeActivityProjection({
+      now: () => 1_721_323_200_000,
+      limits: { maxToolsPerTurn },
+    });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    projection.ingest(RUN_ID, message("msg_user", "user"));
+    projection.ingest(RUN_ID, message("msg_assistant", "assistant", "msg_user"));
+    let tick = 0;
+    return {
+      projection,
+      call: (callId, state): boolean => {
+        tick += 1;
+        return projection.ingest(RUN_ID, {
+          kind: "tool",
+          messageId: "msg_assistant",
+          callId,
+          tool: "edit",
+          state,
+          occurredAt: `2026-07-18T17:00:01.${String(tick).padStart(3, "0")}Z`,
+        });
+      },
+    };
+  }
+
+  function toolIds(projection: ReturnType<typeof createCodingSafeActivityProjection>): string[] {
+    const turn = projection.currentContent()?.feed;
+    return turn?.availability === "available"
+      ? (turn.turns[0]?.tools.map(({ callId }) => callId) ?? [])
+      : [];
+  }
+
+  it("keeps the newest call by displacing the oldest settled one and counts each displacement", () => {
+    const { projection, call } = openSaturated(3);
+    for (const id of ["c1", "c2", "c3", "c4", "c5"]) call(id, "succeeded");
+
+    expect(toolIds(projection)).toEqual(["c3", "c4", "c5"]);
+    expect(projection.currentContent()?.feed).toMatchObject({
+      droppedEventCount: 2,
+      turns: [{ truncated: true }],
+    });
+  });
+
+  it("shows a newly started call at the bound so the run phase can name the running tool", () => {
+    const { projection, call } = openSaturated(2);
+    call("c1", "succeeded");
+    call("c2", "succeeded");
+    call("c3", "running");
+
+    expect(toolIds(projection)).toEqual(["c2", "c3"]);
+    expect(projection.currentContent()?.feed).toMatchObject({
+      turns: [{ tools: [{}, { callId: "c3", state: "running" }] }],
+    });
+  });
+
+  it("never displaces an unsettled call; the newest one is dropped and still counted", () => {
+    const { projection, call } = openSaturated(2);
+    call("c1", "pending");
+    call("c2", "running");
+    expect(call("c3", "pending")).toBe(true);
+
+    expect(toolIds(projection)).toEqual(["c1", "c2"]);
+    expect(projection.currentContent()?.feed).toMatchObject({ droppedEventCount: 1 });
   });
 });

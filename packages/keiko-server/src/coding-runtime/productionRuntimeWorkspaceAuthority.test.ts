@@ -1,5 +1,6 @@
 import type { GovernedSyncHead } from "./governedSyncHeads.js";
 import type { VerifiedCommitResult } from "@oscharko-dev/keiko-contracts";
+import { CODING_RUNTIME_PATCH_BUDGET_BYTES } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 /* eslint-disable @typescript-eslint/explicit-function-return-type -- Local authority fixtures are contextually typed. */
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -145,6 +146,16 @@ describe("production runtime workspace authority", () => {
     expect(next.budget.maxToolCalls).toBe(prior.budget.maxToolCalls);
     expect(next.budget.maxRuntimeMs).toBe(prior.budget.maxRuntimeMs);
     expect(next.budget.maxPatchBytes).toBe(prior.budget.maxPatchBytes);
+  });
+
+  // Owner decision 2026-10-28: a run may apply 64 MiB of patches, so normal work (a 66 KB data
+  // file, a generated fixture) is never refused. The figure is policy this test owns; the producer
+  // takes it from the one contract constant, and the envelope the run mints carries exactly it.
+  it("mints every run with a 64 MiB patch budget", () => {
+    const fixture = liveFixture();
+    const context = resolveProductionRuntimeContext(fixture.input, fixture.request);
+    expect(context.budget.maxPatchBytes).toBe(64 * 1_048_576);
+    expect(context.budget.maxPatchBytes).toBe(CODING_RUNTIME_PATCH_BUDGET_BYTES);
   });
 
   it("validates the deployment prompt budget without an invalid-value fallback", () => {

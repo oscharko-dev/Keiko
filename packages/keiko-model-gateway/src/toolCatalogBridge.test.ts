@@ -8,7 +8,10 @@ import {
   OPENCODE_NATIVE_EXTENSION_DEFINITIONS,
   opencodeRegistrationSet,
 } from "@oscharko-dev/keiko-tool-catalog";
-import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import {
+  CHANGESET_EDIT_ARGUMENT_LIMITS,
+  TOOL_CATALOG_LIMITS,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import {
   gatewayCatalogAdvertisement,
   openCodeGatewayCatalogAdvertisement,
@@ -1559,5 +1562,72 @@ describe("native tool advertisement bridge: assistant-text tool calls", () => {
       bridge.assertNativeTransport(response);
     }).not.toThrow();
     expect(opsOf(events)).toEqual(["gateway.tool-catalog.projected"]);
+  });
+});
+
+// Owner decision 2026-10-28: a model's file content is never refused at 64 KiB. The mapped
+// changeset edit carries up to the changeset cap in one string; the native file-content tools
+// (edit, write, patch) are held to the same ceilings; every other call keeps the generic bound.
+describe("file content in a model tool call", () => {
+  function changesetCall(newString: string, oldString = ""): NormalizedToolCall {
+    return {
+      id: "call-edit",
+      name: "keiko_changeset_edit",
+      arguments: {
+        changeset: {
+          edits: [{ file: "src/data.json", oldString, newString, replaceAll: false }],
+          deletions: [],
+          renames: [],
+          files: [{ file: "src/data.json", expectedContentHash: "a".repeat(64) }],
+          selectedFiles: ["src/data.json"],
+        },
+      },
+    };
+  }
+  function mappedBridge(): GatewayToolCatalogBridge {
+    return createGatewayToolCatalogBridge(
+      { ...request(), toolCatalog: openCodeGatewayCatalogAdvertisement(NOW) },
+      (): number => NOW,
+    );
+  }
+
+  it("binds a mapped changeset edit above the generic 256 KiB and 64 KiB ceilings", () => {
+    const big = "y".repeat(TOOL_CATALOG_LIMITS.maxArgumentBytes + 1);
+    const [bound] = mappedBridge().bindCalls([changesetCall(big)]);
+    expect(bound?.id).toBe("call-edit");
+  });
+
+  it("binds a mapped changeset edit string of exactly the cap and refuses one byte more", () => {
+    const cap = "z".repeat(CHANGESET_EDIT_ARGUMENT_LIMITS.maxStringBytes);
+    expect(mappedBridge().bindCalls([changesetCall(cap)])).toHaveLength(1);
+    expect(() => mappedBridge().bindCalls([changesetCall(`${cap}z`)])).toThrow(
+      GatewayToolCatalogError,
+    );
+  });
+
+  it("does not widen any other mapped tool", () => {
+    const call = {
+      id: "call-question",
+      name: "question",
+      arguments: { questions: ["x".repeat(TOOL_CATALOG_LIMITS.maxStringBytes + 1)] },
+    };
+    expect(() => mappedBridge().bindCalls([call])).toThrow(GatewayToolCatalogError);
+  });
+
+  it("hands a native file-content call above 64 KiB back unbound, and a native read still bounded", () => {
+    const { bridge } = nativeBridge();
+    const big = "w".repeat(TOOL_CATALOG_LIMITS.maxStringBytes + 1);
+    for (const name of ["edit", "write", "patch"])
+      expect(bridge.bindCalls([nativeCall(name, "call-big", { target: big })])).toHaveLength(1);
+    expect(() => bridge.bindCalls([nativeCall("read", "call-read", { target: big })])).toThrow(
+      GatewayToolCatalogError,
+    );
+    expect(() =>
+      bridge.bindCalls([
+        nativeCall("write", "call-over", {
+          target: "x".repeat(CHANGESET_EDIT_ARGUMENT_LIMITS.maxStringBytes + 1),
+        }),
+      ]),
+    ).toThrow(GatewayToolCatalogError);
   });
 });

@@ -4,6 +4,11 @@ import {
   resetActivityLogLossCountersForTests,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
+  ProviderEmptyAnswerError,
+  ProviderError,
+  ProviderOutputExhaustedError,
+} from "@oscharko-dev/keiko-security/errors/gateway";
+import {
   activityLogErrorKind,
   logEndpointHost,
   logErrorKind,
@@ -290,6 +295,20 @@ describe("activityLogErrorKind", () => {
       "authority-denied",
     );
     expect(activityLogErrorKind({ message: "GATEWAY_ATTEMPT_ADMISSION_DENIED" })).toBe("unknown");
+  });
+  // Keiko 1.3.1 stress test (F4): a model that answered with nothing usable is a model outcome, not
+  // an internal fault, on `chat.response.streamed` and `gateway.retry.scheduled` alike. Both inherit
+  // the provider error code, so the class (never the shared code) tells them from a real provider
+  // fault, which keeps the generic classification.
+  it.each([
+    ["an empty answer after reasoning", new ProviderEmptyAnswerError("model", [], true)],
+    ["an empty answer", new ProviderEmptyAnswerError("model")],
+    ["an exhausted output budget", new ProviderOutputExhaustedError("model")],
+  ])("does not classify %s as an internal fault", (_label, error) => {
+    expect(activityLogErrorKind(error)).toBe("validation-failed");
+  });
+  it("keeps the generic classification for a real provider fault", () => {
+    expect(activityLogErrorKind(new ProviderError("provider failed", 500))).toBe("internal");
   });
   it("maps the gateway authentication taxonomy to the closed permission denial kind", () => {
     const error = Object.assign(new Error("provider rejected credentials"), {

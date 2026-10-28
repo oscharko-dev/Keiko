@@ -52,6 +52,7 @@ import {
   type RouteResult,
 } from "../routes.js";
 import { SSE_HEADERS, startSseHeartbeat } from "../sse.js";
+import { writeSseFrame } from "../sse-write.js";
 import type { CodingRuntimeEventHub } from "./codingRuntimeEventHub.js";
 import type { CodingRuntimeOrchestrator } from "./codingRuntimeOrchestrator.js";
 import { openCodeSelectableAgents } from "./opencodeAgents.js";
@@ -446,7 +447,7 @@ function admittedMutation(
   orchestrator: CodingRuntimeOrchestrator,
   snapshot: CodingWorkbenchRuntimeSnapshot,
 ): RouteResult {
-  holdAppSessionForCodingRun(deps, ctx.req, snapshot, (id) => orchestrator.getSnapshot(id)?.state);
+  holdAppSessionForCodingRun(deps, ctx.req, snapshot, (id) => orchestrator.getSnapshot(id));
   return { status: 200, body: snapshot };
 }
 
@@ -1152,11 +1153,7 @@ export function openCodingRuntimeSse(
     if (!res.writableEnded && !res.destroyed) res.end();
   };
   const subscribed = eventHub.subscribe(runId, lastEventId, {
-    write: (event) => {
-      const accepted = res.write(frame(event));
-      if (!accepted) res.destroy();
-      return accepted;
-    },
+    write: (event) => writeSseFrame(res, frame(event), null),
     close,
   });
   if (!subscribed.ok) {

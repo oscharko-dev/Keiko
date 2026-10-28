@@ -314,8 +314,10 @@ an admitted run mutation of the existing `mutation()` funnel answers with the ru
 `ready`, `running`, `awaiting-approval` or `stopping`, the requesting session holds the existing
 operation lease on the `coding-run` surface, correlated by the run id, once per session and run.
 A run-state observation every five seconds only releases that lease once the run has left those
-states (paused, settled, taken over, recovery-required or gone); it never renews, extends or
-re-acquires anything, and holding the session again after a pause takes a new admitted mutation.
+states (paused by the human, settled, taken over, recovery-required or gone); it never renews,
+extends or re-acquires anything, and holding the session again after a pause takes a new admitted
+mutation. A run paused for an operator decision (a `pauseReason` is recorded) is waiting on the human
+exactly like `awaiting-approval`, so it keeps the lease; a pause the human chose does not.
 A rotation replaces the session record without its operations, so the rotated credential holds the
 lease again on its next admitted mutation, which first ends the predecessor's lease. An unreadable
 run state counts as settled, each lease releases independently, and either failure records a
@@ -355,8 +357,9 @@ itself mean the reader stalled. In the Keiko 1.3.0 test one near-capacity activi
 idle local browser closed the live stream as `sse-backpressure` (#3897). The writer therefore waits
 for `drain`, keeps only the newest pending snapshot while it waits (a later snapshot supersedes the
 pending one; a terminal frame still ends the stream once written) and skips heartbeats meanwhile.
-Only a stream that does not drain within `CODING_APP_SESSION_STREAM_DRAIN_TIMEOUT_MS` (one second)
-is a stalled reader: it records `sse-backpressure`, stops its live source and closes, exactly as
+Only a stream that does not drain within `CODING_APP_SESSION_STREAM_DRAIN_TIMEOUT_MS` (since
+2026-10-28 the shared SSE stalled-reader bound of 30 s, previously one second; ADR-0173) is a stalled
+reader: it records `sse-backpressure`, stops its live source and closes, exactly as
 before. The KEIKO-0225 regression pin for that diagnostic was relocated to this bound, not relaxed.
 The live stream's closed line counts `drainWaitCount` and `coalescedSnapshotCount`. The browser
 reconnects a dropped live channel by itself, at most five times with growing pauses, and gets a

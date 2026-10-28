@@ -43,6 +43,13 @@ const AWS_ACCESS_KEY_PATTERN = /\bAKIA[0-9A-Z]{16}\b/g;
 const SLACK_TOKEN_PATTERN = /\bxox[baprs]-[A-Za-z0-9-]{10,}/g;
 const GOOGLE_API_KEY_PATTERN = /\bAIza[0-9A-Za-z_-]{20,}/g;
 const STRIPE_KEY_PATTERN = /\b[rs]k_(?:live|test)_[A-Za-z0-9]{16,}/g;
+// A JSON Web Token is a bearer credential: three base64url segments whose header and payload are
+// base64url JSON objects, so both start with `eyJ` (`{"`). The signature may be empty (`alg: none`).
+// Requiring both `eyJ` segments and a realistic minimum length keeps dotted identifiers, version
+// strings, hashes, UUIDs and base64 blobs out of reach. Linear classes around literal dots, no
+// nesting: ReDoS-safe.
+const JWT_PATTERN =
+  /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*(?![A-Za-z0-9_-])/g;
 const PEM_PRIVATE_KEY_HEADER_PATTERN = /-----BEGIN [A-Z ]*PRIVATE KEY-----/g;
 const GERMAN_IBAN_PATTERN = /\bDE\d{2}(?: ?\d{4}){4} ?\d{2}\b/gi;
 const INTERNATIONAL_GERMAN_PHONE_PATTERN =
@@ -129,6 +136,7 @@ const BUILTIN_PATTERNS: readonly RegExp[] = [
   SLACK_TOKEN_PATTERN,
   GOOGLE_API_KEY_PATTERN,
   STRIPE_KEY_PATTERN,
+  JWT_PATTERN,
 ];
 
 function escapeRegExp(value: string): string {
@@ -200,6 +208,7 @@ const CREDENTIAL_SHAPE_PATTERNS: readonly RegExp[] = Object.freeze([
   ...[
     GOOGLE_API_KEY_PATTERN,
     STRIPE_KEY_PATTERN,
+    JWT_PATTERN,
     PEM_PRIVATE_KEY_HEADER_PATTERN,
     API_KEY_PATTERN,
     URL_CREDENTIALS_PATTERN,
@@ -208,7 +217,7 @@ const CREDENTIAL_SHAPE_PATTERNS: readonly RegExp[] = Object.freeze([
 
 /**
  * True when `value` contains something shaped like an actual credential: an issuer-prefixed token,
- * a private-key header, URL userinfo credentials, or an auth/api-key/cookie/secret-key context
+ * a JWT-shaped bearer token, a private-key header, URL userinfo credentials, or an auth/api-key/cookie/secret-key context
  * followed by a credential-length value. Pure, no IO. Intended for scanning free text a human wrote;
  * structured payloads that may not carry headers at all keep their stricter substring guard.
  */
@@ -438,7 +447,8 @@ function redactAuthorizationValues(input: string): string {
 /**
  * The credential floor of authorized content (#4098, `KEIKO_CONTENT_REDACTION=off`): configured
  * secret literals, private key blocks, URL credentials, credential-shaped authorization values and
- * issuer-format tokens (`sk-`, `ghp_`, `AKIA`, Slack, Google, Stripe). It never masks personal
+ * issuer-format tokens (`sk-`, `ghp_`, `AKIA`, Slack, Google, Stripe) and JWT-shaped bearer
+ * tokens (three base64url segments, header and payload starting `eyJ`). It never masks personal
  * data, account numbers, configuration values or code, and it is not a diagnostic redactor:
  * logs, evidence and support artifacts keep `redact()`.
  */

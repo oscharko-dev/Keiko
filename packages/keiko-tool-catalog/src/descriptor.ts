@@ -1,10 +1,13 @@
 import {
+  GENERIC_TOOL_ARGUMENT_LIMITS,
   TOOL_CATALOG_LIMITS,
+  toolArgumentLimits,
   type CatalogActionMapping,
   type CatalogEffect,
   type CatalogHandlerRequirement,
   type CatalogJsonObject,
   type CatalogJsonValue,
+  type ToolArgumentLimits,
   type ToolDescriptor,
   type ToolDescriptorDeclaration,
   type ToolResultBounds,
@@ -82,7 +85,10 @@ function actionMappings(
   return mappings.sort((left, right) => compareStrings(left.action, right.action));
 }
 
-export function resultBoundsFrom(value: CatalogJsonValue | undefined): ToolResultBounds {
+export function resultBoundsFrom(
+  value: CatalogJsonValue | undefined,
+  argumentLimits: ToolArgumentLimits = GENERIC_TOOL_ARGUMENT_LIMITS,
+): ToolResultBounds {
   requireCatalog(value !== undefined, "missing-bounds");
   const bounds = catalogObject(value);
   exactCatalogKeys(bounds, [
@@ -92,10 +98,7 @@ export function resultBoundsFrom(value: CatalogJsonValue | undefined): ToolResul
     "maxDurationMs",
   ]);
   return {
-    maxArgumentBytes: catalogPositive(
-      bounds.maxArgumentBytes,
-      TOOL_CATALOG_LIMITS.maxArgumentBytes,
-    ),
+    maxArgumentBytes: catalogPositive(bounds.maxArgumentBytes, argumentLimits.maxArgumentBytes),
     maxResultBytes: catalogPositive(bounds.maxResultBytes, TOOL_CATALOG_LIMITS.maxResultBytes),
     maxResultCount: catalogPositive(bounds.maxResultCount, TOOL_CATALOG_LIMITS.maxArrayItems),
     maxDurationMs: catalogPositive(bounds.maxDurationMs),
@@ -127,8 +130,9 @@ function declarationFrom(object: CatalogJsonObject): ToolDescriptorDeclaration {
       effects.every((effect) => effect === "workspace-read"),
       "ambiguous-effects",
     );
+  const toolRef = toolRefFrom(object.toolRef);
   return {
-    toolRef: toolRefFrom(object.toolRef),
+    toolRef,
     description: catalogString(object.description),
     inputSchema: compileCatalogSchema(object.inputSchema),
     resultSchema: compileCatalogSchema(object.resultSchema),
@@ -136,7 +140,7 @@ function declarationFrom(object: CatalogJsonObject): ToolDescriptorDeclaration {
     actionMapping: actionMappings(object.actionMapping, effects),
     policyReferences: uniqueStrings(object.policyReferences),
     handlerRequirement: handlerFrom(object.handlerRequirement),
-    bounds: resultBoundsFrom(object.bounds),
+    bounds: resultBoundsFrom(object.bounds, toolArgumentLimits(toolRef.canonicalId)),
     idempotency: object.idempotency,
     cancellation: object.cancellation,
   };

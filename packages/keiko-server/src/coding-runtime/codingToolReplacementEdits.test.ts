@@ -4,7 +4,10 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { applyPatch, validatePatch } from "@oscharko-dev/keiko-tools";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
-import { EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import {
+  EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES,
+  EDITOR_AGENT_CHANGESET_PATCH_LIMITS,
+} from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import {
   changesetPayloadBytes,
   EMPTY_CONTENT_SHA256,
@@ -95,6 +98,8 @@ function applied(
     applyEnabled: true,
     signal: new AbortController().signal,
     lineBreakMarkers,
+    // The editor route applies a changeset under its own limits, not the 64 KiB tools default.
+    limits: EDITOR_AGENT_CHANGESET_PATCH_LIMITS,
   });
   return Object.fromEntries(
     result.changeset.files.map(({ file }) => [
@@ -123,7 +128,10 @@ function engineVerdict(
     mkdirSync(dirname(join(root, file)), { recursive: true });
     writeFileSync(join(root, file), text);
   }
-  return validatePatch(workspace(root), patch, { lineBreakMarkers: engineMode(patch, registered) });
+  return validatePatch(workspace(root), patch, {
+    lineBreakMarkers: engineMode(patch, registered),
+    limits: EDITOR_AGENT_CHANGESET_PATCH_LIMITS,
+  });
 }
 
 function patchOf(result: ReplacementMaterialization): string {
@@ -855,10 +863,11 @@ describe("materializeReplacementChangeset deletions and renames", () => {
   });
 
   // A rename carries the whole file twice and cannot be split: one that alone exceeds the
-  // 65,536-byte changeset cap (ADR-0125 D3) is refused with that reason and an action the model can
-  // take, never "split it into smaller calls" (#3873 review).
+  // changeset cap (ADR-0125 D3, 8 MiB since the owner decision of 2026-10-28) is refused with that
+  // reason and an action the model can take, never "split it into smaller calls" (#3873 review).
+  // The fake reader has no 1 MiB read ceiling, so a 5 MiB file renders 10 MiB here.
   it("refuses a rename whose whole-file rendering alone exceeds the patch byte cap", async () => {
-    const large = `${"x".repeat(1_023)}\n`.repeat(40);
+    const large = `${"x".repeat(1_023)}\n`.repeat(5_120);
     const files = { "large.ts": large };
 
     const result = await materializeReplacementChangeset(
@@ -882,11 +891,12 @@ describe("materializeReplacementChangeset deletions and renames", () => {
     expect(result).not.toHaveProperty("message", expect.stringContaining("split"));
   });
 
-  // The editor route's changed-line limit (DEFAULT_PATCH_LIMITS) binds the rendered diff: a rename
-  // of a 1,001-line file removes and adds every line, 2,002 in all, and is refused here, before the
-  // run's budget is charged, instead of later by the route with advice the model cannot follow.
-  it("refuses moving a file over 1,000 lines before the editor route would", async () => {
-    const files = { "long.ts": "line\n".repeat(1_001) };
+  // The editor route's changed-line limit (EDITOR_AGENT_CHANGESET_MAX_CHANGED_LINES) binds the
+  // rendered diff: a rename of a 500,001-line file removes and adds every line, 1,000,002 in all,
+  // and is refused here, before the run's budget is charged, instead of later by the route with
+  // advice the model cannot follow.
+  it("refuses moving a file over half the changed-line limit before the editor route would", async () => {
+    const files = { "long.ts": "line\n".repeat(500_001) };
 
     const result = await materializeReplacementChangeset(
       reader(files),
@@ -898,7 +908,7 @@ describe("materializeReplacementChangeset deletions and renames", () => {
     );
 
     expect(result).toMatchObject({ status: "refused", refusal: "whole-file-too-large" });
-    expect(result).toHaveProperty("message", expect.stringContaining("2002 changed lines"));
+    expect(result).toHaveProperty("message", expect.stringContaining("1000002 changed lines"));
   });
 
   // keiko-tools refuses any diff text with a literal backslash-n followed by +, - or a space (its
@@ -1000,13 +1010,18 @@ describe("materializeReplacementChangeset deletions and renames", () => {
   });
 
   it("still advises splitting an edit-only changeset over the patch byte cap", async () => {
+    // Ten files of 500 KB, each fully replaced: about 1 MB of diff per file, over the 8 MiB cap in
+    // all while every file, and the changed-line count, stays far inside its own bound.
     const files = Object.fromEntries(
-      Array.from({ length: 3 }, (_, index) => [`f${String(index)}.ts`, `${"x".repeat(30_000)}\n`]),
+      Array.from({ length: 10 }, (_, index) => [
+        `f${String(index)}.ts`,
+        `${"x".repeat(500_000)}\n`,
+      ]),
     );
     const edits = Object.keys(files).map((file) => ({
       file,
-      oldString: "x".repeat(30_000),
-      newString: "y".repeat(30_000),
+      oldString: "x".repeat(500_000),
+      newString: "y".repeat(500_000),
       replaceAll: false,
     }));
 
@@ -1025,18 +1040,23 @@ describe("materializeReplacementChangeset deletions and renames", () => {
   });
 
   it("refuses edits that change more lines than the editor route allows, advising a split", async () => {
-    const files = { "a.ts": "x\n".repeat(1_100) };
+    // Two files of 300,000 lines, each fully replaced: 1,200,000 changed lines in about 3.6 MB.
+    const files = {
+      "a.ts": "x\n".repeat(300_000),
+      "b.ts": "x\n".repeat(300_000),
+    };
 
     const result = await materializeReplacementChangeset(
       reader(files),
-      changeset(files, [
-        {
-          file: "a.ts",
-          oldString: "x\n".repeat(1_100),
-          newString: "y\n".repeat(1_100),
+      changeset(
+        files,
+        Object.keys(files).map((file) => ({
+          file,
+          oldString: "x\n".repeat(300_000),
+          newString: "y\n".repeat(300_000),
           replaceAll: false,
-        },
-      ]),
+        })),
+      ),
       undefined,
     );
 
@@ -1163,5 +1183,95 @@ describe("changesetPayloadBytes", () => {
         files: [],
       }),
     ).toBe(6);
+  });
+});
+
+// Owner decision 2026-10-28: a governed changeset may carry 8 MiB, so normal work (a 66 KB data file,
+// a generated fixture) is never refused. The boundary is policy this block owns, not arithmetic the
+// materializer owns: the 8 MiB figure is written out here, and the patch is measured, never assumed.
+describe("materializeReplacementChangeset at the 8 MiB changeset cap", () => {
+  const MIB = 1_048_576;
+
+  /** One new file per path, each `lines` lines of `width` characters (width excludes the newline). */
+  function creations(
+    count: number,
+    lines: number,
+    width: number,
+  ): {
+    readonly files: Readonly<Record<string, undefined>>;
+    readonly edits: CodingToolReplacementEdit[];
+  } {
+    const paths = Array.from({ length: count }, (_, index) => `data/part-${String(index)}.csv`);
+    return {
+      files: Object.fromEntries(paths.map((path) => [path, undefined])),
+      edits: paths.map((file) => ({
+        file,
+        oldString: "",
+        newString: `${"d".repeat(width)}\n`.repeat(lines),
+      })),
+    };
+  }
+
+  async function materializeCreations(
+    edits: readonly CodingToolReplacementEdit[],
+    files: Readonly<Record<string, undefined>>,
+  ): Promise<ReplacementMaterialization> {
+    return materializeReplacementChangeset(reader({}), changeset(files, edits), undefined);
+  }
+
+  it("materializes a 66 KB data file, over the old 65,536-byte cap, and the real engine applies it", async () => {
+    const { files, edits } = creations(1, 1_000, 65);
+    const result = await materializeCreations(edits, files);
+
+    expect(Buffer.byteLength(patchOf(result), "utf8")).toBeGreaterThan(65_536);
+    expect(applied({}, result)["data/part-0.csv"]).toBe(edits[0]?.newString);
+  });
+
+  it("accepts a 1 MiB changeset end to end through the editor's patch limits", async () => {
+    const { files, edits } = creations(1, 1_023, 1_022);
+    const result = await materializeCreations(edits, files);
+
+    expect(Buffer.byteLength(patchOf(result), "utf8")).toBeGreaterThan(MIB - 4_096);
+    expect(engineVerdict({}, patchOf(result), true)).toMatchObject({ ok: true });
+    // The tools default (64 KiB) is what the editor route used to apply: it would refuse this.
+    expect(
+      validatePatch(workspace(tmpdir()), patchOf(result), { lineBreakMarkers: "verbatim" }),
+    ).toMatchObject({ ok: false });
+  });
+
+  // Seven files of exactly 1 MiB (the read ceiling a created file may reach) and one sized by
+  // measurement so the patch lands on 8 MiB exactly: only the last line of the last file changes
+  // length, and the hunk header does not depend on it.
+  async function exactly(bytes: number): Promise<ReplacementMaterialization> {
+    const full = creations(7, 1_024, 1_023);
+    const lastPath = "data/last.csv";
+    const lastLine = (extra: number): string => `${"d".repeat(1_022 + extra)}\n`;
+    const edit = (extra: number): CodingToolReplacementEdit => ({
+      file: lastPath,
+      oldString: "",
+      newString: `${"d".repeat(1_022)}\n`.repeat(100) + lastLine(extra),
+    });
+    const files = { ...full.files, [lastPath]: undefined };
+    const probe = patchOf(await materializeCreations([...full.edits, edit(0)], files));
+    const slack = bytes - Buffer.byteLength(probe, "utf8");
+    expect(slack).toBeGreaterThanOrEqual(0);
+    return materializeCreations([...full.edits, edit(slack)], files);
+  }
+
+  it("accepts a changeset of exactly 8 MiB", async () => {
+    const result = await exactly(8 * MIB);
+
+    expect(Buffer.byteLength(patchOf(result), "utf8")).toBe(8 * MIB);
+  });
+
+  it("refuses 8 MiB + 1 byte with the existing clear message", async () => {
+    const result = await exactly(8 * MIB + 1);
+
+    expect(result).toEqual({
+      status: "refused",
+      reasonCode: "LIMIT_EXCEEDED",
+      refusal: "patch-too-large",
+      message: "The materialized changeset exceeds 8388608 bytes; split it into smaller calls.",
+    });
   });
 });

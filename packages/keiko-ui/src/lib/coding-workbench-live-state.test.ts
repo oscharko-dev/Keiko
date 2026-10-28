@@ -679,6 +679,72 @@ describe("mode selection, setup plans, and mutation failures", () => {
     const recovered = codingWorkbenchRuntimeReducer(failed, { kind: "mutation-complete" });
     expect(recovered.mutation).toMatchObject({ status: "idle", error: null });
   });
+
+  // Stability audit item 7: a failed Stop/Approve alert outranks every other alert, so it must not
+  // outlive the server state that made it stale.
+  describe("a failed action superseded by a newer snapshot", () => {
+    const failure = {
+      code: "CODING_RUNTIME_STALE_REVISION",
+      message: "redacted",
+      retryable: false,
+    } as const;
+    const failedAt = (revision: number): CodingWorkbenchRuntimeState => {
+      const withRun = codingWorkbenchRuntimeReducer(readyState(), {
+        kind: "run-set",
+        snapshot: snapshot({ revision }),
+      });
+      return codingWorkbenchRuntimeReducer(withRun, { kind: "mutation-failed", error: failure });
+    };
+
+    it("clears the error when a newer revision of the same run arrives", () => {
+      const next = codingWorkbenchRuntimeReducer(failedAt(4), {
+        kind: "run-set",
+        snapshot: snapshot({ revision: 5, state: "running", pendingPermission: undefined }),
+      });
+      expect(next.mutation).toMatchObject({ status: "idle", error: null });
+    });
+
+    it("clears the error when a different run replaces the one the action targeted", () => {
+      const next = codingWorkbenchRuntimeReducer(failedAt(4), {
+        kind: "run-set",
+        snapshot: snapshot({ runId: "run-2", revision: 1 }),
+      });
+      expect(next.mutation).toMatchObject({ status: "idle", error: null });
+    });
+
+    it("keeps the error while the re-read shows the same revision (the action still failed)", () => {
+      const next = codingWorkbenchRuntimeReducer(failedAt(4), {
+        kind: "run-set",
+        snapshot: snapshot({ revision: 4 }),
+      });
+      expect(next.mutation).toMatchObject({ status: "error", error: { code: failure.code } });
+    });
+
+    it("keeps a refused start's error across a snapshot that binds no run", () => {
+      const refused = codingWorkbenchRuntimeReducer(readyState(), {
+        kind: "mutation-failed",
+        error: failure,
+      });
+      const next = codingWorkbenchRuntimeReducer(refused, {
+        kind: "run-set",
+        snapshot: snapshot({ state: "idle", runId: undefined, pendingPermission: undefined }),
+      });
+      expect(next.mutation).toMatchObject({ status: "error" });
+    });
+
+    it("never clears a mutation that is still pending", () => {
+      const pending = codingWorkbenchRuntimeReducer(failedAt(4), {
+        kind: "mutation-start",
+        mutation: "stop",
+        requestId: "req-2",
+      });
+      const next = codingWorkbenchRuntimeReducer(pending, {
+        kind: "run-set",
+        snapshot: snapshot({ revision: 9 }),
+      });
+      expect(next.mutation).toMatchObject({ status: "pending", requestId: "req-2" });
+    });
+  });
 });
 
 it("keeps the actual managed-gateway Start projection closed when its model selection clears", () => {

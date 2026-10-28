@@ -76,7 +76,11 @@ import {
   writeBrowserOpenRequest,
   type PidRecord,
 } from "./state-paths.js";
-import { liveProcessHasLaunchId } from "./ui-process-identity.js";
+import {
+  defaultReadProcessCommandLine,
+  liveIdentityTextHasLaunchId,
+  liveProcessHasLaunchId,
+} from "./ui-process-identity.js";
 import { terminateUiProcess, type WindowsTreeKill } from "./ui-process-stop.js";
 
 type LifecycleCommand = "start" | "stop" | "status" | "restart";
@@ -187,6 +191,8 @@ export interface LifecycleCliDeps {
   readonly securityLogSink?: SecurityLogSink | undefined;
   readonly securityLogSinkFactory?: CliSecurityLogSinkFactory | undefined;
   readonly verifyLaunchIdentity?: ((pid: number, launchId: string) => boolean) | undefined;
+  /** Test seam: the process command line the tracked UI's own endpoint is read from. */
+  readonly readCommandLine?: ((pid: number) => string | undefined) | undefined;
 }
 
 interface LifecycleRuntimeDeps {
@@ -205,6 +211,7 @@ interface LifecycleRuntimeDeps {
   readonly processEnv?: NodeJS.ProcessEnv | undefined;
   readonly securityLogSink?: SecurityLogSink | undefined;
   readonly verifyLaunchIdentity?: ((pid: number, launchId: string) => boolean) | undefined;
+  readonly readCommandLine?: ((pid: number) => string | undefined) | undefined;
 }
 
 interface HealthProbeResult {
@@ -901,12 +908,55 @@ function keepAlreadyRunningUi(
   return true;
 }
 
-async function handleStaleRunning(
+// The pid file records no port, but the tracked UI was spawned as `ui --port N --host H
+// --keiko-launch-id ID` (`uiProcessArguments`). Its live command line is therefore the record's own
+// endpoint, read only when it also carries the record's launch id so another process cannot
+// supply it. Anything else falls back to the requested endpoint.
+const LOOPBACK_UI_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "localhost"]);
+
+function commandLineFlagValue(commandLine: string, flag: string): string | undefined {
+  const tokens = commandLine.split(/[\s\0]+/u);
+  const index = tokens.indexOf(flag);
+  return index === -1 ? undefined : tokens[index + 1];
+}
+
+function commandLineEndpoint(
+  commandLine: string,
+): { readonly host: string; readonly port: number } | undefined {
+  const rawPort = commandLineFlagValue(commandLine, "--port");
+  const host = commandLineFlagValue(commandLine, "--host");
+  if (rawPort === undefined || !/^\d{1,5}$/u.test(rawPort)) return undefined;
+  const port = Number(rawPort);
+  if (port < 1 || port > 65_535) return undefined;
+  return host !== undefined && LOOPBACK_UI_HOSTS.has(host) ? { host, port } : undefined;
+}
+
+function trackedEndpointOptions(
   options: LifecycleOptions,
+  deps: LifecycleRuntimeDeps,
+  record: PidRecord,
+): LifecycleOptions {
+  if (record.launchId === undefined) return options;
+  const read =
+    deps.readCommandLine ??
+    ((pid: number): string | undefined => defaultReadProcessCommandLine(pid, deps.platform));
+  const commandLine = read(record.pid);
+  if (commandLine === undefined || !liveIdentityTextHasLaunchId(commandLine, record.launchId)) {
+    return options;
+  }
+  const endpoint = commandLineEndpoint(commandLine);
+  return endpoint === undefined ? options : { ...options, ...endpoint };
+}
+
+async function handleStaleRunning(
+  requested: LifecycleOptions,
   io: CliIo,
   deps: LifecycleRuntimeDeps,
   running: PidRecord,
 ): Promise<number | "start"> {
+  // Health, the "already running" report and the browser handoff address the tracked instance's
+  // own endpoint, never the port this invocation asked for (L1).
+  const options = trackedEndpointOptions(requested, deps, running);
   const health = await deps.healthProbe(healthUrl(options));
   if (
     !trackedUiStillOwned(options, deps, running) ||
@@ -1383,6 +1433,7 @@ function runtimeDeps(
     processEnv: deps.processEnv,
     securityLogSink,
     verifyLaunchIdentity: deps.verifyLaunchIdentity,
+    readCommandLine: deps.readCommandLine,
   };
 }
 
