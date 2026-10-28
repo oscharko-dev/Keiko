@@ -121,7 +121,9 @@ This shapes the product _and_ how you work on it:
 - Source redaction preserves TypeScript/JavaScript and Java syntax at the shared security boundary;
   syntax metadata never exempts credential literal data or configured secrets. JSON/JSONC and YAML
   use parsed value boundaries. Ordinary unified diffs reuse the canonical parser at the contracts
-  leaf and separate native old/new images; unsupported fragments fail closed. Streaming retains unresolved credential/source context until it can
+  leaf and separate native old/new images; unsupported fragments fail closed. Only the raw Git
+  diff view of the user's own repository keeps syntax-refused hunks readable under the credential
+  floor (owner decision 2026-10-28, #4114; ADR-0022). Streaming retains unresolved credential/source context until it can
   publish safely; cancellation discards pending text. Failed source projection is unavailable evidence,
   not a complete source. Keep diagnostics body-free and regenerate the existing operation registry.
 - Every change to product runtime behaviour — feature, fix, refactor, anything — ships its own
@@ -1077,7 +1079,10 @@ responses cannot establish that continuation. Refusals distinguish model or
 generation replacement, absent observations, failed probes, invalid timestamps and expiry without
 recording model names, requests or answers. An uninvoked model port consumes no physical synthesis
 attempt or uncertain output reservation; actual interrupted provider calls retain conservative
-accounting. See [ADR-0171](docs/adr/ADR-0171-gateway-readiness-capability-reconciliation.md).
+accounting. A chat probe that only times out or meets a transient overload status keeps and renews
+a same-generation positive observation (`gateway.readiness.busy-retained`, a `provider-busy` warning
+diagnostic), so a busy single-slot model stays selectable (#4115). See
+[ADR-0171](docs/adr/ADR-0171-gateway-readiness-capability-reconciliation.md).
 
 `chat.scope.update` records a serialized source update as `applied` or `conflict` under the
 request correlation, with optional `expectedScopeDigest`, required `actualScopeDigest` and

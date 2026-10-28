@@ -73,6 +73,21 @@ import {
   type TextToSpeechRequest,
   type TextToSpeechStreamOutcome,
 } from "@oscharko-dev/keiko-model-gateway";
+export {
+  currentGatewayConfig,
+  currentGatewayEgressConfig,
+  currentRedactionSecrets,
+} from "./redaction-secrets.js";
+import {
+  configOpaqueSecretValues,
+  configTopologyValues,
+  currentGatewayConfig,
+  currentGatewayEgressConfig,
+  currentRedactionSecrets,
+  egressSecretValues,
+  figmaEnvSecretValues,
+  redactionSecrets,
+} from "./redaction-secrets.js";
 import { GatewayModelPort, type ChatModel, type ModelPort } from "@oscharko-dev/keiko-harness";
 import {
   createAuditRedactor,
@@ -1833,10 +1848,6 @@ function boundedCitationObservation(
   };
 }
 
-export function currentGatewayConfig(deps: UiHandlerDeps): GatewayConfig | undefined {
-  return deps.gatewayConfig?.current() ?? deps.config;
-}
-
 /** Resolves the process-shared gateway while honoring live runtime-config generations. */
 export function currentGateway(deps: UiHandlerDeps): Gateway | undefined {
   if (deps.gatewayConfig !== undefined) {
@@ -2033,17 +2044,6 @@ export function currentContextProfileForModel(
     : configuredChatContextProfile(config, modelId);
 }
 
-export function currentGatewayEgressConfig(
-  deps: Pick<UiHandlerDeps, "config" | "gatewayConfig" | "env" | "egress">,
-): GatewayEgressConfig | undefined {
-  return (
-    deps.gatewayConfig?.current()?.egress ??
-    deps.egress ??
-    deps.config?.egress ??
-    resolveOutboundHttpEgressConfig(undefined, deps.env)
-  );
-}
-
 // Module-level: read KEIKO_GROUNDING_* env overrides ONCE at load (mirrors KEIKO_MODEL_* env
 // reads). Each value is parsed as a positive integer; unparseable values are silently ignored so
 // misconfigured env does not prevent the server from starting.
@@ -2100,81 +2100,6 @@ export function currentOwnAssessmentPolicy(deps: UiHandlerDeps): OwnAssessmentPo
 // Re-export GroundingLimits so callers (read-handlers, store-handlers) only need one import.
 export type { GroundingLimits };
 
-function configTopologyValues(config: GatewayConfig | undefined): readonly string[] {
-  // Epic #177 audit: redact provider URLs and egress settings because backend topology gives an
-  // attacker a place to direct probes. Credentials are collected separately as opaque secrets for
-  // evidence hashing.
-  if (config === undefined) return [];
-  const out: string[] = [];
-  const addEgressTopology = (egress: GatewayConfig["egress"]): void => {
-    if (egress === undefined) return;
-    if (egress.httpProxy !== undefined) out.push(egress.httpProxy);
-    if (egress.httpsProxy !== undefined) out.push(egress.httpsProxy);
-    if (egress.caBundlePath !== undefined) out.push(egress.caBundlePath);
-  };
-  addEgressTopology(config.egress);
-  for (const provider of config.providers) {
-    out.push(provider.baseUrl);
-    addEgressTopology(provider.egress);
-  }
-  if (config.reranker !== undefined) {
-    out.push(config.reranker.baseUrl);
-    addEgressTopology(config.reranker.egress);
-  }
-  return out;
-}
-
-function configOpaqueSecretValues(config: GatewayConfig | undefined): readonly string[] {
-  if (config === undefined) return [];
-  const out: string[] = [];
-  if (config.figma?.accessToken !== undefined) {
-    out.push(config.figma.accessToken);
-  }
-  for (const provider of config.providers) {
-    out.push(provider.apiKey);
-  }
-  if (config.reranker !== undefined) {
-    out.push(config.reranker.apiKey);
-  }
-  return out;
-}
-
-function configSecretValues(config: GatewayConfig | undefined): readonly string[] {
-  return [...configTopologyValues(config), ...configOpaqueSecretValues(config)];
-}
-
-function figmaEnvSecretValues(env: EnvSource): readonly string[] {
-  const token = env.FIGMA_ACCESS_TOKEN;
-  return token !== undefined && token.length > 0 ? [token] : [];
-}
-
-function egressSecretValues(egress: GatewayConfig["egress"]): readonly string[] {
-  if (egress === undefined) return [];
-  return [egress.httpProxy, egress.httpsProxy, egress.caBundlePath].filter(
-    (value): value is string => value !== undefined,
-  );
-}
-
-// The Figma PAT is redacted via its config (`config.figma.accessToken`) and env
-// (`FIGMA_ACCESS_TOKEN`) literals. The decrypted ENCRYPTED-VAULT token (#758) is intentionally NOT
-// added here: it never reaches a redactable payload — it is confined to the outbound `X-Figma-Token`
-// request header by construction (figmaConnector.ts) and is never returned, logged, or serialized.
-// Adding it would require decrypting the vault at redactor-build time, widening exposure for no gain.
-function redactionSecrets(
-  env: EnvSource,
-  config: GatewayConfig | undefined,
-  egress: GatewayConfig["egress"] = config?.egress,
-): readonly string[] {
-  return Array.from(
-    new Set([
-      ...keikoApiKeySecretValues(env),
-      ...figmaEnvSecretValues(env),
-      ...configSecretValues(config),
-      ...egressSecretValues(egress),
-    ]),
-  );
-}
-
 function runtimeRedactionSecrets(
   env: EnvSource,
   runtimeConfig: RuntimeGatewayConfig,
@@ -2228,14 +2153,6 @@ function runtimeContentRedactString(
   if (policy.policy === "redact") return redactString;
   return (value): string =>
     redactContent(value, "preserve", runtimeRedactionSecrets(env, runtimeConfig, egress));
-}
-
-export function currentRedactionSecrets(deps: UiHandlerDeps): readonly string[] {
-  return redactionSecrets(
-    deps.env,
-    deps.gatewayConfig?.configured?.() ?? currentGatewayConfig(deps),
-    currentGatewayEgressConfig(deps),
-  );
 }
 
 /**
