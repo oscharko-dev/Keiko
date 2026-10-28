@@ -273,6 +273,46 @@ describe("retaining a settled run's session state", () => {
     }
   });
 
+  it("retains only committed WAL state while another connection holds a write transaction", () => {
+    const f = fixture();
+    const writer = new DatabaseSync(f.source);
+    try {
+      writer.exec("PRAGMA journal_mode=WAL");
+      writer.exec("BEGIN IMMEDIATE");
+      writer
+        .prepare("INSERT INTO session_message (id, session_id, data) VALUES (?, ?, ?)")
+        .run("msg_uncommitted", SESSION_ID, "UNCOMMITTED-CONTENT");
+
+      expect(retain(f)).toMatchObject({ ok: true, messageCount: 3 });
+      expect(checkout(f).result).toMatchObject({ ok: true, messageCount: 3 });
+      writer.exec("COMMIT");
+      expect(retain(f)).toMatchObject({ ok: true, messageCount: 4 });
+      expect(checkout(f).result).toMatchObject({ ok: true, messageCount: 4 });
+    } finally {
+      writer.close();
+    }
+  });
+
+  it("preserves the previous entry on an exclusive database lock and recovers after release", () => {
+    const f = fixture();
+    expect(retain(f)).toMatchObject({ ok: true });
+    const previousDatabase = sha256(join(entryDirectory(f), "opencode.db"));
+    const previousManifest = sha256(join(entryDirectory(f), "manifest.json"));
+    const writer = new DatabaseSync(f.source);
+    try {
+      writer.exec("PRAGMA journal_mode=DELETE");
+      writer.exec("BEGIN EXCLUSIVE");
+      expect(() => retain(f)).toThrow(expect.objectContaining({ errcode: 5 }));
+      expect(sha256(join(entryDirectory(f), "opencode.db"))).toBe(previousDatabase);
+      expect(sha256(join(entryDirectory(f), "manifest.json"))).toBe(previousManifest);
+      expect(entryNames(f)).toEqual([retainedSessionKey("task-1")]);
+      expect(checkout(f).result).toMatchObject({ ok: true, messageCount: 3 });
+    } finally {
+      writer.close();
+    }
+    expect(retain(f)).toMatchObject({ ok: true, messageCount: 3 });
+  });
+
   it.each([
     ["a saved permission grant", { rows: { permission: 1 } }, "grant-present"],
     [
@@ -469,6 +509,19 @@ describe("retaining a settled run's session state", () => {
     expect(() => retain(f)).toThrow("retained-root-invalid");
     expect(readdirSync(join(f.root, "elsewhere"))).toEqual([]);
   });
+
+  it.runIf(process.platform === "win32")(
+    "refuses a Windows directory junction as the store root",
+    () => {
+      const f = fixture();
+      const target = join(f.root, "elsewhere");
+      mkdirSync(target);
+      symlinkSync(target, f.storeRoot, "junction");
+
+      expect(() => retain(f)).toThrow("retained-root-invalid");
+      expect(readdirSync(target)).toEqual([]);
+    },
+  );
 
   it("throws, rather than reporting a missing database, when the source cannot be examined", () => {
     const f = fixture();
