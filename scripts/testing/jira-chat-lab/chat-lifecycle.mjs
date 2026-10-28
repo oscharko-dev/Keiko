@@ -9,7 +9,7 @@ export function reportFaultQualificationFailure(qualification, error) {
   const location =
     error instanceof Error
       ? (error.stack?.match(
-          /(?:restricted-(?:chat|cases|catalog-cases)|browser-(?:faults|write|connections|lifecycle|disconnect|response-drop|recovery)|chat-(?:faults|fault-transport|read|write|lifecycle)|consent-lifecycle|private-json)\.mjs:\d+:\d+/gu,
+          /(?:restricted-(?:chat|cases|catalog-cases)|browser-(?:faults|write|connections|lifecycle|disconnect|response-drop|recovery)|chat-(?:faults|fault-transport|read|write|lifecycle)|consent-lifecycle|pagination-chat|private-json)\.mjs:\d+:\d+/gu,
         ) ?? [])
       : [];
   console.error(JSON.stringify({ qualification, passed: false, location }));

@@ -13,6 +13,7 @@ describe("body-free live qualification failures", () => {
     "browser-disconnect",
     "browser-response-drop",
     "browser-recovery",
+    "pagination-chat",
   ])("reports %s coordinates without private path or content", (source) => {
     const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const error = new Error("private fixture content");

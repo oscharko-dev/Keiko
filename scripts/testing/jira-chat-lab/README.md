@@ -47,6 +47,30 @@ does not count as acceptance and must be qualified again as a complete new group
 after reconciliation. Raw REST fixture setup is not a substitute for this product
 path. The final acceptance record identifies the exact tested product artifact.
 
+## Complete paginated search through ordinary Chat
+
+After the same licensed HTTPS/read/write preflight, use the existing seeded project with
+more than ten issues. Run this read-only group separately from other laboratory writers:
+
+```sh
+node scripts/testing/jira-chat-lab/pagination-chat.mjs /absolute/private/session actual-model-id stream
+```
+
+The selected real model calls the production `jira.search` tool with ten-record requests.
+The harness follows each actual `nextStartAt` until the independently observed ordered
+reference is complete, then checks an empty terminal page. A bounded prefix must expose its
+first unreturned cursor; a missing/skipping cursor, duplicated record, incorrect total or
+premature completion fails qualification. Every physical Jira search must retain the exact
+requested cursor, limit and query, and every mutation is refused before forwarding. The
+observer passes real responses through unchanged and records only counts, cursors and statuses.
+The same Chat reuses its first read grant; no write approval is expected. Independent reads
+also require unchanged remote state after each page.
+
+The private pending intent is exclusive and retained on failure, together with product state.
+A successful receipt requires all pages, the empty page, zero mutation attempts and the closing
+license check. This product-path group is distinct from the direct seed pagination check;
+preparing or unit-testing the harness does not count as a successful live group.
+
 ## Start an isolated session
 
 The directory’s parent must already exist. Initialization refuses an existing directory.

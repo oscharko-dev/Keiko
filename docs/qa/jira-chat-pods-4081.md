@@ -137,7 +137,7 @@ Status: **Partial — not accepted**. Current Data Center pagination and endpoin
 
 - [ ] **AC4:** Pagination, empty results, partial results, bounds, timeout and cancellation behave deterministically. Jira content and tool metadata cannot modify the tool allowlist, credential, chat binding, read grant or approval state.
 
-Status: **Partial — not accepted**. Bounded pagination/results, schema/context override refusal and cancellation have retained domain/SDK tests. The real catalog groups read the hostile-comment fixture; their single-key search is not a two-page normal-Chat pagination proof. Separate fixture checks establish nonoverlapping pages. Mixed empty results are usable only after an actual successful sanitized observation. Full per-operation bounds/failure, product pagination and hostile-content qualification remain open.
+Status: **Partial — not accepted**. Bounded pagination/results, schema/context override refusal and cancellation have retained domain/SDK tests. The real catalog groups read the hostile-comment fixture; their single-key search is not a pagination proof. A separate complete LiteLLM/Gemma SSE group now traverses all 26 reference issues through the real provider with exact request cursors and bounded pages, then proves an empty terminal page and zero writes. Mixed empty results require an actual successful sanitized observation. Full per-operation bounds/failure, hostile-content and final-artifact qualification remain open.
 
 - [ ] **AC5:** Tests distinguish malformed/truncated acknowledged 2xx from unknown remote effects, and prove no blind mutation replay after timeout, committed-then-5xx or cancellation. They cover intervening field/assignee changes and operation-aware retry safety, not only duplicate POST. Route, canonical tool outcome, activity and UI folds agree; an empty reconciliation search never authorizes a retry. Approved action changes invalidate stale approval. Document the concurrency limit of operations without an atomic Jira precondition; do not claim universal exactly-once execution or lost-update prevention.
 
@@ -328,6 +328,35 @@ Prioritized work identified at that checkpoint (later repairs are reflected in t
    checks on the delivered head, then settle reviews. No merge authority is implied.
 
 ## Verification checkpoints
+
+### Bounded Jira pagination through actual streamed Chat
+
+On merge head `3e5c1469385a756d4b8a8640aecc6a7707318729`, the real LiteLLM/Gemma
+SSE Chat → catalog/binder → managed MCP → Jira group passed in the licensed synthetic
+session. The independent ordered reference contained 26 issues. Actual cursors were
+`0,10,20,26`, with `10,10,6,0` returned records: the two nonterminal pages exposed
+`nextStartAt=10,20`, while the final content page and empty terminal page exposed no
+continuation. The combined ordered keys matched the full independent reference exactly.
+
+The unchanged pass-through observer counted four physical search requests, each with the
+requested cursor/query, `maxResults=10` and status 200. There were zero mutation attempts
+and zero mutation-journal rows. Read-grant counts were `1,0,0,0`; no write approval occurred.
+The actual saved model configuration had zero retries. Per-call result counts were
+`10,10,6,0`, and result sizes were `4471,4414,2672,58` bytes. The reference count/digest
+remained unchanged after every page. The 6,932-file runtime/helper inventory was identical
+before and after the group, SHA-256
+`b23c896e92c25af3fea7cf668ea3b7900721cbb4786d9e31ce41b64daa4ebbdd`;
+opening/closing license checks reported 8,249/8,166 seconds remaining.
+
+An initial incomplete attempt incorrectly required a repeated public grant projection
+on an already authorized later turn. Its two product pages had succeeded; independent
+SQLite/Jira reconciliation proved zero mutations and unchanged remote state. That attempt
+is retained as interrupted/reconciled. The helper now accepts the existing production
+grant-reuse form after the exact grant's authenticated route check, and refuses missing
+first grants or contradictory projections. The actual failure has a red/green regression;
+46 focused helper/consent/lifecycle cases, scoped lint and formatting pass. No product
+pagination or policy change was necessary. This supports #4083 AC4 and #4087 AC5/9 within
+the recorded artifact scope; full catalog/refusal/browser and final gates remain open.
 
 ### Licensed Jira PAT, availability and retained consent
 
