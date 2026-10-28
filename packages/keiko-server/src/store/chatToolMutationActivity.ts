@@ -14,6 +14,7 @@ const MUTATION_STATE = defineActivityLogOperation({
   owner: "keiko-server",
   emitter: "store.chatToolMutationActivity.recordChatToolMutation",
   fields: {
+    consumer: { type: "string", dataClass: "closed-enum", required: false, values: ["coding"] },
     invocationId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
     actionDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
     event: {
@@ -66,6 +67,7 @@ export function recordChatToolMutation(
         },
         {
           invocationId: record.invocationId,
+          ...(record.consumer === undefined ? {} : { consumer: record.consumer.kind }),
           actionDigest: record.actionDigest,
           event,
           phase: record.phase,

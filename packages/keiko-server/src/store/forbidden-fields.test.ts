@@ -658,7 +658,10 @@ describe("forbidden-fields — schema column set (AC#5 / ADR-0013 D8)", () => {
 describe("forbidden-fields — coding history identity tables", () => {
   it.each([
     ["coding_history_tasks", ["chat_id", "workspace_id", "task_id", "operator_digest", "status"]],
-    ["coding_history_runs", ["run_id", "chat_id", "sequence"]],
+    [
+      "coding_history_runs",
+      ["run_id", "chat_id", "sequence", "active_native_turn_ref", "active_user_message_id"],
+    ],
     ["coding_history_message_bindings", ["run_id", "source_id", "message_id"]],
   ] as const)("keeps %s free of conversation bodies and credentials", (table, expected) => {
     const inspector = openMigratedSchema(join(tmpDir, "coding-history-inventory.db"));
@@ -735,6 +738,17 @@ describe("forbidden-fields — durable chat mutation metadata", () => {
           "http_status",
           "created_at",
           "updated_at",
+          "source_kind",
+          "configuration_digest",
+          "server_name",
+          "tool_name",
+          "protocol_outcome",
+          "consumer_kind",
+          "coding_run_id",
+          "native_session_id",
+          "native_message_id",
+          "native_call_id",
+          "native_arguments_digest",
         ]),
       );
       // Authentication generation is an integer invalidation counter, never a credential value.

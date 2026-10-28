@@ -163,6 +163,17 @@ is unavailable, never an empty editable configuration. Protocol negotiation and 
 remain in `keiko-mcp`; consumer authority, discovery admission and lifecycle invalidation
 remain server responsibilities.
 
+An enabled legacy reference that actually falls back to the BFF environment makes the
+Chat configuration revision process-scoped. The existing Settings owner combines its private
+startup nonce with the durable registry revision; it never hashes credential values. Persisted
+Chat disclosures therefore require fresh acceptance after restart, even when the reference
+name is unchanged. Reference metadata identifies sealed values without decrypting them;
+vault-only configurations, unused environment variables and disabled connections retain their
+stable revision. Unavailable vault metadata fails closed to a process-scoped context. Moving
+an active legacy value into the vault requires a fresh reference, like any other credential
+replacement: the atomic registry generation then changes together with the reference, so a
+crash between vault and registry publication cannot revive an earlier disclosure.
+
 External servers use the same package's SDK client adapter with automatic protocol-version
 negotiation. Streamable HTTP is the modern remote transport; explicit legacy HTTP+SSE and
 local stdio preserve compatibility with existing servers. Process launch parameters and HTTP

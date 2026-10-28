@@ -2589,6 +2589,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "loss-state",
         required: true,
       },
+      consumer: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["coding"],
+      },
       invocationId: {
         type: "string",
         dataClass: "opaque-id",
@@ -29394,6 +29400,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "digest",
         required: true,
         maxLength: 64,
+      },
+      credentialContext: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["persistent", "process-scoped"],
       },
       credentialCleanup: {
         type: "string",

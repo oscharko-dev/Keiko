@@ -2939,6 +2939,12 @@
               "required": true
             },
             {
+              "name": "consumer",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "event",
               "type": "string",
               "dataClass": "closed-enum",
@@ -35024,6 +35030,12 @@
               "type": "string",
               "dataClass": "closed-enum",
               "required": true
+            },
+            {
+              "name": "credentialContext",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
             },
             {
               "name": "outcome",

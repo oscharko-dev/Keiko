@@ -40,6 +40,12 @@ const UPDATED = defineActivityLogOperation({
     serverCount: { type: "integer", dataClass: "count", required: true },
     secretCount: { type: "integer", dataClass: "count", required: true },
     registrySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    credentialContext: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["persistent", "process-scoped"],
+    },
     credentialCleanup: {
       type: "string",
       dataClass: "closed-enum",
@@ -82,6 +88,7 @@ function recordMcpSettingsUpdate(
   outcome: "applied" | "conflict" | "reconciled",
   state: McpSettingsSnapshot,
   secretCount: number,
+  credentialContext?: "persistent" | "process-scoped",
 ): void {
   log?.write(
     activityLogEvent(
@@ -93,6 +100,7 @@ function recordMcpSettingsUpdate(
         secretCount,
         registrySha256: state.revision,
         credentialCleanup: state.credentialCleanup ?? "complete",
+        ...(credentialContext === undefined ? {} : { credentialContext }),
       },
     ),
   );
@@ -170,9 +178,60 @@ class SettingsStore implements McpSettingsStore {
   readonly #secrets: ReturnType<typeof createMcpServerSecretStore>;
   readonly #generations = new Map<string, { definition: string; controller: AbortController }>();
   #revision: { digest: string; controller: AbortController } | undefined;
+  readonly #environmentEpoch = randomUUID();
+  #credentialContext: { readonly revision: string; readonly scoped: boolean } | undefined;
   constructor(private readonly input: StoreInput) {
     this.#secrets = createMcpServerSecretStore(input);
   }
+  private processCredentialContext(state: McpSettingsSnapshot): McpSettingsSnapshot {
+    return {
+      ...state,
+      revision: createHash("sha256")
+        .update(JSON.stringify([state.revision, this.#environmentEpoch]))
+        .digest("hex"),
+    };
+  }
+  private scopeCredentialContext(
+    state: McpSettingsSnapshot,
+    correlationId: string,
+  ): McpSettingsSnapshot {
+    const references = state.servers
+      .filter((server) => server.enabled)
+      .flatMap(mcpServerSecretReferences);
+    let scoped: boolean;
+    try {
+      scoped = this.#secrets.usesEnvironment(references);
+    } catch {
+      // An unavailable vault cannot prove that a configured environment credential is shadowed.
+      const current = this.processCredentialContext({ ...state, credentialCleanup: "pending" });
+      recordMcpSettingsUpdate(
+        this.input.activityLog,
+        correlationId,
+        "reconciled",
+        current,
+        0,
+        "process-scoped",
+      );
+      this.#credentialContext = { revision: current.revision, scoped: true };
+      return current;
+    }
+    const current = scoped ? this.processCredentialContext(state) : state;
+    if (
+      (scoped && this.#credentialContext?.revision !== current.revision) ||
+      (this.#credentialContext?.scoped === true && !scoped)
+    )
+      recordMcpSettingsUpdate(
+        this.input.activityLog,
+        correlationId,
+        "reconciled",
+        current,
+        0,
+        scoped ? "process-scoped" : "persistent",
+      );
+    this.#credentialContext = { revision: current.revision, scoped };
+    return current;
+  }
+
   private reconcileGenerations(state: McpSettingsSnapshot): void {
     const { revision: digest, servers } = state;
     if (this.#revision?.digest !== digest) {
@@ -191,7 +250,7 @@ class SettingsStore implements McpSettingsStore {
   readonly read = (correlationId: string): McpSettingsSnapshot => {
     let current: McpSettingsSnapshot;
     try {
-      current = readSettings(this.input, correlationId);
+      current = this.scopeCredentialContext(readSettings(this.input, correlationId), correlationId);
     } catch (error) {
       this.reconcileGenerations(snapshot([]));
       throw error;
@@ -260,12 +319,12 @@ class SettingsStore implements McpSettingsStore {
     for (const entry of entries) {
       if (
         activeReferences.has(entry.reference) &&
-        this.#secrets.get(entry.reference, entry.server) !== entry.value
+        (this.#secrets.usesEnvironment([entry.reference]) ||
+          this.#secrets.get(entry.reference, entry.server) !== entry.value)
       )
         throw new TypeError("An active MCP credential requires a new reference");
     }
     this.#secrets.put(entries);
-    let committed = current;
     if (JSON.stringify(current.servers) !== JSON.stringify(validated.servers)) {
       // The epoch and definitions commit together: restoring old definitions never restores consent.
       const generation = randomUUID();
@@ -274,8 +333,12 @@ class SettingsStore implements McpSettingsStore {
         generation,
         servers: validated.servers,
       });
-      committed = snapshot(validated.servers, generation);
     }
+    // Resolve the public revision from the committed definitions and current credential custody.
+    const committed = this.scopeCredentialContext(
+      readSettings(this.input, correlationId),
+      correlationId,
+    );
     this.reconcileGenerations(committed);
     const next = reconcileSecrets(
       this.#secrets,

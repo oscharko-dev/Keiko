@@ -23,8 +23,23 @@ const COLUMNS = `invocation_id AS invocationId, chat_id AS chatId, user_message_
   authentication_generation AS credentialGeneration, authority_digest AS authorityDigest, action_digest AS actionDigest,
   operation, correlation_id AS correlationId, phase, outcome, http_status AS httpStatus, created_at AS createdAt, updated_at AS updatedAt,
   source_kind AS sourceKind, configuration_digest AS configurationDigest, server_name AS serverName,
-  tool_name AS toolName, protocol_outcome AS protocolOutcome`;
+  tool_name AS toolName, protocol_outcome AS protocolOutcome,
+  consumer_kind AS consumerKind, coding_run_id AS codingRunId, native_session_id AS nativeSessionId,
+  native_message_id AS nativeMessageId, native_call_id AS nativeCallId, native_arguments_digest AS nativeArgumentsDigest`;
 const MAX_MUTATIONS_PER_TURN = 32;
+function consumerColumns(intent: ChatToolMutationIntent): readonly (string | null)[] {
+  const consumer = intent.consumer;
+  return consumer === undefined
+    ? ["chat", null, null, null, null, null]
+    : [
+        consumer.kind,
+        consumer.runId,
+        consumer.sessionId,
+        consumer.messageId,
+        consumer.callId,
+        consumer.argumentsDigest,
+      ];
+}
 class GuardDenied extends Error {}
 interface MutationChange {
   readonly record: ChatToolMutationRecord;
@@ -48,7 +63,30 @@ function timestamp(now: () => number, previous = 0): number {
 }
 function rowRecord(value: unknown): ChatToolMutationRecord | undefined {
   if (value === undefined) return undefined;
-  const row = value as ChatToolMutationRecord;
+  const {
+    consumerKind,
+    codingRunId,
+    nativeSessionId,
+    nativeMessageId,
+    nativeCallId,
+    nativeArgumentsDigest,
+    ...fields
+  } = value as Record<string, unknown>;
+  const row = {
+    ...fields,
+    ...(consumerKind === "coding"
+      ? {
+          consumer: {
+            kind: "coding",
+            runId: codingRunId,
+            sessionId: nativeSessionId,
+            messageId: nativeMessageId,
+            callId: nativeCallId,
+            argumentsDigest: nativeArgumentsDigest,
+          },
+        }
+      : {}),
+  } as unknown as ChatToolMutationRecord;
   if (row.sourceKind === "configured-mcp") return Object.freeze(row);
   const {
     sourceKind: _source,
@@ -57,7 +95,7 @@ function rowRecord(value: unknown): ChatToolMutationRecord | undefined {
     toolName: _tool,
     protocolOutcome: _protocol,
     ...legacy
-  } = value as Record<string, unknown>;
+  } = row as unknown as Record<string, unknown>;
   return Object.freeze(legacy as unknown as ChatToolMutationRecord);
 }
 /** Read the already admitted canonical turn; this never prepares or dispatches an action. */
@@ -68,7 +106,7 @@ export function readChatToolMutationTurn(
 ): readonly ChatToolMutationRecord[] {
   return db
     .prepare(
-      `SELECT ${COLUMNS} FROM chat_tool_mutations WHERE chat_id = ? AND turn_ref = ? LIMIT 33`,
+      `SELECT ${COLUMNS} FROM chat_tool_mutations WHERE chat_id = ? AND turn_ref = ? AND consumer_kind = 'chat' LIMIT 33`,
     )
     .all(chatId, turnRef)
     .map((row) => rowRecord(row))
@@ -77,8 +115,33 @@ export function readChatToolMutationTurn(
 
 function assertCurrentTurn(
   db: DatabaseSync,
-  intent: Pick<ChatToolMutationRecord, "userMessageId" | "chatId" | "turnRef">,
+  intent: ChatToolMutationRecord | ChatToolMutationIntent,
 ): void {
+  if (intent.consumer !== undefined) {
+    const row = db
+      .prepare(
+        `SELECT 1 FROM coding_history_runs r
+      JOIN coding_history_tasks t ON t.chat_id=r.chat_id
+      JOIN coding_runtime_snapshots s ON s.run_id=r.run_id
+      JOIN chat_messages m ON m.id=r.active_user_message_id AND m.chat_id=r.chat_id
+      JOIN coding_history_message_bindings b ON b.run_id=r.run_id AND b.message_id=m.id AND b.source_id=r.active_native_turn_ref
+      WHERE r.run_id=? AND r.chat_id=? AND r.active_user_message_id=? AND r.active_native_turn_ref=?
+        AND m.role='user' AND t.operator_digest=? AND s.operator_digest=? AND s.authority_digest=?
+        AND s.state IN ('running','awaiting-approval') AND s.terminal_at IS NULL
+        AND NOT EXISTS (SELECT 1 FROM coding_history_runs next WHERE next.chat_id=r.chat_id AND next.sequence>r.sequence)`,
+      )
+      .get(
+        intent.consumer.runId,
+        intent.chatId,
+        intent.userMessageId,
+        intent.turnRef,
+        intent.actorId,
+        intent.actorId,
+        intent.authorityDigest,
+      );
+    if (row === undefined) throw journalConflict();
+    return;
+  }
   const row = db
     .prepare(
       "SELECT 1 FROM chat_messages WHERE id = ? AND chat_id = ? AND role = 'user' AND client_turn_id = ? AND client_turn_state = 'pending'",
@@ -114,6 +177,17 @@ class MutationStore implements ChatToolMutationStore {
         .get(invocationId),
     );
   }
+  preparedNative(
+    input: Parameters<NonNullable<ChatToolMutationStore["preparedNative"]>>[0],
+  ): ChatToolMutationRecord | undefined {
+    const rows = this.db
+      .prepare(
+        `SELECT ${COLUMNS} FROM chat_tool_mutations WHERE consumer_kind='coding'
+      AND coding_run_id=? AND native_session_id=? AND server_name=? AND tool_name=? AND native_arguments_digest=? AND phase='prepared' LIMIT 2`,
+      )
+      .all(input.runId, input.sessionId, input.serverName, input.toolName, input.argumentsDigest);
+    return rows.length === 1 ? rowRecord(rows[0]) : undefined;
+  }
   private requireRecord(invocationId: string): ChatToolMutationRecord {
     const record = this.find(invocationId);
     if (record === undefined) throw journalConflict();
@@ -147,7 +221,7 @@ class MutationStore implements ChatToolMutationStore {
   private insertPrepared(intent: ChatToolMutationIntent, createdAt: number): void {
     this.db
       .prepare(
-        `INSERT INTO chat_tool_mutations (invocation_id, chat_id, user_message_id, turn_ref, actor_id, pod_id, binding_generation, authentication_generation, authority_digest, action_digest, operation, correlation_id, phase, created_at, updated_at, source_kind, configuration_digest, server_name, tool_name) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'prepared',?,?,?,?,?,?)`,
+        `INSERT INTO chat_tool_mutations (invocation_id, chat_id, user_message_id, turn_ref, actor_id, pod_id, binding_generation, authentication_generation, authority_digest, action_digest, operation, correlation_id, phase, created_at, updated_at, source_kind, configuration_digest, server_name, tool_name, consumer_kind, coding_run_id, native_session_id, native_message_id, native_call_id, native_arguments_digest) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'prepared',?,?,?,?,?,?,?,?,?,?,?,?)`,
       )
       .run(
         intent.invocationId,
@@ -168,6 +242,7 @@ class MutationStore implements ChatToolMutationStore {
         intent.sourceKind === "configured-mcp" ? intent.configurationDigest : null,
         intent.sourceKind === "configured-mcp" ? intent.serverName : null,
         intent.sourceKind === "configured-mcp" ? intent.toolName : null,
+        ...consumerColumns(intent),
       );
   }
   beginDispatch(invocationId: string, guard: () => boolean): boolean {

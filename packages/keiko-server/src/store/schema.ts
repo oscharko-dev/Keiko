@@ -10,7 +10,7 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 52;
+export const SCHEMA_VERSION = 53;
 
 interface Migration {
   readonly version: number;
@@ -1818,6 +1818,25 @@ export const MIGRATIONS: readonly Migration[] = [
     CREATE INDEX chat_tool_mutations_turn ON chat_tool_mutations(chat_id, turn_ref);
     CREATE UNIQUE INDEX chat_tool_mutations_active ON chat_tool_mutations(chat_id, turn_ref)
       WHERE phase IN ('dispatched','acknowledged');`,
+  },
+  {
+    version: 53,
+    // Coding uses the same effect journal and its existing real History message/run owners.
+    sql: `ALTER TABLE coding_history_runs ADD COLUMN active_native_turn_ref TEXT;
+      ALTER TABLE coding_history_runs ADD COLUMN active_user_message_id TEXT REFERENCES chat_messages(id) ON DELETE SET NULL;
+      ALTER TABLE chat_tool_mutations ADD COLUMN consumer_kind TEXT NOT NULL DEFAULT 'chat' CHECK (consumer_kind IN ('chat','coding'));
+      ALTER TABLE chat_tool_mutations ADD COLUMN coding_run_id TEXT REFERENCES coding_runtime_snapshots(run_id) ON DELETE CASCADE
+        CHECK ((consumer_kind = 'chat' AND coding_run_id IS NULL) OR (consumer_kind = 'coding' AND coding_run_id IS NOT NULL));
+      ALTER TABLE chat_tool_mutations ADD COLUMN native_session_id TEXT
+        CHECK ((consumer_kind = 'chat' AND native_session_id IS NULL) OR (consumer_kind = 'coding' AND native_session_id IS NOT NULL AND length(native_session_id) BETWEEN 1 AND 256));
+      ALTER TABLE chat_tool_mutations ADD COLUMN native_message_id TEXT
+        CHECK ((consumer_kind = 'chat' AND native_message_id IS NULL) OR (consumer_kind = 'coding' AND native_message_id IS NOT NULL AND length(native_message_id) BETWEEN 1 AND 256));
+      ALTER TABLE chat_tool_mutations ADD COLUMN native_call_id TEXT
+        CHECK ((consumer_kind = 'chat' AND native_call_id IS NULL) OR (consumer_kind = 'coding' AND native_call_id IS NOT NULL AND length(native_call_id) BETWEEN 1 AND 256));
+      ALTER TABLE chat_tool_mutations ADD COLUMN native_arguments_digest TEXT
+        CHECK ((consumer_kind = 'chat' AND native_arguments_digest IS NULL) OR (consumer_kind = 'coding' AND native_arguments_digest IS NOT NULL AND length(native_arguments_digest) = 64));
+      CREATE INDEX chat_tool_mutations_native_dispatch ON chat_tool_mutations(coding_run_id, native_session_id, server_name, tool_name, native_arguments_digest)
+        WHERE consumer_kind = 'coding' AND phase = 'prepared';`,
   },
 ];
 

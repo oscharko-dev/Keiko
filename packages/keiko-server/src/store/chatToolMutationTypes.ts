@@ -2,7 +2,17 @@ import type {
   JiraMutationOperation,
   JiraMutationOutcome,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+/** Actual private producer identities; no tool arguments or results are persisted. */
+export interface CodingToolMutationConsumer {
+  readonly kind: "coding";
+  readonly runId: string;
+  readonly sessionId: string;
+  readonly messageId: string;
+  readonly callId: string;
+  readonly argumentsDigest: string;
+}
 interface ChatToolMutationIdentity {
+  readonly consumer?: CodingToolMutationConsumer;
   readonly invocationId: string;
   readonly chatId: string;
   readonly userMessageId: string;
@@ -56,4 +66,12 @@ export interface ChatToolMutationStore {
   readonly acknowledge: (invocationId: string, httpStatus: number) => ChatToolMutationRecord;
   readonly acknowledgeMcp: (invocationId: string, success: boolean) => ChatToolMutationRecord;
   readonly settle: (invocationId: string, outcome: JiraMutationOutcome) => ChatToolMutationRecord;
+  /** Finds one admitted call; an ambiguous dispatch is refused, never guessed. */
+  readonly preparedNative?: (input: {
+    readonly runId: string;
+    readonly sessionId: string;
+    readonly serverName: string;
+    readonly toolName: string;
+    readonly argumentsDigest: string;
+  }) => ChatToolMutationRecord | undefined;
 }

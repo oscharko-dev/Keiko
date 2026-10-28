@@ -4,11 +4,29 @@ import {
   type JiraMutationOutcome,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { invalidRequest, UiStoreError } from "./errors.js";
-import type { ChatToolMutationIntent, ChatToolMutationRecord } from "./chatToolMutationTypes.js";
+import type {
+  ChatToolMutationIntent,
+  ChatToolMutationRecord,
+  CodingToolMutationConsumer,
+} from "./chatToolMutationTypes.js";
 const OPERATIONS: ReadonlySet<string> = new Set(JIRA_MUTATION_OPERATIONS);
 const OUTCOMES: ReadonlySet<string> = new Set(JIRA_MUTATION_OUTCOMES);
 const DIGEST = /^[a-f0-9]{64}$/;
 const ID = /^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/;
+function validConsumer(value: unknown): value is CodingToolMutationConsumer {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    v.kind === "coding" &&
+    typeof v.runId === "string" &&
+    ID.test(v.runId) &&
+    [v.sessionId, v.messageId, v.callId].every(
+      (id) => typeof id === "string" && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$/u.test(id),
+    ) &&
+    typeof v.argumentsDigest === "string" &&
+    DIGEST.test(v.argumentsDigest)
+  );
+}
 export function journalConflict(): UiStoreError {
   return new UiStoreError(
     "INVALID_REQUEST",
@@ -18,6 +36,11 @@ export function journalConflict(): UiStoreError {
 }
 /** Pure validation result shared by write admission and read-only history projection. */
 export function mutationIntentError(intent: ChatToolMutationIntent): UiStoreError | undefined {
+  if (
+    intent.consumer !== undefined &&
+    (intent.sourceKind !== "configured-mcp" || !validConsumer(intent.consumer))
+  )
+    return invalidRequest("Invalid coding mutation identity.");
   const identifiers = [
     intent.invocationId,
     intent.chatId,
@@ -87,10 +110,24 @@ export function sameMutationIdentity(
     record.operation === intent.operation
   );
 }
+function sameConsumer(record: ChatToolMutationRecord, intent: ChatToolMutationIntent): boolean {
+  const a = record.consumer;
+  const b = intent.consumer;
+  if (a === undefined || b === undefined) return a === b;
+  return (
+    record.userMessageId === intent.userMessageId &&
+    a.runId === b.runId &&
+    a.sessionId === b.sessionId &&
+    a.messageId === b.messageId &&
+    a.callId === b.callId &&
+    a.argumentsDigest === b.argumentsDigest
+  );
+}
 function sameMutationSource(
   record: ChatToolMutationRecord,
   intent: ChatToolMutationIntent,
 ): boolean {
+  if (!sameConsumer(record, intent)) return false;
   if (record.sourceKind !== "configured-mcp") return intent.sourceKind !== "configured-mcp";
   return (
     intent.sourceKind === "configured-mcp" &&

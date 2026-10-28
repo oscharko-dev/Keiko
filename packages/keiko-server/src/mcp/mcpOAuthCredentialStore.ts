@@ -134,9 +134,22 @@ function staticCredentialValue(text: string, server: McpServerDefinition): strin
   return value.value;
 }
 
+function usesEnvironmentCredential(
+  input: McpOAuthCredentialStoreInput,
+  references: readonly string[],
+): boolean {
+  const candidates = references.filter((reference) => typeof input.env[reference] === "string");
+  if (candidates.length === 0) return false;
+  if (!vaultExists(input)) return true;
+  const sealed = new Set(openVault(input).list());
+  return candidates.some((reference) => !sealed.has(`mcp-static:${reference}`));
+}
+
 /** Static credentials share the MCP vault, with immutable references bound to one exact target. */
 export function createMcpServerSecretStore(input: McpOAuthCredentialStoreInput): {
   readonly get: (reference: string, server: McpServerDefinition) => string | undefined;
+  /** Inspect reference metadata only; do not decrypt credential values for authority discovery. */
+  readonly usesEnvironment: (references: readonly string[]) => boolean;
   readonly retain: (references: readonly string[]) => number;
   readonly put: (
     entries: readonly {
@@ -148,6 +161,7 @@ export function createMcpServerSecretStore(input: McpOAuthCredentialStoreInput):
 } {
   const key = (reference: string): string => `mcp-static:${reference}`;
   return {
+    usesEnvironment: (references): boolean => usesEnvironmentCredential(input, references),
     retain: (references): number => {
       if (!vaultExists(input)) return 0;
       const vault = openVault(input);

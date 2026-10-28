@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "9185234313afb499de4eb187f0b2b32f34abf7c668e0fce5b7409a520474ffae",
+    "catalogDigest": "6cf74ae76f5ba00ed7b5fd18d23adcb8d7e53cc8f3ced24262f4ec62707cb0e4",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -2697,6 +2697,12 @@
             "dataClass": "loss-state",
             "required": true
           },
+          "consumer": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["coding"]
+          },
           "invocationId": {
             "type": "string",
             "dataClass": "opaque-id",
@@ -2742,7 +2748,7 @@
         "proofIds": ["chat.tool-mutation.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/store/chatToolMutationActivity.ts:9",
-        "emitterSites": ["packages/keiko-server/src/store/chatToolMutationActivity.ts:61"]
+        "emitterSites": ["packages/keiko-server/src/store/chatToolMutationActivity.ts:62"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -30697,6 +30703,12 @@
             "required": true,
             "maxLength": 64
           },
+          "credentialContext": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["persistent", "process-scoped"]
+          },
           "credentialCleanup": {
             "type": "string",
             "dataClass": "closed-enum",
@@ -30711,7 +30723,7 @@
         "proofIds": ["mcp.settings.updated.emitted-line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/mcp/mcpSettingsStore.ts:26",
-        "emitterSites": ["packages/keiko-server/src/mcp/mcpSettingsStore.ts:87"]
+        "emitterSites": ["packages/keiko-server/src/mcp/mcpSettingsStore.ts:94"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -56284,6 +56296,12 @@
                   "type": "string",
                   "dataClass": "digest",
                   "required": true
+                },
+                {
+                  "name": "consumer",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
                 },
                 {
                   "name": "event",
@@ -88690,6 +88708,12 @@
                   "type": "string",
                   "dataClass": "closed-enum",
                   "required": true
+                },
+                {
+                  "name": "credentialContext",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
                 },
                 {
                   "name": "outcome",

@@ -27,6 +27,18 @@ interface VersionRollback {
 // `coding_runtime_snapshots` (no column added), so there is nothing to structurally undo at fixture
 // granularity.
 const ROLLBACKS: readonly VersionRollback[] = [
+  {
+    version: 53,
+    sql: `DROP INDEX chat_tool_mutations_native_dispatch;
+    ALTER TABLE chat_tool_mutations DROP COLUMN native_arguments_digest;
+    ALTER TABLE chat_tool_mutations DROP COLUMN native_call_id;
+    ALTER TABLE chat_tool_mutations DROP COLUMN native_message_id;
+    ALTER TABLE chat_tool_mutations DROP COLUMN native_session_id;
+    ALTER TABLE chat_tool_mutations DROP COLUMN coding_run_id;
+    ALTER TABLE chat_tool_mutations DROP COLUMN consumer_kind;
+    ALTER TABLE coding_history_runs DROP COLUMN active_user_message_id;
+    ALTER TABLE coding_history_runs DROP COLUMN active_native_turn_ref;`,
+  },
   { version: 51, sql: "DROP TABLE chat_tool_read_grants;" },
   {
     version: 50,

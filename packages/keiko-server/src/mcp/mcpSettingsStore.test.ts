@@ -404,3 +404,159 @@ it("requires a new reference before introducing a credential into an already act
   expect(f.store.secret(reference, f.server)).toBeUndefined();
   expect(f.store.read("settings-test").revision).toBe(active.snapshot.revision);
 });
+
+describe("legacy environment credential authority across restarts", () => {
+  function environmentFixture(): ReturnType<typeof fixture> {
+    const f = fixture();
+    const input = { ...f.input, env: { ...f.input.env, [reference]: token } };
+    return { ...f, input, store: createMcpSettingsStore(input) };
+  }
+
+  function configure(
+    f: ReturnType<typeof fixture>,
+    server = f.server,
+  ): ReturnType<typeof f.store.read> {
+    return f.store.update(
+      {
+        expectedRevision: f.store.read("env-startup").revision,
+        servers: [server],
+        secrets: {},
+      },
+      "env-startup",
+    ).snapshot;
+  }
+
+  it("identifies environment fallback from reference metadata without decrypting sealed values", () => {
+    const f = environmentFixture();
+    const credentials = createMcpServerSecretStore(f.input);
+    expect(credentials.usesEnvironment([])).toBe(false);
+    expect(credentials.usesEnvironment(["KEIKO_UNUSED_SYNTHETIC"])).toBe(false);
+    expect(credentials.usesEnvironment([reference])).toBe(true);
+    credentials.put([{ reference, server: f.server, value: token }]);
+    const metadataOnly = createMcpServerSecretStore({
+      ...f.input,
+      env: { ...f.input.env, KEIKO_MCP_OAUTH_CREDENTIALS_KEY: randomBytes(32).toString("base64") },
+    });
+    expect(metadataOnly.usesEnvironment([reference])).toBe(false);
+    expect(() => metadataOnly.get(reference, f.server)).toThrow();
+  });
+
+  it("keeps one process scope through no-op saves and rejects a prior process revision", () => {
+    const f = environmentFixture();
+    const initial = configure(f);
+    expect(f.store.read("env-noop")).toEqual(initial);
+    expect(configure(f)).toEqual(initial);
+    const next = createMcpSettingsStore(f.input);
+    expect(next.read("env-restart").servers).toEqual(initial.servers);
+    expect(
+      next.update(
+        { expectedRevision: initial.revision, servers: initial.servers, secrets: {} },
+        "env-stale",
+      ).ok,
+    ).toBe(false);
+    const scoped = f.events.filter(
+      (event) =>
+        event.op === "mcp.settings.updated" && event.extra?.credentialContext === "process-scoped",
+    );
+    expect(scoped).toHaveLength(2);
+    for (const event of scoped) {
+      const line = expectActivityLogProof(
+        "mcp.settings.updated.emitted-line",
+        formatActivityLogProofLine(event),
+      );
+      expect(line).toMatchObject({
+        outcome: "reconciled",
+        credentialContext: "process-scoped",
+        serverCount: 1,
+        secretCount: 0,
+      });
+    }
+    expect(JSON.stringify(f.events)).not.toContain(token);
+    expect(JSON.stringify(f.events)).not.toContain(reference);
+  });
+
+  it("rotates across an actual Node process restart without rewriting configuration", () => {
+    const f = environmentFixture();
+    const initial = configure(f);
+    const file = join(f.input.stateDir, "mcp-servers.json");
+    const contents = readFileSync(file, "utf8");
+    const restarted = readInNewProcess(f.input) as ReturnType<typeof f.store.read>;
+    expect(restarted.servers).toEqual(JSON.parse(JSON.stringify(initial.servers)) as unknown);
+    expect(restarted.revision).not.toBe(initial.revision);
+    expect(readFileSync(file, "utf8")).toBe(contents);
+    const next = readInNewProcess(f.input) as ReturnType<typeof f.store.read>;
+    expect(next.revision).not.toBe(restarted.revision);
+  });
+
+  it("keeps unused and disabled environment references out of the authority context", () => {
+    const f = environmentFixture();
+    const empty = f.store.read("unused-env");
+    expect(createMcpSettingsStore(f.input).read("unused-env")).toEqual(empty);
+    const disabled = configure(f, { ...f.server, enabled: false });
+    expect(createMcpSettingsStore(f.input).read("disabled-env")).toEqual(disabled);
+    expect(f.events.some((event) => event.extra?.credentialContext === "process-scoped")).toBe(
+      false,
+    );
+  });
+
+  it("requires a fresh reference when moving a legacy credential into the vault", () => {
+    const f = environmentFixture();
+    const initial = configure(f);
+    const oldScope = f.store.revisionSignal(initial.revision, "env-migration");
+    expect(() =>
+      f.store.update(
+        {
+          expectedRevision: initial.revision,
+          servers: initial.servers,
+          secrets: { [reference]: { server: f.server.name, value: token } },
+        },
+        "env-in-place",
+      ),
+    ).toThrow("new reference");
+    const sealedReference = `${reference}_SEALED`;
+    const server = {
+      ...f.server,
+      transport: {
+        kind: "remote" as const,
+        url: "https://fixture.example.test/mcp",
+        headers: { Authorization: { secretEnv: sealedReference, prefix: "Bearer " } },
+      },
+    };
+    const saved = f.store.update(
+      {
+        expectedRevision: initial.revision,
+        servers: [server],
+        secrets: { [sealedReference]: { server: server.name, value: token } },
+      },
+      "env-migration",
+    );
+    expect(saved.ok).toBe(true);
+    expect(oldScope.aborted).toBe(true);
+    expect(saved.snapshot.revision).not.toBe(initial.revision);
+    expect(f.store.read("env-migration")).toEqual(saved.snapshot);
+    expect(createMcpSettingsStore(f.input).read("env-migration")).toEqual(saved.snapshot);
+    expect(f.store.secret(sealedReference, server)).toBe(token);
+    expect(f.events.some((event) => event.extra?.credentialContext === "persistent")).toBe(true);
+  });
+
+  it("keeps Settings available but revokes the prior scope if vault metadata is unavailable", () => {
+    const f = environmentFixture();
+    const initial = f.store.update(
+      {
+        expectedRevision: f.store.read("vault-before").revision,
+        servers: [f.server],
+        secrets: { [reference]: { server: f.server.name, value: token } },
+      },
+      "vault-before",
+    ).snapshot;
+    const vault = join(f.input.stateDir, "credentials", "mcp-oauth-credentials.vault");
+    writeFileSync(vault, "invalid synthetic vault metadata");
+    const next = f.store.read("vault-unavailable");
+    expect(next.credentialCleanup).toBe("pending");
+    expect(next.servers).toEqual(initial.servers);
+    expect(next.revision).not.toBe(initial.revision);
+    expect(f.store.revisionSignal(initial.revision, "vault-unavailable").aborted).toBe(true);
+    expect(() => f.store.secret(reference, f.server)).toThrow();
+    expect(JSON.stringify(f.events)).not.toContain("invalid synthetic vault metadata");
+  });
+});
