@@ -288,6 +288,51 @@ The required local Sonar scan also passes with no unresolved finding on the chan
 `8ae7c84f-b215-4dcf-afca-bd6da65294db`, 2026-10-28 19:56 UTC). The earlier scan was stopped after
 the file-symlink matrix was retained; only this final frozen-source scan is the delivery verdict.
 
+### Windows update image locks and handoff paths
+
+The continuation from `53fdbc5be` extends the existing mandatory native cutover probe with a real
+`SEC_IMAGE` mapping of a private copy of the probe executable. The mapped candidate refuses an
+independent write-open and atomic replacement. The old active file retains its bytes and file ID;
+the candidate retains its full executable bytes and file ID. After unmapping and closing the
+image handles, the same candidate replaces the active name successfully, keeps its candidate file
+ID, and leaves no pending name. This uses the existing production atomic replacement owner,
+without a mocked sharing failure or a fallback to copy/delete.
+
+Native MSVC `/std:c17 /W4 /WX /analyze` compilation and actual execution pass on the recorded
+Windows/NTFS host: `image-locked=1`, `image-recovered=1`, and all existing allowing/denying-handle,
+invalid-candidate, pre/post-termination and contention controls pass. Flush checks report
+38/38 before and 42/42 after. The measured probe source SHA-256 is
+`83e72d3a8e6dd9a0170a0e6b9f79056847d5edc622530da0ec5a4e42c18a9ea5`; the locally compiled test
+binary SHA-256 is `35da99260b9354ef275d6bbe496be2deaf4c15af1e06bc304f135c29cc85d854`.
+These are test-probe identities, not runtime/helper approvals. The Windows native-quality gate
+already compiles and executes this probe; its existing wiring test now additionally pins that
+source, compile invocation, execution and both failure exits. The complete host-changing gate
+(including its SMB-share qualification) was not rerun locally; the new native probe itself ran
+with the gate's compiler/analyzer flags. Current-head CI remains required.
+
+The six-file generation/handoff/recovery/startup selection initially reports 122 passes, three
+failures and one skip. One failure exposes a production path-grammar defect: when inspecting
+POSIX package paths on Windows, the layout owner joined their children with the host's Windows
+path API. It now explicitly selects `posix` for POSIX syntax and keeps `win32` for drive/backslash
+syntax. Exact Linux/macOS child paths and forward-slash Windows drive paths are checked without
+changing any release, provenance or generation admission rule.
+
+The other failures occur while creating privileged symlink fixtures. Original directory/file
+symlink controls remain executable and explicitly report Windows `EPERM`; separate native
+junction controls now verify publication-path and plan-file redirection, reachable positive
+controls and unchanged target contents. The oversized-file refusal is a separate test so missing
+symlink privilege cannot hide it. The final six-file selection passes **126 tests, zero failures,
+three skips** (two unavailable symlink fixtures and the existing POSIX canonical-plan case).
+Scoped lint, strict typecheck, formatting, duplication (932 baseline groups) and diff checks pass.
+The full regular `npm run check:activity-log` also passes all seven checks in 199.7 seconds:
+registry 97/97 and scenarios 144 passed, zero failed, 15 explicit skips. Local Sonar passes with
+no unresolved findings (task `569fe986-bf5c-437c-82b1-aa3f7a633816`, 2026-10-28 20:21 UTC).
+
+This is a native image-lock/recovery component proof and a layout repair. It does not execute an
+installed Keiko upgrade, original runtime restart, Authenticode release chain or Workbench task;
+the image is mapped as executable code but is not a running installed Keiko process. W13 remains
+partial, and gateway, source-approval and Windows npm publication blockers are unchanged.
+
 ## Revalidation on 2026-10-27
 
 The continuation starts from PR #4088 head `475e91a3f9745a70a3371400c9fe265adf363bae` and
@@ -581,23 +626,23 @@ no unfinished implementation or its results were imported as this branch's quali
 
 ## Acceptance disposition
 
-| Group                                | Evidence / remaining work                                                                                                                                                                                                                                                                            |
-| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| W1 — OS boundaries                   | BLOCKED. Mapped profile retained by explicit decision. Production gateway confinement still refuses Windows. Native filesystem and foreign-process boundaries remain unqualified                                                                                                                     |
-| W2 — Owned process tree              | PARTIAL. Real Job Object helper cancels/reaps ordinary and detached descendants and handles control EOF. Workbench concurrency release, original service, watchers and active turns remain untested behind W1                                                                                        |
-| W3 — Customer installs               | BLOCKED. Fresh development dependencies and staging pass, but the npm runtime target map and approved npm runtime identities contain macOS only. No clean Windows npm/npx/Yarn/start/reload/upgrade qualification                                                                                    |
-| W4 — Artifacts / approvals           | PARTIAL. Approved OpenCode/ripgrep and published v1.3.0 portable helper bytes verified; release helpers pass isolated execution. Portable remains evaluation-unqualified; Windows npm approval and installed retained-state/stale-helper proofs remain open                                          |
-| W5 — Platform lanes                  | PARTIAL. Existing required Windows native-quality lane now runs the actual supervisor protocol harness against its freshly compiled helper. Real service execution remains blocked; native macOS-only and environment-gated suites are not Windows certification                                     |
-| W6 — Three-mode task comparison      | BLOCKED by W1 and the missing live model/Gateway qualification. No task or mode counted as passed                                                                                                                                                                                                    |
-| W7 — Windows paths / filesystem      | PARTIAL. Git reparse, checkout binding, portable discovery, and source-built/staged secure-read paths and races pass, including Unicode, case aliases, long paths, ADS and namespace refusal. Full instruction/media/external-root and linked-worktree move/watcher qualification remains open       |
-| W8 — Shell / real repair             | PARTIAL. 113 shell unit cases and actual `.cmd`/npm-shim argv/injection controls pass; the final binary-symlink proof lacks privilege. No project-selected Node/Vitest or Java/Maven/Gradle Workbench failing-test-to-repair loop                                                                    |
-| W9 — Persisted sessions / locks      | PARTIAL. Synthetic-schema SQLite WAL snapshots, exclusive-lock failure/recovery, retained-state integrity, history/export/import and Windows junction refusal executed. Four retention observations remain; original-runtime Workbench restart/resume/fork and Windows ACL isolation are unqualified |
-| W10 — Agents / IPC / active input    | NOT RUN. Native capabilities are unavailable under the retained mapped profile. Native local MCP still constructs `/usr/bin/env -i`; no native Windows MCP execution claim                                                                                                                           |
-| W11 — Network / environment          | PARTIAL. Disposable Windows runner passes IPv4/IPv6 WFP lifecycle and actual AppContainer socket/descendant controls. Installed service, inherited proxy/CA/OpenSSL/FIPS, endpoint failures, long streams and orphan requests remain unqualified                                                     |
-| W12 — Visible identity / state       | PARTIAL, static only. Production selects `direct`, not `native`. Actual UI/model/agent/mode state and reload flows remain untested                                                                                                                                                                   |
-| W13 — Upgrade / rollback             | PARTIAL. Published v1.3.0 portable archive and helper identities verified and helpers executed. No installed upgrade/rollback, executable-lock or retained-state qualification; Windows npm runtime pair remains absent                                                                              |
-| W14 — Large repositories / resources | NOT RUN. Secure-read load observations above cannot substitute for standalone/Workbench task measurements or another platform's reference budgets                                                                                                                                                    |
-| W15 — Private skills / races         | NOT RUN. No actual model dispatch, compaction, revision replacement or multi-turn repair evidence                                                                                                                                                                                                    |
+| Group                                | Evidence / remaining work                                                                                                                                                                                                                                                                             |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| W1 — OS boundaries                   | BLOCKED. Mapped profile retained by explicit decision. Production gateway confinement still refuses Windows. Native filesystem and foreign-process boundaries remain unqualified                                                                                                                      |
+| W2 — Owned process tree              | PARTIAL. Real Job Object helper cancels/reaps ordinary and detached descendants and handles control EOF. Workbench concurrency release, original service, watchers and active turns remain untested behind W1                                                                                         |
+| W3 — Customer installs               | BLOCKED. Fresh development dependencies and staging pass, but the npm runtime target map and approved npm runtime identities contain macOS only. No clean Windows npm/npx/Yarn/start/reload/upgrade qualification                                                                                     |
+| W4 — Artifacts / approvals           | PARTIAL. Approved OpenCode/ripgrep and published v1.3.0 portable helper bytes verified; release helpers pass isolated execution. Portable remains evaluation-unqualified; Windows npm approval and installed retained-state/stale-helper proofs remain open                                           |
+| W5 — Platform lanes                  | PARTIAL. Existing required Windows native-quality lane now runs the actual supervisor protocol harness against its freshly compiled helper. Real service execution remains blocked; native macOS-only and environment-gated suites are not Windows certification                                      |
+| W6 — Three-mode task comparison      | BLOCKED by W1 and the missing live model/Gateway qualification. No task or mode counted as passed                                                                                                                                                                                                     |
+| W7 — Windows paths / filesystem      | PARTIAL. Git reparse, checkout binding, portable discovery, and source-built/staged secure-read paths and races pass, including Unicode, case aliases, long paths, ADS and namespace refusal. Full instruction/media/external-root and linked-worktree move/watcher qualification remains open        |
+| W8 — Shell / real repair             | PARTIAL. 113 shell unit cases and actual `.cmd`/npm-shim argv/injection controls pass; the final binary-symlink proof lacks privilege. No project-selected Node/Vitest or Java/Maven/Gradle Workbench failing-test-to-repair loop                                                                     |
+| W9 — Persisted sessions / locks      | PARTIAL. Synthetic-schema SQLite WAL snapshots, exclusive-lock failure/recovery, retained-state integrity, history/export/import and Windows junction refusal executed. Four retention observations remain; original-runtime Workbench restart/resume/fork and Windows ACL isolation are unqualified  |
+| W10 — Agents / IPC / active input    | NOT RUN. Native capabilities are unavailable under the retained mapped profile. Native local MCP still constructs `/usr/bin/env -i`; no native Windows MCP execution claim                                                                                                                            |
+| W11 — Network / environment          | PARTIAL. Disposable Windows runner passes IPv4/IPv6 WFP lifecycle and actual AppContainer socket/descendant controls. Installed service, inherited proxy/CA/OpenSSL/FIPS, endpoint failures, long streams and orphan requests remain unqualified                                                      |
+| W12 — Visible identity / state       | PARTIAL, static only. Production selects `direct`, not `native`. Actual UI/model/agent/mode state and reload flows remain untested                                                                                                                                                                    |
+| W13 — Upgrade / rollback             | PARTIAL. Published v1.3.0 helpers executed; native candidate-image lock refusal and recovery preserve bytes and file identities. Generation/handoff/recovery components pass. No installed upgrade/rollback or original-runtime retained-state qualification; Windows npm runtime pair remains absent |
+| W14 — Large repositories / resources | NOT RUN. Secure-read load observations above cannot substitute for standalone/Workbench task measurements or another platform's reference budgets                                                                                                                                                     |
+| W15 — Private skills / races         | NOT RUN. No actual model dispatch, compaction, revision replacement or multi-turn repair evidence                                                                                                                                                                                                     |
 
 ## CI and remaining capability gaps
 
