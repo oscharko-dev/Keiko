@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "1e9bc03173054c70b1f4e0b0e49559cc40b217ef92028cf9dc3f179eb7a4c18d",
+    "catalogDigest": "45be13e24c008a060e96e2e6884ef6148e47e699655b375ec10e73c525c85e37",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -20602,7 +20602,7 @@
         "proofIds": ["gateway.readiness.busy-retained.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/gateway-readiness.ts:201",
-        "emitterSites": ["packages/keiko-server/src/gateway-readiness.ts:1979"]
+        "emitterSites": ["packages/keiko-server/src/gateway-readiness.ts:2002"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -24894,8 +24894,8 @@
         "failureClasses": ["git-diff-view-bounded"],
         "proofIds": ["git.diff.view-bounded.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDiffView.ts:23",
-        "emitterSites": ["packages/keiko-server/src/gitDiffView.ts:68"]
+        "registrationSite": "packages/keiko-server/src/gitDiffView.ts:25",
+        "emitterSites": ["packages/keiko-server/src/gitDiffView.ts:70"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -99056,7 +99056,7 @@
     "violations": []
   },
   "legacyDiscovery": {
-    "dynamicCount": 85,
+    "dynamicCount": 86,
     "unknownCategoryCount": 77,
     "authoritative": false
   },
@@ -101045,6 +101045,13 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
+      "site": "packages/keiko-server/src/gateway-readiness.ts:1118",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "diagnostic",
       "site": "packages/keiko-server/src/gitDelivery/repositoryInitializationRoutes.ts:279",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
@@ -101052,7 +101059,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitRoutes.ts:1503",
+      "site": "packages/keiko-server/src/gitRoutes.ts:1504",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -103045,49 +103052,49 @@
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-readiness.ts:2060",
+      "site": "packages/keiko-server/src/gateway-readiness.ts:2093",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-readiness.ts:2149",
+      "site": "packages/keiko-server/src/gateway-readiness.ts:2182",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-readiness.ts:2391",
+      "site": "packages/keiko-server/src/gateway-readiness.ts:2424",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-readiness.ts:2643",
+      "site": "packages/keiko-server/src/gateway-readiness.ts:2676",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-readiness.ts:2722",
+      "site": "packages/keiko-server/src/gateway-readiness.ts:2755",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-readiness.ts:2900",
+      "site": "packages/keiko-server/src/gateway-readiness.ts:2933",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-readiness.ts:3054",
+      "site": "packages/keiko-server/src/gateway-readiness.ts:3087",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -103479,7 +103486,7 @@
     {
       "op": "git.diff.view-bounded",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDiffView.ts:26",
+      "site": "packages/keiko-server/src/gitDiffView.ts:28",
       "package": "keiko-server"
     },
     {

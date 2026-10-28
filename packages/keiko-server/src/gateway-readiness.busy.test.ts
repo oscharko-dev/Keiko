@@ -158,6 +158,24 @@ describe("gateway readiness while a single-slot model is busy (#4115)", () => {
     expect(currentConversationReadinessObservation(run.deps, MODEL)).toBe(true);
     const retained = run.events.filter((event) => event.op === "gateway.readiness.busy-retained");
     expect(retained[0]?.extra).toMatchObject({ busySignal: "gateway-overloaded" });
+    expect(run.diagnostics).toEqual([
+      expect.objectContaining({
+        source: "gateway-readiness.chat",
+        diagnosticOutcome: "provider-busy",
+      }),
+    ]);
+  });
+
+  it.each([
+    { name: "a future", checkedAt: (): string => new Date(Date.now() + 60_000).toISOString() },
+    { name: "a malformed", checkedAt: (): string => "not-a-timestamp" },
+  ])("does not renew a proof with $name timestamp", async ({ checkedAt }) => {
+    const run = harness(timeout(), { ...provenReady(), checkedAt: checkedAt() });
+
+    await runGatewayReadiness({ modelId: MODEL, options: { probes: ["chat"] } }, run.deps);
+
+    expect(currentConversationReadinessObservation(run.deps, MODEL)).not.toBe(true);
+    expect(run.events.some((event) => event.op === "gateway.readiness.busy-retained")).toBe(false);
   });
 
   it("still records an unreachable provider as not ready", async () => {

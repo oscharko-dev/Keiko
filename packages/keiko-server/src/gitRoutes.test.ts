@@ -991,6 +991,8 @@ describe("GET /api/git/diff", () => {
     expect(diff).not.toContain("[REDACTED]");
     expect(diff.endsWith("\n")).toBe(true);
     expect(() => parseUnifiedDiff(diff)).not.toThrow();
+    // The cap is the declared outcome of this read, so the observer records no failed git run.
+    expect(activity.withOp("git.process.failed")).toHaveLength(0);
     const lines = activity.withOp("git.diff.view-bounded");
     expect(lines).toHaveLength(1);
     expect(lines[0]).toMatchObject({
@@ -1015,6 +1017,41 @@ describe("GET /api/git/diff", () => {
     expect(structured.status).toBe(200);
     expect(structured.body).toMatchObject({ truncated: true });
   });
+
+  const cutPrefix = "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1,4 +1,4 @@\n-old\n";
+  const cutRun = (
+    overrides: Partial<Awaited<ReturnType<GitProcessRunner>>>,
+  ): Awaited<ReturnType<GitProcessRunner>> => ({
+    exitCode: null,
+    signal: "SIGTERM",
+    stdout: cutPrefix,
+    stderr: "",
+    truncated: true,
+    ...overrides,
+  });
+
+  it.each([
+    { name: "a timeout", result: cutRun({ timedOut: true }) },
+    { name: "an abort", result: cutRun({ aborted: true }) },
+    { name: "a refusal", result: cutRun({ refusal: "diff-enabling-flag" }) },
+    { name: "git error output", result: cutRun({ stderr: "fatal: unable to read blob" }) },
+    { name: "a genuine non-zero git exit", result: cutRun({ exitCode: 128, signal: null }) },
+  ])(
+    "keeps a truncated diff that ended with $name a failure (#4113)",
+    async ({ result }): Promise<void> => {
+      const runner = vi
+        .fn<GitProcessRunner>()
+        .mockResolvedValueOnce(ok(`${root}\n`))
+        .mockResolvedValueOnce(result);
+
+      const response = await handleGitDiff(
+        ctx(`/api/git/diff?root=${encodeURIComponent(root)}&scope=worktree`),
+        deps(runner),
+      );
+
+      expect(response.status).not.toBe(200);
+    },
+  );
 
   it("keeps token shapes and configured secrets masked in a floored diff view (#4114)", async (): Promise<void> => {
     const token = "ghp_" + "abcdefghijklmnopqrstuvwxyz0123456789";

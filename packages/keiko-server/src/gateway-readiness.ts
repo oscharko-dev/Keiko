@@ -1106,6 +1106,28 @@ function reportProbeFailure(
   return result(name, "failed", start, evidence, warning);
 }
 
+// #4115: an overload status turns the probe away like a timeout outwaits it, so it carries the same
+// closed provider-busy warning diagnostic. Any other unsuccessful status writes none here.
+function reportBusyStatus(
+  deps: UiHandlerDeps,
+  correlationId: string,
+  name: GatewayReadinessProbeName,
+  response: Response,
+): void {
+  if (busySignal(transientStatusWarning(response)) === undefined) return;
+  emitServerDiagnostic(deps.diagnostics, {
+    ...serverDiagnosticFromError({
+      correlationId,
+      operation: "gateway.readiness",
+      source: `gateway-readiness.${name}`,
+      error: new Error(unsuccessfulEvidence("Gateway", response)),
+      summary: "A gateway readiness probe could not be completed.",
+      redact: (message): string => String(deps.redactor(message)),
+    }),
+    diagnosticOutcome: "provider-busy",
+  });
+}
+
 function unsupportedStatus(response: Response): boolean {
   return (
     response.status === 400 ||
@@ -1189,6 +1211,7 @@ async function probeChat(
       ],
     });
     if (!response.ok) {
+      reportBusyStatus(deps, correlationId, "chat", response);
       return result(
         "chat",
         "failed",
@@ -1697,6 +1720,7 @@ async function probeLongContext(
     const response = await providerRequest(deps, config, provider, correlationId, body);
     if (!response.ok) {
       const status = unsupportedStatus(response) ? "unsupported" : "failed";
+      reportBusyStatus(deps, correlationId, "long_context", response);
       return result(
         "long_context",
         status,
@@ -1966,8 +1990,7 @@ function retainBusyConversationReadiness(
   const signal = chat?.status === "failed" ? busySignal(chat.warning) : undefined;
   if (signal === undefined) return false;
   const previous = deps.gatewayConfig?.verifiedCapability(report.modelId);
-  if (previous === undefined || previous.generation !== observedGeneration) return false;
-  if (previous.fields.conversationReady !== true) return false;
+  if (!renewableConversationProof(previous, observedGeneration)) return false;
   deps.gatewayConfig?.recordVerifiedCapability(
     report.modelId,
     previous.fields,
@@ -1983,6 +2006,16 @@ function retainBusyConversationReadiness(
     ),
   );
   return true;
+}
+
+// A same-generation success with a valid proof time. A future or malformed time is unknown and
+// never renewable; an expired but valid proof is (#4115).
+function renewableConversationProof(
+  previous: VerifiedModelCapabilityObservation | undefined,
+  observedGeneration: number | undefined,
+): previous is VerifiedModelCapabilityObservation {
+  if (previous === undefined || previous.generation !== observedGeneration) return false;
+  return previous.fields.conversationReady === true && conversationReadinessAgeMs(previous) >= 0;
 }
 
 function recordFailedReadinessObservation(

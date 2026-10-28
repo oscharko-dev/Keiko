@@ -38,7 +38,7 @@ import {
 import { errorBody } from "./route-error.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
-import { observedGitRunner } from "./gitProcessActivity.js";
+import { isCapTerminatedTruncation, observedGitRunner } from "./gitProcessActivity.js";
 import type { ServerLogSink } from "./observability/index.js";
 import { processServerLogSink } from "./process-log-sink.js";
 import {
@@ -1104,15 +1104,13 @@ function normalizeNoIndexDiff(
 
 /**
  * The runner kills git once its output reaches the byte cap, so a large tracked diff ends with a
- * signal and a non-zero exit. That cut is the bounded, truncated view the routes report, not a
- * failed diff (#4103). A timeout, an abort, a refusal or any git error output stays a failure.
+ * signal. That cut is the bounded, truncated view the routes report, not a failed diff (#4113).
+ * Only a run the cap itself ended counts (`isCapTerminatedTruncation`): a timeout, an abort, a
+ * refusal, git error output or an exit status git chose on its own stays a failure.
  */
 function byteCapCutAsBoundedDiff(result: GitProcessResult): GitProcessResult {
   const cutAtByteCap =
-    result.exitCode !== 0 &&
-    result.truncated &&
-    result.timedOut !== true &&
-    result.aborted !== true &&
+    isCapTerminatedTruncation(result) &&
     result.refusal === undefined &&
     result.stderr.length === 0 &&
     result.stdout.startsWith("diff --git ");
@@ -1218,7 +1216,10 @@ async function runDiff(
   const relativePath = gitPath(repo.selectedRootPrefix, path);
   if (relativePath !== undefined) args.push("--", literalGitPathspec(relativePath));
   const result = byteCapCutAsBoundedDiff(
-    await options.runner(args, gitProcessOptions(repo, options, maxBytes)),
+    await options.runner(args, {
+      ...gitProcessOptions(repo, options, maxBytes),
+      expectedTruncation: true,
+    }),
   );
   if (
     staged ||

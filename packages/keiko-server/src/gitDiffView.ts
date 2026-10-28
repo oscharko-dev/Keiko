@@ -2,9 +2,11 @@
 //
 // A diff cut at its byte cap is reconciled into a complete patch before redaction, and a file whose
 // hunks do not parse on their own keeps them readable under the credential floor, as standalone
-// OpenCode shows them: keys, tokens, passwords and configured secrets stay masked. Every other
-// redaction caller keeps whole-file masking. The line records only counts and the closed truncation
-// state, never the diff, a path or a secret.
+// OpenCode shows them: private keys, URL credentials, Authorization values, known token shapes,
+// configured secrets and private literals from parsed files of the same diff stay masked; a value
+// that is secret only by its key name stays readable there. Every other redaction caller keeps
+// whole-file masking. The line records only counts and the closed truncation state, never the
+// diff, a path or a secret.
 
 import { Buffer } from "node:buffer";
 import type { GitRepositoryDiffResponse } from "@oscharko-dev/keiko-contracts";

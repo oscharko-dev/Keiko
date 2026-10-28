@@ -887,8 +887,9 @@ Owner decision 2026-10-28 (#4114): the raw Git diff view of the local user's own
 (`GET /api/git/diff`) keeps a file whose hunks fail only the syntax check readable under the
 credential floor, as standalone OpenCode shows it. Each old/new image is floored as a whole, so a
 private key spanning lines, token shapes, configured secrets and private literals known from other
-files of the same patch stay masked; depth and size refusals and a floor that changes the line count
-keep whole-file masking. Every other redaction caller keeps the fail-closed default. A view cut at
+files of the same patch stay masked; a value that is secret only by its key name (for example a
+`password` field) stays readable in such a hunk, as in standalone OpenCode. Depth and size refusals
+and a floor that changes the line count keep whole-file masking. Every other redaction caller keeps the fail-closed default. A view cut at
 its byte cap (#4113) drops its partial last line and restates the cut hunk's shown line counts before
 redaction; body lines are never rewritten, and output that is not a patch is unchanged. The registered
 `git.diff.view-bounded` Activity Log operation records truncation, shown and maximum bytes and the
