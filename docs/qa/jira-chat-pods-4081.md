@@ -2672,3 +2672,49 @@ remote effect after a lost successful response. Typecheck/scoped lint/format, ar
 negative architecture checks are run independently. This qualifies the protocol adapter;
 Settings discovery, Chat/OpenCode composition, complete runtime invalidation and product UI
 remain required before external MCP tools are usable end to end.
+
+### Configured MCP tools in OpenCode: real UI and approval repair
+
+The Settings connection manager now serves admitted tools through the existing authenticated
+native relay. One server-owned SDK connection owns stdio/HTTP and credential materialization;
+OpenCode receives a scoped loopback capability. Disable, replacement and removal revoke the
+generation and abort its relay. Modern and legacy MCP requests carry isolated, private invocation
+context. Managed tools remain external actions under the selected mode, including local stdio
+processes owned by the server: Ask for approval and Supervised workspace require approval;
+Full access permits execution inside the existing authority. Direct remote access below Full
+access remains denied.
+
+The real browser journey exposed two approval defects. A hyphenated MCP tool permission was
+copied into the narrow public evidence contract and rejected as `sidecar-event-denied`; its
+public projection is now the fixed `mcp` category with the registered `native-mcp` command
+label. The authenticated private review retains the actual tool identity. The UI also incorrectly
+required a Research destination for these native requests; it now uses their existing bound
+native review. Red-before/green-after regressions cover both defects without relaxing the
+public contract or admitting unbound approvals. Runtime failures record a closed, body-free
+reason code rather than arbitrary error text.
+
+On 2026-10-28, the in-app browser configured a synthetic three-tool stdio server and used the
+running Docker LiteLLM gateway with Gemma. Actual Workbench journeys succeeded for:
+
+- Full access: read, then a write followed by readback; exactly one new remote record.
+- Ask for approval: read after the visible program/tool approvals.
+- Ask for approval: create and readback after the visible program/tool approvals. Independent
+  fixture inspection found zero matching records before the MCP write approval and exactly one
+  afterward. The UI returned the new record ID and its original text, with a succeeded run and
+  zero changed repository files. Earlier failed approval attempts produced no remote write.
+
+These checks used only synthetic fixtures and an isolated test repository; no customer
+screenshots, service addresses, tokens or response bodies are included. The original failed
+runs remain truthful history; fresh runs demonstrate the corrected behavior.
+
+Focused validation passes: 673 server tests, 345 UI tests, four actual-SDK relay tests, package
+build, root/UI TypeScript, scoped server/UI lint and formatting. After the final UI display
+adjustment, 13 targeted native/research approval tests pass again. Activity Log passes all
+seven inventory checks, including error observability and architecture; the ADR index also
+passes. Final aggregate coverage, UI evidence, assembled-package qualification and Sonar
+remain pending under the owner's final-qualification workflow.
+
+Ordinary Chat consumption of configured external MCP tools is still being integrated. This
+checkpoint does not accept all 55 original criteria, qualify every transport/model combination,
+or establish durable mutation/restart safety for the new native path. The PR remains open and
+not merge-ready, with auto-merge disabled.

@@ -5050,6 +5050,28 @@ describe("pause and resume (#2386 adversarial-review regressions)", () => {
     expect(JSON.stringify(captured.records)).not.toContain(start.taskIntent);
   });
 
+  it.each(["sidecar-event-denied", "runtime-event-failed", "private-customer-content"])(
+    "records only allowlisted lifecycle details: %s",
+    async (failureSummary) => {
+      const captured = captureDiagnostics();
+      const f = await runningFixture(undefined, captured.diagnostics);
+      await f.orchestrator.ingest({
+        schemaVersion: "1",
+        eventId: "event-failure",
+        runId: "run-1",
+        occurredAt: "2026-01-01T00:00:03.000Z",
+        kind: "failure-redacted",
+        failureSummary,
+      });
+      const expected =
+        failureSummary === "private-customer-content" ? "" : `:detail=${failureSummary}`;
+      expect(captured.records).toContainEqual(
+        expect.objectContaining({ code: `stage=lifecycle:reason=failure-redacted${expected}` }),
+      );
+      expect(JSON.stringify(captured.records)).not.toContain("private-customer-content");
+    },
+  );
+
   it("projects the manager's body-free process result on terminal status", async () => {
     const f = await runningFixture();
     f.manager.result.mockReturnValue({

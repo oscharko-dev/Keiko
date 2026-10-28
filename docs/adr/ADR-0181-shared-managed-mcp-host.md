@@ -245,3 +245,18 @@ transport wrappers have a separate fixed depth allowance; each descriptor/schema
 all model arguments retain their original bounds and closed validation. Historical
 completed tool results retain their validated descriptor/projection snapshot privately
 in the existing Chat row; the public serializer omits that qualification metadata.
+
+## Centrally configured external MCP servers (#4081)
+
+The same package owns SDK clients for configured stdio, Streamable HTTP and legacy SSE servers.
+Server composition shares their connections and obtains credentials from the existing vault only
+at the transport boundary. Native OpenCode reaches these connections through its existing,
+run-bound MCP relay; its configuration contains a revocable relay capability, never provider
+credentials. Disabling or changing a server invalidates that generation and its relay capabilities.
+
+A server-managed stdio provider runs outside the coding process's workspace sandbox. Its actions
+therefore use the external-effect policy, just like a managed HTTPS provider: Ask for approval and
+Supervised workspace require the existing action approval; Full access may act within its validated
+authority. The relay uses the already admitted loopback gateway route. This capability does not
+relax the coding process's network sandbox or the Full access restriction on direct external
+connections, including the existing native OAuth path.

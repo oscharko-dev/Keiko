@@ -1,3 +1,4 @@
+import type { ConfiguredMcpConnections } from "../mcp/mcpConfiguredConnections.js";
 import type { NativeWebSearch } from "./nativeWebSearch.js";
 import type { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
 import { createHash, randomBytes } from "node:crypto";
@@ -232,6 +233,7 @@ export interface ProductionOpenCodeBackendInput {
    * at the gateway's origin, with the credentials read from `processEnv`.
    */
   readonly mcpRelay?: McpCredentialRelay | undefined;
+  readonly mcpConnections?: ConfiguredMcpConnections | undefined;
   /** Pulls the operator's remote skill sources for a Full access native run (#3903 AC3). */
   readonly remoteSkills?: RemoteSkillsPort | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
@@ -485,6 +487,7 @@ function mcpRelayFor(input: LaunchInput): Pick<OpenCodeRuntimeCompositionInput, 
       relay: input.mcpRelay,
       origin: new URL(input.gatewayUrl).origin,
       secrets: input.processEnv ?? {},
+      managed: input.mcpConnections,
     },
   };
 }

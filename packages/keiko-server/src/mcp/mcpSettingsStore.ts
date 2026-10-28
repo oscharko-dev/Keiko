@@ -144,6 +144,8 @@ function validUpdate(update: McpSettingsUpdate): McpSettingsUpdate {
 function reconcileSecrets(
   secrets: ReturnType<typeof createMcpServerSecretStore>,
   state: McpSettingsSnapshot,
+  log: ServerLogSink | undefined,
+  correlationId: string,
 ): { readonly snapshot: McpSettingsSnapshot; readonly changed: boolean } {
   try {
     const removed = secrets.retain(state.servers.flatMap(mcpServerSecretReferences));
@@ -151,7 +153,9 @@ function reconcileSecrets(
   } catch {
     // The committed registry revokes access independently of physical ciphertext cleanup.
     // The next read/update (including a new process) retries against that same durable state.
-    return { snapshot: { ...state, credentialCleanup: "pending" }, changed: true };
+    const pending = { ...state, credentialCleanup: "pending" as const };
+    recordMcpSettingsUpdate(log, correlationId, "reconciled", pending, 0);
+    return { snapshot: pending, changed: true };
   }
 }
 
@@ -180,8 +184,8 @@ class SettingsStore implements McpSettingsStore {
       throw error;
     }
     this.reconcileGenerations(current.servers);
-    const result = reconcileSecrets(this.#secrets, current);
-    if (result.changed)
+    const result = reconcileSecrets(this.#secrets, current, this.input.activityLog, correlationId);
+    if (result.changed && result.snapshot.credentialCleanup !== "pending")
       recordMcpSettingsUpdate(
         this.input.activityLog,
         correlationId,
@@ -237,7 +241,12 @@ class SettingsStore implements McpSettingsStore {
     this.#secrets.put(entries);
     savePrivateJson(join(this.input.stateDir, MCP_SERVER_REGISTRY_FILE), document);
     this.reconcileGenerations(validated.servers);
-    const next = reconcileSecrets(this.#secrets, snapshot(validated.servers)).snapshot;
+    const next = reconcileSecrets(
+      this.#secrets,
+      snapshot(validated.servers),
+      this.input.activityLog,
+      correlationId,
+    ).snapshot;
     recordMcpSettingsUpdate(this.input.activityLog, correlationId, "applied", next, entries.length);
     return { ok: true, snapshot: next };
   };

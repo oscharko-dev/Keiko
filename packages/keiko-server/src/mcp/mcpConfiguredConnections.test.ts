@@ -206,6 +206,7 @@ describe("configured MCP connections", () => {
           {
             ...f.server,
             transport: { kind: "local", command: [process.execPath, program], environment: {} },
+            tools: { probe: "write" },
           },
         ],
         secrets: {},
@@ -228,6 +229,25 @@ describe("configured MCP connections", () => {
     expect(await connection.call("probe", {}, context())).toMatchObject({
       content: [{ text: "sealed" }],
     });
+    const response = await manager.serve(
+      "notes",
+      new Request("https://relay.example.test/mcp", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream",
+          "mcp-protocol-version": "2025-03-26",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: { name: "probe", arguments: {} },
+        }),
+      }),
+      context(),
+    );
+    expect(await response.text()).toContain('"text":"sealed"');
     f.store.update(
       { expectedRevision: f.store.read("test").revision, servers: [], secrets: {} },
       "test",

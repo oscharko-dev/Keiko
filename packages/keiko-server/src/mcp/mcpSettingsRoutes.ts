@@ -1,3 +1,4 @@
+import { emitServerDiagnostic, contentFreeErrorClass } from "../diagnostics-log.js";
 import type { ExternalMcpTool } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import type { McpSettingsStore } from "./mcpSettingsStore.js";
 import {
@@ -14,7 +15,7 @@ import type { RouteContext, RouteResult } from "../routes.js";
 
 type SettingsDeps = Pick<
   UiHandlerDeps,
-  "mcpSettings" | "mcpConnections" | "codingAppSessionChannel"
+  "mcpSettings" | "mcpConnections" | "codingAppSessionChannel" | "diagnostics"
 >;
 const denied = (): RouteResult => ({
   status: 403,
@@ -87,7 +88,16 @@ export async function handleConnectMcpServer(
   let tools: readonly ExternalMcpTool[];
   try {
     tools = (await deps.mcpConnections.connect(server.name, correlationId)).tools;
-  } catch {
+  } catch (error) {
+    emitServerDiagnostic(deps.diagnostics, {
+      correlationId,
+      timestamp: new Date().toISOString(),
+      operation: "mcp.connection",
+      source: "mcp.settings.connect",
+      errorClass: contentFreeErrorClass(error),
+      message: "runtime-turn-failed",
+      code: "stage=mcp-connect",
+    });
     return {
       status: 502,
       body: errorBody(
@@ -114,7 +124,12 @@ function saveDiscoveredTools(
   // Provider readOnlyHint is descriptive, never an authority grant. Unknown tools require write approval.
   const admitted =
     server.discovery === "automatic"
-      ? Object.fromEntries(tools.map((tool) => [tool.name, server.tools[tool.name] ?? "write"]))
+      ? Object.fromEntries(
+          tools.map((tool) => [
+            tool.name,
+            Object.hasOwn(server.tools, tool.name) ? (server.tools[tool.name] ?? "write") : "write",
+          ]),
+        )
       : server.tools;
   const result = store.update(
     {

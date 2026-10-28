@@ -2617,6 +2617,41 @@ describe("CodingWorkbenchWindow", () => {
     } as UseCodingWorkbenchApprovalReviewResult;
   }
 
+  it("enables a managed MCP approval using its bound native review without research evidence", () => {
+    approvalReviewHookMock.mockReturnValue(
+      nativeReview("fixture-server_write", ["fixture-server_write", "fixture"]),
+    );
+    renderWorkbench(
+      liveState({
+        run: {
+          status: "ready",
+          error: null,
+          value: snapshot({
+            state: "awaiting-approval",
+            runId: "run-1",
+            pendingPermission: {
+              requestId: "permission-native-1",
+              kind: "network-egress",
+              actionClass: "network-egress",
+              reasonCode: "approval-required",
+              policyReason: "approval-required",
+              scopeLabel: "network-egress",
+              risk: "medium",
+              commandLabel: "native-mcp",
+              nativePermission: "mcp",
+              expiresAt: "2026-07-13T12:05:00.000Z",
+            },
+          }),
+        },
+      }),
+    );
+    expect(screen.getByRole("group", { name: "What the agent wants to do" })).toHaveTextContent(
+      "fixture-server_write",
+    );
+    expect(screen.queryByRole("group", { name: "Research destination" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Approve once" })).toBeEnabled();
+  });
+
   // #3897 review: the generic "Raw commands, prompts, diffs, and file contents remain hidden." sat
   // directly under the visible command. A native ask says what Approve does for ITS permission.
   it("#3897: a native shell ask states what Approve runs instead of claiming the command is hidden", () => {

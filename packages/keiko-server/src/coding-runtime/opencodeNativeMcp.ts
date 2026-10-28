@@ -93,24 +93,32 @@ export function mcpServersNeedingIssuerValidation(
 
 // A remote server with an operator-named issuer is admitted only once that issuer validated, and
 // one with credential headers only once its relay is bound; absent maps select the servers to check.
+function remoteAdmitted(
+  server: McpServerDefinition,
+  validations: ReadonlyMap<string, McpOAuthIssuerValidation> | undefined,
+  relays: ReadonlyMap<string, OpenCodeNativeMcpRelayEndpoint> | undefined,
+): boolean {
+  const transport = server.transport;
+  if (transport.kind !== "remote") return false;
+  if (transport.headers !== undefined) return relays === undefined || relays.has(server.name);
+  return (
+    validations === undefined ||
+    transport.oauth === undefined ||
+    validations.get(server.name)?.ok === true
+  );
+}
 function admittedServers(
   servers: readonly McpServerDefinition[],
   mode: string | undefined,
   validations: ReadonlyMap<string, McpOAuthIssuerValidation> | undefined,
   relays: ReadonlyMap<string, OpenCodeNativeMcpRelayEndpoint> | undefined,
+  managed = false,
 ): readonly McpServerDefinition[] {
-  const fullAccess = mode === "autonomous-delivery";
   return servers.filter((server) => {
     if (!server.enabled) return false;
-    const transport = server.transport;
-    if (transport.kind === "local") return true;
-    if (!fullAccess) return false;
-    if (transport.headers !== undefined) return relays === undefined || relays.has(server.name);
-    return (
-      validations === undefined ||
-      transport.oauth === undefined ||
-      validations.get(server.name)?.ok === true
-    );
+    if (server.transport.kind === "local") return true;
+    if (managed && relays?.has(server.name)) return true;
+    return mode === "autonomous-delivery" && remoteAdmitted(server, validations, relays);
   });
 }
 
@@ -159,7 +167,7 @@ function serverConfig(
   relay: OpenCodeNativeMcpRelayEndpoint | undefined,
 ): Readonly<Record<string, unknown>> {
   const transport = server.transport;
-  if (transport.kind === "remote" && relay !== undefined) return relayedConfig(relay);
+  if (relay !== undefined) return relayedConfig(relay);
   if (transport.kind === "remote")
     return { type: "remote", url: transport.url, oauth: remoteOAuthConfig(admitted) };
   const environment = Object.entries(transport.environment).map(
@@ -180,6 +188,7 @@ function serverConfig(
 
 /** The binding and the policy grants for one native run, from the operator's registry. */
 export function openCodeNativeMcpAdmission(input: {
+  readonly managed?: boolean | undefined;
   readonly servers: readonly McpServerDefinition[];
   readonly mode: string | undefined;
   readonly home: string;
@@ -190,7 +199,15 @@ export function openCodeNativeMcpAdmission(input: {
 }): OpenCodeNativeMcpAdmission {
   const validations = input.validations ?? new Map<string, McpOAuthIssuerValidation>();
   const relays = input.relays ?? new Map<string, OpenCodeNativeMcpRelayEndpoint>();
-  const admitted = admittedServers(input.servers, input.mode, validations, relays);
+  const candidates =
+    input.managed === true
+      ? input.servers.filter(
+          (server) =>
+            (server.transport.kind === "remote" && server.transport.oauth !== undefined) ||
+            relays.has(server.name),
+        )
+      : input.servers;
+  const admitted = admittedServers(candidates, input.mode, validations, relays, input.managed);
   const oauth = new Map(
     admitted.flatMap((server) => {
       const entry = oauthServer(server, validations);
@@ -207,11 +224,29 @@ export function openCodeNativeMcpAdmission(input: {
       ),
     },
     oauth,
-    grants: {
-      actions: mcpToolActions(admitted),
-      servers: new Map(
-        admitted.map((server) => [server.name, { remote: server.transport.kind === "remote" }]),
-      ),
-    },
+    grants: nativeGrants(admitted, input.managed === true ? new Set(relays.keys()) : new Set()),
+  };
+}
+
+function nativeGrants(
+  servers: readonly McpServerDefinition[],
+  managedNames: ReadonlySet<string>,
+): OpenCodeNativeMcpGrants {
+  const actions = new Map<string, { risk: "read" | "write"; remote: boolean; managed?: boolean }>();
+  for (const server of servers) {
+    const managed = managedNames.has(server.name);
+    for (const [action, grant] of mcpToolActions([server]))
+      actions.set(action, managed ? { ...grant, remote: true, managed: true } : grant);
+  }
+  return {
+    actions,
+    servers: new Map(
+      servers.map((server) => [
+        server.name,
+        managedNames.has(server.name)
+          ? { remote: true, managed: true }
+          : { remote: server.transport.kind === "remote" },
+      ]),
+    ),
   };
 }

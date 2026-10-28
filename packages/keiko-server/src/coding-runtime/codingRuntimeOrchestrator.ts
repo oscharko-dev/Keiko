@@ -1220,6 +1220,7 @@ function recordRuntimeLifecycleFailure(
   diagnostics: ServerDiagnosticSink | undefined,
   runId: string,
   reason: RuntimeLifecycleFailureReason,
+  event?: CodingWorkbenchRuntimeEvent,
 ): void {
   emitServerDiagnostic(diagnostics, {
     correlationId: runtimeDiagnosticCorrelationId(runId),
@@ -1228,8 +1229,24 @@ function recordRuntimeLifecycleFailure(
     source: "coding-runtime-orchestrator.ingest",
     errorClass: "CodingRuntimeLifecycleFailure",
     message: "runtime-lifecycle-failed",
-    code: `stage=lifecycle:reason=${reason}`,
+    code: `stage=lifecycle:reason=${reason}${runtimeLifecycleDetail(event)}`,
   });
+}
+
+const RUNTIME_LIFECYCLE_DETAILS = new Set([
+  "runtime-event-failed",
+  "sidecar-event-denied",
+  "network-denied",
+  "operator-stopped",
+  "connector-access-denied",
+  "delivery-denied",
+  "approval-proof-stale",
+]);
+function runtimeLifecycleDetail(event: CodingWorkbenchRuntimeEvent | undefined): string {
+  const detail = event?.failureSummary;
+  return typeof detail === "string" && RUNTIME_LIFECYCLE_DETAILS.has(detail)
+    ? `:detail=${detail}`
+    : "";
 }
 
 function recordApprovalExpiryFailure(
@@ -2704,7 +2721,12 @@ export class CodingRuntimeOrchestrator {
       return this.fail("invalid-intent");
     }
     if (event.kind === "failure-redacted") {
-      recordRuntimeLifecycleFailure(this.deps.diagnostics, current.runId, "failure-redacted");
+      recordRuntimeLifecycleFailure(
+        this.deps.diagnostics,
+        current.runId,
+        "failure-redacted",
+        event,
+      );
       return this.stopAfterIssueFailure(current, "runtime-failed");
     }
     this.observeVerificationSummary(current, event);

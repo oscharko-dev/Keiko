@@ -94,6 +94,9 @@ export function CodingWorkbenchNativeActionReview({
       <p className={styles.approvalResearchTitle}>
         {title}: {permission}
       </p>
+      {ownMessageKey(PERMISSION_MESSAGE_KEYS, action.permission) === undefined && (
+        <p className={styles.approvalResearchDetail}>{action.permission}</p>
+      )}
       {action.resources.length === 0 ? (
         <p className={styles.approvalResearchDetail}>
           {t("codingWorkbench.approval.native.noResources")}

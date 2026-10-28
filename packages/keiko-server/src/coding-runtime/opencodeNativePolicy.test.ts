@@ -1218,3 +1218,51 @@ describe("accepted external references (#3900 AC5)", () => {
     }
   });
 });
+
+it("asks before managed MCP effects in either restricted mode while retaining direct-network denial", () => {
+  const admission = openCodeNativeMcpAdmission({
+    servers: [
+      {
+        name: "managed",
+        enabled: true,
+        description: undefined,
+        transport: { kind: "local", command: ["/synthetic/server"], environment: {} },
+        tools: { read: "read", write: "write" },
+      },
+    ],
+    mode: "governed-assist",
+    home: "/synthetic/home",
+    managed: true,
+    relays: new Map([
+      ["managed", { url: "http://127.0.0.1:1983/relay", capability: "synthetic-capability" }],
+    ]),
+  });
+  for (const permission of ["managed_read", "managed_write"]) {
+    const decisions = ["governed-assist", "supervised-coding", "autonomous-delivery"].map((mode) =>
+      decideOpenCodeNativePolicy({
+        mode,
+        workspaceRoot: WORKSPACE,
+        request: request(permission, ["*"]),
+        nowMs: NOW,
+        mcp: admission.grants,
+      }),
+    );
+    expect(decisions.map((decision) => decision.effect)).toEqual(["ask", "ask", "allow"]);
+    expect(decisions[0]).toMatchObject({
+      classification: { scope: "internet", label: "native-mcp" },
+    });
+  }
+  const direct = {
+    actions: new Map([["direct_read", { risk: "read" as const, remote: true }]]),
+    servers: new Map(),
+  };
+  expect(
+    decideOpenCodeNativePolicy({
+      mode: "governed-assist",
+      workspaceRoot: WORKSPACE,
+      request: request("direct_read", ["*"]),
+      nowMs: NOW,
+      mcp: direct,
+    }),
+  ).toMatchObject({ effect: "deny", reason: "mode-denied" });
+});

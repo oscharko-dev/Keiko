@@ -56,6 +56,9 @@ export interface McpRelayTarget {
   readonly headers: Readonly<Record<string, string>>;
   /** The credential values behind those headers, without their prefixes; held only by the relay. */
   readonly secrets: readonly string[];
+  /** Server-owned managed transport; no endpoint or credential can be chosen by request data. */
+  readonly upstream?: McpRelayUpstream;
+  readonly signal?: AbortSignal;
 }
 
 export interface McpRelayBinding {
@@ -80,6 +83,7 @@ interface StoredBinding {
   readonly capabilityHash: Buffer;
   readonly target: McpRelayTarget;
   readonly controller: AbortController;
+  readonly detach: () => void;
 }
 
 function capabilityHash(capability: string): Buffer {
@@ -90,9 +94,15 @@ class InMemoryMcpCredentialRelay implements McpCredentialRelay {
   private readonly bindings = new Map<string, StoredBinding>();
 
   public bind(target: McpRelayTarget): McpRelayBinding | undefined {
-    if (this.bindings.size >= MAX_BINDINGS) return undefined;
+    if (this.bindings.size >= MAX_BINDINGS || target.signal?.aborted === true) return undefined;
     const relayId = randomBytes(16).toString("base64url");
     const capability = randomBytes(32).toString("base64url");
+    const controller = new AbortController();
+    const revoke = (): void => {
+      controller.abort();
+      this.bindings.delete(relayId);
+    };
+    target.signal?.addEventListener("abort", revoke, { once: true });
     this.bindings.set(relayId, {
       capabilityHash: capabilityHash(capability),
       target: Object.freeze({
@@ -100,7 +110,8 @@ class InMemoryMcpCredentialRelay implements McpCredentialRelay {
         headers: Object.freeze({ ...target.headers }),
         secrets: Object.freeze([...target.secrets]),
       }),
-      controller: new AbortController(),
+      controller,
+      detach: () => target.signal?.removeEventListener("abort", revoke),
     });
     return { relayId, capability };
   }
@@ -120,6 +131,7 @@ class InMemoryMcpCredentialRelay implements McpCredentialRelay {
     for (const [relayId, stored] of this.bindings) {
       if (stored.target.runId !== runId) continue;
       stored.controller.abort();
+      stored.detach();
       this.bindings.delete(relayId);
     }
   }
@@ -495,6 +507,15 @@ interface ExchangeState {
   signal?: AbortSignal;
 }
 
+function admittedUpstream(
+  admission: McpRelayAdmission,
+  options: McpRelayServeOptions,
+  signal: AbortSignal,
+): McpRelayUpstream {
+  if (admission.signal.aborted || signal.aborted) throw new RelayRefusal(409, "cancelled");
+  return admission.target.upstream ?? options.upstream;
+}
+
 async function exchange(
   request: IncomingMessage,
   response: ServerResponse,
@@ -505,11 +526,16 @@ async function exchange(
 ): Promise<void> {
   const body = method === "POST" ? await requestBody(request) : undefined;
   state.requestBytes = body?.byteLength ?? 0;
-  const upstream = await options.upstream(admission.target.url, {
+  const signal = state.signal ?? admission.signal;
+  const upstream = await admittedUpstream(
+    admission,
+    options,
+    signal,
+  )(admission.target.url, {
     method,
     headers: upstreamHeaders(request, admission.target),
     ...(body === undefined ? {} : { body }),
-    signal: state.signal ?? admission.signal,
+    signal,
   });
   if (upstream.status >= 300 && upstream.status < 400) {
     await upstream.body?.cancel();

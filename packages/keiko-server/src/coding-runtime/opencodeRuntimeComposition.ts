@@ -1917,6 +1917,7 @@ function nativeMcpAdmission(
     home: join(runRoot, "home"),
     validations: checks.validations,
     relays: checks.relays,
+    managed: input.mcpRelay?.managed !== undefined,
   });
 }
 

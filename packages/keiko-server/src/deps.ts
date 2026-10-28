@@ -4554,6 +4554,7 @@ interface UiHandlerDepsAssemblyArgs {
   readonly codingSessionContinuity: CodingSessionContinuity;
   /** The one MCP relay the runtime host binds and the relay route serves (#3903 AC3). */
   readonly mcpCredentialRelay?: McpCredentialRelay | undefined;
+  readonly mcpConnections?: ConfiguredMcpConnections | undefined;
 }
 
 function codingSidecarGatewayModelSourceFields(
@@ -4970,8 +4971,9 @@ function buildMcpServices(args: UiHandlerDepsAssemblyArgs): {
 }
 
 function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
+  const { mcpSettings, mcpConnections } = buildMcpServices(args);
   const dapRuntime = createDapRuntimeReference(args.options);
-  const services = assembleUiHandlerRuntimeServices(args, dapRuntime);
+  const services = assembleUiHandlerRuntimeServices({ ...args, mcpConnections }, dapRuntime);
   // #3399: one shared hook instance, so recordStatus/readStatus coordinate through the SAME
   // in-process expected-version cache (createPrDescriptionReceiptStatusHooks's own contract) rather
   // than each call building an independent, uncoordinated bridge over the same durable store.
@@ -4991,7 +4993,6 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   // no configured model profile — is the ONE closed reason prDescriptionRoutes.ts's "unavailable"
   // fallback exists for.
   const prDescriptionGeneration = createProductionPrDescriptionGeneration(args.runtimeConfig);
-  const { mcpSettings, mcpConnections } = buildMcpServices(args);
   const deps: UiHandlerDeps = {
     mcpSettings,
     mcpConnections,
@@ -6271,6 +6272,7 @@ function resolveProductionRuntimePorts(
     historyCapture: createNativeHistoryCapture(args.bundle.uiStore, processServerLogSink()),
     sessionContinuity: args.codingSessionContinuity,
     ...(args.mcpCredentialRelay === undefined ? {} : { mcpRelay: args.mcpCredentialRelay }),
+    ...(args.mcpConnections === undefined ? {} : { mcpConnections: args.mcpConnections }),
     env: args.options.env,
     runtimeStateDir: dirname(args.resolvedUiDbPath),
     runtimeEvidence,

@@ -14,6 +14,7 @@ import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/go
 import { deepRedactStrings, redactContent } from "@oscharko-dev/keiko-security";
 import {
   connectExternalMcp,
+  createMcpRelayEndpoint,
   ManagedMcpError,
   type ExternalMcpTransportOptions,
 } from "@oscharko-dev/keiko-mcp";
@@ -27,6 +28,12 @@ import type { McpSettingsStore } from "./mcpSettingsStore.js";
 
 export interface ConfiguredMcpConnections {
   readonly connect: (name: string, correlationId: string) => Promise<ExternalMcpConnection>;
+  readonly generation: (server: McpServerDefinition, correlationId: string) => AbortSignal;
+  readonly serve: (
+    name: string,
+    request: Request,
+    context: ManagedMcpInvocationContext,
+  ) => Promise<Response>;
   readonly close: () => Promise<void>;
 }
 interface Options {
@@ -214,13 +221,44 @@ function guardedConnection(
 }
 
 /** One shared connection per current server definition; Settings commits revoke live transports. */
+interface ConnectionEntry {
+  readonly signal: AbortSignal;
+  readonly connection: Promise<ExternalMcpConnection>;
+  endpoint?: ReturnType<typeof createMcpRelayEndpoint>;
+}
+
+function endpointFor(
+  entry: ConnectionEntry | undefined,
+  connection: ExternalMcpConnection,
+  server: McpServerDefinition,
+): ReturnType<typeof createMcpRelayEndpoint> {
+  if (entry === undefined || entry.signal.aborted) throw new ManagedMcpError("not-admitted");
+  if (entry.endpoint !== undefined) return entry.endpoint;
+  const endpoint = createMcpRelayEndpoint(connection, Object.keys(server.tools));
+  entry.endpoint = endpoint;
+  entry.signal.addEventListener(
+    "abort",
+    () => {
+      void endpoint.close().catch(() => undefined);
+    },
+    { once: true },
+  );
+  return endpoint;
+}
+
 export function createConfiguredMcpConnections(options: Options): ConfiguredMcpConnections {
   const lifetime = new AbortController();
-  const connections = new Map<
-    string,
-    { signal: AbortSignal; connection: Promise<ExternalMcpConnection> }
-  >();
-  return {
+  const connections = new Map<string, ConnectionEntry>();
+  const manager: ConfiguredMcpConnections = {
+    generation: (server, correlationId) => currentGeneration(options, server, correlationId),
+    serve: async (name, request, context): Promise<Response> => {
+      const connection = await manager.connect(name, context.correlationId);
+      return endpointFor(
+        connections.get(name),
+        connection,
+        currentServer(options, name, context.correlationId),
+      ).fetch(request, context);
+    },
     connect: (name, correlationId): Promise<ExternalMcpConnection> => {
       if (lifetime.signal.aborted) return Promise.reject(new ManagedMcpError("closed"));
       const server = currentServer(options, name, correlationId);
@@ -256,4 +294,5 @@ export function createConfiguredMcpConnections(options: Options): ConfiguredMcpC
       connections.clear();
     },
   };
+  return manager;
 }
