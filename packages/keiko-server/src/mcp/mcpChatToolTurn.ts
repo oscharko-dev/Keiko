@@ -1,26 +1,16 @@
+import { reserveChatToolPrompt } from "../chat-tool-approvals.js";
 import { createMcpChatMutationIntent } from "./mcpChatMutation.js";
-import { randomUUID } from "node:crypto";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ToolResultEnvelope } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import { ChatToolTurn, chatModelSupportsTools } from "../chat-tool-turn.js";
-import {
-  waitForChatToolReadConsent,
-  waitForChatToolWriteConsent,
-  refreshChatToolWriteApproval,
-  type ChatToolApprovalContext,
-} from "../chat-tool-approvals.js";
+import { bindChatToolCatalog, ChatToolTurn, chatModelSupportsTools } from "../chat-tool-turn.js";
 import type { UiHandlerDeps } from "../deps.js";
 import type { ChatMessage } from "../store/index.js";
 import {
   observedChatToolMutationOutcome,
   sameMutationIdentity,
 } from "../store/chatToolMutationState.js";
-import { createCatalogToolBinder } from "../tool-catalog/catalogToolDispatch.js";
-import { createCodingToolInvocationRegistry } from "../coding-runtime/codingToolInvocationRegistry.js";
-import { processServerLogSink } from "../process-log-sink.js";
-import { defaultServerDiagnosticSink } from "../diagnostics-log.js";
 import { requireDispatch } from "../tool-catalog/catalogToolErrors.js";
 import { ConversationModelNotReadyError } from "../conversation-readiness-admission.js";
 import { logConversationAdmission } from "../conversation-readiness-log.js";
@@ -28,7 +18,6 @@ import { correlationIdOrUnknown } from "../correlation.js";
 import { createMcpChatCatalogAdmission } from "./mcpChatCatalogAdmission.js";
 import {
   mcpChatCatalogConsumerPort,
-  type McpChatCatalogAction,
   type McpChatCatalogConsumer,
   type McpChatCatalogContext,
 } from "./mcpChatCatalogConsumer.js";
@@ -76,63 +65,24 @@ export class McpChatToolTurn extends ChatToolTurn<McpChatCatalogContext> {
       correlationId,
       context: mcpChatTurnContext(mcpOptions),
       bind: (context, budgetPort) =>
-        createCatalogToolBinder<McpChatCatalogConsumer>(
-          {
-            ...createMcpChatCatalogAdmission({
-              deps,
-              context: () => context,
-              tools: managed.tools,
-              now: Date.now,
-              requestReadConsent: (grant, signal) =>
-                waitForChatToolReadConsent(this.approvalContext(signal), grant),
-              requestWriteConsent: (approval, signal) =>
-                waitForChatToolWriteConsent(this.approvalContext(signal), approval),
-              reviewableWrite: (action) => this.reviewableWrite(action),
-            }),
-            consumerPort: mcpChatCatalogConsumerPort,
-            projection: managed.projection,
-            handlerBindings: managed.handlerBindings,
-            budgetPort,
-            logPort: {
-              primary: processServerLogSink(),
-              diagnostics: deps.diagnostics ?? defaultServerDiagnosticSink,
-            },
-          },
-          {
-            catalog: managed.catalog,
+        bindChatToolCatalog<McpChatCatalogConsumer>({
+          deps,
+          managed,
+          context: context,
+          budgetPort,
+          consumerPort: mcpChatCatalogConsumerPort,
+          admission: createMcpChatCatalogAdmission({
+            deps,
             context: () => context,
+            tools: managed.tools,
             now: Date.now,
-            mintId: randomUUID,
-            invocationRegistry: createCodingToolInvocationRegistry({ now: Date.now }),
-          },
-        ),
+            ...this.consentPorts(),
+          }),
+        }),
     });
   }
-  private approvalContext(signal: AbortSignal): ChatToolApprovalContext {
-    return {
-      ...this.mcpOptions,
-      signal,
-      publish: () => this.publish(),
-      writeExchange: (id) => this.writeExchange(id),
-    };
-  }
-  private reviewableWrite(action: McpChatCatalogAction): boolean {
-    const exchange = this.writeExchange(action.actionId);
-    return (
-      exchange !== undefined &&
-      sha256Hex(canonicalise(exchange.call.arguments)) === action.argumentsDigest
-    );
-  }
   protected override reserveAuthorityPrompt(promptTokens: number): boolean {
-    const { deps, message, authority, correlationId } = this.mcpOptions;
-    return reserveCurrentMcpChatAuthority(
-      deps,
-      message.chatId,
-      authority.reference,
-      { toolCalls: 0, promptTokens, patchBytes: 0 },
-      new Date().toISOString(),
-      correlationId,
-    ).ok;
+    return reserveChatToolPrompt(this.mcpOptions, reserveCurrentMcpChatAuthority, promptTokens);
   }
   protected override observedMutation(
     call: NormalizedResponse["toolCalls"][number],
@@ -140,9 +90,6 @@ export class McpChatToolTurn extends ChatToolTurn<McpChatCatalogContext> {
     result: ToolResultEnvelope,
   ): ChatToolExchange["mutationOutcome"] {
     return observeMcpChatMutation(this.mcpOptions, call, identity, result);
-  }
-  protected override refreshWriteApproval(callId: string): void {
-    refreshChatToolWriteApproval(this.mcpOptions, callId);
   }
 }
 

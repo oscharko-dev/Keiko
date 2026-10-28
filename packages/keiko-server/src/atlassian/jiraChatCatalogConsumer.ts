@@ -1,3 +1,4 @@
+import { createChatToolAuthorityPort, reserveChatToolInvocation } from "../chat-tool-approvals.js";
 import { requireDispatch } from "../tool-catalog/catalogToolErrors.js";
 import type {
   ChatToolReadGrantView,
@@ -285,25 +286,15 @@ async function requestConsent(
 /** Shared binder owns schema admission, budget reservation, cancellation and single settlement. */
 export function createJiraChatCatalogAdmission(options: JiraChatAdmissionOptions): AdmissionPorts {
   return {
-    authorityPort: {
-      preview: (capability, action) => preview(options, capability, action),
-      admit: (capability, action): ReturnType<AdmissionPorts["authorityPort"]["admit"]> => {
-        if (!preview(options, capability, action).ok || !reviewableAction(options, action))
-          return DENIED;
-        const context = options.context();
-        const reservation = reserveCurrentJiraChatAuthority(
-          options.deps,
-          context.chatId,
-          context.authorityReference,
-          { toolCalls: 1, patchBytes: 0, promptTokens: 0 },
-          new Date(options.now()).toISOString(),
-          context.correlationId,
-        );
-        return reservation.ok
-          ? { ok: true, mutationGuard: mutationGuard(options, capability, action) }
-          : DENIED;
+    authorityPort: createChatToolAuthorityPort<JiraChatCatalogConsumer, JiraChatAdmissionOptions>(
+      options,
+      {
+        preview,
+        reviewable: reviewableAction,
+        reserve: (current) => reserveChatToolInvocation(current, reserveCurrentJiraChatAuthority),
+        guard: mutationGuard,
       },
-    },
+    ),
     approvalPort: {
       available: (action) =>
         options.requestReadConsent !== undefined &&

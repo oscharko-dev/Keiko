@@ -2995,3 +2995,26 @@ followed by HEADER_MISMATCH. The client now supplies the official callTool optio
 validated frozen definition, disabling that refetch/re-dispatch branch. The actual SDK
 regression counts exactly one remote effect after the fix, compared with two before it.
 The final 35 client/metadata cases, scoped lint and MCP build pass independently.
+
+## Incremental qualification — shared Chat admission and duplicate-code repair
+
+The existing Chat owners now share consent-decision parsing, exact write-approval
+settlement and catalog/budget binding across Jira and configured MCP. Provider-specific
+subject checks, authority resolution, result projection and credential custody remain
+with their existing domain owners. Both consumers keep their existing body-free
+Activity Log events; regeneration resolves all 630 proofs and 30 scenarios.
+
+Seven newly introduced semantic clone groups were removed. The remaining thirteen
+reported groups were checked against `dev` at `246efd463`: nine are exact existing
+groups and four are existing groups affected by route-template literals or the native
+MCP permission projection. Their existing baseline identities were refreshed after
+that content review. The complete check passes with the unchanged 927-group ceiling;
+no new Chat duplicate, higher ceiling or exclusion was accepted.
+
+The actual checkout passes all 177 unchanged tests in the seven combined Chat, Jira
+and MCP authority/runtime suites, full root typecheck, scoped ESLint and Prettier,
+error-observability, import policy and contract boundaries. Native producer completion,
+per-physical-call budget identity, final licensed Jira/browser groups and the complete
+final-head gates remain open. The pre-integration Linux fast run found stale catalog
+performance receipts and a wall-clock grounded-handler failure under concurrent load;
+both require final qualification with unchanged limits.

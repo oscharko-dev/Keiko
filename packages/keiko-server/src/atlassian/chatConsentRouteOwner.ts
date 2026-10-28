@@ -22,6 +22,7 @@ export interface ChatConsentRouteOwner<Entry, Decision> {
     nowIso: string,
     correlationId: string,
   ) => boolean;
+  readonly matchesDecision: (entry: Entry, value: Decision) => boolean;
   readonly validate: (
     value: unknown,
   ) => { readonly ok: true; readonly value: Decision } | { readonly ok: false };
@@ -116,4 +117,21 @@ export async function readCurrentChatDecision<Entry, Decision>(
   if (current === undefined)
     return { ok: false, response: chatConsentFailure(ctx, owner.phase, 404) };
   return { ok: true, ...current, value: parsed.value, nowIso };
+}
+
+/** Both decision endpoints share parsing, custody and current-authority revalidation. */
+export function decideChatConsent<Entry, Decision>(
+  owner: ChatConsentRouteOwner<Entry, Decision>,
+  decide: (
+    current: CurrentConsent<Entry> & { readonly value: Decision; readonly nowIso: string },
+    ctx: RouteContext,
+  ) => RouteResult,
+): (ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult> {
+  return async (ctx, deps): Promise<RouteResult> => {
+    const parsed = await readCurrentChatDecision(ctx, deps, owner);
+    if (!parsed.ok) return parsed.response;
+    return owner.matchesDecision(parsed.entry, parsed.value)
+      ? decide(parsed, ctx)
+      : chatConsentFailure(ctx, owner.phase, 409);
+  };
 }

@@ -1,25 +1,19 @@
-import { randomUUID } from "node:crypto";
-import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
+import { reserveChatToolPrompt } from "./chat-tool-approvals.js";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import type { ToolResultEnvelope } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { UiHandlerDeps } from "./deps.js";
 import type { ChatMessage } from "./store/index.js";
-import { ChatToolTurn, chatModelSupportsTools, type ChatToolTurnPort } from "./chat-tool-turn.js";
-import { createCatalogToolBinder } from "./tool-catalog/catalogToolDispatch.js";
+import {
+  bindChatToolCatalog,
+  ChatToolTurn,
+  chatModelSupportsTools,
+  type ChatToolTurnPort,
+} from "./chat-tool-turn.js";
 import { requireDispatch } from "./tool-catalog/catalogToolErrors.js";
-import { createCodingToolInvocationRegistry } from "./coding-runtime/codingToolInvocationRegistry.js";
-import { defaultServerDiagnosticSink } from "./diagnostics-log.js";
-import { processServerLogSink } from "./process-log-sink.js";
 import { correlationIdOrUnknown } from "./correlation.js";
 import { logConversationAdmission } from "./conversation-readiness-log.js";
 import { ConversationModelNotReadyError } from "./conversation-readiness-admission.js";
-import {
-  waitForChatToolReadConsent,
-  waitForChatToolWriteConsent,
-  refreshChatToolWriteApproval,
-  type ChatToolApprovalContext,
-} from "./chat-tool-approvals.js";
 import {
   prepareAcceptedJiraChatAuthority,
   reserveCurrentJiraChatAuthority,
@@ -94,64 +88,25 @@ class ChatSourcesToolTurn extends ChatToolTurn<ChatSourcesContext> {
       managed,
       context: sourceContext(sourceOptions),
       bind: (context, budgetPort) =>
-        createCatalogToolBinder<ChatSourcesConsumer>(
-          {
-            ...createChatSourcesAdmission({
-              deps,
-              context: () => context,
-              tools: mcp.managed.tools,
-              requestReadConsent: (grant, signal) =>
-                waitForChatToolReadConsent(this.approvalContext(signal), grant),
-              requestWriteConsent: (approval, signal) =>
-                waitForChatToolWriteConsent(this.approvalContext(signal), approval),
-              reviewableWrite: (action) => this.reviewableWrite(action),
-            }),
-            consumerPort: chatSourcesConsumerPort,
-            projection: managed.projection,
-            handlerBindings: managed.handlerBindings,
-            budgetPort,
-            logPort: {
-              primary: processServerLogSink(),
-              diagnostics: deps.diagnostics ?? defaultServerDiagnosticSink,
-            },
-          },
-          {
-            catalog: managed.catalog,
+        bindChatToolCatalog<ChatSourcesConsumer>({
+          deps,
+          managed,
+          context: context,
+          budgetPort,
+          consumerPort: chatSourcesConsumerPort,
+          admission: createChatSourcesAdmission({
+            deps,
             context: () => context,
-            now: Date.now,
-            mintId: randomUUID,
-            invocationRegistry: createCodingToolInvocationRegistry({ now: Date.now }),
-          },
-        ),
+            tools: mcp.managed.tools,
+            ...this.consentPorts(),
+          }),
+        }),
     });
   }
-  private approvalContext(signal: AbortSignal): ChatToolApprovalContext {
-    return {
-      ...this.sourceOptions,
-      signal,
-      publish: () => this.publish(),
-      writeExchange: (id) => this.writeExchange(id),
-    };
-  }
-  private reviewableWrite(action: ChatSourcesConsumer["action"]): boolean {
-    const exchange = this.writeExchange(action.actionId);
-    return (
-      exchange !== undefined &&
-      sha256Hex(canonicalise(exchange.call.arguments)) === action.argumentsDigest
-    );
-  }
   protected override reserveAuthorityPrompt(promptTokens: number): boolean {
-    const { deps, message, jira, correlationId } = this.sourceOptions;
     return (
-      currentChatSources(deps, this.context) &&
-      reserveCurrentJiraChatAuthority(
-        deps,
-        message.chatId,
-        jira.authority.reference,
-        { toolCalls: 0, promptTokens, patchBytes: 0 },
-        new Date().toISOString(),
-        correlationId,
-      ).ok
+      currentChatSources(this.sourceOptions.deps, this.context) &&
+      reserveChatToolPrompt(this.sourceOptions.jira, reserveCurrentJiraChatAuthority, promptTokens)
     );
   }
   protected override observedMutation(
@@ -163,9 +118,6 @@ class ChatSourcesToolTurn extends ChatToolTurn<ChatSourcesContext> {
       observeJiraChatMutation(this.sourceOptions.jira, call, identity, result) ??
       observeMcpChatMutation(this.sourceOptions.mcp, call, identity, result)
     );
-  }
-  protected override refreshWriteApproval(callId: string): void {
-    refreshChatToolWriteApproval(this.sourceOptions, callId);
   }
 }
 

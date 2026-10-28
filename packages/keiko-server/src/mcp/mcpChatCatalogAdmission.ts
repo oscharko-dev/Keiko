@@ -1,3 +1,4 @@
+import { createChatToolAuthorityPort, reserveChatToolInvocation } from "../chat-tool-approvals.js";
 import type {
   ChatToolReadGrantView,
   ChatToolWriteApprovalView,
@@ -270,24 +271,15 @@ function guard(
 /** The existing binder owns schema checks, approval routing, budgets and exactly-once settlement. */
 export function createMcpChatCatalogAdmission(options: McpChatAdmissionOptions): Ports {
   return {
-    authorityPort: {
-      preview: (capability, action) => preview(options, capability, action),
-      admit: (capability, action): ReturnType<Ports["authorityPort"]["admit"]> => {
-        if (!preview(options, capability, action).ok || !reviewable(options, action)) return DENIED;
-        const context = options.context();
-        const reserved = reserveCurrentMcpChatAuthority(
-          options.deps,
-          context.chatId,
-          context.authorityReference,
-          { toolCalls: 1, patchBytes: 0, promptTokens: 0 },
-          new Date(options.now()).toISOString(),
-          context.correlationId,
-        );
-        return reserved.ok
-          ? { ok: true, mutationGuard: guard(options, capability, action) }
-          : DENIED;
+    authorityPort: createChatToolAuthorityPort<McpChatCatalogConsumer, McpChatAdmissionOptions>(
+      options,
+      {
+        preview,
+        reviewable: reviewable,
+        reserve: (current) => reserveChatToolInvocation(current, reserveCurrentMcpChatAuthority),
+        guard: guard,
       },
-    },
+    ),
     approvalPort: {
       available: () => true,
       request: (action, context) => requestConsent(options, action, context),

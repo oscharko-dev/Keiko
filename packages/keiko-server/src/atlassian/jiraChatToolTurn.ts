@@ -1,23 +1,15 @@
+import { reserveChatToolPrompt } from "../chat-tool-approvals.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
-import { randomUUID } from "node:crypto";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
-import type {
-  ChatToolReadGrantView,
-  ChatToolWriteApprovalView,
-} from "@oscharko-dev/keiko-contracts";
 import type { ChatMessage } from "../store/index.js";
 import {
   JIRA_MUTATION_OPERATIONS,
   type JiraMutationOutcome,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { UiHandlerDeps } from "../deps.js";
-import { processServerLogSink } from "../process-log-sink.js";
-import { defaultServerDiagnosticSink } from "../diagnostics-log.js";
 import { correlationIdOrUnknown } from "../correlation.js";
 import { ConversationModelNotReadyError } from "../conversation-readiness-admission.js";
 import { logConversationAdmission } from "../conversation-readiness-log.js";
-import { createCatalogToolBinder } from "../tool-catalog/catalogToolDispatch.js";
-import { createCodingToolInvocationRegistry } from "../coding-runtime/codingToolInvocationRegistry.js";
 import { requireDispatch } from "../tool-catalog/catalogToolErrors.js";
 import {
   mintAcceptedJiraChatAuthority,
@@ -29,20 +21,14 @@ import {
   jiraChatCatalogConsumerPort,
   type JiraChatCatalogConsumer,
   type JiraChatCatalogContext,
-  type JiraChatCatalogAction,
 } from "./jiraChatCatalogConsumer.js";
 import type { ManagedProviderCatalog } from "../tool-catalog/managedProviderCatalog.js";
-import {
-  waitForChatToolReadConsent,
-  waitForChatToolWriteConsent,
-  refreshChatToolWriteApproval,
-  type ChatToolApprovalContext,
-} from "../chat-tool-approvals.js";
 import { createJiraChatMutationIntent } from "./jiraChatMutationIntent.js";
 import { jiraChatMutationOutcome } from "./jiraChatMutationOutcome.js";
 import type { ToolResultEnvelope } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import {
   ChatToolTurn,
+  bindChatToolCatalog,
   chatModelSupportsTools as jiraChatModelSupportsTools,
 } from "../chat-tool-turn.js";
 export { chatModelSupportsTools as jiraChatModelSupportsTools } from "../chat-tool-turn.js";
@@ -82,82 +68,31 @@ export class JiraChatToolTurn extends ChatToolTurn<JiraChatCatalogContext> {
       context,
       correlationId,
       bind: (current, budgetPort) =>
-        createCatalogToolBinder<JiraChatCatalogConsumer>(
-          {
-            ...createJiraChatCatalogAdmission({
-              deps,
-              context: () => current,
-              now: Date.now,
-              requestReadConsent: (grant, signal) => this.waitForConsent(grant, signal),
-              requestWriteConsent: (approval, signal) => this.waitForWriteConsent(approval, signal),
-              reviewableWrite: (action) => this.reviewableWrite(action),
-            }),
-            consumerPort: jiraChatCatalogConsumerPort,
-            projection: managed.projection,
-            handlerBindings: managed.handlerBindings,
-            budgetPort,
-            logPort: {
-              primary: processServerLogSink(),
-              diagnostics: deps.diagnostics ?? defaultServerDiagnosticSink,
-            },
-          },
-          {
-            catalog: managed.catalog,
+        bindChatToolCatalog<JiraChatCatalogConsumer>({
+          deps,
+          managed,
+          context: current,
+          budgetPort,
+          consumerPort: jiraChatCatalogConsumerPort,
+          admission: createJiraChatCatalogAdmission({
+            deps,
             context: () => current,
             now: Date.now,
-            mintId: randomUUID,
-            invocationRegistry: createCodingToolInvocationRegistry({ now: Date.now }),
-          },
-        ),
+            ...this.consentPorts(),
+          }),
+        }),
     });
   }
-  private approvalContext(signal: AbortSignal): ChatToolApprovalContext {
-    return {
-      ...this.jiraOptions,
-      signal,
-      publish: () => this.publish(),
-      writeExchange: (id) => this.writeExchange(id),
-    };
-  }
-  private async waitForConsent(grant: ChatToolReadGrantView, signal: AbortSignal): Promise<void> {
-    await waitForChatToolReadConsent(this.approvalContext(signal), grant);
-  }
   protected override reserveAuthorityPrompt(promptTokens: number): boolean {
-    const { deps, message, authority, correlationId } = this.jiraOptions;
-    return reserveCurrentJiraChatAuthority(
-      deps,
-      message.chatId,
-      authority.reference,
-      { toolCalls: 0, promptTokens, patchBytes: 0 },
-      new Date().toISOString(),
-      correlationId,
-    ).ok;
+    return reserveChatToolPrompt(this.jiraOptions, reserveCurrentJiraChatAuthority, promptTokens);
   }
 
-  // A raw digest must not authorize bytes omitted by the store's broader secret redaction.
-  // The actual action must remain identical to its persisted, reviewable preview in every mode.
-  private reviewableWrite(action: JiraChatCatalogAction): boolean {
-    const exchange = this.writeExchange(action.actionId);
-    return (
-      exchange !== undefined &&
-      sha256Hex(canonicalise(exchange.call.arguments)) === action.argumentsDigest
-    );
-  }
-  private async waitForWriteConsent(
-    approval: ChatToolWriteApprovalView,
-    signal: AbortSignal,
-  ): Promise<void> {
-    await waitForChatToolWriteConsent(this.approvalContext(signal), approval);
-  }
   protected override observedMutation(
     call: NormalizedResponse["toolCalls"][number],
     identity: string,
     result: ToolResultEnvelope,
   ): JiraMutationOutcome | undefined {
     return observeJiraChatMutation(this.jiraOptions, call, identity, result);
-  }
-  protected override refreshWriteApproval(callId: string): void {
-    refreshChatToolWriteApproval(this.jiraOptions, callId);
   }
 }
 

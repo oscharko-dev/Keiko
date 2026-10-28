@@ -1,3 +1,23 @@
+import { randomUUID } from "node:crypto";
+import { createCatalogToolBinder } from "./tool-catalog/catalogToolDispatch.js";
+import { createCodingToolInvocationRegistry } from "./coding-runtime/codingToolInvocationRegistry.js";
+import { processServerLogSink } from "./process-log-sink.js";
+import { defaultServerDiagnosticSink } from "./diagnostics-log.js";
+import {
+  waitForChatToolReadConsent,
+  waitForChatToolWriteConsent,
+  refreshChatToolWriteApproval,
+  type ChatToolApprovalContext,
+} from "./chat-tool-approvals.js";
+import type {
+  ChatToolReadGrantView,
+  ChatToolWriteApprovalView,
+} from "@oscharko-dev/keiko-contracts";
+import type {
+  CatalogConsumerPort,
+  CatalogToolBinderInput,
+  CatalogToolBudgetPort,
+} from "./tool-catalog/catalogToolPorts.js";
 import { gatewayMessagesForToolExchange } from "./conversation-gateway.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import {
@@ -25,7 +45,7 @@ import { requireDispatch } from "./tool-catalog/catalogToolErrors.js";
 
 type ModelAttempt = NonNullable<GatewayCallRequest["attemptAdmission"]>;
 export interface ChatToolTurnOptions<Context extends ToolConsumerContext> {
-  readonly deps: Pick<UiHandlerDeps, "store" | "gatewayConfig">;
+  readonly deps: Pick<UiHandlerDeps, "store" | "gatewayConfig" | "atlassianActionApprovalRegistry">;
   readonly message: ChatMessage;
   readonly context: Context;
   readonly managed: Pick<ManagedProviderCatalog<CatalogConsumer>, "catalog" | "projection">;
@@ -97,7 +117,57 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     identity: string,
     result: ToolResultEnvelope,
   ): ChatToolExchange["mutationOutcome"];
-  protected abstract refreshWriteApproval(callId: string): void;
+  protected refreshWriteApproval(callId: string): void {
+    refreshChatToolWriteApproval(this.options, callId);
+  }
+  private approvalContext(signal: AbortSignal): ChatToolApprovalContext {
+    return {
+      ...this.options,
+      signal,
+      publish: () => this.publish(),
+      writeExchange: (id) => this.writeExchange(id),
+    };
+  }
+  protected waitForReadConsent(grant: ChatToolReadGrantView, signal: AbortSignal): Promise<void> {
+    return waitForChatToolReadConsent(this.approvalContext(signal), grant);
+  }
+  protected waitForWriteConsent(
+    approval: ChatToolWriteApprovalView,
+    signal: AbortSignal,
+  ): Promise<void> {
+    return waitForChatToolWriteConsent(this.approvalContext(signal), approval);
+  }
+  protected consentPorts(): {
+    readonly requestReadConsent: (
+      grant: ChatToolReadGrantView,
+      signal: AbortSignal,
+    ) => Promise<void>;
+    readonly requestWriteConsent: (
+      approval: ChatToolWriteApprovalView,
+      signal: AbortSignal,
+    ) => Promise<void>;
+    readonly reviewableWrite: (action: {
+      readonly actionId: string;
+      readonly argumentsDigest: string;
+    }) => boolean;
+  } {
+    return {
+      requestReadConsent: (grant, signal) => this.waitForReadConsent(grant, signal),
+      requestWriteConsent: (approval, signal) => this.waitForWriteConsent(approval, signal),
+      reviewableWrite: (action) => this.reviewableWrite(action),
+    };
+  }
+  /** Approval must match the actual persisted preview after the store's credential floor. */
+  protected reviewableWrite(action: {
+    readonly actionId: string;
+    readonly argumentsDigest: string;
+  }): boolean {
+    const exchange = this.writeExchange(action.actionId);
+    return (
+      exchange !== undefined &&
+      sha256Hex(canonicalise(exchange.call.arguments)) === action.argumentsDigest
+    );
+  }
   private reservePrompt(promptTokens: number): boolean {
     return (
       !this.uncertainBudget &&
@@ -387,3 +457,35 @@ export type ChatToolTurnPort = Pick<
   ChatToolTurn,
   "onTranscript" | "hasUsableObservation" | "meter" | "stream" | "call" | "signal" | "deadlineAtMs"
 >;
+
+/** Source-specific authority adapters use the same catalog/log/budget and invocation registry wiring. */
+export function bindChatToolCatalog<Consumer extends CatalogConsumer>(options: {
+  readonly deps: Pick<UiHandlerDeps, "diagnostics">;
+  readonly managed: ManagedProviderCatalog<Consumer>;
+  readonly context: Consumer["context"];
+  readonly consumerPort: CatalogConsumerPort<Consumer>;
+  readonly admission: Pick<CatalogToolBinderInput<Consumer>, "authorityPort" | "approvalPort">;
+  readonly budgetPort: CatalogToolBudgetPort<Consumer>;
+}): CatalogToolBinder {
+  const { deps, managed, context, consumerPort, admission, budgetPort } = options;
+  return createCatalogToolBinder<Consumer>(
+    {
+      ...admission,
+      consumerPort,
+      projection: managed.projection,
+      handlerBindings: managed.handlerBindings,
+      budgetPort,
+      logPort: {
+        primary: processServerLogSink(),
+        diagnostics: deps.diagnostics ?? defaultServerDiagnosticSink,
+      },
+    },
+    {
+      catalog: managed.catalog,
+      context: () => context,
+      now: Date.now,
+      mintId: randomUUID,
+      invocationRegistry: createCodingToolInvocationRegistry({ now: Date.now }),
+    },
+  );
+}

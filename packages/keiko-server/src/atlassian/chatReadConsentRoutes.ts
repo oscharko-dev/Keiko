@@ -1,14 +1,13 @@
 import type { ChatToolReadConsentDecision } from "@oscharko-dev/keiko-contracts";
 import {
   getChatConsent,
-  readCurrentChatDecision,
+  decideChatConsent,
   chatConsentFailure,
   type ChatConsentRouteOwner,
 } from "./chatConsentRouteOwner.js";
 import { validateChatToolReadConsentDecision } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
-import type { UiHandlerDeps } from "../deps.js";
-import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
+import type { RouteDefinition, RouteResult } from "../routes.js";
 import { isCurrentMcpChatReadGrant } from "../mcp/mcpChatAuthority.js";
 import { isCurrentJiraChatReadGrant } from "./jiraChatAuthority.js";
 import { projectChatReadGrant, type ChatReadGrantEntry } from "./chatReadGrantState.js";
@@ -21,20 +20,14 @@ const OWNER: ChatConsentRouteOwner<ChatReadGrantEntry, ChatToolReadConsentDecisi
     entry.grant.subject.kind === "configured-mcp"
       ? isCurrentMcpChatReadGrant(deps, entry, nowIso, correlationId)
       : isCurrentJiraChatReadGrant(deps, entry, nowIso, correlationId),
+  matchesDecision: (entry, value) => value.disclosureVersion === entry.grant.disclosureVersion,
   validate: validateChatToolReadConsentDecision,
 };
 export const handleGetChatReadConsent = getChatConsent(OWNER);
 
 /** Human-only consent endpoint. It changes the existing grant record and never executes a tool. */
-export async function handleDecideChatReadConsent(
-  ctx: RouteContext,
-  deps: UiHandlerDeps,
-): Promise<RouteResult> {
-  const parsed = await readCurrentChatDecision(ctx, deps, OWNER);
-  if (!parsed.ok) return parsed.response;
+export const handleDecideChatReadConsent = decideChatConsent(OWNER, (parsed, ctx): RouteResult => {
   const { entry, registry, nowIso } = parsed;
-  if (parsed.value.disclosureVersion !== entry.grant.disclosureVersion)
-    return chatConsentFailure(ctx, OWNER.phase, 409);
   const proof = sha256Hex(
     canonicalise({
       kind:
@@ -65,7 +58,7 @@ export async function handleDecideChatReadConsent(
         );
   if (!result.ok) return chatConsentFailure(ctx, OWNER.phase, 409);
   return { status: 200, body: { approval: projectChatReadGrant(result.grant) } };
-}
+});
 
 export const CHAT_READ_CONSENT_ROUTE_GROUP: readonly RouteDefinition[] = [
   {
