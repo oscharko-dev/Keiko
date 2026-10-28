@@ -933,6 +933,7 @@ function ToolRow({
   hasMeasured,
 }: RowProps<Extract<TimelineItem, { kind: "tool" }>> & { readonly grouped?: boolean }): ReactNode {
   const rowRef = useRowMeasurement(item.id, measureRow, hasMeasured, !grouped);
+  const shownState = shownToolState(item.tool);
   return (
     <li
       ref={rowRef}
@@ -943,8 +944,8 @@ function ToolRow({
     >
       <details
         className={styles.toolCard}
-        data-tool-state={item.tool.state}
-        open={item.tool.state === "failed" || item.tool.state === "denied"}
+        data-tool-state={shownState}
+        open={shownState === "failed" || shownState === "denied" || shownState === "exited"}
       >
         <summary
           className={styles.cmpActivitySummary}
@@ -962,15 +963,45 @@ function ToolRow({
               {t("codingWorkbench.activity.toolCount", { count: item.count })}
             </span>
           ) : null}
-          <span className={styles.activityBadge} data-state={item.tool.state}>
-            {t(`codingWorkbench.activity.toolState.${item.tool.state}`)}
-          </span>
+          <ToolStateBadge tool={item.tool} state={shownState} t={t} />
         </summary>
         <ToolOutcome tool={item.tool} t={t} />
         <code className={styles.toolName}>{item.tool.tool}</code>
         <ToolPresentationDetails tool={item.tool} t={t} />
       </details>
     </li>
+  );
+}
+
+// The runtime completes a shell call whatever its command returned and reports the exit code; a
+// non-zero code is the command's answer, for example a test run that reproduces a defect, not a
+// failed call. The timeline shows that code as OpenCode does instead of a red "Failed" (#4098
+// acceptance). The run's own state and its verification evidence still count the command as
+// failed; only the card's presentation changes.
+type ShownToolState = CodingSafeActivityTool["state"] | "exited";
+
+function shownToolState(tool: CodingSafeActivityTool): ShownToolState {
+  const exitCode = tool.presentation?.exitCode;
+  return tool.state === "failed" && exitCode !== undefined && exitCode !== 0
+    ? "exited"
+    : tool.state;
+}
+
+function ToolStateBadge({
+  tool,
+  state,
+  t,
+}: {
+  readonly tool: CodingSafeActivityTool;
+  readonly state: ShownToolState;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  return (
+    <span className={styles.activityBadge} data-state={state}>
+      {state === "exited"
+        ? t("codingWorkbench.activity.toolState.exited", { code: tool.presentation?.exitCode ?? 0 })
+        : t(`codingWorkbench.activity.toolState.${state}`)}
+    </span>
   );
 }
 

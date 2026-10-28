@@ -86,6 +86,7 @@ import type {
   CodingToolNativeReadFilePacket,
   CodingToolNativeInvocationRefusal,
   CodingToolNativeEffectAdmission,
+  CodingToolNativeSettlementInput,
 } from "./codingToolFacadePorts.js";
 import {
   codingToolEditPresentation,
@@ -2369,6 +2370,7 @@ function displayActivitySignal(
   const display = { ...signal };
   delete display.exitCode;
   delete display.exitStatusCheck;
+  delete display.ownWorkdir;
   if (signal.exitCode === undefined) return display;
   return { ...display, presentation: { ...display.presentation, exitCode: signal.exitCode } };
 }
@@ -2395,9 +2397,19 @@ function nativeToolSettlementObserver(
       tool: signal.tool,
       state: signal.state,
       ...planNoteSettlement(run, signal.messageId, signal.callId),
-      ...(signal.exitCode === undefined ? {} : { exitCode: signal.exitCode }),
-      ...(signal.exitStatusCheck === undefined ? {} : { exitStatusCheck: signal.exitStatusCheck }),
+      ...nativeExitEvidence(signal),
     });
+  };
+}
+
+/** A finished shell call's exit status, the check it speaks for and where it ran (#3901). */
+function nativeExitEvidence(
+  signal: Extract<CompositionSafeActivitySignal, { readonly kind: "tool" }>,
+): Pick<CodingToolNativeSettlementInput, "exitCode" | "exitStatusCheck" | "ownWorkdir"> {
+  return {
+    ...(signal.exitCode === undefined ? {} : { exitCode: signal.exitCode }),
+    ...(signal.exitStatusCheck === undefined ? {} : { exitStatusCheck: signal.exitStatusCheck }),
+    ...(signal.ownWorkdir === undefined ? {} : { ownWorkdir: signal.ownWorkdir }),
   };
 }
 
@@ -3978,6 +3990,7 @@ function noteAdmittedVerification(
   deps.facade.nativeSettlement?.verificationAdmitted?.(
     { messageId: request.source.messageID, callId: request.source.id },
     kind,
+    request.resources,
   );
 }
 

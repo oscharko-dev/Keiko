@@ -2555,6 +2555,27 @@ describe("OpenCode V2 native shell exit status (#3901)", () => {
     expect(toolSignals(shellHistory(background))[0]).not.toHaveProperty("exitStatusCheck");
   });
 
+  // Keiko 1.3.1 qualification: a passing check line also proves the checks its package scripts ran,
+  // read at admission from the session directory's package.json. A call that named another working
+  // directory ran that directory's scripts, so the settlement says so.
+  it("says when a check line ran in a working directory the call named itself", () => {
+    const signal = (input: Readonly<Record<string, unknown>>): Record<string, unknown> =>
+      toolSignals(
+        shellHistory({ ...completed(0), input: { command: "npm run check", ...input } }),
+      )[0] as Record<string, unknown>;
+    expect(signal({})).not.toHaveProperty("ownWorkdir");
+    expect(signal({ workdir: "." })).not.toHaveProperty("ownWorkdir");
+    expect(signal({ workdir: "  " })).not.toHaveProperty("ownWorkdir");
+    expect(signal({ workdir: "packages/web" })).toEqual(
+      expect.objectContaining({ exitStatusCheck: "test", ownWorkdir: true }),
+    );
+    // A line that is no check carries no evidence, wherever it ran.
+    const listing = toolSignals(
+      shellHistory({ ...completed(0), input: { command: "ls", workdir: "packages/web" } }),
+    )[0];
+    expect(listing).not.toHaveProperty("ownWorkdir");
+  });
+
   it("carries no exit status for a job moved to the background or a malformed one", () => {
     const background = { status: "completed", input: { command: "npm run dev", background: true } };
     for (const state of [background, completed("3"), completed(1.5)]) {

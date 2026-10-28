@@ -664,6 +664,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.toolState.running": "Running",
   "codingWorkbench.activity.toolState.succeeded": "Succeeded",
   "codingWorkbench.activity.toolState.failed": "Failed",
+  "codingWorkbench.activity.toolState.exited": "Exit code {code}",
   "codingWorkbench.activity.toolState.denied": "Denied",
   "codingWorkbench.activity.toolState.cancelled": "Cancelled",
   "codingWorkbench.activity.plan.title": "Current plan",

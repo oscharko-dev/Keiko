@@ -1943,7 +1943,22 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   finished. A step of admitted project checks alone changed only what the checks write and counts
   nothing. A check whose admission preceded such a change cannot prove it, because the evidence
   binds the edit revision at admission. `coding-runtime.native-step.changed` records each weighed
-  step body-free (outcome, file, uncovered and call counts; never a path).
+  step body-free (outcome, file, uncovered and call counts; never a path). A passing line proves
+  every check it ran, not only the one its status is named for (`openCodeNativeCreditedKinds`): an
+  `&&` list exits zero only when each command in it did, so each check of the line counts, and so
+  does each check a package script it runs chains with `&&`. The lab repository of the Keiko 1.3.1
+  qualification documents `npm run check` (`npm run typecheck && npm run lint && npm test`); the
+  model ran it after the governed verifier refused its type check, lint and test as
+  `native-shell-required`, it passed, and the run still settled `verification-not-evidenced`
+  because only its test counted. The task workspace's package.json is read once, at admission,
+  through the guarded workspace reader; a body's other commands prove nothing, a `cd` in a body
+  leaves its later scripts credited by name only, and a recursion bound stops scripts that run each
+  other. A line that changes directory, a script invocation with options of its own
+  (`--workspace`, `--prefix`) and a call that named its own `workdir` (`ownWorkdir`, from the
+  finished part) credit no script body. A failing line is the named check's failure alone. Each
+  credited check publishes its own `verification-summarized` event at the admitted edit revision,
+  and `coding-runtime.verification` records it (`state: "credited"`, `verifierId`, `creditedBy`)
+  or why the scripts could not be read (`credit-unavailable`, warn, frames and causes).
 - **Process confinement becomes the `keiko-native` profile.** The profile confines the service and
   every descendant it spawns (shells, npm, node, Git), because the native shell tool authorizes its
   working directory and the command as a whole and never routes each file operand through the

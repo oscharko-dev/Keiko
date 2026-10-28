@@ -445,6 +445,11 @@ export interface CodingToolNativeSettlementInput extends CodingToolNativeCall {
    */
   readonly exitStatusCheck?: VerificationKind | undefined;
   /**
+   * The call ran in a working directory it named itself (`workdir`), not the session's: the
+   * package.json read at its admission need not be the one its scripts ran from.
+   */
+  readonly ownWorkdir?: boolean | undefined;
+  /**
    * Whether the call wrote the task workspace, as its admission named it (#3901): `false` for an
    * edit of the run's private plan notes, which is planning, not a change a check must cover.
    * Absent keeps the tool's own meaning: a completed edit tool call is the run's edit.
@@ -461,6 +466,11 @@ export interface CodingToolNativeVerificationResult {
   readonly durationMs: number;
   /** The run's admission observer captured with the command; told only after it executed. */
   readonly executed: CodingVerificationExecutedObserver | undefined;
+  /**
+   * The check whose passing line also proved this one (`openCodeNativeCreditedKinds`); absent for
+   * the check the line's exit status is named for.
+   */
+  readonly creditedBy?: VerificationKind | undefined;
 }
 
 /**
@@ -474,6 +484,13 @@ export interface CodingToolNativeVerificationHooks {
   readonly blocked?:
     ((reason: CodingVerificationBlockedReason, targetDigest?: string) => void) | undefined;
   readonly publish: (result: CodingToolNativeVerificationResult) => void;
+  /**
+   * The other checks an admitted line proves when it passes (`openCodeNativeCreditedKinds`), with
+   * or without reading the workspace's package scripts.
+   */
+  readonly credited?:
+    | ((resources: readonly string[], readScripts: boolean) => readonly VerificationKind[])
+    | undefined;
 }
 
 /**
@@ -492,9 +509,13 @@ export interface CodingToolNativeSettlementFacet {
   /** The policy refused or a human denied this call: its terminal failure is a refusal. */
   readonly refused: (call: CodingToolNativeCall) => void;
   readonly settled: (input: CodingToolNativeSettlementInput) => CodingToolNativeSettlement;
-  /** The policy admitted this call as a verification command (`openCodeNativeVerificationKind`). */
+  /**
+   * The policy admitted this call as a verification command (`openCodeNativeVerificationKind`);
+   * `resources` are its admitted command line, from which a pass also credits the other checks it ran.
+   */
   readonly verificationAdmitted?:
-    ((call: CodingToolNativeCall, kind: VerificationKind) => void) | undefined;
+    | ((call: CodingToolNativeCall, kind: VerificationKind, resources?: readonly string[]) => void)
+    | undefined;
   /** A human refused a native verification command: no later pass of an older one clears it. */
   readonly verificationDenied?: (() => void) | undefined;
   /**

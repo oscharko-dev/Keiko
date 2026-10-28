@@ -13835,7 +13835,14 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["not-run", "target-bound", "passed", "proof-unavailable"],
+        values: [
+          "not-run",
+          "target-bound",
+          "passed",
+          "proof-unavailable",
+          "credited",
+          "credit-unavailable",
+        ],
       },
       stepCount: {
         type: "integer",
@@ -13886,6 +13893,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         ],
       },
       verifierId: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["test", "targeted-test", "typecheck", "lint", "build"],
+      },
+      creditedBy: {
         type: "string",
         dataClass: "closed-enum",
         required: false,

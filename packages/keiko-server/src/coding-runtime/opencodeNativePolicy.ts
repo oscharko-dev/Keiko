@@ -411,6 +411,116 @@ export function openCodeNativeVerificationKind(
   return kind;
 }
 
+/** How many package scripts deep a passing line's credit follows `npm run` into `npm run`. */
+const SCRIPT_CREDIT_DEPTH = 4;
+
+/**
+ * The other project checks a passing native check line proves, beside the one its exit status is
+ * named for (`openCodeNativeVerificationKind`). An `&&` list exits zero only when every command in
+ * it did, so a zero status proves each check of the line, and each check a package script it runs
+ * chains with `&&`: `npm run check`, with `"check": "npm run typecheck && npm run lint && npm test"`,
+ * proved a type check, a lint and a test. Keiko 1.3.1's qualification run failed as unverified
+ * after exactly that line passed, because only its test was counted. A non-zero status proves
+ * nothing about any single check, so the caller credits these only on a pass. `scripts` reads the
+ * package.json of the directory the line starts in, at most once; a line that changes directory,
+ * or a script invocation with options of its own (`--workspace`, `--prefix`), reads no script.
+ */
+export function openCodeNativeCreditedKinds(
+  resources: readonly string[],
+  scripts?: () => ReadonlyMap<string, string> | undefined,
+): readonly VerificationKind[] {
+  const primary = openCodeNativeVerificationKind(resources);
+  if (primary === undefined) return [];
+  const lines = resources
+    .flatMap((resource) => statusPreservingSegments(resource) ?? [])
+    .map(commandTokens);
+  const source = lines.some(([program]) => program === "cd") ? undefined : readOnce(scripts);
+  const kinds = new Set<VerificationKind>();
+  for (const tokens of lines) {
+    for (const kind of creditedSegmentKinds(tokens, source, SCRIPT_CREDIT_DEPTH, false)) {
+      kinds.add(kind);
+    }
+  }
+  kinds.delete(primary);
+  return [...kinds];
+}
+
+type PackageScripts = () => ReadonlyMap<string, string> | undefined;
+
+function readOnce(read: PackageScripts | undefined): PackageScripts | undefined {
+  if (read === undefined) return undefined;
+  let scripts: { readonly value: ReadonlyMap<string, string> | undefined } | undefined;
+  return (): ReadonlyMap<string, string> | undefined => {
+    scripts ??= { value: read() };
+    return scripts.value;
+  };
+}
+
+/**
+ * The checks one command proves when it exits zero: its own, and those of the script it runs. In a
+ * script body a program is resolved from the package's own `node_modules/.bin`, so `tsc --noEmit`
+ * there is the same type check `npx tsc --noEmit` is on a line.
+ */
+function creditedSegmentKinds(
+  tokens: readonly string[],
+  scripts: PackageScripts | undefined,
+  depth: number,
+  inScript: boolean,
+): readonly VerificationKind[] {
+  const own = segmentVerificationKind(tokens) ?? (inScript ? scriptBinaryKind(tokens) : undefined);
+  if (own === undefined) return [];
+  const name = scripts === undefined || depth === 0 ? undefined : invokedScriptName(tokens);
+  const body = name === undefined ? undefined : scripts?.()?.get(name);
+  return body === undefined ? [own] : [own, ...scriptBodyKinds(body, scripts, depth - 1)];
+}
+
+/**
+ * The checks of a script body whose status is its last command's under `&&` alone. Its other
+ * commands prove nothing, and after a `cd` its scripts belong to another package, so they are
+ * credited by their own names only.
+ */
+function scriptBodyKinds(
+  body: string,
+  scripts: PackageScripts | undefined,
+  depth: number,
+): readonly VerificationKind[] {
+  const segments = statusPreservingSegments(body);
+  if (segments === undefined) return [];
+  const kinds: VerificationKind[] = [];
+  let source = scripts;
+  for (const segment of segments) {
+    const tokens = commandTokens(segment);
+    if (tokens[0] === "cd") source = undefined;
+    kinds.push(...creditedSegmentKinds(tokens, source, depth, true));
+  }
+  return kinds;
+}
+
+function scriptBinaryKind(tokens: readonly string[]): VerificationKind | undefined {
+  const [program] = tokens;
+  return program === undefined || nonExecutingCheck(tokens)
+    ? undefined
+    : NPX_VERIFICATION_KINDS.get(program);
+}
+
+const SCRIPT_RUNNERS: ReadonlySet<string> = new Set(["npm", "pnpm", "yarn", "bun"]);
+
+/**
+ * The package script a package-manager command runs: `npm test`, `npm run <name>`. An option before
+ * `--` can point the manager at another package (`--workspace`, `--prefix`, `-C`), so a command
+ * with one names no script here. `bun test` runs Bun's own test runner, not a script.
+ */
+function invokedScriptName(tokens: readonly string[]): string | undefined {
+  const [program] = tokens;
+  if (program === undefined || !SCRIPT_RUNNERS.has(program)) return undefined;
+  const separator = tokens.indexOf("--");
+  const own = tokens.slice(1, separator === -1 ? undefined : separator);
+  if (own.some((token) => token.startsWith("-"))) return undefined;
+  const [subcommand, script] = own;
+  if (subcommand === "test" || subcommand === "t") return program === "bun" ? undefined : "test";
+  return subcommand === "run" || subcommand === "run-script" ? script : undefined;
+}
+
 /**
  * The `&&`-joined simple commands of a line, or undefined when another operator could hand the
  * line's exit status to a command after the check. A descriptor duplication (`2>&1`) is not one.

@@ -535,12 +535,11 @@ function toolState(
   const { id, name } = toolIdentity(part);
   assertToolInput(part, state);
   if (!historyToolAdmitted(name, profile)) throw new Error("opencode-v2-tool-invalid");
-  const exitCode = name === "shell" ? shellExitCode(state) : undefined;
-  const exitStatusCheck = exitCode === undefined ? undefined : shellLineCheck(state);
+  const exit = name === "shell" ? shellExitEvidence(state) : {};
   // The runtime completes a shell call whatever its command returned (`metadata.exit`); a command
   // that exited non-zero failed, which the timeline and the run's evidence both say (#3901).
   const mapped =
-    exitCode !== undefined && exitCode !== 0 ? "failed" : displayToolState(name, state);
+    exit.exitCode !== undefined && exit.exitCode !== 0 ? "failed" : displayToolState(name, state);
   return {
     kind: "tool",
     messageId,
@@ -548,9 +547,23 @@ function toolState(
     tool: name,
     state: mapped,
     occurredAt: toolOccurredAt(part),
-    ...(exitCode === undefined ? {} : { exitCode }),
-    ...(exitStatusCheck === undefined ? {} : { exitStatusCheck }),
+    ...exit,
   };
+}
+
+/** A finished shell call's exit status, the check it speaks for, and whether it chose its directory. */
+function shellExitEvidence(state: Readonly<Record<string, unknown>>): {
+  readonly exitCode?: number;
+  readonly exitStatusCheck?: VerificationKind;
+  readonly ownWorkdir?: true;
+} {
+  const exitCode = shellExitCode(state);
+  if (exitCode === undefined) return {};
+  const exitStatusCheck = shellLineCheck(state);
+  if (exitStatusCheck === undefined) return { exitCode };
+  return shellOwnWorkdir(state)
+    ? { exitCode, exitStatusCheck, ownWorkdir: true }
+    : { exitCode, exitStatusCheck };
 }
 
 /**
@@ -561,6 +574,19 @@ function toolState(
 function shellLineCheck(state: Readonly<Record<string, unknown>>): VerificationKind | undefined {
   const command = record(state.input)?.command;
   return typeof command === "string" ? openCodeNativeVerificationKind([command]) : undefined;
+}
+
+/**
+ * Whether a shell call named its own working directory (`workdir`). The runtime treats an empty one
+ * and `.` as the session's directory; anything else, even the same path spelled out, ran from a
+ * directory whose package.json the admission did not read.
+ */
+function shellOwnWorkdir(state: Readonly<Record<string, unknown>>): boolean {
+  const workdir = record(state.input)?.workdir;
+  if (workdir === undefined || workdir === null) return false;
+  if (typeof workdir !== "string") return true;
+  const trimmed = workdir.trim();
+  return trimmed.length > 0 && trimmed !== ".";
 }
 
 /** A completed shell call's own exit status; a job moved to the background reports none. */
