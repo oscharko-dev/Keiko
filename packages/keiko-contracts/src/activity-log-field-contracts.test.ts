@@ -148,3 +148,77 @@ it("preserves every automatic catalog field's concrete literal type", () => {
     Omit<Pilot["fields"], "completeness" | "loss">
   >();
 });
+
+describe("named scalar field declaration compatibility", () => {
+  it("retains separate closed readonly primitive descriptors and literal requiredness", () => {
+    const count = activityLogCountField(true);
+    const duration = activityLogDurationField(false);
+    const flag = activityLogBooleanField(true);
+    expectTypeOf(count).toEqualTypeOf<{
+      readonly type: "integer";
+      readonly dataClass: "count";
+      readonly required: true;
+    }>();
+    expectTypeOf(duration).toEqualTypeOf<{
+      readonly type: "integer";
+      readonly dataClass: "duration";
+      readonly required: false;
+    }>();
+    expectTypeOf(flag).toEqualTypeOf<{
+      readonly type: "boolean";
+      readonly dataClass: "closed-enum";
+      readonly required: true;
+    }>();
+    expectTypeOf<keyof typeof count>().toEqualTypeOf<"type" | "dataClass" | "required">();
+    expectTypeOf<keyof typeof duration>().toEqualTypeOf<"type" | "dataClass" | "required">();
+    expectTypeOf<keyof typeof flag>().toEqualTypeOf<"type" | "dataClass" | "required">();
+    expectTypeOf(activityLogCountField(false).required).toEqualTypeOf<false>();
+    expectTypeOf(activityLogDurationField(true).required).toEqualTypeOf<true>();
+    expectTypeOf(activityLogBooleanField(false).required).toEqualTypeOf<false>();
+    expectTypeOf(count).toExtend<Record<string, unknown>>();
+    expectTypeOf(duration).toExtend<Record<string, unknown>>();
+    expectTypeOf(flag).toExtend<Record<string, unknown>>();
+  });
+
+  it("retains readonly enum descriptor keys and exact inline vocabularies", () => {
+    const required = activityLogStringEnumField(true, ["ready", "failed"]);
+    const optional = activityLogStringEnumField(false, ["ready", "failed"]);
+    expectTypeOf(required).toEqualTypeOf<{
+      readonly type: "string";
+      readonly dataClass: "closed-enum";
+      readonly required: true;
+      readonly values: readonly ["ready", "failed"];
+    }>();
+    expectTypeOf(optional).toEqualTypeOf<{
+      readonly type: "string";
+      readonly dataClass: "closed-enum";
+      readonly required: false;
+      readonly values: readonly ["ready", "failed"];
+    }>();
+    expectTypeOf<keyof typeof required>().toEqualTypeOf<
+      "type" | "dataClass" | "required" | "values"
+    >();
+    expectTypeOf<keyof typeof optional>().toEqualTypeOf<
+      "type" | "dataClass" | "required" | "values"
+    >();
+    expectTypeOf(required).toExtend<Record<string, unknown>>();
+    expectTypeOf(optional).toExtend<Record<string, unknown>>();
+  });
+
+  it("keeps a supplied mutable vocabulary mutable and reference-identical", () => {
+    const values: string[] = ["ready", "failed"];
+    const descriptor = activityLogStringEnumField(false, values);
+    expectTypeOf(descriptor).toEqualTypeOf<{
+      readonly type: "string";
+      readonly dataClass: "closed-enum";
+      readonly required: false;
+      readonly values: string[];
+    }>();
+    expectTypeOf(descriptor.values).toEqualTypeOf<string[]>();
+    expectTypeOf(descriptor).toExtend<Record<string, unknown>>();
+    expect(descriptor.values).toBe(values);
+    descriptor.values.push("later");
+    expect(values).toEqual(["ready", "failed", "later"]);
+    expectOrdinaryDescriptor(descriptor, ["type", "dataClass", "required", "values"]);
+  });
+});

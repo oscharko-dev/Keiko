@@ -2446,14 +2446,18 @@ describe("Memory public parsers (#3918)", () => {
         items: Array.from({ length: 129 }, () => "item"),
       }).ok,
     ).toBe(false);
-    expectTypeOf(parsePublicMemoryRecord).returns.toEqualTypeOf<
-      PublicMemoryValidation<PublicMemoryRecord>
-    >();
-    expectTypeOf(parsePublicMemoryScope).returns.toEqualTypeOf<
-      PublicMemoryValidation<PublicMemoryScope>
-    >();
-    expectTypeOf(parsePublicMemoryPayload).returns.toEqualTypeOf<
-      PublicMemoryValidation<PublicMemoryStructuredPayload>
+    expectTypeOf<
+      readonly [
+        ReturnType<typeof parsePublicMemoryRecord>,
+        ReturnType<typeof parsePublicMemoryScope>,
+        ReturnType<typeof parsePublicMemoryPayload>,
+      ]
+    >().toEqualTypeOf<
+      readonly [
+        PublicMemoryValidation<PublicMemoryRecord>,
+        PublicMemoryValidation<PublicMemoryScope>,
+        PublicMemoryValidation<PublicMemoryStructuredPayload>,
+      ]
     >();
   });
 });
@@ -2717,77 +2721,123 @@ function expectRemainingMemoryIdentity(own: RemainingMemoryCase): void {
 }
 
 function assertRemainingInitialMemoryTypes(): void {
-  expectTypeOf(validatePublicMemoryProposal).returns.toEqualTypeOf<
-    PublicMemoryValidation<PublicMemoryProposal>
+  expectTypeOf<
+    readonly [
+      ReturnType<typeof validatePublicMemoryProposal>,
+      ReturnType<typeof parsePublicMemoryProposal>,
+    ]
+  >().toEqualTypeOf<
+    readonly [
+      PublicMemoryValidation<PublicMemoryProposal>,
+      PublicMemoryValidation<PublicMemoryProposal>,
+    ]
   >();
-  expectTypeOf(parsePublicMemoryProposal).returns.toEqualTypeOf<
-    PublicMemoryValidation<PublicMemoryProposal>
+  expectTypeOf<
+    readonly [
+      ReturnType<typeof validatePublicMemoryAcceptance>,
+      ReturnType<typeof parsePublicMemoryAcceptance>,
+    ]
+  >().toEqualTypeOf<
+    readonly [
+      PublicMemoryValidation<PublicMemoryAcceptance>,
+      PublicMemoryValidation<PublicMemoryAcceptance>,
+    ]
   >();
-  expectTypeOf(validatePublicMemoryAcceptance).returns.toEqualTypeOf<
-    PublicMemoryValidation<PublicMemoryAcceptance>
+  expectTypeOf<
+    readonly [
+      ReturnType<typeof validatePublicMemoryRejection>,
+      ReturnType<typeof parsePublicMemoryRejection>,
+    ]
+  >().toEqualTypeOf<
+    readonly [
+      PublicMemoryValidation<PublicMemoryRejection>,
+      PublicMemoryValidation<PublicMemoryRejection>,
+    ]
   >();
-  expectTypeOf(parsePublicMemoryAcceptance).returns.toEqualTypeOf<
-    PublicMemoryValidation<PublicMemoryAcceptance>
-  >();
-  expectTypeOf(validatePublicMemoryRejection).returns.toEqualTypeOf<
-    PublicMemoryValidation<PublicMemoryRejection>
-  >();
-  expectTypeOf(parsePublicMemoryRejection).returns.toEqualTypeOf<
-    PublicMemoryValidation<PublicMemoryRejection>
-  >();
-  expectTypeOf(validatePublicMemoryUpdate).returns.toEqualTypeOf<
-    PublicMemoryValidation<PublicMemoryUpdate>
-  >();
-  expectTypeOf(parsePublicMemoryUpdate).returns.toEqualTypeOf<
-    PublicMemoryValidation<PublicMemoryUpdate>
+  expectTypeOf<
+    readonly [
+      ReturnType<typeof validatePublicMemoryUpdate>,
+      ReturnType<typeof parsePublicMemoryUpdate>,
+    ]
+  >().toEqualTypeOf<
+    readonly [
+      PublicMemoryValidation<PublicMemoryUpdate>,
+      PublicMemoryValidation<PublicMemoryUpdate>,
+    ]
   >();
 }
 
 function assertRemainingLifecycleMemoryTypes(): void {
-  expectTypeOf(validatePublicMemorySupersession).returns.toEqualTypeOf<
-    PublicMemoryValidation<PublicMemorySupersession>
+  expectTypeOf<
+    readonly [
+      ReturnType<typeof validatePublicMemorySupersession>,
+      ReturnType<typeof parsePublicMemorySupersession>,
+    ]
+  >().toEqualTypeOf<
+    readonly [
+      PublicMemoryValidation<PublicMemorySupersession>,
+      PublicMemoryValidation<PublicMemorySupersession>,
+    ]
   >();
-  expectTypeOf(parsePublicMemorySupersession).returns.toEqualTypeOf<
-    PublicMemoryValidation<PublicMemorySupersession>
+  expectTypeOf<
+    readonly [ReturnType<typeof validatePublicMemoryPin>, ReturnType<typeof parsePublicMemoryPin>]
+  >().toEqualTypeOf<
+    readonly [PublicMemoryValidation<PublicMemoryPin>, PublicMemoryValidation<PublicMemoryPin>]
   >();
-  expectTypeOf(validatePublicMemoryPin).returns.toEqualTypeOf<
-    PublicMemoryValidation<PublicMemoryPin>
+  expectTypeOf<
+    readonly [
+      ReturnType<typeof validatePublicMemoryUnpin>,
+      ReturnType<typeof parsePublicMemoryUnpin>,
+    ]
+  >().toEqualTypeOf<
+    readonly [PublicMemoryValidation<PublicMemoryUnpin>, PublicMemoryValidation<PublicMemoryUnpin>]
   >();
-  expectTypeOf(parsePublicMemoryPin).returns.toEqualTypeOf<
-    PublicMemoryValidation<PublicMemoryPin>
-  >();
-  expectTypeOf(validatePublicMemoryUnpin).returns.toEqualTypeOf<
-    PublicMemoryValidation<PublicMemoryUnpin>
-  >();
-  expectTypeOf(parsePublicMemoryUnpin).returns.toEqualTypeOf<
-    PublicMemoryValidation<PublicMemoryUnpin>
-  >();
-  expectTypeOf(validatePublicMemoryArchive).returns.toEqualTypeOf<
-    PublicMemoryValidation<PublicMemoryArchive>
-  >();
-  expectTypeOf(parsePublicMemoryArchive).returns.toEqualTypeOf<
-    PublicMemoryValidation<PublicMemoryArchive>
+  expectTypeOf<
+    readonly [
+      ReturnType<typeof validatePublicMemoryArchive>,
+      ReturnType<typeof parsePublicMemoryArchive>,
+    ]
+  >().toEqualTypeOf<
+    readonly [
+      PublicMemoryValidation<PublicMemoryArchive>,
+      PublicMemoryValidation<PublicMemoryArchive>,
+    ]
   >();
 }
 
 function assertRemainingOtherMemoryTypes(): void {
-  expectTypeOf(validatePublicMemoryForget).returns.toEqualTypeOf<
-    PublicMemoryValidation<PublicMemoryForget>
+  expectTypeOf<
+    readonly [
+      ReturnType<typeof validatePublicMemoryForget>,
+      ReturnType<typeof parsePublicMemoryForget>,
+    ]
+  >().toEqualTypeOf<
+    readonly [
+      PublicMemoryValidation<PublicMemoryForget>,
+      PublicMemoryValidation<PublicMemoryForget>,
+    ]
   >();
-  expectTypeOf(parsePublicMemoryForget).returns.toEqualTypeOf<
-    PublicMemoryValidation<PublicMemoryForget>
+  expectTypeOf<
+    readonly [
+      ReturnType<typeof validatePublicMemoryAuditRecord>,
+      ReturnType<typeof parsePublicMemoryAuditRecord>,
+    ]
+  >().toEqualTypeOf<
+    readonly [
+      PublicMemoryValidation<PublicMemoryAuditRecord>,
+      PublicMemoryValidation<PublicMemoryAuditRecord>,
+    ]
   >();
-  expectTypeOf(validatePublicMemoryAuditRecord).returns.toEqualTypeOf<
-    PublicMemoryValidation<PublicMemoryAuditRecord>
-  >();
-  expectTypeOf(parsePublicMemoryAuditRecord).returns.toEqualTypeOf<
-    PublicMemoryValidation<PublicMemoryAuditRecord>
-  >();
-  expectTypeOf(validatePublicMemoryRetrievalRequest).returns.toEqualTypeOf<
-    PublicMemoryValidation<PublicMemoryRetrievalRequest>
-  >();
-  expectTypeOf(parsePublicMemoryRetrievalRequest).returns.toEqualTypeOf<
-    PublicMemoryValidation<PublicMemoryRetrievalRequest>
+  expectTypeOf<
+    readonly [
+      ReturnType<typeof validatePublicMemoryRetrievalRequest>,
+      ReturnType<typeof parsePublicMemoryRetrievalRequest>,
+    ]
+  >().toEqualTypeOf<
+    readonly [
+      PublicMemoryValidation<PublicMemoryRetrievalRequest>,
+      PublicMemoryValidation<PublicMemoryRetrievalRequest>,
+    ]
   >();
 }
 

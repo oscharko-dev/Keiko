@@ -101,6 +101,62 @@ function makeIo(): Captured {
   };
 }
 
+function healthyDetachedChild(
+  root: string,
+  child: ChildProcess,
+): {
+  readonly spawned: { command: string; args: readonly string[]; opts: SpawnOptions }[];
+  readonly deps: Pick<
+    NonNullable<Parameters<typeof runLifecycleCli>[4]>,
+    "spawnFn" | "fetchImpl" | "isProcessAlive" | "isPortAvailable" | "killProcess" | "sleep"
+  >;
+} {
+  const spawned: { command: string; args: readonly string[]; opts: SpawnOptions }[] = [];
+  return {
+    spawned,
+    deps: {
+      spawnFn: (command, args, opts): ChildProcess => {
+        spawned.push({ command, args, opts });
+        return child;
+      },
+      fetchImpl: () =>
+        Promise.resolve(
+          Response.json(
+            { version: SDK_VERSION, launchId: readCurrentLaunchId(root) },
+            { status: 200 },
+          ),
+        ),
+      isProcessAlive: () => true,
+      isPortAvailable: () => Promise.resolve(true),
+      killProcess: vi.fn(),
+      sleep: () => Promise.resolve(),
+    },
+  };
+}
+
+async function startWithHealthyDetachedChild(
+  root: string,
+  child: ChildProcess,
+  io: CliIo,
+): Promise<{
+  readonly code: Awaited<ReturnType<typeof runLifecycle>>;
+  readonly spawned: ReturnType<typeof healthyDetachedChild>["spawned"];
+}> {
+  const { spawned, deps } = healthyDetachedChild(root, child);
+  const code = await runLifecycle(
+    "start",
+    ["--state-dir", ".keiko"],
+    io,
+    {},
+    {
+      cwd: root,
+      homedir: () => root,
+      ...deps,
+    },
+  );
+  return { code, spawned };
+}
+
 const tempRoots: string[] = [];
 
 function makeRoot(): string {
@@ -602,8 +658,8 @@ describe("runLifecycleCli", () => {
     const binPath = join(root, "published-keiko-bin.js");
     writeFileSync(binPath, "#!/usr/bin/env node\n", "utf8");
     const c = makeIo();
-    const spawned: { command: string; args: readonly string[]; opts: SpawnOptions }[] = [];
     const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
+    const { spawned, deps } = healthyDetachedChild(root, child);
 
     const code = await runLifecycle(
       "start",
@@ -612,21 +668,7 @@ describe("runLifecycleCli", () => {
       { KEIKO_CLI_BIN_PATH: binPath },
       {
         cwd: root,
-        spawnFn: (command, args, opts) => {
-          spawned.push({ command, args, opts });
-          return child;
-        },
-        fetchImpl: () =>
-          Promise.resolve(
-            Response.json(
-              { version: SDK_VERSION, launchId: readCurrentLaunchId(root) },
-              { status: 200 },
-            ),
-          ),
-        isProcessAlive: () => true,
-        isPortAvailable: () => Promise.resolve(true),
-        killProcess: vi.fn(),
-        sleep: () => Promise.resolve(),
+        ...deps,
       },
     );
 
@@ -717,8 +759,8 @@ describe("runLifecycleCli", () => {
     // `optionOrEnv` pattern.
     const root = makeRoot();
     const c = makeIo();
-    const spawned: { command: string; args: readonly string[]; opts: SpawnOptions }[] = [];
     const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
+    const { spawned, deps } = healthyDetachedChild(root, child);
 
     const code = await runLifecycle(
       "start",
@@ -727,21 +769,7 @@ describe("runLifecycleCli", () => {
       { KEIKO_CLI_BIN_PATH: "relative/bin.js" },
       {
         cwd: root,
-        spawnFn: (command, args, opts) => {
-          spawned.push({ command, args, opts });
-          return child;
-        },
-        fetchImpl: () =>
-          Promise.resolve(
-            Response.json(
-              { version: SDK_VERSION, launchId: readCurrentLaunchId(root) },
-              { status: 200 },
-            ),
-          ),
-        isProcessAlive: () => true,
-        isPortAvailable: () => Promise.resolve(true),
-        killProcess: vi.fn(),
-        sleep: () => Promise.resolve(),
+        ...deps,
       },
     );
 
@@ -759,8 +787,8 @@ describe("runLifecycleCli", () => {
     // env var in a parent shell) is refused before spawn instead of being executed by Node.
     const root = makeRoot();
     const c = makeIo();
-    const spawned: { command: string; args: readonly string[]; opts: SpawnOptions }[] = [];
     const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
+    const { spawned, deps } = healthyDetachedChild(root, child);
 
     const code = await runLifecycle(
       "start",
@@ -769,21 +797,7 @@ describe("runLifecycleCli", () => {
       { KEIKO_CLI_BIN_PATH: "/nonexistent/keiko-bin-planted.js" },
       {
         cwd: root,
-        spawnFn: (command, args, opts) => {
-          spawned.push({ command, args, opts });
-          return child;
-        },
-        fetchImpl: () =>
-          Promise.resolve(
-            Response.json(
-              { version: SDK_VERSION, launchId: readCurrentLaunchId(root) },
-              { status: 200 },
-            ),
-          ),
-        isProcessAlive: () => true,
-        isPortAvailable: () => Promise.resolve(true),
-        killProcess: vi.fn(),
-        sleep: () => Promise.resolve(),
+        ...deps,
       },
     );
 
@@ -801,8 +815,8 @@ describe("runLifecycleCli", () => {
     writeFileSync(join(root, "dist", "cli", "index.js"), "#!/usr/bin/env node\n", "utf8");
     writeFileSync(join(root, "dist", "ui", "static", "index.html"), "<html></html>\n", "utf8");
     const c = makeIo();
-    const spawned: { command: string; args: readonly string[]; opts: SpawnOptions }[] = [];
     const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
+    const { spawned, deps } = healthyDetachedChild(root, child);
 
     const code = await withEnvVar(
       "KEIKO_CLI_BIN_PATH",
@@ -816,21 +830,7 @@ describe("runLifecycleCli", () => {
             {},
             {
               cwd: root,
-              spawnFn: (command, args, opts) => {
-                spawned.push({ command, args, opts });
-                return child;
-              },
-              fetchImpl: () =>
-                Promise.resolve(
-                  Response.json(
-                    { version: SDK_VERSION, launchId: readCurrentLaunchId(root) },
-                    { status: 200 },
-                  ),
-                ),
-              isProcessAlive: () => true,
-              isPortAvailable: () => Promise.resolve(true),
-              killProcess: vi.fn(),
-              sleep: () => Promise.resolve(),
+              ...deps,
             },
           ),
         ),
@@ -1852,33 +1852,8 @@ describe("keiko start — refuses symlinked ui.log and ui.pid (KEIKO-0886)", () 
     symlinkSync(decoy, join(stateDir, "ui.log"));
 
     const c = makeIo();
-    const spawned: unknown[] = [];
     const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
-    const code = await runLifecycle(
-      "start",
-      ["--state-dir", ".keiko"],
-      c.io,
-      {},
-      {
-        cwd: root,
-        homedir: () => root,
-        spawnFn: (command, args, opts) => {
-          spawned.push({ command, args, opts });
-          return child;
-        },
-        fetchImpl: () =>
-          Promise.resolve(
-            Response.json(
-              { version: SDK_VERSION, launchId: readCurrentLaunchId(root) },
-              { status: 200 },
-            ),
-          ),
-        isProcessAlive: () => true,
-        isPortAvailable: () => Promise.resolve(true),
-        killProcess: vi.fn(),
-        sleep: () => Promise.resolve(),
-      },
-    );
+    const { code, spawned } = await startWithHealthyDetachedChild(root, child, c.io);
 
     // The start never touches ui.log: the child inherits no descriptor, the decoy is
     // byte-identical, and the planted symlink is left exactly as it was.
@@ -2014,33 +1989,8 @@ describe("keiko start — never opens a planted hard-linked/FIFO/non-regular ui.
     linkSync(victim, join(stateDir, "ui.log"));
 
     const c = makeIo();
-    const spawned: unknown[] = [];
     const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
-    const code = await runLifecycle(
-      "start",
-      ["--state-dir", ".keiko"],
-      c.io,
-      {},
-      {
-        cwd: root,
-        homedir: () => root,
-        spawnFn: (command, args, opts) => {
-          spawned.push({ command, args, opts });
-          return child;
-        },
-        fetchImpl: () =>
-          Promise.resolve(
-            Response.json(
-              { version: SDK_VERSION, launchId: readCurrentLaunchId(root) },
-              { status: 200 },
-            ),
-          ),
-        isProcessAlive: () => true,
-        isPortAvailable: () => Promise.resolve(true),
-        killProcess: vi.fn(),
-        sleep: () => Promise.resolve(),
-      },
-    );
+    const { code, spawned } = await startWithHealthyDetachedChild(root, child, c.io);
 
     // The child inherits no descriptor, the victim file's content is byte-identical before and
     // after, and the hard link itself is left exactly as planted.
@@ -2059,33 +2009,8 @@ describe("keiko start — never opens a planted hard-linked/FIFO/non-regular ui.
     execFileSync("mkfifo", [join(stateDir, "ui.log")]);
 
     const c = makeIo();
-    const spawned: unknown[] = [];
     const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
-    const code = await runLifecycle(
-      "start",
-      ["--state-dir", ".keiko"],
-      c.io,
-      {},
-      {
-        cwd: root,
-        homedir: () => root,
-        spawnFn: (command, args, opts) => {
-          spawned.push({ command, args, opts });
-          return child;
-        },
-        fetchImpl: () =>
-          Promise.resolve(
-            Response.json(
-              { version: SDK_VERSION, launchId: readCurrentLaunchId(root) },
-              { status: 200 },
-            ),
-          ),
-        isProcessAlive: () => true,
-        isPortAvailable: () => Promise.resolve(true),
-        killProcess: vi.fn(),
-        sleep: () => Promise.resolve(),
-      },
-    );
+    const { code, spawned } = await startWithHealthyDetachedChild(root, child, c.io);
 
     // A blocking open() with no reader present would hang this test forever; reaching this
     // assertion at all proves the FIFO was never opened.
@@ -2103,33 +2028,8 @@ describe("keiko start — never opens a planted hard-linked/FIFO/non-regular ui.
     mkdirSync(join(stateDir, "ui.log"));
 
     const c = makeIo();
-    const spawned: unknown[] = [];
     const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
-    const code = await runLifecycle(
-      "start",
-      ["--state-dir", ".keiko"],
-      c.io,
-      {},
-      {
-        cwd: root,
-        homedir: () => root,
-        spawnFn: (command, args, opts) => {
-          spawned.push({ command, args, opts });
-          return child;
-        },
-        fetchImpl: () =>
-          Promise.resolve(
-            Response.json(
-              { version: SDK_VERSION, launchId: readCurrentLaunchId(root) },
-              { status: 200 },
-            ),
-          ),
-        isProcessAlive: () => true,
-        isPortAvailable: () => Promise.resolve(true),
-        killProcess: vi.fn(),
-        sleep: () => Promise.resolve(),
-      },
-    );
+    const { code, spawned } = await startWithHealthyDetachedChild(root, child, c.io);
 
     expect(code).toBe(0);
     expect(spawned).toHaveLength(1);
