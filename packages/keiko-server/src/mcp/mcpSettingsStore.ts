@@ -1,4 +1,5 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { parseEnv } from "node:util";
 import { join } from "node:path";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import type {
@@ -56,6 +57,8 @@ const UPDATED = defineActivityLogOperation({
 
 export interface McpSettingsStore {
   readonly read: (correlationId: string) => McpSettingsSnapshot;
+  /** Revoked synchronously when the committed definition changes, is disabled, or disappears. */
+  readonly generation: (server: McpServerDefinition, correlationId: string) => AbortSignal;
   readonly update: (
     update: McpSettingsUpdate,
     correlationId: string,
@@ -103,8 +106,34 @@ function readSettings(
   return snapshot(current.servers);
 }
 
+function importEnvironmentFiles(update: McpSettingsUpdate): McpSettingsUpdate {
+  const secrets = { ...update.secrets };
+  const servers = update.servers.map((server) => {
+    const file = update.environmentFiles?.[server.name];
+    if (file === undefined || server.transport.kind !== "local") return server;
+    const environment = { ...server.transport.environment };
+    const secretEnvironment = { ...server.transport.secretEnvironment };
+    for (const [name, value] of Object.entries(parseEnv(file))) {
+      if (value === undefined) throw new TypeError("MCP environment value is invalid");
+      if (value === "") {
+        environment[name] = "";
+        Reflect.deleteProperty(secretEnvironment, name);
+        continue;
+      }
+      const reference = `KEIKO_MCP_SECRET_${randomUUID().replaceAll("-", "").toUpperCase()}`;
+      Reflect.deleteProperty(environment, name);
+      secretEnvironment[name] = { secretEnv: reference };
+      secrets[reference] = { server: server.name, value };
+    }
+    return { ...server, transport: { ...server.transport, environment, secretEnvironment } };
+  });
+  return { expectedRevision: update.expectedRevision, servers, secrets };
+}
+
 function validUpdate(update: McpSettingsUpdate): McpSettingsUpdate {
-  const validated = parseMcpSettingsUpdate(update);
+  const input = parseMcpSettingsUpdate(update);
+  const validated =
+    input === undefined ? undefined : parseMcpSettingsUpdate(importEnvironmentFiles(input));
   if (validated === undefined) throw new TypeError("MCP settings are invalid");
   const document = { schemaVersion: 1, servers: validated.servers };
   if (Buffer.byteLength(JSON.stringify(document), "utf8") > 64 * 1024)
@@ -126,55 +155,95 @@ function reconcileSecrets(
   }
 }
 
-/** One existing registry, one MCP vault and the canonical atomic private-file writer. */
-export function createMcpSettingsStore(
-  input: McpOAuthCredentialStoreInput & {
-    readonly activityLog?: ServerLogSink;
-  },
-): McpSettingsStore {
-  const secrets = createMcpServerSecretStore(input);
-  const read = (correlationId: string): McpSettingsSnapshot => {
-    const result = reconcileSecrets(secrets, readSettings(input, correlationId));
+type StoreInput = McpOAuthCredentialStoreInput & { readonly activityLog?: ServerLogSink };
+class SettingsStore implements McpSettingsStore {
+  readonly #secrets: ReturnType<typeof createMcpServerSecretStore>;
+  readonly #generations = new Map<string, { definition: string; controller: AbortController }>();
+  constructor(private readonly input: StoreInput) {
+    this.#secrets = createMcpServerSecretStore(input);
+  }
+  private reconcileGenerations(servers: readonly McpServerDefinition[]): void {
+    for (const [name, generation] of this.#generations) {
+      const current = servers.find((server) => server.name === name && server.enabled);
+      if (current === undefined || JSON.stringify(current) !== generation.definition) {
+        this.#generations.delete(name);
+        generation.controller.abort();
+      }
+    }
+  }
+  readonly read = (correlationId: string): McpSettingsSnapshot => {
+    let current: McpSettingsSnapshot;
+    try {
+      current = readSettings(this.input, correlationId);
+    } catch (error) {
+      this.reconcileGenerations([]);
+      throw error;
+    }
+    this.reconcileGenerations(current.servers);
+    const result = reconcileSecrets(this.#secrets, current);
     if (result.changed)
-      recordMcpSettingsUpdate(input.activityLog, correlationId, "reconciled", result.snapshot, 0);
+      recordMcpSettingsUpdate(
+        this.input.activityLog,
+        correlationId,
+        "reconciled",
+        result.snapshot,
+        0,
+      );
     return result.snapshot;
   };
-  return {
-    read,
-    secret: (reference, server): string | undefined => {
-      const current = read(UNKNOWN_CORRELATION_ID).servers.find(
-        (entry) => entry.name === server.name,
-      );
-      if (
-        current?.enabled !== true ||
-        !mcpServerSecretReferences(current).includes(reference) ||
-        JSON.stringify(current.transport) !== JSON.stringify(server.transport)
+  readonly generation = (server: McpServerDefinition, correlationId: string): AbortSignal => {
+    const definition = JSON.stringify(server);
+    if (
+      !this.read(correlationId).servers.some(
+        (current) => current.enabled && JSON.stringify(current) === definition,
       )
-        return undefined;
-      return secrets.get(reference, current);
-    },
-    update: (
-      update,
-      correlationId,
-    ): { readonly ok: boolean; readonly snapshot: McpSettingsSnapshot } => {
-      const validated = validUpdate(update);
-      const document = { schemaVersion: 1, servers: validated.servers };
-      const current = read(correlationId);
-      if (current.revision !== update.expectedRevision) {
-        recordMcpSettingsUpdate(input.activityLog, correlationId, "conflict", current, 0);
-        return { ok: false, snapshot: current };
-      }
-      const entries = Object.entries(validated.secrets).map(([reference, entry]) => {
-        const server = validated.servers.find((candidate) => candidate.name === entry.server);
-        if (server === undefined) throw new TypeError("MCP secret binding is invalid");
-        return { reference, server, value: entry.value };
-      });
-      // Unique immutable references are sealed first. A failed registry write cannot change old credentials.
-      secrets.put(entries);
-      savePrivateJson(join(input.stateDir, MCP_SERVER_REGISTRY_FILE), document);
-      const next = reconcileSecrets(secrets, snapshot(validated.servers)).snapshot;
-      recordMcpSettingsUpdate(input.activityLog, correlationId, "applied", next, entries.length);
-      return { ok: true, snapshot: next };
-    },
+    )
+      throw new TypeError("MCP server is unavailable");
+    let generation = this.#generations.get(server.name);
+    if (generation === undefined) {
+      generation = { definition, controller: new AbortController() };
+      this.#generations.set(server.name, generation);
+    }
+    return generation.controller.signal;
   };
+  readonly secret = (reference: string, server: McpServerDefinition): string | undefined => {
+    const current = this.read(UNKNOWN_CORRELATION_ID).servers.find(
+      (entry) => entry.name === server.name,
+    );
+    if (
+      current?.enabled !== true ||
+      !mcpServerSecretReferences(current).includes(reference) ||
+      JSON.stringify(current.transport) !== JSON.stringify(server.transport)
+    )
+      return undefined;
+    return this.#secrets.get(reference, current);
+  };
+  readonly update = (
+    update: McpSettingsUpdate,
+    correlationId: string,
+  ): { readonly ok: boolean; readonly snapshot: McpSettingsSnapshot } => {
+    const validated = validUpdate(update);
+    const document = { schemaVersion: 1, servers: validated.servers };
+    const current = this.read(correlationId);
+    if (current.revision !== update.expectedRevision) {
+      recordMcpSettingsUpdate(this.input.activityLog, correlationId, "conflict", current, 0);
+      return { ok: false, snapshot: current };
+    }
+    const entries = Object.entries(validated.secrets).map(([reference, entry]) => {
+      const server = validated.servers.find((candidate) => candidate.name === entry.server);
+      if (server === undefined) throw new TypeError("MCP secret binding is invalid");
+      return { reference, server, value: entry.value };
+    });
+    this.#secrets.put(entries);
+    savePrivateJson(join(this.input.stateDir, MCP_SERVER_REGISTRY_FILE), document);
+    this.reconcileGenerations(validated.servers);
+    const next = reconcileSecrets(this.#secrets, snapshot(validated.servers)).snapshot;
+    recordMcpSettingsUpdate(this.input.activityLog, correlationId, "applied", next, entries.length);
+    return { ok: true, snapshot: next };
+  };
+}
+
+/** One existing registry, one MCP vault and the canonical atomic private-file writer. */
+export function createMcpSettingsStore(input: StoreInput): McpSettingsStore {
+  return new SettingsStore(input);
 }

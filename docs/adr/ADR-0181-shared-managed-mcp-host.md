@@ -170,6 +170,21 @@ arguments, keeps invocation context out of MCP arguments, rechecks authority at 
 never replays a tool call after a transport failure. Local stdio explicitly overrides the
 SDK's inherited environment defaults; credentials remain in memory at the launch boundary.
 
+The configured connection owner shares one client per current server definition. Registry
+commits synchronously abort the old generation when its server changes, is disabled or is
+removed; calls recheck the durable registry before dispatch and before releasing results.
+Application shutdown closes these clients. The Settings connection check performs discovery
+only, persists a validated tool map with revision comparison and treats unknown tool risk as
+write; descriptive remote annotations do not confer authority. Consumers still require their
+own catalog admission before invoking any discovered tool.
+
+Remote traffic uses the existing gateway egress with DNS/proxy pinning, TLS verification and
+redirect refusal. An explicit private-network selection admits only the configured private
+resource; loopback and metadata addresses remain denied. Legacy SSE can address messages
+only within the configured origin and resource directory. Local `.env` imports use Node's
+literal parser, seal values in the existing vault and store references, never source file paths
+or file contents. Empty environment values remain non-secret literals.
+
 Mixed Chat turns create that same accepted-turn authority before continuity, memory and
 retrieval preparation. Existing grounding owners assemble their evidence packs before
 productive Jira orchestration. Every gateway attempt retains its cumulative token and

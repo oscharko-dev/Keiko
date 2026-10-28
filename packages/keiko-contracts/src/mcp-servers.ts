@@ -93,6 +93,10 @@ export interface McpRemoteSecretHeader {
 export interface McpRemoteTransport {
   readonly kind: "remote";
   readonly url: string;
+  /** Explicit compatibility selection; new connections use Streamable HTTP. */
+  readonly protocol?: "sse";
+  /** Exact operator-configured private target; metadata and loopback remain denied. */
+  readonly network?: "private";
   /** Absent: the server is used without OAuth. */
   readonly oauth?: McpRemoteOAuth;
   /** Credential headers by name; absent: the server needs none. Never together with `oauth`. */
@@ -209,19 +213,34 @@ function remoteUrl(value: unknown): string | undefined {
   return url.href;
 }
 
-function remoteTransport(value: Json): McpRemoteTransport | undefined {
-  if (!hasOnlyKeys(value, ["kind", "url", "oauth", "headers"])) return undefined;
+function remoteTransportBase(value: Json): McpRemoteTransport | undefined {
+  if (value.protocol !== undefined && value.protocol !== "sse") return undefined;
+  if (value.network !== undefined && value.network !== "private") return undefined;
   const url = remoteUrl(value.url);
   if (url === undefined) return undefined;
+  const base = {
+    kind: "remote" as const,
+    url,
+    ...(value.protocol === "sse" ? { protocol: "sse" as const } : {}),
+    ...(value.network === "private" ? { network: "private" as const } : {}),
+  };
+  return base;
+}
+
+function remoteTransport(value: Json): McpRemoteTransport | undefined {
+  if (!hasOnlyKeys(value, ["kind", "url", "oauth", "headers", "protocol", "network"]))
+    return undefined;
+  const base = remoteTransportBase(value);
+  if (base === undefined) return undefined;
   // A relayed server is reached at Keiko's address, which no OAuth resource binding can name.
   if (value.oauth !== undefined && value.headers !== undefined) return undefined;
   if (value.headers !== undefined) {
     const headers = secretHeadersOf(value.headers);
-    return headers === undefined ? undefined : { kind: "remote", url, headers };
+    return headers === undefined ? undefined : { ...base, headers };
   }
-  if (value.oauth === undefined) return { kind: "remote", url };
+  if (value.oauth === undefined) return base;
   const oauth = oauthOf(value.oauth);
-  return oauth === undefined ? undefined : { kind: "remote", url, oauth };
+  return oauth === undefined ? undefined : { ...base, oauth };
 }
 
 function secretHeaderOf(name: string, value: unknown): McpRemoteSecretHeader | undefined {
@@ -603,21 +622,57 @@ export interface McpSettingsUpdate {
   readonly expectedRevision: string;
   readonly servers: readonly McpServerDefinition[];
   readonly secrets: Readonly<Record<string, McpSettingsSecretInput>>;
+  /** Write-only .env contents for named local servers; values are sealed by the Settings owner. */
+  readonly environmentFiles?: Readonly<Record<string, string>>;
 }
 
 /** One bounded mutation; registry parsing remains the canonical definition validator. */
 export function parseMcpSettingsUpdate(value: unknown): McpSettingsUpdate | undefined {
   const body = record(value);
-  if (body === undefined || !hasOnlyKeys(body, ["expectedRevision", "servers", "secrets"]))
-    return undefined;
-  if (typeof body.expectedRevision !== "string" || !/^[a-f0-9]{64}$/u.test(body.expectedRevision))
-    return undefined;
+  if (!settingsUpdateHeader(body)) return undefined;
   const registry = parseMcpServerRegistry({ schemaVersion: 1, servers: body.servers });
   const secrets = body.secrets === undefined ? {} : record(body.secrets);
   if (!registry.ok || secrets === undefined || Object.keys(secrets).length > 64) return undefined;
   const admitted = settingsSecrets(secrets, registry.servers);
   if (admitted === undefined) return undefined;
-  return { expectedRevision: body.expectedRevision, servers: registry.servers, secrets: admitted };
+  const files = settingsEnvironmentFiles(body.environmentFiles, registry.servers);
+  if (files === undefined) return undefined;
+  return {
+    expectedRevision: body.expectedRevision,
+    servers: registry.servers,
+    secrets: admitted,
+    ...(Object.keys(files).length === 0 ? {} : { environmentFiles: files }),
+  };
+}
+
+function settingsUpdateHeader(
+  body: Json | undefined,
+): body is Json & { readonly expectedRevision: string } {
+  return (
+    body !== undefined &&
+    hasOnlyKeys(body, ["expectedRevision", "servers", "secrets", "environmentFiles"]) &&
+    typeof body.expectedRevision === "string" &&
+    /^[a-f0-9]{64}$/u.test(body.expectedRevision)
+  );
+}
+
+function settingsEnvironmentFiles(
+  value: unknown,
+  servers: readonly McpServerDefinition[],
+): Readonly<Record<string, string>> | undefined {
+  const files = value === undefined ? {} : record(value);
+  if (
+    files === undefined ||
+    Object.entries(files).some(
+      ([name, value]) =>
+        typeof value !== "string" ||
+        value.length > 64 * 1024 ||
+        value.includes("\0") ||
+        !servers.some((server) => server.name === name && server.transport.kind === "local"),
+    )
+  )
+    return undefined;
+  return files as Readonly<Record<string, string>>;
 }
 
 function settingsSecret(raw: unknown): McpSettingsSecretInput | undefined {

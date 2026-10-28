@@ -1,5 +1,9 @@
 import type { JiraChatToolTurn } from "./atlassian/jiraChatToolTurn.js";
 import { createMcpSettingsStore, type McpSettingsStore } from "./mcp/mcpSettingsStore.js";
+import {
+  createConfiguredMcpConnections,
+  type ConfiguredMcpConnections,
+} from "./mcp/mcpConfiguredConnections.js";
 import { EditorAgentAuthorityRegistry } from "./editor/agentAuthorityRegistry.js";
 import {
   installJiraChatCatalogRuntime,
@@ -770,6 +774,7 @@ interface AgentAuthorityRegistryDependency {
 
 export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   readonly mcpSettings?: McpSettingsStore;
+  readonly mcpConnections?: ConfiguredMcpConnections;
   /** Server-only, request-scoped revalidation of the paired session using a private skill. */
   readonly markdownSkillAuthority?: (() => boolean) | undefined;
   // The resolved gateway config, or undefined when no config file was provided / it failed to load.
@@ -4950,6 +4955,20 @@ function buildMcpSettings(args: UiHandlerDepsAssemblyArgs): McpSettingsStore {
   });
 }
 
+function buildMcpServices(args: UiHandlerDepsAssemblyArgs): {
+  mcpSettings: McpSettingsStore;
+  mcpConnections: ConfiguredMcpConnections;
+} {
+  const mcpSettings = buildMcpSettings(args);
+  const mcpConnections = createConfiguredMcpConnections({
+    settings: mcpSettings,
+    stateDir: dirname(args.resolvedUiDbPath),
+    log: args.options.activityLog ?? processServerLogSink(),
+    egress: () => resolveOutboundHttpEgressConfig(undefined, args.options.env),
+  });
+  return { mcpSettings, mcpConnections };
+}
+
 function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   const dapRuntime = createDapRuntimeReference(args.options);
   const services = assembleUiHandlerRuntimeServices(args, dapRuntime);
@@ -4972,8 +4991,10 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   // no configured model profile — is the ONE closed reason prDescriptionRoutes.ts's "unavailable"
   // fallback exists for.
   const prDescriptionGeneration = createProductionPrDescriptionGeneration(args.runtimeConfig);
+  const { mcpSettings, mcpConnections } = buildMcpServices(args);
   const deps: UiHandlerDeps = {
-    mcpSettings: buildMcpSettings(args),
+    mcpSettings,
+    mcpConnections,
     ...buildBaseUiHandlerDeps(args),
     ...buildRuntimeUiHandlerDeps(args, services),
     ...buildIntegrationUiHandlerDeps(args, atlassianRegistries),
@@ -4997,6 +5018,7 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
       services,
       atlassianRegistries,
       codingAppSessionDenialWindows,
+      mcpConnections,
     ),
   };
   attachWorkbenchDescriptionSupport(
@@ -5900,55 +5922,71 @@ function createUiHandlerDispose(
   services: UiHandlerRuntimeServices,
   atlassianRegistries: ReturnType<typeof atlassianConnectorRegistryFields>,
   codingAppSessionDenialWindows: CodingAppSessionDenialWindows,
+  mcpConnections: ConfiguredMcpConnections,
 ): UiHandlerDeps["dispose"] {
-  return async (): Promise<void> => {
-    const activityLog = args.options.activityLog ?? processServerLogSink();
-    const correlationId = randomUUID();
-    const startedAtMs = Date.now();
-    const { openSseStreamCount, activeRunCount } = runtimeShutdownStartState(services);
-    markServerShuttingDown();
-    logRuntimeShutdown(activityLog, correlationId, {
-      state: "started",
-      openSseStreamCount,
-      activeRunCount,
-    });
-    // What the teardown achieved for the live run, not merely "the call did not throw". A refused
-    // shutdown resolves normally with `{ok: false}` (a run in `recovery-required`, for one), and
-    // recording that as a clean stop told the one artifact a customer site has the opposite of what
-    // happened (owner review, PR #3452). "not-applicable" is its own answer: no control plane means
-    // there was nothing to stop, which is not the same as stopping cleanly.
-    let runtimeShutdown: RuntimeShutdownOutcome = "not-applicable";
-    try {
-      runtimeShutdown = await shutdownCodingRuntime(services, correlationId);
-    } catch (error) {
-      runtimeShutdown = "faulted";
-      throw error;
-    } finally {
-      await thenSealActivityLog(args.options, () =>
-        disposeRuntimeServicesRecorded(
-          () =>
-            disposeRuntimeServices(
-              args,
-              services,
-              atlassianRegistries,
-              codingAppSessionDenialWindows,
-              correlationId,
-            ),
-          (cleanup) => {
-            logRuntimeShutdown(activityLog, correlationId, {
-              state: "completed",
-              durationMs: Date.now() - startedAtMs,
-              openSseStreamCount,
-              activeRunCount,
-              runtimeShutdown,
-              ...cleanup,
-            });
-          },
-          runtimeShutdown === "faulted",
-        ),
-      );
-    }
-  };
+  return (): Promise<void> =>
+    disposeUiHandler(
+      args,
+      services,
+      atlassianRegistries,
+      codingAppSessionDenialWindows,
+      mcpConnections,
+    );
+}
+async function disposeUiHandler(
+  args: UiHandlerDepsAssemblyArgs,
+  services: UiHandlerRuntimeServices,
+  atlassianRegistries: ReturnType<typeof atlassianConnectorRegistryFields>,
+  codingAppSessionDenialWindows: CodingAppSessionDenialWindows,
+  mcpConnections: ConfiguredMcpConnections,
+): Promise<void> {
+  const activityLog = args.options.activityLog ?? processServerLogSink();
+  const correlationId = randomUUID();
+  const startedAtMs = Date.now();
+  const { openSseStreamCount, activeRunCount } = runtimeShutdownStartState(services);
+  markServerShuttingDown();
+  logRuntimeShutdown(activityLog, correlationId, {
+    state: "started",
+    openSseStreamCount,
+    activeRunCount,
+  });
+  // What the teardown achieved for the live run, not merely "the call did not throw". A refused
+  // shutdown resolves normally with `{ok: false}` (a run in `recovery-required`, for one), and
+  // recording that as a clean stop told the one artifact a customer site has the opposite of what
+  // happened (owner review, PR #3452). "not-applicable" is its own answer: no control plane means
+  // there was nothing to stop, which is not the same as stopping cleanly.
+  let runtimeShutdown: RuntimeShutdownOutcome = "not-applicable";
+  try {
+    await mcpConnections.close();
+    runtimeShutdown = await shutdownCodingRuntime(services, correlationId);
+  } catch (error) {
+    runtimeShutdown = "faulted";
+    throw error;
+  } finally {
+    await thenSealActivityLog(args.options, () =>
+      disposeRuntimeServicesRecorded(
+        () =>
+          disposeRuntimeServices(
+            args,
+            services,
+            atlassianRegistries,
+            codingAppSessionDenialWindows,
+            correlationId,
+          ),
+        (cleanup) => {
+          logRuntimeShutdown(activityLog, correlationId, {
+            state: "completed",
+            durationMs: Date.now() - startedAtMs,
+            openSseStreamCount,
+            activeRunCount,
+            runtimeShutdown,
+            ...cleanup,
+          });
+        },
+        runtimeShutdown === "faulted",
+      ),
+    );
+  }
 }
 
 function runtimeShutdownStartState(services: UiHandlerRuntimeServices): {

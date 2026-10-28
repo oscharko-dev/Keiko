@@ -79,7 +79,11 @@ import {
 } from "./chat-handlers.js";
 import { handleSendDesktopChatStream } from "./chat-stream-handlers.js";
 import { handleReadChatDraft, handleSaveChatDraft } from "./chat-draft-routes.js";
-import { handleGetMcpSettings, handlePutMcpSettings } from "./mcp/mcpSettingsRoutes.js";
+import {
+  handleGetMcpSettings,
+  handlePutMcpSettings,
+  handleConnectMcpServer,
+} from "./mcp/mcpSettingsRoutes.js";
 import {
   handleDeleteConversationAttachment,
   handleUploadConversationAttachment,
@@ -524,6 +528,11 @@ function dispatchGitChangeApplyDescription(
 export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/mcp/servers", handler: handleGetMcpSettings },
   { method: "PUT", pattern: "/api/mcp/servers", handler: handlePutMcpSettings },
+  {
+    method: "POST",
+    pattern: "/api/mcp/servers/:serverName/connect",
+    handler: handleConnectMcpServer,
+  },
   { method: "GET", pattern: "/api/health", handler: health },
   ...WORKSPACE_MANIFEST_ROUTE_GROUP,
   ...EDITOR_LOCAL_HISTORY_ROUTE_GROUP,
