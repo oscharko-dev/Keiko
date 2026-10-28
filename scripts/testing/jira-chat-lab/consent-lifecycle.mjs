@@ -36,7 +36,7 @@ function read(context, path) {
     "GET",
   );
 }
-async function currentChat(context, id) {
+export async function currentChat(context, id) {
   const result = await read(
     context,
     `/api/chats?id=${encodeURIComponent(id)}&projectPath=${encodeURIComponent(context.projectPath)}`,
@@ -45,7 +45,7 @@ async function currentChat(context, id) {
   assert.ok(chat?.jiraPodBinding);
   return chat;
 }
-async function credential(context, podId) {
+export async function credential(context, podId) {
   const result = await read(context, "/api/atlassian-connectors/credentials");
   const item = result.credentials.find((candidate) => candidate.livePod?.podId === podId);
   assert.ok(item);

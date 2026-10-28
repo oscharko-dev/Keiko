@@ -77,6 +77,12 @@ function referenceItems(operation, raw) {
 }
 
 export function restrictedReadExpectation(operation, field, response) {
+  if (operation === "jira.assignable-users" && response.status === 401)
+    return {
+      outcome: "cancelled",
+      referenceStatus: 401,
+      credentialInvalidationExpected: true,
+    };
   if (response.status !== 200) {
     const reason = RESTRICTED_REFUSAL_DIAGNOSTICS.get(response.status);
     assert.ok(reason, "Only an actual Jira scope/permission refusal qualifies");
@@ -210,6 +216,7 @@ export function restrictedWriteCases(fixture, projectId, transition, id) {
 export async function restrictedCatalogCases(session, fixture, id) {
   await requireRestrictedPermissions(session);
   const reads = await restrictedReads(session, fixture);
+  await requireRestrictedPermissions(session);
   const project = await adminRead(session, "/rest/api/2/project/ISOLATED");
   const metadata = await adminRead(
     session,
@@ -220,5 +227,17 @@ export async function restrictedCatalogCases(session, fixture, id) {
     transition,
     "An administrator-visible transition is required as the positive reference",
   );
-  return [...reads, ...restrictedWriteCases(fixture, project.id, transition, id)];
+  const assignmentAuthFailure = reads.some((read) => read.credentialInvalidationExpected);
+  const writes = restrictedWriteCases(fixture, project.id, transition, id).map((write) =>
+    assignmentAuthFailure && write.operation === "jira.assign"
+      ? {
+          ...write,
+          outcome: "cancelled",
+          dispatches: 0,
+          credentialInvalidationExpected: true,
+          expectedMutationOutcome: "rejected",
+        }
+      : write,
+  );
+  return [...reads, ...writes];
 }

@@ -17,6 +17,10 @@ import {
   verifyRestrictedTurn,
 } from "./restricted-cases.mjs";
 import { restrictedCatalogCases } from "./restricted-catalog-cases.mjs";
+import {
+  restrictedAuthenticationObserver,
+  runRestrictedAuthenticationCase,
+} from "./restricted-auth.mjs";
 
 function stage(name, extra = {}) {
   console.log(JSON.stringify({ qualification: "jira-chat-restricted", stage: name, ...extra }));
@@ -94,7 +98,30 @@ async function verifyDeniedReplay(context, group, testCase, observed, observer) 
   return true;
 }
 
-async function runCase(context, group, fixture, testCase, observer) {
+async function observedCase(context, group, chat, testCase, observer, authentication, before) {
+  if (testCase.credentialInvalidationExpected)
+    return runRestrictedAuthenticationCase(context, chat, group, observer, authentication);
+  const observed = await runObservedChatTurn(context, chat, {
+    ...group.current,
+    assertUnchanged: async () =>
+      assert.deepEqual(await restrictedRemoteState(context.session), before),
+  });
+  const dispatch = observer.snapshot();
+  group.current.observedDispatch = dispatch;
+  privateJson(group.pendingPath, group);
+  const actual = restrictedCaseAtDispatch(testCase, dispatch);
+  const exchange = verifyRestrictedTurn(observed, actual, group.transport, dispatch);
+  const replayed = await verifyDeniedReplay(context, group, actual, observed, observer);
+  return {
+    canonicalReplayPreserved: replayed,
+    decisions: observed.decisions,
+    dispatch,
+    outcome: exchange.result.data.outcome,
+    reason: exchange.result.data.reason,
+  };
+}
+
+async function runCase(context, group, fixture, testCase, observer, authentication) {
   await requireLicense(context.session);
   const before = await restrictedRemoteState(context.session);
   const original =
@@ -109,33 +136,28 @@ async function runCase(context, group, fixture, testCase, observer) {
     context.modelId,
     testCase.actor,
   );
-  const intent = privateIntent(group, testCase, before, chat);
+  privateIntent(group, testCase, before, chat);
   observer.arm(testCase);
-  const observed = await runObservedChatTurn(context, chat, {
-    ...intent,
-    assertUnchanged: async () =>
-      assert.deepEqual(await restrictedRemoteState(context.session), before),
-  });
-  const dispatch = observer.snapshot();
-  group.current.observedDispatch = dispatch;
-  privateJson(group.pendingPath, group);
-  const actual = restrictedCaseAtDispatch(testCase, dispatch);
-  const exchange = verifyRestrictedTurn(observed, actual, group.transport, dispatch);
-  const replayed = await verifyDeniedReplay(context, group, actual, observed, observer);
+  authentication.arm(testCase.credentialInvalidationExpected === true);
+  const observed = await observedCase(
+    context,
+    group,
+    chat,
+    testCase,
+    observer,
+    authentication,
+    before,
+  );
   const remoteEffects = await verifyRemoteEffect(context, fixture, testCase, before, original);
   group.results.push({
-    canonicalReplayPreserved: replayed,
     id: testCase.id,
     actor: testCase.actor,
     operation: testCase.operation,
-    decisions: observed.decisions,
-    dispatch,
+    ...observed,
     remoteEffects,
-    outcome: exchange.result.data.outcome,
-    reason: exchange.result.data.reason,
   });
   privateJson(group.pendingPath, group);
-  stage(testCase.id, { passed: true, ...dispatch, remoteEffects, ...observed.decisions });
+  stage(testCase.id, { passed: true, ...observed.dispatch, remoteEffects, ...observed.decisions });
 }
 
 function assertCompletedGroup(group) {
@@ -143,14 +165,18 @@ function assertCompletedGroup(group) {
   if (group.suite === "catalog")
     assert.equal(new Set(group.results.map((item) => item.operation)).size, 14);
 }
-async function main() {
-  const session = loadSession(process.argv[2]);
-  const modelId = process.argv[3];
+function qualificationOptions() {
   const transport = process.argv[4] ?? "buffered";
   const suite = process.argv[5] ?? "focused";
   if (!new Set(["focused", "catalog"]).has(suite)) throw new TypeError("Unknown restricted suite");
   if (!new Set(["buffered", "stream"]).has(transport))
     throw new TypeError("Unknown Chat transport");
+  return { transport, suite };
+}
+async function main() {
+  const session = loadSession(process.argv[2]);
+  const modelId = process.argv[3];
+  const { transport, suite } = qualificationOptions();
   await requireLicense(session);
   const fixture = JSON.parse(readFileSync(join(session.directory, "fixture.json"), "utf8"));
   const group = {
@@ -166,19 +192,22 @@ async function main() {
       ? await restrictedCatalogCases(session, fixture, group.id)
       : await casesFor(session, fixture, group.id);
   const observer = restrictedDispatchObserver();
+  const authentication = restrictedAuthenticationObserver();
   privateJson(group.pendingPath, group, true);
   await withLiveChat({
     session,
     modelId,
     modelRetries: group.modelRetries,
     retainState: true,
-    decorateAtlassianHttp: observer.decorate,
+    decorateAtlassianHttp: (factory) => authentication.decorate(observer.decorate(factory)),
+    configureServer: authentication.configureServer,
     stateReady: (root) => {
       group.stateDirectory = root;
       privateJson(group.pendingPath, group);
     },
     run: async (context) => {
-      for (const testCase of cases) await runCase(context, group, fixture, testCase, observer);
+      for (const testCase of cases)
+        await runCase(context, group, fixture, testCase, observer, authentication);
     },
   });
   assertCompletedGroup(group);

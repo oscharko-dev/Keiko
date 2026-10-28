@@ -8,8 +8,16 @@ import { commentState, privateJson, runChatToolTurn } from "./chat-write.mjs";
 import { projectState } from "./catalog-state.mjs";
 import { loadSession, requireLicense } from "./lab-client.mjs";
 
-const QUESTION =
-  "How many review steps does the synthetic Caldera release require according to the connected Data Pod? Answer this question with its Data Pod citation, then separately report the requested Jira tool outcome.";
+const DATA_QUESTION =
+  "How many review steps does the synthetic Caldera release require according to the connected Data Pod? Cite the Data Pod for that answer, and report the Jira outcome separately without a Data Pod citation.";
+
+function mixedQuestion(operation, args) {
+  const jira =
+    operation === "jira.projects"
+      ? "Which projects can I access in the connected Jira instance? Read Jira now and list the returned project keys."
+      : `Please add exactly this comment to Jira issue ${args.issueKey}: ${args.body}. Request my approval before making this change, then check the tool result.`;
+  return `${jira} After handling that Jira request, also answer this knowledge question: ${DATA_QUESTION}`;
+}
 
 function stage(name, facts = {}) {
   console.log(JSON.stringify({ qualification: "jira-chat-mixed", stage: name, ...facts }));
@@ -103,7 +111,7 @@ async function qualifyTurn(context, group, operation, args) {
   const intent = {
     operation,
     arguments: args,
-    question: QUESTION,
+    question: mixedQuestion(operation, args),
     mode: "governed-assist",
     transport: "buffered",
     clientTurnId: randomUUID(),

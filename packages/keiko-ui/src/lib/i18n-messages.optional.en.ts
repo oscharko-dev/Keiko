@@ -2682,11 +2682,10 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.verify.ok.label": "Connection verified",
   "atlassianConnectors.verify.ok.copy": "The credential authenticated successfully.",
   "atlassianConnectors.verify.auth-failed.label": "Authentication failed",
-  "atlassianConnectors.verify.auth-failed.copy":
-    "Check the account email and API token, then verify again.",
+  "atlassianConnectors.verify.auth-failed.copy": "Check the account and token, then verify again.",
   "atlassianConnectors.verify.forbidden.label": "Access forbidden",
   "atlassianConnectors.verify.forbidden.copy":
-    "The account authenticated but lacks permission. Grant access in Atlassian, then verify again.",
+    "Atlassian denied access. Check the account permissions and any site or license restrictions, then verify again.",
   "atlassianConnectors.verify.unreachable.label": "Site unreachable",
   "atlassianConnectors.verify.unreachable.copy":
     "The base URL could not be reached. Check the URL and your network, then verify again.",

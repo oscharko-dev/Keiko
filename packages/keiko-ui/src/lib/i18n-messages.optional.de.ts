@@ -2778,10 +2778,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "atlassianConnectors.verify.ok.copy": "Die Anmeldeinformation wurde erfolgreich authentifiziert.",
   "atlassianConnectors.verify.auth-failed.label": "Authentifizierung fehlgeschlagen",
   "atlassianConnectors.verify.auth-failed.copy":
-    "Prüfen Sie Konto-E-Mail und API-Token und versuchen Sie es erneut.",
+    "Prüfe das Konto und das Token. Prüfe die Verbindung danach erneut.",
   "atlassianConnectors.verify.forbidden.label": "Zugriff verweigert",
   "atlassianConnectors.verify.forbidden.copy":
-    "Das Konto wurde authentifiziert, hat aber keine Berechtigung. Erteilen Sie den Zugriff in Atlassian und prüfen Sie erneut.",
+    "Atlassian hat den Zugriff verweigert. Prüfe die Kontoberechtigungen sowie Einschränkungen der Website oder Lizenz. Prüfe die Verbindung danach erneut.",
   "atlassianConnectors.verify.unreachable.label": "Website nicht erreichbar",
   "atlassianConnectors.verify.unreachable.copy":
     "Die Basis-URL konnte nicht erreicht werden. Prüfen Sie URL und Netzwerk und versuchen Sie es erneut.",

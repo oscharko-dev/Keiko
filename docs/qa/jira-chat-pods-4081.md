@@ -2476,3 +2476,59 @@ not claim the licensed browser group has run. An independent mixed-source driver
 indexes a real Data Pod with an explicitly selected embedding model, then checks ordinary mixed
 read/approved-write turns and Data-only citations. Its live group is also pending. Existing
 defaults are preserved, and no product retry, schema, authority or budget was widened.
+
+### Completed mixed-source and browser recovery groups
+
+The stable `55ba6ff64` browser build passes both unknown-result journeys: keyboard connection
+with a lost observed Jira response, and native drag connection with committed-then-503. Each
+approved comment produces exactly one independently observed Jira effect. Canonical duplicate
+delivery, browser reload and visible Regenerate retain the unknown outcome without replay.
+Receipt SHA-256: `e76c288a6309cff4c8a6c6c2a2076f1d7f5ea49d16c4bcbadc70d3b84228b868`.
+A separate real BFF-to-Chromium interruption destroys the actual response after durable tool and
+assistant completion. Chromium observes the network failure; there are zero automatic buffered
+fallbacks. Explicit duplicate/reload/Regenerate preserve the confirmed result and one remote
+comment. Receipt SHA-256: `6d4ccbea70223517c0c6737dddb092df0ef0a7d53ee8b976a93797fa21ac2dd5`.
+Both groups retain matching 6,832-file runtime/helper and 381-file served-UI inventories, valid
+opening/closing license checks and no pending intent. The physical socket-loss group injects no
+Jira fault; its confirmed result is distinct from the first group's unknown Jira observation.
+
+The complete real-model mixed group passes two turns through ordinary Chat: Jira projects read
+and approved comment, each combined with a freshly created, connected and indexed Data Pod.
+The explicit embedding model is `qwen3-embedding:8b`; synthesis uses `keiko-qwen36-35b-8bit`.
+Each turn has one first-read grant; the write has one exact approval and one remote effect.
+Both answers correctly report eleven review steps, retain one Data-only citation, and identify
+Jira separately. Receipt SHA-256:
+`9da82b396b2421c2b81439f74513aa2918238ccc81d4afa17ea384cd9ba186f7`.
+All 6,825 runtime/helper files match before/after, inventory digest
+`775c169e79a1e9fad58a44a294f8f598960ebcccae1137d4bb639dc73f8c0b4f`; closing license has
+6,466 seconds remaining. The earlier ambiguous-question attempt answered only the Data question
+with zero Jira calls and zero effects; its incomplete receipt and reconciliation remain retained.
+The successful fresh group clarifies the natural Jira question without forcing tool choice,
+replacing a provider or weakening acceptance assertions.
+
+### Verification failures through the actual Hub
+
+The existing browser-client integration fixture now also mounts the real Hub panel. Nineteen
+additional cases carry all nine closed verification outcomes in English/German and a later
+revoked-token response through the actual client, HTTP route, custody and visible card. Only the
+remote fetch tail is synthetic; this does not claim a native Jira token was revoked. The tests
+check generation invalidation, removal of stale success, registered body-free outcomes and no
+raw provider details or tokens in the UI. All seven unchanged Cloud/Data Center creation and
+compatibility cases still pass.
+
+Four new checks failed before correction: the shared authentication copy requested an account
+email which PAT connections do not have, and the forbidden copy asserted authentication and a
+permission-only cause. Existing English/German messages now request the account/token check and
+include site/license restrictions as possible causes to inspect. No new outcome is inferred from
+provider text. The 26 integration cases and two existing status/axe tests pass; scoped UI types,
+lint and format pass. The required visual/update evidence refresh follows this source change.
+
+Restricted catalog qualification now has an explicit native-401 case for assignable-user lookup
+and assignment metadata. The harness expects existing fail-closed credential invalidation,
+cancelled delivery, unchanged canonical identity, no mutation dispatch and no duplicate replay.
+It does not reinterpret 401 as permission403. Sixty-five scoped helper cases and the unchanged
+927-entry semantic baseline pass; complete licensed catalog/lifecycle groups are still pending.
+
+The independent Linux full-gate run on `55ba6ff64` has passed root/UI typechecking, lint and
+formatting and is running the full unit matrix. Complete final-head coverage, evidence, Sonar,
+required checks and review closeout remain outstanding; no criterion is marked fully accepted.
