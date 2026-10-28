@@ -12,6 +12,7 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
+import { createMcpServerSecretStore } from "./mcpOAuthCredentialStore.js";
 import { createMcpSettingsStore } from "./mcpSettingsStore.js";
 
 const roots: string[] = [];
@@ -139,6 +140,32 @@ describe("shared MCP settings custody", () => {
     writeFileSync(join(f.input.stateDir, "mcp-servers.json"), "broken", { mode: 0o600 });
     expect(() => f.store.read("settings-test")).toThrow("unavailable");
     expect(readFileSync(join(f.input.stateDir, "mcp-servers.json"), "utf8")).toBe("broken");
+  });
+  it("removes deleted credentials and refuses disabled or superseded bindings", () => {
+    const f = fixture();
+    const saved = f.store.update(
+      {
+        expectedRevision: f.store.read("settings-test").revision,
+        servers: [f.server],
+        secrets: { [reference]: { server: f.server.name, value: token } },
+      },
+      "settings-test",
+    );
+    const disabled = f.store.update(
+      {
+        expectedRevision: saved.snapshot.revision,
+        servers: [{ ...f.server, enabled: false }],
+        secrets: {},
+      },
+      "settings-test",
+    );
+    expect(f.store.secret(reference, f.server)).toBeUndefined();
+    f.store.update(
+      { expectedRevision: disabled.snapshot.revision, servers: [], secrets: {} },
+      "settings-test",
+    );
+    expect(f.store.secret(reference, f.server)).toBeUndefined();
+    expect(createMcpServerSecretStore(f.input).get(reference, f.server)).toBeUndefined();
   });
   it("mcp.settings.updated.emitted-line records counts and a digest without configuration content", () => {
     const f = fixture();

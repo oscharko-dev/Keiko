@@ -79,6 +79,7 @@ import {
 } from "./chat-handlers.js";
 import { handleSendDesktopChatStream } from "./chat-stream-handlers.js";
 import { handleReadChatDraft, handleSaveChatDraft } from "./chat-draft-routes.js";
+import { handleGetMcpSettings, handlePutMcpSettings } from "./mcp/mcpSettingsRoutes.js";
 import {
   handleDeleteConversationAttachment,
   handleUploadConversationAttachment,
@@ -521,6 +522,8 @@ function dispatchGitChangeApplyDescription(
 // two desktop chat routes, desktop terminal JSON routes, and read-only Files widget routes.
 // Terminal byte I/O uses a token-scoped WebSocket upgrade path.
 export const API_ROUTES: readonly RouteDefinition[] = [
+  { method: "GET", pattern: "/api/mcp/servers", handler: handleGetMcpSettings },
+  { method: "PUT", pattern: "/api/mcp/servers", handler: handlePutMcpSettings },
   { method: "GET", pattern: "/api/health", handler: health },
   ...WORKSPACE_MANIFEST_ROUTE_GROUP,
   ...EDITOR_LOCAL_HISTORY_ROUTE_GROUP,

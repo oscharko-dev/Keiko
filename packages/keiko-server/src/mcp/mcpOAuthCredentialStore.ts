@@ -108,9 +108,24 @@ function staticCredentialBinding(server: McpServerDefinition): string {
     .digest("hex");
 }
 
+function staticCredentialValue(text: string, server: McpServerDefinition): string | undefined {
+  const value: unknown = JSON.parse(text);
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("binding" in value) ||
+    !("value" in value) ||
+    value.binding !== staticCredentialBinding(server) ||
+    typeof value.value !== "string"
+  )
+    return undefined;
+  return value.value;
+}
+
 /** Static credentials share the MCP vault, with immutable references bound to one exact target. */
 export function createMcpServerSecretStore(input: McpOAuthCredentialStoreInput): {
   readonly get: (reference: string, server: McpServerDefinition) => string | undefined;
+  readonly retain: (references: readonly string[]) => void;
   readonly put: (
     entries: readonly {
       readonly reference: string;
@@ -121,20 +136,19 @@ export function createMcpServerSecretStore(input: McpOAuthCredentialStoreInput):
 } {
   const key = (reference: string): string => `mcp-static:${reference}`;
   return {
+    retain: (references): void => {
+      const vault = openVault(input);
+      const retained = new Set(references.map(key));
+      vault.deleteMany(
+        vault
+          .list()
+          .filter((reference) => reference.startsWith("mcp-static:") && !retained.has(reference)),
+      );
+    },
     get: (reference, server): string | undefined => {
       const text = openVault(input).get(key(reference));
       if (text === undefined) return input.env[reference];
-      const value: unknown = JSON.parse(text);
-      if (
-        typeof value !== "object" ||
-        value === null ||
-        !("binding" in value) ||
-        !("value" in value) ||
-        value.binding !== staticCredentialBinding(server) ||
-        typeof value.value !== "string"
-      )
-        return undefined;
-      return value.value;
+      return staticCredentialValue(text, server);
     },
     put: (entries): void => {
       if (entries.length === 0) return;

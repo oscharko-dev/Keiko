@@ -2615,3 +2615,22 @@ Activity Log reconstruction. Package build and scoped lint/format are checked se
 Settings routes/UI, external SDK transport composition, discovery admission, Chat integration,
 OpenCode secret launch/relay integration and lifecycle invalidation are still pending at this
 checkpoint. The accepted earlier Jira live evidence does not qualify those new paths.
+
+### Shared Settings API and credential removal checkpoint
+
+The production dependency graph now owns the shared Settings store, mounted at authenticated
+GET/PUT `/api/mcp/servers`. Reads are non-cacheable; writes use the existing bounded JSON reader
+and reject an app session revoked during body delivery. Invalid requests do not reach persistence;
+a stale revision returns a conflict instead of silently replacing the current registry.
+
+Secret resolution checks the currently enabled configuration and its exact transport before
+opening a credential. Deleted references are removed from the MCP vault without touching OAuth
+entries. This is storage/resolution invalidation; revocation of already-bound runtime transports
+remains a separate outstanding integration obligation.
+
+The targeted route, store, credential, route-template and stack-frame suites pass 53 tests.
+This increment also corrects concrete earlier failures: the Activity Log recognizes the real
+`keiko-mcp` package and preserves the literal consent/approval/MCP-settings route segments.
+The full Activity Log gate passed seven checks on the previous foundation checkpoint; error
+observability also passes. Settings UI, external transports/discovery and shared consumer
+execution remain pending; these API tests are not an end-to-end MCP tool qualification.

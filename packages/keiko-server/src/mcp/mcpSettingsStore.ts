@@ -6,7 +6,11 @@ import type {
   McpSettingsSnapshot,
   McpSettingsUpdate,
 } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
-import { parseMcpSettingsUpdate } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
+import {
+  parseMcpSettingsUpdate,
+  mcpServerSecretReferences,
+} from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
   activityLogEvent,
   defineActivityLogOperation,
@@ -78,6 +82,29 @@ function recordMcpSettingsUpdate(
   );
 }
 
+function readSettings(
+  input: McpOAuthCredentialStoreInput & { readonly activityLog?: ServerLogSink },
+  correlationId: string,
+): McpSettingsSnapshot {
+  const current = loadMcpServerRegistry({
+    stateDir: input.stateDir,
+    activityLog: input.activityLog,
+    correlationId,
+    consumer: "settings",
+  });
+  if (current.state === "refused") throw new TypeError("MCP registry is unavailable");
+  return snapshot(current.servers);
+}
+
+function validUpdate(update: McpSettingsUpdate): McpSettingsUpdate {
+  const validated = parseMcpSettingsUpdate(update);
+  if (validated === undefined) throw new TypeError("MCP settings are invalid");
+  const document = { schemaVersion: 1, servers: validated.servers };
+  if (Buffer.byteLength(JSON.stringify(document), "utf8") > 64 * 1024)
+    throw new TypeError("MCP settings exceed the registry size limit");
+  return validated;
+}
+
 /** One existing registry, one MCP vault and the canonical atomic private-file writer. */
 export function createMcpSettingsStore(
   input: McpOAuthCredentialStoreInput & {
@@ -86,28 +113,27 @@ export function createMcpSettingsStore(
   },
 ): McpSettingsStore {
   const secrets = createMcpServerSecretStore(input);
-  const read = (correlationId: string): McpSettingsSnapshot => {
-    const current = loadMcpServerRegistry({
-      stateDir: input.stateDir,
-      activityLog: input.activityLog,
-      correlationId,
-      consumer: "settings",
-    });
-    if (current.state === "refused") throw new TypeError("MCP registry is unavailable");
-    return snapshot(current.servers);
-  };
+  const read = (correlationId: string): McpSettingsSnapshot => readSettings(input, correlationId);
   return {
     read,
-    secret: secrets.get,
+    secret: (reference, server): string | undefined => {
+      const current = read(UNKNOWN_CORRELATION_ID).servers.find(
+        (entry) => entry.name === server.name,
+      );
+      if (
+        current?.enabled !== true ||
+        !mcpServerSecretReferences(current).includes(reference) ||
+        JSON.stringify(current.transport) !== JSON.stringify(server.transport)
+      )
+        return undefined;
+      return secrets.get(reference, current);
+    },
     update: (
       update,
       correlationId,
     ): { readonly ok: boolean; readonly snapshot: McpSettingsSnapshot } => {
-      const validated = parseMcpSettingsUpdate(update);
-      if (validated === undefined) throw new TypeError("MCP settings are invalid");
+      const validated = validUpdate(update);
       const document = { schemaVersion: 1, servers: validated.servers };
-      if (Buffer.byteLength(JSON.stringify(document), "utf8") > 64 * 1024)
-        throw new TypeError("MCP settings exceed the registry size limit");
       const current = read(correlationId);
       if (current.revision !== update.expectedRevision) {
         recordMcpSettingsUpdate(input.activityLog, correlationId, "conflict", current, 0);
@@ -123,6 +149,7 @@ export function createMcpSettingsStore(
       savePrivateJson(join(input.stateDir, MCP_SERVER_REGISTRY_FILE), document);
       const next = snapshot(validated.servers);
       input.onChanged?.();
+      secrets.retain(next.servers.flatMap(mcpServerSecretReferences));
       recordMcpSettingsUpdate(input.activityLog, correlationId, "applied", next, entries.length);
       return { ok: true, snapshot: next };
     },

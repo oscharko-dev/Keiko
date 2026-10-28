@@ -1,4 +1,5 @@
 import type { JiraChatToolTurn } from "./atlassian/jiraChatToolTurn.js";
+import { createMcpSettingsStore, type McpSettingsStore } from "./mcp/mcpSettingsStore.js";
 import { EditorAgentAuthorityRegistry } from "./editor/agentAuthorityRegistry.js";
 import {
   installJiraChatCatalogRuntime,
@@ -768,6 +769,7 @@ interface AgentAuthorityRegistryDependency {
 }
 
 export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
+  readonly mcpSettings?: McpSettingsStore;
   /** Server-only, request-scoped revalidation of the paired session using a private skill. */
   readonly markdownSkillAuthority?: (() => boolean) | undefined;
   // The resolved gateway config, or undefined when no config file was provided / it failed to load.
@@ -4940,6 +4942,14 @@ function mcpRelayDeps(args: UiHandlerDepsAssemblyArgs): Pick<UiHandlerDeps, "mcp
   };
 }
 
+function buildMcpSettings(args: UiHandlerDepsAssemblyArgs): McpSettingsStore {
+  return createMcpSettingsStore({
+    stateDir: dirname(args.resolvedUiDbPath),
+    env: args.options.env,
+    activityLog: args.options.activityLog ?? processServerLogSink(),
+  });
+}
+
 function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   const dapRuntime = createDapRuntimeReference(args.options);
   const services = assembleUiHandlerRuntimeServices(args, dapRuntime);
@@ -4963,6 +4973,7 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   // fallback exists for.
   const prDescriptionGeneration = createProductionPrDescriptionGeneration(args.runtimeConfig);
   const deps: UiHandlerDeps = {
+    mcpSettings: buildMcpSettings(args),
     ...buildBaseUiHandlerDeps(args),
     ...buildRuntimeUiHandlerDeps(args, services),
     ...buildIntegrationUiHandlerDeps(args, atlassianRegistries),
