@@ -15,8 +15,9 @@ import {
 import { createAuditRedactor, deepRedactStrings } from "@oscharko-dev/keiko-security";
 
 import { correlationIdOrUnknown } from "./correlation.js";
-import { currentRedactionSecrets, type UiHandlerDeps } from "./deps.js";
+import type { UiHandlerDeps } from "./deps.js";
 import { completeTruncatedDiffPrefix } from "./gitDiffTruncation.js";
+import { currentRedactionSecrets } from "./redaction-secrets.js";
 import type { ServerLogSink } from "./observability/index.js";
 
 const GIT_DIFF_VIEW_BOUNDED_OPERATION = defineActivityLogOperation({
