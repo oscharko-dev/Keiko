@@ -2634,3 +2634,19 @@ This increment also corrects concrete earlier failures: the Activity Log recogni
 The full Activity Log gate passed seven checks on the previous foundation checkpoint; error
 observability also passes. Settings UI, external transports/discovery and shared consumer
 execution remain pending; these API tests are not an end-to-end MCP tool qualification.
+
+### Auditor finding: recoverable Settings persistence across partial failures
+
+Confirmed against `6d08fc0cb`: registry publication followed by failed vault cleanup could
+report failure after configuration was committed; a failed registry write after sealing could
+also make a repeated immutable-reference request fail. Three new fault cases fail on that
+commit and pass after the fix (78 tests across six focused suites; registry gate 97 tests).
+
+Identical sealed reference/value/target writes are now idempotent; different values remain
+refused. A credential-free update does not open a nonexistent vault. Registry publication is
+the configuration commit point: cleanup failure returns the committed revision with
+`credentialCleanup: pending`, recorded in body-free Activity Log evidence. Access resolution
+still refuses inactive references. Reads and subsequent updates reconcile orphan ciphertext
+against the durable registry, including after a fresh store/process; malformed registry state
+never authorizes cleanup. The fault tests simulate registry-write failure and an unavailable
+vault key and verify successful retry/restart and actual eventual credential removal.

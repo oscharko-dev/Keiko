@@ -29370,7 +29370,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["applied", "conflict"],
+        values: ["applied", "conflict", "reconciled"],
       },
       serverCount: {
         type: "integer",
@@ -29387,6 +29387,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "digest",
         required: true,
         maxLength: 64,
+      },
+      credentialCleanup: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["complete", "pending"],
       },
     },
     causal: "correlation",

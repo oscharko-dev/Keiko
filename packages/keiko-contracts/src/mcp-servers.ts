@@ -592,6 +592,8 @@ export function parseCodingWorkbenchMcpAuthorizationRequest(
 export interface McpSettingsSnapshot {
   readonly revision: string;
   readonly servers: readonly McpServerDefinition[];
+  /** Committed configuration is authoritative even when encrypted orphan cleanup needs retry. */
+  readonly credentialCleanup?: "pending";
 }
 export interface McpSettingsSecretInput {
   readonly server: string;

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { lstatSync } from "node:fs";
 import { join } from "node:path";
 import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 import {
@@ -95,6 +96,17 @@ function openVault(input: McpOAuthCredentialStoreInput): LocalSecretVault {
   });
 }
 
+function vaultExists(input: McpOAuthCredentialStoreInput): boolean {
+  try {
+    lstatSync(join(input.stateDir, VAULT_DIRECTORY, VAULT_FILE));
+    return true;
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT")
+      return false;
+    throw error;
+  }
+}
+
 function staticCredentialBinding(server: McpServerDefinition): string {
   return createHash("sha256")
     .update(
@@ -125,7 +137,7 @@ function staticCredentialValue(text: string, server: McpServerDefinition): strin
 /** Static credentials share the MCP vault, with immutable references bound to one exact target. */
 export function createMcpServerSecretStore(input: McpOAuthCredentialStoreInput): {
   readonly get: (reference: string, server: McpServerDefinition) => string | undefined;
-  readonly retain: (references: readonly string[]) => void;
+  readonly retain: (references: readonly string[]) => number;
   readonly put: (
     entries: readonly {
       readonly reference: string;
@@ -136,14 +148,15 @@ export function createMcpServerSecretStore(input: McpOAuthCredentialStoreInput):
 } {
   const key = (reference: string): string => `mcp-static:${reference}`;
   return {
-    retain: (references): void => {
+    retain: (references): number => {
+      if (!vaultExists(input)) return 0;
       const vault = openVault(input);
       const retained = new Set(references.map(key));
-      vault.deleteMany(
-        vault
-          .list()
-          .filter((reference) => reference.startsWith("mcp-static:") && !retained.has(reference)),
-      );
+      const removed = vault
+        .list()
+        .filter((reference) => reference.startsWith("mcp-static:") && !retained.has(reference));
+      vault.deleteMany(removed);
+      return removed.length;
     },
     get: (reference, server): string | undefined => {
       const text = openVault(input).get(key(reference));
@@ -156,12 +169,14 @@ export function createMcpServerSecretStore(input: McpOAuthCredentialStoreInput):
       const captured = new Map<string, string>();
       for (const entry of entries) {
         const reference = key(entry.reference);
-        if (vault.get(reference) !== undefined || captured.has(reference))
+        const encoded = JSON.stringify({
+          binding: staticCredentialBinding(entry.server),
+          value: entry.value,
+        });
+        const prior = vault.get(reference) ?? captured.get(reference);
+        if (prior !== undefined && prior !== encoded)
           throw new TypeError("MCP secret references are immutable");
-        captured.set(
-          reference,
-          JSON.stringify({ binding: staticCredentialBinding(entry.server), value: entry.value }),
-        );
+        if (prior === undefined) captured.set(reference, encoded);
       }
       vault.setMany(captured);
     },

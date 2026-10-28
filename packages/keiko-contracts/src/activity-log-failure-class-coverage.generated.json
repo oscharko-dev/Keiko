@@ -35014,6 +35014,12 @@
           "analyzerProjection": "timeline",
           "safeContextFields": [
             {
+              "name": "credentialCleanup",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
               "name": "outcome",
               "type": "string",
               "dataClass": "closed-enum",

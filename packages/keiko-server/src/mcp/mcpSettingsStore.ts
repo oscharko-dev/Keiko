@@ -34,11 +34,17 @@ const UPDATED = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["applied", "conflict"],
+      values: ["applied", "conflict", "reconciled"],
     },
     serverCount: { type: "integer", dataClass: "count", required: true },
     secretCount: { type: "integer", dataClass: "count", required: true },
     registrySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    credentialCleanup: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["complete", "pending"],
+    },
   },
   causal: "correlation",
   lifecycle: "state",
@@ -64,7 +70,7 @@ function snapshot(servers: readonly McpServerDefinition[]): McpSettingsSnapshot 
 function recordMcpSettingsUpdate(
   log: ServerLogSink | undefined,
   correlationId: string,
-  outcome: "applied" | "conflict",
+  outcome: "applied" | "conflict" | "reconciled",
   state: McpSettingsSnapshot,
   secretCount: number,
 ): void {
@@ -77,6 +83,7 @@ function recordMcpSettingsUpdate(
         serverCount: state.servers.length,
         secretCount,
         registrySha256: state.revision,
+        credentialCleanup: state.credentialCleanup ?? "complete",
       },
     ),
   );
@@ -105,15 +112,33 @@ function validUpdate(update: McpSettingsUpdate): McpSettingsUpdate {
   return validated;
 }
 
+function reconcileSecrets(
+  secrets: ReturnType<typeof createMcpServerSecretStore>,
+  state: McpSettingsSnapshot,
+): { readonly snapshot: McpSettingsSnapshot; readonly changed: boolean } {
+  try {
+    const removed = secrets.retain(state.servers.flatMap(mcpServerSecretReferences));
+    return { snapshot: state, changed: removed > 0 };
+  } catch {
+    // The committed registry revokes access independently of physical ciphertext cleanup.
+    // The next read/update (including a new process) retries against that same durable state.
+    return { snapshot: { ...state, credentialCleanup: "pending" }, changed: true };
+  }
+}
+
 /** One existing registry, one MCP vault and the canonical atomic private-file writer. */
 export function createMcpSettingsStore(
   input: McpOAuthCredentialStoreInput & {
     readonly activityLog?: ServerLogSink;
-    readonly onChanged?: () => void;
   },
 ): McpSettingsStore {
   const secrets = createMcpServerSecretStore(input);
-  const read = (correlationId: string): McpSettingsSnapshot => readSettings(input, correlationId);
+  const read = (correlationId: string): McpSettingsSnapshot => {
+    const result = reconcileSecrets(secrets, readSettings(input, correlationId));
+    if (result.changed)
+      recordMcpSettingsUpdate(input.activityLog, correlationId, "reconciled", result.snapshot, 0);
+    return result.snapshot;
+  };
   return {
     read,
     secret: (reference, server): string | undefined => {
@@ -147,9 +172,7 @@ export function createMcpSettingsStore(
       // Unique immutable references are sealed first. A failed registry write cannot change old credentials.
       secrets.put(entries);
       savePrivateJson(join(input.stateDir, MCP_SERVER_REGISTRY_FILE), document);
-      const next = snapshot(validated.servers);
-      input.onChanged?.();
-      secrets.retain(next.servers.flatMap(mcpServerSecretReferences));
+      const next = reconcileSecrets(secrets, snapshot(validated.servers)).snapshot;
       recordMcpSettingsUpdate(input.activityLog, correlationId, "applied", next, entries.length);
       return { ok: true, snapshot: next };
     },

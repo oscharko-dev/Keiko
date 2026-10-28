@@ -1,8 +1,9 @@
 import { randomBytes } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
   type McpServerDefinition,
@@ -13,10 +14,12 @@ import {
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
 import { createMcpServerSecretStore } from "./mcpOAuthCredentialStore.js";
+import * as privateJson from "../private-json.js";
 import { createMcpSettingsStore } from "./mcpSettingsStore.js";
 
 const roots: string[] = [];
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const path of roots.splice(0)) rmSync(path, { recursive: true, force: true });
 });
 const reference = "KEIKO_MCP_SECRET_FIXTURE";
@@ -57,6 +60,27 @@ function fixture(): {
   });
   if (!parsed.ok || parsed.servers[0] === undefined) throw new Error("fixture registry invalid");
   return { input, events, server: parsed.servers[0], store: createMcpSettingsStore(input) };
+}
+
+function readInNewProcess(input: Parameters<typeof createMcpSettingsStore>[0]): unknown {
+  const program = `
+    import { readFileSync } from "node:fs";
+    const input = JSON.parse(readFileSync(0, "utf8"));
+    const { createMcpSettingsStore } = await import(input.moduleUrl);
+    const store = createMcpSettingsStore({ stateDir: input.stateDir, env: input.env, keychainAccess: () => undefined });
+    process.stdout.write(JSON.stringify(store.read("settings-restart")));
+  `;
+  const result = spawnSync(process.execPath, ["--input-type=module", "--eval", program], {
+    input: JSON.stringify({
+      stateDir: input.stateDir,
+      env: input.env,
+      moduleUrl: new URL("../../dist/mcp/mcpSettingsStore.js", import.meta.url).href,
+    }),
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  expect(result.status).toBe(0);
+  return JSON.parse(result.stdout) as unknown;
 }
 
 describe("shared MCP settings custody", () => {
@@ -165,6 +189,64 @@ describe("shared MCP settings custody", () => {
       "settings-test",
     );
     expect(f.store.secret(reference, f.server)).toBeUndefined();
+    expect(createMcpServerSecretStore(f.input).get(reference, f.server)).toBeUndefined();
+  });
+  it("recovery: credential-free updates do not require a vault key", () => {
+    const f = fixture();
+    const store = createMcpSettingsStore({
+      ...f.input,
+      env: { KEIKO_MCP_OAUTH_CREDENTIALS_KEY: "invalid" },
+    });
+    expect(
+      store.update(
+        { expectedRevision: store.read("settings-test").revision, servers: [], secrets: {} },
+        "settings-test",
+      ).ok,
+    ).toBe(true);
+  });
+  it("recovery: retries the same mutation after sealing succeeds but registry persistence fails", () => {
+    const f = fixture();
+    const update = {
+      expectedRevision: f.store.read("settings-test").revision,
+      servers: [f.server],
+      secrets: { [reference]: { server: f.server.name, value: token } },
+    };
+    vi.spyOn(privateJson, "savePrivateJson").mockImplementationOnce((): never => {
+      throw new Error("synthetic-write-failure");
+    });
+    expect(() => f.store.update(update, "settings-test")).toThrow("synthetic-write-failure");
+    expect(createMcpServerSecretStore(f.input).get(reference, f.server)).toBe(token);
+    expect(createMcpSettingsStore(f.input).update(update, "settings-test").ok).toBe(true);
+    expect(f.store.secret(reference, f.server)).toBe(token);
+  });
+  it("recovery: reports committed deletion while cleanup is unavailable and reconciles after restart", () => {
+    const f = fixture();
+    const saved = f.store.update(
+      {
+        expectedRevision: f.store.read("settings-test").revision,
+        servers: [f.server],
+        secrets: { [reference]: { server: f.server.name, value: token } },
+      },
+      "settings-test",
+    );
+    const unavailable = createMcpSettingsStore({
+      ...f.input,
+      env: { KEIKO_MCP_OAUTH_CREDENTIALS_KEY: "invalid" },
+    });
+    const result = unavailable.update(
+      { expectedRevision: saved.snapshot.revision, servers: [], secrets: {} },
+      "settings-test",
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      snapshot: { servers: [], credentialCleanup: "pending" },
+    });
+    expect(unavailable.read("settings-test").revision).toBe(result.snapshot.revision);
+    expect(unavailable.secret(reference, f.server)).toBeUndefined();
+    expect(readInNewProcess(f.input)).toEqual({
+      revision: result.snapshot.revision,
+      servers: [],
+    });
     expect(createMcpServerSecretStore(f.input).get(reference, f.server)).toBeUndefined();
   });
   it("mcp.settings.updated.emitted-line records counts and a digest without configuration content", () => {

@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "317bcfd8bca5a488e023bf4b293ac540bb98d859c696f8c348d1eded8cd9d0fc",
+    "catalogDigest": "0775cb8878556a45a562a7f23d0cc232dd8a63d84d28424d9929ba49b7cc2b0b",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -30672,7 +30672,7 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["applied", "conflict"]
+            "values": ["applied", "conflict", "reconciled"]
           },
           "serverCount": {
             "type": "integer",
@@ -30689,6 +30689,12 @@
             "dataClass": "digest",
             "required": true,
             "maxLength": 64
+          },
+          "credentialCleanup": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["complete", "pending"]
           }
         },
         "causal": "correlation",
@@ -30697,8 +30703,8 @@
         "failureClasses": ["mcp-registry"],
         "proofIds": ["mcp.settings.updated.emitted-line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/mcp/mcpSettingsStore.ts:21",
-        "emitterSites": ["packages/keiko-server/src/mcp/mcpSettingsStore.ts:68"]
+        "registrationSite": "packages/keiko-server/src/mcp/mcpSettingsStore.ts:25",
+        "emitterSites": ["packages/keiko-server/src/mcp/mcpSettingsStore.ts:78"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -88667,6 +88673,12 @@
               "analyzerProjection": "timeline",
               "safeContextFields": [
                 {
+                  "name": "credentialCleanup",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
                   "name": "outcome",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -104628,7 +104640,7 @@
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:1606",
+      "site": "packages/keiko-server/src/deps.ts:1608",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -105419,7 +105431,7 @@
     {
       "op": "managed-lsp.trust.restrict",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:2471",
+      "site": "packages/keiko-server/src/deps.ts:2473",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -105445,7 +105457,7 @@
     {
       "op": "mcp.settings.updated",
       "category": "security",
-      "site": "packages/keiko-server/src/mcp/mcpSettingsStore.ts:24",
+      "site": "packages/keiko-server/src/mcp/mcpSettingsStore.ts:28",
       "package": "keiko-server"
     },
     {
@@ -105875,7 +105887,7 @@
     {
       "op": "server.composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:4734",
+      "site": "packages/keiko-server/src/deps.ts:4736",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -106028,7 +106040,7 @@
     {
       "op": "task-workspace.reconcile.startup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:3328",
+      "site": "packages/keiko-server/src/deps.ts:3330",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
