@@ -251,6 +251,20 @@ deny, egress and owner-reaping results. Early utility exits report only a numeri
 bounded filter readback, not localized output or private identities. This distinguishes package
 scope from utility concurrency without turning a failed concurrent lifetime into a pass.
 
+[Run 40774169836](https://github.com/oscharko-dev/Keiko/actions/runs/40774169836) on `5b607a251`
+confirms the peer's own rule admits its listener and the wrong package rule refuses it, in both
+gateway-family cases. The second simultaneous inbound utility exits with `0x80320009`
+(`FWP_E_ALREADY_EXISTS`); its readback contains only the first package's filter. A later outbound
+probe also failed, before independent-deny/reaping checks could execute.
+
+That outbound failure exposed a separate fixture defect: the target listened with an eight-entry
+backlog but never accepted completed connections. The default, unprivileged regression reproduced
+exhaustion after the initial connection plus seven repetitions in both families. The fixture now
+accepts and closes each completed probe's connections, verifies exact server-side counts and runs
+16 successful reuse cycles per family. This preserves actual network-denial assertions instead of
+mistaking a full listener backlog for enforcement. The concurrent-utility refusal remains a
+separate failed qualification requirement.
+
 Local protocol validation also ran the complete existing `runtime-gateway.test.ts`: 29 passed,
 eight failed on existing POSIX filesystem fixtures rejected by Windows path canonicalization, and
 25 macOS tests skipped. The new cross-language vector case passes individually. These baseline

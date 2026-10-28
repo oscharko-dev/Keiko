@@ -54,6 +54,25 @@ static int listen_target(int family, struct socket_target *target) {
   return bind_target(family, target) && listen(target->listener, 8) == 0;
 }
 
+static int tcp_accepted(SOCKET listener) {
+  /* Each bounded probe finishes before this readback. Accept and close its connections so the
+   * eight-slot backlog cannot impersonate a later policy denial. Excess traffic fails closed. */
+  for (int count = 0; count < 16; count++) {
+    fd_set ready;
+    struct timeval timeout = {0, 0};
+    SOCKET client;
+    int selected;
+    FD_ZERO(&ready); FD_SET(listener, &ready);
+    selected = select(0, &ready, NULL, NULL, &timeout);
+    if (selected == 0) return count;
+    if (selected < 0) return -1;
+    client = accept(listener, NULL, NULL);
+    if (client == INVALID_SOCKET) return -1;
+    if (closesocket(client) != 0) return -1;
+  }
+  return -1;
+}
+
 static int connect_target(int family, UINT16 port, int *failure) {
   SOCKADDR_STORAGE storage = {0};
   int length, result, error = 0, error_size = sizeof(error);
@@ -108,8 +127,16 @@ int gateway_socket_client_tests(void) {
     /* Reserve the negative control's port without listening so it cannot be reassigned. */
     if (!listen_target(family, &server) || !bind_target(family, &refused) ||
         !connect_target(family, server.port, &success_error) || success_error != 0 ||
+        tcp_accepted(server.listener) != 1 ||
         connect_target(family, refused.port, &refused_error) ||
         (refused_error != WSAECONNREFUSED && refused_error != WSAETIMEDOUT)) ok = 0;
+    {
+      unsigned completed = 0;
+      for (; completed < 16; completed++)
+        if (!connect_target(family, server.port, &success_error) || tcp_accepted(server.listener) != 1) break;
+      printf("gateway-host-listener-reuse: family=%d cycles=%u expected=16\n", family, completed);
+      if (completed != 16) ok = 0;
+    }
     if (server.listener != INVALID_SOCKET) closesocket(server.listener);
     if (refused.listener != INVALID_SOCKET) closesocket(refused.listener);
     printf("gateway-host-socket-client: family=%d accepted=%d refused=%d\n",
@@ -331,7 +358,8 @@ static DWORD foreign_principal_probe(PSID sid, PSID peer_sid, const wchar_t *exe
 }
 
 static DWORD scoped_inbound_probe(PSID sid, PSID peer_sid, const wchar_t *executable, int family,
-                                  UINT16 gateway, UINT16 hostile, SOCKET udp, PSID_AND_ATTRIBUTES network) {
+                                  UINT16 gateway, UINT16 hostile, SOCKET udp, SOCKET gateway_listener,
+                                  PSID_AND_ATTRIBUTES network) {
   /* opencodeLaunchProfile and opencodeV2HttpClient require IPv4 control, independently of the
    * attested outbound gateway family. This experiment must exercise that actual composition. */
   const int control_family = AF_INET;
@@ -349,7 +377,8 @@ static DWORD scoped_inbound_probe(PSID sid, PSID peer_sid, const wchar_t *execut
     printf("socket-diagnostic-control: family=%d code=%lu observations=%lu expected-tcp-mask=1\n",
            family, result, observed);
     if (result == ERROR_SUCCESS &&
-        (observed > 7 || (observed & 3) != 1 || udp_received(udp) != 0)) result = ERROR_INVALID_DATA;
+        (observed > 7 || (observed & 3) != 1 || udp_received(udp) != 0 ||
+         tcp_accepted(gateway_listener) != 2)) result = ERROR_INVALID_DATA;
   }
   if (result == ERROR_SUCCESS)
     result = foreign_principal_probe(sid, peer_sid, executable, control_family, network);
@@ -367,7 +396,8 @@ static DWORD scoped_inbound_probe(PSID sid, PSID peer_sid, const wchar_t *execut
     printf("socket-inbound-egress: family=%d code=%lu observations=%lu expected-tcp-mask=1\n",
            family, result, observed);
     if (result == ERROR_SUCCESS &&
-        (observed > 7 || (observed & 3) != 1 || udp_received(udp) != 0)) result = ERROR_INVALID_DATA;
+        (observed > 7 || (observed & 3) != 1 || udp_received(udp) != 0 ||
+         tcp_accepted(gateway_listener) != 2)) result = ERROR_INVALID_DATA;
   }
   if (result == ERROR_SUCCESS) result = gateway_inbound_block(sid, (UINT16)control_family, &deny);
   if (result == ERROR_SUCCESS &&
@@ -631,13 +661,15 @@ int gateway_socket_proof(int inbound_experiment) {
       if (result == ERROR_SUCCESS)
       result = run_child(sid, executable, family, gateway.port, hostile.port, &observed, network_pointer);
       printf("socket-baseline: family=%d code=%lu connections=%lu expected=7 descendant=same\n", family, result, observed);
-      if (result == ERROR_SUCCESS && (observed != 7 || udp_received(udp) != 1 || udp_received(udp) != 1))
+      if (result == ERROR_SUCCESS && (observed != 7 || udp_received(udp) != 1 || udp_received(udp) != 1 ||
+          tcp_accepted(gateway.listener) != 2 || tcp_accepted(hostile.listener) != 2))
         result = ERROR_INVALID_DATA;
       if (result == ERROR_SUCCESS) {
         result = run_child(peer_sid, executable, family, hostile.port, gateway.port, &observed, network_pointer);
         printf("socket-peer-baseline: family=%d code=%lu connections=%lu expected=7 descendant=same\n", family, result, observed);
         if (result == ERROR_SUCCESS &&
-            (observed != 7 || udp_received(peer_udp) != 1 || udp_received(peer_udp) != 1))
+            (observed != 7 || udp_received(peer_udp) != 1 || udp_received(peer_udp) != 1 ||
+             tcp_accepted(gateway.listener) != 2 || tcp_accepted(hostile.listener) != 2))
           result = ERROR_INVALID_DATA;
       }
       if (result == ERROR_SUCCESS) {
@@ -678,15 +710,18 @@ int gateway_socket_proof(int inbound_experiment) {
         }
         {
           int received = udp_received(udp), peer_received = udp_received(peer_udp);
+          int accepted = tcp_accepted(gateway.listener), peer_accepted = tcp_accepted(hostile.listener);
           printf("socket-udp-reception: family=%d first=%d peer=%d expected=0\n", family, received, peer_received);
-          if (received != 0 || peer_received != 0) result = ERROR_INVALID_DATA;
+          printf("socket-tcp-acceptance: family=%d first=%d peer=%d expected=2\n", family, accepted, peer_accepted);
+          if (received != 0 || peer_received != 0 || accepted != 2 || peer_accepted != 2) result = ERROR_INVALID_DATA;
         }
         if (result == ERROR_SUCCESS) {
           DWORD route = control_route_probe(sid, executable, control_family, "filtered", network_pointer, NULL);
           DWORD expected = inbound_experiment ? ERROR_CONNECTION_REFUSED : ERROR_SUCCESS;
           if (route != expected) control_result = ERROR_INVALID_DATA;
           if (inbound_experiment) {
-            route = scoped_inbound_probe(sid, peer_sid, executable, family, gateway.port, hostile.port, udp, network_pointer);
+            route = scoped_inbound_probe(sid, peer_sid, executable, family, gateway.port, hostile.port,
+                                          udp, gateway.listener, network_pointer);
             if (route != ERROR_SUCCESS) control_result = route;
           }
         }
