@@ -1,5 +1,9 @@
 import { deepFreeze } from "./deep-freeze.js";
 import type { CodingWorkbenchActionClass } from "./coding-workbench.js";
+import {
+  EDITOR_AGENT_ACTION_MAX_BODY_BYTES,
+  EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES,
+} from "./editor-agent.js";
 
 declare const canonicalToolIdBrand: unique symbol;
 declare const catalogDigestBrand: unique symbol;
@@ -27,6 +31,44 @@ export const TOOL_CATALOG_LIMITS = Object.freeze({
   maxCursorLifetimeMs: 300_000,
   maxCompatibilityLifetimeMs: 604_800_000,
 });
+
+/** The byte ceilings of one tool call's arguments: the whole call, and any one string in it. */
+export interface ToolArgumentLimits {
+  readonly maxArgumentBytes: number;
+  readonly maxStringBytes: number;
+}
+
+/** The canonical id of the governed changeset edit, the one tool whose arguments are file content. */
+export const GOVERNED_CHANGESET_EDIT_TOOL_ID = "keiko.changeset.edit";
+/** The name the model and the coding runtime know the governed changeset edit by. */
+export const GOVERNED_CHANGESET_EDIT_TOOL_ALIAS = "keiko_changeset_edit";
+
+/** The ceilings every tool call is held to unless `toolArgumentLimits` names a larger one. */
+export const GENERIC_TOOL_ARGUMENT_LIMITS: ToolArgumentLimits = Object.freeze({
+  maxArgumentBytes: TOOL_CATALOG_LIMITS.maxArgumentBytes,
+  maxStringBytes: TOOL_CATALOG_LIMITS.maxStringBytes,
+});
+
+/**
+ * The ceilings of one `keiko_changeset_edit` call (owner decision, 2026-10-28: Keiko refuses no
+ * coding data at 64 KiB). They are the changeset cap, not a second figure: one `oldString` or
+ * `newString` may carry up to `EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES` UTF-8 bytes, and one call
+ * may carry what one editor action may (`EDITOR_AGENT_ACTION_MAX_BODY_BYTES`: the old and new text
+ * of a changeset at the cap, JSON escaping of quotes and line breaks, and a mebibyte of envelope).
+ * The materialized diff stays bounded by the cap itself, so these remain runaway safeguards of the
+ * wire, and the generic catalog ceilings are unchanged for every other tool.
+ */
+export const CHANGESET_EDIT_ARGUMENT_LIMITS: ToolArgumentLimits = Object.freeze({
+  maxArgumentBytes: EDITOR_AGENT_ACTION_MAX_BODY_BYTES,
+  maxStringBytes: EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES,
+});
+
+/** The argument ceilings of the tool with this canonical id. */
+export function toolArgumentLimits(canonicalId: string): ToolArgumentLimits {
+  return canonicalId === GOVERNED_CHANGESET_EDIT_TOOL_ID
+    ? CHANGESET_EDIT_ARGUMENT_LIMITS
+    : GENERIC_TOOL_ARGUMENT_LIMITS;
+}
 
 export interface ToolRef {
   readonly canonicalId: CanonicalToolId;

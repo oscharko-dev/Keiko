@@ -13,7 +13,10 @@
 
 import { createHash } from "node:crypto";
 import type { IncomingMessage } from "node:http";
-import type { CodingWorkbenchRuntimeStateName } from "@oscharko-dev/keiko-contracts";
+import type {
+  CodingWorkbenchOperatorDecision,
+  CodingWorkbenchRuntimeStateName,
+} from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "../deps.js";
 import {
   emitServerDiagnostic,
@@ -48,7 +51,28 @@ export function isLeaseHoldingRunState(
   return state !== undefined && ACTIVE_RUN_STATES.has(state);
 }
 
-type RunStateReader = (runId: string) => CodingWorkbenchRuntimeStateName | undefined;
+/**
+ * What a reader reports about a run: its state alone, or its state with the operator decision it is
+ * paused for. A run paused for an operator decision is waiting on the human, like awaiting-approval,
+ * so it keeps the lease (audit 2026-10, finding 10); a pause the human chose (no decision recorded)
+ * still releases it.
+ */
+type RunObservation =
+  | CodingWorkbenchRuntimeStateName
+  | {
+      readonly state: CodingWorkbenchRuntimeStateName;
+      readonly pauseReason?: CodingWorkbenchOperatorDecision | undefined;
+    }
+  | undefined;
+type RunStateReader = (runId: string) => RunObservation;
+
+function holdsLease(observation: RunObservation): boolean {
+  if (typeof observation !== "object") return isLeaseHoldingRunState(observation);
+  return (
+    isLeaseHoldingRunState(observation.state) ||
+    (observation.state === "paused" && observation.pauseReason !== undefined)
+  );
+}
 type LeaseDeps = Pick<UiHandlerDeps, "codingAppSessionChannel" | "activityLog" | "diagnostics">;
 
 interface SessionLease {
@@ -88,7 +112,7 @@ function reportLeaseFailure(
 // An unreadable run state never holds a session open, and never escapes the observation timer.
 function runStillActive(runId: string, run: LeasedRun): boolean {
   try {
-    return isLeaseHoldingRunState(run.runState(runId));
+    return holdsLease(run.runState(runId));
   } catch (error) {
     reportLeaseFailure(run, runId, "coding-app-session.coding-run-lease.state", error);
     return false;
@@ -225,13 +249,13 @@ export function holdAppSessionForCodingRun(
   snapshot: {
     readonly runId?: string | undefined;
     readonly state: CodingWorkbenchRuntimeStateName;
+    readonly pauseReason?: CodingWorkbenchOperatorDecision | undefined;
   },
   runState: RunStateReader,
 ): void {
   const channel = deps.codingAppSessionChannel;
   const runId = snapshot.runId;
-  if (channel === undefined || runId === undefined || !isLeaseHoldingRunState(snapshot.state))
-    return;
+  if (channel === undefined || runId === undefined || !holdsLease(snapshot)) return;
   const session = resolveAppSessionReadAuthority(deps, req);
   if (session === undefined) return;
   leasesFor(channel).hold({ deps, req, runId, sessionId: session.sessionId, runState });

@@ -127,6 +127,12 @@ export interface CodingWorkbenchMutationState {
   readonly kind: CodingWorkbenchMutationKind | null;
   readonly requestId: string | null;
   readonly error: CodingWorkbenchClientError | null;
+  /**
+   * The run revision the failed action was attempted against. A later snapshot that moves past it
+   * (a newer revision, or another run) supersedes the failure: the alert described a state that no
+   * longer exists. A snapshot that merely repeats the revision proves nothing and keeps the alert.
+   */
+  readonly failedAgainst?: { readonly runId: string | null; readonly revision: number };
 }
 
 export interface CodingWorkbenchRuntimeState {
@@ -192,6 +198,7 @@ export type CodingWorkbenchRuntimeStateAction =
     }
   | { readonly kind: "run-set"; readonly snapshot: CodingWorkbenchRuntimeSnapshot }
   | { readonly kind: "stream-set"; readonly stream: CodingWorkbenchStreamProjection }
+  | { readonly kind: "stream-reconnecting" }
   | {
       readonly kind: "resource-failed";
       readonly resource: CodingWorkbenchResourceKey;
@@ -326,6 +333,25 @@ function acceptStreamProjection(
     return { ...state, stream: emptyResource() };
   }
   return { ...state, stream: ready(stream) };
+}
+
+// The browser is reconnecting an interrupted source by itself: a polite status, not a failure. The
+// last cursor stays so the next open resumes from it; `stream-set` on the open turns it ready again.
+function markStreamReconnecting(state: CodingWorkbenchRuntimeState): CodingWorkbenchRuntimeState {
+  const snapshot = state.run.value;
+  if (snapshot === null || !isStreamableSnapshot(snapshot)) return state;
+  const previous = state.stream.value;
+  return {
+    ...state,
+    stream: {
+      status: "loading",
+      value:
+        previous === null || previous.runId !== snapshot.runId
+          ? null
+          : { ...previous, connected: false },
+      error: null,
+    },
+  };
 }
 
 /**
@@ -505,6 +531,17 @@ function resourceFailed(
   });
 }
 
+function snapshotSupersedesFailure(
+  mutation: CodingWorkbenchMutationState,
+  snapshot: CodingWorkbenchRuntimeSnapshot,
+): boolean {
+  const against = mutation.failedAgainst;
+  if (mutation.status !== "error" || against === undefined || snapshot.runId === undefined) {
+    return false;
+  }
+  return snapshot.runId !== against.runId || snapshot.revision > against.revision;
+}
+
 function acceptSnapshot(
   state: CodingWorkbenchRuntimeState,
   snapshot: CodingWorkbenchRuntimeSnapshot,
@@ -520,6 +557,7 @@ function acceptSnapshot(
     run: ready(snapshot),
     stream: changedRun ? emptyResource() : streamForSnapshot(state, snapshot),
     ...(changedRun ? { events: [] } : {}),
+    ...(snapshotSupersedesFailure(state.mutation, snapshot) ? { mutation: IDLE_MUTATION } : {}),
   });
 }
 
@@ -617,6 +655,7 @@ const runtimeActionHandlers = {
   "run-set": (state, action): CodingWorkbenchRuntimeState => acceptSnapshot(state, action.snapshot),
   "stream-set": (state, action): CodingWorkbenchRuntimeState =>
     acceptStreamProjection(state, action.stream),
+  "stream-reconnecting": (state): CodingWorkbenchRuntimeState => markStreamReconnecting(state),
   "mutation-start": (state, action): CodingWorkbenchRuntimeState =>
     projectReadiness({
       ...state,
@@ -632,7 +671,15 @@ const runtimeActionHandlers = {
   "mutation-failed": (state, action): CodingWorkbenchRuntimeState =>
     projectReadiness({
       ...state,
-      mutation: { ...state.mutation, status: "error", error: action.error },
+      mutation: {
+        ...state.mutation,
+        status: "error",
+        error: action.error,
+        failedAgainst: {
+          runId: state.run.value?.runId ?? null,
+          revision: state.run.value?.revision ?? 0,
+        },
+      },
     }),
   "events-received": (state, action): CodingWorkbenchRuntimeState =>
     acceptEvents(state, action.events),

@@ -163,6 +163,28 @@ describe("a Coding Workbench run keeps its window's session active (ADR-0141 D5)
     expect(fixture.registry.inspectOperationCount(fixture.token)).toBe(1);
   });
 
+  // Audit finding 10: a run paused for an operator decision is waiting on the human, exactly like
+  // awaiting-approval, so the quiet wait must not unpair the session that will answer it. A pause
+  // the human chose (no decision recorded) keeps its release, pinned above.
+  it("keeps the lease while a run is paused for an operator decision", () => {
+    const fixture = leaseFixture();
+    const observe: {
+      value: { state: CodingWorkbenchRuntimeStateName; pauseReason?: "workspace-script-trust" };
+    } = { value: { state: "running" } };
+    holdAppSessionForCodingRun(
+      fixture.deps,
+      fixture.request,
+      { runId: RUN_ID, state: "running" },
+      () => observe.value,
+    );
+    observe.value = { state: "paused", pauseReason: "workspace-script-trust" };
+    vi.advanceTimersByTime(CODING_RUN_SESSION_LEASE_OBSERVATION_MS * 3);
+    expect(fixture.registry.inspectOperationCount(fixture.token)).toBe(1);
+    observe.value = { state: "paused" };
+    vi.advanceTimersByTime(CODING_RUN_SESSION_LEASE_OBSERVATION_MS);
+    expect(fixture.registry.inspectOperationCount(fixture.token)).toBe(0);
+  });
+
   it("releases a run whose snapshot is gone", () => {
     const fixture = leaseFixture();
     fixture.hold();

@@ -228,13 +228,16 @@ export interface GatewayCallRequest extends GatewayRequest {
    */
   readonly answerRepair?: "steered" | undefined;
   /**
-   * The explicit content projection of a Chat answer (#4098); local, never serialized into a
-   * provider request body. `preserve` keeps personal data, configuration values and code in the
-   * answer, its stream and its structured output, and still removes configured secrets and
-   * credential shapes. Only Chat sets it, and only under the deployment opt-out
-   * `KEIKO_CONTENT_REDACTION=off`; every other call, the coding sidecar, memory, commit drafts and
-   * pull-request descriptions included, keeps the default projection. Tool-call arguments never
-   * follow it.
+   * The explicit content projection of an answer (#4098); local, never serialized into a provider
+   * request body. `preserve` keeps personal data, configuration values and code in the answer, its
+   * stream and its structured output, and still removes configured secrets and credential shapes.
+   * Two callers set it: Chat, only under the deployment opt-out `KEIKO_CONTENT_REDACTION=off`, and
+   * the coding sidecar route, always (owner decision, 2026-10-27: the OpenCode runtime is its own
+   * producer and receives the model's answer, reasoning and structured output as written). Every
+   * other call, memory, commit drafts and pull-request descriptions included, keeps the default
+   * projection. Tool-call arguments never follow it: they keep their own rule, full redaction except
+   * for the governed exact-content tools (`GATEWAY_NATIVE_EXACT_CONTENT_TOOLS`: edit, write, patch,
+   * execute, shell), which lose only the configured provider literals.
    */
   readonly contentRedaction?: "preserve" | undefined;
   /**

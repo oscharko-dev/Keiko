@@ -9,6 +9,7 @@ import { isAbsolute } from "node:path";
 import { correlationIdOrUnknown } from "../correlation.js";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
+import { emitServerDiagnostic, type ServerDiagnosticSink } from "../diagnostics-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import {
   activityLogEvent,
@@ -64,7 +65,13 @@ const MAX_HISTORY_BYTES = 1024 * 1024;
 const MAX_AGGREGATE_CHECKPOINTS = 256;
 const MAX_RECENT_IDENTITIES = 2_048;
 const MAX_HISTORY_CATCH_UP_ATTEMPTS = 4;
-const MAX_STREAM_RECONNECTS = 3;
+// A live stream that keeps failing is retried with exponential backoff and jitter inside a time
+// budget, not three times back to back: a refused connection or a deterministic history error used
+// to burn the whole budget in milliseconds (audit 2026-10, finding 15). The count is a hard backstop.
+const MAX_STREAM_RECONNECTS = 16;
+const RECONNECT_BASE_DELAY_MS = 250;
+const RECONNECT_MAX_DELAY_MS = 8_000;
+const RECONNECT_BUDGET_MS = 30_000;
 // The generated client must outlive the server-owned 30 s governed tool-bridge deadline.
 const OPEN_CODE_TOOL_CLIENT_TIMEOUT_MS = 35_000;
 
@@ -310,11 +317,21 @@ export interface GeneratedOpenCodeBundle {
   readonly toolSources: Readonly<Record<string, string>>;
 }
 
+export interface OpenCodeReconnectPorts {
+  readonly delay?: ((ms: number, signal: AbortSignal) => Promise<void>) | undefined;
+  readonly random?: (() => number) | undefined;
+  readonly now?: (() => number) | undefined;
+  readonly budgetMs?: number | undefined;
+}
+
 export interface OpenCodeRuntimeAdapterPorts {
   readonly activityLog?: ServerLogSink | undefined;
   readonly correlationId?: string | undefined;
   /** The run's envelope duration (`budget.maxRuntimeMs`); absent keeps the default backstop. */
   readonly maxTurnWaitMs?: number | undefined;
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
+  /** Test seams for the monitor's reconnect backoff; production uses real timers and `Math.random`. */
+  readonly reconnect?: OpenCodeReconnectPorts | undefined;
   readonly contextGeometry?: OpenCodeContextGeometry | undefined;
   readonly readiness: {
     readonly verifiedTarget: {
@@ -431,6 +448,8 @@ export function createOpenCodeRuntimeAdapter(
   let activeAbort: AbortController | undefined;
   let monitorTask: Promise<void> | undefined;
   let monitoring = false;
+  // Aborted when the monitor is disposed, so a reconnect backoff never outlives its monitor.
+  let monitorStop = new AbortController();
   let closed = false;
   let turnGeneration = 0;
   let turnArmed = false;
@@ -479,32 +498,50 @@ export function createOpenCodeRuntimeAdapter(
       }
       if (monitorTask === undefined) {
         monitoring = true;
+        monitorStop = new AbortController();
         monitorTask = monitorLoop().finally(() => {
           monitorTask = undefined;
         });
       }
       return (): void => {
         monitoring = false;
+        monitorStop.abort();
         cancelTurn();
         activeAbort?.abort();
       };
 
       async function monitorLoop(): Promise<void> {
         let reconnects = 0;
+        let failingSince: number | undefined;
         while (isMonitoring()) {
           try {
             await observeNextHint();
             reconnects = 0;
+            failingSince = undefined;
           } catch {
             if (!isMonitoring()) return;
             await cancelSubscription();
             reconnects += 1;
-            if (reconnects > MAX_STREAM_RECONNECTS) {
+            const nowMs = (ports.reconnect?.now ?? Date.now)();
+            failingSince ??= nowMs;
+            if (!(await backOff(reconnects, nowMs - failingSince))) {
               onFailure();
               return;
             }
           }
         }
+      }
+
+      // Waits before the next reconnect; false when the failure budget is spent (count or time).
+      async function backOff(attempt: number, failingForMs: number): Promise<boolean> {
+        const delayMs = reconnectDelayMs(attempt, ports.reconnect?.random ?? Math.random);
+        const budgetMs = ports.reconnect?.budgetMs ?? RECONNECT_BUDGET_MS;
+        const exhausted = attempt > MAX_STREAM_RECONNECTS || failingForMs + delayMs > budgetMs;
+        const outcome = exhausted ? "budget-exhausted" : "backoff";
+        recordMonitorReconnect(ports, { attempt, outcome, delayMs, failingForMs });
+        if (exhausted) return false;
+        await (ports.reconnect?.delay ?? abortableDelay)(delayMs, monitorStop.signal);
+        return true;
       }
 
       async function observeNextHint(): Promise<void> {
@@ -532,6 +569,7 @@ export function createOpenCodeRuntimeAdapter(
     close: async (): Promise<void> => {
       closed = true;
       monitoring = false;
+      monitorStop.abort();
       cancelTurn();
       await cancelSubscription();
       await monitorTask;
@@ -1046,6 +1084,52 @@ async function applyHistoryPlan(
     // The sink owns rejection accounting and records the projection-specific closed reason.
     ports.safeActivitySink?.ingest(signal);
   }
+}
+
+function recordMonitorReconnect(
+  ports: Pick<OpenCodeRuntimeAdapterPorts, "diagnostics" | "correlationId">,
+  facts: {
+    readonly attempt: number;
+    readonly outcome: "backoff" | "budget-exhausted";
+    readonly delayMs: number;
+    readonly failingForMs: number;
+  },
+): void {
+  emitServerDiagnostic(ports.diagnostics, {
+    correlationId: correlationIdOrUnknown(ports.correlationId),
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.monitor",
+    source: "opencode.monitor.reconnect",
+    errorClass: "OpenCodeMonitorReconnect",
+    message: "runtime-lifecycle-failed",
+    code: `stage=monitor:reason=${facts.outcome}:attempt=${String(facts.attempt)}:delayMs=${String(facts.delayMs)}:failingForMs=${String(facts.failingForMs)}`,
+  });
+}
+
+/** Equal jitter: half the exponential ceiling, plus a random share of the other half. */
+export function reconnectDelayMs(attempt: number, random: () => number): number {
+  const ceiling = Math.min(
+    RECONNECT_MAX_DELAY_MS,
+    RECONNECT_BASE_DELAY_MS * 2 ** Math.max(0, attempt - 1),
+  );
+  const jitter = Math.min(1, Math.max(0, random()));
+  return Math.round(ceiling / 2 + (ceiling / 2) * jitter);
+}
+
+function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(done, ms);
+    function done(): void {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", done);
+      resolve();
+    }
+    signal.addEventListener("abort", done, { once: true });
+  });
 }
 
 function recordTurnInterrupted(ports: CompactionActivityLogPorts, settledAfterMs: number): void {

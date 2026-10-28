@@ -100,6 +100,31 @@ describe("production OpenCode backend composition", () => {
     }
   });
 
+  // Audit finding 8: a run that crashed, or whose disposal failed, left its state directory behind.
+  it("sweeps the per-run state directories no live or recoverable run owns, under the owned base", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-orphaned-run-state-")));
+    try {
+      const base = join(root, "coding-runtime", "opencode");
+      for (const runId of ["run-orphan", "run-recoverable"]) {
+        mkdirSync(join(base, runId, "state"), { recursive: true });
+        writeFileSync(join(base, runId, "state", "opencode.db"), "x");
+      }
+      const unrelated = join(root, "coding-runtime", "retained-sessions", "run-orphan");
+      mkdirSync(unrelated, { recursive: true });
+      const backend = createProductionOpenCodeBackend(
+        backendInput(root, scriptedFunctionalPortable(root)),
+      );
+
+      backend.sweepOrphanedRunState?.((runId) => runId === "run-recoverable");
+
+      expect(existsSync(join(base, "run-orphan"))).toBe(false);
+      expect(existsSync(join(base, "run-recoverable"))).toBe(true);
+      expect(existsSync(unrelated)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps legacy missing profiles direct and refuses unknown constructor profiles", () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-closed-profile-"));
     try {
@@ -1685,6 +1710,7 @@ describe("ripgrep on the OpenCode launch", () => {
 
   interface Launch {
     readonly processEnv: NodeJS.ProcessEnv | undefined;
+    readonly ripgrepVerified: boolean | undefined;
     readonly allowlist: readonly string[];
     readonly toolchainReadRoots: readonly string[] | undefined;
     readonly externalReadRoots: readonly string[] | undefined;
@@ -1723,6 +1749,7 @@ describe("ripgrep on the OpenCode launch", () => {
     const composed = compose.mock.calls.at(-1)?.[0];
     return {
       processEnv: composed?.processEnv,
+      ripgrepVerified: composed?.ripgrepVerified,
       allowlist: run.launch.inheritedEnvAllowlist,
       ...launchedRoots(confinement?.filesystem, composed?.externalReadRoots),
       events,
@@ -1797,20 +1824,30 @@ describe("ripgrep on the OpenCode launch", () => {
     }
   });
 
-  it("starts the run without touching PATH when the executable does not verify", () => {
+  // Stress ledger F5 (2026-10-28): an unverified pinned ripgrep used to leave PATH untouched, so a
+  // host `rg` ran unverified in its place. The run still starts with search degraded, but every
+  // PATH entry that provides an `rg` is gone and the composition places the refusing placeholder.
+  it("starts the run without any rg-providing PATH entry when the executable does not verify", () => {
     const root = tmpRoot();
-    vi.stubEnv("PATH", `/usr/bin${delimiter}/bin`);
+    const hostRipgrep = stage(join(root, "host-bin", "rg"), "an unverified host ripgrep");
+    const toolchain = join(root, "toolchain-bin");
+    mkdirSync(toolchain, { recursive: true });
+    const processEnv = { ...CONTENT_ENV, PATH: [hostRipgrep, toolchain].join(delimiter) };
+    vi.stubEnv("PATH", processEnv.PATH);
     try {
       stage(join(root, "install", "runtime", "native", "rg"), "not the pinned bytes");
       const result = launch(root, releaseQualifiedLinuxRuntime(root), {
         native: true,
-        processEnv: CONTENT_ENV,
+        processEnv,
         key: "linux-x64",
       });
 
-      expect(result.processEnv).toBe(CONTENT_ENV);
-      expect(result.processEnv?.PATH).toBe(`/usr/bin${delimiter}/bin`);
-      expect(result.toolchainReadRoots).toEqual([]);
+      expect(result.processEnv).toEqual({ ...CONTENT_ENV, PATH: toolchain });
+      expect(result.ripgrepVerified).toBe(false);
+      // The read allowlist follows the same PATH: the host ripgrep's directory is not readable.
+      expect(
+        (result.toolchainReadRoots ?? []).some((readRoot) => readRoot.endsWith("host-bin")),
+      ).toBe(false);
       expect(result.events[0]).toMatchObject({
         level: "warn",
         extra: { outcome: "unverified", layout: "portable", reason: "digest-mismatch" },
@@ -2035,7 +2072,8 @@ describe("ripgrep on the OpenCode launch", () => {
         processEnv: CONTENT_ENV,
         key: "darwin-arm64",
       });
-      expect(absent.processEnv).toBe(CONTENT_ENV);
+      expect(absent.processEnv).toEqual(CONTENT_ENV);
+      expect(absent.ripgrepVerified).toBe(false);
       expect(absent.toolchainReadRoots).toEqual([]);
       expect(absent.events[0]).toMatchObject({
         level: "warn",
@@ -2048,7 +2086,8 @@ describe("ripgrep on the OpenCode launch", () => {
         processEnv: CONTENT_ENV,
         key: "darwin-arm64",
       });
-      expect(tampered.processEnv).toBe(CONTENT_ENV);
+      expect(tampered.processEnv).toEqual(CONTENT_ENV);
+      expect(tampered.ripgrepVerified).toBe(false);
       expect(tampered.events[0]).toMatchObject({
         level: "warn",
         extra: { outcome: "unverified", layout: "npm-package", reason: "digest-mismatch" },

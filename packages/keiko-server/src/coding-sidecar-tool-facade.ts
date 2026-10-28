@@ -22,7 +22,7 @@ import {
   incomingHeaders,
   type OpenCodeToolBridgeResponse,
 } from "./coding-runtime/opencodeRuntimeComposition.js";
-import { CODING_TOOL_MAX_BODY_BYTES } from "./coding-runtime/codingToolIpc.js";
+import { CODING_TOOL_MAX_REQUEST_BODY_BYTES } from "./coding-runtime/codingToolIpc.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { readJsonObject } from "./files.js";
 import { getServerLogger } from "./observability/index.js";
@@ -293,7 +293,7 @@ function readToolFacadeBody(
       });
     }, deadlineMs);
     timer.unref();
-    void readJsonObject(ctx.req, CODING_TOOL_MAX_BODY_BYTES).then(
+    void readJsonObject(ctx.req, CODING_TOOL_MAX_REQUEST_BODY_BYTES).then(
       (result) => {
         if (settled) return;
         settled = true;

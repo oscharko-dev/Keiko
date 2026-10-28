@@ -29,6 +29,7 @@ import {
   openCodeNativeContextFacts,
 } from "./opencodeNativeContext.js";
 import type { ServerLogEvent, ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "../diagnostics-log.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -121,6 +122,13 @@ interface OpenCodeRuntimeAdapterPorts {
   readonly activityLog?: ServerLogSink;
   readonly correlationId?: string;
   readonly maxTurnWaitMs?: number;
+  readonly diagnostics?: ServerDiagnosticSink;
+  readonly reconnect?: {
+    readonly delay?: (ms: number, signal: AbortSignal) => Promise<void>;
+    readonly random?: () => number;
+    readonly now?: () => number;
+    readonly budgetMs?: number;
+  };
   readonly contextGeometry?: {
     readonly contextWindowTokens: number;
     readonly maxInputTokens: number;
@@ -1503,22 +1511,145 @@ describe("OpenCode runtime adapter readiness", () => {
     expect(harness.effects.filter((value) => value === "evt_0")).toHaveLength(1);
   });
 
-  it("reconnects a failed live stream three times and reports one terminal monitor failure", async () => {
-    const harness = readinessPorts();
+  // The first subscription readies the adapter; every later one ends without a hint.
+  function failStreamAfterReady(harness: ReturnType<typeof readinessPorts>): void {
     let subscriptions = 0;
-    harness.ports.readiness.subscribe = (_signal): AsyncIterable<OpenCodeSyncHint> => {
+    harness.ports.readiness.subscribe = (): AsyncIterable<OpenCodeSyncHint> => {
       subscriptions += 1;
       return subscriptions === 1 ? finiteHints([{ id: "evt_0" }]) : finiteHints([]);
     };
-    const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter(harness.ports);
+  }
+
+  // A fake monitor clock: every backoff wait advances it, so the time budget is deterministic.
+  function backoffClock(): {
+    readonly reconnect: NonNullable<OpenCodeRuntimeAdapterPorts["reconnect"]>;
+    readonly delays: number[];
+  } {
+    const delays: number[] = [];
+    let nowMs = 0;
+    return {
+      delays,
+      reconnect: {
+        random: (): number => 1,
+        now: (): number => nowMs,
+        delay: (ms): Promise<void> => {
+          delays.push(ms);
+          nowMs += ms;
+          return Promise.resolve();
+        },
+      },
+    };
+  }
+
+  // Audit finding 15: the monitor used to reconnect three times back to back, so a sidecar that
+  // refused a connection burned the whole budget in milliseconds. Reconnects now back off
+  // exponentially with jitter inside a time budget, and a stream that keeps failing still ends in
+  // exactly one terminal monitor failure.
+  it("backs off exponentially between reconnects and reports one terminal failure when the time budget is spent", async () => {
+    const harness = readinessPorts();
+    failStreamAfterReady(harness);
+    const clock = backoffClock();
+    const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter({
+      ...harness.ports,
+      reconnect: clock.reconnect,
+    });
     await expect(adapter.start()).resolves.toMatchObject({ ok: true });
     const failures: string[] = [];
     const dispose = adapter.monitor(() => failures.push("failed"));
 
     await vi.waitFor(() => {
-      expect(subscriptions).toBe(4);
       expect(failures).toEqual(["failed"]);
     });
+    expect(clock.delays).toEqual([250, 500, 1_000, 2_000, 4_000, 8_000, 8_000]);
+    dispose();
+    await adapter.close();
+  });
+
+  it("jitters each reconnect delay between half and all of its backoff ceiling", async () => {
+    const harness = readinessPorts();
+    failStreamAfterReady(harness);
+    const clock = backoffClock();
+    const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter({
+      ...harness.ports,
+      reconnect: { ...clock.reconnect, random: (): number => 0 },
+    });
+    await expect(adapter.start()).resolves.toMatchObject({ ok: true });
+    const failures: string[] = [];
+    const dispose = adapter.monitor(() => failures.push("failed"));
+
+    await vi.waitFor(() => {
+      expect(failures).toEqual(["failed"]);
+    });
+    expect(clock.delays.slice(0, 4)).toEqual([125, 250, 500, 1_000]);
+    dispose();
+    await adapter.close();
+  });
+
+  it("stops waiting between reconnects as soon as the monitor is disposed", async () => {
+    const harness = readinessPorts();
+    failStreamAfterReady(harness);
+    let waiting: AbortSignal | undefined;
+    const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter({
+      ...harness.ports,
+      reconnect: {
+        delay: (_ms, signal): Promise<void> => {
+          waiting = signal;
+          return new Promise<void>((resolve) => {
+            signal.addEventListener(
+              "abort",
+              () => {
+                resolve();
+              },
+              { once: true },
+            );
+          });
+        },
+      },
+    });
+    await expect(adapter.start()).resolves.toMatchObject({ ok: true });
+    const failures: string[] = [];
+    const dispose = adapter.monitor(() => failures.push("failed"));
+    await vi.waitFor(() => {
+      expect(waiting).toBeDefined();
+    });
+
+    dispose();
+    await adapter.close();
+
+    expect(waiting?.aborted).toBe(true);
+    expect(failures).toEqual([]);
+  });
+
+  it("records each reconnect decision as a body-free diagnostic under the run's correlation", async () => {
+    const harness = readinessPorts();
+    failStreamAfterReady(harness);
+    const records: ServerDiagnosticRecord[] = [];
+    const clock = backoffClock();
+    const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter({
+      ...harness.ports,
+      diagnostics: { record: (record) => void records.push(record) },
+      correlationId: "run-reconnect-1",
+      reconnect: clock.reconnect,
+    });
+    await expect(adapter.start()).resolves.toMatchObject({ ok: true });
+    const failures: string[] = [];
+    const dispose = adapter.monitor(() => failures.push("failed"));
+    await vi.waitFor(() => {
+      expect(failures).toEqual(["failed"]);
+    });
+
+    const reconnects = records.filter((record) => record.source === "opencode.monitor.reconnect");
+    expect(reconnects.map((record) => record.code)).toEqual([
+      "stage=monitor:reason=backoff:attempt=1:delayMs=250:failingForMs=0",
+      "stage=monitor:reason=backoff:attempt=2:delayMs=500:failingForMs=250",
+      "stage=monitor:reason=backoff:attempt=3:delayMs=1000:failingForMs=750",
+      "stage=monitor:reason=backoff:attempt=4:delayMs=2000:failingForMs=1750",
+      "stage=monitor:reason=backoff:attempt=5:delayMs=4000:failingForMs=3750",
+      "stage=monitor:reason=backoff:attempt=6:delayMs=8000:failingForMs=7750",
+      "stage=monitor:reason=backoff:attempt=7:delayMs=8000:failingForMs=15750",
+      "stage=monitor:reason=budget-exhausted:attempt=8:delayMs=8000:failingForMs=23750",
+    ]);
+    expect(reconnects.every((record) => record.correlationId === "run-reconnect-1")).toBe(true);
     dispose();
     await adapter.close();
   });
@@ -1529,16 +1660,20 @@ describe("OpenCode runtime adapter readiness", () => {
     harness.ports.readiness.subscribe = (signal): AsyncIterable<OpenCodeSyncHint> => {
       subscriptions += 1;
       if (subscriptions === 1) return finiteHints([{ id: "evt_0" }]);
-      if (subscriptions <= 4) return finiteHints([{ requiresHistoryIdentity: false }]);
+      if (subscriptions <= 9) return finiteHints([{ requiresHistoryIdentity: false }]);
       return hints([{ requiresHistoryIdentity: false }], signal);
     };
-    const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter(harness.ports);
+    const clock = backoffClock();
+    const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter({
+      ...harness.ports,
+      reconnect: clock.reconnect,
+    });
     await expect(adapter.start()).resolves.toMatchObject({ ok: true });
     const failures: string[] = [];
     const dispose = adapter.monitor(() => failures.push("failed"));
 
     await vi.waitFor(() => {
-      expect(subscriptions).toBe(5);
+      expect(subscriptions).toBe(10);
     });
     expect(failures).toEqual([]);
     dispose();

@@ -1,4 +1,5 @@
-import { delimiter, dirname, isAbsolute } from "node:path";
+import { statSync } from "node:fs";
+import { delimiter, dirname, isAbsolute, join } from "node:path";
 
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import {
@@ -25,7 +26,10 @@ import {
 // never lets the runtime reach that third step: at every launch it resolves the one pinned
 // executable through the verifier, and only a verified executable's directory is put on the child
 // PATH. An unverified one leaves the run starting with search degraded, and the closed reason is
-// recorded on the Activity Log (never a path).
+// recorded on the Activity Log (never a path). A degraded native launch also loses every inherited
+// PATH entry that provides an `rg`: an unverified host ripgrep (Homebrew, a workspace-planted one)
+// is never executed in the pinned one's place. The pinned OpenCode runtime has no switch that turns
+// its own ripgrep download off; below Full access the loopback-only egress refuses it.
 
 /** The closed vocabulary of why a launch has no verified ripgrep. */
 export const OPENCODE_RIPGREP_UNVERIFIED_REASONS = [
@@ -305,10 +309,48 @@ function prependDirectory(directory: string, path: string | undefined): string {
   return [directory, ...inherited].join(delimiter);
 }
 
+const RIPGREP_EXECUTABLE_NAMES: readonly string[] =
+  process.platform === "win32" ? ["rg.exe", "rg.com", "rg.bat", "rg.cmd"] : ["rg"];
+
+function isAbsentError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    (error.code === "ENOENT" || error.code === "ENOTDIR")
+  );
+}
+
+function isFile(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch (error) {
+    // Only a missing path proves the file is absent; any other failure cannot prove it, so the
+    // directory is treated as a possible provider (fail closed).
+    return !isAbsentError(error);
+  }
+}
+
+// An empty or relative entry resolves against the child's working directory, the workspace, which
+// can plant an `rg`; it cannot be proven free of one from here.
+function mayProvideRipgrep(entry: string): boolean {
+  if (!isAbsolute(entry)) return true;
+  return RIPGREP_EXECUTABLE_NAMES.some((name) => isFile(join(entry, name)));
+}
+
+/** The inherited PATH without any entry that provides an `rg`; every other entry keeps its order. */
+function withoutRipgrepProviders(path: string | undefined): string | undefined {
+  if (path === undefined) return undefined;
+  return path
+    .split(delimiter)
+    .filter((entry) => !mayProvideRipgrep(entry))
+    .join(delimiter);
+}
+
 /**
- * The PATH the native profile's child and its kernel read allowlist share: the verified directory
- * in front of what the launcher already had. `undefined` leaves the inherited PATH exactly as it
- * was, so an unverified launch is not changed by this module at all.
+ * The PATH the native profile's child and its kernel read allowlist share. A verified executable's
+ * directory goes in front of what the launcher already had. An unverified one removes every entry
+ * that provides a host `rg`, so search degrades instead of running an unverified executable; the
+ * read allowlist follows the same PATH. `undefined` only when the launcher had no PATH.
  */
 export function ripgrepNativePath(
   launcherPath: string | undefined,
@@ -316,21 +358,25 @@ export function ripgrepNativePath(
 ): string | undefined {
   return resolution.outcome === "verified"
     ? prependDirectory(resolution.directory, launcherPath)
-    : undefined;
+    : withoutRipgrepProviders(launcherPath);
 }
 
 /**
- * The environment the manager copies the launch's allowlisted names from. Only a verified
- * executable changes it. The native profile inherits the launcher's PATH, so its child PATH is the
- * verified directory followed by that PATH. The mapped profiles inherit nothing else, so theirs is
- * the verified directory alone; no entry of the launcher's PATH is ever relied on to find ripgrep.
+ * The environment the manager copies the launch's allowlisted names from. The native profile
+ * inherits the launcher's PATH, so its child PATH is the verified directory followed by that PATH,
+ * or, for an unverified ripgrep, that PATH without any `rg` provider. The mapped profiles inherit
+ * nothing else, so theirs is the verified directory alone, or no PATH at all when unverified; no
+ * entry of the launcher's PATH is ever relied on to find ripgrep.
  */
 export function ripgrepLaunchEnvironment(
   processEnv: NodeJS.ProcessEnv | undefined,
   resolution: OpenCodeRipgrepResolution,
   native: boolean,
 ): NodeJS.ProcessEnv | undefined {
-  if (resolution.outcome !== "verified") return processEnv;
+  if (resolution.outcome !== "verified") {
+    if (!native || processEnv?.PATH === undefined) return processEnv;
+    return { ...processEnv, PATH: withoutRipgrepProviders(processEnv.PATH) };
+  }
   const path = native
     ? prependDirectory(resolution.directory, processEnv?.PATH)
     : resolution.directory;

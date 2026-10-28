@@ -16,7 +16,6 @@ import type { RunRequest, RunVoiceOrigin } from "./run-request.js";
 import { startRun, applyRun, type EngineContext } from "./run-engine.js";
 import { ActiveRunLimitError, type AppliableSnapshot, type RunRecord } from "./runs.js";
 import { SSE_HEADERS, writeMessageEvent, writeReadyMessage, startSseHeartbeat } from "./sse.js";
-import { markSseStreamBackpressureKilled } from "./sse-write.js";
 import { getServerLogger } from "./observability/index.js";
 import { correlationIdOrUnknown } from "./correlation.js";
 import type { SseWriter, StreamEvent } from "./sink.js";
@@ -28,6 +27,7 @@ import type {
   CommittedVoiceTranscriptProjection,
   VoiceProfile,
 } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { VOICE_TRANSCRIPT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/voice-transcript";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { createNodeToolResultArtifactStore } from "@oscharko-dev/keiko-evidence";
@@ -53,7 +53,7 @@ import { newReferenceId } from "./reference-id.js";
 
 const MAX_BODY_BYTES = 1_000_000;
 const AGGREGATE_RUN_EVENTS_SNAPSHOT_LIMIT = 128;
-const AGENT_RUN_DEFAULT_PATCH_BUDGET_BYTES = 65_536;
+const AGENT_RUN_DEFAULT_PATCH_BUDGET_BYTES = EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES;
 
 const SSE_RUN_EVENTS_RESUME_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -774,12 +774,7 @@ function aggregateRunWriter(
   return {
     write: (event: StreamEvent): boolean => {
       if (!agentRecordSessionMatches(record, ctx, deps)) return false;
-      const accepted = writeMessageEvent(ctx.res, event, deps.redactor, ctx.correlationId);
-      if (!accepted) {
-        markSseStreamBackpressureKilled(ctx.res);
-        ctx.res.destroy();
-      }
-      return accepted;
+      return writeMessageEvent(ctx.res, event, deps.redactor, ctx.correlationId);
     },
     // A single run reaching terminal must not close the aggregate desktop stream.
     close: (): void => {
@@ -809,12 +804,7 @@ function openSseStream(
   startSseHeartbeat(res);
   const writer: SseWriter = {
     write: (event: StreamEvent): boolean => {
-      const accepted = writeMessageEvent(res, event, redactor, correlationId);
-      if (!accepted) {
-        markSseStreamBackpressureKilled(res);
-        res.destroy();
-      }
-      return accepted;
+      return writeMessageEvent(res, event, redactor, correlationId);
     },
     close: (): void => {
       res.end();

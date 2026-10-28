@@ -34,6 +34,10 @@ vi.mock("@oscharko-dev/keiko-tool-catalog", async (importOriginal) => {
 
 import type { CodingToolMutationGuard } from "../coding-runtime/codingToolFacadePorts.js";
 import { nativeTextSnapshotRegistrationSet } from "@oscharko-dev/keiko-tool-catalog";
+import {
+  CHANGESET_EDIT_ARGUMENT_LIMITS,
+  TOOL_CATALOG_LIMITS,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { CodingToolActionRequest, CodingToolResult } from "../coding-runtime/codingToolIpc.js";
 import { createCodingToolInvocationRegistry } from "../coding-runtime/codingToolInvocationRegistry.js";
 import type { OpenCodeOptionalToolName } from "../coding-runtime/opencodeLaunchProfile.js";
@@ -1081,3 +1085,65 @@ it.each(["", "long-segment/".repeat(50) + "é.ts"])(
     expect(run).toHaveBeenCalledOnce();
   },
 );
+
+// Owner decision 2026-10-28: a governed changeset edit carries file content up to the changeset cap
+// through the canonical boundary; nothing in binding, staging or settlement refuses it at 64 KiB or
+// 256 KiB, while the cap itself is still a closed refusal.
+describe("a large governed changeset edit through the canonical boundary", () => {
+  function replacementEdit(
+    newString: string,
+  ): Extract<CodingToolActionRequest, { readonly action: "edit" }> {
+    return {
+      ...identity,
+      action: "edit",
+      changeset: {
+        edits: [{ file: "data.json", oldString: "", newString, replaceAll: false }],
+        deletions: [],
+        renames: [],
+        files: [{ file: "data.json", expectedContentHash: "e".repeat(64) }],
+        selectedFiles: ["data.json"],
+      },
+    };
+  }
+
+  it("reads the settlement budget of an edit above the generic argument ceiling", () => {
+    const small = openCodeCatalogSettlementBudgetMs(replacementEdit("x"));
+    expect(small).toBeDefined();
+    const large = replacementEdit("y".repeat(TOOL_CATALOG_LIMITS.maxArgumentBytes + 1));
+    expect(openCodeCatalogSettlementBudgetMs(large)).toBe(small);
+  });
+
+  it("binds, stages, runs and settles an edit above the generic ceilings", async () => {
+    const { bridge } = createBridge();
+    const run = vi.fn((_signal: AbortSignal, mutationGuard: { readonly check: () => boolean }) => {
+      expect(mutationGuard.check()).toBe(true);
+      return Promise.resolve({
+        status: "completed" as const,
+        evidence: [{ kind: "governed-delegate", code: "completed" }],
+      });
+    });
+    const request = replacementEdit("z".repeat(TOOL_CATALOG_LIMITS.maxArgumentBytes + 1));
+
+    const result = await bridge.execute(
+      request,
+      { body: JSON.stringify(request), capability: "capability" },
+      run,
+    );
+    expect(result).toMatchObject({ status: "completed" });
+    expect(run).toHaveBeenCalledOnce();
+  });
+
+  it("still refuses a string over the changeset cap before any effect", async () => {
+    const { bridge } = createBridge();
+    const run = vi.fn(() => Promise.resolve({ status: "completed" as const, evidence: [] }));
+    const request = replacementEdit("z".repeat(CHANGESET_EDIT_ARGUMENT_LIMITS.maxStringBytes + 1));
+    const outcome = await bridge
+      .execute(request, { body: JSON.stringify(request), capability: "capability" }, run)
+      .then(
+        (result) => result.status,
+        () => "refused",
+      );
+    expect(outcome).not.toBe("completed");
+    expect(run).not.toHaveBeenCalled();
+  });
+});

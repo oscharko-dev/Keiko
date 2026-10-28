@@ -86,6 +86,7 @@ import {
   type McpOAuthIssuerPort,
   type OpenCodeRuntimeCompositionInput,
 } from "./opencodeRuntimeComposition.js";
+import { sweepOrphanedOpenCodeRunState } from "./opencodeRunStateSweep.js";
 import { createOpenCodeRuntimeQuestionPort } from "./productionCodingRuntimeQuestionPort.js";
 import { createOpenCodeRuntimePermissionPort } from "./productionCodingRuntimePermissionPort.js";
 import { createOpenCodeRuntimeTurnPort } from "./productionCodingRuntimePorts.js";
@@ -290,6 +291,13 @@ export function createProductionOpenCodeBackend(
     safeActivityProjection,
     createRun: (run: ProductionRuntimeBackendInput): QualifiedProductionRuntimeRun =>
       createOpenCodeRun(input, run, safeActivityProjection, toolProfile),
+    sweepOrphanedRunState: (isRetained: (runId: string) => boolean): void => {
+      sweepOrphanedOpenCodeRunState({
+        stateBaseRoot: openCodeStateBaseRoot(input.runtimeStateRoot),
+        isRetained,
+        diagnostics: input.diagnostics,
+      });
+    },
   });
 }
 
@@ -371,8 +379,10 @@ function ripgrepLocation(portable: ResolvedPortableOpenCodeRuntime): OpenCodeRip
 
 /**
  * Resolves the pinned ripgrep once for this launch, records the closed outcome, and returns the
- * input whose inherited environment carries only a VERIFIED directory. An unverified ripgrep
- * changes nothing: the run still starts, search degrades, and the reason is on the Activity Log.
+ * input whose inherited environment carries only a VERIFIED directory. An unverified ripgrep still
+ * starts the run with search degraded: no inherited `rg` provider stays on PATH, the composition
+ * places a refusing placeholder ahead of the runtime's download, and the reason is on the Activity
+ * Log.
  */
 function withVerifiedRipgrep(
   input: ProductionOpenCodeBackendInput,
@@ -416,6 +426,7 @@ function composeOpenCodeRun(
 ): ReturnType<typeof createOpenCodeRuntimeComposition> {
   return createOpenCodeRuntimeComposition({
     toolProfile,
+    ripgrepVerified: input.ripgrep.outcome === "verified",
     ...(input.processEnv === undefined ? {} : { processEnv: input.processEnv }),
     ...nativeRunInputs(input, run, toolProfile),
     portable: compositionPortableInput(input),

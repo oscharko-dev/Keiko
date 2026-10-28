@@ -1,9 +1,9 @@
 import {
+  EDITOR_AGENT_CHANGESET_MAX_CHANGED_LINES,
   EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES,
   type EditorAgentChangeset,
   type EditorAgentChangesetFile,
 } from "@oscharko-dev/keiko-contracts/editor-agent";
-import { DEFAULT_PATCH_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import { lineDiffSide, unifiedDiffHunks } from "../gitDelivery/lineDiff.js";
 import {
   secureWorkspaceTextDigest,
@@ -24,13 +24,13 @@ import { SECURE_WORKSPACE_TEXT_READ_MAX_BYTES } from "./secureWorkspaceTextReadP
  * `deletions` path becomes its full pre-image removed, and a `renames` entry that removal plus the
  * creation of `to` with identical content. One call applies renames first, then edits (which address
  * a moved file by its new path), then deletions. Every touched path stays hash-bound through `files`
- * and counts against the same 50-file and 65,536-byte caps as a hand-written changeset.
+ * and counts against the same 50-file and 8 MiB caps as a hand-written changeset.
  *
  * Bounds (#3873 review): an edited file may not grow past the governed read ceiling, projected from
  * the match count before any result is built, so a `replaceAll` that would multiply a file cannot
  * hold the event loop or the heap; the rendered changeset is held to the editor's patch cap and to
- * the changed-line limit the editor route applies (`DEFAULT_PATCH_LIMITS`) here, before the run's
- * patch budget is charged, with a closed reason the model can act on, instead of failing later as
+ * the changed-line limit the editor route applies (`EDITOR_AGENT_CHANGESET_MAX_CHANGED_LINES`) here,
+ * before the run's patch budget is charged, with a closed reason the model can act on, instead of failing later as
  * an opaque invalid changeset. A deletion or a rename renders its whole file and cannot be split, so
  * one that alone exceeds a call's bounds is refused as `whole-file-too-large`, never "split it".
  *
@@ -210,12 +210,25 @@ export async function materializeReplacementChangeset(
   return assembled(changes);
 }
 
-// The lines a rendered section adds or removes; its two header lines are not counted.
+// The lines a rendered section adds or removes; its two header lines are not counted. Scanned in
+// place: a section may carry megabytes, and splitting it would allocate a string per line.
 function changedLineCount(section: string): number {
-  return section
-    .split("\n")
-    .slice(2)
-    .filter((line) => line.startsWith("+") || line.startsWith("-")).length;
+  let count = 0;
+  let lineNumber = 0;
+  let start = 0;
+  while (start < section.length) {
+    const newline = section.indexOf("\n", start);
+    const end = newline === -1 ? section.length : newline;
+    if (lineNumber >= 2 && end > start && isChangedLine(section.charCodeAt(start))) count += 1;
+    lineNumber += 1;
+    start = end + 1;
+  }
+  return count;
+}
+
+// "+" and "-".
+function isChangedLine(firstCharCode: number): boolean {
+  return firstCharCode === 0x2b || firstCharCode === 0x2d;
 }
 
 // A deletion or a rename renders its whole file and cannot be split into smaller calls: one that
@@ -229,20 +242,25 @@ function wholeFileRefusal(step: Step, changes: readonly FileChange[]): Refusal |
   const lines = changes.reduce((sum, change) => sum + changedLineCount(change.section), 0);
   if (
     bytes <= EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES &&
-    lines <= DEFAULT_PATCH_LIMITS.maxChangedLines
+    lines <= EDITOR_AGENT_CHANGESET_MAX_CHANGED_LINES
   ) {
     return undefined;
   }
   return refused(
     "LIMIT_EXCEEDED",
     "whole-file-too-large",
-    `${file} cannot be ${verb} with keiko_changeset_edit: a ${step.kind === "rename" ? "rename" : "deletion"} renders the whole file (${String(lines)} changed lines, ${String(bytes)} bytes), more than one call may carry (${String(DEFAULT_PATCH_LIMITS.maxChangedLines)} lines, ${String(EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES)} bytes). Leave it in place and report it to the operator.`,
+    `${file} cannot be ${verb} with keiko_changeset_edit: a ${step.kind === "rename" ? "rename" : "deletion"} renders the whole file (${String(lines)} changed lines, ${String(bytes)} bytes), more than one call may carry (${String(EDITOR_AGENT_CHANGESET_MAX_CHANGED_LINES)} lines, ${String(EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES)} bytes). Leave it in place and report it to the operator.`,
   );
 }
 
 function assembled(changes: readonly FileChange[]): ReplacementMaterialization {
-  const patch = changes.map((change) => change.section).join("");
-  if (Buffer.byteLength(patch, "utf8") > EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES) {
+  // Measured section by section, so a changeset over the cap is refused before its text is joined
+  // into one more full-size string.
+  const patchBytes = changes.reduce(
+    (sum, change) => sum + Buffer.byteLength(change.section, "utf8"),
+    0,
+  );
+  if (patchBytes > EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES) {
     return refused(
       "LIMIT_EXCEEDED",
       "patch-too-large",
@@ -250,13 +268,14 @@ function assembled(changes: readonly FileChange[]): ReplacementMaterialization {
     );
   }
   const changedLines = changes.reduce((sum, change) => sum + changedLineCount(change.section), 0);
-  if (changedLines > DEFAULT_PATCH_LIMITS.maxChangedLines) {
+  if (changedLines > EDITOR_AGENT_CHANGESET_MAX_CHANGED_LINES) {
     return refused(
       "LIMIT_EXCEEDED",
       "changed-lines-exceeded",
-      `The materialized changeset changes ${String(changedLines)} lines, more than the ${String(DEFAULT_PATCH_LIMITS.maxChangedLines)} one call may change; split the edits into smaller calls.`,
+      `The materialized changeset changes ${String(changedLines)} lines, more than the ${String(EDITOR_AGENT_CHANGESET_MAX_CHANGED_LINES)} one call may change; split the edits into smaller calls.`,
     );
   }
+  const patch = changes.map((change) => change.section).join("");
   const bindings = changes.map((change) => change.binding);
   return {
     status: "materialized",

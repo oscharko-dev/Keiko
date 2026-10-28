@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { codingToolRequiredActionClasses, parseCodingToolRequest } from "./codingToolIpc.js";
+import { CHANGESET_EDIT_ARGUMENT_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import {
+  CODING_TOOL_MAX_BODY_BYTES,
+  CODING_TOOL_MAX_REQUEST_BODY_BYTES,
+  codingToolRequiredActionClasses,
+  parseCodingToolRequest,
+} from "./codingToolIpc.js";
 
 const changeset = {
   patch: "--- a/src/a.ts\n+++ b/src/a.ts\n@@\n-old\n+new\n",
@@ -633,5 +639,61 @@ describe("coding tool IPC CI observation (#3388)", () => {
     ["an unexpected extra key with no forceFresh", { extra: "SENTINEL" }],
   ])("rejects %s before a CI observation request exists", (_name, extra) => {
     expect(parseCodingToolRequest(ciBody(extra), 262_144)).toBeUndefined();
+  });
+});
+
+// Owner decision 2026-10-28: a replacement edit string is bounded by the changeset cap, not 64 KiB,
+// and the request that carries it by the changeset-edit argument ceiling, not 256 KiB. The
+// response bound (tool_output) is a different direction and stays what it was.
+describe("coding tool IPC replacement edit size", () => {
+  const DIGEST = "a".repeat(64);
+  function editBody(oldString: string, newString: string): string {
+    return JSON.stringify({
+      action: "edit",
+      actionId: "edit-1",
+      idempotencyKey: "edit-key",
+      changeset: {
+        edits: [{ file: "src/a.ts", oldString, newString, replaceAll: false }],
+        files: [{ file: "src/a.ts", expectedContentHash: DIGEST }],
+      },
+    });
+  }
+
+  it("bounds the request by the changeset-edit argument ceiling and the response as before", () => {
+    expect(CODING_TOOL_MAX_REQUEST_BODY_BYTES).toBe(
+      CHANGESET_EDIT_ARGUMENT_LIMITS.maxArgumentBytes,
+    );
+    expect(CODING_TOOL_MAX_BODY_BYTES).toBe(262_144);
+  });
+
+  it("admits a replacement far above 64 KiB and above the old 256 KiB body bound", () => {
+    const big = "n".repeat(CODING_TOOL_MAX_BODY_BYTES + 1);
+    const body = editBody("", big);
+    expect(Buffer.byteLength(body)).toBeGreaterThan(CODING_TOOL_MAX_BODY_BYTES);
+    expect(parseCodingToolRequest(body, CODING_TOOL_MAX_REQUEST_BODY_BYTES)).toMatchObject({
+      action: "edit",
+    });
+  });
+
+  it("admits a string of exactly the changeset cap and refuses one byte more", () => {
+    const cap = "c".repeat(CHANGESET_EDIT_ARGUMENT_LIMITS.maxStringBytes);
+    expect(
+      parseCodingToolRequest(editBody("", cap), CODING_TOOL_MAX_REQUEST_BODY_BYTES),
+    ).toMatchObject({ action: "edit" });
+    expect(
+      parseCodingToolRequest(editBody("", `${cap}c`), CODING_TOOL_MAX_REQUEST_BODY_BYTES),
+    ).toBeUndefined();
+    // Multi-byte text counts UTF-8 bytes, not characters.
+    const wide = "é".repeat(CHANGESET_EDIT_ARGUMENT_LIMITS.maxStringBytes / 2 + 1);
+    expect(
+      parseCodingToolRequest(editBody("", wide), CODING_TOOL_MAX_REQUEST_BODY_BYTES),
+    ).toBeUndefined();
+  });
+
+  it("refuses a body over the request bound, and keeps a small bound when the caller asks for one", () => {
+    expect(parseCodingToolRequest(editBody("", "x".repeat(2_048)), 1_024)).toBeUndefined();
+    const body = editBody("", "x");
+    expect(parseCodingToolRequest(body, Buffer.byteLength(body) - 1)).toBeUndefined();
+    expect(parseCodingToolRequest(body, Buffer.byteLength(body))).toMatchObject({ action: "edit" });
   });
 });

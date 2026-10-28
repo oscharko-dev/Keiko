@@ -167,10 +167,41 @@ closed rather than applying silently.
 `applyChangeset` is a new content-mutation action with:
 
 - one action-level `idempotencyKey`, with per-file idempotency keys rejected;
-- one UTF-8 patch capped by `EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES` (65,536 bytes);
+- one UTF-8 patch capped by `EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES` (8 MiB, 8,388,608 bytes);
 - one non-empty, unique file list capped by `EDITOR_AGENT_CHANGESET_MAX_FILES` (50 files);
 - a workspace-relative path and at least one version/hash precondition for every file; and
 - optional, unique `selectedFiles` drawn only from the declared file list.
+
+The size bounds are the runaway-model safeguard of the editor trust boundary, sized so normal work
+(a 66 KB data file, a generated fixture) is never refused (owner decision, 2026-10-28; they were
+65,536 bytes and 2,000 changed lines). They are defined once in `editor-agent.ts`:
+`EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES` for the patch, `EDITOR_AGENT_CHANGESET_MAX_CHANGED_LINES`
+(1,000,000) for added plus removed lines, `EDITOR_AGENT_CHANGESET_PATCH_LIMITS` for the patch
+inspection of `inspectPatch`, `validatePatch` and `applyPatch` on the editor path (the
+`DEFAULT_PATCH_LIMITS` of `keiko-tools` stay sized for the small patches of the other workflows),
+`EDITOR_AGENT_CHANGESET_PROJECTION_PATCH_LIMITS` for the re-rendered projection (which spells every
+hunk count out and can be longer than what was sent by less than half), and
+`EDITOR_AGENT_ACTION_MAX_BODY_BYTES` (three caps and 1 MiB) for the request body of one editor action,
+which carries the patch and its prepared whole-file preview; the session, snapshot and scope requests
+keep the 1 MiB body bound. The contract guards count UTF-8 bytes without encoding a copy of the
+patch. The change review of a changeset parses the whole patch up to this cap instead of the 512 KB
+display cut. A modified file still has to be readable (the 1,000,000-byte patch source bound of
+`keiko-tools` and the 1 MiB governed read ceiling); a created file is bounded by the patch cap.
+
+The same cap governs every path to an edit, so no hop refuses file content the cap admits (owner
+decision, 2026-10-28). The model-facing `keiko_changeset_edit` call carries one `oldString` or
+`newString` of up to `EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES` UTF-8 bytes and one call of up to
+`EDITOR_AGENT_ACTION_MAX_BODY_BYTES`, declared once as `CHANGESET_EDIT_ARGUMENT_LIMITS` in
+`governed-tool-catalog.ts`; the generic catalog ceilings (256 KiB per call, 64 KiB per string) stay
+what every other tool is held to (ADR-0175 D4). The gateway capture, the descriptor bound, the
+wire schema the model sees, the tool request body (`CODING_TOOL_MAX_REQUEST_BODY_BYTES`, while the
+response and `tool_output` bound stay 256 KiB), the invocation registry entry, the lifecycle
+evidence and the runtime's history gate all read that one declaration; the model-facing prompt
+states the cap from the contract constants. A native OpenCode edit (`edit`, `write`, `patch`) is
+held to the same cap before the run's patch budget is charged: the policy admission refuses a diff
+over it with the closed reason `patch-too-large`, the class the mapped materializer uses, and spends
+neither the tool call nor patch budget. An agent run's apply reserves one changeset
+(`EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES`) as its envelope `maxPatchBytes`.
 
 `selectedFiles` represents partial acceptance. Absence means the complete declared changeset;
 presence means the selected non-empty subset. It does not weaken validation: the server must parse,
@@ -214,12 +245,12 @@ grants nothing: the apply path re-validates containment, aliasing and the deny l
 overwrite a file that appeared in between. Every
 touched path, both halves of a rename included, counts against the 50-file cap; an edited file may
 not grow past the governed read ceiling, projected from the match count before any result is built;
-the rendered changeset is held to the 65,536-byte cap; and the run's `maxPatchBytes` is charged
+the rendered changeset is held to the 8 MiB cap; and the run's `maxPatchBytes` is charged
 with the materialized diff, not merely with the replacement text the model sent. The rendered diff
 is also held to the editor route's changed-line limit before the budget is charged (#3873 review).
 A deletion or a rename renders its whole file and cannot be split, so a file whose rendering alone
-exceeds the byte cap or the 2,000 changed lines, or that the governed read cannot return as text
-(binary, or above the 65,536-byte read ceiling) cannot be moved or deleted with this tool; each is
+exceeds the byte cap or the 1,000,000 changed lines, or that the governed read cannot return as text
+(binary, or above the 1 MiB read ceiling) cannot be moved or deleted with this tool; each is
 refused with a closed class (`whole-file-too-large`, or the read's own reason) and a message that
 tells the model to leave the file in place and report it, never to "split" the call. A charge the
 authority refuses for any reason other than an exhausted budget is recorded as the guard's denial,

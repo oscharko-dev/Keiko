@@ -1575,6 +1575,8 @@ describe("POST /api/diagnostics/client", () => {
     },
     { interaction: "changeset-review-prepared", fileCount: 3 },
     { interaction: "changeset-review-prepared", fileCount: 100_000 },
+    { interaction: "history-repository-switched" },
+    { interaction: "event-stream-reconnecting" },
   ])("persists the Coding Workbench interaction $interaction at info", async (interaction) => {
     const sink = captureServerLog();
     const body = JSON.stringify({
@@ -1611,6 +1613,8 @@ describe("POST /api/diagnostics/client", () => {
     { interaction: "progress-state", progressState: "working", agent: "build" },
     { interaction: "agent-selected", agent: "my-private-agent" },
     { interaction: "pending-decision-focused", fileCount: 1 },
+    { interaction: "history-repository-switched", taskId: "task-one" },
+    { interaction: "event-stream-reconnecting", readyState: 2 },
     { interaction: "repository-trust-bound", repositoryId: "repo/../x", workspaceId: "w" },
     {
       interaction: "repository-trust-bound",

@@ -289,6 +289,12 @@ export interface OpenCodeV2HttpClient {
     sessionId: string,
     signal?: AbortSignal,
   ): Promise<readonly Readonly<Record<string, unknown>>[]>;
+  /**
+   * The newest messages of the session that fit the read bound, for a live run's timeline. A session
+   * past the bound yields its newest window with `truncated` set instead of failing; the complete
+   * read above stays strict for callers that need every message.
+   */
+  recentMessages(sessionId: string, signal?: AbortSignal): Promise<OpenCodeV2MessageWindow>;
   prompt(
     sessionId: string,
     text: string,
@@ -1173,11 +1179,24 @@ function nextSessionsCursor(
   return next;
 }
 
+/** A session's messages, oldest first, and whether older ones than these exist and were not read. */
+export interface OpenCodeV2MessageWindow {
+  readonly messages: readonly Readonly<Record<string, unknown>>[];
+  readonly truncated: boolean;
+}
+
+/**
+ * Reads the session newest first. `complete` refuses a session past the read bound, which the
+ * continuation of a retained session relies on; `recent` keeps the newest messages that fit and
+ * says the older ones were left out, so a very long live run keeps its timeline instead of failing
+ * every read (audit 2026-10, finding 3).
+ */
 async function pagedMessages(
   request: V2Request,
   sessionId: string,
-  signal?: AbortSignal,
-): Promise<readonly Readonly<Record<string, unknown>>[]> {
+  signal: AbortSignal | undefined,
+  mode: "complete" | "recent",
+): Promise<OpenCodeV2MessageWindow> {
   const base = `/api/session/${safeSessionId(sessionId)}/message`;
   const rows: Readonly<Record<string, unknown>>[] = [];
   const cursors = new Set<string>();
@@ -1191,17 +1210,42 @@ async function pagedMessages(
       signal,
     );
     const batch = arrayEnvelope(response);
-    if (rows.length + batch.length > MAX_MESSAGES) throw new Error("opencode-v2-history-oversized");
+    if (rows.length + batch.length > MAX_MESSAGES) return overBound(mode, rows.concat(batch));
     rows.push(...batch);
-    if (batch.length < MESSAGE_PAGE_SIZE) return rows.reverse();
-    const next = record(response.cursor)?.next;
-    if (typeof next !== "string" || next.length > 2048 || cursors.has(next)) {
-      throw new Error("opencode-v2-cursor-invalid");
-    }
-    cursors.add(next);
-    cursor = next;
+    if (batch.length < MESSAGE_PAGE_SIZE) return { messages: rows.reverse(), truncated: false };
+    cursor = nextMessagesCursor(response, cursors);
   }
-  throw new Error("opencode-v2-history-oversized");
+  return overBound(mode, rows);
+}
+
+function overBound(
+  mode: "complete" | "recent",
+  newestFirst: readonly Readonly<Record<string, unknown>>[],
+): OpenCodeV2MessageWindow {
+  if (mode === "complete") throw new Error("opencode-v2-history-oversized");
+  return newestWindow(newestFirst);
+}
+
+function nextMessagesCursor(
+  response: Readonly<Record<string, unknown>>,
+  seen: Set<string>,
+): string {
+  const next = record(response.cursor)?.next;
+  if (typeof next !== "string" || next.length > 2048 || seen.has(next)) {
+    throw new Error("opencode-v2-cursor-invalid");
+  }
+  seen.add(next);
+  return next;
+}
+
+// The newest messages that fit the bound, oldest first. An assistant message is projected against
+// the user message it answers, so the window opens on a user message.
+function newestWindow(
+  newestFirst: readonly Readonly<Record<string, unknown>>[],
+): OpenCodeV2MessageWindow {
+  const kept = newestFirst.slice(0, MAX_MESSAGES).reverse();
+  const firstUser = kept.findIndex((message) => message.type === "user");
+  return { messages: firstUser < 0 ? [] : kept.slice(firstUser), truncated: true };
 }
 
 /** Only the session API needed by a governed run is reachable from this client. */
@@ -1255,7 +1299,9 @@ export function createOpenCodeV2HttpClient(
       );
     },
     sessions: (signal) => pagedSessions(request, signal),
-    messages: (sessionId, signal) => pagedMessages(request, sessionId, signal),
+    messages: async (sessionId, signal) =>
+      (await pagedMessages(request, sessionId, signal, "complete")).messages,
+    recentMessages: (sessionId, signal) => pagedMessages(request, sessionId, signal, "recent"),
     prompt: async (sessionId, value, signal, display, inputs): Promise<void> => {
       const prepared = preparedPrompt(sessionId, value, display, inputs);
       const receipt = objectEnvelope(await request("POST", prepared.path, prepared.body, signal));

@@ -25635,6 +25635,18 @@
               "type": "integer",
               "dataClass": "count",
               "required": false
+            },
+            {
+              "name": "toolCallFragmentsDropped",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "toolCallFragmentsPositional",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
             }
           ],
           "evidenceClasses": [
@@ -39783,6 +39795,12 @@
               "type": "integer",
               "dataClass": "count",
               "required": true
+            },
+            {
+              "name": "drainWaitCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
             },
             {
               "name": "frameCount",

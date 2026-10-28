@@ -2,10 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import { validateCodingWorkbenchPermissionRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 import { EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
-import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import {
+  CHANGESET_EDIT_ARGUMENT_LIMITS,
+  TOOL_CATALOG_LIMITS,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 
 import {
   OPENCODE_APPROVED_ENDPOINTS,
+  OPENCODE_HISTORY_CATCH_UP_CHANGESET_EDIT_CALLS,
   OPENCODE_HISTORY_CATCH_UP_TOOL_CALLS,
   OPENCODE_HISTORY_RESPONSE_MAX_BYTES,
   OPENCODE_HISTORY_TOOL_PART_MAX_BYTES,
@@ -906,6 +910,9 @@ describe("OpenCode v1.18.30 protocol boundary", () => {
   // Arguments now re-enter under the catalog ceilings that admitted them at the gateway, and the
   // admitted bodies still never reach the reconciliation projection.
   it("admits a governed edit whose arguments fill the patch contract, in every tool status", () => {
+    // Owner decision 2026-10-28: the patch contract is the changeset cap (8 MiB), and a governed
+    // changeset edit carries a string of exactly that size under its own argument ceilings. The pin
+    // is back at its original meaning: the arguments fill the contract, in every status.
     const input = changesetInput("x".repeat(EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES));
     const raw = JSON.stringify(input);
     expect(raw.length).toBeGreaterThan(64 * 1024);
@@ -931,6 +938,21 @@ describe("OpenCode v1.18.30 protocol boundary", () => {
     }
   });
 
+  // The relaxed ceilings belong to the changeset edit (and the native file-content tools) alone: the
+  // same arguments on any other tool are still refused at the generic catalog ceilings.
+  it("keeps the generic argument ceilings for every tool that is not file content", () => {
+    const input = changesetInput("x".repeat(TOOL_CATALOG_LIMITS.maxStringBytes + 1));
+    const state = { status: "running", input, title: "T", metadata: {}, time: { start: 1 } };
+    for (const tool of ["keiko_workspace_read", "question", "shell"]) {
+      const row = editRow(70, state, { tool });
+      expect(parseOpenCodeHistory([row])).toEqual({ ok: false, reason: "event-unknown" });
+      expect(describeRejectedOpenCodeHistoryPart(row)).toMatchObject({ gate: "argument-bound" });
+    }
+    for (const tool of ["keiko_changeset_edit", "edit", "write", "patch"]) {
+      expect(parseOpenCodeHistory([editRow(71, state, { tool })])).toMatchObject({ ok: true });
+    }
+  });
+
   // Both halves of AGENTS.md §7 at once. The formula belongs to the producer and is not restated
   // here (CodeRabbit, PR #3452) — but a floor alone is satisfied by absurd values, so replacing the
   // original equalities with floors RELAXED the pin (owner review, PR #3452): a dropped zero in the
@@ -943,27 +965,40 @@ describe("OpenCode v1.18.30 protocol boundary", () => {
   // OPENCODE_HISTORY_RESPONSE_MAX_BYTES to the transport verbatim as `maxResponseBytes`, so this
   // number is the largest response one sidecar pull may ever buffer in the server's memory.
   const METADATA_ALLOWANCE_CEILING_BYTES = 128 * 1024;
-  const HISTORY_PULL_BUFFER_CEILING_BYTES = 12 * 1024 * 1024;
+  // Owner decision 2026-10-28 (changeset edits of up to 8 MiB are never refused): the pull may now
+  // hold ONE whole changeset-edit call -- four argument-bearing rows -- beside the ordinary
+  // traffic the 12 MiB fence always allowed. The fence stays a fence: it is the old figure plus
+  // exactly that one call, and a second such call per pull (or any larger factor) breaks it.
+  const ORDINARY_HISTORY_PULL_CEILING_BYTES = 12 * 1024 * 1024;
+  const HISTORY_PULL_BUFFER_CEILING_BYTES =
+    ORDINARY_HISTORY_PULL_CEILING_BYTES + 4 * CHANGESET_EDIT_ARGUMENT_LIMITS.maxArgumentBytes;
 
   it("derives the history budgets from the catalog ceilings, never from a restated constant", () => {
     // Floor: one governed call can leave BOTH an input and an output body at the catalog's own
-    // ceiling, and a part budget under that would refuse a legal call's own record.
+    // ceiling, and a part budget under that would refuse a legal call's own record. The largest
+    // such call is the changeset edit, whose ceiling is its own.
     expect(OPENCODE_HISTORY_TOOL_PART_MAX_BYTES).toBeGreaterThan(
-      2 * TOOL_CATALOG_LIMITS.maxArgumentBytes,
+      2 * CHANGESET_EDIT_ARGUMENT_LIMITS.maxArgumentBytes,
     );
     // Ceiling: what a part budget adds ON TOP of those two bodies is a bounded metadata allowance,
     // never a second payload's worth of room.
     expect(OPENCODE_HISTORY_TOOL_PART_MAX_BYTES).toBeLessThanOrEqual(
-      2 * TOOL_CATALOG_LIMITS.maxArgumentBytes + METADATA_ALLOWANCE_CEILING_BYTES,
+      2 * CHANGESET_EDIT_ARGUMENT_LIMITS.maxArgumentBytes + METADATA_ALLOWANCE_CEILING_BYTES,
     );
     // Floor: a catch-up pull must hold the ordinary metadata rows AND every call it is allowed to
     // catch up on, each with at least one argument body.
     expect(OPENCODE_HISTORY_RESPONSE_MAX_BYTES).toBeGreaterThan(
       1024 * 1024 + OPENCODE_HISTORY_CATCH_UP_TOOL_CALLS * TOOL_CATALOG_LIMITS.maxArgumentBytes,
     );
-    // Floor: it must still hold several whole parts, so one large call cannot exhaust a pull.
+    // Floor: it must hold one whole changeset-edit call (the pending row carries both bodies, the
+    // running and settled rows one each) beside those rows.
     expect(OPENCODE_HISTORY_RESPONSE_MAX_BYTES).toBeGreaterThan(
-      3 * OPENCODE_HISTORY_TOOL_PART_MAX_BYTES,
+      1024 * 1024 + 4 * CHANGESET_EDIT_ARGUMENT_LIMITS.maxArgumentBytes,
+    );
+    // Floor: it must still hold several whole parts of an ordinary call, so one large ordinary
+    // call cannot exhaust a pull.
+    expect(OPENCODE_HISTORY_RESPONSE_MAX_BYTES).toBeGreaterThan(
+      3 * (METADATA_ALLOWANCE_CEILING_BYTES + 2 * TOOL_CATALOG_LIMITS.maxArgumentBytes),
     );
     // Ceiling: no edit to any input of the formula may push one pull's buffer past this.
     expect(OPENCODE_HISTORY_RESPONSE_MAX_BYTES).toBeLessThanOrEqual(
@@ -973,6 +1008,7 @@ describe("OpenCode v1.18.30 protocol boundary", () => {
     // room inside the pull budget above.
     expect(OPENCODE_HISTORY_CATCH_UP_TOOL_CALLS).toBeGreaterThan(0);
     expect(OPENCODE_HISTORY_CATCH_UP_TOOL_CALLS).toBeLessThanOrEqual(16);
+    expect(OPENCODE_HISTORY_CATCH_UP_CHANGESET_EDIT_CALLS).toBe(1);
   });
 
   it("re-bounds tool arguments by the catalog ceilings and names the refusing gate body-free", () => {
@@ -993,14 +1029,16 @@ describe("OpenCode v1.18.30 protocol boundary", () => {
         row: editRow(51, {
           status: "pending",
           input,
-          raw: `${sentinel}${"x".repeat(TOOL_CATALOG_LIMITS.maxArgumentBytes)}`,
+          raw: `${sentinel}${"x".repeat(CHANGESET_EDIT_ARGUMENT_LIMITS.maxArgumentBytes)}`,
         }),
         expected: { status: "pending", gate: "argument-bound" },
       },
       {
         row: editRow(52, {
           ...running,
-          input: changesetInput(`${sentinel}${"x".repeat(TOOL_CATALOG_LIMITS.maxStringBytes)}`),
+          input: changesetInput(
+            `${sentinel}${"x".repeat(CHANGESET_EDIT_ARGUMENT_LIMITS.maxStringBytes)}`,
+          ),
         }),
         expected: { status: "running", gate: "argument-bound" },
       },

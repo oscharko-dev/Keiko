@@ -119,7 +119,17 @@ Launch verifies the executable against the same pinned digest (or the activation
 through the same verifier before the runtime may use it, and puts only that verified directory on
 the child `PATH` (and, for the native macOS profile, on the matching Seatbelt read allowlist). A
 ripgrep that does not verify never blocks the run: search is degraded, the closed reason is recorded
-by `coding-runtime.ripgrep.resolved`, and no path is logged. The npm runtime packages of ADR-0140 D2a
+by `coding-runtime.ripgrep.resolved`, and no path is logged. A degraded native launch also removes
+every inherited `PATH` entry that provides an `rg` (and every empty or relative entry) from the child
+`PATH` and from the matching read allowlist, so an unverified host ripgrep is never executed in the
+pinned one's place; a mapped child inherits no `PATH` at all. The pinned OpenCode runtime has no
+switch that disables its own ripgrep download: it looks for `rg` on `PATH`, then in its own `bin`
+directory (`<run>/home/.local/share/opencode/bin`, since the run's `HOME` is private and
+`XDG_DATA_HOME` is never set), then downloads. A degraded launch of every profile therefore places a
+refusing `rg` placeholder in that private directory before the runtime starts (amended 2026-10-28):
+the lookup ends there, search fails visibly with a fixed message, and no profile, Full access
+included, fetches an unverified binary at run time. The pinned executable must still verify
+(`npm run provision:ripgrep`, portable staging, the npm runtime package) for search to work. The npm runtime packages of ADR-0140 D2a
 ship the same unmodified executable at the same paths (amended 2026-10-24), verified against the
 same pinned digest at every launch. Details:
 [`docs/qa/ripgrep-runtime-evidence.md`](../qa/ripgrep-runtime-evidence.md).
