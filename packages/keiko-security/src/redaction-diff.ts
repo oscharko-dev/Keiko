@@ -11,6 +11,7 @@ import type {
   RedactionSpan,
   SourceRedactionLanguage,
 } from "./redaction-code.js";
+import { REDACTION_PLACEHOLDER } from "./redaction-source-map.js";
 import { maskedLiteralBody } from "./redaction-typescript.js";
 import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 
@@ -185,6 +186,8 @@ function projectFile(
     );
   const projections = inspect();
   const report = sumReports(projections);
+  const floored = credentialFloorFile(text, file, images, report, ports);
+  if (floored !== undefined) return floored;
   const literals: RedactionSpan[] = [];
   for (const [index, entry] of sources.entries()) {
     const projection = projections[index];
@@ -197,6 +200,67 @@ function projectFile(
         if (line.marker !== "\\")
           literals.push(maskRange(text, { start: line.start + 1, end: line.end }));
   return { regions: fileRegions(file), literals, report };
+}
+
+/**
+ * #4114: a diff view whose file hunks fail only the syntax check keeps them readable under the
+ * credential floor instead of masking every line. Each old/new image is floored as a whole, so a
+ * private key spanning lines is still found, and mapped back line by line. Private literal values
+ * found in other files of the same diff stay masked. Depth and size refusals, a floor that changes
+ * the line count, and every caller without the port keep whole-file masking.
+ */
+function credentialFloorFile(
+  text: string,
+  file: UnifiedDiffFileSource,
+  images: readonly { readonly image: SourceImage }[],
+  report: CodeRedactionProjection["report"],
+  ports: ProjectionPorts,
+): CodeRedactionProjection | undefined {
+  const floor = ports.unparsedDiffHunkFloor;
+  if (floor === undefined || report.syntaxRefusals === 0) return undefined;
+  if (report.depthRefusals + report.sizeRefusals > 0) return undefined;
+  // Shared private literal keys are `<kind>:<value>` (TypeScript, Java and YAML projections).
+  const values = [...(ports.privateLiteralValues ?? [])]
+    .map((key) => key.slice(key.indexOf(":") + 1))
+    .filter((value) => value.length > 0);
+  const masked = (value: string): string =>
+    values.reduce(
+      (current, secret) => current.split(secret).join(REDACTION_PLACEHOLDER),
+      floor(value),
+    );
+  const literals: RedactionSpan[] = [];
+  for (const { image } of images) {
+    const spans = flooredImageSpans(image, masked);
+    if (spans === undefined) return undefined;
+    literals.push(...spans);
+  }
+  addMetadataSpans(text, file, ports, literals);
+  ports.onUnparsedDiffHunkFloor?.();
+  return { regions: fileRegions(file), literals, report };
+}
+
+function flooredImageSpans(
+  image: SourceImage,
+  floor: (text: string) => string,
+): readonly RedactionSpan[] | undefined {
+  if (image.lines.length === 0) return [];
+  const original = image.lines.map((line) => image.text.slice(line.start, line.end));
+  const floored = floor(image.text).split(/(?<=\n)/u);
+  const physical = image.text.split(/(?<=\n)/u);
+  const aligned =
+    physical.length === original.length && physical.every((line, at) => line === original[at]);
+  if (!aligned || floored.length !== original.length) return undefined;
+  const spans: RedactionSpan[] = [];
+  for (const [index, line] of image.lines.entries()) {
+    const replacement = floored[index] ?? "";
+    if (replacement !== original[index])
+      spans.push({
+        start: line.rawStart,
+        end: line.rawStart + line.end - line.start,
+        replacement,
+      });
+  }
+  return spans;
 }
 
 function addMetadataSpans(
@@ -256,19 +320,38 @@ export function projectUnifiedDiff(
   try {
     const files = acceptedFiles(text);
     if (files.length === 0) return refusedDiff(text, "syntax");
-    const ownsScope = ports.privateLiteralValues === undefined;
-    const scoped = {
-      ...ports,
-      privateLiteralValues: ports.privateLiteralValues ?? new Set<string>(),
-    };
-    const projection = projectAcceptedFiles(text, files, scoped, project);
-    return ownsScope && scoped.privateLiteralValues.size > 0
-      ? projectAcceptedFiles(text, files, scoped, project)
-      : projection;
+    return projectWithSharedLiterals(text, files, ports, project);
   } catch (error) {
     if (!(error instanceof RangeError)) throw error;
     return refusedDiff(text, "depth");
   }
+}
+
+/** Private literals found anywhere in the patch take one bounded second pass; only the final
+ * pass reports its credential-floor files. */
+function projectWithSharedLiterals(
+  text: string,
+  files: readonly UnifiedDiffFileSource[],
+  ports: ProjectionPorts,
+  project: Project,
+): CodeRedactionProjection {
+  const ownsScope = ports.privateLiteralValues === undefined;
+  const privateLiteralValues = ports.privateLiteralValues ?? new Set<string>();
+  let floored = 0;
+  const scoped: ProjectionPorts = {
+    ...ports,
+    privateLiteralValues,
+    onUnparsedDiffHunkFloor: () => {
+      floored += 1;
+    },
+  };
+  let projection = projectAcceptedFiles(text, files, scoped, project);
+  if (ownsScope && privateLiteralValues.size > 0) {
+    floored = 0;
+    projection = projectAcceptedFiles(text, files, scoped, project);
+  }
+  for (let index = 0; index < floored; index += 1) ports.onUnparsedDiffHunkFloor?.();
+  return projection;
 }
 
 function refusedDiff(text: string, reason: "size" | "syntax" | "depth"): CodeRedactionProjection {

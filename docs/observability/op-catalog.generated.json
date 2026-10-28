@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "03216c932ea94d826dcebf5a1d02b4c5cc8ac69109b54ac6ce4dec4a4cb28c76",
+    "catalogDigest": "b1865d97ea547716648bfb56f8c1a6f36638b576a5bd9501d16e83a57b1f5bf8",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -24812,6 +24812,54 @@
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
+        "op": "git.diff.view-bounded",
+        "category": "process",
+        "owner": "keiko-server",
+        "emitter": "gitDiffView.redactedDiffViewBody",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "truncated": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": true
+          },
+          "shownBytes": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "maxBytes": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "credentialFloorFileCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["git-diff-view-bounded"],
+        "proofIds": ["git.diff.view-bounded.emitted-line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/gitDiffView.ts:22",
+        "emitterSites": ["packages/keiko-server/src/gitDiffView.ts:67"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
         "op": "git.draft-checks",
         "category": "process",
         "owner": "keiko-server",
@@ -47858,6 +47906,27 @@
       {
         "contractKind": "activity-log-failure-class",
         "schemaVersion": 1,
+        "failureClass": "git-diff-view-bounded",
+        "requiredProductSurfaces": ["keiko-server"],
+        "requiredLifecycleOperations": {
+          "start": [],
+          "state": ["git.diff.view-bounded"],
+          "end": [],
+          "failure": [],
+          "loss": []
+        },
+        "requiredCausalOperations": ["git.diff.view-bounded"],
+        "requiredLossOperations": [],
+        "requiredProofOperations": ["git.diff.view-bounded"],
+        "requiredReplayProofIds": [],
+        "requiredResourceOperations": ["git.diff.view-bounded"],
+        "requiredEvidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+        "requiredFrameOperations": [],
+        "requiredCauseOperations": []
+      },
+      {
+        "contractKind": "activity-log-failure-class",
+        "schemaVersion": 1,
         "failureClass": "git-draft-checks",
         "requiredProductSurfaces": ["keiko-server"],
         "requiredLifecycleOperations": {
@@ -52370,8 +52439,8 @@
     "failureClassCoverage": {
       "schemaVersion": 1,
       "releaseExpectation": "100%-complete",
-      "supportedClassCount": 373,
-      "completeClassCount": 373,
+      "supportedClassCount": 374,
+      "completeClassCount": 374,
       "completeness": "complete",
       "classes": [
         {
@@ -81360,6 +81429,74 @@
           "completeness": "complete"
         },
         {
+          "failureClass": "git-diff-view-bounded",
+          "requirementContract": "git-diff-view-bounded",
+          "productSurfaces": ["keiko-server"],
+          "lifecycleTransitions": ["state"],
+          "lifecycleOperations": {
+            "start": [],
+            "state": ["git.diff.view-bounded"],
+            "end": [],
+            "failure": [],
+            "loss": []
+          },
+          "causalEdges": [
+            {
+              "op": "git.diff.view-bounded",
+              "mode": "correlation"
+            }
+          ],
+          "lossSignals": [],
+          "resourceSignals": ["git.diff.view-bounded"],
+          "replayReferences": [],
+          "operations": [
+            {
+              "op": "git.diff.view-bounded",
+              "owner": "keiko-server",
+              "category": "process",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "credentialFloorFileCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "maxBytes",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "shownBytes",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "truncated",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["git.diff.view-bounded.emitted-line"],
+              "replayReferences": [],
+              "missingObligations": []
+            }
+          ],
+          "missingObligations": [],
+          "completeness": "complete"
+        },
+        {
           "failureClass": "git-draft-checks",
           "requirementContract": "git-draft-checks",
           "productSurfaces": ["keiko-server"],
@@ -100822,7 +100959,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitRoutes.ts:1471",
+      "site": "packages/keiko-server/src/gitRoutes.ts:1497",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -103241,6 +103378,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "git.diff.view-bounded",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitDiffView.ts:25",
+      "package": "keiko-server"
+    },
+    {
       "op": "git.draft-checks",
       "category": "process",
       "site": "packages/keiko-server/src/gitDelivery/draftDeliveryChecks.ts:29",
@@ -105082,6 +105225,7 @@
     "git.delivery.readiness.observed",
     "git.delivery.repository.mismatch",
     "git.delivery.sync.approval.minted",
+    "git.diff.view-bounded",
     "git.draft-checks",
     "git.draft-delivery",
     "git.draft-delivery.repository-drift",

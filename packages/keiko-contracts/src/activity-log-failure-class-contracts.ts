@@ -5948,6 +5948,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "git-diff-view-bounded",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["git.diff.view-bounded"],
+      end: [],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["git.diff.view-bounded"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["git.diff.view-bounded"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["git.diff.view-bounded"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "git-draft-checks",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {

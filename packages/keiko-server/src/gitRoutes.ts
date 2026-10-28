@@ -57,6 +57,7 @@ import {
 import { DENIED_MESSAGE } from "./files-deny.js";
 import { parseGitBlamePorcelain } from "./gitBlameParser.js";
 import { parseGitEditorUnifiedDiff } from "./gitDiffParser.js";
+import { redactedDiffViewBody, type DiffViewLog } from "./gitDiffView.js";
 
 // The git core moved to @oscharko-dev/keiko-git (shared with keiko-tools). Route modules and
 // their tests keep importing the process surface from here so the BFF has one seam for it.
@@ -1326,6 +1327,15 @@ function prepareDiffContext<Scope>(
   return { options, scope, path, repository: resolveRepository(ctx, deps, options) };
 }
 
+function diffViewLog(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  rawOptions: GitRouteOptions | undefined,
+): DiffViewLog {
+  const sink = (rawOptions ?? deps.gitRouteOptions)?.activityLog ?? processServerLogSink();
+  return { sink, correlationId: ctx.correlationId };
+}
+
 // eslint-disable-next-line max-lines-per-function
 export async function handleGitDiff(
   ctx: RouteContext,
@@ -1421,7 +1431,10 @@ export async function handleGitDiff(
         truncated: runs.some((result) => result.truncated) || rawDiffBytes > options.maxDiffBytes,
         maxBytes: options.maxDiffBytes,
       };
-      return { status: 200, body: redacted(deps, body) };
+      return {
+        status: 200,
+        body: redactedDiffViewBody(deps, body, diffViewLog(ctx, deps, rawOptions)),
+      };
     },
     GIT_DIFF_ROUTE_TEMPLATE,
   );

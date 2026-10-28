@@ -23752,6 +23752,52 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "git.diff.view-bounded",
+    category: "process",
+    owner: "keiko-server",
+    emitter: "gitDiffView.redactedDiffViewBody",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      truncated: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: true,
+      },
+      shownBytes: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      maxBytes: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      credentialFloorFileCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["git-diff-view-bounded"],
+    proofIds: ["git.diff.view-bounded.emitted-line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "git.draft-checks",
     category: "process",
     owner: "keiko-server",

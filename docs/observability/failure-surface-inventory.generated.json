@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "03216c932ea94d826dcebf5a1d02b4c5cc8ac69109b54ac6ce4dec4a4cb28c76"
+    "catalogDigest": "b1865d97ea547716648bfb56f8c1a6f36638b576a5bd9501d16e83a57b1f5bf8"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -59,10 +59,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 593,
-    "proofCount": 606,
-    "resolvedProofCount": 606,
-    "failureClassCount": 373,
+    "operationCount": 594,
+    "proofCount": 607,
+    "resolvedProofCount": 607,
+    "failureClassCount": 374,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -599,6 +599,7 @@
         "git.delivery.readiness.observed",
         "git.delivery.repository.mismatch",
         "git.delivery.sync.approval.minted",
+        "git.diff.view-bounded",
         "git.draft-checks",
         "git.draft-delivery",
         "git.draft-delivery.repository-drift",
@@ -980,6 +981,7 @@
     "git-delivery-repository-binding": ["editor-delivery.rejection"],
     "git-denied-path-exclusion": ["editor-delivery.rejection"],
     "git-diff-search-bounded": ["editor-delivery.loss"],
+    "git-diff-view-bounded": ["editor-delivery.dependency-failure"],
     "git-draft-checks": ["editor-delivery.dependency-failure"],
     "git-draft-delivery": ["editor-delivery.dependency-failure"],
     "git-draft-push-preparation": ["editor-delivery.dependency-failure"],
@@ -2171,6 +2173,7 @@
     "git.delivery.sync.approval.minted.emitted-line": [
       "packages/keiko-server/src/gitDelivery/approvalEvents.test.ts"
     ],
+    "git.diff.view-bounded.emitted-line": ["packages/keiko-server/src/gitRoutes.test.ts"],
     "git.draft-checks.emitted-line": [
       "packages/keiko-server/src/gitDelivery/draftDeliveryChecks.test.ts"
     ],

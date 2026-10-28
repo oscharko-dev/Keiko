@@ -17,6 +17,7 @@ import {
 import {
   projectCodeRedaction,
   type CodeRedactionReport,
+  type ProjectionPorts,
   type RedactionSpan,
   type SourceRedactionLanguage,
 } from "./redaction-code.js";
@@ -249,6 +250,24 @@ export function objectContainsCredentialKey(value: unknown, seen = new WeakSet()
 // so even non-standard key formats are scrubbed.
 // Source projections may preserve each masked span's LF/CRLF delimiters so cited line numbers
 // remain physical file coordinates. The default diagnostic/provider projection is unchanged.
+/** #4114: the credential floor a diff view applies to hunks that do not parse on their own. */
+function unparsedDiffHunkFloorPorts(
+  options: {
+    readonly unparsedDiffHunks?: "mask" | "credential-floor";
+    readonly onUnparsedDiffHunkFloor?: () => void;
+  },
+  additionalSecrets: readonly string[],
+): Pick<ProjectionPorts, "unparsedDiffHunkFloor" | "onUnparsedDiffHunkFloor"> {
+  if (options.unparsedDiffHunks !== "credential-floor") return {};
+  return {
+    unparsedDiffHunkFloor: (value: string): string =>
+      redactCredentialShapes(value, additionalSecrets, true),
+    ...(options.onUnparsedDiffHunkFloor === undefined
+      ? {}
+      : { onUnparsedDiffHunkFloor: options.onUnparsedDiffHunkFloor }),
+  };
+}
+
 export function redact(
   input: string,
   additionalSecrets: readonly string[] = [],
@@ -257,9 +276,16 @@ export function redact(
     readonly sourceLanguage?: SourceRedactionLanguage;
     readonly inferSourceLanguage?: boolean;
     readonly onCodeProjection?: (report: CodeRedactionReport) => void;
+    /**
+     * Diff views of the local user's own repository (#4114): a file whose hunks do not parse on
+     * their own keeps them readable under the credential floor instead of being masked whole.
+     */
+    readonly unparsedDiffHunks?: "mask" | "credential-floor";
+    readonly onUnparsedDiffHunkFloor?: () => void;
   } = {},
 ): string {
   const preserve = options.preserveSourceLineBreaks === true;
+  const floor = unparsedDiffHunkFloorPorts(options, additionalSecrets);
   const projection = projectCodeRedaction(
     input,
     options.sourceLanguage,
@@ -268,6 +294,7 @@ export function redact(
       mayContainSensitiveName,
       redactPlain: (value): string => redactPlain(value, additionalSecrets, true),
       publicPrefix: (value): boolean => /^(?:Bearer|Basic)[ \t]+$/iu.test(value),
+      ...floor,
     },
     options.inferSourceLanguage,
   );
@@ -542,17 +569,22 @@ function keepLongEnough(literals: readonly string[]): readonly string[] {
 
 // Returns a function string -> string applying redact() with the union of all literal secrets
 // (additionalSecrets ∪ resolved env values ∪ sensitiveLiterals). Idempotent: redact() over already-
-// redacted text is a no-op on the redacted tokens (ADR-0010 D3 audit-redaction layer).
+// redacted text is a no-op on the redacted tokens (ADR-0010 D3 audit-redaction layer). Only a diff
+// view of the local user's own repository passes `diffView` (#4114); every other caller keeps the
+// default whole-file masking of an unparsed diff hunk.
 export function createAuditRedactor(
   config: AuditRedactionConfig,
   env: Readonly<Record<string, string | undefined>>,
+  diffView?: { readonly onUnparsedDiffHunkFloor?: () => void },
 ): (input: string) => string {
   const literals = [
     ...keepLongEnough(config.additionalSecrets ?? []),
     ...resolveEnvValues(config.redactEnvValues ?? [], env),
     ...keepLongEnough(config.sensitiveLiterals ?? []),
   ];
-  return (input: string): string => redact(input, literals);
+  if (diffView === undefined) return (input: string): string => redact(input, literals);
+  const options = { ...diffView, unparsedDiffHunks: "credential-floor" as const };
+  return (input: string): string => redact(input, literals, options);
 }
 
 // Recursively re-applies a redactor to EVERY STRING LEAF of a plain-JSON value, rebuilding

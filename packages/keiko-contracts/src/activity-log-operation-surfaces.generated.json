@@ -345,6 +345,7 @@
   "git.delivery.readiness.observed": "editor-delivery",
   "git.delivery.repository.mismatch": "editor-delivery",
   "git.delivery.sync.approval.minted": "editor-delivery",
+  "git.diff.view-bounded": "editor-delivery",
   "git.draft-checks": "editor-delivery",
   "git.draft-delivery": "editor-delivery",
   "git.draft-delivery.repository-drift": "editor-delivery",
