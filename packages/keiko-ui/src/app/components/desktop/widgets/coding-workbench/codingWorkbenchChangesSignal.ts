@@ -59,5 +59,6 @@ export function changesRefreshSignal(
   // call for each new one; the feed's monotonic loss counter is what keeps advancing then.
   const displaced = feed?.droppedEventCount ?? 0;
   if (cursor === null && settled === 0 && displaced === 0) return null;
-  return `${cursor ?? "-"}|${String(settled)}${displaced === 0 ? "" : `|d${String(displaced)}`}`;
+  const displacedSuffix = displaced === 0 ? "" : `|d${String(displaced)}`;
+  return `${cursor ?? "-"}|${String(settled)}${displacedSuffix}`;
 }

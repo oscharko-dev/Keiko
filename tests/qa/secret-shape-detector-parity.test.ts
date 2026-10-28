@@ -116,18 +116,26 @@ const SECRET_SHAPE_CLASSES: readonly SecretShapeClass[] = [
     fixtures: [{ id: "bearer-jwt", value: `Bearer ${JWT}` }],
   },
   {
+    className: "bare-jwt",
+    rationale:
+      "A bare JWT (no context word) is a bearer credential. looksLikeSecretShape matches it with " +
+      "its own content-shape pattern, and since #3897 (2026-10-28, the 1.3.1 stress finding F2) " +
+      "keiko-security's containsCredentialShape()/redact() carry the same unconditional JWT shape, " +
+      "so the former contracts-only gap is closed. workspace inherits contracts' verdict because " +
+      "isSecretShapedString() calls looksLikeSecretShape() directly.",
+    verdicts: { contracts: true, secDetect: true, secRedact: true, workspace: true },
+    fixtures: [{ id: "bare-jwt", value: JWT }],
+  },
+  {
     className: "contracts-only-bare-payload",
     rationale:
-      "A bare JWT (no context word) and a Luhn-valid PAN are matched by looksLikeSecretShape's " +
-      "own content-shape patterns, but keiko-security's containsCredentialShape()/redact() have " +
-      "no unconditional bare-JWT or bare-PAN pattern -- both require a triggering context word " +
-      "(bearer/basic/api-key/etc.) that these fixtures lack. workspace inherits contracts' verdict " +
-      "because isSecretShapedString() calls looksLikeSecretShape() directly.",
+      "A Luhn-valid PAN is matched by looksLikeSecretShape's own content-shape patterns, but " +
+      "keiko-security's containsCredentialShape()/redact() have no unconditional bare-PAN pattern " +
+      "-- it requires a triggering context word (bearer/basic/api-key/etc.) that this fixture " +
+      "lacks. workspace inherits contracts' verdict because isSecretShapedString() calls " +
+      "looksLikeSecretShape() directly.",
     verdicts: { contracts: true, secDetect: false, secRedact: false, workspace: true },
-    fixtures: [
-      { id: "bare-jwt", value: JWT },
-      { id: "pan-visa", value: "4111 1111 1111 1111" },
-    ],
+    fixtures: [{ id: "pan-visa", value: "4111 1111 1111 1111" }],
   },
   {
     className: "contracts-documented-exclusion",

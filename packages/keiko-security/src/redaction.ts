@@ -208,6 +208,7 @@ const CREDENTIAL_SHAPE_PATTERNS: readonly RegExp[] = Object.freeze([
   ...[
     GOOGLE_API_KEY_PATTERN,
     STRIPE_KEY_PATTERN,
+    JWT_PATTERN,
     PEM_PRIVATE_KEY_HEADER_PATTERN,
     API_KEY_PATTERN,
     URL_CREDENTIALS_PATTERN,
@@ -216,7 +217,7 @@ const CREDENTIAL_SHAPE_PATTERNS: readonly RegExp[] = Object.freeze([
 
 /**
  * True when `value` contains something shaped like an actual credential: an issuer-prefixed token,
- * a private-key header, URL userinfo credentials, or an auth/api-key/cookie/secret-key context
+ * a JWT-shaped bearer token, a private-key header, URL userinfo credentials, or an auth/api-key/cookie/secret-key context
  * followed by a credential-length value. Pure, no IO. Intended for scanning free text a human wrote;
  * structured payloads that may not carry headers at all keep their stricter substring guard.
  */

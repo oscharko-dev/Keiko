@@ -912,7 +912,7 @@ function keepAlreadyRunningUi(
 // --keiko-launch-id ID` (`uiProcessArguments`). Its live command line is therefore the record's own
 // endpoint, read only when it also carries the record's launch id so another process cannot
 // supply it. Anything else falls back to the requested endpoint.
-const LOOPBACK_UI_HOSTS: readonly string[] = ["127.0.0.1", "localhost"];
+const LOOPBACK_UI_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "localhost"]);
 
 function commandLineFlagValue(commandLine: string, flag: string): string | undefined {
   const tokens = commandLine.split(/[\s\0]+/u);
@@ -928,7 +928,7 @@ function commandLineEndpoint(
   if (rawPort === undefined || !/^\d{1,5}$/u.test(rawPort)) return undefined;
   const port = Number(rawPort);
   if (port < 1 || port > 65_535) return undefined;
-  return host !== undefined && LOOPBACK_UI_HOSTS.includes(host) ? { host, port } : undefined;
+  return host !== undefined && LOOPBACK_UI_HOSTS.has(host) ? { host, port } : undefined;
 }
 
 function trackedEndpointOptions(

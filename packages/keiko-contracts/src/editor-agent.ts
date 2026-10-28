@@ -760,17 +760,13 @@ function isUtf8StringWithin(value: unknown, maxBytes: number): value is string {
 }
 
 function utf8UnitBytes(value: string, index: number): 1 | 2 | 3 | 4 {
-  const unit = value.charCodeAt(index);
-  if (unit < 0x80) return 1;
-  if (unit < 0x800) return 2;
-  const isPair =
-    unit >= 0xd800 &&
-    unit <= 0xdbff &&
-    value.charCodeAt(index + 1) >= 0xdc00 &&
-    value.charCodeAt(index + 1) <= 0xdfff;
-  // A surrogate pair is one four-byte code point; a lone surrogate encodes as U+FFFD (three bytes),
-  // exactly what `TextEncoder` produces.
-  return isPair ? 4 : 3;
+  const codePoint = value.codePointAt(index) ?? 0;
+  if (codePoint < 0x80) return 1;
+  if (codePoint < 0x800) return 2;
+  // `codePointAt` joins a surrogate pair into one supplementary code point, which UTF-8 encodes in
+  // four bytes; a lone surrogate stays below U+10000 and encodes as U+FFFD (three bytes), exactly
+  // what `TextEncoder` produces.
+  return codePoint > 0xffff ? 4 : 3;
 }
 
 /**

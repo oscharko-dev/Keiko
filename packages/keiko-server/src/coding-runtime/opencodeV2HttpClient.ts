@@ -1212,7 +1212,10 @@ async function pagedMessages(
     const batch = arrayEnvelope(response);
     if (rows.length + batch.length > MAX_MESSAGES) return overBound(mode, rows.concat(batch));
     rows.push(...batch);
-    if (batch.length < MESSAGE_PAGE_SIZE) return { messages: rows.reverse(), truncated: false };
+    if (batch.length < MESSAGE_PAGE_SIZE) {
+      rows.reverse();
+      return { messages: rows, truncated: false };
+    }
     cursor = nextMessagesCursor(response, cursors);
   }
   return overBound(mode, rows);

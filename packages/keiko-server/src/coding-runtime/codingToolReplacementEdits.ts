@@ -219,7 +219,7 @@ function changedLineCount(section: string): number {
   while (start < section.length) {
     const newline = section.indexOf("\n", start);
     const end = newline === -1 ? section.length : newline;
-    if (lineNumber >= 2 && end > start && isChangedLine(section.charCodeAt(start))) count += 1;
+    if (lineNumber >= 2 && end > start && isChangedLine(section.codePointAt(start))) count += 1;
     lineNumber += 1;
     start = end + 1;
   }
@@ -227,8 +227,8 @@ function changedLineCount(section: string): number {
 }
 
 // "+" and "-".
-function isChangedLine(firstCharCode: number): boolean {
-  return firstCharCode === 0x2b || firstCharCode === 0x2d;
+function isChangedLine(firstCodePoint: number | undefined): boolean {
+  return firstCodePoint === 0x2b || firstCodePoint === 0x2d;
 }
 
 // A deletion or a rename renders its whole file and cannot be split into smaller calls: one that

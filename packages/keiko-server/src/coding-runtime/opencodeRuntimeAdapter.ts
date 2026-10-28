@@ -524,24 +524,12 @@ export function createOpenCodeRuntimeAdapter(
             reconnects += 1;
             const nowMs = (ports.reconnect?.now ?? Date.now)();
             failingSince ??= nowMs;
-            if (!(await backOff(reconnects, nowMs - failingSince))) {
+            if (!(await backOff(ports, monitorStop.signal, reconnects, nowMs - failingSince))) {
               onFailure();
               return;
             }
           }
         }
-      }
-
-      // Waits before the next reconnect; false when the failure budget is spent (count or time).
-      async function backOff(attempt: number, failingForMs: number): Promise<boolean> {
-        const delayMs = reconnectDelayMs(attempt, ports.reconnect?.random ?? Math.random);
-        const budgetMs = ports.reconnect?.budgetMs ?? RECONNECT_BUDGET_MS;
-        const exhausted = attempt > MAX_STREAM_RECONNECTS || failingForMs + delayMs > budgetMs;
-        const outcome = exhausted ? "budget-exhausted" : "backoff";
-        recordMonitorReconnect(ports, { attempt, outcome, delayMs, failingForMs });
-        if (exhausted) return false;
-        await (ports.reconnect?.delay ?? abortableDelay)(delayMs, monitorStop.signal);
-        return true;
       }
 
       async function observeNextHint(): Promise<void> {
@@ -1084,6 +1072,23 @@ async function applyHistoryPlan(
     // The sink owns rejection accounting and records the projection-specific closed reason.
     ports.safeActivitySink?.ingest(signal);
   }
+}
+
+// Waits before the next reconnect; false when the failure budget is spent (count or time).
+async function backOff(
+  ports: OpenCodeRuntimeAdapterPorts,
+  stop: AbortSignal,
+  attempt: number,
+  failingForMs: number,
+): Promise<boolean> {
+  const delayMs = reconnectDelayMs(attempt, ports.reconnect?.random ?? Math.random);
+  const budgetMs = ports.reconnect?.budgetMs ?? RECONNECT_BUDGET_MS;
+  const exhausted = attempt > MAX_STREAM_RECONNECTS || failingForMs + delayMs > budgetMs;
+  const outcome = exhausted ? "budget-exhausted" : "backoff";
+  recordMonitorReconnect(ports, { attempt, outcome, delayMs, failingForMs });
+  if (exhausted) return false;
+  await (ports.reconnect?.delay ?? abortableDelay)(delayMs, stop);
+  return true;
 }
 
 function recordMonitorReconnect(

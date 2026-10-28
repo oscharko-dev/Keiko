@@ -266,8 +266,8 @@ export function handleVerificationEvents(ctx: RouteContext, deps: UiHandlerDeps)
 }
 
 // Exported for unit-testing the backpressure path (mirrors openCommandSseStream). `onBackpressure` is
-// optional and defaults to undefined in production; it fires exactly once when a frame is rejected
-// because the client is not draining, before the socket is destroyed.
+// optional and defaults to undefined in production; it fires exactly once when the client drains
+// nothing within the shared stall bound, before the socket is destroyed.
 export function openVerificationSseStream(
   res: ServerResponse,
   manager: VerificationRunnerManager,
@@ -290,8 +290,9 @@ export function openVerificationSseStream(
     unsubscribe();
   };
   controller.signal.addEventListener("abort", stop, { once: true });
-  // The ready frame takes the same abort-and-destroy path as every event frame: refused, it aborts
-  // this controller at once, which unsubscribes the stream, so the socket is destroyed exactly once.
+  // The ready frame takes the same flow control as every event frame: a reader that never drains it
+  // aborts this controller at the stall bound, which unsubscribes the stream, so the socket is
+  // destroyed exactly once.
   writeSseFrame(res, readyMessage(), controller, onBackpressure, correlationId);
   res.on("close", () => {
     stop();
