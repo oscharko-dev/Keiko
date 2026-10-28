@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "fcda05db4297851829cd8b6acc4c97a0cb5f29a4fb5a27072b85be61a18b396f"
+    "catalogDigest": "317bcfd8bca5a488e023bf4b293ac540bb98d859c696f8c348d1eded8cd9d0fc"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,9 +67,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 604,
-    "proofCount": 627,
-    "resolvedProofCount": 627,
+    "operationCount": 605,
+    "proofCount": 628,
+    "resolvedProofCount": 628,
     "failureClassCount": 378,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -441,6 +441,7 @@
         "mcp.managed.lifecycle",
         "mcp.oauth.issuer.checked",
         "mcp.registry.loaded",
+        "mcp.settings.updated",
         "portable.runtime.native-helper-bound",
         "pr-description.workbench.egress.denied",
         "runtime.confinement.failed",
@@ -2468,6 +2469,7 @@
       "packages/keiko-server/src/mcp/mcpOAuthIssuer.test.ts"
     ],
     "mcp.registry.loaded.emitted-line": ["packages/keiko-server/src/mcp/mcpServerRegistry.test.ts"],
+    "mcp.settings.updated.emitted-line": ["packages/keiko-server/src/mcp/mcpSettingsStore.test.ts"],
     "memory-vault.log.sink-failed.body-free": ["packages/keiko-memory-vault/src/vault-log.test.ts"],
     "memory-vault.store.encryption-checkpoint-degraded.state": [
       "packages/keiko-memory-vault/src/schema.test.ts"

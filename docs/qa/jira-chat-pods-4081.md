@@ -2593,3 +2593,25 @@ Natural read questions now precede the exact operation payload in the catalog/li
 14 wire regressions preserve arguments, identities and all five mutation requests. The80-case
 helper run passes. No shared API helper, model budget, expected effect or runtime policy changes.
 Final qualified aggregates, full coverage/Sonar and required current-head checks remain open.
+
+## Shared external MCP priority — foundation checkpoint, 2026-10-28
+
+The owner expanded the primary delivery to central Settings configuration for local stdio
+and remote HTTPS MCP servers, with tools shared by ordinary Chat and OpenCode. Jira Pods
+remain in this same PR. Resources/prompts are not prerequisites for the tools delivery.
+All original 55 criteria remain subject to acceptance; this checkpoint is not closeout.
+
+This increment adds additive registry contracts for automatic discovery and sealed local
+environment references, safe native action collision rejection, and the Settings persistence
+owner over the existing registry, private JSON writer and MCP credential vault. It checks
+revisions before writes and binds immutable stored credentials to their configured target.
+The registered Settings event contains only counts, outcome and a registry digest.
+
+The five focused contract, registry and credential suites pass 69 tests. New capability
+cases first failed against the old contract. Persistence tests cover restart, stale writers,
+private file permissions, corrupt state, target changes, immutable credentials and body-free
+Activity Log reconstruction. Package build and scoped lint/format are checked separately.
+
+Settings routes/UI, external SDK transport composition, discovery admission, Chat integration,
+OpenCode secret launch/relay integration and lifecycle invalidation are still pending at this
+checkpoint. The accepted earlier Jira live evidence does not qualify those new paths.

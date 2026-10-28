@@ -29275,7 +29275,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["coding-run"],
+        values: ["coding-run", "settings", "chat"],
       },
       state: {
         type: "string",
@@ -29347,6 +29347,54 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     failureClasses: ["mcp-registry"],
     proofIds: ["mcp.registry.loaded.emitted-line"],
     releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "mcp.settings.updated",
+    category: "security",
+    owner: "keiko-server",
+    emitter: "mcp.mcpSettingsStore.recordMcpSettingsUpdate",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      outcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["applied", "conflict"],
+      },
+      serverCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      secretCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      registrySha256: {
+        type: "string",
+        dataClass: "digest",
+        required: true,
+        maxLength: 64,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["mcp-registry"],
+    proofIds: ["mcp.settings.updated.emitted-line"],
+    releaseImpact: "minor",
   },
   {
     contractKind: "activity-log-operation",

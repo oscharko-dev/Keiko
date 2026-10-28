@@ -44,7 +44,12 @@ const MCP_REGISTRY_LOADED_OPERATION = defineActivityLogOperation({
   owner: "keiko-server",
   emitter: "mcp.mcpServerRegistry.recordMcpRegistryLoaded",
   fields: {
-    consumer: { type: "string", dataClass: "closed-enum", required: true, values: ["coding-run"] },
+    consumer: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["coding-run", "settings", "chat"],
+    },
     state: { type: "string", dataClass: "closed-enum", required: true, values: [...LOAD_STATES] },
     serverCount: { type: "integer", dataClass: "count", required: true },
     enabledServerCount: { type: "integer", dataClass: "count", required: true },
@@ -110,17 +115,24 @@ export function loadMcpServerRegistry(input: {
   readonly stateDir: string;
   readonly activityLog: ServerLogSink | undefined;
   readonly correlationId: string;
+  readonly consumer?: "coding-run" | "settings" | "chat";
 }): McpServerRegistryLoad {
   try {
     const text = readRegistryText(join(input.stateDir, MCP_SERVER_REGISTRY_FILE));
     const load: McpServerRegistryLoad =
       text === undefined ? { state: "absent", servers: [] } : parsedRegistry(text);
-    recordMcpRegistryLoaded(input.activityLog, input.correlationId, load);
+    recordMcpRegistryLoaded(
+      input.activityLog,
+      input.correlationId,
+      load,
+      undefined,
+      input.consumer,
+    );
     return load;
   } catch (error) {
     // A file Keiko cannot trust admits no server; the closed reason and the frames are the evidence.
     const load: McpServerRegistryLoad = { state: "refused", servers: [], reason: refusalOf(error) };
-    recordMcpRegistryLoaded(input.activityLog, input.correlationId, load, error);
+    recordMcpRegistryLoaded(input.activityLog, input.correlationId, load, error, input.consumer);
     return load;
   }
 }
@@ -135,6 +147,7 @@ export function recordMcpRegistryLoaded(
   correlationId: string,
   load: McpServerRegistryLoad,
   error?: unknown,
+  consumer: "coding-run" | "settings" | "chat" = "coding-run",
 ): void {
   const enabled = load.servers.filter((server) => server.enabled);
   const digest = registryDigest(load.servers);
@@ -143,7 +156,7 @@ export function recordMcpRegistryLoaded(
       MCP_REGISTRY_LOADED_OPERATION,
       { correlationId, ...(load.state === "refused" ? { level: "warn" as const } : {}) },
       {
-        consumer: "coding-run",
+        consumer,
         state: load.state,
         serverCount: load.servers.length,
         enabledServerCount: enabled.length,

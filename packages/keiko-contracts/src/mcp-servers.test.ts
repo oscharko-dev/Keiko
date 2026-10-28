@@ -189,7 +189,6 @@ describe("the MCP server registry (#3903)", () => {
   });
 
   it.each([
-    ["a name with an underscore", { ...LOCAL, name: "my_docs" }],
     ["an uppercase name", { ...LOCAL, name: "Docs" }],
     ["an unknown key", { ...LOCAL, secret: "x" }],
     ["no tools", { ...LOCAL, tools: {} }],

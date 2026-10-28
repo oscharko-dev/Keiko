@@ -432,6 +432,7 @@
   "mcp.managed.lifecycle": "tools-workflows",
   "mcp.oauth.issuer.checked": "tools-workflows",
   "mcp.registry.loaded": "tools-workflows",
+  "mcp.settings.updated": "tools-workflows",
   "memory-vault.log.sink-failed": "memory-knowledge",
   "memory-vault.store.encryption-checkpoint-degraded": "memory-knowledge",
   "memory-vault.store.encryption-migrated": "memory-knowledge",

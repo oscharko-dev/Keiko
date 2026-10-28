@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "fcda05db4297851829cd8b6acc4c97a0cb5f29a4fb5a27072b85be61a18b396f",
+    "catalogDigest": "317bcfd8bca5a488e023bf4b293ac540bb98d859c696f8c348d1eded8cd9d0fc",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -30575,7 +30575,7 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["coding-run"]
+            "values": ["coding-run", "settings", "chat"]
           },
           "state": {
             "type": "string",
@@ -30648,7 +30648,57 @@
         "proofIds": ["mcp.registry.loaded.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/mcp/mcpServerRegistry.ts:39",
-        "emitterSites": ["packages/keiko-server/src/mcp/mcpServerRegistry.ts:142"]
+        "emitterSites": ["packages/keiko-server/src/mcp/mcpServerRegistry.ts:155"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "mcp.settings.updated",
+        "category": "security",
+        "owner": "keiko-server",
+        "emitter": "mcp.mcpSettingsStore.recordMcpSettingsUpdate",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "outcome": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["applied", "conflict"]
+          },
+          "serverCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "secretCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "registrySha256": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 64
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["mcp-registry"],
+        "proofIds": ["mcp.settings.updated.emitted-line"],
+        "releaseImpact": "minor",
+        "registrationSite": "packages/keiko-server/src/mcp/mcpSettingsStore.ts:21",
+        "emitterSites": ["packages/keiko-server/src/mcp/mcpSettingsStore.ts:68"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -44925,16 +44975,16 @@
         "requiredProductSurfaces": ["keiko-server"],
         "requiredLifecycleOperations": {
           "start": [],
-          "state": ["mcp.registry.loaded"],
+          "state": ["mcp.registry.loaded", "mcp.settings.updated"],
           "end": [],
           "failure": [],
           "loss": []
         },
-        "requiredCausalOperations": ["mcp.registry.loaded"],
+        "requiredCausalOperations": ["mcp.registry.loaded", "mcp.settings.updated"],
         "requiredLossOperations": [],
-        "requiredProofOperations": ["mcp.registry.loaded"],
+        "requiredProofOperations": ["mcp.registry.loaded", "mcp.settings.updated"],
         "requiredReplayProofIds": [],
-        "requiredResourceOperations": ["mcp.registry.loaded"],
+        "requiredResourceOperations": ["mcp.registry.loaded", "mcp.settings.updated"],
         "requiredEvidenceClasses": [
           "closed-enum",
           "completeness-state",
@@ -88503,7 +88553,7 @@
           "lifecycleTransitions": ["state"],
           "lifecycleOperations": {
             "start": [],
-            "state": ["mcp.registry.loaded"],
+            "state": ["mcp.registry.loaded", "mcp.settings.updated"],
             "end": [],
             "failure": [],
             "loss": []
@@ -88512,10 +88562,14 @@
             {
               "op": "mcp.registry.loaded",
               "mode": "correlation"
+            },
+            {
+              "op": "mcp.settings.updated",
+              "mode": "correlation"
             }
           ],
           "lossSignals": [],
-          "resourceSignals": ["mcp.registry.loaded"],
+          "resourceSignals": ["mcp.registry.loaded", "mcp.settings.updated"],
           "replayReferences": [],
           "operations": [
             {
@@ -88601,6 +88655,54 @@
                 "causeChain": true
               },
               "proofIds": ["mcp.registry.loaded.emitted-line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "mcp.settings.updated",
+              "owner": "keiko-server",
+              "category": "security",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "outcome",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "registrySha256",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": true
+                },
+                {
+                  "name": "secretCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "serverCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": [
+                "closed-enum",
+                "completeness-state",
+                "count",
+                "digest",
+                "loss-state"
+              ],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["mcp.settings.updated.emitted-line"],
               "replayReferences": [],
               "missingObligations": []
             }
@@ -105341,6 +105443,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "mcp.settings.updated",
+      "category": "security",
+      "site": "packages/keiko-server/src/mcp/mcpSettingsStore.ts:24",
+      "package": "keiko-server"
+    },
+    {
       "op": "memory.audit.persist",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/memory-audit-handler.ts:117",
@@ -106907,6 +107015,7 @@
     "mcp.managed.lifecycle",
     "mcp.oauth.issuer.checked",
     "mcp.registry.loaded",
+    "mcp.settings.updated",
     "memory-vault.log.sink-failed",
     "memory-vault.store.encryption-checkpoint-degraded",
     "memory-vault.store.encryption-migrated",

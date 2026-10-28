@@ -15,7 +15,7 @@
 export const MCP_SERVER_REGISTRY_SCHEMA_VERSION = 1;
 export const MCP_SERVER_MAX = 16;
 export const MCP_SERVER_TOOL_MAX = 64;
-const MCP_SERVER_NAME = /^[a-z][a-z0-9]{0,30}$/u;
+const MCP_SERVER_NAME = /^[a-z][a-z0-9_-]{0,63}$/u;
 const MCP_TOOL_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/u;
 const MCP_ENVIRONMENT_NAME = /^[A-Z][A-Z0-9_]{0,63}$/u;
 const MCP_ARGUMENT_MAX = 32;
@@ -62,6 +62,8 @@ export interface McpLocalTransport {
   readonly command: readonly [string, ...string[]];
   /** Literal, non-secret variables; the process starts from an empty environment plus these. */
   readonly environment: Readonly<Record<string, string>>;
+  /** Sealed values, resolved only for this server's process; never placed in runtime config. */
+  readonly secretEnvironment?: Readonly<Record<string, McpRemoteSecretHeader>>;
 }
 
 /**
@@ -103,6 +105,8 @@ export interface McpServerDefinition {
   readonly enabled: boolean;
   readonly transport: McpLocalTransport | McpRemoteTransport;
   readonly tools: Readonly<Record<string, McpToolRisk>>;
+  /** Discovery is metadata only; consumers still admit every call under their own authority. */
+  readonly discovery?: "automatic";
 }
 
 export type McpServerRegistryRefusal =
@@ -140,16 +144,45 @@ function literal(value: string): boolean {
 }
 
 function localTransport(value: Json): McpLocalTransport | undefined {
-  if (!hasOnlyKeys(value, ["kind", "command", "environment"])) return undefined;
-  const command = value.command;
+  if (!hasOnlyKeys(value, ["kind", "command", "environment", "secretEnvironment"]))
+    return undefined;
+  const command = localCommand(value.command);
+  if (command === undefined) return undefined;
+  const environment = environmentOf(value.environment);
+  if (environment === undefined) return undefined;
+  const secretEnvironment = secretEnvironmentOf(value.secretEnvironment, environment);
+  if (secretEnvironment === undefined) return undefined;
+  return {
+    kind: "local",
+    command,
+    environment,
+    ...(value.secretEnvironment === undefined ? {} : { secretEnvironment }),
+  };
+}
+
+function localCommand(command: unknown): readonly [string, ...string[]] | undefined {
   if (!Array.isArray(command) || command.length === 0 || command.length > MCP_ARGUMENT_MAX)
     return undefined;
   if (!command.every((part) => boundedText(part) && literal(part))) return undefined;
   const [executable, ...args] = command as string[];
-  if (!executable?.startsWith("/")) return undefined;
-  const environment = environmentOf(value.environment);
-  if (environment === undefined) return undefined;
-  return { kind: "local", command: [executable, ...args], environment };
+  return executable?.startsWith("/") ? [executable, ...args] : undefined;
+}
+
+function secretEnvironmentOf(
+  value: unknown,
+  environment: Readonly<Record<string, string>>,
+): Readonly<Record<string, McpRemoteSecretHeader>> | undefined {
+  if (value === undefined) return {};
+  const secrets = record(value);
+  if (secrets === undefined || Object.keys(secrets).length > MCP_ENVIRONMENT_MAX) return undefined;
+  const result: Record<string, McpRemoteSecretHeader> = {};
+  for (const [name, raw] of Object.entries(secrets)) {
+    const reference = secretHeaderOf("X-Mcp-Secret", raw);
+    if (!MCP_ENVIRONMENT_NAME.test(name) || reference === undefined || name in environment)
+      return undefined;
+    result[name] = reference;
+  }
+  return result;
 }
 
 function environmentOf(value: unknown): Readonly<Record<string, string>> | undefined {
@@ -261,11 +294,15 @@ function transportOf(value: unknown): McpLocalTransport | McpRemoteTransport | u
   return undefined;
 }
 
-function toolsOf(value: unknown): Readonly<Record<string, McpToolRisk>> | undefined {
+function toolsOf(
+  value: unknown,
+  automatic: boolean,
+): Readonly<Record<string, McpToolRisk>> | undefined {
   const tools = record(value);
   if (tools === undefined) return undefined;
   const entries = Object.entries(tools);
-  if (entries.length === 0 || entries.length > MCP_SERVER_TOOL_MAX) return undefined;
+  if ((!automatic && entries.length === 0) || entries.length > MCP_SERVER_TOOL_MAX)
+    return undefined;
   const valid = entries.every(
     ([name, risk]) => MCP_TOOL_NAME.test(name) && (risk === "read" || risk === "write"),
   );
@@ -290,13 +327,19 @@ function serverHeader(
 function serverOf(value: unknown): McpServerDefinition | undefined {
   const server = record(value);
   if (server === undefined) return undefined;
-  if (!hasOnlyKeys(server, ["name", "description", "enabled", "transport", "tools"]))
+  if (!hasOnlyKeys(server, ["name", "description", "enabled", "transport", "tools", "discovery"]))
     return undefined;
   const header = serverHeader(server);
   const transport = transportOf(server.transport);
-  const tools = toolsOf(server.tools);
+  if (server.discovery !== undefined && server.discovery !== "automatic") return undefined;
+  const tools = toolsOf(server.tools, server.discovery === "automatic");
   if (header === undefined || transport === undefined || tools === undefined) return undefined;
-  return { ...header, transport, tools };
+  return {
+    ...header,
+    transport,
+    tools,
+    ...(server.discovery === "automatic" ? { discovery: "automatic" as const } : {}),
+  };
 }
 
 /**
@@ -314,14 +357,25 @@ export function parseMcpServerRegistry(value: unknown): McpServerRegistryParse {
   if (!Array.isArray(entries)) return { ok: false, reason: "malformed" };
   if (entries.length > MCP_SERVER_MAX) return { ok: false, reason: "too-many-servers" };
   const servers: McpServerDefinition[] = [];
+  const actions = new Set<string>();
   for (const entry of entries) {
     const server = serverOf(entry);
     if (server === undefined) return { ok: false, reason: "server-invalid" };
     if (servers.some(({ name }) => name === server.name))
       return { ok: false, reason: "duplicate-server" };
+    if (!admitUniqueActions(server, actions)) return { ok: false, reason: "server-invalid" };
     servers.push(server);
   }
   return { ok: true, servers };
+}
+
+function admitUniqueActions(server: McpServerDefinition, actions: Set<string>): boolean {
+  for (const tool of Object.keys(server.tools)) {
+    const action = mcpToolAction(server.name, tool);
+    if (actions.has(action)) return false;
+    actions.add(action);
+  }
+  return true;
 }
 
 /**
@@ -532,4 +586,70 @@ export function parseCodingWorkbenchMcpAuthorizationRequest(
   return isMcpAuthorizationAttemptId(body.attemptId)
     ? { server: body.server, attemptId: body.attemptId }
     : undefined;
+}
+
+/** Shared Settings projection. Secret values are write-only and never part of this document. */
+export interface McpSettingsSnapshot {
+  readonly revision: string;
+  readonly servers: readonly McpServerDefinition[];
+}
+export interface McpSettingsSecretInput {
+  readonly server: string;
+  readonly value: string;
+}
+export interface McpSettingsUpdate {
+  readonly expectedRevision: string;
+  readonly servers: readonly McpServerDefinition[];
+  readonly secrets: Readonly<Record<string, McpSettingsSecretInput>>;
+}
+
+/** One bounded mutation; registry parsing remains the canonical definition validator. */
+export function parseMcpSettingsUpdate(value: unknown): McpSettingsUpdate | undefined {
+  const body = record(value);
+  if (body === undefined || !hasOnlyKeys(body, ["expectedRevision", "servers", "secrets"]))
+    return undefined;
+  if (typeof body.expectedRevision !== "string" || !/^[a-f0-9]{64}$/u.test(body.expectedRevision))
+    return undefined;
+  const registry = parseMcpServerRegistry({ schemaVersion: 1, servers: body.servers });
+  const secrets = body.secrets === undefined ? {} : record(body.secrets);
+  if (!registry.ok || secrets === undefined || Object.keys(secrets).length > 64) return undefined;
+  const admitted = settingsSecrets(secrets, registry.servers);
+  if (admitted === undefined) return undefined;
+  return { expectedRevision: body.expectedRevision, servers: registry.servers, secrets: admitted };
+}
+
+function settingsSecret(raw: unknown): McpSettingsSecretInput | undefined {
+  const secret = record(raw);
+  if (
+    secret === undefined ||
+    !hasOnlyKeys(secret, ["server", "value"]) ||
+    typeof secret.server !== "string" ||
+    typeof secret.value !== "string" ||
+    secret.value.length === 0 ||
+    secret.value.length > 8192 ||
+    secret.value.includes("\0")
+  )
+    return undefined;
+  return { server: secret.server, value: secret.value };
+}
+
+function settingsSecrets(
+  secrets: Json,
+  servers: readonly McpServerDefinition[],
+): Readonly<Record<string, McpSettingsSecretInput>> | undefined {
+  const admitted: Record<string, McpSettingsSecretInput> = {};
+  for (const [name, raw] of Object.entries(secrets)) {
+    const secret = settingsSecret(raw);
+    if (!MCP_SECRET_ENVIRONMENT_NAME.test(name) || secret === undefined) return undefined;
+    const owners = servers.filter((entry) => mcpServerSecretReferences(entry).includes(name));
+    if (owners.length !== 1 || owners[0]?.name !== secret.server) return undefined;
+    admitted[name] = secret;
+  }
+  return admitted;
+}
+
+export function mcpServerSecretReferences(server: McpServerDefinition): readonly string[] {
+  const transport = server.transport;
+  const entries = transport.kind === "local" ? transport.secretEnvironment : transport.headers;
+  return [...new Set(Object.values(entries ?? {}).map((entry) => entry.secretEnv))];
 }

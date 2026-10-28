@@ -141,11 +141,26 @@ and reconstruction; the host has only an injected port.
 
 ### D6 — Compatibility and scope
 
-The operator `mcp-servers.json` grammar, credential relay, OAuth and OpenCode behavior
-remain owned by ADR-0137. Managed providers are declared by server composition and do
-not add registry entries. Exposing them to OpenCode or external MCP clients and migrating
-other sources are outside this epic. Retrieval, citations and conversation budgets
-remain owned by their existing paths.
+The operator `mcp-servers.json` registry, credential relay and OAuth remain owned by
+ADR-0137. The expanded delivery scope also makes configured external MCP tools available
+to ordinary Chat and OpenCode through these existing owners. Managed Jira providers remain
+server-composed; they do not require operator registry entries. Retrieval, citations and
+conversation budgets remain owned by their existing paths.
+
+Settings extend the same registry additively: explicit automatic discovery permits an
+initially empty tool map, and local secret environment entries use references instead of
+literal credentials. Existing explicit tool maps retain their admission semantics. Discovery
+never grants execution authority. Server names accept lowercase letters, digits, underscores
+and hyphens; ambiguous native action identities across servers are refused.
+
+Static credentials reuse the existing MCP encrypted vault in a separate reference namespace.
+References are immutable and sealed values are bound to the server name and exact remote
+target or local command/environment. Settings writes compare the caller's registry revision,
+validate the complete document and use the existing atomic private-file writer. Concurrent
+requests in the owning BFF cannot silently overwrite each other. A malformed operator file
+is unavailable, never an empty editable configuration. Protocol negotiation and SDK imports
+remain in `keiko-mcp`; consumer authority, discovery admission and lifecycle invalidation
+remain server responsibilities.
 
 Mixed Chat turns create that same accepted-turn authority before continuity, memory and
 retrieval preparation. Existing grounding owners assemble their evidence packs before

@@ -34900,7 +34900,7 @@
       "lifecycleTransitions": ["state"],
       "lifecycleOperations": {
         "start": [],
-        "state": ["mcp.registry.loaded"],
+        "state": ["mcp.registry.loaded", "mcp.settings.updated"],
         "end": [],
         "failure": [],
         "loss": []
@@ -34909,10 +34909,14 @@
         {
           "op": "mcp.registry.loaded",
           "mode": "correlation"
+        },
+        {
+          "op": "mcp.settings.updated",
+          "mode": "correlation"
         }
       ],
       "lossSignals": [],
-      "resourceSignals": ["mcp.registry.loaded"],
+      "resourceSignals": ["mcp.registry.loaded", "mcp.settings.updated"],
       "replayReferences": [],
       "operations": [
         {
@@ -34998,6 +35002,48 @@
             "causeChain": true
           },
           "proofIds": ["mcp.registry.loaded.emitted-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "mcp.settings.updated",
+          "owner": "keiko-server",
+          "category": "security",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "registrySha256",
+              "type": "string",
+              "dataClass": "digest",
+              "required": true
+            },
+            {
+              "name": "secretCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "serverCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["mcp.settings.updated.emitted-line"],
           "replayReferences": [],
           "missingObligations": []
         }
